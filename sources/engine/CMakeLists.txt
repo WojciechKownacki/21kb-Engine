@@ -17,21 +17,28 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioMixerAsset.hpp
+    include/engine/audio/AudioDspEffect.hpp
+    include/engine/audio/AudioDspRuntimeReport.hpp
+    include/engine/audio/AudioMixerEffectEditing.hpp
     include/engine/audio/AudioRoutingContract.hpp
     include/engine/audio/AudioMixerAssetIO.hpp
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
+    include/engine/audio/AudioMetering.hpp
+    include/engine/audio/AudioMixerPreview.hpp
     include/engine/audio/AudioSettings.hpp
     include/engine/assets/AssetCompatibility.hpp
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetId.hpp
     include/engine/assets/AssetKind.hpp
     include/engine/assets/AssetImportCatalog.hpp
+    include/engine/assets/Map2DAsset.hpp
     include/engine/assets/TerrainAsset.hpp
     include/engine/assets/CollisionMeshAsset.hpp
     include/engine/assets/TerrainAssetIO.hpp
     include/engine/assets/AssetImportPreset.hpp
     include/engine/assets/AssetImportService.hpp
+    include/engine/assets/AssetImportRecord.hpp
     include/engine/assets/AssetImportTypes.hpp
     include/engine/assets/AssetManager.hpp
     include/engine/assets/AssetManifest.hpp
@@ -49,6 +56,11 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/AssetPackReader.hpp
     include/engine/assets/bake/AssetPackSeal.hpp
     include/engine/assets/bake/AssetPackSet.hpp
+    include/engine/mods/ModCatalog.hpp
+    include/engine/mods/ModManifest.hpp
+    include/engine/mods/ModRuntime.hpp
+    include/engine/mods/ModVersion.hpp
+    include/engine/script/ScriptModsApi.hpp
     include/engine/assets/bake/AssetPackTools.hpp
     include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
@@ -90,6 +102,7 @@ add_library(kb_engine STATIC
     include/engine/save/SaveGame.hpp
     include/engine/save/SaveGameMigration.hpp
     include/engine/save/SaveGameService.hpp
+    include/engine/save/SaveGameChunkStore.hpp
     include/engine/save/SaveValue.hpp
     include/engine/ecs/ChunkSizeAutoTuner.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
@@ -203,6 +216,8 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMotionSkeletonRuleComponents.hpp
     include/engine/scene/SceneDeformedGeometryComponents.hpp
     include/engine/scene/SceneAssets.hpp
+    include/engine/scene/SceneAssetCopy.hpp
+    include/engine/scene/AIBrainDecisionSnapshot.hpp
     include/engine/scene/SceneAssetMeta.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
     include/engine/scene/SceneCameraComponents.hpp
@@ -354,6 +369,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
+    include/engine/scene/ParallelSceneSystem.hpp
     include/engine/scene/SceneSystemHandle.hpp
     include/engine/scene/SceneSystemContext.hpp
     include/engine/scene/SceneSystemQueryAccess.hpp
@@ -370,7 +386,23 @@ add_library(kb_engine STATIC
       include/engine/scene/SceneGuideCurveQueries.hpp
       include/engine/scene/GuideCurveComponent.hpp
         include/engine/scene/ContentInstanceComponent.hpp
+        include/engine/scene/GridComponent.hpp
+        include/engine/scene/TilemapComponent.hpp
+        include/engine/scene/TilemapRendererComponent.hpp
+        include/engine/scene/TilemapColliderComponent.hpp
+        include/engine/scene/CharacterController2DComponent.hpp
+        include/engine/scene/Collider2DComponent.hpp
+        include/engine/scene/Body2DComponent.hpp
+        include/engine/scene/Sprite2DComponent.hpp
         include/engine/scene/SceneContentInstanceComponents.hpp
+        include/engine/scene/SceneGridComponents.hpp
+        include/engine/scene/SceneTilemapComponents.hpp
+        include/engine/scene/SceneTilemapRendererComponents.hpp
+        include/engine/scene/SceneTilemapColliderComponents.hpp
+        include/engine/scene/SceneCharacterController2DComponents.hpp
+        include/engine/scene/SceneCollider2DComponents.hpp
+        include/engine/scene/SceneBody2DComponents.hpp
+        include/engine/scene/SceneSprite2DComponents.hpp
         include/engine/scene/StreamFocusComponent.hpp
         include/engine/scene/SceneStreamFocusComponents.hpp
         include/engine/scene/WorldBackdropComponent.hpp
@@ -562,8 +594,11 @@ add_library(kb_engine STATIC
     src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
     src/audio/AudioMixerAssetIO.cpp
+    src/audio/AudioMixerEffectEditing.cpp
     src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
+    src/audio/AudioMetering.cpp
+    src/audio/AudioMixerPreview.cpp
     src/assets/AssetId.cpp
     src/assets/BuiltInShapes.cpp
     src/assets/AssetKind.cpp
@@ -574,12 +609,14 @@ add_library(kb_engine STATIC
     src/assets/AssetFileSystem.cpp
     src/assets/AssetFolderOperations.cpp
     src/assets/AssetImportCatalog.cpp
+    src/assets/Map2DAsset.cpp
     src/assets/TerrainAsset.cpp
     src/assets/CollisionMeshAsset.cpp
     src/assets/TerrainAssetIO.cpp
     src/assets/AssetImportPreset.cpp
     src/assets/AssetImportService.cpp
     src/assets/AssetLoadRequest.cpp
+    src/assets/AssetImportRecord.cpp
     src/assets/AssetImportTypes.cpp
     src/assets/AssetLoaderRegistry.cpp
     src/assets/AssetManager.cpp
@@ -598,6 +635,11 @@ add_library(kb_engine STATIC
     src/assets/bake/AssetPackReader.cpp
     src/assets/bake/AssetPackSeal.cpp
     src/assets/bake/AssetPackSet.cpp
+    src/mods/ModCatalog.cpp
+    src/mods/ModManifest.cpp
+    src/mods/ModRuntime.cpp
+    src/mods/ModVersion.cpp
+    src/script/ScriptModsApi.cpp
     src/assets/bake/AssetPackTools.cpp
     src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
@@ -684,6 +726,7 @@ add_library(kb_engine STATIC
     src/ecs/WorldReflection.cpp
     src/ecs/WorldRegistrySet.cpp
     src/ecs/WorldRelations.cpp
+    src/ecs/HierarchyDepthGuard.cpp
     src/ecs/WorldRuntime.cpp
     src/ecs/WorldTelemetryExport.cpp
     src/ecs/WorldSerialized.cpp
@@ -800,6 +843,7 @@ add_library(kb_engine STATIC
     src/save/SaveGameCodec.cpp
     src/save/SaveGameMigration.cpp
     src/save/SaveGameService.cpp
+    src/save/SaveGameChunkStore.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
     src/scene/asset/io/SceneAssetComponentCodec.cpp
     src/scene/asset/io/components/SceneAssetAudioComponentCodec.cpp
@@ -843,6 +887,7 @@ add_library(kb_engine STATIC
     src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
     src/ui/UITextLineBreaking.cpp
+    src/ui/UITextGraphemes.cpp
     src/ui/UIComponentCatalog.cpp
     src/ui/UIComponentPropertyCatalog.cpp
     src/scene/asset/io/components/SceneAssetUIComponentCodec.cpp
@@ -886,7 +931,23 @@ add_library(kb_engine STATIC
       src/scene/components/SceneGuideCurveQueries.cpp
       src/scene/components/SceneGuideCurveStorage.cpp
         src/scene/components/SceneContentInstanceApi.cpp
+        src/scene/components/SceneGridApi.cpp
+        src/scene/components/SceneTilemapApi.cpp
+        src/scene/components/SceneTilemapRendererApi.cpp
+        src/scene/components/SceneTilemapColliderApi.cpp
+        src/scene/components/SceneCharacterController2DApi.cpp
+        src/scene/components/SceneCollider2DApi.cpp
+        src/scene/components/SceneBody2DApi.cpp
+        src/scene/components/SceneSprite2DApi.cpp
         src/scene/components/SceneContentInstanceStorage.cpp
+        src/scene/components/SceneGridStorage.cpp
+        src/scene/components/SceneTilemapStorage.cpp
+        src/scene/components/SceneTilemapRendererStorage.cpp
+        src/scene/components/SceneTilemapColliderStorage.cpp
+        src/scene/components/SceneCharacterController2DStorage.cpp
+        src/scene/components/SceneCollider2DStorage.cpp
+        src/scene/components/SceneBody2DStorage.cpp
+        src/scene/components/SceneSprite2DStorage.cpp
         src/scene/components/SceneStreamFocusApi.cpp
         src/scene/components/SceneStreamFocusStorage.cpp
         src/scene/components/SceneWorldBackdropApi.cpp
@@ -955,6 +1016,7 @@ add_library(kb_engine STATIC
     src/scene/entities/SceneEntityStatsService.cpp
     src/scene/hierarchy/SceneHierarchyOperations.cpp
     src/scene/hierarchy/SceneHierarchyChildrenService.cpp
+    src/scene/hierarchy/SceneHierarchyDepthGuard.cpp
     src/scene/hierarchy/SceneHierarchyParentAssignmentService.cpp
     src/scene/hierarchy/SceneHierarchyParenting.cpp
     src/scene/hierarchy/SceneHierarchyParentService.cpp
@@ -989,11 +1051,20 @@ add_library(kb_engine STATIC
       src/scene/modules/components/SceneRegionShapeModule.cpp
       src/scene/modules/components/SceneGuideCurveModule.cpp
         src/scene/modules/components/SceneContentInstanceModule.cpp
+        src/scene/modules/components/SceneGridModule.cpp
+        src/scene/modules/components/SceneTilemapModule.cpp
+        src/scene/modules/components/SceneTilemapRendererModule.cpp
+        src/scene/modules/components/SceneTilemapColliderModule.cpp
+        src/scene/modules/components/SceneCharacterController2DModule.cpp
+        src/scene/modules/components/SceneCollider2DModule.cpp
+        src/scene/modules/components/SceneBody2DModule.cpp
+        src/scene/modules/components/SceneSprite2DModule.cpp
         src/scene/modules/components/SceneStreamFocusModule.cpp
       src/scene/systems/ContentInstanceSceneSystem.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
+    src/scene/SceneAssetCopy.cpp
     src/scene/modules/SceneAssetsAccess.cpp
     src/scene/modules/ScenePrefabCaptureModule.cpp
     src/scene/modules/SceneEntities.cpp
@@ -1192,6 +1263,10 @@ add_library(kb_engine STATIC
     src/script/ScriptTimelineApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptNavigationApi.cpp
+    src/script/ScriptMap2DApi.cpp
+    src/script/ScriptPhysics2DApi.cpp
+    src/script/ScriptNetApi.cpp
+    src/assets/Map2DNavigation.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptRendererApi.cpp
     src/script/ScriptLifecycle.cpp
@@ -1289,6 +1364,14 @@ add_library(kb_engine STATIC
       src/private/scene/components/SceneRegionShapeComponentStore.hpp
       src/private/scene/components/SceneGuideCurveComponentStore.hpp
         src/private/scene/components/SceneContentInstanceComponentStore.hpp
+        src/private/scene/components/SceneGridComponentStore.hpp
+        src/private/scene/components/SceneTilemapComponentStore.hpp
+        src/private/scene/components/SceneTilemapRendererComponentStore.hpp
+        src/private/scene/components/SceneTilemapColliderComponentStore.hpp
+        src/private/scene/components/SceneCharacterController2DComponentStore.hpp
+        src/private/scene/components/SceneCollider2DComponentStore.hpp
+        src/private/scene/components/SceneBody2DComponentStore.hpp
+        src/private/scene/components/SceneSprite2DComponentStore.hpp
         src/private/scene/components/SceneStreamFocusComponentStore.hpp
         src/private/scene/components/SceneWorldBackdropComponentStore.hpp
         src/private/scene/components/SceneAmbientRadianceComponentStore.hpp
@@ -1470,6 +1553,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabVariantMaterializer.hpp
     src/private/scene/prefab/ScenePrefabVariantRefreshService.hpp
     src/private/scene/prefab/ScenePrefabValidator.hpp
+    src/private/scene/systems/SceneSystemParallel.hpp
     src/private/scene/systems/SceneSystemScheduler.hpp
     src/private/scene/systems/AnimatorSceneSystem.hpp
     src/private/scene/systems/TimelineSceneSystem.hpp
@@ -1673,6 +1757,11 @@ if(NOT WIN32)
     set_target_properties(kb_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
+# A new project lists the 2D world plugin only where it is built: it needs the renderer.
+if(KB_BUILD_RENDERER)
+    set_source_files_properties(src/project/ProjectCreator.cpp PROPERTIES COMPILE_DEFINITIONS KB_DEFAULT_PROJECT_HAS_WORLD2D=1)
+endif()
+
 target_include_directories(kb_engine
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -1691,6 +1780,10 @@ target_link_libraries(kb_engine
         kb_zstd
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(kb_engine PRIVATE rt)
+endif()
+
 if(KB_ENGINE_ENABLE_NATIVE_AVX2)
     if(MSVC)
         target_compile_options(kb_engine PUBLIC /arch:AVX2)
@@ -1702,6 +1795,9 @@ if(KB_ENGINE_ENABLE_NATIVE_AVX2)
     target_compile_definitions(kb_engine PUBLIC KB_ENGINE_NATIVE_AVX2=1)
 endif()
 
+set_source_files_properties(src/ecs/HierarchyDepthGuard.cpp PROPERTIES
+    COMPILE_DEFINITIONS "KB_ECS_HIERARCHY_DEPTH_LIMIT=${KB_ECS_HIERARCHY_DEPTH_LIMIT}"
+)
 kb_apply_quality_gates(kb_engine)
 
 if(MSVC)
@@ -1742,6 +1838,32 @@ if(NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BUILD_TESTING)
+    if(MSVC)
+        find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+        add_executable(kb_test_process_error_tests tests/TestProcessErrorsProbe.cpp)
+        target_link_libraries(kb_test_process_error_tests PRIVATE user32)
+        kb_apply_quality_gates(kb_test_process_error_tests)
+        add_test(NAME kb_test_process_errors
+            COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/scripts/tests/test_test_process_errors.py
+                --probe $<TARGET_FILE:kb_test_process_error_tests> --debug-crt $<IF:$<CONFIG:Debug>,1,0>)
+        set_tests_properties(kb_test_process_errors PROPERTIES TIMEOUT 60)
+    endif()
+
+    # Keep native I/O verification independent of the full engine dependency graph.
+    add_executable(kb_background_read_tests
+        tests/BackgroundReadBatchTests.cpp
+        src/assets/streaming/BackgroundLoadService.cpp
+    )
+    target_include_directories(kb_background_read_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    find_package(Threads REQUIRED)
+    target_link_libraries(kb_background_read_tests PRIVATE Threads::Threads)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(kb_background_read_tests PRIVATE rt)
+    endif()
+    add_test(NAME kb_background_read_tests COMMAND $<TARGET_FILE:kb_background_read_tests>)
+    set_tests_properties(kb_background_read_tests PROPERTIES TIMEOUT 60)
+    kb_apply_quality_gates(kb_background_read_tests)
+
     add_library(kb_engine_old_abi_test_plugin SHARED
         tests/OldEngineModuleAbiPlugin.cpp
     )
@@ -1805,6 +1927,7 @@ if(BUILD_TESTING)
         tests/AssetRuntimeTests.cpp
         tests/AssetBakeTests.cpp
         tests/AssetPackTests.cpp
+        tests/ModTests.cpp
         tests/ContentStreamingTests.cpp
         tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
@@ -1818,6 +1941,7 @@ if(BUILD_TESTING)
         tests/EcsReflectionTests.cpp
         tests/EcsRelationTests.cpp
         tests/EcsRuntimeTests.cpp
+        tests/EcsHierarchyDepthTests.cpp
         tests/EcsSeededStressTests.cpp
         tests/EcsSnapshotTests.cpp
         tests/EcsSystemSchedulerTests.cpp
@@ -1848,6 +1972,8 @@ if(BUILD_TESTING)
         tests/SceneStreamingTests.cpp
         tests/SceneRuntimeTests.cpp
         tests/SceneSystemTestSuites.hpp
+        tests/SceneSystemParallelTests.cpp
+        tests/ScriptNetApiTests.cpp
         tests/SceneSystemTests.cpp
         tests/SceneSystemTransformSyncTests.cpp
         tests/ScriptApiCatalogTests.cpp
@@ -1877,8 +2003,22 @@ if(BUILD_TESTING)
             "KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH=\"$<TARGET_FILE:kb_native_script_test_plugin>\""
     )
 
+    add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    add_test(NAME kb_engine_scene_transform_golden COMMAND $<TARGET_FILE:kb_engine_tests> scene-transform-golden)
+    set_tests_properties(kb_engine_scene_transform_golden PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+    set_tests_properties(kb_engine_scene_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 RUN_SERIAL TRUE)
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
-    set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1500)
+    add_test(NAME kb_engine_scene_parenting COMMAND $<TARGET_FILE:kb_engine_tests> scene-parenting)
+    set_tests_properties(kb_engine_scene_parenting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 30)
+    add_test(NAME kb_engine_ecs_batch_hierarchy_depth COMMAND $<TARGET_FILE:kb_engine_tests> ecs-batch-hierarchy-depth)
+    set_tests_properties(kb_engine_ecs_batch_hierarchy_depth PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "ecs;hierarchy;correctness")
+    add_test(NAME kb_engine_prefab_hierarchy_depth COMMAND $<TARGET_FILE:kb_engine_tests> prefab-hierarchy-depth)
+    set_tests_properties(kb_engine_prefab_hierarchy_depth PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "scene;prefab;hierarchy;correctness")
+    add_test(NAME kb_engine_scene_hierarchy_depth COMMAND $<TARGET_FILE:kb_engine_tests> scene-hierarchy-depth)
+    set_tests_properties(kb_engine_scene_hierarchy_depth PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "scene;hierarchy;correctness")
+    add_test(NAME kb_engine_hierarchy_depth COMMAND $<TARGET_FILE:kb_engine_tests> ecs-hierarchy-depth)
+    set_tests_properties(kb_engine_hierarchy_depth PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "ecs;hierarchy;correctness")
 
     # Machine-independent performance gates: each compares two measurements taken in the same run. They
     # run alone, as other tests competing for the CPU in between would skew one measurement and not the other.
@@ -2038,6 +2178,9 @@ if(BUILD_TESTING)
     )
     set_tests_properties(kb_ecs_api_tests PROPERTIES LABELS "ecs;api;debug")
     target_include_directories(kb_ecs_api_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+
+    kb_add_ecs_test_target(kb_ecs_query_shutdown_tests tests/EcsQueryShutdownTests.cpp)
+    set_tests_properties(kb_ecs_query_shutdown_tests PROPERTIES LABELS "ecs;lifetime;asan")
 
     kb_add_ecs_test_target(kb_ecs_observer_identity_tests tests/EcsObserverIdentityTests.cpp)
     kb_add_ecs_test_target(kb_ecs_cascade_owner_tests tests/EcsCascadeOwnerTests.cpp)

@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::script {
@@ -44,6 +45,12 @@ public:
     [[nodiscard]] static ScriptAgentProjectFilesResult Write(
         const std::filesystem::path& projectRoot,
         const ScriptApiCatalog& catalog);
+
+    // The Lua source of a ready-made 2D player: "Platformer2DPlayer.lua" (a CharacterController that walks,
+    // jumps with coyote time, a jump buffer and a variable height) or "TopDown2DPlayer.lua" (8 or 4 direction
+    // movement with a normalized diagonal). `kb_cli entity add --create 'Platformer Player'` and 'Top Down Player'
+    // copy one into a project. Empty for any other name.
+    [[nodiscard]] static std::string_view PresetScript(std::string_view fileName) noexcept;
 };
 
 } // namespace kb::script

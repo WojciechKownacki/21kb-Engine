@@ -107,6 +107,7 @@ def create_throwaway_certificate(directory: Path, password: str) -> tuple[Path, 
     result = subprocess.run(
         [str(powershell), "-NoProfile", "-NonInteractive", "-Command", script],
         input=password + "\n", capture_output=True, text=True, timeout=120, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return pfx, result.stdout.strip().splitlines()[-1]
 
@@ -195,19 +196,43 @@ class PackageGameTests(unittest.TestCase):
         for name in ("console", "com0", "com10", "lpt0", "lpt10", "Game.exe"):
             self.assertTrue(package_game._is_safe_executable_name(name, "Windows.x64"), name)
 
+    def test_snapshot_accepts_aliased_project_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text) / "Project"
+            (root / "Alias").mkdir(parents=True)
+            (root / "Assets").mkdir()
+            (root / "Saved").mkdir()
+            descriptor = root / "Project.21kbproject"
+            descriptor.write_bytes(b"descriptor")
+            asset = root / "Assets" / "scene.bin"
+            asset.write_bytes(b"frozen scene")
+            (root / "Saved" / "editor.log").write_bytes(b"transient")
+            alias = root / "Alias" / ".." / descriptor.name
+            self.assertEqual(descriptor.resolve(strict=True), alias.resolve(strict=True))
+            destination = Path(temporary_text) / "snapshot"
+            copied = package_game._copy_project_snapshot(alias, destination)
+            self.assertEqual(destination / descriptor.name, copied)
+            self.assertEqual(b"descriptor", copied.read_bytes())
+            self.assertEqual(package_game._project_source_fingerprint(descriptor), package_game._project_source_fingerprint(alias))
+            asset.write_bytes(b"changed scene")
+            self.assertEqual(b"frozen scene", (destination / "Assets" / "scene.bin").read_bytes())
+            self.assertFalse((destination / "Saved").exists())
+
     def test_snapshot_is_frozen_and_excludes_transient_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
-            root = Path(temporary_text) / "project"
+            root = Path(temporary_text) / "Saved" / "project"
             (root / "Assets").mkdir(parents=True)
+            (root / "Assets" / "Saved").mkdir()
             (root / "Saved").mkdir()
             descriptor = root / "Project.21kbproject"
             descriptor.write_bytes(b"descriptor")
             (root / "Assets" / "scene.bin").write_bytes(b"scene")
+            (root / "Assets" / "Saved" / "keep.bin").write_bytes(b"asset")
             (root / "Saved" / "editor.log").write_bytes(b"log")
             destination = Path(temporary_text) / "snapshot"
 
             def reject_saved_visit(path: Path) -> bool:
-                if "Saved" in path.parts:
+                if path.is_relative_to(root / "Saved"):
                     raise AssertionError("excluded directory was visited")
                 return False
 
@@ -217,6 +242,7 @@ class PackageGameTests(unittest.TestCase):
 
             self.assertEqual(b"descriptor", copied.read_bytes())
             self.assertEqual(b"scene", (destination / "Assets/scene.bin").read_bytes())
+            self.assertEqual(b"asset", (destination / "Assets/Saved/keep.bin").read_bytes())
             self.assertFalse((destination / "Saved").exists())
             self.assertEqual(64, len(fingerprint))
 
@@ -343,6 +369,16 @@ class PackageGameTests(unittest.TestCase):
             self.assertEqual(job / "cook" / "RuntimeModules", command[output_option + 1])
             self.assertEqual("7", command[command.index("--pack-compression-level") + 1])
             self.assertEqual(job / "cook" / "Game.kbpack", pack)
+
+    def test_windows_package_finds_tilemap_provider_in_cmake_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            for configuration in ("", "Release"):
+                plugin = root / "world_2d" / configuration / "kb_world2d_plugin.dll"
+                plugin.parent.mkdir(parents=True, exist_ok=True)
+                plugin.write_bytes(b"MZ")
+                self.assertEqual(plugin.resolve(), package_game._windows_provider_path(
+                    root, "Release", root / "bin", "kb_world2d_plugin"))
 
     @staticmethod
     def _signing_args(root: Path, **overrides: object) -> argparse.Namespace:
@@ -692,6 +728,7 @@ class PackageGameTests(unittest.TestCase):
             key.write_bytes(b"key")
             args = self._content_args(root, signing_key=key, patch_from=previous, pack_compression_level=0)
             package_game._validate_content_packaging(args)
+            previous = previous.resolve(strict=True)
             self.assertEqual(1, args.patch_level)
 
             def run(arguments: list[object], **_kwargs: object) -> object:
@@ -749,6 +786,7 @@ class PackageGameTests(unittest.TestCase):
             key.write_bytes(b"key")
             args = self._content_args(root, signing_key=key, patch_from=previous, encrypt_pack=True)
             package_game._validate_content_packaging(args)
+            previous = previous.resolve(strict=True)
             self.assertEqual(2, args.patch_level)
             self.assertEqual(
                 [("base", "", 0, "Game.kbpack"), ("patch", "patch-0001", 1, "Game.patch-0001.kbpack")],
@@ -1895,7 +1933,7 @@ class PackageGameTests(unittest.TestCase):
                 package_game._sign_with_pfx_signer(signer, pfx, "wrong-" + password, [unsigned], None, root)
 
     def test_windows_images_are_signed_after_every_binary_edit(self) -> None:
-        plugins = ("kb_physics_jolt_plugin", "kb_audio_miniaudio_plugin", "kb_basic_lighting_plugin", "kb_21kb_particle_plugin")
+        plugins = ("kb_physics_jolt_plugin", "kb_audio_miniaudio_plugin", "kb_basic_lighting_plugin", "kb_ai_plugin", "kb_21kb_particle_plugin", "kb_world2d_plugin")
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)
             built = root / "build" / "bin"
@@ -2123,6 +2161,44 @@ class PackageGameTests(unittest.TestCase):
             args = argparse.Namespace(engine_root=root, target="Windows.x64", product_name="G", version="1")
             with self.assertRaisesRegex(PackagingError, "license file is missing"):
                 package_game._stage_licenses(args, root / "stage")
+
+class SourceStateTests(unittest.TestCase):
+    """The receipt names the engine commit and says whether the tree matched it."""
+
+    def _git(self, root: Path, *arguments: str) -> None:
+        subprocess.run(
+            ("git", "-C", str(root), "-c", "user.name=test", "-c", "user.email=test@example.invalid", *arguments),
+            check=True, capture_output=True,
+        )
+
+    def test_clean_dirty_and_unknown_trees_are_told_apart(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "engine"
+            root.mkdir()
+            self._git(root, "init", "-q")
+            (root / "file.txt").write_text("one" + chr(10), encoding="utf-8")
+            self._git(root, "add", "file.txt")
+            self._git(root, "commit", "-q", "-m", "first")
+            head = subprocess.run(("git", "-C", str(root), "rev-parse", "HEAD"), check=True, capture_output=True, text=True).stdout.strip()
+            clean = package_game._source_state(root)
+            self.assertEqual({"gitCommit": head, "treeState": "clean"}, clean)
+            (root / "file.txt").write_text("two" + chr(10), encoding="utf-8")
+            dirty = package_game._source_state(root)
+            self.assertEqual({"gitCommit": head, "treeState": "dirty"}, dirty)
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual({"gitCommit": "unknown", "treeState": "unknown"}, package_game._source_state(Path(directory)))
+
+    def test_receipt_carries_the_source_state(self) -> None:
+        arguments = argparse.Namespace(
+            target=next(iter(package_game.TARGETS)), configuration="Release", product_name="P", publisher="Q",
+            version="1.0.0", executable_name="Game", engine_root=SCRIPTS.parent,
+        )
+        with mock.patch.object(package_game, "_source_state", return_value={"gitCommit": "a" * 40, "treeState": "clean"}):
+            receipt = package_game._receipt(arguments, "0" * 64, "1" * 64, ())
+        self.assertEqual({"gitCommit": "a" * 40, "treeState": "clean"}, receipt["source"])
+
 
 if __name__ == "__main__":
     unittest.main()

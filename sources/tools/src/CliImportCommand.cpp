@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetImportPreset.hpp"
+#include "engine/assets/AssetImportRecord.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -92,13 +93,41 @@ namespace {
     return {};
 }
 
+// What a reimport changed or would change, one line per asset: = same, ~ changed, + added, - no longer produced, ! edited since the last import.
+void PrintChanges(const kb::assets::AssetImportItemResult& item, CommandIo io) {
+    for (const kb::assets::AssetImportChange& change : item.changes) {
+        using Kind = kb::assets::AssetImportChangeKind;
+        const char* mark = change.kind == Kind::Added ? "+" : change.kind == Kind::Changed ? "~" : change.kind == Kind::Unchanged ? "="
+            : change.kind == Kind::Removed ? "-" : "!";
+        const char* word = change.kind == Kind::Added ? "added" : change.kind == Kind::Changed ? "changed" : change.kind == Kind::Unchanged ? "unchanged"
+            : change.kind == Kind::Removed ? "no longer produced" : "edited since the last import";
+        io.out << "  " << mark << ' ' << change.virtualPath.generic_string() << " (" << (change.assetType.empty() ? "asset" : change.assetType) << ", " << word << ")\n";
+    }
+}
+
+[[nodiscard]] std::optional<kb::assets::AssetImportConflictPolicy> ParsePolicy(std::string_view text) {
+    if (text == "report") return kb::assets::AssetImportConflictPolicy::Report;
+    if (text == "keep-local") return kb::assets::AssetImportConflictPolicy::KeepLocal;
+    if (text == "overwrite") return kb::assets::AssetImportConflictPolicy::Overwrite;
+    return std::nullopt;
+}
+
 } // namespace
 
 int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     const std::optional<std::string> destination = arguments.Option("--destination");
-    if (!project.has_value() || !destination.has_value() || arguments.Positionals().empty()) {
-        io.err << "error: import requires --project <dir> --destination /Game/<folder> <file> [more files...]\n";
+    const std::optional<std::string> reimport = arguments.Option("--reimport");
+    const std::optional<std::string> undo = arguments.Option("--undo");
+    const bool listBackups = arguments.Flag("--list-backups");
+    const bool standalone = undo.has_value() || listBackups;
+    if (!project.has_value() || (!standalone && ((!destination.has_value() && !reimport.has_value()) || arguments.Positionals().empty()))) {
+        io.err << "error: import requires --project <dir> --destination /Game/<folder> <file> [more files...]" << '\n'
+               << "       or --project <dir> --reimport /Game/<asset>.21kb <changed source file>, or --list-backups, or --undo <backup id>" << '\n';
+        return 1;
+    }
+    if (reimport.has_value() && arguments.Positionals().size() != 1U) {
+        io.err << "error: --reimport takes one source file" << '\n';
         return 1;
     }
 
@@ -108,8 +137,50 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: " << mountError << '\n';
         return 1;
     }
+    // What a reimport overwrote can be put back; the backups are kept in Saved/ImportBackups until then.
+    if (listBackups) {
+        for (const std::string& id : kb::assets::AssetImportBackups::List(scene.Assets().Manager())) io.out << id << '\n';
+        return 0;
+    }
+    if (undo.has_value()) {
+        std::string undoError;
+        if (!kb::assets::AssetImportBackups::Restore(scene.Assets().Manager(), *undo, &undoError)) {
+            io.err << "error: " << undoError << '\n';
+            return 1;
+        }
+        io.out << "restored the files of reimport " << *undo << '\n';
+        return 0;
+    }
+    std::optional<kb::assets::AssetId> reimportId;
+    std::optional<kb::assets::AssetImportRecord> reimportRecord;
+    if (reimport.has_value()) {
+        const kb::assets::AssetMetadata* existing = scene.Assets().Manager().Registry().FindByPath(std::filesystem::path{ *reimport });
+        if (existing == nullptr) {
+            io.err << "error: --reimport " << *reimport << " is not an asset of the project" << '\n';
+            return 1;
+        }
+        reimportId = existing->id;
+        reimportRecord = kb::assets::AssetImportRecordIO::Read(kb::assets::AssetImportRecordIO::PathFor(existing->physicalPath));
+    }
 
     kb::assets::AssetImportOptions options{};
+    if (reimportRecord.has_value()) {
+        // A reimport keeps the settings of the last import unless a flag says otherwise.
+        options.mesh.importMaterialSlots = (reimportRecord->optionFlags & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U;
+        options.mesh.importTextures = (reimportRecord->optionFlags & kb::assets::kAssetImportOptionMeshImportTextures) != 0U;
+        options.mesh.importMaterials = (reimportRecord->optionFlags & kb::assets::kAssetImportOptionMeshImportMaterials) != 0U;
+        options.mesh.combineMeshes = (reimportRecord->optionFlags & kb::assets::kAssetImportOptionMeshCombineMeshes) != 0U;
+        options.mesh.transform = reimportRecord->transform;
+    }
+    if (const std::optional<std::string> policy = arguments.Option("--on-conflict")) {
+        const auto parsed = ParsePolicy(*policy);
+        if (!parsed.has_value()) {
+            io.err << "error: --on-conflict takes report, keep-local or overwrite, got '" << *policy << "'" << '\n';
+            return 1;
+        }
+        options.conflictPolicy = *parsed;
+    }
+    options.dryRun = arguments.Flag("--diff");
     if (const std::optional<std::string> preset = arguments.Option("--preset")) {
         std::optional<kb::assets::AssetImportOptions> loaded = LoadPreset(scene, *project, *preset, io);
         if (!loaded.has_value()) return 1;
@@ -132,6 +203,37 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
     if (options.mesh.importMaterials) {
         // As the import dialog does: materials reference the textures imported with them.
         options.mesh.importTextures = true;
+    }
+
+    if (reimportId.has_value()) {
+        const std::filesystem::path source = ResolveInputPath(kb::assets::Utf8Path(arguments.Positionals().front()), kb::assets::Utf8Path(*project));
+        kb::assets::AssetManager& assets = scene.Assets().Manager();
+#if KB_CLI_RENDERER
+        const kb::assets::AssetImportItemResult item = kb::render::RenderMeshImportArtifacts::Reimport(assets, *reimportId, source, options);
+#else
+        if (options.mesh.importTextures || options.mesh.importMaterials) {
+            io.err << "error: reimporting textures and materials needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF" << '\n';
+            return 1;
+        }
+        const kb::assets::AssetImportItemResult item = kb::assets::AssetImportService::ReimportFile(assets, *reimportId, source, options);
+#endif
+        static_cast<void>(assets.DiscoverMountedAssets());
+        if (item.status == kb::assets::AssetImportItemStatus::Failed || item.status == kb::assets::AssetImportItemStatus::Missing || !item.error.empty()) {
+            io.err << "error: " << Utf8Text(source) << ": " << item.error << '\n';
+            PrintChanges(item, io);
+            return 1;
+        }
+        io.out << (options.dryRun ? "would be " : "") << kb::assets::ToString(item.status) << ' ' << item.virtualPath.generic_string() << '\n';
+        PrintChanges(item, io);
+        for (const kb::assets::AssetImportChange& edited : item.conflicts) {
+            if (options.dryRun) continue;
+            io.out << (options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Overwrite ? "  replaced " : "  kept ") << edited.virtualPath.generic_string()
+                   << (options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Overwrite ? " (it had been edited)" : " as edited") << '\n';
+        }
+        if (!item.backupId.empty()) {
+            io.out << "backup " << item.backupId << " (undo: kb_cli import --project " << *project << " --undo " << item.backupId << ')' << '\n';
+        }
+        return 0;
     }
 
     std::vector<std::filesystem::path> staticSources;
@@ -166,6 +268,11 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
 #endif
     static_cast<void>(manager.DiscoverMountedAssets());
     for (const kb::assets::AssetImportItemResult& item : result.items) {
+        if (options.dryRun && item.error.empty()) {
+            io.out << "would import " << item.virtualPath.generic_string() << '\n';
+            PrintChanges(item, io);
+            continue;
+        }
         if (item.Succeeded()) {
             const kb::assets::AssetMetadata* metadata = manager.Registry().Find(item.id);
             io.out << kb::assets::ToString(item.status) << " " << item.virtualPath.generic_string();
@@ -181,8 +288,16 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
                     io.out << "  + " << other->virtualPath.generic_string() << " (" << other->type << ")\n";
                 }
             }
+            for (const kb::assets::AssetImportChange& edited : item.conflicts) {
+                io.out << (options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Overwrite ? "  replaced " : "  kept ") << edited.virtualPath.generic_string()
+                       << (options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Overwrite ? " (it had been edited)" : " as edited") << '\n';
+            }
+            if (!item.backupId.empty()) {
+                io.out << "backup " << item.backupId << " (undo: kb_cli import --project " << *project << " --undo " << item.backupId << ')' << '\n';
+            }
         } else {
             io.err << "error: " << Utf8Text(item.sourcePath) << ": " << item.error << '\n';
+            PrintChanges(item, io);
         }
     }
     return result.Succeeded() ? 0 : 1;

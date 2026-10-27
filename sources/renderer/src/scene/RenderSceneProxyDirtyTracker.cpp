@@ -9,7 +9,7 @@ RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForMeshChange(const Mesh
         current.boundsOverride.radius != next.boundsOverride.radius) {
         dirty |= RenderProxyDirtyFlag::Transform;
     }
-    if (current.meshAssetId != next.meshAssetId || current.castsShadow != next.castsShadow || current.receivesShadow != next.receivesShadow) {
+    if (current.meshAssetId != next.meshAssetId || current.castsShadow != next.castsShadow || current.receivesShadow != next.receivesShadow || current.shadowOnly != next.shadowOnly) {
         dirty |= RenderProxyDirtyFlag::Mesh;
     }
     if (current.materialAssetId != next.materialAssetId ||

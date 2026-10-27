@@ -605,8 +605,11 @@ def _write_crash_report_config(stage: Path, url: str | None) -> None:
 def _copy_project_snapshot(project_file: Path, destination: Path) -> Path:
     source_root = project_file.parent.resolve(strict=True)
     destination.mkdir(parents=True)
+    sources = regular_files(source_root, excluded_top_level=_PROJECT_TRANSIENT_ROOTS)
+    # Validate the anchored tree before resolving the descriptor so file links remain rejected.
+    project_file = project_file.resolve(strict=True)
     copied_project = False
-    for relative, source in regular_files(source_root, excluded_top_level=_PROJECT_TRANSIENT_ROOTS):
+    for relative, source in sources:
         parts = PurePosixPath(relative).parts
         target = destination.joinpath(*parts)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1031,6 +1034,16 @@ def _collect_windows_symbols(
     return tuple(symbols)
 
 
+def _windows_provider_path(build_root: Path, configuration: str, game_directory: Path, target: str) -> Path:
+    directory = "world_2d" if target == "kb_world2d_plugin" else target.removeprefix("kb_").removesuffix("_plugin")
+    expected = f"{target}.dll"
+    for candidate in (build_root / directory / configuration / expected,
+                      build_root / directory / expected, game_directory / expected):
+        if candidate.is_file():
+            return candidate.resolve(strict=True)
+    raise PackagingError(f"Windows player provider was not produced: {expected}")
+
+
 def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     configuration = CONFIGURATIONS[args.configuration]
     plugin_targets = (
@@ -1039,6 +1052,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         "kb_basic_lighting_plugin",
         "kb_ai_plugin",
         "kb_21kb_particle_plugin",
+        "kb_world2d_plugin",
     )
     _build_targets(cmake, args.build_root, configuration, ("kb_game", *plugin_targets), args.engine_root)
     game = _build_tool_path(args.build_root, configuration, "kb_game")
@@ -1068,15 +1082,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     plugin_paths: list[Path] = []
     for target in plugin_targets:
         expected = f"{target}.dll"
-        candidates = [
-            args.build_root / target.removeprefix("kb_").removesuffix("_plugin") / configuration / expected,
-            args.build_root / target.removeprefix("kb_").removesuffix("_plugin") / expected,
-            args.build_root / "21kb_particle" / configuration / expected,
-            game.parent / expected,
-        ]
-        plugin = next((path.resolve(strict=True) for path in candidates if path.is_file()), None)
-        if plugin is None:
-            raise PackagingError(f"Windows player provider was not produced: {expected}")
+        plugin = _windows_provider_path(args.build_root, configuration, game.parent, target)
         shutil.copy2(plugin, stage / expected)
         built[stage / expected] = plugin
         plugin_paths.append(plugin)
@@ -2239,6 +2245,28 @@ def _launch(args: argparse.Namespace) -> None:
         _launch_linux(args)
 
 
+def _source_state(engine_root: Path) -> dict[str, str]:
+    """Which engine commit the package was built from and whether the tree had changes the commit does not hold.
+
+    "unknown" means git could not answer (no git, not a work tree); it is recorded, never guessed.
+    """
+    def git(*arguments: str) -> str | None:
+        try:
+            completed = subprocess.run(
+                ("git", "-C", str(engine_root), *arguments),
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return completed.stdout.strip() if completed.returncode == 0 else None
+
+    commit = git("rev-parse", "--verify", "HEAD")
+    status = git("status", "--porcelain", "--untracked-files=no")
+    if commit is None or status is None:
+        return {"gitCommit": "unknown", "treeState": "unknown"}
+    return {"gitCommit": commit, "treeState": "dirty" if status else "clean"}
+
+
 def _receipt(
     args: argparse.Namespace,
     project_fingerprint: str,
@@ -2265,6 +2293,7 @@ def _receipt(
             "projectSha256": project_fingerprint,
             "engineSha256": engine_fingerprint,
         },
+        "source": _source_state(args.engine_root),
         "tools": [tool_fingerprint(path) for path in unique_tools],
     }
 

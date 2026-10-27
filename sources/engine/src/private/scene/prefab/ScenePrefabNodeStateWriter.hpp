@@ -25,6 +25,14 @@
 #include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneContentInstanceComponents.hpp"
+#include "engine/scene/SceneGridComponents.hpp"
+#include "engine/scene/SceneTilemapComponents.hpp"
+#include "engine/scene/SceneTilemapRendererComponents.hpp"
+#include "engine/scene/SceneTilemapColliderComponents.hpp"
+#include "engine/scene/SceneCharacterController2DComponents.hpp"
+#include "engine/scene/SceneCollider2DComponents.hpp"
+#include "engine/scene/SceneBody2DComponents.hpp"
+#include "engine/scene/SceneSprite2DComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
@@ -69,6 +77,14 @@ struct ScenePrefabNodeStateWriterContext {
     SceneRegionShapeComponents regionShapes;
     SceneGuideCurveComponents guideCurves;
     SceneContentInstanceComponents contentInstances;
+    SceneGridComponents grids;
+    SceneTilemapComponents tilemaps;
+    SceneTilemapRendererComponents tilemapRenderers;
+    SceneTilemapColliderComponents tilemapColliders;
+    SceneCharacterController2DComponents characterControllers2D;
+    SceneCollider2DComponents colliders2D;
+    SceneBody2DComponents bodies2D;
+    SceneSprite2DComponents sprites2D;
     SceneStreamFocusComponents streamFocuses;
     SceneWorldBackdropComponents worldBackdrops;
     SceneAmbientRadianceComponents ambientRadiances;

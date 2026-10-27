@@ -130,6 +130,36 @@ struct AssetPackPatchReport {
     AssetPackPatchReport& report,
     std::string& error);
 
+struct AssetPackModChunkRequest {
+    // What the mod extends: the game's pack set index or base pack.
+    std::filesystem::path base;
+    // A complete cook of the mod's project, which starts from the game's project and adds content.
+    std::filesystem::path next;
+    std::filesystem::path output;
+    // The mod's id: the label of the chunk pack.
+    std::string label;
+    AssetPackBlockCompression compression = AssetPackBlockCompression::Zstd;
+    int compressionLevel = 9;
+    // How `base` is read (the content key of the release it belongs to decrypts its packs).
+    AssetPackTrust baseTrust{};
+};
+
+struct AssetPackModChunkReport {
+    std::uint64_t addedAssets = 0U;
+    // Assets of `next` the base already has, by id or by virtual path, changed or not: a mod
+    // adds content and never replaces the game's, so they stay out of the chunk.
+    std::uint64_t skippedExistingAssets = 0U;
+    AssetPackToolReport pack;
+};
+
+// Writes a chunk pack, labelled with the mod's id and naming the identity of the base, with every
+// asset of `next` that the base lacks, together with their artifacts. Refuses when `next` adds
+// nothing, when the profiles differ or when the base already has a pack with that label.
+[[nodiscard]] bool BuildAssetPackModChunk(
+    const AssetPackModChunkRequest& request,
+    AssetPackModChunkReport& report,
+    std::string& error);
+
 struct AssetPackSetKeyReport {
     std::uint64_t packs = 0U;
     std::uint64_t encryptedPacks = 0U;

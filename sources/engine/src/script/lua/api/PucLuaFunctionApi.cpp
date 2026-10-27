@@ -317,6 +317,75 @@ int LuaAudioDeviceCall(lua_State* state, const char* function) {
 int LuaAudioDeviceStatus(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.DeviceStatus"); }
 int LuaAudioReinitialize(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.Reinitialize"); }
 
+int LuaAudioDspCall(lua_State* state, const char* function, const char* field = nullptr) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (field != nullptr && std::string_view{field} == "frames") {
+        const lua_Integer frames = luaL_checkinteger(state, 1);
+        luaL_argcheck(state, frames >= 1 && frames <= 384000, 1, "offline audio frames must be between 1 and 384000");
+        arguments.push_back(Arg(field, ScriptValue{static_cast<int>(frames)}));
+    } else if (field != nullptr) {
+        std::size_t length = 0U;
+        const char* value = luaL_checklstring(state, 1, &length);
+        arguments.push_back(Arg(field, ScriptValue{std::string{value, length}}));
+    }
+    const auto result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "audio DSP request failed");
+    if (field == nullptr) {
+        lua_pushboolean(state, result.Output("configured").value_or(ScriptValue{false}).AsBool() ? 1 : 0);
+        return 1;
+    }
+    return PushAudioResultTable(state, result);
+}
+
+int LuaAudioConfigureOffline(lua_State* state) { return LuaAudioDspCall(state, "Audio.ConfigureOffline"); }
+int LuaAudioRenderOffline(lua_State* state) { return LuaAudioDspCall(state, "Audio.RenderOffline", "frames"); }
+int LuaAudioDspState(lua_State* state) { return LuaAudioDspCall(state, "Audio.DspState", "bus"); }
+
+int LuaAudioMeterCall(lua_State* state, const char* function, const char* output = nullptr) {
+    auto* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state); lua_pushliteral(state, "lua script execution context is not available"); return 2;
+    }
+    const bool configure = std::string_view{function} == "Audio.ConfigureMeters";
+    const bool read = std::string_view{function} == "Audio.Meter";
+    int integer = 0;
+    const auto channel = read ? lua_tointegerx(state, 2, &integer) : 0;
+    // Return ordinary call errors before constructing C++ arguments. Lua
+    // nonlocal argument-error exits must not unwind through this adapter.
+    if ((configure && lua_type(state, 1) != LUA_TBOOLEAN)
+        || (read && (lua_type(state, 1) != LUA_TSTRING || lua_type(state, 2) != LUA_TNUMBER
+            || integer == 0 || channel < 0 || channel >= 8))) {
+        lua_pushnil(state);
+        lua_pushstring(state, configure ? "audio meter capture requires a boolean"
+            : "audio meter requires a bus string and an integer channel between 0 and 7");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (configure) {
+        arguments.push_back(Arg("enabled", ScriptValue{lua_toboolean(state, 1) != 0}));
+    } else if (read) {
+        std::size_t length = 0U; const auto* bus = lua_tolstring(state, 1, &length);
+        arguments.push_back(Arg("bus", ScriptValue{std::string{bus, length}}));
+        arguments.push_back(Arg("channel", ScriptValue{static_cast<int>(channel)}));
+    }
+    const auto result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "audio meter request failed");
+    if (output != nullptr) {
+        lua_pushboolean(state, result.Output(output).value_or(ScriptValue{false}).AsBool() ? 1 : 0); return 1;
+    }
+    return PushAudioResultTable(state, result);
+}
+
+int LuaAudioConfigureMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ConfigureMeters", "configured"); }
+int LuaAudioResetMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ResetMeters", "reset"); }
+int LuaAudioMeter(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Meter"); }
+
 int LuaAudioSetListenerLocalUser(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2242,6 +2311,21 @@ int LuaPhysicsCharacterJump(lua_State* state) {
     return 1;
 }
 
+int LuaPhysicsSetCharacterJumpGrace(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("seconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.SetCharacterJumpGrace", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaPhysicsCharacterVelocity(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2725,6 +2809,34 @@ int LuaInputRemoveMappingContext(lua_State* state) {
     }
     const ScriptFunctionCallResult result = context->CallFunction("Input.RemoveMappingContext", arguments);
     lua_pushboolean(state, result.Output("removed").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaInputTouchCount(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const ScriptFunctionCallResult result = context->CallFunction("Input.TouchCount", {});
+    if (!result.Succeeded()) return PushCallError(state, result, "touch count query failed");
+    lua_pushinteger(state, result.Output("count").value_or(ScriptValue{0}).AsInt());
+    return 1;
+}
+
+int LuaInputTouchPoint(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const lua_Integer index = luaL_checkinteger(state, 1);
+    luaL_argcheck(state, index >= std::numeric_limits<int>::min() && index <= std::numeric_limits<int>::max(),
+        1, "index must fit an Int");
+    const std::array arguments{
+        Arg("index", ScriptValue{static_cast<int>(index)}),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.TouchPoint", arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "touch point query failed");
+    lua_createtable(state, 0, static_cast<int>(result.outputs.size()));
+    for (const auto& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
     return 1;
 }
 
@@ -3390,6 +3502,12 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioIsSourcePlaying,
     &LuaAudioDeviceStatus,
     &LuaAudioReinitialize,
+    &LuaAudioConfigureOffline,
+    &LuaAudioRenderOffline,
+    &LuaAudioDspState,
+    &LuaAudioConfigureMeters,
+    &LuaAudioResetMeters,
+    &LuaAudioMeter,
     &LuaAudioSetListenerLocalUser,
     &LuaAudioListenerLocalUser,
     &LuaAudioSetBusVolume,
@@ -3507,6 +3625,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaPhysicsCharacterIsGrounded,
     &LuaPhysicsCharacterGroundNormal,
     &LuaPhysicsCharacterGroundVelocity,
+    &LuaPhysicsSetCharacterJumpGrace,
     &LuaPhysicsSetDebugDrawEnabled,
     &LuaPhysicsIsDebugDrawEnabled,
     &LuaInputIsPressed,
@@ -3537,6 +3656,8 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaInputBindHapticsUser,
     &LuaInputSetUserVibration,
     &LuaInputStopVibration,
+    &LuaInputTouchCount,
+    &LuaInputTouchPoint,
     &LuaTimelineCreate,
     &LuaTimelineRelease,
     &LuaTimelinePlay,

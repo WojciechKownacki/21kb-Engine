@@ -27,6 +27,10 @@ struct UICanvas {
     // Which local player drives this canvas with their controller: -1 is every player plus mouse and
     // keyboard, 0-3 one player whose focus is kept apart from the others (split-screen menus).
     std::int32_t player = -1;
+    // While this canvas is shown, canvases drawn below it (a lower sorting order) take no pointer or navigation input:
+    // a pause menu or a confirm dialog. Focus moves into the modal canvas when it appears and returns to where it was
+    // when the canvas goes. Widgets below keep drawing, in their disabled look.
+    bool modal = false;
 };
 
 } // namespace kb::scene

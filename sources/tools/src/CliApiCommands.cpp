@@ -38,6 +38,7 @@ struct CatalogBuildResult {
         kb::script::ScriptRuntimeHost host{ scene };
         if (!host.Succeeded()) {
             result.error = "script runtime host reported diagnostics";
+            for (const auto& diagnostic : host.Diagnostics()) result.error += "\n" + diagnostic;
             return result;
         }
         result.catalog = kb::script::ScriptApiCatalog::Build(host, scene.Assets().Manager());
@@ -45,6 +46,7 @@ struct CatalogBuildResult {
         kb::script::ScriptRuntimeHost host{ scene };
         if (!host.Succeeded()) {
             result.error = "script runtime host reported diagnostics";
+            for (const auto& diagnostic : host.Diagnostics()) result.error += "\n" + diagnostic;
             return result;
         }
         result.catalog = kb::script::ScriptApiCatalog::Build(host);

@@ -96,6 +96,9 @@ class SupportMatrixTests(unittest.TestCase):
             self.assertEqual({fields["os"]}, _code_names(row[1]), f"{name}: runner differs from CI")
             ci_targets = {target for target in fields["targets"].split(";") if target}
             self.assertEqual(ci_targets, _code_names(row[4]), f"{name}: targets differ from CI")
+            if not ci_targets:
+                self.assertIn("complete default build graph", row[4].casefold(),
+                              f"{name}: the full build must be documented explicitly")
 
     def test_other_jobs_match_the_workflow(self) -> None:
         jobs = _workflow_job_names(self.workflow)

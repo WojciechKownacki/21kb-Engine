@@ -296,6 +296,22 @@ std::vector<GameplayEvent> SceneGameplayService::DrainEvents(Scene& scene) {
 void SceneGameplayService::RefreshPerception(Scene& scene, float elapsedSeconds) {
     GameplayRuntimeState& state = State(scene);
     const std::vector<SceneEntity> combatants = AllCombatants(scene);
+    struct Subject { SceneEntity entity; Vec3 position; std::uint32_t team; };
+    std::vector<Subject> subjects;
+    subjects.reserve(combatants.size());
+    std::unordered_set<std::uint64_t> living;
+    living.reserve(combatants.size());
+    for (const SceneEntity entity : combatants) {
+        const CombatantComponent* component = Combatant(scene, entity);
+        if (component != nullptr && IsCombatantAlive(*component)) living.insert(entity.Id());
+        if (UsableCombatant(component) && scene.Entities().IsActive(entity)) {
+            subjects.push_back({ entity, Position(scene, entity), component->team });
+        }
+    }
+    // Sample ECS state once per refresh; inner perception loops only read this
+    // snapshot. Reuse the lookup allocation across observers instead of scanning
+    // the entire remembered list for every visible subject.
+    std::unordered_map<std::uint64_t, std::size_t> remembered;
     for (const SceneEntity observer : combatants) {
         const CombatantComponent* eyes = Combatant(scene, observer);
         std::vector<PerceivedCombatant>& memory = state.perceived[observer.Id()];
@@ -308,15 +324,22 @@ void SceneGameplayService::RefreshPerception(Scene& scene, float elapsedSeconds)
         const Vec3 forward = transform == nullptr ? Vec3{ 0.0F, 0.0F, 1.0F } : kb::math::Rotate(transform->worldRotation, Vec3{ 0.0F, 0.0F, 1.0F });
         const Vec3 eye{ position.x, position.y + kEyeHeight, position.z };
         const float halfAngle = eyes->sightAngleDegrees * 0.5F;
+        const float forwardFlat = std::sqrt(forward.x * forward.x + forward.z * forward.z);
+        const float coneCosine = std::cos(halfAngle * 3.14159265358979F / 180.0F);
+        const float maximumRange = std::max(eyes->hearingRange, eyes->sightRange);
+        remembered.clear();
+        remembered.reserve(memory.size());
         for (PerceivedCombatant& entry : memory) {
+            remembered.emplace(entry.entity.Id(), static_cast<std::size_t>(&entry - memory.data()));
             entry.sensed = false;
             entry.secondsSinceSensed += elapsedSeconds;
         }
-        for (const SceneEntity other : combatants) {
+        for (const Subject& subject : subjects) {
+            const SceneEntity other = subject.entity;
             if (other == observer) continue;
-            const CombatantComponent* subject = Combatant(scene, other);
-            if (!UsableCombatant(subject) || !scene.Entities().IsActive(other)) continue;
-            const Vec3 at = Position(scene, other);
+            const Vec3 at = subject.position;
+            const Vec3 offset = at - position;
+            if (offset.x * offset.x + offset.y * offset.y + offset.z * offset.z > maximumRange * maximumRange) continue;
             const float distance = GameplayDistance(position, at);
             std::optional<PerceptionSense> sense;
             if (distance <= eyes->hearingRange) sense = PerceptionSense::Hearing;
@@ -325,11 +348,10 @@ void SceneGameplayService::RefreshPerception(Scene& scene, float elapsedSeconds)
                 const float dx = at.x - position.x;
                 const float dz = at.z - position.z;
                 const float flat = std::sqrt(dx * dx + dz * dz);
-                const float forwardFlat = std::sqrt(forward.x * forward.x + forward.z * forward.z);
                 bool inCone = halfAngle >= 180.0F || flat <= 0.001F;
                 if (!inCone && forwardFlat > 0.001F) {
                     const float cosine = (dx * forward.x + dz * forward.z) / (flat * forwardFlat);
-                    inCone = cosine >= std::cos(halfAngle * 3.14159265358979F / 180.0F);
+                    inCone = cosine >= coneCosine;
                 }
                 if (inCone && (!eyes->requireLineOfSight ||
                                InLineOfSight(scene, observer, eye, other, Vec3{ at.x, at.y + kBodyHeight, at.z }))) {
@@ -337,19 +359,18 @@ void SceneGameplayService::RefreshPerception(Scene& scene, float elapsedSeconds)
                 }
             }
             if (!sense.has_value()) continue;
-            const bool hostile = AreCombatantTeamsHostile(eyes->team, subject->team);
-            auto known = std::ranges::find(memory, other, &PerceivedCombatant::entity);
-            if (known == memory.end()) {
+            const bool hostile = AreCombatantTeamsHostile(eyes->team, subject.team);
+            const auto [known, added] = remembered.try_emplace(other.Id(), memory.size());
+            if (added) {
                 memory.push_back(PerceivedCombatant{ .entity = other });
-                known = memory.end() - 1;
                 if (hostile) Emit(scene, GameplayEvent{ .kind = GameplayEventKind::Spotted, .source = observer, .target = other });
             }
-            *known = PerceivedCombatant{ .entity = other, .lastKnownPosition = at, .distance = distance, .secondsSinceSensed = 0.0F,
+            memory[known->second] = PerceivedCombatant{ .entity = other, .lastKnownPosition = at, .distance = distance, .secondsSinceSensed = 0.0F,
                 .sense = *sense, .sensed = true, .hostile = hostile };
         }
         // Forget the dead, the gone, and whoever was not sensed for kMemorySeconds.
         std::erase_if(memory, [&](const PerceivedCombatant& entry) {
-            if (!IsAlive(scene, entry.entity)) return true;
+            if (!living.contains(entry.entity.Id())) return true;
             if (entry.secondsSinceSensed < kMemorySeconds) return false;
             if (entry.hostile) Emit(scene, GameplayEvent{ .kind = GameplayEventKind::Lost, .source = observer, .target = entry.entity });
             return true;

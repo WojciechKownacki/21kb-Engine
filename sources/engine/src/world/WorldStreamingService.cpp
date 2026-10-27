@@ -20,9 +20,12 @@
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <filesystem>
 #include <limits>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 
@@ -583,12 +586,105 @@ const WorldPartitionState* WorldStreamingService::TryState(const scene::Scene& s
     return scene::SceneAccess::State(scene).worldPartition.get();
 }
 
+namespace {
+
+// One reading of every kind: a probe the host set, or the engine's own for the instances and the assets.
+[[nodiscard]] std::array<std::optional<std::uint64_t>, kWorldMemoryKindCount> ReadMemory(scene::Scene& scene, const WorldMemoryState& memory) {
+    std::array<std::optional<std::uint64_t>, kWorldMemoryKindCount> readings{};
+    for (std::size_t kind = 0U; kind < kWorldMemoryKindCount; ++kind) {
+        if (memory.probes[kind]) {
+            readings[kind] = memory.probes[kind]();
+        }
+    }
+    constexpr std::size_t kAssets = static_cast<std::size_t>(WorldMemoryKind::AssetsCpu);
+    constexpr std::size_t kInstances = static_cast<std::size_t>(WorldMemoryKind::Instances);
+    if (!memory.probes[kInstances]) {
+        readings[kInstances] = static_cast<std::uint64_t>(scene.Runtime().EcsWorld().TelemetrySnapshot().usedBytes);
+    }
+    if (!memory.probes[kAssets]) {
+        // The size of every loaded asset's file: not its decoded size, which only the loader knows.
+        std::uint64_t bytes = 0U;
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+            if (!manager.IsLoaded(metadata.id) || metadata.physicalPath.empty()) {
+                continue;
+            }
+            std::error_code error;
+            const std::uintmax_t size = std::filesystem::file_size(metadata.physicalPath, error);
+            if (!error) {
+                bytes += size;
+            }
+        }
+        readings[kAssets] = bytes;
+    }
+    return readings;
+}
+
+[[nodiscard]] WorldMemorySource SourceOf(const WorldMemoryState& memory, std::size_t kind, bool available) {
+    if (!available) {
+        return WorldMemorySource::Unavailable;
+    }
+    return kind == static_cast<std::size_t>(WorldMemoryKind::AssetsCpu) && !memory.probes[kind] ? WorldMemorySource::Estimated : WorldMemorySource::Measured;
+}
+
+void TakeMemoryBaseline(scene::Scene& scene, WorldMemoryState& memory) {
+    memory.baseline = ReadMemory(scene, memory);
+    memory.baselineTaken = true;
+}
+
+[[nodiscard]] WorldMemoryReport BuildMemoryReport(scene::Scene& scene, WorldPartitionState& state, std::uint64_t estimatedResident, std::size_t residentUnits) {
+    WorldMemoryState& memory = state.memory;
+    WorldMemoryReport report;
+    report.budgetBytes = state.budget.maxResidentBytes;
+    report.estimatedResidentBytes = estimatedResident;
+    report.residentUnits = residentUnits;
+    const auto readings = ReadMemory(scene, memory);
+    static constexpr const char* kNotes[kWorldMemoryKindCount] = {
+        "the size of the files of the loaded assets; decoded size is not measured",
+        "the scene's ECS storage in use",
+        "the script runtime's heap",
+        "the physics world",
+        "graphics resources",
+    };
+    for (std::size_t kind = 0U; kind < kWorldMemoryKindCount; ++kind) {
+        WorldMemoryCategory& category = report.categories[kind];
+        category.kind = static_cast<WorldMemoryKind>(kind);
+        const bool available = readings[kind].has_value() && memory.baseline[kind].has_value();
+        category.source = SourceOf(memory, kind, available);
+        category.note = available ? kNotes[kind] : std::string{ kNotes[kind] } + " (no reading in this host)";
+        if (!available) {
+            report.hasUnavailableKinds = true;
+            continue;
+        }
+        category.baselineBytes = *memory.baseline[kind];
+        category.bytes = *readings[kind] > *memory.baseline[kind] ? *readings[kind] - *memory.baseline[kind] : 0U;
+        report.measuredBytes += category.bytes;
+    }
+    report.errorRatio = estimatedResident == 0U ? 0.0 : static_cast<double>(report.measuredBytes) / static_cast<double>(estimatedResident);
+    report.minimumErrorRatio = memory.minimumRatio;
+    report.maximumErrorRatio = memory.maximumRatio;
+    report.samples = memory.samples;
+    return report;
+}
+
+void RecordMemorySample(WorldMemoryState& memory, double ratio) {
+    memory.minimumRatio = memory.samples == 0U ? ratio : std::min(memory.minimumRatio, ratio);
+    memory.maximumRatio = memory.samples == 0U ? ratio : std::max(memory.maximumRatio, ratio);
+    ++memory.samples;
+}
+
+} // namespace
+
 void WorldStreamingService::Synchronize(scene::Scene& scene, std::span<const WorldOwnerRef> owners) {
     if (owners.empty() && TryState(scene) == nullptr) {
         return;
     }
     WorldPartitionState& state = State(scene);
     const Clock::time_point start = Clock::now();
+    // What the scene held before any cell of any world loaded.
+    if (!state.memory.baselineTaken && !owners.empty()) {
+        TakeMemoryBaseline(scene, state.memory);
+    }
     for (auto world = state.worlds.begin(); world != state.worlds.end();) {
         const auto owner = std::ranges::find_if(owners, [&](const WorldOwnerRef& ref) { return ref.owner.Id() == world->first; });
         if (owner == owners.end() || owner->worldAssetId != world->second.worldAssetId || !scene.Entities().IsAlive(world->second.owner)) {
@@ -636,6 +732,13 @@ void WorldStreamingService::Synchronize(scene::Scene& scene, std::span<const Wor
     stats.residentBytes = resident;
     stats.milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
     state.stats = stats;
+    // Each time the set of resident cells settles, compare what they hold with what the budget charged for them.
+    if (state.memory.baselineTaken && stats.loadingUnits == 0U && stats.unloadingUnits == 0U && stats.loadedUnits != state.memory.sampledLoadedUnits) {
+        state.memory.sampledLoadedUnits = stats.loadedUnits;
+        if (resident > 0U) {
+            RecordMemorySample(state.memory, BuildMemoryReport(scene, state, resident, stats.loadedUnits).errorRatio);
+        }
+    }
 }
 
 void WorldStreamingService::Shutdown(scene::Scene& scene) noexcept {
@@ -804,6 +907,27 @@ std::vector<WorldCellCoord> WorldPartitionRuntime::LoadedCells(scene::SceneEntit
     std::ranges::sort(cells);
     cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
     return cells;
+}
+
+void WorldPartitionRuntime::SetMemoryProbe(WorldMemoryKind kind, WorldMemoryProbe probe) {
+    const std::size_t index = static_cast<std::size_t>(kind);
+    if (index >= kWorldMemoryKindCount) {
+        throw std::invalid_argument("Unknown world memory kind");
+    }
+    WorldPartitionState& state = WorldStreamingService::State(scene_);
+    state.memory.probes[index] = std::move(probe);
+    // A probe set after the baseline was taken counts growth from now: it cannot know what was in memory before.
+    if (state.memory.baselineTaken) {
+        state.memory.baseline[index] = state.memory.probes[index] ? state.memory.probes[index]() : ReadMemory(scene_, state.memory)[index];
+    }
+}
+
+WorldMemoryReport WorldPartitionRuntime::MemoryReport() {
+    WorldPartitionState& state = WorldStreamingService::State(scene_);
+    if (!state.memory.baselineTaken) {
+        TakeMemoryBaseline(scene_, state.memory);
+    }
+    return BuildMemoryReport(scene_, state, state.stats.residentBytes, state.stats.loadedUnits);
 }
 
 WorldStreamingStats WorldPartitionRuntime::Stats() const {

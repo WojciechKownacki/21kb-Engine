@@ -88,4 +88,22 @@ Run:
 
 The gate builds and runs renderer tests, editor tests, the editor executable and `kb_standalone_player --self-test`, then performs a no-token smoke over the Material Graph code surface. The renderer test binary includes `GraphForwardGpuRenderTests`, the MAT-68 graph acceptance suite, deferred `GBuffer` MRT readback coverage and real D3D11 GPU readback coverage, so it is the required visual GPU proof for Material Graph releases.
 
+When shaderc is configured, CTest separates renderer integration and cache checks
+from the complete node-output cook sweep. Four
+`kb_renderer_graph_shader_node_cook_0` through `_3` tests cover disjoint cases
+with separate cache directories and bounded process lifetimes. They retain every
+node, hint, output, pass and shader profile in the original sweep. Run the entire
+set with:
+
+```powershell
+ctest --test-dir build/ci -C Debug -R "^(kb_renderer_tests|kb_renderer_graph_shader_node_cook_[0-3])$" --output-on-failure
+```
+
+`kb_renderer_tests` alone runs the integration and cache checks. Invoking the
+test executable without arguments, or with `graph-shader-artifact`, retains the
+complete unpartitioned sweep. `graph-shader-node-cook <index> <count>` runs an
+explicit partition and prints case identities and coverage totals; invalid or
+empty partitions fail. Shader-profile compilation remains separate evidence
+from the GPU draw and pixel-readback checks.
+
 Use `-IncludeWindowSmoke` to also run `run-render-smoke.ps1` for the broader bgfx window sample after the Material Graph gate has passed.

@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -115,6 +116,7 @@ public:
     void Clear() noexcept;
     // `remap` is sorted by the id of the entity it replaces.
     void RemapEntities(std::span<const SceneEntityRemap> remap) noexcept;
+    void RemapPrefabHandles(const std::map<ScenePrefabInstanceHandle, ScenePrefabInstanceHandle>& remap) noexcept;
     [[nodiscard]] std::size_t Bytes() const noexcept;
 
 private:

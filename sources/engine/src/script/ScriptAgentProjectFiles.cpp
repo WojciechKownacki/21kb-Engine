@@ -31,6 +31,32 @@ constexpr std::string_view kAgentsTemplate = R"md(# AGENTS.md — working in thi
 
 This is a game project for the 21kb Engine. Read this file before writing gameplay code.
 
+## Recommended first script
+
+Start with Lua. The engine uses entities and components (ECS): a behaviour is attached
+to an entity and reads or changes its components. A hierarchy parent is an entity
+relationship, not a separate kind of scene object. C++ and Visual Graph are advanced
+alternatives; the Lua starter does not require either toolchain.
+
+After `kb_cli init-agent --project .`, run this example from the project folder:
+
+```sh
+kb_cli entity add --project . --name TemplatePlayer
+kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node TemplatePlayer --script /Game/Logic/PlayerController.lua
+kb_cli validate --project . Assets/Logic/PlayerController.lua
+kb_cli run --project . --scene Assets/Scenes/Main.21kbscene --frames 2 --report input
+```
+
+The run prints a versioned execution report. The controller needs a `Move` input
+action and bindings to move; a headless run does not invent keyboard input. Use
+`--input-replay <recording>` to reproduce input. The Top Down Player and Platformer
+Player presets provision their input mappings and character controllers.
+
+Use `kb_cli commands` for this build's available operations and MCP aliases, and
+`.kb/api/script_api.json` for the current API. Export support depends on the target's
+installed SDK and player build. A successful headless run validates this host; it
+does not establish input, rendering or persistence on every export platform.
+
 ## Project layout
 
 - `<Name>.21kbproject` — binary project descriptor. Never edit by hand; use the editor or `kb_cli`.
@@ -143,6 +169,38 @@ Scripts and C++ see the same: `Gameplay.ApplyDamage`, `Gameplay.Heal`, `Gameplay
 sightings) and `scene.Animators()`. A combatant's script receives its fights as callbacks with the
 details in `event.args` (`other`, `amount`, `damageType`, `ability`): `OnDamaged`, `OnHealed`,
 `OnDeath`, `OnRevived`, `OnAbilityUsed`, `OnEnemySpotted`, `OnEnemyLost`.
+
+)md"
+R"md(## 2D tile maps from the command line
+
+A World 2D Map (plugin "World, 2D Map Editor", on by default) is a tile map in the style of
+Remere's Map Editor: grounds with automatic borders, sprites as items, floors -50..50 (0 is the
+ground floor). In the editor: Add Component > World 2D Map, then Open Map Editor. The same from
+here, one `kb_cli` call per line:
+
+```
+# The map entity: a .kbmap2d file, its Mesh Renderer and a Map Camera (orthographic, from above,
+# framing the client box) that Play looks through. --orientation wall hangs it like a picture.
+kb_cli map2d new --project . --name World --size 64x64 --view 15x11
+# Sprite sheets (PNG, cells row by row from 0) go into Assets/2D Map Sprites/<Category>: every
+# folder is a palette category (Ground, Nature, Houses...).
+# A ground with its twelve edge pieces from a 3x3 island and a 2x2 hole of the sheet; a higher
+# --z draws its edges onto lower grounds and empty tiles.
+kb_cli map2d ground new --project . --name Grass --texture "/Game/2D Map Sprites/Ground/terrain.png" --island 16 --hole 19 --z 30
+kb_cli map2d ground new --project . --name Dirt --texture "/Game/2D Map Sprites/Ground/terrain.png" --tiles 0,1 --weights 3,1 --z 10
+# An object of several tiles (a tree, a house), placed in one click with its bottom middle tile on --at.
+kb_cli map2d object new --project . --name Oak --texture "/Game/2D Map Sprites/Nature/trees.png" --cell 0 --size 2x2
+kb_cli map2d palette --project .
+kb_cli map2d fill --project . --map /Game/Maps/World.kbmap2d --ground Dirt --at 0,0
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --ground Grass --at 10,10 --to 20,14
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --object Oak --at 14,12
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --sprite "/Game/2D Map Sprites/Nature/trees.png" --cell 7 --at 12,12
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --ground Grass --at 5,5,1   # floor 1
+kb_cli map2d info --project . --map /Game/Maps/World.kbmap2d
+```
+
+Tile (x, y) of a flat map lies at X = x + 0.5 - width/2, Z = height/2 - y - 0.5 (in tiles, row 0
+north at +Z) relative to its entity; floor z is z * 3 m up.
 
 ## Verifying your work (always do this before finishing)
 
@@ -284,6 +342,149 @@ function Tick(self, dt)
 end
 )lua";
 
+// Ready-made 2D players (kb_cli entity add --create 'Platformer Player' / 'Top Down Player'). Plain Lua files of
+// the project; the @expose lines are the tunables the Inspector shows. The CharacterController supplies gravity,
+// ground and walls; the platformer script switches on the engine's coyote time for its own character.
+constexpr std::string_view kPlatformer2DPlayerLuaTemplate = R"lua(-- Platformer2DPlayer.lua
+-- For a Map Platformer (a wall map: x across, y up). Requires: CharacterController.
+-- Input: Move (Axis2D, x = left and right), Jump (Bool).
+-- @expose speed Float = 6.0
+-- @expose jumpSpeed Float = 9.0
+-- @expose coyoteTime Float = 0.1
+-- @expose jumpBuffer Float = 0.12
+-- @expose releaseGravity Float = 3.0
+-- @expose fallGravity Float = 1.5
+-- coyoteTime: seconds after walking off an edge in which Jump still works (0 to 0.5; this script asks the engine
+-- for that window with Physics.SetCharacterJumpGrace, which is off for every other character).
+-- jumpBuffer: seconds before landing in which a Jump press is remembered.
+-- releaseGravity: gravity multiplier while rising with Jump released (a short hop); fallGravity: while falling.
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    Physics.CharacterMove(entity, (move.x or 0.0) * vars.speed, 0.0)
+
+    local state = states[entity]
+    if state == nil then
+        state = { sinceGround = 1000.0, sincePress = 1000.0, gravity = 1.0 }
+        states[entity] = state
+    end
+    -- Ask for the coyote window until the engine has the character, and again whenever the tunable changes.
+    if state.grace ~= vars.coyoteTime then
+        if Physics.SetCharacterJumpGrace(entity, math.min(math.max(vars.coyoteTime, 0.0), 0.5)) then
+            state.grace = vars.coyoteTime
+        end
+    end
+    local grounded = Physics.CharacterIsGrounded(entity)
+    local sinceGround = state.sinceGround
+    local sincePress = state.sincePress
+    if grounded then sinceGround = 0.0 else sinceGround = sinceGround + dt end
+    if Input.Pressed("Jump") then sincePress = 0.0 else sincePress = sincePress + dt end
+
+    local velocity = Physics.CharacterVelocity(entity)
+    local rising = velocity.found and velocity.y > 0.5
+    if rising then
+        -- The jump has started: it is used up, and so is the time on the ground.
+        sincePress = 1000.0
+        sinceGround = 1000.0
+    elseif sincePress <= vars.jumpBuffer and sinceGround <= vars.coyoteTime then
+        Physics.CharacterJump(entity, vars.jumpSpeed)
+    end
+    state.sinceGround = sinceGround
+    state.sincePress = sincePress
+
+    local gravity = 1.0
+    if velocity.found and velocity.y > 0.0 and not Input.Held("Jump") then
+        gravity = vars.releaseGravity
+    elseif velocity.found and velocity.y < -0.1 then
+        gravity = vars.fallGravity
+    end
+    if gravity ~= state.gravity then
+        self:SetProperty("CharacterController", "gravityScale", gravity)
+        state.gravity = gravity
+    end
+end
+)lua";
+
+constexpr std::string_view kTopDown2DPlayerLuaTemplate = R"lua(-- TopDown2DPlayer.lua
+-- For a Map Top Down (a flat map: x across, z up the screen). Requires: CharacterController with
+-- Use Gravity off, so that the player stays on the floor level. Input: Move (Axis2D).
+-- @expose speed Float = 5.0
+-- @expose eightWay Bool = true
+-- eightWay: false allows the four directions only (the stronger axis wins).
+
+function Tick(self, dt)
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    local x = move.x or 0.0
+    local y = move.y or 0.0
+    if not vars.eightWay then
+        if math.abs(x) >= math.abs(y) then y = 0.0 else x = 0.0 end
+    end
+    -- A diagonal key press is (1, 1): as fast as one axis once it is normalized. A stick is not boosted.
+    local length = math.sqrt(x * x + y * y)
+    if length > 1.0 then
+        x = x / length
+        y = y / length
+    end
+    Physics.CharacterMove(self.entity, x * vars.speed, y * vars.speed)
+end
+)lua";
+
+// The same two players on the 2D physics (Box2D): a Character Controller 2D driven through the Physics2D functions.
+constexpr std::string_view kPlatformer2DBox2DPlayerLuaTemplate = R"lua(-- Platformer2DBox2DPlayer.lua
+-- For a Map Platformer (a wall map: x across, y up) on the 2D physics. Requires: Character Controller 2D (side view).
+-- Input: Move (Axis2D, x = left and right), Jump (Bool).
+-- @expose speed Float = 6.0
+-- @expose jumpSpeed Float = 9.0
+-- @expose jumpBuffer Float = 0.12
+-- jumpBuffer: seconds before landing in which a Jump press is remembered.
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    CallFunction("Physics2D.MoveCharacter", { entity = entity, x = (move.x or 0.0) * vars.speed, y = 0.0 })
+
+    local sincePress = states[entity]
+    if sincePress == nil then sincePress = 1000.0 end
+    if Input.Pressed("Jump") then sincePress = 0.0 else sincePress = sincePress + dt end
+    if sincePress <= vars.jumpBuffer and CallFunction("Physics2D.IsGrounded", { entity = entity }) then
+        if CallFunction("Physics2D.JumpCharacter", { entity = entity, speed = vars.jumpSpeed }) then sincePress = 1000.0 end
+    end
+    states[entity] = sincePress
+end
+)lua";
+
+constexpr std::string_view kTopDown2DBox2DPlayerLuaTemplate = R"lua(-- TopDown2DBox2DPlayer.lua
+-- For a Map Top Down (a flat map: x across, z up the screen) on the 2D physics. Requires: Character Controller 2D
+-- with Side View off. Input: Move (Axis2D).
+-- @expose speed Float = 5.0
+-- @expose eightWay Bool = true
+-- eightWay: false allows the four directions only (the stronger axis wins).
+
+function Tick(self, dt)
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    local x = move.x or 0.0
+    local y = move.y or 0.0
+    if not vars.eightWay then
+        if math.abs(x) >= math.abs(y) then y = 0.0 else x = 0.0 end
+    end
+    local length = math.sqrt(x * x + y * y)
+    if length > 1.0 then
+        x = x / length
+        y = y / length
+    end
+    CallFunction("Physics2D.MoveCharacter", { entity = self.entity, x = x * vars.speed, y = y * vars.speed })
+end
+)lua";
+
 constexpr std::string_view kSimpleShooterControllerLuaTemplate = R"lua(-- SimpleShooterController.lua
 -- Requires: CharacterController and the shipped Projectile.kbprefab.
 -- Input: Move (Axis2D), Fire (Bool).
@@ -377,6 +578,14 @@ constexpr std::string_view kLuarcTemplate = R"json({
 }
 
 } // namespace
+
+std::string_view ScriptAgentProjectFiles::PresetScript(std::string_view fileName) noexcept {
+    if (fileName == "Platformer2DPlayer.lua") return kPlatformer2DPlayerLuaTemplate;
+    if (fileName == "TopDown2DPlayer.lua") return kTopDown2DPlayerLuaTemplate;
+    if (fileName == "Platformer2DBox2DPlayer.lua") return kPlatformer2DBox2DPlayerLuaTemplate;
+    if (fileName == "TopDown2DBox2DPlayer.lua") return kTopDown2DBox2DPlayerLuaTemplate;
+    return {};
+}
 
 ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
     const std::filesystem::path& projectRoot,

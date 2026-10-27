@@ -156,6 +156,7 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
             break;
         }
         case ColliderShape::Box:
+        case ColliderShape::OneWayBox:
             AppendWireBox(
                 output, center,
                 Vec3{ collider->boxSize.x * scaleX * 0.5F, collider->boxSize.y * scaleY * 0.5F, collider->boxSize.z * scaleZ * 0.5F },

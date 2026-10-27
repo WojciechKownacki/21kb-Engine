@@ -2,11 +2,19 @@
 
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetReimport.hpp"
+#include "engine/assets/AssetImportCatalog.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "platform/win32/EditorChoiceDialog.hpp"
+#include "platform/win32/EditorFileDialogFilter.hpp"
+#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "platform/win32/EditorAssetImportDialog.hpp"
 #include "scene/EditorSceneContext.hpp"
+
+#include <CommDlg.h>
 
 #include <filesystem>
 #include <optional>
@@ -21,6 +29,55 @@ namespace {
         presets.push_back(EditorAssetImportPreset{ .name = std::move(name), .options = options });
     }
     return presets;
+}
+
+// The changed source of an imported model, asked from the author (the file the model was imported from is not remembered by path).
+[[nodiscard]] std::optional<std::filesystem::path> ChooseReimportSource(HWND owner) {
+    std::string extensions;
+    for (const std::string& extension : kb::assets::AssetImportCatalog::SupportedSourceExtensions()) {
+        extensions += (extensions.empty() ? "*" : ";*") + extension;
+    }
+    const std::wstring filter = EditorFileDialogFilter({
+        { std::string{ EditorText("assets.reimport.modelFiles", "Model files") }, extensions },
+        { std::string{ EditorText("fileDialog.allFiles", "All files (*.*)") }, "*.*" },
+    });
+    const std::wstring title = ScriptEditorTextEncoding::Widen(EditorText("assets.reimport.chooseSource", "Choose the changed source file"));
+    std::wstring buffer(4096U, L'\0');
+    OPENFILENAMEW openFileName{};
+    openFileName.lStructSize = sizeof(openFileName);
+    openFileName.hwndOwner = owner;
+    openFileName.lpstrFilter = filter.c_str();
+    openFileName.lpstrFile = buffer.data();
+    openFileName.nMaxFile = static_cast<DWORD>(buffer.size());
+    openFileName.lpstrTitle = title.c_str();
+    openFileName.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&openFileName) == FALSE) return std::nullopt;
+    return std::filesystem::path{ buffer.c_str() };
+}
+
+// What to do with textures and materials edited since the import, asked in the editor's own dialog.
+[[nodiscard]] EditorAssetReimport::Decision AskAboutEditedAssets(HWND owner, const std::vector<kb::assets::AssetImportChange>& conflicts) {
+    std::string names;
+    for (std::size_t index = 0U; index < conflicts.size() && index < 4U; ++index) {
+        names += (index == 0U ? "" : ", ") + conflicts[index].virtualPath.filename().string();
+    }
+    if (conflicts.size() > 4U) names += "...";
+    switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = std::string{ EditorText("assets.reimport.title", "Reimport") },
+        .message = EditorLocalization::Format("assets.reimport.conflict", "{count} asset(s) were edited since the last import: {names}.",
+            { { "count", std::to_string(conflicts.size()) }, { "names", names } }),
+        .supportingText = std::string{ EditorText("assets.reimport.conflictHelp",
+            "Overwrite replaces them; the old files are kept and Undo Last Reimport restores them. Keep my edits leaves them and updates the rest.") },
+        .primaryLabel = std::string{ EditorText("assets.reimport.keep", "Keep my edits") },
+        .secondaryLabel = std::string{ EditorText("assets.reimport.overwrite", "Overwrite") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
+        .icon = HeroIconKind::DocumentText,
+    })) {
+    case EditorChoiceDialogResult::Primary: return EditorAssetReimport::Decision::KeepLocal;
+    case EditorChoiceDialogResult::Secondary: return EditorAssetReimport::Decision::Overwrite;
+    case EditorChoiceDialogResult::Cancel:
+    default: return EditorAssetReimport::Decision::Cancel;
+    }
 }
 
 } // namespace
@@ -49,6 +106,18 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
             ? true
             : sceneContext.BeginAssetImport(selection->files, destinationFolder, selection->options);
     }
+    case EditorAssetContextCommand::Reimport: {
+        if (targetKind != EditorAssetContextTargetKind::Asset) return false;
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(targetAsset);
+        if (metadata == nullptr || !EditorAssetReimport::CanReimport(*metadata)) return false;
+        const std::optional<std::filesystem::path> source = ChooseReimportSource(owner);
+        if (!source.has_value()) return true;
+        const EditorAssetReimport::Outcome outcome = EditorAssetReimport::Run(sceneContext, targetAsset, *source, EditorAssetReimport::OptionsOf(manager, targetAsset),
+            [owner](const std::vector<kb::assets::AssetImportChange>& conflicts) { return AskAboutEditedAssets(owner, conflicts); });
+        return outcome.succeeded || outcome.cancelled;
+    }
+    case EditorAssetContextCommand::UndoReimport:
+        return EditorAssetReimport::UndoLast(sceneContext);
     case EditorAssetContextCommand::NewFolder:
         if (targetKind == EditorAssetContextTargetKind::Folder) {
             static_cast<void>(state.SelectFolder(targetFolder, manager));

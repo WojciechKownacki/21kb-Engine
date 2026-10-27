@@ -38,6 +38,14 @@ namespace {
 #endif
 #endif
 
+#if !defined(KB_WORLD2D_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_WORLD2D_PLUGIN_PATH "kb_world2d_plugin.dll"
+#else
+#define KB_WORLD2D_PLUGIN_PATH "libkb_world2d_plugin.so"
+#endif
+#endif
+
 #if !defined(KB_21KB_PARTICLE_PLUGIN_PATH)
 #if defined(_WIN32)
 #define KB_21KB_PARTICLE_PLUGIN_PATH "kb_21kb_particle_plugin.dll"
@@ -54,7 +62,7 @@ namespace {
 #endif
 #endif
 
-constexpr std::array<EditorPluginDescriptor, 6> kPlugins{{
+constexpr std::array<EditorPluginDescriptor, 7> kPlugins{{
     EditorPluginDescriptor{
         .id = "Physics.Jolt",
         .displayName = "Jolt Physics",
@@ -94,6 +102,14 @@ constexpr std::array<EditorPluginDescriptor, 6> kPlugins{{
         .provider = "21kb",
         .description = "Runs AI Brains: creatures that see, chase, fight, flee and wander by simple rules.",
         .binaryPath = KB_AI_PLUGIN_PATH,
+    },
+    EditorPluginDescriptor{
+        .id = "World.Map2D",
+        .displayName = "World, 2D Map Editor",
+        .category = "World",
+        .provider = "21kb",
+        .description = "Tile maps for 2D games: paint sprites with brushes and automatic borders in the Map Editor window.",
+        .binaryPath = KB_WORLD2D_PLUGIN_PATH,
     },
     EditorPluginDescriptor{
         .id = "Editor.Terrain",

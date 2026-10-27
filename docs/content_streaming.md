@@ -188,11 +188,23 @@ The service runs two kinds of request.
 **Reads** are served highest priority first, ties in submission order. On Windows every file is
 opened with `FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING`: a request is widened to the volume's
 sector alignment and read into a sector-aligned buffer, bypassing the system cache, and each
-worker keeps several reads in flight (4 by default). Elsewhere workers use `pread`. A file that
-refuses unbuffered access is read buffered instead. A read carries a transform that runs on the
+worker keeps several reads in flight (4 by default). Desktop Linux and Apple platforms submit
+POSIX `aio_read` operations for the entire batch before waiting. Their reads are buffered;
+libc and the filesystem determine device concurrency. Other platforms retain single-request
+`pread`. A file that refuses Windows unbuffered access is read buffered instead. A read carries a transform that runs on the
 worker: `ReadPackBlockAsync` verifies the block's seal hash, decrypts and decompresses it there.
 The service keeps a file open once read; the streamer lets go of its packs' files when it
 releases its resources.
+
+Native control blocks and buffers stay alive until completion, including during teardown.
+Short POSIX reads retry the remaining range; an incomplete range fails without exposing partial
+bytes. Completion is published in batch priority order. `asynchronousReads` counts operations
+accepted by the native API, including retries; `peakSubmittedReadBatch` counts how many were
+accepted before a worker waited. These differ from `peakInFlight`, which counts requests admitted
+by the service and includes memory copies. Submission depth does not measure physical disk
+parallelism. `kb_background_read_tests` verifies real native submission, exact unaligned ranges,
+priority, cancellation, EOF, range errors and memory-copy accounting without renderer dependencies.
+The isolated Linux CI job runs it with AddressSanitizer and UndefinedBehaviorSanitizer.
 
 **Jobs** are callables, in two classes with separate workers:
 

@@ -11,6 +11,7 @@
 #include "engine/scene/SocketAttachmentComponent.hpp"
 #include "engine/scene/CombatantComponent.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
+#include "engine/scene/AIBrainDecisionSnapshot.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -25,6 +26,14 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/Body2DComponent.hpp"
+#include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -465,6 +474,116 @@ void RegisterContentInstanceReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterGridReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<GridComponent>("kb.scene.GridComponent", {
+        KB_ECS_FIELD(GridComponent, cellSize, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(GridComponent, floorHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(GridComponent, wall, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterTilemapReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<TilemapComponent>("kb.scene.TilemapComponent", {
+        KB_ECS_FIELD(TilemapComponent, mapAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(TilemapComponent, locked, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterTilemapRendererReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<TilemapRendererComponent>("kb.scene.TilemapRendererComponent", {
+        KB_ECS_FIELD(TilemapRendererComponent, sortingOrder, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(TilemapRendererComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterTilemapColliderReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<TilemapColliderComponent>("kb.scene.TilemapColliderComponent", {
+        KB_ECS_FIELD(TilemapColliderComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterSprite2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<Sprite2DComponent>("kb.scene.Sprite2DComponent", {
+        KB_ECS_FIELD(Sprite2DComponent, imageAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(Sprite2DComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(Sprite2DComponent, cellWidth, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, cellHeight, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, margin, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, spacing, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, imageWidth, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, imageHeight, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, cell, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, frameCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, framesPerSecond, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, loop, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, playing, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, time, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, pixelsPerUnit, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, pivotX, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, pivotY, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, flipX, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, flipY, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, tintR, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, tintG, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, tintB, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, tintA, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, sortingOrder, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Sprite2DComponent, wall, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, visible, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterBody2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<Body2DComponent>("kb.scene.Body2DComponent", {
+        KB_ECS_FIELD(Body2DComponent, type, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Body2DComponent, gravityScale, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, linearDamping, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, angularDamping, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, fixedRotation, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, bullet, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, allowSleep, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, sideView, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, startVelocityX, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, startVelocityY, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterCollider2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<Collider2DComponent>("kb.scene.Collider2DComponent", {
+        KB_ECS_FIELD(Collider2DComponent, shape, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Collider2DComponent, width, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, height, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, radius, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, offsetX, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, offsetY, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, angleDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, isTrigger, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Collider2DComponent, density, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, friction, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, restitution, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, layer, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Collider2DComponent, collidesWith, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Collider2DComponent, sideView, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Collider2DComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterCharacterController2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<CharacterController2DComponent>("kb.scene.CharacterController2DComponent", {
+        KB_ECS_FIELD(CharacterController2DComponent, radius, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, height, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, gravityScale, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, useGravity, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(CharacterController2DComponent, slopeLimitDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, stepHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, layer, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(CharacterController2DComponent, collidesWith, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(CharacterController2DComponent, sideView, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(CharacterController2DComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 void RegisterStreamFocusReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<StreamFocusComponent>("kb.scene.StreamFocusComponent", {
         KB_ECS_FIELD(StreamFocusComponent, innerRadius, kb::ecs::ComponentFieldType::Float32),
@@ -563,6 +682,14 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , regionShapeComponentId_(RegisterSceneComponent<RegionShapeComponent>(world, RegionShapeComponent::StableId))
     , guideCurveComponentId_(RegisterSceneComponent<GuideCurveComponent>(world, GuideCurveComponent::StableId))
     , contentInstanceComponentId_(RegisterSceneComponent<ContentInstanceComponent>(world, ContentInstanceComponent::StableId))
+    , gridComponentId_(RegisterSceneComponent<GridComponent>(world, GridComponent::StableId))
+    , tilemapComponentId_(RegisterSceneComponent<TilemapComponent>(world, TilemapComponent::StableId))
+    , tilemapRendererComponentId_(RegisterSceneComponent<TilemapRendererComponent>(world, TilemapRendererComponent::StableId))
+    , tilemapColliderComponentId_(RegisterSceneComponent<TilemapColliderComponent>(world, TilemapColliderComponent::StableId))
+    , characterController2DComponentId_(RegisterSceneComponent<CharacterController2DComponent>(world, CharacterController2DComponent::StableId))
+    , collider2DComponentId_(RegisterSceneComponent<Collider2DComponent>(world, Collider2DComponent::StableId))
+    , body2DComponentId_(RegisterSceneComponent<Body2DComponent>(world, Body2DComponent::StableId))
+    , sprite2DComponentId_(RegisterSceneComponent<Sprite2DComponent>(world, Sprite2DComponent::StableId))
     , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
     , worldBackdropComponentId_(RegisterSceneComponent<WorldBackdropComponent>(world, WorldBackdropComponent::StableId))
     , ambientRadianceComponentId_(RegisterSceneComponent<AmbientRadianceComponent>(world, AmbientRadianceComponent::StableId))
@@ -590,12 +717,23 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
     , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle"))
     , navLinkComponentId_(RegisterSceneComponent<NavLink>(world, "kb.scene.NavLink")) {
+    // Keep runtime diagnostic type metadata in the host, which outlives provider DLLs.
+    static_cast<void>(world.RegisterComponent<AIBrainDecisionSnapshot>(
+        "AIBrainDecisionSnapshot", { .storageClass = kb::ecs::ComponentStorageClass::SparsePayload }));
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
     RegisterLightReflection(world);
     RegisterRegionShapeReflection(world);
     RegisterGuideCurveReflection(world);
     RegisterContentInstanceReflection(world);
+    RegisterGridReflection(world);
+    RegisterTilemapReflection(world);
+    RegisterTilemapRendererReflection(world);
+    RegisterTilemapColliderReflection(world);
+    RegisterCharacterController2DReflection(world);
+    RegisterCollider2DReflection(world);
+    RegisterBody2DReflection(world);
+    RegisterSprite2DReflection(world);
     RegisterStreamFocusReflection(world);
     RegisterWorldBackdropReflection(world);
     RegisterAmbientRadianceReflection(world);
@@ -667,6 +805,14 @@ std::uint64_t SceneComponentRegistry::RegionShapeComponentId() const noexcept {
 }
 std::uint64_t SceneComponentRegistry::GuideCurveComponentId() const noexcept { return guideCurveComponentId_; }
 std::uint64_t SceneComponentRegistry::ContentInstanceComponentId() const noexcept { return contentInstanceComponentId_; }
+std::uint64_t SceneComponentRegistry::GridComponentId() const noexcept { return gridComponentId_; }
+std::uint64_t SceneComponentRegistry::TilemapComponentId() const noexcept { return tilemapComponentId_; }
+std::uint64_t SceneComponentRegistry::TilemapRendererComponentId() const noexcept { return tilemapRendererComponentId_; }
+std::uint64_t SceneComponentRegistry::TilemapColliderComponentId() const noexcept { return tilemapColliderComponentId_; }
+std::uint64_t SceneComponentRegistry::CharacterController2DComponentId() const noexcept { return characterController2DComponentId_; }
+std::uint64_t SceneComponentRegistry::Collider2DComponentId() const noexcept { return collider2DComponentId_; }
+std::uint64_t SceneComponentRegistry::Body2DComponentId() const noexcept { return body2DComponentId_; }
+std::uint64_t SceneComponentRegistry::Sprite2DComponentId() const noexcept { return sprite2DComponentId_; }
 std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
 std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept { return worldBackdropComponentId_; }
 std::uint64_t SceneComponentRegistry::AmbientRadianceComponentId() const noexcept { return ambientRadianceComponentId_; }

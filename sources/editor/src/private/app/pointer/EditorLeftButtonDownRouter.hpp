@@ -39,6 +39,9 @@ public:
     void Handle(HWND messageWindow, int x, int y);
 
 private:
+    // The World 2D Map rows that open a window or a menu: the Map Editor and the client box sizes.
+    void HandleWorld2DMapClick(InspectorPropertyId property);
+
     HWND mainWindow_ = nullptr;
     EditorDockModel& dockModel_;
     EditorFloatingWindowManager& floatingWindows_;

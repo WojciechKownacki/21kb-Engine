@@ -57,6 +57,28 @@ miniaudio can be used under either license option documented in its license
 file. If the MIT No Attribution option is chosen, no attribution is required by
 the license text.
 
+## stb_vorbis
+
+- Source: `third_party/miniaudio/extras/stb_vorbis.c` (version 1.22)
+- Author: Sean Barrett
+- Selected license: MIT
+- License file: `third_party/licenses/stb_vorbis.txt`
+
+The audio implementation compiles this existing bundled decoder for Ogg Vorbis.
+Its original source and embedded license remain intact. The game distribution
+manifest includes its attribution and selected license.
+
+## Verblib
+
+- Source: `third_party/miniaudio/extras/nodes/ma_reverb_node/verblib.h` (version 0.5)
+- Author: Philip Bennefall
+- License: Unlicense or MIT No Attribution, at your option
+- License file: `third_party/licenses/verblib-0.5.txt`
+
+The audio reverb effect uses this reverb implementation bundled with miniaudio's extra
+nodes. Its source and embedded license remain intact, and the game distribution
+manifest includes its attribution and license text.
+
 ## ufbx
 
 - Repository: https://github.com/ufbx/ufbx
@@ -120,6 +142,8 @@ licenses.
 Recast generates the navigation meshes the engine bakes from scene geometry; Detour stores them
 as tiles, answers path queries and moves agents along path corridors. The Zlib notice is
 reproduced with the shipped licenses.
+CMake compiles a marked generated copy of `DetourCrowd.cpp` that cancels an agent's
+off-mesh animation when its crowd slot is removed. The pinned upstream archive is unchanged.
 
 ## etcpak
 
@@ -197,6 +221,8 @@ in `third_party_manifest.json`.
 - RenderDoc in-application API header (MIT; text in `licenses/renderdoc.txt`)
 - Dawn and Tint (WebGPU) (BSD 3-Clause), WebGPU players
 - AndroidX AppCompat, Games Activity and their AndroidX dependencies (Apache 2.0), Android players
+- Android Games Controller (Paddleboat) 2.0.2 (Apache 2.0), statically linked into Android players.
+  Copyright 2021 The Android Open Source Project; license text in `licenses/apache-2.0.txt`.
 
 Compiled only into the editor, the cooker and the shader compiler:
 
@@ -223,8 +249,6 @@ Compiled only into the editor, the cooker and the shader compiler:
 - Fluent UI System Icons (MIT), `third_party/fluentui-system-icons`
 - Fluent UI toolbar icons (MIT), `third_party/luizengine-fluentui-toolbar`
 - Devicon (MIT), `third_party/devicon`
-
-Box2D is vendored but not built into any product.
 
 ## Notes
 

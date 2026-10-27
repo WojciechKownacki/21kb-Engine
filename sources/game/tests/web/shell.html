@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Input tests</title></head>
+<body>
+<canvas id="canvas" width="800" height="600"
+    style="position:absolute;left:40px;top:50px;width:400px;height:300px;touch-action:pan-x"></canvas>
+<input id="text" style="position:absolute;left:40px;top:400px" aria-label="Focus fixture">
+<script>
+var Module = {print: console.log, printErr: console.error};
+window.kbTouchEvents = [];
+for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+    document.getElementById('canvas').addEventListener(type, event => {
+        window.kbTouchEvents.push({type, trusted: event.isTrusted,
+            changed: Array.from(event.changedTouches, point => point.identifier)});
+    }, {passive: true});
+}
+</script>
+{{{ SCRIPT }}}
+</body></html>

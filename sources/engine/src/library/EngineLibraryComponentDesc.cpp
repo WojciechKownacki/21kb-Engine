@@ -43,6 +43,16 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
     static const std::vector<LibraryComponentDesc> kCatalog = [] {
         std::vector<LibraryComponentDesc> catalog{
         LibraryComponentDesc{
+            .name = "AudioSource",
+            .id = ComputeLibraryComponentId("AudioSource"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "AudioListener",
+            .id = ComputeLibraryComponentId("AudioListener"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Transform",
             .id = ComputeLibraryComponentId("Transform"),
             .serializable = true,
@@ -160,6 +170,46 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
         LibraryComponentDesc{
             .name = "GuideCurve",
             .id = ComputeLibraryComponentId("GuideCurve"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Grid",
+            .id = ComputeLibraryComponentId("Grid"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Tilemap",
+            .id = ComputeLibraryComponentId("Tilemap"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "TilemapRenderer",
+            .id = ComputeLibraryComponentId("TilemapRenderer"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "TilemapCollider",
+            .id = ComputeLibraryComponentId("TilemapCollider"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Sprite2D",
+            .id = ComputeLibraryComponentId("Sprite2D"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Body2D",
+            .id = ComputeLibraryComponentId("Body2D"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Collider2D",
+            .id = ComputeLibraryComponentId("Collider2D"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "CharacterController2D",
+            .id = ComputeLibraryComponentId("CharacterController2D"),
             .serializable = true,
         },
         LibraryComponentDesc{

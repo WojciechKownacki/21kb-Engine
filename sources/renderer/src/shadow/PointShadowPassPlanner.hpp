@@ -12,6 +12,8 @@ namespace kb::render {
 // pure function of the scene and camera, so the shadow pass and the light packer agree on it.
 struct PointShadowLightSelection {
     std::uint32_t count = 0U;
+    // Shadow-casting lights that did not fit in kMaxLights and so are lit without a shadow this frame.
+    std::uint32_t droppedCount = 0U;
     std::array<const LightRenderProxyDesc*, ScenePointShadowBinding::kMaxLights> lights{};
     std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights> entityIds{};
 };
@@ -25,6 +27,8 @@ struct PointShadowFace {
 struct PointShadowSetup {
     bool valid = false;
     std::uint32_t lightCount = 0U;
+    // Eligible shadow-casting lights beyond the limit (see PointShadowLightSelection::droppedCount).
+    std::uint32_t droppedLights = 0U;
     std::uint32_t tileSize = 0U;
     // Faces rendered per light: all of them for a point light, only the first for a spot light.
     std::array<std::uint32_t, ScenePointShadowBinding::kMaxLights> faceCount{};

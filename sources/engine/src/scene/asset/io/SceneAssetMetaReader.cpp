@@ -37,9 +37,15 @@ SceneAssetMetaReadResult SceneAssetMetaReader::Read(const std::filesystem::path&
     if (!input.ReadRaw(magic.data(), magic.size()) ||
         magic != SceneAssetFormat::MetaMagic ||
         !input.ReadUInt32(meta.fileVersion) ||
-        meta.fileVersion == 0U ||
-        meta.fileVersion > SceneAssetMeta::CurrentFileVersion ||
-        !input.ReadString(meta.sceneGuid) ||
+        meta.fileVersion == 0U) {
+        return {.succeeded = false, .meta = {}, .error = "Scene meta header is invalid."};
+    }
+    if (meta.fileVersion > SceneAssetMeta::CurrentFileVersion) {
+        return {.succeeded = false, .meta = {}, .error = "Scene meta version " + std::to_string(meta.fileVersion) +
+            " requires a newer engine; this engine supports up to version " +
+            std::to_string(SceneAssetMeta::CurrentFileVersion) + ". Open the scene with a newer engine."};
+    }
+    if (!input.ReadString(meta.sceneGuid) ||
         !input.ReadString(meta.sceneName) ||
         !input.ReadString(meta.worldType) ||
         !input.ReadString(sceneFile) ||

@@ -81,6 +81,13 @@ std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::Validat
     }
     for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
         const auto& emitter = asset.emitters[emitterIndex];
+        if (emitter.screenDepthCollision) {
+            diagnostics.push_back({.code = kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+                .severity = kb::scene::ParticleEffectDiagnosticSeverity::Warning,
+                .propertyPath = "effect.emitter[" + std::to_string(emitterIndex) + "].screenDepthCollision",
+                .emitterId = emitter.emitterId,
+                .message = "screen-depth collision uses available GPU scene depth; CPU simulation and frames without depth continue without this visual response"});
+        }
         if (!Supports(emitter.output.type, request.capabilities)) {
             Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
                 "effect.emitter[" + std::to_string(emitterIndex) + "].output.type",
@@ -141,7 +148,9 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         const auto compileFlipbook = [&](const kb::scene::ParticleFlipbookAsset& flipbook) noexcept {
             destination.flipbookColumns = static_cast<std::uint16_t>(flipbook.columns);
             destination.flipbookRows = static_cast<std::uint16_t>(flipbook.rows);
-            destination.flipbookFrameCount = flipbook.columns * flipbook.rows;
+            destination.flipbookStartFrame = flipbook.startFrame;
+            destination.flipbookFrameCount = flipbook.frameCount != 0U ? flipbook.frameCount :
+                flipbook.columns * flipbook.rows - flipbook.startFrame;
             destination.flipbookFramesPerSecond = flipbook.framesPerSecond;
             destination.flipbookLooping = flipbook.looping;
         };
@@ -204,6 +213,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         destination.cycleLooping = source.spawn.cycleLooping;
         destination.beam = source.spawn.beam;
         destination.absolutePosition = source.absolutePosition;
+        destination.screenDepthCollision = source.screenDepthCollision;
         destination.simulationSpace = source.simulationSpace;
         destination.enabled = source.enabled;
         destination.mode = source.spawn.mode;

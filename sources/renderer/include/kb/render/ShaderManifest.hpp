@@ -25,6 +25,7 @@ enum class ShaderRuntimeFeature : std::uint8_t {
     GpuDrivenCulling,
     ParticleGpuVisual,
     Editor,
+    ParticleGpuEmitters,
 };
 
 using ShaderRuntimeFeatureMask = std::uint32_t;

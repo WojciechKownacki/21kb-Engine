@@ -350,6 +350,11 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
         streamTop += rowHeight;
     }
     layout.diagnosticHeader = {rowsLeft, streamTop, rowsRight, streamTop + sectionHeaderHeight}; streamTop += sectionHeaderHeight;
+    layout.executionRowCount = diagnosticsExpanded && inspector != nullptr ? layout.executionRows.size() : 0U;
+    for (std::size_t index = 0U; index < layout.executionRowCount; ++index) {
+        layout.executionRows[index] = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight};
+        streamTop += rowHeight;
+    }
     layout.diagnosticRowCount = diagnosticsExpanded && inspector != nullptr ?
         std::min(inspector->diagnostics.size(), layout.diagnosticRows.size()) : 0U;
     for (std::size_t index = 0U; index < layout.diagnosticRowCount; ++index) {

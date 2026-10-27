@@ -8,6 +8,7 @@
 #include "engine/localization/LocalizationCatalogIO.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -193,6 +194,66 @@ void TestFrameWithoutCanvasTracksDynamicComponents() {
         "UI update must discard elements after removal of the last canvas");
 }
 
+void TestFrameTracksWidgetComponentLifetimes() {
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        const auto canvas = AddUI(scene, {}, CanvasComponents());
+        kb::scene::UIComponentSet components;
+        components.rectTransform = Rect(0.0F, 0.0F, 80.0F, 20.0F);
+        const auto first = AddUI(scene, canvas, components);
+        static_cast<void>(kb::scene::SetUITextContent(components.text.emplace(), "Sibling"));
+        const auto sibling = AddUI(scene, canvas, components);
+        auto ui = scene.Components().UI();
+        const kb::scene::SceneUIQueries queries{scene};
+        kb::scene::SceneUIFrame frame;
+        const auto build = [&] {
+            kb::tests::Require(queries.BuildFrame(640.0F, 360.0F, frame),
+                "UI frames must build after widget component changes");
+        };
+        build();
+        kb::tests::Require(FindElement(frame, first.Entity()) != nullptr &&
+            !FindElement(frame, first.Entity())->text &&
+            FindElement(frame, sibling.Entity()) != nullptr &&
+            kb::scene::UITextContent(*FindElement(frame, sibling.Entity())->text) == "Sibling",
+            "Missing widget components must not reuse a sibling's payload");
+
+        kb::scene::UIText text;
+        static_cast<void>(kb::scene::SetUITextContent(text, "Added"));
+        ui.Set(first.Entity(), text);
+        build();
+        kb::tests::Require(FindElement(frame, first.Entity())->text &&
+            kb::scene::UITextContent(*FindElement(frame, first.Entity())->text) == "Added",
+            "A frame must observe a component added after an earlier missing lookup");
+        const auto previous = frame;
+        static_cast<void>(kb::scene::SetUITextContent(*ui.TryGet<kb::scene::UIText>(first.Entity()), "Edited"));
+        ui.Set(first.Entity(), Rect(10.0F, 0.0F, 120.0F, 20.0F));
+        build();
+        kb::tests::Require(kb::scene::UITextContent(*FindElement(frame, first.Entity())->text) == "Edited" &&
+            kb::tests::NearlyEqual(FindElement(frame, first.Entity())->rect.width, 120.0F) &&
+            kb::scene::UITextContent(*FindElement(previous, first.Entity())->text) == "Added",
+            "Frame payloads must reflect current values while earlier snapshots remain owned");
+
+        ui.Remove<kb::scene::UIText>(first.Entity());
+        build();
+        kb::tests::Require(!FindElement(frame, first.Entity())->text &&
+            kb::scene::UITextContent(*FindElement(frame, sibling.Entity())->text) == "Sibling",
+            "Removing a component must clear only its widget's frame payload");
+        const auto retired = first.Entity();
+        scene.Entities().Destroy(first);
+        static_cast<void>(kb::scene::SetUITextContent(*components.text, "Replacement"));
+        const auto replacement = AddUI(scene, canvas, components);
+        build();
+        kb::tests::Require(replacement.Entity() != retired && FindElement(frame, retired) == nullptr &&
+            FindElement(frame, replacement.Entity()) != nullptr &&
+            kb::scene::UITextContent(*FindElement(frame, replacement.Entity())->text) == "Replacement" &&
+            kb::scene::UITextContent(*FindElement(frame, sibling.Entity())->text) == "Sibling",
+            "Destroyed widgets must leave the frame without transferring payloads to new entities");
+    }
+}
+
 void TestLayoutsAndFitters() {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -376,6 +437,123 @@ void TestHierarchicalTransformsAndMaskHitTesting() {
         "Hit testing must reject a point inside the mask bounds but outside its transformed quad");
 }
 
+// Masks inside masks: a descendant is clipped by every mask above it, so only the overlap of the two takes presses,
+// and the overlap follows the canvas when the screen it is scaled to changes size.
+void TestNestedMasksClipToTheirOverlap() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    kb::scene::UIComponentSet canvasComponents = CanvasComponents();
+    canvasComponents.canvasScaler->scaleMode = kb::scene::UICanvasScaleMode::ScaleWithScreenSize;
+    canvasComponents.canvasScaler->referenceResolution = {200.0F, 200.0F};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, canvasComponents);
+    kb::scene::UIComponentSet outerComponents;
+    outerComponents.rectTransform = Rect(20.0F, 20.0F, 100.0F, 100.0F);
+    outerComponents.mask.emplace();
+    const kb::scene::SceneObject outer = AddUI(scene, canvas, outerComponents);
+    kb::scene::UIComponentSet innerComponents;
+    innerComponents.rectTransform = Rect(60.0F, 60.0F, 100.0F, 100.0F);
+    innerComponents.mask.emplace();
+    const kb::scene::SceneObject inner = AddUI(scene, outer, innerComponents);
+    kb::scene::UIComponentSet leafComponents;
+    leafComponents.rectTransform = Rect(-100.0F, -100.0F, 400.0F, 400.0F);
+    leafComponents.selectable.emplace();
+    const kb::scene::SceneObject leaf = AddUI(scene, inner, leafComponents);
+
+    // The masks overlap in the square from 80 to 120 in canvas units.
+    for (const float scale : {1.0F, 2.0F, 0.5F}) {
+        const float side = 200.0F * scale;
+        kb::tests::Require(scene.UI().Update(side, side, {}, 0.016F), "The nested mask frame must build");
+        const kb::scene::SceneUIFrameElement* leafFrame = FindElement(scene.UI().Frame(), leaf.Entity());
+        kb::tests::Require(leafFrame != nullptr && leafFrame->clipQuads.size() == 2U,
+            "A descendant of two masks must carry both mask quads");
+        kb::tests::Require(scene.UI().HitTest({100.0F * scale, 100.0F * scale}) == leaf.Entity(),
+            "A press inside both masks must reach the descendant");
+        kb::tests::Require(!scene.UI().HitTest({50.0F * scale, 50.0F * scale}).IsValid(),
+            "A press inside the outer mask only must not reach the descendant");
+        kb::tests::Require(!scene.UI().HitTest({150.0F * scale, 150.0F * scale}).IsValid(),
+            "A press inside the inner mask only must not reach the descendant");
+        kb::tests::Require(!scene.UI().HitTest({121.0F * scale, 100.0F * scale}).IsValid() && scene.UI().HitTest({119.0F * scale, 100.0F * scale}) == leaf.Entity(),
+            "The overlap must end exactly where the outer mask ends, at every scale");
+    }
+
+    // A turned mask inside a straight one: the corners of the turned mask's bounding box are inside the outer mask
+    // and inside the box, but outside the turned quad, and take no press; its middle does.
+    kb::scene::Scene turned{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject turnedCanvas = AddUI(turned, {}, CanvasComponents());
+    kb::scene::UIComponentSet straightComponents;
+    straightComponents.rectTransform = Rect(0.0F, 0.0F, 200.0F, 200.0F);
+    straightComponents.mask.emplace();
+    const kb::scene::SceneObject straight = AddUI(turned, turnedCanvas, straightComponents);
+    kb::scene::UIComponentSet diamondComponents;
+    diamondComponents.rectTransform = Rect(50.0F, 50.0F, 100.0F, 100.0F);
+    diamondComponents.rectTransform->rotationDegrees = 45.0F;
+    diamondComponents.mask.emplace();
+    const kb::scene::SceneObject diamond = AddUI(turned, straight, diamondComponents);
+    kb::scene::UIComponentSet coverComponents;
+    coverComponents.rectTransform = Rect(-100.0F, -100.0F, 400.0F, 400.0F);
+    coverComponents.selectable.emplace();
+    const kb::scene::SceneObject cover = AddUI(turned, diamond, coverComponents);
+    kb::tests::Require(turned.UI().Update(200.0F, 200.0F, {}, 0.016F), "The turned mask frame must build");
+    kb::tests::Require(turned.UI().HitTest({100.0F, 100.0F}) == cover.Entity(), "The middle of a turned mask takes presses");
+    kb::tests::Require(!turned.UI().HitTest({160.0F, 160.0F}).IsValid() && !turned.UI().HitTest({40.0F, 160.0F}).IsValid(),
+        "The corners of a turned mask's bounding box take no press");
+    kb::tests::Require(turned.UI().HitTest({100.0F, 40.0F}) == cover.Entity() || turned.UI().HitTest({100.0F, 45.0F}) == cover.Entity(),
+        "The tip of a turned mask takes presses");
+}
+
+template <typename Component, typename Mutation>
+void RequireInvalidFramePayload(Mutation mutate, std::string_view componentName) {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet components;
+    components.rectTransform = Rect(0.0F, 0.0F, 40.0F, 30.0F);
+    const auto widget = AddUI(scene, canvas, components);
+    auto ui = scene.Components().UI();
+    ui.Set(widget.Entity(), Component{});
+    const kb::scene::SceneUIQueries query{scene};
+    kb::scene::SceneUIFrame frame;
+    kb::tests::Require(query.BuildFrame(100.0F, 100.0F, frame), "Valid UI payload control must build");
+    auto* payload = ui.TryGet<Component>(widget.Entity());
+    kb::tests::Require(payload != nullptr, "UI payload mutation fixture must resolve its authored component");
+    mutate(*payload);
+    kb::tests::Require(!query.BuildFrame(100.0F, 100.0F, frame) && frame.refusal.entity == widget.Entity() &&
+        frame.refusal.reason != nullptr && std::string_view{frame.refusal.reason}.starts_with(componentName),
+        "Invalid UI payload must refuse the frame with the component and entity before layout uses it");
+}
+
+void TestInvalidFramePayloads() {
+    RequireInvalidFramePayload<kb::scene::UIText>([](auto& value) { value.fontSize = std::numeric_limits<float>::quiet_NaN(); }, "UIText");
+    RequireInvalidFramePayload<kb::scene::UIText>([](auto& value) { value.content.fill('x'); }, "UIText");
+    RequireInvalidFramePayload<kb::scene::UIImage>([](auto& value) { value.alphaHitThreshold = std::numeric_limits<float>::quiet_NaN(); }, "UIImage");
+    RequireInvalidFramePayload<kb::scene::UIDropdown>([](auto& value) { value.optionCount = kb::scene::UIDropdown::MaxOptions + 1U; }, "UIDropdown");
+    RequireInvalidFramePayload<kb::scene::UIDropdown>([](auto& value) { value.optionCount = 1U; value.options[0].text.fill('x'); }, "UIDropdown");
+    RequireInvalidFramePayload<kb::scene::UIInputField>([](auto& value) { value.contentType = static_cast<kb::scene::UIInputContentType>(255U); }, "UIInputField");
+}
+
+void TestContentSizeFitterModes() {
+    kb::scene::Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet components;
+    components.rectTransform = Rect(0.0F, 0.0F, 20.0F, 25.0F);
+    components.layoutElement = kb::scene::UILayoutElement{.minimumWidth = 10.0F, .minimumHeight = 15.0F,
+        .preferredWidth = 60.0F, .preferredHeight = 70.0F};
+    const auto widget = AddUI(scene, canvas, components);
+    struct Fit { kb::scene::UIFitMode mode; float width; float height; };
+    constexpr std::array modes{Fit{kb::scene::UIFitMode::Unconstrained, 20.0F, 25.0F},
+        Fit{kb::scene::UIFitMode::MinimumSize, 10.0F, 15.0F}, Fit{kb::scene::UIFitMode::PreferredSize, 60.0F, 70.0F}};
+    for (const auto horizontal : modes) {
+        for (const auto vertical : modes) {
+            scene.Components().UI().Set(widget.Entity(), kb::scene::UIContentSizeFitter{
+                .horizontalFit = horizontal.mode, .verticalFit = vertical.mode});
+            kb::scene::SceneUIFrame frame;
+            kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(100.0F, 100.0F, frame), "Every content size fitter mode must build");
+            const auto* element = FindElement(frame, widget.Entity());
+            kb::tests::Require(element != nullptr && kb::tests::NearlyEqual(element->rect.width, horizontal.width) &&
+                kb::tests::NearlyEqual(element->rect.height, vertical.height),
+                "Content size fitting must resolve minimum, preferred and unconstrained axes independently");
+        }
+    }
+}
+
 void TestClippingGroupsSortingAndScaling() {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
     kb::scene::UIComponentSet canvasComponents = CanvasComponents();
@@ -410,6 +588,267 @@ void TestClippingGroupsSortingAndScaling() {
     kb::tests::Require(scene.UI().HitTest({20.0F, 140.0F}) == upper.Entity(), "Higher z-order must win hit testing independent of insertion order");
     kb::tests::Require(FindElement(scene.UI().Frame(), lower.Entity())->traversalOrder <
         FindElement(scene.UI().Frame(), upper.Entity())->traversalOrder, "Sibling traversal order must remain authored hierarchy order");
+}
+
+void TestNativeTextSnapshots() {
+    using namespace kb::scene;
+    Scene scene{SceneMode::PrefabPrivate};
+    const SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    auto components = BuildUIComponentPreset(UIComponentPreset::InputField);
+    components.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const auto field = AddUI(scene, canvas, components);
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && scene.UI().SetFocus(field.Entity()),
+        "Native text fixture must focus its field");
+    const auto edit = [&](std::u32string text, std::size_t caret) {
+        static_cast<void>(scene.UI().DrainEvents());
+        kb::tests::Require(scene.UI().QueueTextInputState({field.Entity(), std::move(text), caret}),
+            "A committed native snapshot must be accepted");
+        kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F), "Native snapshot update must succeed");
+        return scene.UI().TextInputState();
+    };
+    auto result = edit(U"A\U0001F600\u017c", 2U);
+    kb::tests::Require(result && result->text == U"A\U0001F600\u017c" && result->caret == 2U,
+        "Native Unicode snapshots must preserve supplementary scalars and caret");
+    kb::tests::Require(std::ranges::count_if(scene.UI().Events(), [](const auto& event) { return event.type == SceneUIEventType::Changed; }) == 1,
+        "A changed native snapshot must emit exactly one change event");
+    result = edit(U"A\U0001F600\u017c", 1U);
+    kb::tests::Require(result && result->caret == 1U, "A selection-only snapshot must update the caret");
+    kb::tests::Require(std::ranges::none_of(scene.UI().Events(), [](const auto& event) { return event.type == SceneUIEventType::Changed; }),
+        "Selection-only snapshots must not emit text changes");
+    result = edit(std::u32string(200U, U'x'), 100U);
+    kb::tests::Require(result && result->text.size() == 200U && result->caret == 100U,
+        "Native paste must not be truncated to a frame's character-event capacity");
+    result = edit(U"", 0U);
+    kb::tests::Require(result && result->text.empty(), "An empty snapshot must delete all content");
+    auto* input = scene.Components().UI().TryGet<UIInputField>(field.Entity());
+    input->characterLimit = 3U;
+    result = edit(U"a\u0301bcdef", 7U);
+    kb::tests::Require(result && result->text == U"a\u0301bc" && result->caret == 4U,
+        "Native edits must use the field's grapheme limit");
+    input->contentType = UIInputContentType::IntegerNumber;
+    result = edit(U"12x34", 3U);
+    kb::tests::Require(result && result->text == U"123" && result->caret == 2U,
+        "Native snapshots must validate content and map the caret past rejected characters");
+    kb::tests::Require(!scene.UI().QueueTextInputState({field.Entity(), {char32_t{0xD800U}}, 1U}) &&
+        !scene.UI().QueueTextInputState({field.Entity(), U"a", 2U}), "Malformed snapshots must be rejected");
+    kb::tests::Require(scene.UI().QueueTextInputState({field.Entity(), U"9", 1U}), "Queue blur fixture");
+    scene.UI().ClearFocus();
+    kb::tests::Require(scene.UI().SetFocus(field.Entity()), "Refocus blur fixture");
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && scene.UI().TextInputState()->text == U"123",
+        "A snapshot queued before blur must not edit a later focus session");
+    kb::tests::Require(scene.UI().QueueTextInputState({field.Entity(), U"9", 1U}), "Queue read-only fixture");
+    input->readOnly = true;
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && !scene.UI().TextInputState() &&
+        UITextContent(*scene.Components().UI().TryGet<UIText>(field.Entity())) == "123",
+        "Becoming read-only must discard a pending native edit and hide the editable snapshot");
+}
+
+// Editing text by the characters a player sees: an accent typed after a letter joins it, Backspace and Delete remove a
+// whole letter with its accents or a whole emoji with its skin tone or family, the arrow keys step over it, and the
+// character limit counts them, not code points or bytes.
+void TestInputFieldEditsGraphemeClusters() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet components = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::InputField);
+    components.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject field = AddUI(scene, canvas, components);
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && scene.UI().SetFocus(field.Entity()), "The input field must take focus");
+    const auto content = [&] {
+        return std::string{kb::scene::UITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(field.Entity()))};
+    };
+    const auto type = [&](std::u32string_view text) {
+        kb::scene::SceneUIInput input;
+        input.textInput = std::span<const char32_t>{text.data(), text.size()};
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, input, 0.016F));
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, {}, 0.016F));
+    };
+    const auto press = [&](auto setKey) {
+        kb::scene::SceneUIInput input;
+        setKey(input);
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, input, 0.016F));
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, {}, 0.016F));
+    };
+    const auto backspace = [&] { press([](kb::scene::SceneUIInput& input) { input.backspaceDown = true; }); };
+    const auto left = [&] { press([](kb::scene::SceneUIInput& input) { input.navigateLeft = true; }); };
+    const auto remove = [&] { press([](kb::scene::SceneUIInput& input) { input.deleteDown = true; }); };
+    // UTF-8 of: e with an acute accent, a with a diaeresis, the diaeresis and a circumflex, a thumb with a skin tone,
+    // a flag of two regional indicators.
+    const std::string acuteE = "e\xCC\x81";
+    const std::string diaeresisA = "a\xCC\x88";
+    const std::string circumflex = "\xCC\x82";
+    const std::string thumb = "\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD";
+    const std::string flag = "\xF0\x9F\x87\xB5\xF0\x9F\x87\xB1";
+
+    type(U"e\u0301");
+    kb::tests::Require(content() == acuteE, "A combining accent typed after a letter must join the text");
+    backspace();
+    kb::tests::Require(content().empty(), "Backspace must remove a letter together with its combining accent");
+
+    type(U"x\U0001F468\u200D\U0001F469\u200D\U0001F467");
+    backspace();
+    kb::tests::Require(content() == "x", "Backspace must remove a whole joined family, not one of its members");
+
+    type(U"\U0001F44D\U0001F3FD");
+    left();
+    type(U"y");
+    kb::tests::Require(content() == "xy" + thumb, "An arrow key must step over an emoji and its skin tone together");
+    remove();
+    kb::tests::Require(content() == "xy", "Delete before an emoji must remove it with its skin tone");
+    backspace();
+    backspace();
+    backspace();
+    kb::tests::Require(content().empty(), "Backspace on empty text must leave it empty");
+
+    // The limit counts characters as seen: two letters with accents fit a limit of two and a third does not.
+    kb::scene::UIInputField limited = *scene.Components().UI().TryGet<kb::scene::UIInputField>(field.Entity());
+    limited.characterLimit = 2U;
+    scene.Components().UI().Set(field.Entity(), limited);
+    type(U"e\u0301");
+    type(U"a\u0308");
+    kb::tests::Require(content() == acuteE + diaeresisA, "Accents must not use up places of the character limit");
+    type(U"z");
+    kb::tests::Require(content() == acuteE + diaeresisA, "A third character must be refused at a limit of two");
+    type(U"\u0302");
+    kb::tests::Require(content() == acuteE + diaeresisA + circumflex, "An accent typed at the limit must still join the last character");
+    // A flag is one character: two regional indicators fit a limit of one.
+    for (int guard = 0; guard < 8 && !content().empty(); ++guard) backspace();
+    kb::tests::Require(content().empty(), "The field must be emptied before the flag check");
+    limited.characterLimit = 1U;
+    scene.Components().UI().Set(field.Entity(), limited);
+    type(U"\U0001F1F5\U0001F1F1");
+    kb::tests::Require(content() == flag, "A flag must count as one character");
+    type(U"q");
+    kb::tests::Require(content() == flag, "A second character must be refused at a limit of one");
+}
+
+// A menu laid out for a reference screen keeps every control on screen, whole, apart and clickable across screens of
+// every shape and size: phone and tablet, portrait and landscape, ultra wide and 4K, with the scaler matching the
+// width, the height or both, with and without a safe area. A text far too long for its place is cut to the text
+// limit and the element keeps a finite, bounded size.
+void TestResponsiveMenuKeepsEveryControlReachable() {
+    struct Screen {
+        float width;
+        float height;
+    };
+    constexpr std::array<Screen, 8U> screens{ Screen{ 1920.0F, 1080.0F }, Screen{ 1280.0F, 720.0F }, Screen{ 800.0F, 600.0F },
+        Screen{ 360.0F, 640.0F }, Screen{ 640.0F, 360.0F }, Screen{ 3840.0F, 2160.0F }, Screen{ 2560.0F, 1080.0F }, Screen{ 1024.0F, 1366.0F } };
+    constexpr std::array<float, 3U> matches{ 0.0F, 0.5F, 1.0F };
+    for (const bool safeArea : { false, true }) {
+        for (const float match : matches) {
+            kb::scene::Scene scene{ kb::scene::SceneMode::PrefabPrivate };
+            kb::scene::UIComponentSet canvasComponents = CanvasComponents();
+            canvasComponents.canvasScaler->scaleMode = kb::scene::UICanvasScaleMode::ScaleWithScreenSize;
+            canvasComponents.canvasScaler->referenceResolution = { 1920.0F, 1080.0F };
+            canvasComponents.canvasScaler->matchWidthOrHeight = match;
+            const kb::scene::SceneObject canvas = AddUI(scene, {}, canvasComponents);
+            kb::scene::UIComponentSet menuComponents;
+            menuComponents.rectTransform = kb::scene::UIRectTransform{};
+            menuComponents.rectTransform->anchorMin = { 0.1F, 0.1F };
+            menuComponents.rectTransform->anchorMax = { 0.9F, 0.9F };
+            menuComponents.rectTransform->offsetMin = { 0.0F, 0.0F };
+            menuComponents.rectTransform->offsetMax = { 0.0F, 0.0F };
+            menuComponents.verticalLayout = kb::scene::UIVerticalLayout{ .spacing = 10.0F, .controlChildWidth = true, .expandChildWidth = true };
+            const kb::scene::SceneObject menu = AddUI(scene, canvas, menuComponents);
+            std::vector<kb::scene::SceneEntity> buttons;
+            for (int index = 0; index < 5; ++index) {
+                kb::scene::UIComponentSet button = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+                button.rectTransform = Rect(0.0F, 0.0F, 400.0F, 80.0F);
+                button.layoutElement = kb::scene::UILayoutElement{ .preferredWidth = 400.0F, .preferredHeight = 80.0F };
+                buttons.push_back(AddUI(scene, menu, button).Entity());
+            }
+            // A label with a text far longer than anything fits: the limit cuts it and the size stays sane.
+            kb::scene::UIComponentSet longLabel = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+            longLabel.rectTransform = Rect(0.0F, 0.0F, 400.0F, 40.0F);
+            longLabel.layoutElement = kb::scene::UILayoutElement{ .preferredWidth = 400.0F, .preferredHeight = 40.0F };
+            const kb::scene::SceneObject label = AddUI(scene, menu, longLabel);
+            kb::tests::Require(kb::scene::SetUITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(label.Entity()), std::string(1000U, 'W')),
+                "A text of 1000 letters must be accepted by the text limit");
+            for (const Screen& screen : screens) {
+                if (safeArea) {
+                    static_cast<void>(scene.UI().SetSafeAreaInsets(kb::scene::UIEdges{ .left = 20.0F, .top = 40.0F, .right = 20.0F, .bottom = 30.0F }));
+                }
+                kb::tests::Require(scene.UI().Update(screen.width, screen.height, {}, 0.016F), "The responsive menu must build a frame");
+                const kb::scene::SceneUIFrame& frame = scene.UI().Frame();
+                float previousBottom = -1.0e9F;
+                for (const kb::scene::SceneEntity entity : buttons) {
+                    const kb::scene::SceneUIFrameElement* element = FindElement(frame, entity);
+                    kb::tests::Require(element != nullptr && element->interactionEnabled, "Every control of the menu must be in the frame and usable");
+                    const kb::math::Rect& rect = element->rect;
+                    kb::tests::Require(std::isfinite(rect.x) && std::isfinite(rect.y) && std::isfinite(rect.width) && std::isfinite(rect.height) &&
+                            rect.width > 1.0F && rect.height > 1.0F,
+                        "Every control must have a finite, visible size");
+                    kb::tests::Require(rect.x >= -0.5F && rect.y >= -0.5F && rect.x + rect.width <= screen.width + 0.5F &&
+                            rect.y + rect.height <= screen.height + 0.5F,
+                        "Every control must lie inside the screen");
+                    kb::tests::Require(rect.y >= previousBottom - 0.5F, "Controls of a vertical menu must not overlap");
+                    previousBottom = rect.y + rect.height;
+                    kb::tests::Require(scene.UI().HitTest({ rect.x + rect.width * 0.5F, rect.y + rect.height * 0.5F }) == entity,
+                        "The middle of a control must hit that control");
+                }
+                const kb::scene::SceneUIFrameElement* labelElement = FindElement(frame, label.Entity());
+                kb::tests::Require(labelElement != nullptr && std::isfinite(labelElement->rect.width) && std::isfinite(labelElement->rect.height) &&
+                        labelElement->rect.width <= screen.width * 4.0F && labelElement->rect.height <= screen.height * 4.0F,
+                    "A very long text must not give its element an unbounded size");
+                if (labelElement != nullptr && labelElement->text.has_value()) {
+                    kb::tests::Require(kb::scene::UITextContent(*labelElement->text).size() < kb::scene::UIText::MaxUtf8Bytes,
+                        "A text longer than the text limit must be cut to it");
+                }
+            }
+        }
+    }
+}
+
+// Controls anchored to the four corners of a screen stay inside the safe area and reachable for every orientation, notch,
+// gesture bar and on-screen keyboard (a bottom inset), and insets larger than the screen collapse without negative
+// sizes or a crash.
+void TestSafeAreaMatrixKeepsCornerControlsReachable() {
+    struct Screen { float width; float height; };
+    struct Insets { float left; float top; float right; float bottom; };
+    constexpr std::array<Screen, 2U> screens{ Screen{ 360.0F, 780.0F }, Screen{ 780.0F, 360.0F } };
+    constexpr std::array<Insets, 5U> insets{ Insets{ 0.0F, 0.0F, 0.0F, 0.0F }, Insets{ 0.0F, 44.0F, 0.0F, 34.0F },
+        Insets{ 44.0F, 0.0F, 44.0F, 21.0F }, Insets{ 0.0F, 24.0F, 0.0F, 300.0F }, Insets{ 400.0F, 400.0F, 400.0F, 400.0F } };
+    for (const Screen& screen : screens) {
+        for (const Insets& edge : insets) {
+            kb::scene::Scene scene{ kb::scene::SceneMode::PrefabPrivate };
+            kb::scene::UIComponentSet canvasComponents = CanvasComponents();
+            canvasComponents.canvas->respectSafeArea = true;
+            const kb::scene::SceneObject canvas = AddUI(scene, {}, canvasComponents);
+            std::array<kb::scene::SceneEntity, 4U> corners{};
+            for (std::size_t index = 0U; index < corners.size(); ++index) {
+                kb::scene::UIComponentSet button = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+                const float x = (index % 2U == 0U) ? 0.0F : 1.0F;
+                const float y = (index < 2U) ? 0.0F : 1.0F;
+                button.rectTransform = kb::scene::UIRectTransform{};
+                button.rectTransform->anchorMin = { x, y };
+                button.rectTransform->anchorMax = { x, y };
+                button.rectTransform->pivot = { x, y };
+                button.rectTransform->offsetMin = { x > 0.5F ? -80.0F : 0.0F, y > 0.5F ? -40.0F : 0.0F };
+                button.rectTransform->offsetMax = { x > 0.5F ? 0.0F : 80.0F, y > 0.5F ? 0.0F : 40.0F };
+                corners[index] = AddUI(scene, canvas, button).Entity();
+            }
+            static_cast<void>(scene.UI().SetSafeAreaInsets(kb::scene::UIEdges{ .left = edge.left, .top = edge.top, .right = edge.right, .bottom = edge.bottom }));
+            kb::tests::Require(scene.UI().Update(screen.width, screen.height, {}, 0.016F), "The safe area frame must build");
+            // With less room than two buttons side by side and two on top of each other, nothing is promised except sane sizes.
+            const bool collapsed = screen.width - edge.left - edge.right < 160.0F || screen.height - edge.top - edge.bottom < 80.0F;
+            for (const kb::scene::SceneEntity entity : corners) {
+                const kb::scene::SceneUIFrameElement* element = FindElement(scene.UI().Frame(), entity);
+                if (element == nullptr) {
+                    kb::tests::Require(collapsed, "A corner control may only vanish when the insets leave no room");
+                    continue;
+                }
+                const kb::math::Rect& rect = element->rect;
+                kb::tests::Require(std::isfinite(rect.x) && std::isfinite(rect.y) && rect.width >= 0.0F && rect.height >= 0.0F,
+                    "A corner control must keep a finite, non-negative size under any inset");
+                if (!collapsed) {
+                    kb::tests::Require(rect.x >= edge.left - 0.5F && rect.y >= edge.top - 0.5F &&
+                            rect.x + rect.width <= screen.width - edge.right + 0.5F && rect.y + rect.height <= screen.height - edge.bottom + 0.5F,
+                        "A corner control must lie inside the safe area");
+                    kb::tests::Require(scene.UI().HitTest({ rect.x + rect.width * 0.5F, rect.y + rect.height * 0.5F }) == entity,
+                        "The middle of a corner control must take presses");
+                }
+            }
+        }
+    }
 }
 
 void TestInteractionAndEditing() {
@@ -661,6 +1100,69 @@ void TestAutomaticRuntimeInput() {
     kb::tests::Require(!scene.UI().SetViewport(std::nanf(""), 100.0F), "Invalid viewport geometry must fail closed");
 }
 
+void TestIndependentTouchCapture() {
+    kb::scene::Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    auto components = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    components.rectTransform = Rect(200.0F, 0.0F, 100.0F, 100.0F);
+    const auto button = AddUI(scene, canvas, components);
+    auto& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    device.SetPointerViewportExtent(400U, 400U);
+    const auto frame = [&](std::span<const kb::input::InputTouchPoint> points) {
+        device.SetTouchPoints(points);
+        static_cast<void>(scene.Runtime().Update(0.016F));
+    };
+    using Phase = kb::input::InputTouchPhase;
+    std::array points{kb::input::InputTouchPoint{7U, 50.0F, 50.0F, Phase::Began},
+        kb::input::InputTouchPoint{23U, 250.0F, 50.0F, Phase::Began}};
+    frame(std::span{points}.first(1U));
+    kb::tests::Require(!scene.UI().Pressed().IsValid(), "Gameplay touch outside UI must not press a widget");
+    points[0].phase = Phase::Moved;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(),
+        "A second contact must press UI independently of the first gameplay contact");
+    std::swap(points[0], points[1]);
+    points[0].phase = Phase::Moved;
+    points[1].x = 350.0F;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(), "Contact order changes must preserve the captured UI press");
+    points[0].phase = Phase::Ended;
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "Captured contact release must activate its button while the gameplay finger remains down");
+    static_cast<void>(scene.UI().DrainEvents());
+    frame(std::span{points}.subspan(1U));
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Pressed, button.Entity()) &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "The remaining gameplay move must not become a new UI press");
+    points[0].phase = Phase::Began;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(), "A fresh contact must press UI again");
+    static_cast<void>(scene.UI().DrainEvents());
+    device.SetHasFocus(false);
+    points[0].phase = Phase::Moved;
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "Focus loss must release a captured UI contact without activating it");
+    device.SetHasFocus(true);
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid(), "A move after focus restoration must not revive a UI press");
+    points[0].phase = Phase::Began;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(), "Cancellation fixture must capture the button");
+    static_cast<void>(scene.UI().DrainEvents());
+    points[0].phase = Phase::Cancelled;
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Canceled, button.Entity()) &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "Explicit touch cancellation must release and cancel the button without activation");
+}
+
 void TestAuthoredDimensionsAndVisibility() {
     kb::scene::Scene scene;
     const auto canvas = AddUI(scene, {}, CanvasComponents());
@@ -682,6 +1184,69 @@ void TestAuthoredDimensionsAndVisibility() {
     const auto* visible = FindElement(frame, button.Entity());
     kb::tests::Require(visible != nullptr && visible->effectiveOpacity == 1.0F && visible->hitTestable &&
         kb::tests::NearlyEqual(visible->rect.width, 240.0F), "Restored UI must render at its authored width and accept input");
+}
+
+void TestFocusedTextAfterViewportResize() {
+    kb::scene::Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet formComponents;
+    formComponents.rectTransform = Rect(0.0F, 0.0F, 0.0F, 0.0F);
+    formComponents.rectTransform->anchorMax = {1.0F, 1.0F};
+    formComponents.mask.emplace();
+    formComponents.scrollView.emplace();
+    formComponents.scrollView->horizontal = false;
+    formComponents.scrollView->inertia = false;
+    const auto form = AddUI(scene, canvas, formComponents);
+    auto fieldComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::InputField);
+    fieldComponents.rectTransform = Rect(40.0F, 320.0F, 160.0F, 80.0F);
+    const auto field = AddUI(scene, form, fieldComponents);
+    kb::scene::SceneUIInput input;
+    input.pointerAvailable = true;
+    input.pointerPosition = {100.0F, 350.0F};
+    kb::tests::Require(scene.UI().Update(400.0F, 600.0F, input, 0.016F), "Form must build before focus");
+    input.primaryDown = true;
+    kb::tests::Require(scene.UI().Update(400.0F, 600.0F, input, 0.016F), "Pointer must focus the field");
+    input.primaryDown = false;
+    const std::array<char32_t, 1U> typed{U'x'};
+    input.textInput = typed;
+    kb::tests::Require(scene.UI().Update(400.0F, 600.0F, input, 0.016F), "Focused field must accept text");
+    input.textInput = {};
+    kb::tests::Require(scene.UI().Focused() == field.Entity(), "The form field must hold actual pointer focus");
+    const auto resize = [&](float height) {
+        kb::tests::Require(scene.UI().Update(400.0F, height, input, 0.016F), "Focused form must resize");
+    };
+    const auto requireVisible = [&] {
+        const auto* item = FindElement(scene.UI().Frame(), field.Entity());
+        const auto* viewport = FindElement(scene.UI().Frame(), form.Entity());
+        kb::tests::Require(item != nullptr && viewport != nullptr && item->rect.y >= viewport->rect.y - 0.01F &&
+            item->rect.y + item->rect.height <= viewport->rect.y + viewport->rect.height + 0.01F,
+            "Viewport changes must reveal the focused text field inside its scroll view");
+        kb::tests::Require(scene.UI().Focused() == field.Entity() &&
+            kb::scene::UITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(field.Entity())) == "x",
+            "Revealing a field must preserve focus and committed text");
+        kb::tests::Require(scene.UI().HitTest({100.0F, item->rect.y + 40.0F}) == field.Entity(),
+            "The revealed field must hit-test where it is drawn");
+    };
+    resize(280.0F);
+    requireVisible();
+    input.pointerPosition = {100.0F, 240.0F};
+    input.scrollDelta = 10.0F;
+    resize(280.0F);
+    input.scrollDelta = 0.0F;
+    resize(280.0F);
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().UI().TryGet<kb::scene::UIScrollView>(form.Entity())->scrollY, 0.0F),
+        "Ordinary frames must let the user scroll away without forcing the focus back into view");
+    resize(600.0F);
+    requireVisible();
+    resize(280.0F);
+    requireVisible();
+    resize(600.0F);
+    kb::tests::Require(scene.UI().SetSafeAreaInsets({0.0F, 0.0F, 0.0F, 320.0F}), "Keyboard insets must apply");
+    resize(600.0F);
+    requireVisible();
+    kb::tests::Require(scene.UI().SetSafeAreaInsets({}), "Keyboard insets must clear");
+    resize(600.0F);
+    requireVisible();
 }
 
 // A pad player has no pointer: the left stick and the D-pad have to walk focus, a focused slider has
@@ -1488,10 +2053,114 @@ void TestScrollMovementAndLocalizedText() {
     kb::tests::Require(scene.Localization().SetLanguage("pl"), "The menu language must switch");
     pointer.At(390.0F, 390.0F, false);
     kb::tests::Require(ShownText(scene.UI().Frame(), text.Entity()) == "Graj", "A localized text must follow a language change");
+
+    // Edges: a language that is not in the catalog (a regional variant too) is refused and changes nothing, a message
+    // missing from the selected language falls back to the catalog language, a message missing everywhere shows its key,
+    // and a translation longer than the text limit is cut on a character boundary instead of overflowing.
+    kb::tests::Require(!scene.Localization().SetLanguage("pl-PL") && !scene.Localization().SetLanguage("xx") && scene.Localization().Language() == "pl",
+        "A language the catalog does not have must be refused and leave the language alone");
+    const std::string accent = "\xE2\x82\xAC"; // the euro sign: three bytes, so a cut at 1022 would split it
+    std::string tooLong;
+    for (int index = 0; index < 600; ++index) tooLong += accent;
+    const kb::localization::LocalizationCatalog edgeCatalog{
+        .fallbackLanguage = "en",
+        .languages = {{"en", {{"long.text", {.text = tooLong}}, {"short.text", {.text = "ok"}}}}, {"pl", {{"short.text", {.text = "OK!"}}}}},
+    };
+    kb::tests::Require(kb::localization::LocalizationCatalogIO::Save(root / "Assets" / "Localization" / "Edge.kbloc", edgeCatalog), "The edge catalog must save");
+    static_cast<void>(scene.Assets().Discover());
+    const auto* edgeMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Localization/Edge.kbloc");
+    kb::tests::Require(edgeMetadata != nullptr && scene.Localization().SetCatalog(edgeMetadata->id.value), "The edge catalog must load");
+    const auto addLocalized = [&](const char* key, float y) {
+        kb::scene::UIComponentSet components;
+        components.rectTransform = Rect(0.0F, y, 100.0F, 20.0F);
+        components.text.emplace();
+        static_cast<void>(kb::scene::SetUITextLocalizationKey(*components.text, key));
+        return AddUI(scene, canvas, components);
+    };
+    const kb::scene::SceneObject longText = addLocalized("long.text", 130.0F);
+    const kb::scene::SceneObject shortText = addLocalized("short.text", 150.0F);
+    const kb::scene::SceneObject missingText = addLocalized("no.such.key", 170.0F);
+    for (const char* language : {"pl", "en"}) {
+        kb::tests::Require(scene.Localization().SetLanguage(language), "The edge catalog language must switch");
+        pointer.At(390.0F, 390.0F, false);
+        const std::string shownLong{ShownText(scene.UI().Frame(), longText.Entity())};
+        kb::tests::Require(!shownLong.empty() && shownLong.size() < kb::scene::UIText::MaxUtf8Bytes && shownLong.size() % 3U == 0U &&
+                shownLong.compare(0U, 3U, accent) == 0 && shownLong.compare(shownLong.size() - 3U, 3U, accent) == 0,
+            "A translation longer than the text limit must be cut at a character boundary, also when it comes from the fallback language");
+        kb::tests::Require(ShownText(scene.UI().Frame(), shortText.Entity()) == (std::string{language} == "pl" ? "OK!" : "ok"),
+            "A short message must follow the language");
+        kb::tests::Require(ShownText(scene.UI().Frame(), missingText.Entity()) == "no.such.key", "A message missing everywhere must show its key");
+    }
     std::filesystem::remove_all(root);
 }
 
 // Every v39 widget setting survives a save, and an older canvas keeps filling the whole screen.
+// A modal canvas takes the input of every canvas drawn below it while it is shown: no hit, no focus, no navigation into
+// them. Focus moves into the modal canvas when it appears and returns to where it was when the canvas goes.
+void TestModalCanvasBlocksCanvasesBelow() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject hud = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet buttonComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    buttonComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject hudFirst = AddUI(scene, hud, buttonComponents);
+    buttonComponents.rectTransform = Rect(0.0F, 40.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject hudSecond = AddUI(scene, hud, buttonComponents);
+
+    kb::scene::UIComponentSet dialogComponents = CanvasComponents();
+    dialogComponents.canvas->sortingOrder = 10;
+    dialogComponents.canvas->modal = true;
+    dialogComponents.canvasGroup.emplace();
+    dialogComponents.canvasGroup->visible = false;
+    dialogComponents.canvasGroup->transitionSeconds = 0.0F;
+    const kb::scene::SceneObject dialog = AddUI(scene, {}, dialogComponents);
+    buttonComponents.rectTransform = Rect(200.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject yes = AddUI(scene, dialog, buttonComponents);
+    buttonComponents.rectTransform = Rect(200.0F, 40.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject no = AddUI(scene, dialog, buttonComponents);
+
+    kb::input::InputDeviceState& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    device.SetPointerViewportExtent(400U, 400U);
+    device.SetPointerPosition(390.0F, 390.0F);
+    const auto frame = [&] { static_cast<void>(scene.Runtime().Update(0.016F)); };
+    const auto tap = [&](kb::input::InputKey key) {
+        device.SetKeyDown(key, true);
+        frame();
+        device.SetKeyDown(key, false);
+        frame();
+    };
+    frame();
+    kb::tests::Require(!scene.UI().ModalCanvasActive() && scene.UI().SetFocus(hudFirst.Entity()), "A hidden modal canvas must not block anything");
+    kb::tests::Require(scene.UI().HitTest({50.0F, 10.0F}) == hudFirst.Entity(), "The HUD is hit while the dialog is hidden");
+
+    // The dialog appears.
+    scene.Components().UI().TryGet<kb::scene::UICanvasGroup>(dialog.Entity())->visible = true;
+    scene.Components().UI().MarkModified<kb::scene::UICanvasGroup>(dialog.Entity());
+    frame();
+    frame();
+    kb::tests::Require(scene.UI().ModalCanvasActive(), "A shown modal canvas must report itself");
+    kb::tests::Require(scene.UI().Focused() == yes.Entity(), "Focus must move into the modal canvas when it appears");
+    kb::tests::Require(scene.UI().HitTest({50.0F, 10.0F}) != hudFirst.Entity() && scene.UI().HitTest({50.0F, 50.0F}) != hudSecond.Entity(),
+        "The canvas below a modal canvas must not be hit");
+    kb::tests::Require(scene.UI().HitTest({250.0F, 10.0F}) == yes.Entity(), "The modal canvas itself is still hit");
+    kb::tests::Require(!scene.UI().SetFocus(hudSecond.Entity()), "The canvas below a modal canvas must refuse focus");
+    tap(kb::input::InputKey::GamepadDPadDown);
+    kb::tests::Require(scene.UI().Focused() == no.Entity(), "Navigation moves inside the modal canvas");
+    tap(kb::input::InputKey::GamepadDPadDown);
+    tap(kb::input::InputKey::GamepadDPadLeft);
+    kb::tests::Require(scene.UI().Focused() == no.Entity(), "Navigation must not leave the modal canvas for the one below");
+
+    // The dialog goes: focus returns to the widget that had it.
+    scene.Components().UI().TryGet<kb::scene::UICanvasGroup>(dialog.Entity())->visible = false;
+    scene.Components().UI().MarkModified<kb::scene::UICanvasGroup>(dialog.Entity());
+    frame();
+    frame();
+    kb::tests::Require(!scene.UI().ModalCanvasActive(), "A hidden modal canvas must let go");
+    kb::tests::Require(scene.UI().Focused() == hudFirst.Entity(), "Focus must return to where it was before the modal canvas");
+    kb::tests::Require(scene.UI().HitTest({50.0F, 50.0F}) == hudSecond.Entity() && scene.UI().SetFocus(hudSecond.Entity()),
+        "The canvas below is reachable again once the modal canvas is gone");
+}
+
 void TestWidgetSettingsPersistence() {
     kb::scene::UIComponentSet authored;
     authored.rectTransform.emplace();
@@ -1500,6 +2169,7 @@ void TestWidgetSettingsPersistence() {
     authored.canvas->pixelsPerUnit = 50.0F;
     authored.canvas->respectSafeArea = false;
     authored.canvas->player = 2;
+    authored.canvas->modal = true;
     authored.canvasGroup.emplace();
     authored.canvasGroup->visible = false;
     authored.canvasGroup->transitionSeconds = 0.3F;
@@ -1549,9 +2219,9 @@ void TestWidgetSettingsPersistence() {
     kb::scene::SceneAssetUIComponentCodec::Write(bytes, authored);
     kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
     kb::scene::UIComponentSet decoded;
-    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 45U, decoded) && reader.Exhausted(), "A v45 widget set must load");
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, kb::scene::SceneDocument::CurrentFileVersion, decoded) && reader.Exhausted(), "The current widget set must load");
     kb::tests::Require(decoded.canvas->renderMode == kb::scene::UICanvasRenderMode::WorldSpace && decoded.canvas->pixelsPerUnit == 50.0F &&
-        !decoded.canvas->respectSafeArea && decoded.canvas->player == 2 && !decoded.canvasGroup->visible &&
+        !decoded.canvas->respectSafeArea && decoded.canvas->player == 2 && decoded.canvas->modal && !decoded.canvasGroup->visible &&
         decoded.canvasGroup->transitionSeconds == 0.3F && decoded.canvasGroup->hiddenOffset.y == 5.0F && decoded.canvasGroup->hiddenScale == 0.8F &&
         decoded.image->fillMethod == kb::scene::UIImageFillMethod::Radial360 && decoded.image->fillOrigin == kb::scene::UIImageFillOrigin::End &&
         decoded.image->fillAmount == 0.4F && !decoded.image->fillClockwise && decoded.image->alphaHitThreshold == 0.2F &&
@@ -1567,6 +2237,20 @@ void TestWidgetSettingsPersistence() {
         decoded.inputField->contentType == kb::scene::UIInputContentType::Pin && kb::scene::UIInputPlaceholder(*decoded.inputField) == "PIN" &&
         decoded.progressBar->direction == kb::scene::UIAxisDirection::TopToBottom && decoded.progressBar->fillRect == 71U,
         "Every v45 widget setting must round-trip");
+
+    // A canvas saved before the modal flag existed (v51) ends one byte earlier and never blocks the canvases below.
+    {
+        kb::scene::UIComponentSet onlyCanvas;
+        onlyCanvas.canvas.emplace();
+        onlyCanvas.canvas->modal = true;
+        std::vector<std::uint8_t> current;
+        kb::scene::SceneAssetUIComponentCodec::Write(current, onlyCanvas);
+        current.pop_back();
+        kb::scene::SceneAssetBinaryIO::ByteReader olderReader{current};
+        kb::scene::UIComponentSet older;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(olderReader, 51U, older) && olderReader.Exhausted() && !older.canvas->modal,
+            "A v51 canvas must load without a modal flag");
+    }
 
     std::vector<std::uint8_t> legacy;
     kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 1ULL << static_cast<unsigned>(kb::scene::UIComponentType::Canvas));
@@ -1714,10 +2398,7 @@ void TestFrameAmongManyRootsMatchesRecordedFrame() {
     kb::tests::Require(hash == expected, "UI frame among many roots differs from the recorded frame");
 }
 
-// The frame builder walks the roots above UI objects only: a small overlay next to a million plain roots must
-// build in well under a millisecond and without large allocations.
-void TestFrameNextToMillionRootsIsCheap() {
-    kb::scene::Scene scene;
+void PopulateMillionRootOverlay(kb::scene::Scene& scene) {
     const std::vector<kb::scene::SceneObjectDesc> descs(1'000'000U);
     static_cast<void>(scene.Entities().CreateObjects(descs));
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -1726,6 +2407,15 @@ void TestFrameNextToMillionRootsIsCheap() {
         text.rectTransform = Rect(10.0F, 10.0F + 30.0F * static_cast<float>(index), 200.0F, 24.0F);
         static_cast<void>(AddUI(scene, canvas, text));
     }
+    kb::tests::Require(scene.Entities().Count() == 1'000'009U,
+        "Overlay profiling scene must contain a million plain roots and nine UI objects");
+}
+
+// The frame builder walks the roots above UI objects only: a small overlay next to a million plain roots must
+// build in well under a millisecond and without large allocations.
+void TestFrameNextToMillionRootsIsCheap() {
+    kb::scene::Scene scene;
+    PopulateMillionRootOverlay(scene);
     const kb::scene::SceneUIQueries ui{scene};
     kb::scene::SceneUIFrame frame;
     std::array<double, 5U> samples{};
@@ -1742,7 +2432,8 @@ void TestFrameNextToMillionRootsIsCheap() {
         kb::tests::Require(built && frame.elements.size() == 9U, "Overlay frame next to a million roots must build");
     }
     std::ranges::sort(samples);
-    std::cout << "ui_buildframe_million_roots median_ms=" << samples[2] << " large_allocations=" << largeAllocations << '\n';
+    std::cout << "ui_buildframe_million_roots median_ms=" << samples[2] << " large_allocations=" << largeAllocations
+              << " element_bytes=" << sizeof(kb::scene::SceneUIFrameElement) << '\n';
     kb::tests::Require(samples[2] < 0.5 * kb::tests::kSanitizerTimeScale && largeAllocations == 0U,
         "A small overlay next to a million plain roots must build in under 0.5 ms without allocations of 16 KB or more");
 }
@@ -1751,7 +2442,10 @@ void RunSceneUITests() {
     TestAuthoredDimensionsAndVisibility();
     TestCatalogAndPresets();
     TestFrameWithoutCanvasTracksDynamicComponents();
+    TestFrameTracksWidgetComponentLifetimes();
     TestLayoutsAndFitters();
+    TestInvalidFramePayloads();
+    TestContentSizeFitterModes();
     TestHierarchicalTransformsAndMaskHitTesting();
     TestClippingGroupsSortingAndScaling();
     TestInteractionAndEditing();
@@ -1761,6 +2455,8 @@ void RunSceneUITests() {
     TestNavigationLinksSurviveHierarchyCopies();
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();
+    TestFocusedTextAfterViewportResize();
+    TestIndependentTouchCapture();
     TestControllerNavigation();
     TestRadioGroupsAndDrivenWidgets();
     TestSelectablePresentationAndHits();
@@ -1770,8 +2466,14 @@ void RunSceneUITests() {
     TestSparseGroupTransitionLifetime();
     TestScrollMovementAndLocalizedText();
     TestWidgetSettingsPersistence();
+    TestModalCanvasBlocksCanvasesBelow();
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
+    TestInputFieldEditsGraphemeClusters();
+    TestNativeTextSnapshots();
+    TestResponsiveMenuKeepsEveryControlReachable();
+    TestNestedMasksClipToTheirOverlap();
+    TestSafeAreaMatrixKeepsCornerControlsReachable();
     RunUITextLineBreakingTests();
 }
 
@@ -1802,6 +2504,42 @@ void RunSceneUIBuildFrameBenchmark() {
     }
     std::ranges::sort(samples);
     std::cout << "ui_buildframe_roots=" << rootCount << " median_ms=" << samples[2] << '\n';
+}
+
+void RunSceneUIBuildFrameProfile() {
+    kb::scene::Scene scene;
+    PopulateMillionRootOverlay(scene);
+    const kb::scene::SceneUIQueries ui{scene};
+    kb::scene::SceneUIFrame frame;
+    for (int warmup = 0; warmup < 2; ++warmup) {
+        kb::tests::Require(ui.BuildFrame(1920.0F, 1080.0F, frame) && frame.elements.size() == 9U,
+            "UI profiling workload must build the complete overlay");
+    }
+    const auto expectedHash = HashUIFrame(frame);
+    constexpr std::size_t frameCount = 10'000U;
+    std::vector<double> samples(frameCount);
+    std::cout << "{\"schema\":\"21kb.scene-ui-profile/v1\",\"phase\":\"begin\",\"frames\":"
+              << frameCount << ",\"budgetEvaluated\":false}" << std::endl;
+    kb::tests::BeginAllocationTally();
+    for (double& sample : samples) {
+        const auto start = std::chrono::steady_clock::now();
+        const bool built = ui.BuildFrame(1920.0F, 1080.0F, frame);
+        sample = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        kb::tests::Require(built && frame.elements.size() == 9U,
+            "UI profiling workload must build the complete overlay on every frame");
+    }
+    const auto allocations = kb::tests::EndAllocationTally();
+    kb::tests::Require(HashUIFrame(frame) == expectedHash,
+        "UI profiling workload must preserve the complete frame contents");
+    std::ranges::sort(samples);
+    std::cout << "{\"schema\":\"21kb.scene-ui-profile/v1\",\"phase\":\"complete\",\"roots\":1000000,"
+                 "\"elements\":9,\"frames\":" << frameCount
+              << ",\"warmupFrames\":2,\"clock\":\"steady_wall_ms\",\"p50\":" << samples[(frameCount - 1U) * 50U / 100U]
+              << ",\"p95\":" << samples[(frameCount - 1U) * 95U / 100U]
+              << ",\"p99\":" << samples[(frameCount - 1U) * 99U / 100U]
+              << ",\"allocations\":" << allocations.count << ",\"allocationBytes\":" << allocations.bytes
+              << ",\"largeAllocations\":" << allocations.largeCount
+              << ",\"budgetEvaluated\":false}" << std::endl;
 }
 
 } // namespace kb::tests

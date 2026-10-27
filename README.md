@@ -30,15 +30,6 @@ executable. No web views, no generic UI toolkit, no layers between you and the f
 > headlessly by its built in automation runner, the same one our regression suite uses
 > to click through panels, cook materials and read pixels back from the GPU.
 
-<table>
-  <tr>
-    <td align="center"><h3>1,082</h3>commits in 15 weeks</td>
-    <td align="center"><h3>545K</h3>lines of first party C++</td>
-    <td align="center"><h3>131K</h3>lines of test code</td>
-    <td align="center"><h3>6</h3>GPU API shader targets</td>
-  </tr>
-</table>
-
 ## The editor
 
 <p align="center">
@@ -55,7 +46,7 @@ side by side or detach into their own windows, with Undo and Redo for every scen
 and Play Mode in place.
 
 **Components by category.** Add Component groups what the engine offers into Animation,
-Audio, Navigation, Physics, Rendering, Scene, User Widget and World, with search.
+Audio, Gameplay, Navigation, Physics, Rendering, Scene, User Widget and World, with search.
 
 **Dedicated editors** for materials, particles, skeletal meshes, animation clips, animator
 state machines, scripts and game builds.
@@ -165,7 +156,7 @@ One panel cooks, packages and publishes atomically, with a manifest, receipt and
 | **Windows x64** | Editor, player and packaging, fully covered by CI |
 | **Linux x64** | Engine runtime tested in CI under sanitizers, native player host not yet in CI |
 | **Android arm64** (ASTC, ETC2) | Native host and Gradle project, not yet in CI |
-| **Web** (WebGL 2, WebGPU) | Native host, not yet in CI |
+| **Web** (WebGL 2, WebGPU) | WebGL 2 host built and bootstrap tested in CI, touch input tested in a browser; WebGPU not built in CI; no GPU rendering acceptance |
 
 ## Engineering you can audit
 
@@ -182,7 +173,7 @@ flowchart LR
   engine["kb_engine<br/>ECS, scenes, assets, scripting"] --> renderer["kb_renderer<br/>pass graph, materials, post"]
   renderer --> editor["kb_editor<br/>native Win32 editor"]
   renderer --> game["Packaged game hosts<br/>Windows, Linux, Android, Web"]
-  plugins["Provider modules<br/>physics, audio, particles, terrain"] --> engine
+  plugins["Provider modules<br/>physics, audio, particles, lighting, AI, World 2D, terrain"] --> engine
   engine --> cli["kb_cli<br/>validation, headless runs, MCP"]
 ```
 
@@ -199,11 +190,13 @@ flowchart LR
 ## Build
 
 ```powershell
-cmake --preset dev
-cmake --build --preset dev --target kb_editor
+cmake -S . -B build/dev -G "Visual Studio 18 2026" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
+cmake --build build/dev --config Release --target kb_editor --parallel 4
 ```
 
-Requires Visual Studio 2022 and CMake. The editor is written to `build/bin/Debug/kb_editor.exe`.
+Requires CMake 3.27 or newer and an MSVC toolchain; CI uses Visual Studio 2026 with the generator above. The configure step downloads
+Lua, Zstandard, Monocypher and Recast. The editor is written to `build/dev/bin/Release/kb_editor.exe`.
+Linux builds the headless engine and tools only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the test commands.
 
 ## Security
 

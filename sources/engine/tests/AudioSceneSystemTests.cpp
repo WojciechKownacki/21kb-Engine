@@ -145,6 +145,7 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         kb::tests::Require(invalidEntity.status == kb::audio::AudioSourceControlStatus::InvalidEntity,
             "Source control did not reject an invalid entity explicitly");
         const kb::audio::AudioDeviceStatus deviceStatus = kb::audio::AudioPlayback::DeviceStatus(scene);
+        std::cout << "audio_scene_device status=" << static_cast<int>(deviceStatus) << '\n';
         const kb::audio::AudioSourceControlResult sourceBeforeTick = kb::audio::AudioPlayback::PlaySource(scene, source.Entity());
         if (deviceStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
             kb::tests::Require(sourceBeforeTick.Succeeded() && sourceBeforeTick.playing,
@@ -482,6 +483,9 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
                 for (int i = 0; i < kPerClip; ++i) {
                     const kb::audio::AudioPlayResult filled = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
                         .clipAssetId = fillClip.value, .volume = 0.0F, .loop = true, .spatial = false, .priority = 200U });
+                    if (!filled.Succeeded()) {
+                        std::cerr << "audio_pool_fill clip=" << c << " voice=" << i << " error=" << filled.error << '\n';
+                    }
                     kb::tests::Require(filled.Succeeded(), "Filling the one-shot pool with high-priority voices must succeed up to capacity");
                 }
                 if (c == 0) {

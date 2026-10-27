@@ -520,6 +520,97 @@ struct ImportedAssetHeader {
 
 } // namespace
 
+AssetImportItemResult AssetImportService::ReimportFile(
+    AssetManager& manager,
+    AssetId id,
+    const std::filesystem::path& sourcePath,
+    const AssetImportOptions& options) {
+    AssetImportItemResult result;
+    result.sourcePath = sourcePath;
+    const AssetMetadata* existing = manager.Registry().Find(id);
+    if (existing == nullptr || existing->physicalPath.empty()) {
+        result.status = AssetImportItemStatus::Missing;
+        result.error = "The asset to reimport is not in the project.";
+        return result;
+    }
+    const std::optional<ImportedAssetHeader> previous = ReadImportedAssetHeader(existing->physicalPath);
+    if (!previous.has_value()) {
+        result.status = AssetImportItemStatus::Failed;
+        result.error = "The asset was not made by an import: there is nothing to reimport.";
+        return result;
+    }
+    result.id = id;
+    result.category = previous->category;
+    result.virtualPath = existing->virtualPath;
+    result.assetPhysicalPath = existing->physicalPath;
+    result.metaPhysicalPath = MetaPathForAssetPath(existing->physicalPath);
+    result.assetHash = existing->contentHash;
+    std::error_code error;
+    if (sourcePath.empty() || !std::filesystem::is_regular_file(sourcePath, error) || error) {
+        result.status = AssetImportItemStatus::Missing;
+        result.error = "Source file is not a regular file.";
+        return result;
+    }
+    if (AssetImportCatalog::ClassifyExtension(sourcePath.extension()) != previous->category) {
+        result.status = AssetImportItemStatus::Failed;
+        result.error = "The source is not the kind of file the asset was imported from.";
+        return result;
+    }
+    std::string resourceError;
+    const std::optional<std::vector<ImportedAssetResource>> resources = CollectSourceResources(sourcePath, previous->category, resourceError);
+    if (!resources.has_value()) {
+        result.status = AssetImportItemStatus::Failed;
+        result.error = resourceError.empty() ? std::string{ "Referenced source files could not be read." } : resourceError;
+        return result;
+    }
+    result.sourceHash = HashWithResources(AssetFileSystem::HashFile(sourcePath), *resources);
+    const std::uint64_t sourceSize = static_cast<std::uint64_t>(std::filesystem::file_size(sourcePath, error));
+    const AssetMeshImportTransform transform = previous->category == AssetImportCategory::Model ? options.mesh.transform : AssetMeshImportTransform{};
+    if (error || !transform.IsValid()) {
+        result.status = AssetImportItemStatus::Failed;
+        result.error = error ? "Source file could not be measured." : "Model import scale must be above zero and its rotation finite.";
+        return result;
+    }
+    const std::uint16_t importOptions = AssetImportOptionFlags(options);
+    // The new container is written beside the old one and only then put in its place, so a failure leaves the old asset as it was.
+    const std::filesystem::path staged = existing->physicalPath.string() + ".reimport";
+    if (!WriteAssetContainer(staged, sourcePath, previous->category, sourceSize, result.sourceHash, importOptions, transform, *resources)) {
+        std::filesystem::remove(staged, error);
+        result.status = AssetImportItemStatus::Failed;
+        result.error = "The new asset container could not be written.";
+        return result;
+    }
+    const std::uint64_t newHash = AssetFileSystem::HashFile(staged);
+    result.assetHash = newHash;
+    if (newHash == existing->contentHash) {
+        std::filesystem::remove(staged, error);
+        result.status = AssetImportItemStatus::Reused;
+        return result;
+    }
+    if (options.dryRun) {
+        std::filesystem::remove(staged, error);
+        result.status = AssetImportItemStatus::Updated;
+        return result;
+    }
+    std::filesystem::rename(staged, existing->physicalPath, error);
+    if (error) {
+        std::error_code ignored;
+        std::filesystem::remove(staged, ignored);
+        result.status = AssetImportItemStatus::Failed;
+        result.error = "The new asset container could not replace the old one.";
+        return result;
+    }
+    if (!WriteMeta(result.metaPhysicalPath, id, existing->virtualPath, sourcePath, previous->category, sourceSize, result.sourceHash, newHash)) {
+        result.status = AssetImportItemStatus::Failed;
+        result.error = "The asset meta could not be updated.";
+        return result;
+    }
+    static_cast<void>(manager.DiscoverMountedAssets());
+    static_cast<void>(manager.Unload(id));
+    result.status = AssetImportItemStatus::Updated;
+    return result;
+}
+
 AssetImportResult AssetImportService::ImportFiles(
     AssetManager& manager,
     std::span<const std::filesystem::path> sourceFiles,

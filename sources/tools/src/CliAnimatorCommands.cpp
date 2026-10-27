@@ -58,11 +58,6 @@ struct Session {
     AnimatorController controller;
 };
 
-[[nodiscard]] std::string Utf8(const std::filesystem::path& path) {
-    const std::u8string text = path.generic_u8string();
-    return { reinterpret_cast<const char*>(text.data()), text.size() };
-}
-
 [[nodiscard]] std::string Lower(std::string text) {
     std::ranges::transform(text, text.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     return text;

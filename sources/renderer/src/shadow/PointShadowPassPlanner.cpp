@@ -63,6 +63,7 @@ PointShadowLightSelection PointShadowPassPlanner::Select(
     };
     std::array<Candidate, ScenePointShadowBinding::kMaxLights> best{};
     std::uint32_t count = 0U;
+    std::uint32_t eligible = 0U;
     const std::array<float, 3> origin{};
     const std::array<float, 3>& reference = cameraPosition != nullptr ? *cameraPosition : origin;
     for (const auto& [entityId, proxy] : renderScene.LightProxies()) {
@@ -70,6 +71,7 @@ PointShadowLightSelection PointShadowPassPlanner::Select(
         if (!CastsPointShadow(light) || (light.layer & cameraCullingMask) == 0U) {
             continue;
         }
+        ++eligible;
         const Candidate candidate{ DistanceSquared(light.position, reference), entityId, &light };
         const auto closer = [](const Candidate& lhs, const Candidate& rhs) noexcept {
             return lhs.distanceSquared != rhs.distanceSquared ? lhs.distanceSquared < rhs.distanceSquared
@@ -91,6 +93,7 @@ PointShadowLightSelection PointShadowPassPlanner::Select(
     }
     PointShadowLightSelection selection{};
     selection.count = count;
+    selection.droppedCount = eligible - count;
     for (std::uint32_t index = 0U; index < count; ++index) {
         selection.lights[index] = best[index].light;
         selection.entityIds[index] = best[index].entityId;
@@ -117,6 +120,7 @@ PointShadowSetup PointShadowPassPlanner::Build(
         return setup;
     }
     const PointShadowLightSelection selection = Select(renderScene, cameraPosition, cameraCullingMask);
+    setup.droppedLights = selection.droppedCount;
     if (selection.count == 0U) {
         return setup;
     }

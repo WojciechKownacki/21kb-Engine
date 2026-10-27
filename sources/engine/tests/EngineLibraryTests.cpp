@@ -248,6 +248,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Save.SetInt",
         "Timeline.Create",
         "Navigation.FindPath",
+        "Map2D.PaintGround",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -267,7 +268,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 26U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == kb::library::EngineLibraryModule::Catalog().size(), "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -279,7 +280,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation" };
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D", "Physics2D", "Net", "Mods" };
     kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must list every domain module");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
@@ -2653,6 +2654,69 @@ void RunFunctionDeprecationWiringTest() {
     kb::tests::Require(!danglingResult.succeeded, "Engine21kbLibrary deprecation wiring test must reject a deprecation declared for a nonexistent function");
 }
 
+// A module that cannot finish registering (its registration budget is too small), one with capability but no Register
+// function, and one that audits a function it never registered each fail the install with a diagnostic naming the module;
+// the startup report calls the allocation figure what it is.
+void RunModuleInstallFaultsAreReportedTest() {
+    const auto registerOne = [](kb::script::ScriptRuntimeHost& host) {
+        return host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = { .name = "Faulty.One", .description = "A function a module registers." },
+            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+            } });
+    };
+    const auto registerMany = [](kb::script::ScriptRuntimeHost& host) {
+        for (int index = 0; index < 100000; ++index) {
+            const bool registered = host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                .signature = { .name = "Faulty.Bulk" + std::to_string(index), .description = "A function a module registers." },
+                .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                    return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+                } });
+            if (!registered) return false;
+        }
+        return true;
+    };
+    const auto hasDiagnostic = [](const kb::library::EngineLibraryModuleResult& result, const std::string& text) {
+        return std::ranges::any_of(result.diagnostics, [&](const std::string& line) { return line.find(text) != std::string::npos; });
+    };
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        const std::vector<kb::library::LibraryModuleDesc> modules{
+            // Registers until the registry has to grow, which is charged to the budget of 1 byte and refused.
+            kb::library::LibraryModuleDesc{ .name = "TinyBudget", .Register = registerMany, .registrationAllocationBudgetBytes = 1U },
+        };
+        const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "TinyBudget"), "a module over its registration budget must fail the install and be named");
+        kb::tests::Require(result.report.size() == 1U && !result.report[0].installed &&
+                result.report[0].registrationAllocationTelemetry.rejectedAllocationCount > 0U,
+            "the report must show the rejected registration allocation");
+        const std::string text = kb::library::FormatStartupReport(result.report);
+        kb::tests::Require(text.find("registration-alloc=") != std::string::npos && text.find("runtime memory, CPU or GPU") != std::string::npos,
+            "the startup report must say the allocation figure covers registration only");
+    }
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        const std::vector<kb::library::LibraryModuleDesc> modules{ kb::library::LibraryModuleDesc{ .name = "NoRegister" } };
+        const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "module 'NoRegister' has capability but no Register function"),
+            "a module with capability and no Register function must fail with its own diagnostic");
+    }
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        const std::vector<kb::library::LibraryModuleDesc> modules{
+            kb::library::LibraryModuleDesc{ .name = "Faulty", .Register = registerOne,
+                .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Faulty.One" }, kb::library::LibraryFunctionDesc{ .canonicalName = "Faulty.Never" } } },
+        };
+        const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "module 'Faulty' audits 'Faulty.Never', but Register() did not register it"),
+            "an audited function that was never registered must fail the install");
+        kb::tests::Require(!hasDiagnostic(result, "Faulty.One"), "the audited function that was registered must not be reported");
+    }
+}
+
 // LIB-026: a function's id must depend only on its canonical name, not on
 // where it lands in ScriptFunctionRegistry::Functions() or which
 // ScriptRuntimeHost instance registered it.
@@ -2699,6 +2763,14 @@ void RunEngineLibraryComponentRegistryTest() {
     const std::vector<kb::library::LibraryComponentDesc>& catalog = kb::library::EngineLibraryComponentRegistry::Catalog();
     const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
 
+    if (catalog.size() != scriptComponentNames.size()) {
+        std::cerr << "component registry has " << catalog.size() << " entries, script API gates " << scriptComponentNames.size() << '\n';
+        for (const std::string_view scriptName : scriptComponentNames) {
+            if (kb::library::EngineLibraryComponentRegistry::Find(scriptName) == nullptr) {
+                std::cerr << "  missing from the registry: " << scriptName << '\n';
+            }
+        }
+    }
     kb::tests::Require(catalog.size() == scriptComponentNames.size(),
         "Engine21kbLibrary component registry must catalog exactly the same number of components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
     for (const std::string_view scriptName : scriptComponentNames) {
@@ -2732,6 +2804,18 @@ void RunEngineLibraryComponentRegistryTest() {
     // Save+Load with its real field values and cross-entity references.
     kb::scene::Scene source;
     const kb::scene::SceneObject object = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistrySubject" });
+    source.Components().Grids().Set(object.Entity(), kb::scene::GridComponent{ .cellSize = 2.0F, .floorHeight = 4.0F, .wall = true });
+    source.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 101U, .locked = true });
+    source.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{ .sortingOrder = 5, .enabled = false });
+    source.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{ .enabled = false });
+    source.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 303U, .cellWidth = 16U, .cell = 2U, .frameCount = 3U, .pivotX = 0.25F, .flipX = true, .tintA = 0.5F, .sortingOrder = -4, .wall = false });
+    source.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{ .type = 1, .gravityScale = 0.5F, .fixedRotation = true, .sideView = false, .startVelocityX = 2.0F });
+    source.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{ .shape = 2, .width = 2.0F, .radius = 0.25F, .offsetX = 0.5F, .isTrigger = true, .friction = 0.2F, .layer = 3, .collidesWith = 9U, .sideView = false });
+    source.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{ .radius = 0.4F, .height = 1.6F, .slopeLimitDegrees = 40.0F, .stepHeight = 0.3F, .layer = 2, .collidesWith = 5U });
+    kb::scene::AudioSourceComponent audioSource{ .clipAssetId = 4242U, .volume = 0.4F, .pitch = 1.5F, .loop = true, .spatial = false, .mute = true };
+    kb::tests::Require(kb::scene::SetAudioSourceOutputBus(audioSource, "Effects"), "Engine21kbLibrary component registry audio fixture needs a valid output bus");
+    source.Components().AudioSources().Set(object.Entity(), audioSource);
+    source.Components().AudioListeners().Set(object.Entity(), kb::scene::AudioListenerComponent{ .priority = 3, .primary = false, .enabled = false });
     source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .mask = 0x0000000FU, .visible = false });
     source.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 55.0F });
     source.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
@@ -2876,6 +2960,31 @@ void RunEngineLibraryComponentRegistryTest() {
     }
     kb::tests::Require(restored.IsValid() && restoredJointTarget.IsValid() && restoredPortalSource.IsValid() && restoredPortalTarget.IsValid(),
         "Engine21kbLibrary component registry round-trip must identify all cross-root references by persisted names");
+
+    kb::tests::Require(target.Components().Grids().Has(restored) &&
+        *target.Components().Grids().TryGet(restored) == *source.Components().Grids().TryGet(object.Entity()), "Grid fields survive the library serialization contract");
+    kb::tests::Require(target.Components().Tilemaps().Has(restored) &&
+        *target.Components().Tilemaps().TryGet(restored) == *source.Components().Tilemaps().TryGet(object.Entity()), "Tilemap fields survive the library serialization contract");
+    kb::tests::Require(target.Components().TilemapRenderers().Has(restored) &&
+        *target.Components().TilemapRenderers().TryGet(restored) == *source.Components().TilemapRenderers().TryGet(object.Entity()), "Tilemap renderer fields survive the library serialization contract");
+    kb::tests::Require(target.Components().TilemapColliders().Has(restored) &&
+        *target.Components().TilemapColliders().TryGet(restored) == *source.Components().TilemapColliders().TryGet(object.Entity()), "Tilemap collider fields survive the library serialization contract");
+    kb::tests::Require(target.Components().Sprites2D().Has(restored) &&
+        *target.Components().Sprites2D().TryGet(restored) == *source.Components().Sprites2D().TryGet(object.Entity()), "Sprite 2D fields survive the library serialization contract");
+    kb::tests::Require(target.Components().Bodies2D().Has(restored) && *target.Components().Bodies2D().TryGet(restored) == *source.Components().Bodies2D().TryGet(object.Entity()) &&
+        target.Components().Colliders2D().Has(restored) && *target.Components().Colliders2D().TryGet(restored) == *source.Components().Colliders2D().TryGet(object.Entity()) &&
+        target.Components().CharacterControllers2D().Has(restored) && *target.Components().CharacterControllers2D().TryGet(restored) == *source.Components().CharacterControllers2D().TryGet(object.Entity()),
+        "2D physics fields survive the library serialization contract");
+
+    const kb::scene::AudioSourceComponent* restoredAudioSource = target.Components().AudioSources().TryGet(restored);
+    kb::tests::Require(restoredAudioSource != nullptr && restoredAudioSource->clipAssetId == 4242U &&
+                            kb::tests::NearlyEqual(restoredAudioSource->volume, 0.4F) && kb::tests::NearlyEqual(restoredAudioSource->pitch, 1.5F) &&
+                            restoredAudioSource->loop && !restoredAudioSource->spatial && restoredAudioSource->mute &&
+                            kb::scene::AudioSourceOutputBus(*restoredAudioSource) == "Effects",
+        "Engine21kbLibrary component registry: Audio Source is marked serializable=true and must survive a save/load round trip with its routing");
+    const kb::scene::AudioListenerComponent* restoredAudioListener = target.Components().AudioListeners().TryGet(restored);
+    kb::tests::Require(restoredAudioListener != nullptr && restoredAudioListener->priority == 3 && !restoredAudioListener->primary && !restoredAudioListener->enabled,
+        "Engine21kbLibrary component registry: Audio Listener is marked serializable=true and must survive a save/load round trip");
 
     kb::tests::Require(target.Components().Cameras().Has(restored), "Engine21kbLibrary component registry: Camera is marked serializable=true and must survive a save/load round trip");
     kb::tests::Require(target.Components().Lights().Has(restored), "Engine21kbLibrary component registry: Light is marked serializable=true and must survive a save/load round trip");
@@ -3373,7 +3482,8 @@ void RunComponentInspectorDescCatalogTest() {
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
-    kb::tests::Require(fieldsChecked == 766U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (766, including the collision mesh and the compatibility aliases) across all components");
+    // Audio Source contributes sixteen fields and Audio Listener four.
+    kb::tests::Require(fieldsChecked == 857U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (857, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5181,6 +5291,51 @@ void RunGameplayAbilityDurationAndCooldownTest() {
         "Gameplay ability accepted a NaN duration");
 }
 
+void RunGameplayAbilityAtomicCostAndDespawnTest() {
+    using namespace kb::gameplay;
+    GameplayAbilities abilities;
+    GameplayModules modules;
+    const kb::scene::SceneEntity caster{31U}, other{32U}, target{33U};
+    const auto resource = GameplayTag("resource");
+    kb::tests::Require(modules.SetAttribute(caster, resource, { 10.0F, 0.0F, 10.0F }), "Ability resource setup failed");
+    GameplayAbilityDefinition ability{ .id = GameplayTag("drain"), .cooldownSeconds = 2.0F,
+        .costAttribute = resource, .cost = 6.0F, .targetRule = AbilityTargetRule::Self,
+        .effect = { resource, -5.0F }, .durationSeconds = 1.0F };
+    kb::tests::Require(!abilities.Activate(ability, caster, {}, caster, {}, modules) &&
+        modules.Attribute(caster, resource)->current == 10.0F && !abilities.IsActive(caster) &&
+        abilities.CooldownRemaining(caster, ability.id) == 0.0F,
+        "A rejected self effect must not partially debit its cost attribute");
+    ability.effect.delta = 2.0F;
+    kb::tests::Require(abilities.Activate(ability, caster, {}, caster, {}, modules) &&
+        modules.Attribute(caster, resource)->current == 6.0F,
+        "A self effect must combine with the validated cost instead of overwriting it");
+    ability.durationSeconds = 9.0F;
+    ability.cooldownSeconds = 7.0F;
+    abilities.Advance(1.0F);
+    kb::tests::Require(!abilities.IsActive(caster) && abilities.CooldownRemaining(caster, ability.id) == 2.0F,
+        "Editing a definition must not change the duration or cooldown of an existing activation");
+    kb::tests::Require(abilities.Remove(caster) && !abilities.Remove(caster) &&
+        abilities.CooldownRemaining(caster, ability.id) == 0.0F,
+        "Despawn must remove all caster cooldowns idempotently");
+    kb::tests::Require(abilities.Activate(ability, caster, {}, caster, {}, modules) &&
+        abilities.Active(caster)->remainingSeconds == 9.0F && abilities.Active(caster)->cooldownSeconds == 7.0F &&
+        abilities.Remove(caster) && !abilities.IsActive(caster),
+        "Subsequent activations must use changed parameters and allow explicit despawn cleanup");
+
+    kb::tests::Require(modules.SetAttribute(caster, resource, { 10.0F, 5.0F, 10.0F }) &&
+        !modules.SpendAttribute(caster, resource, 6.0F) && modules.Attribute(caster, resource)->current == 10.0F &&
+        !abilities.Activate(ability, caster, {}, caster, {}, modules) && modules.Attribute(caster, resource)->current == 10.0F,
+        "Resource spending and ability activation must preserve a nonzero attribute minimum");
+
+    GameplayAbilityDefinition channel{ .id = GameplayTag("channel"), .cooldownSeconds = 3.0F,
+        .durationSeconds = kGameplayAbilityUntilCompleted };
+    kb::tests::Require(abilities.Activate(channel, caster, {}, target, {}, modules) &&
+        abilities.Activate(channel, other, {}, target, {}, modules) && abilities.Remove(target) &&
+        !abilities.IsActive(caster) && !abilities.IsActive(other) && !abilities.Remove(target) &&
+        abilities.CooldownRemaining(caster, channel.id) == 3.0F && abilities.CooldownRemaining(other, channel.id) == 3.0F,
+        "Removing a shared target must cancel every dependent active ability and start caster cooldowns");
+}
+
 // Remove must clear every module store, not only the first one that held data for the entity.
 void RunGameplayModulesRemoveClearsEveryStoreTest() {
     kb::gameplay::GameplayModules modules;
@@ -5322,6 +5477,49 @@ void RunGameInstanceLifetimeTest() {
     kb::tests::Require(profiler.scopes == expectedProfilerSamples &&
         profiler.timelineEvents == expectedProfilerSamples && profiler.allocations == expectedProfilerSamples,
         "Profiler counters must respect the build's enabled state");
+    {
+        // Regions are measured and paired (also across an exception), nested depth is kept, and
+        // long sessions stay bounded; an inactive profiler records nothing.
+        kb::core::ProfilerCounters measured{ true };
+        {
+            auto outer = measured.BeginScope("outer");
+            {
+                auto inner = measured.BeginScope("inner");
+                kb::tests::Require(measured.OpenRegions() == 2U, "Profiler must count open nested regions");
+            }
+            try {
+                auto thrown = measured.BeginScope("thrown");
+                throw 1;
+            } catch (int) {
+            }
+            measured.Timeline("instant");
+        }
+        const auto& events = measured.TimelineEvents();
+        kb::tests::Require(measured.OpenRegions() == 0U && events.size() == 4U &&
+            events[0].name == "inner" && events[0].depth == 1U &&
+            events[1].name == "thrown" && events[1].depth == 1U &&
+            events[2].name == "instant" && events[2].depth == 1U && events[2].durationNanoseconds == 0U &&
+            events[3].name == "outer" && events[3].depth == 0U,
+            "Profiler regions must be paired in end order with their nesting depth, including after an exception");
+        kb::tests::Require(events[3].timestampNanoseconds <= events[0].timestampNanoseconds &&
+            events[3].durationNanoseconds >= events[0].durationNanoseconds,
+            "Profiler outer region must start no later than, and last at least as long as, a nested region");
+        for (int index = 0; index < 5000; ++index) {
+            measured.Timeline("flood");
+        }
+        for (int index = 0; index < 300; ++index) {
+            measured.Counter("counter" + std::to_string(index), static_cast<std::uint64_t>(index));
+        }
+        kb::tests::Require(measured.TimelineEvents().size() == kb::core::ProfilerCounters::MaxTimelineEvents() &&
+            measured.DroppedTimelineEvents() == 5004U - kb::core::ProfilerCounters::MaxTimelineEvents() &&
+            measured.Counters().size() == kb::core::ProfilerCounters::MaxCounters() &&
+            measured.DroppedCounters() == 300U - kb::core::ProfilerCounters::MaxCounters(),
+            "Profiler timeline and counters must stop growing at their limit and count what was dropped");
+        kb::core::ProfilerCounters inactive{ false };
+        { auto region = inactive.BeginScope("ignored"); inactive.Counter("ignored", 1U); inactive.Timeline("ignored"); }
+        kb::tests::Require(inactive.TimelineEvents().empty() && inactive.Counters().empty() && inactive.OpenRegions() == 0U &&
+            inactive.scopes == 0U, "An inactive profiler must record nothing");
+    }
     if constexpr (kb::core::DebugDrawBuffer::Enabled()) {
     kb::core::DebugDrawBuffer draw{5U}; kb::tests::Require(draw.DrawLine({},{1.0F,0.0F,0.0F},1.0F,3U)&&draw.DrawRay({},{0.0F,1.0F,0.0F},1.0F,3U)&&draw.DrawBox({},{1.0F,1.0F,1.0F},1.0F,3U)&&draw.DrawSphere({},1.0F,1.0F,3U)&&draw.DrawText({},"probe",1.0F,3U)&&draw.Commands().size()==5U&&draw.Commands().back().text=="probe"&&!draw.DrawLine({},{},1.0F,3U),"Debug draw buffer did not retain bounded commands"); draw.Advance(1.0F); kb::tests::Require(draw.Commands().empty(),"Debug draw duration did not expire commands");
     } else {
@@ -5634,6 +5832,7 @@ void RunEngineLibraryTests() {
     RunApiCompatibilityComparisonTest();
     RunDeprecationTest();
     RunFunctionDeprecationWiringTest();
+    RunModuleInstallFaultsAreReportedTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunVisibilityGateResolutionTest();
@@ -5670,6 +5869,7 @@ void RunEngineLibraryTests() {
     RunMinimalGameplaySceneReplayTest();
     RunGameplayAbilityEndsAndNextActivatesTest();
     RunGameplayAbilityDurationAndCooldownTest();
+    RunGameplayAbilityAtomicCostAndDespawnTest();
     RunGameplayModulesRemoveClearsEveryStoreTest();
     RunLifecycleSoakTest();
     RunGameInstanceLifetimeTest();

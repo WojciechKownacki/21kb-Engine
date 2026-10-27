@@ -11,6 +11,8 @@ enum class ColliderShape {
     Sphere,
     Capsule,
     Mesh,
+    // Blocks approaching bodies on its local +Y face; bodies rising from below pass through.
+    OneWayBox,
 };
 
 struct ColliderComponent {

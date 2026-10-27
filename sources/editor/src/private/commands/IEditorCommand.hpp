@@ -11,6 +11,7 @@ namespace kb::editor {
 enum class EditorCommandHistoryKind : std::uint8_t {
     Scene,
     MaterialAsset,
+    AudioMixerAsset,
 };
 
 struct EditorCommandHistoryKey {
@@ -30,6 +31,10 @@ struct EditorCommandHistoryKey {
 
     [[nodiscard]] constexpr bool IsMaterialAsset() const noexcept {
         return kind == EditorCommandHistoryKind::MaterialAsset && documentId != 0U;
+    }
+
+    [[nodiscard]] static constexpr EditorCommandHistoryKey AudioMixerAsset(std::uint64_t assetId) noexcept {
+        return {.kind = EditorCommandHistoryKind::AudioMixerAsset, .documentId = assetId};
     }
 
     [[nodiscard]] constexpr bool operator==(const EditorCommandHistoryKey&) const noexcept = default;

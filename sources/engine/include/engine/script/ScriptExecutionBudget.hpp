@@ -7,9 +7,9 @@
 namespace kb::script {
 
 struct ScriptExecutionBudgetSettings {
-    // Zero preserves the existing uninstrumented Lua execution path. A host
-    // enables the hard instruction cap deliberately for the target build.
-    std::size_t luaInstructionsPerBehaviour = 0U;
+    // Bound script loading and behaviour calls even when a host uses defaults.
+    // Trusted hosts may explicitly opt out with zero.
+    std::size_t luaInstructionsPerBehaviour = 1'000'000U;
     std::size_t visualGraphStepsPerBehaviour = 4'096U;
     kb::core::BudgetExceededPolicy policy = kb::core::BudgetExceededPolicy::Fail;
     // Bytes one Lua runtime (all scripts a host runs) may allocate while a

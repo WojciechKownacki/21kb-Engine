@@ -22,7 +22,7 @@ public:
         });
         bool changed = false;
         struct Context {
-            decltype(shownGroups) shownGroups;
+            decltype(shownGroups) groups;
             float deltaSeconds;
             bool& changed;
         } context{shownGroups, deltaSeconds, changed};
@@ -30,7 +30,7 @@ public:
             [](SceneEntity entity, const UICanvasGroup& group, void* raw) {
                 auto& context = *static_cast<Context*>(raw);
                 const float target = group.visible ? 1.0F : 0.0F;
-                const auto [entry, inserted] = context.shownGroups.try_emplace(entity.Id(), target);
+                const auto [entry, inserted] = context.groups.try_emplace(entity.Id(), target);
                 float& shown = entry->second;
                 if (inserted || shown == target) return;
                 const float step = group.transitionSeconds <= 0.0F ? 1.0F : context.deltaSeconds / group.transitionSeconds;

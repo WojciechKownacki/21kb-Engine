@@ -1,6 +1,6 @@
 #include "bgfx_compute.sh"
 
-// One compare-exchange step of a bitonic sort (descending by distance, ties by slot).
+// One compare-exchange step of a bitonic sort (descending by key, ascending by slot on ties).
 // u_gpuSortParams: x = padded count, y = block size k, z = compare distance j.
 BUFFER_RW(keys, vec4, 0);
 
@@ -8,7 +8,7 @@ uniform vec4 u_gpuSortParams;
 
 bool KeyLess(vec4 a, vec4 b)
 {
-    return a.x < b.x || (a.x == b.x && a.y < b.y);
+    return a.x < b.x || (a.x == b.x && a.y > b.y);
 }
 
 NUM_THREADS(64, 1, 1)

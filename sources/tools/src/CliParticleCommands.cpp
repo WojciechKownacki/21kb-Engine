@@ -4,6 +4,7 @@
 #include "editor/ParticleAssetGateway.hpp"
 #include "editor/ParticleEditorCommands.hpp"
 #include "engine/assets/AssetFileName.hpp"
+#include "engine/platform/FileSystemPath.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 
 #include <charconv>
@@ -110,7 +111,16 @@ int RunVfxCommand(std::string_view command, const ArgumentList& arguments, Comma
         }
         std::error_code error;
         std::filesystem::create_directories(folder.folder, error);
-        return Save(file, asset, folder.virtualPath + '/' + fileName, io);
+        const auto virtualPath = folder.virtualPath + '/' + fileName;
+        const auto source = kb::platform::RunningExecutablePath().parent_path() /
+            "Content/21kbParticle/Materials/DefaultParticle.kbmat";
+        const auto saved = kb::particle_editor::ParticleAssetGateway{}.SaveNewProjectEffect(file, virtualPath, asset, source);
+        if (!saved.Succeeded()) {
+            io.err << "error: " << Problem(saved) << '\n';
+            return 1;
+        }
+        io.out << virtualPath << " (" << asset.emitters.size() << " emitters)\n";
+        return 0;
     }
 
     const std::optional<std::string> effectText = arguments.Option("--effect");

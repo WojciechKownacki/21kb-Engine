@@ -49,7 +49,7 @@ bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReade
     std::uint32_t shape = 0;
     bool trigger = false;
     if (!input.ReadUInt32(shape) ||
-        shape > static_cast<std::uint32_t>(fileVersion >= 40U ? ColliderShape::Mesh : ColliderShape::Capsule) ||
+        shape > static_cast<std::uint32_t>(fileVersion >= SceneDocument::OneWayColliderFileVersion ? ColliderShape::OneWayBox : fileVersion >= 40U ? ColliderShape::Mesh : ColliderShape::Capsule) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.center) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.boxSize) ||
         !input.ReadFloat(output.radius) ||

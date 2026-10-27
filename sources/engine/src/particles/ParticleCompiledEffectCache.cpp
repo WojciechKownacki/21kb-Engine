@@ -55,7 +55,7 @@ void WriteSpawnExtras(std::vector<std::uint8_t>& bytes, const ParticleCompiledEm
     WriteFloat(bytes, e.startDelaySeconds); WriteFloat(bytes, e.cycleSeconds); WriteBool(bytes, e.cycleLooping);
     WriteBool(bytes, e.beam.enabled); WriteUInt8(bytes, static_cast<std::uint8_t>(e.beam.ends));
     WriteUInt32(bytes, e.beam.segments); WriteVec3(bytes, e.beam.start); WriteVec3(bytes, e.beam.end);
-    WriteFloat(bytes, e.beam.noise); WriteBool(bytes, e.absolutePosition);
+    WriteFloat(bytes, e.beam.noise); WriteBool(bytes, e.absolutePosition); WriteBool(bytes, e.screenDepthCollision);
     WriteFloat(bytes, e.colorIntensity);
     WriteBool(bytes, e.lightEnabled); WriteFloat(bytes, e.lightRadius); WriteFloat(bytes, e.lightIntensity);
     WriteUInt32(bytes, e.lightMaxCount); WriteFloat(bytes, e.decalDepth);
@@ -74,7 +74,8 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         WriteUInt8(bytes, static_cast<std::uint8_t>(e.blendMode)); WriteUInt8(bytes, static_cast<std::uint8_t>(e.sortMode));
         WriteUInt8(bytes, static_cast<std::uint8_t>(e.alignment)); WriteBool(bytes, e.depthTest); WriteBool(bytes, e.depthWrite);
         WriteBool(bytes, e.softParticles); WriteBool(bytes, e.antiAliasing); WriteUInt32(bytes, e.flipbookColumns);
-        WriteUInt32(bytes, e.flipbookRows); WriteUInt32(bytes, e.flipbookFrameCount); WriteFloat(bytes, e.flipbookFramesPerSecond);
+        WriteUInt32(bytes, e.flipbookRows); WriteUInt32(bytes, e.flipbookFrameCount); WriteUInt32(bytes, e.flipbookStartFrame);
+        WriteFloat(bytes, e.flipbookFramesPerSecond);
         WriteBool(bytes, e.flipbookLooping); WriteFloat(bytes, e.stretchVelocityScale); WriteFloat(bytes, e.stretchMinimumLength);
         WriteFloat(bytes, e.pointSpriteDiameter);
         WriteFloat(bytes, e.trailSampleIntervalSeconds); WriteFloat(bytes, e.trailMinimumDistance);
@@ -200,7 +201,7 @@ class Reader {
             !F(e.startDelaySeconds) || !F(e.cycleSeconds) || !Bool(e.cycleLooping) || !Bool(e.beam.enabled) ||
             !U8(ends) || ends > static_cast<std::uint8_t>(kb::scene::ParticleBeamEnds::ShapeToEmitter) ||
             !U32(e.beam.segments) || !Vec3(e.beam.start) || !Vec3(e.beam.end) || !F(e.beam.noise) ||
-            !Bool(e.absolutePosition) || !F(e.colorIntensity) || !Bool(e.lightEnabled) || !F(e.lightRadius) || !F(e.lightIntensity) ||
+            !Bool(e.absolutePosition) || !Bool(e.screenDepthCollision) || !F(e.colorIntensity) || !Bool(e.lightEnabled) || !F(e.lightRadius) || !F(e.lightIntensity) ||
             !U32(e.lightMaxCount) || !F(e.decalDepth))
             return false;
         s.type = static_cast<kb::scene::ParticleSpawnShape>(shape);
@@ -234,7 +235,8 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             !reader.U8(alignment) || alignment > static_cast<std::uint8_t>(kb::scene::ParticleAlignment::Local) ||
             !reader.Bool(e.depthTest) || !reader.Bool(e.depthWrite) || !reader.Bool(e.softParticles) ||
             !reader.Bool(e.antiAliasing) || !reader.U32(columns) || columns > UINT16_MAX || !reader.U32(rows) || rows > UINT16_MAX ||
-            !reader.U32(e.flipbookFrameCount) || !reader.F(e.flipbookFramesPerSecond) || !reader.Bool(e.flipbookLooping) ||
+            !reader.U32(e.flipbookFrameCount) || !reader.U32(e.flipbookStartFrame) ||
+            !reader.F(e.flipbookFramesPerSecond) || !reader.Bool(e.flipbookLooping) ||
             !reader.F(e.stretchVelocityScale) || !reader.F(e.stretchMinimumLength) || !reader.F(e.pointSpriteDiameter) ||
             !reader.F(e.trailSampleIntervalSeconds) || !reader.F(e.trailMinimumDistance) ||
             !reader.U32(e.trailMaxSamplesPerParticle) || !reader.F(e.trailWidth) ||
@@ -298,16 +300,18 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
 [[nodiscard]] bool ValidEffect(const ParticleCompiledEffect& effect) noexcept {
     if (effect.emitterCount == 0U || effect.durationSeconds < 0.0F) return false;
     std::uint64_t totalCapacity = 0U;
-    kb::scene::ParticleStableId previousEmitterId = 0U;
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         const auto& emitter = effect.emitters[emitterIndex];
-        if (emitter.emitterId == 0U || emitter.emitterId <= previousEmitterId || emitter.materialAssetId == 0U ||
+        if (emitter.emitterId == 0U || emitter.materialAssetId == 0U ||
             ((emitter.outputType == kb::scene::ParticleOutputType::Mesh) != (emitter.meshAssetId != 0U)) ||
             emitter.maxParticles == 0U ||
             emitter.maxParticles > kb::scene::ParticleEmitterCapacityLimit(effect.backendPolicy) || emitter.rateKeyCount == 0U ||
             emitter.lifetimeMin <= 0.0F || emitter.lifetimeMax < emitter.lifetimeMin ||
             emitter.prewarmSeconds < 0.0F || emitter.prewarmSeconds > kb::scene::kParticleEffectMaxPrewarmSeconds ||
             emitter.flipbookColumns == 0U || emitter.flipbookRows == 0U || emitter.flipbookFrameCount == 0U ||
+            emitter.flipbookColumns > 256U || emitter.flipbookRows > 256U || emitter.flipbookFramesPerSecond < 0.0F ||
+            static_cast<std::uint64_t>(emitter.flipbookStartFrame) + emitter.flipbookFrameCount >
+                static_cast<std::uint64_t>(emitter.flipbookColumns) * emitter.flipbookRows ||
             emitter.pointSpriteDiameter <= 0.0F ||
             emitter.trailSampleIntervalSeconds <= 0.0F || emitter.trailMinimumDistance < 0.0F ||
             emitter.trailMaxSamplesPerParticle == 0U ||
@@ -323,17 +327,19 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             emitter.volumetricHighQualitySteps < emitter.volumetricLowQualitySteps ||
             emitter.volumetricHighQualitySteps > 256U)
             return false;
-        previousEmitterId = emitter.emitterId;
+        // Compiled records follow authored execution order, independently of their stable IDs.
+        for (std::uint8_t previous = 0U; previous < emitterIndex; ++previous)
+            if (effect.emitters[previous].emitterId == emitter.emitterId) return false;
         totalCapacity += emitter.maxParticles;
         for (std::uint8_t index = 1U; index < emitter.rateKeyCount; ++index)
             if (emitter.rateKeys[index].time <= emitter.rateKeys[index - 1U].time) return false;
         for (std::uint8_t index = 1U; index < emitter.burstCount; ++index)
             if (emitter.bursts[index].timeSeconds < emitter.bursts[index - 1U].timeSeconds) return false;
-        kb::scene::ParticleStableId previousModuleId = 0U;
         for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
             const auto& module = emitter.modules[index];
-            if (module.moduleId == 0U || module.moduleId <= previousModuleId) return false;
-            previousModuleId = module.moduleId;
+            if (module.moduleId == 0U) return false;
+            for (std::uint8_t previous = 0U; previous < index; ++previous)
+                if (emitter.modules[previous].moduleId == module.moduleId) return false;
         }
     }
     if (totalCapacity > kb::scene::ParticleEffectCapacityLimit(effect.backendPolicy)) return false;

@@ -72,6 +72,32 @@ void RunSceneStreamingTests() {
         wait(id, SceneLoadStatus::Unknown);
         Require(scene.Entities().Count() == 1U && !scene.Entities().IsAlive(spawned), "Unload must include runtime-created descendants and preserve its external parent");
     }
+    // A budget no step can keep: streaming still moves forward by a step every frame (it never starves) and says how
+    // many frames went over the limit and how long the longest was.
+    scene.LoadedContent().ConfigureStreaming({.maxPendingLoads = 2U, .maxOperationsPerFrame = 1U, .maxMillisecondsPerFrame = 0.000000001F});
+    {
+        const auto tight = scene.LoadedContent().LoadAsync(path, parent);
+        const auto tightDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{15};
+        while (scene.LoadedContent().Status(tight) != SceneLoadStatus::Ready && std::chrono::steady_clock::now() < tightDeadline) {
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(scene.LoadedContent().StreamingStats().operations <= 1U,
+                "Minimum streaming progress must preserve the operation budget");
+            std::this_thread::yield();
+        }
+        Require(scene.LoadedContent().Status(tight) == SceneLoadStatus::Ready && scene.Entities().Count() == 515U,
+            "A load under an impossible time budget must still finish");
+        const SceneStreamingStats tightStats = scene.LoadedContent().StreamingStats();
+        Require(tightStats.overBudgetFrames > 0U && tightStats.longestFrameMilliseconds > 0.000000001,
+            "Frames over the time budget must be counted");
+        Require(scene.LoadedContent().UnloadAsync(tight), "The tight-budget scene must unload");
+        const auto unloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{15};
+        while (scene.LoadedContent().Status(tight) != SceneLoadStatus::Unknown && std::chrono::steady_clock::now() < unloadDeadline) {
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            std::this_thread::yield();
+        }
+        Require(scene.Entities().Count() == 1U, "The tight-budget scene must unload completely");
+    }
+    scene.LoadedContent().ConfigureStreaming({.maxPendingLoads = 2U, .maxOperationsPerFrame = 7U, .maxMillisecondsPerFrame = 20.0F});
     const auto cancelled = scene.LoadedContent().LoadAsync(path);
     Require(scene.LoadedContent().UnloadAsync(cancelled), "Pending load must be cancellable");
     wait(cancelled, SceneLoadStatus::Cancelled);

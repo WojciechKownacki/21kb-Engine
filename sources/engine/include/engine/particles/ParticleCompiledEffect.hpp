@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 6U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 8U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -77,6 +77,7 @@ struct ParticleCompiledEmitter {
     std::uint16_t flipbookColumns = 1U;
     std::uint16_t flipbookRows = 1U;
     std::uint32_t flipbookFrameCount = 1U;
+    std::uint32_t flipbookStartFrame = 0U;
     float flipbookFramesPerSecond = 0.0F;
     bool flipbookLooping = true;
     float stretchVelocityScale = 0.0F;
@@ -134,6 +135,7 @@ struct ParticleCompiledEmitter {
     bool cycleLooping = true;
     kb::scene::ParticleBeamSpawnAsset beam{};
     bool absolutePosition = false;
+    bool screenDepthCollision = false;
     // HDR colour multiplier, particle lights and decals of the output.
     float colorIntensity = 1.0F;
     bool lightEnabled = false;

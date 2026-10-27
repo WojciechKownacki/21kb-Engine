@@ -124,9 +124,10 @@ void ValidateFlipbook(const ParticleFlipbookAsset& flipbook, const ParticleAsset
     const std::uint64_t frameCount = static_cast<std::uint64_t>(flipbook.columns) * flipbook.rows;
     if (flipbook.columns == 0U || flipbook.rows == 0U || flipbook.columns > kMaxGridAxis ||
         flipbook.rows > kMaxGridAxis || frameCount > 65'536U || !Finite(flipbook.framesPerSecond) ||
-        flipbook.framesPerSecond < 0.0F) {
+        flipbook.framesPerSecond < 0.0F || flipbook.startFrame >= frameCount ||
+        (flipbook.frameCount != 0U && static_cast<std::uint64_t>(flipbook.startFrame) + flipbook.frameCount > frameCount)) {
         Add(result, ParticleEffectDiagnosticCode::InvalidValue, path,
-            "flipbook grid and frame rate are outside the supported range", emitterId);
+            "flipbook grid, frame range or frame rate is outside the supported range", emitterId);
     }
     if ((frameCount > 1U || flipbook.framesPerSecond > 0.0F) && atlas.Empty()) {
         Add(result, ParticleEffectDiagnosticCode::InvalidReference, path + ".textureAtlas",

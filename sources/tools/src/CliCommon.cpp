@@ -1,18 +1,18 @@
 #include "CliCommon.hpp"
 
+#include "engine/assets/AssetImportPreset.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/math/ColorSpace.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #if KB_CLI_RENDERER
-#include "engine/assets/AssetManager.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #if KB_CLI_RENDERER
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #endif
-#include "engine/assets/AssetImportPreset.hpp"
 #endif
 
 #include <cmath>
@@ -77,6 +77,16 @@ const std::vector<std::string>& ArgumentList::Positionals() const noexcept {
 
 const std::vector<std::string>& ArgumentList::Errors() const noexcept {
     return errors_;
+}
+
+std::vector<std::string> ArgumentList::UnknownOptions(std::span<const std::string_view> allowed) const {
+    std::vector<std::string> unknown;
+    const auto check = [&](const std::string& name) {
+        if (std::find(allowed.begin(), allowed.end(), name) == allowed.end()) unknown.push_back(name);
+    };
+    for (const auto& option : options_) check(option.first);
+    for (const auto& flag : flags_) check(flag);
+    return unknown;
 }
 
 bool MountProjectAssets(
@@ -152,7 +162,9 @@ const kb::assets::AssetMetadata* FindAssetByFlexiblePath(
     const std::filesystem::path& input) {
     const std::string text = input.generic_string();
     if (!text.empty() && text.front() == '/') {
-        return registry.FindByPath(input);
+        if (const kb::assets::AssetMetadata* asset = registry.FindByPath(input)) {
+            return asset;
+        }
     }
 
     std::error_code errorCode;

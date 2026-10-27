@@ -31,6 +31,7 @@ bool MeshPipelinePassPolicy::CanEverContain(
     const SceneRenderMeshInstance& instance,
     std::span<const std::uint64_t> selectedEntityIds,
     std::uint32_t cullingMask) noexcept {
+    if (instance.shadowOnly && pass != MeshPassType::ShadowDepth) return false;
     if (!PassesCullingMask(instance, cullingMask)) {
         return false;
     }
@@ -72,6 +73,7 @@ bool MeshPipelinePassPolicy::Accepts(
     std::span<const std::uint64_t> selectedEntityIds,
     std::uint32_t cullingMask,
     const RenderMeshSection* section) noexcept {
+    if (instance.shadowOnly && pass != MeshPassType::ShadowDepth) return false;
     if (!PassesCullingMask(instance, cullingMask)) {
         return false;
     }

@@ -27,6 +27,7 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -82,6 +83,38 @@ void Require(bool condition, std::string_view message) {
 [[nodiscard]] std::string ReadBytes(const std::filesystem::path& path) {
     std::ifstream input{path, std::ios::binary};
     return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+}
+
+void TestNewProjectEffectMaterialDependency() {
+    const auto root = TestRoot() / ("project-material-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "project material fixture directory creation failed");
+    const auto source = root / "source.kbmat";
+    { std::ofstream file{source, std::ios::binary}; file << "version 1\nmaterialType builtin.pbr\nbaseColor 1 1 1 1\n"; }
+    const auto occupied = root / "LocalMaterial.kbmat";
+    { std::ofstream file{occupied, std::ios::binary}; file << "existing project material\n"; }
+    const auto asset = kb::particle_editor::ParticleEditorCommands::NewEffect("Local");
+    kb::particle_editor::ParticleAssetGateway gateway;
+    const auto effectFile = root / "Local.kbvfx";
+    Require(gateway.SaveNewProjectEffect(effectFile, "/Game/Effects/Local.kbvfx", asset, source).Succeeded(),
+        "new project effect could not import its default material");
+    const auto loaded = gateway.Load(effectFile);
+    Require(loaded.asset && loaded.asset->emitters[0].output.material.virtualPath == "/Game/Effects/LocalMaterial1.kbmat" &&
+        loaded.asset->emitters[0].output.material.assetId == 0U && ReadBytes(root / "LocalMaterial1.kbmat") == ReadBytes(source),
+        "new project effect did not persist its project material dependency");
+    Require(ReadBytes(occupied) == "existing project material\n", "creating a particle effect overwrote a project material");
+    const auto before = ReadBytes(effectFile);
+    Require(!gateway.SaveNewProjectEffect(effectFile, "/Game/Effects/Local.kbvfx", asset, source).Succeeded() &&
+        ReadBytes(effectFile) == before && !std::filesystem::exists(root / "LocalMaterial2.kbmat"),
+        "creating an effect over an existing asset modified project data");
+    Require(!gateway.SaveNewProjectEffect(root / "Missing.kbvfx", "/Game/Effects/Missing.kbvfx", asset, root / "absent").Succeeded() &&
+        !std::filesystem::exists(root / "Missing.kbvfx"), "missing shared material silently created an unrunnable effect");
+    Require(!gateway.SaveNewProjectEffect(root / "Invalid.kbvfx", "/Game/../Invalid.kbvfx", asset, source).Succeeded(),
+        "project particle creation accepted a noncanonical virtual path");
+    Require(gateway.SaveNewProjectEffect(root / "Custom.kbvfx", "/Game/Effects/Custom.kbvfx", MakeEffect(), root / "absent").Succeeded(),
+        "an explicitly assigned project material unnecessarily required shared content");
 }
 
 void TestDocumentHistorySavePointAndAtomicFailure() {
@@ -458,6 +491,14 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(std::get<kb::scene::ParticleBillboardOutput>(
                 atlasDocument.Asset().emitters[0].output.payload).flipbook.columns == 4U,
         "atlas columns did not persist on the working document");
+    atlasBillboard->flipbook.startFrame = 1U;
+    atlasBillboard->flipbook.frameCount = 2U;
+    Require(ParticleEditorCommands::SetEmitterOutput(atlasDocument, atlasWorkspace, 11U, atlasOutput).Succeeded(),
+        "partial atlas authoring must succeed");
+    Require(atlasDocument.Undo() && std::get<kb::scene::ParticleBillboardOutput>(atlasDocument.Asset().emitters[0].output.payload).flipbook.startFrame == 0U,
+        "undo must restore the prior atlas range");
+    Require(atlasDocument.Redo() && std::get<kb::scene::ParticleBillboardOutput>(atlasDocument.Asset().emitters[0].output.payload).flipbook.frameCount == 2U,
+        "redo must restore the partial atlas range");
     const auto atlasValidation =
         kb::scene::ParticleEffectAssetValidator::ValidateStructure(atlasDocument.Asset());
     Require(atlasValidation.Succeeded(), "atlas columns left the particle effect structurally invalid");
@@ -481,6 +522,7 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     const auto atlasCompiled = kb::particle_plugin::ParticleEffectCompiler::Compile(
         atlasCompilable, atlasOwner, atlasRegistry);
     Require(atlasCompiled.Succeeded() && atlasCompiled.effect != nullptr &&
+            atlasCompiled.effect->emitters[0].flipbookStartFrame == 1U && atlasCompiled.effect->emitters[0].flipbookFrameCount == 2U &&
             atlasCompiled.effect->emitters[0].colorOverLife.stopCount == 2U &&
             atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.g > 0.8F &&
             atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.r < 0.2F,
@@ -613,6 +655,9 @@ void TestProductionBakeCacheAndCapabilityGates() {
         .physicalPath = sourcePath, .contentHash = 30U};
     auto effect = MakeEffect();
     effect.emitters[0].spawn.bursts.push_back({.timeSeconds = 0.25F, .count = 3U});
+    effect.emitters[0].output.payload = kb::scene::ParticleBillboardOutput{
+        .flipbook = {.columns = 4U, .rows = 2U, .framesPerSecond = 3.25F, .looping = false,
+            .startFrame = 2U, .frameCount = 5U}};
     effect.emitters[0].modules.push_back({.moduleId = 1U, .authoringOrder = 0U, .type = kb::scene::ParticleModuleType::Gravity,
         .payload = kb::scene::ParticleGravityModule{.acceleration = {0.0F, -2.0F, 0.0F}}});
     kb::math::Gradient colorGradient;
@@ -632,6 +677,8 @@ void TestProductionBakeCacheAndCapabilityGates() {
         "first production Bake failed or modified the source asset");
     const ParticleBakeResult hit = bake(effect);
     Require(hit.status == ParticleBakeStatus::UpToDate && hit.key == first.key &&
+            hit.effect->emitters[0].flipbookStartFrame == 2U && hit.effect->emitters[0].flipbookFrameCount == 5U &&
+            hit.effect->emitters[0].flipbookFramesPerSecond == 3.25F && !hit.effect->emitters[0].flipbookLooping &&
             hit.effect->emitters[0].materialAssetId == 72U && hit.effect->emitters[0].burstCount == 1U &&
             hit.effect->emitters[0].moduleCount == 2U && hit.effect->emitters[0].colorOverLife.stopCount == 2U &&
             std::get<kb::scene::ParticleGravityModule>(hit.effect->emitters[0].modules[0].payload).acceleration.y == -2.0F,
@@ -642,6 +689,87 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(alternatePlatform.status == ParticleBakeStatus::Baked &&
             alternatePlatform.key.platform != first.key.platform && alternatePlatform.cachePath != first.cachePath,
         "typed compiler platform was omitted from the Bake cache key");
+    auto withDepth = effect;
+    withDepth.emitters[0].screenDepthCollision = true;
+    const auto depthBake = bake(withDepth);
+    const auto depthHit = bake(withDepth);
+    Require(depthBake.Succeeded() && depthBake.effect->emitters[0].screenDepthCollision &&
+        depthBake.cachePath != first.cachePath && depthHit.status == ParticleBakeStatus::UpToDate &&
+        depthHit.effect->emitters[0].screenDepthCollision && !hit.effect->emitters[0].screenDepthCollision &&
+        std::any_of(depthBake.diagnostics.begin(), depthBake.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.propertyPath == "effect.emitter[0].screenDepthCollision" &&
+                diagnostic.severity == kb::scene::ParticleEffectDiagnosticSeverity::Warning;
+        }), "screen-depth authoring did not survive compilation/cache or expose unavailable-depth semantics");
+    auto withContactDeath = effect;
+    withContactDeath.emitters[0].modules.push_back({.moduleId = 30U, .authoringOrder = 2U,
+        .type = kb::scene::ParticleModuleType::CollisionPlane,
+        .payload = kb::scene::ParticleCollisionPlaneModule{.killOnContact = true}});
+    const auto contactBake = bake(withContactDeath);
+    const auto contactHit = bake(withContactDeath);
+    const auto hasContactDeath = [](const auto& compiled) {
+        const auto& emitter = compiled.emitters[0];
+        for (std::size_t index = 0U; index < emitter.moduleCount; ++index) {
+            const auto& module = emitter.modules[index];
+            if (module.type == kb::scene::ParticleModuleType::CollisionPlane)
+                return std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact;
+        }
+        return false;
+    };
+    Require(contactBake.Succeeded() && contactHit.status == ParticleBakeStatus::UpToDate &&
+        contactBake.cachePath != first.cachePath && hasContactDeath(*contactBake.effect) && hasContactDeath(*contactHit.effect),
+        "contact death did not survive compiled cache rebuild and hit");
+    auto orderedMotion = effect;
+    auto& motionSource = orderedMotion.emitters[0].modules;
+    for (std::uint32_t index = 0U; index < 6U; ++index) {
+        const auto type = index % 3U == 0U ? kb::scene::ParticleModuleType::Noise :
+            (index % 3U == 1U ? kb::scene::ParticleModuleType::AxisRotation : kb::scene::ParticleModuleType::Attraction);
+        auto payload = kb::scene::DefaultParticleModulePayload(type);
+        if (type == kb::scene::ParticleModuleType::Noise)
+            payload = kb::scene::ParticleNoiseModule{.strength = 0.7F + index, .frequency = 0.5F + index};
+        else if (type == kb::scene::ParticleModuleType::AxisRotation)
+            payload = kb::scene::ParticleAxisRotationModule{.axis = {1.0F, 0.0F, 0.0F}, .degreesPerSecond = 10.0F + index};
+        else payload = kb::scene::ParticleAttractionModule{.point = {1.0F, 2.0F, 3.0F}, .strength = 2.0F + index, .radius = 4.0F + index};
+        motionSource.push_back({.moduleId = 30U + index, .authoringOrder = 2U + index, .type = type, .payload = std::move(payload)});
+    }
+    std::swap(motionSource[2].authoringOrder, motionSource[5].authoringOrder);
+    const auto motionBake = bake(orderedMotion);
+    const auto motionHit = bake(orderedMotion);
+    Require(motionBake.Succeeded() && motionHit.status == ParticleBakeStatus::UpToDate &&
+        motionBake.cachePath != first.cachePath && motionHit.effect->emitters[0].moduleCount == 8U,
+        "repeatable motion compilation/cache failed");
+    const auto& cachedMotion = motionHit.effect->emitters[0].modules;
+    Require(cachedMotion[2].moduleId == 33U && cachedMotion[5].moduleId == 30U &&
+        std::get<kb::scene::ParticleNoiseModule>(cachedMotion[2].payload).strength == 3.7F &&
+        std::get<kb::scene::ParticleNoiseModule>(cachedMotion[5].payload).frequency == 0.5F &&
+        std::get<kb::scene::ParticleAxisRotationModule>(cachedMotion[3].payload).degreesPerSecond == 11.0F &&
+        std::get<kb::scene::ParticleAxisRotationModule>(cachedMotion[6].payload).degreesPerSecond == 14.0F &&
+        std::get<kb::scene::ParticleAttractionModule>(cachedMotion[4].payload).radius == 6.0F &&
+        std::get<kb::scene::ParticleAttractionModule>(cachedMotion[7].payload).strength == 7.0F,
+        "compiled cache lost a repeated motion parameter or authored order");
+    auto duplicateModule = *motionHit.effect;
+    duplicateModule.emitters[0].modules[1].moduleId = duplicateModule.emitters[0].modules[0].moduleId;
+    const auto duplicatePath = root / "Duplicate.kbcache";
+    Require(kb::particles::ParticleCompiledEffectCache::Save(duplicatePath, motionHit.key, duplicateModule) ==
+        kb::particles::ParticleCompiledEffectCacheStatus::Success &&
+        !kb::particles::ParticleCompiledEffectCache::Load(duplicatePath, motionHit.key).Succeeded(),
+        "compiled cache accepted duplicate module identities");
+    auto reorderedEmitters = orderedMotion;
+    auto secondEmitter = reorderedEmitters.emitters[0];
+    secondEmitter.emitterId = 12U;
+    secondEmitter.authoringOrder = 0U;
+    reorderedEmitters.emitters[0].authoringOrder = 1U;
+    reorderedEmitters.emitters.push_back(std::move(secondEmitter));
+    const auto emitterBake = bake(reorderedEmitters);
+    const auto emitterHit = bake(reorderedEmitters);
+    Require(emitterBake.Succeeded() && emitterHit.status == ParticleBakeStatus::UpToDate &&
+        emitterHit.effect->emitters[0].emitterId == 12U && emitterHit.effect->emitters[1].emitterId == 11U,
+        "compiled cache changed authored emitter execution order");
+    auto duplicateEmitter = *emitterHit.effect;
+    duplicateEmitter.emitters[1].emitterId = duplicateEmitter.emitters[0].emitterId;
+    Require(kb::particles::ParticleCompiledEffectCache::Save(duplicatePath, emitterHit.key, duplicateEmitter) ==
+        kb::particles::ParticleCompiledEffectCacheStatus::Success &&
+        !kb::particles::ParticleCompiledEffectCache::Load(duplicatePath, emitterHit.key).Succeeded(),
+        "compiled cache accepted duplicate emitter identities");
     kb::particle_plugin::ParticleCompilerCapabilities reducedCapabilities;
     reducedCapabilities.pointSprite = false;
     const ParticleBakeResult alternateCapabilities = ParticleBakeService::Bake({.workingAsset = effect, .owner = owner,
@@ -690,6 +818,13 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(rebuilt.status == ParticleBakeStatus::Baked && rebuilt.effect != nullptr &&
             kb::particles::ParticleCompiledEffectCache::Load(rebuilt.cachePath, rebuilt.key).Succeeded(),
         "corrupt compiled cache was accepted or not atomically rebuilt");
+    auto newerCompiler = rebuilt.key;
+    ++newerCompiler.compilerVersion;
+    Require(kb::particles::ParticleCompiledEffectCache::PathFor(cacheRoot, newerCompiler) != rebuilt.cachePath &&
+            kb::particles::ParticleCompiledEffectCache::Load(rebuilt.cachePath, newerCompiler).status ==
+                kb::particles::ParticleCompiledEffectCacheStatus::InvalidCache &&
+            kb::particles::ParticleCompiledEffectCache::Load(rebuilt.cachePath, rebuilt.key).Succeeded(),
+        "a compiler version change must isolate the cache without damaging the previous compiler's entry");
     {
         std::ofstream oversized{rebuilt.cachePath, std::ios::binary | std::ios::trunc};
         oversized.seekp(static_cast<std::streamoff>(kb::particles::kParticleCompiledEffectCacheMaxBytes));
@@ -841,6 +976,44 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
                 .contentHash = 1U,
             }),
         "preview retarget metadata registration failed");
+
+    {
+        using Model = kb::particle_editor::ParticleEmitterInspectorModel;
+        using Path = kb::particles::ParticleEmitterSimulationPath;
+        using Reason = kb::particles::ParticleGpuFallbackReason;
+        kb::particle_editor::ParticlePreviewSession routingPreview;
+        auto routingAsset = MakeEffect();
+        Require(routingPreview.Start(project, sourceRegistry, kb::assets::AssetId{71U},
+            "/Game/Effects/Routing.kbvfx", routingAsset).Succeeded() && routingPreview.Tick(0.05F).Succeeded(),
+            "routing preview could not start");
+        const auto retained = kb::particles::ParticlePlayback::ReadRenderSnapshot(routingPreview.PreviewScene());
+        const auto cpu = Model::ReadExecution(retained.get(), 71U, 11U);
+        Require(cpu && cpu->path == Path::Cpu && cpu->reason == Reason::CpuPolicy && cpu->cpuRenderRecords > 0U &&
+            cpu->cpuRenderBytes == cpu->cpuRenderRecords * sizeof(kb::particles::ParticleRenderRecord),
+            "inspector did not read actual CPU routing and render payload cost");
+        Require(!Model::ReadExecution(nullptr, 71U, 11U) && !Model::ReadExecution(retained.get(), 73U, 11U) &&
+            !Model::ReadExecution(retained.get(), 71U, 12U), "inspector reused data from another effect or emitter");
+        kb::particle_editor::ParticleEmitterInspectorView view;
+        Require(Model::ExecutionRows(view)[0] == "Simulation: Unavailable", "missing runtime data guessed the authored policy");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(routingPreview.PreviewScene(), true);
+        routingAsset.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        Require(routingPreview.PublishWorkingCopy(routingAsset, false).Succeeded(), "GPU routing edit failed");
+        const auto gpuSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(routingPreview.PreviewScene());
+        view.execution = Model::ReadExecution(gpuSnapshot.get(), 71U, 11U);
+        Require(view.execution && view.execution->path == Path::Gpu && view.execution->reason == Reason::None &&
+            view.execution->snapshotRevision > cpu->snapshotRevision && Model::ExecutionRows(view)[0] == "Simulation: GPU",
+            "inspector did not follow the actual GPU route after a live edit");
+        routingAsset.emitters[0].output.alignment = kb::scene::ParticleAlignment::Local;
+        Require(routingPreview.PublishWorkingCopy(routingAsset, false).Succeeded(), "local alignment edit failed");
+        const auto fallbackSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(routingPreview.PreviewScene());
+        view.execution = Model::ReadExecution(fallbackSnapshot.get(), 71U, 11U);
+        Require(view.execution && view.execution->path == Path::Cpu && view.execution->reason == Reason::LocalAlignment &&
+            Model::ExecutionRows(view)[0] == "Simulation: CPU (local-alignment)" &&
+            Model::ExecutionRows(view)[2] == "CPU/GPU timings: Unavailable" &&
+            Model::ReadExecution(retained.get(), 71U, 11U)->reason == Reason::CpuPolicy,
+            "inspector lost the fallback reason, invented timings or mutated a retained snapshot");
+        routingPreview.Release([](const kb::scene::Scene&) {});
+    }
 
     kb::particle_editor::ParticlePreviewSession preview;
     const auto effect = MakeEffect();
@@ -996,6 +1169,7 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
 
 int main() {
     try {
+        TestNewProjectEffectMaterialDependency();
         TestDocumentHistorySavePointAndAtomicFailure();
         TestEmitterListCommandsAndAuthoredCompileOrder();
         TestModuleStackCommandsCapabilitiesAndAuthoredOrder();

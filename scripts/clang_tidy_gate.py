@@ -70,9 +70,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     checks = gate_checks(ENGINE_ROOT / ".clang-tidy")
-    tidy = find_clang_tidy(args.clang_tidy)
     pattern = args.filter_file.read_text(encoding="utf-8").strip() if args.filter_file else args.filter
-    sources = [path for path in first_party_sources(args.build_dir) if re.search(pattern, path)]
+    try:
+        source_filter = re.compile(pattern)
+    except re.error as error:
+        parser.error(f"invalid source filter: {error}")
+    sources = [path for path in first_party_sources(args.build_dir) if source_filter.search(path)]
+    if not sources:
+        parser.error("no first-party sources selected; check compile_commands.json and the source filter")
     if args.changed_since:
         changed = subprocess.run(
             ["git", "diff", "--name-only", f"{args.changed_since}...HEAD"],
@@ -84,6 +89,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if not header_changed:
             sources = [path for path in sources if path.lower() in changed_paths]
+        if not sources:
+            print("clang-tidy gate: skipped; no changed first-party sources in the selected scope")
+            return 0
+    tidy = find_clang_tidy(args.clang_tidy)
     command = [
         tidy, "-p", str(args.build_dir), "--quiet", f"--checks=-*,{','.join(checks)}", "--warnings-as-errors=*",
         # MSVC-only switches in the compile database mean nothing to the clang front end.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/ParticleGpuEmitter.hpp"
+#include "kb/render/particles/ParticleGpuUpdateFailure.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -30,7 +31,7 @@ struct ParticleGpuMeshDraw {
 };
 
 // Renderer side of GPU-simulated particle emitters. Owns, per emitter, a ring buffer of birth records
-// and the instance buffer a compute pass rebuilds every frame from them; nothing is read back.
+// and the instance buffer a compute pass rebuilds every frame. Normal simulation performs no readback.
 class ParticleGpuEmitterSimulation final {
 public:
     struct Draw {
@@ -39,9 +40,13 @@ public:
         // Instances in the buffer: the slot count, times the segments per slot of a trail emitter.
         std::uint32_t capacity = 0U;
         std::array<float, 3> origin{};
+        kb::particles::ParticleGpuEmitterKey key{};
+        // Requested buffer bytes, including birth/state/upload/instance and optional sort storage; not physical residency.
+        std::uint64_t requestedBufferBytes = 0U;
     };
 
-    [[nodiscard]] bool Initialize();
+    // Logical emitter buffer budget; zero uses the engine limit. Fixed until Shutdown.
+    [[nodiscard]] bool Initialize(std::uint64_t maxBufferBytes = 0U);
     void Shutdown() noexcept;
     [[nodiscard]] bool IsReady() const noexcept;
 
@@ -52,16 +57,24 @@ public:
     // Applies one frame of drained commands for a scene: creates emitters, uploads spawn records,
     // releases emitters. Positions are carried from each command's simulation origin to the render origin.
     void Apply(std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands) noexcept;
+    struct RejectedUpdate {
+        kb::particles::ParticleGpuEmitterKey key{};
+        ParticleGpuUpdateFailure failure = ParticleGpuUpdateFailure::None;
+    };
+    // Rejections persist until the same emitter receives accepted parameters or is released.
+    [[nodiscard]] std::span<const RejectedUpdate> RejectedUpdates(std::uint64_t sceneId) const noexcept;
     // Moves the scene render clock forward by the frame time, never more than one fixed step away
     // from the newest simulated time.
     void Advance(std::uint64_t sceneId, float frameDeltaSeconds) noexcept;
     // What the frame gives the simulation: the scene depth the camera has drawn so far (colliding emitters
-    // bounce off it) and the camera position (alpha-blended emitters are sorted back to front from it).
+    // bounce off it) and the camera data used by the authored particle sort.
     struct FrameContext {
         bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
         std::array<float, 16> viewProjection{};
         std::array<float, 16> inverseViewProjection{};
         std::array<float, 4> cameraPosition{};
+        // The view matrix's depth row, including translation, in render space.
+        std::array<float, 4> cameraDepth{0.0F, 0.0F, 1.0F, 0.0F};
         std::array<float, 2> texelSize{};
         bool homogeneousDepth = false;
         // Resolve the material of a mesh emitter, whose base colour goes into the instance colour.
@@ -72,7 +85,7 @@ public:
     // Rebuilds the instance buffers of the scene emitters; call once per rendered frame.
     void Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const FrameContext& frame) noexcept;
     // Emitters of the scene that were dispatched this frame.
-    [[nodiscard]] std::span<const Draw> Draws(std::uint64_t sceneId) noexcept;
+    [[nodiscard]] std::span<const Draw> Draws(std::uint64_t sceneId) const noexcept;
     [[nodiscard]] bool HasEmitters(std::uint64_t sceneId) const noexcept;
 
     void ReleaseScene(std::uint64_t sceneId) noexcept;
@@ -104,13 +117,14 @@ private:
         std::array<float, 12> basis{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
         // Fields of an emitter with forces, in the frame of its records (ParticleGpuEmitterCommand::hasField).
         kb::math::Vec3 fieldOrigin{};
-        kb::math::Vec3 fieldAxis{ 0.0F, 1.0F, 0.0F };
-        kb::math::Vec3 attractionTarget{};
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
+        // CPU-writable birth records copied into the GPU-writable ring before compute.
+        bgfx::DynamicVertexBufferHandle spawnUpload = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
         // Per-slot position/velocity record of the stateful kernel; only created for emitters that need it
         // (collisions, forces).
         bgfx::DynamicVertexBufferHandle state = BGFX_INVALID_HANDLE;
+        bgfx::DynamicVertexBufferHandle stateZeros = BGFX_INVALID_HANDLE;
         // Alpha-blended emitters only: sort keys (distance, slot) padded to a power of two, and the
         // instance records in back-to-front order, which is what gets drawn.
         bgfx::DynamicVertexBufferHandle sortKeys = BGFX_INVALID_HANDLE;
@@ -119,6 +133,9 @@ private:
         // Instances written per slot: 1, or the trail segments.
         std::uint32_t perSlot = 1U;
         std::uint64_t nextSlot = 0U;
+        std::uint32_t pendingBirths = 0U;
+        bool initializeSpawns = true;
+        bool initializeState = false;
         std::uint64_t bytes = 0U;
     };
     struct SceneClock {
@@ -129,17 +146,19 @@ private:
         // render origin as of the last Dispatch. Records uploaded before the next Dispatch are converted to it.
         kb::math::DVec3 recordOrigin{};
         std::vector<Draw> draws;
+        std::vector<RejectedUpdate> rejections;
     };
 
-    [[nodiscard]] bool Create(const Key& key, const kb::particles::ParticleGpuEmitterParams& params) noexcept;
+    [[nodiscard]] bool Create(Emitter& emitter, const kb::particles::ParticleGpuEmitterParams& params) noexcept;
     void Destroy(Emitter& emitter) noexcept;
     void Upload(Emitter& emitter, std::span<const kb::particles::ParticleGpuSpawn> spawns) noexcept;
     void Clear(Emitter& emitter) noexcept;
+    void FlushUploads(bgfx::ViewId viewId, Emitter& emitter) noexcept;
     // Creates the state buffer of a colliding emitter; false when the memory budget would be exceeded.
     [[nodiscard]] bool EnsureState(Emitter& emitter) noexcept;
     // Creates the sort buffers of an alpha-blended emitter; false when the budget or a kernel is missing.
     [[nodiscard]] bool EnsureSort(Emitter& emitter) noexcept;
-    void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const std::array<float, 4>& cameraPosition) noexcept;
+    void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const FrameContext& frame, float simTime) noexcept;
     // Moves the records of the scene's world-space emitters from the record origin to the render origin.
     void Rebase(bgfx::ViewId viewId, std::uint64_t sceneId, SceneClock& clock) noexcept;
     // Whether the draw order of this emitter's instances matters: alpha-blended billboards, and mesh particles
@@ -147,8 +166,9 @@ private:
     [[nodiscard]] static bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params, bool translucentMaterial) noexcept;
 
     std::vector<kb::particles::ParticleGpuSpawn> spawnScratch_;
+    std::uint64_t maxBufferBytes_ = 0U;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
-    // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
+    // Required for the GPU consumer: absence keeps authored collision/force semantics on the CPU.
     bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;
     // Optional: without it the live particles of world-space emitters are cleared when the render origin moves.
     bgfx::ProgramHandle rebaseProgram_ = BGFX_INVALID_HANDLE;
@@ -166,19 +186,22 @@ private:
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackDepth_ = BGFX_INVALID_HANDLE;
-    // Optional kernels of the back-to-front sort (all three are needed).
+    // Optional kernels of the authored particle sort (all three are needed).
     bgfx::ProgramHandle sortKeysProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle sortStepProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle sortGatherProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sortCameraUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle sortDepthUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sortParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sizeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle outputUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle flipbookUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle spinUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle basisUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fieldUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle forcesUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle noiseOriginUniform_ = BGFX_INVALID_HANDLE;
     std::unordered_map<Key, Emitter, KeyHash> emitters_;

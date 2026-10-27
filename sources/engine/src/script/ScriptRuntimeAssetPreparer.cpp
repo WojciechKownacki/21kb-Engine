@@ -255,9 +255,6 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(cons
     }
 
     PucLuaScriptRuntime* runtime = dynamic_cast<PucLuaScriptRuntime*>(&luaScripts_);
-    if (runtime != nullptr) {
-        runtime->SetScriptExposedVariables(metadata.id, asset->exposedVariables, asset->exposedVariableDefaults, asset->exposedVariableHasDefault);
-    }
 
     const bool scriptCurrent = runtime != nullptr
         ? runtime->IsScriptCurrent(metadata.id, metadata.contentHash)
@@ -280,6 +277,12 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(cons
     if (!loaded.succeeded) {
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Lua, loaded.error.empty() ? "Lua script could not be prepared" : loaded.error);
         return result;
+    }
+
+    // Keep the working schema with the working code when compilation or top-level
+    // execution fails. Otherwise an invalid edit can break the retained script.
+    if (runtime != nullptr) {
+        runtime->SetScriptExposedVariables(metadata.id, asset->exposedVariables, asset->exposedVariableDefaults, asset->exposedVariableHasDefault);
     }
 
     result.reloadedAssets.push_back(metadata.id);

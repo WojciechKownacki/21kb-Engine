@@ -58,7 +58,7 @@ Powtarzanie cullingu/kopiowania instancji w kolejnych pasach nadal kosztuje CPU.
 Ślady zachowano w Results/diagnostics. Sondy usunięto przed finalną kompilacją.
 
 Metoda finalna
-Projekt: E:/21kbProjekty/OpenWorldProductionStage8_20261001.
+Projekt: <workdir>/OpenWorldProductionStage8_20261001.
 i7-13700F, RTX 4070 12 GB, 64 GB RAM, D3D11 1920x1080, ForwardPlus,
 Release /O2 /DNDEBUG. Headless, bez widocznego edytora i przejmowania wejścia.
 54 procesy: 18 scenariuszy x 3, wszystkie exit 0. Stałe kroki city/mixed.
@@ -124,5 +124,5 @@ Results/rejected_native_clusters/decision.json i experiment.patch.
 Generator oraz run_compare.py/report_production.py pozostają bez zmian.
 Użyj poleceń README etapu 4 z Stage8 zamiast Stage4; suite compare, capacity,
 foliage, production --fixed-step kolejno, po pełnej kompilacji/testach. Porównanie:
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage7_20261001 --after E:/21kbProjekty/OpenWorldProductionStage8_20261001
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionStage7_20261001 --after <workdir>/OpenWorldProductionStage8_20261001
 Nie zastępuj nowych serii wcześniejszymi; zapisuj je w oddzielnym katalogu.

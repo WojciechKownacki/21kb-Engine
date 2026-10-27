@@ -31,8 +31,10 @@ struct CrashReporterOptions {
 // Process-wide crash capture: an unhandled structured exception, std::terminate,
 // abort(), a pure virtual call or an invalid CRT parameter leaves a minidump with
 // every thread's stack plus a small JSON description beside it, then ends the
-// process. The dump is written by a thread created at installation, so neither
-// a corrupted heap nor an exhausted stack on the crashing thread stops it.
+// process. The dump is written by a thread created at installation rather than
+// on the crashing thread's stack. Install reserves exception-handler stack space
+// on its calling thread; other threads must use SetThreadStackGuarantee themselves
+// to guarantee dispatch of stack-overflow exceptions to the process-wide handler.
 class CrashReporter final {
 public:
     CrashReporter() = delete;

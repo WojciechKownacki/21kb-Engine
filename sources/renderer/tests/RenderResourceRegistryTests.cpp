@@ -47,6 +47,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -117,6 +118,64 @@ void RunRuntimeTextureMipChainGenerationTest() {
 }
 
 void RunRenderTextureTextAssetPreservesDimensionTest() {
+    // A bitmap must contain its declared rows before the decoder allocates them.
+    // Exercise both header layouts and both row directions through the public loader.
+    for (const std::uint32_t headerSize : {12U, 40U, 108U, 124U}) {
+        for (const bool topDown : {false, true}) {
+            if (headerSize == 12U && topDown) continue;
+            for (const std::uint32_t bits : {1U, 4U, 8U, 16U, 24U, 32U}) {
+                // The platform decoder accepts the legacy core header for RGB24.
+                if (headerSize == 12U && bits != 24U) continue;
+                const std::uint32_t paletteBytes = bits <= 8U ? (1U << bits) * (headerSize == 12U ? 3U : 4U) : 0U;
+                const std::uint32_t pixelOffset = 14U + headerSize + paletteBytes;
+                std::vector<std::uint8_t> bytes(pixelOffset + 4U);
+                const auto put = [&bytes](std::size_t offset, std::uint32_t value, std::size_t count = 4U) {
+                    for (std::size_t index = 0U; index < count; ++index) {
+                        bytes[offset + index] = static_cast<std::uint8_t>((value >> (8U * index)) & 0xFFU);
+                    }
+                };
+                bytes[0] = 'B'; bytes[1] = 'M';
+                put(2U, static_cast<std::uint32_t>(bytes.size())); put(10U, pixelOffset); put(14U, headerSize);
+                if (headerSize == 12U) {
+                    put(18U, 1U, 2U); put(20U, 1U, 2U); put(22U, 1U, 2U); put(24U, bits, 2U);
+                } else {
+                    put(18U, 1U); put(22U, topDown ? 0xFFFFFFFFU : 1U); put(26U, 1U, 2U); put(28U, bits, 2U);
+                }
+                if (bits <= 8U) {
+                    const std::size_t palette = 14U + headerSize;
+                    bytes[palette] = 255U; bytes[palette + 1U] = 255U; bytes[palette + 2U] = 255U;
+                } else {
+                    for (std::uint32_t index = 0U; index < bits / 8U; ++index) bytes[pixelOffset + index] = 255U;
+                }
+                kb::assets::AssetMetadata metadata; metadata.type = "Texture";
+                RenderTextureAssetLoader loader{bgfx::RendererType::Noop};
+                const auto load = [&] {
+                    return loader.Load(kb::assets::AssetLoadRequest{
+                        .metadata = metadata, .resolvedPath = "Bitmap.bmp", .runtimePack = nullptr, .sourceBytes = bytes});
+                };
+                const auto valid = load();
+                Require(valid.Succeeded(), ("Complete padded bitmap failed to load: header=" + std::to_string(headerSize) +
+                    " bits=" + std::to_string(bits) + " topDown=" + std::to_string(topDown)).c_str());
+                const auto texture = std::static_pointer_cast<RenderTextureAssetData>(valid.asset);
+                Require(texture->width == 1U && texture->height == 1U &&
+                        texture->rgba8 == std::vector<std::uint8_t>{255U, 255U, 255U, 255U},
+                    "Bitmap header layout or row direction changed decoded pixels");
+                if (headerSize >= 40U && bits == 24U) {
+                    for (const std::uint32_t compression : {1U, 2U, 3U, 6U, 7U, 0x8F000000U}) {
+                        put(30U, compression);
+                        Require(!load().Succeeded(), "Bitmap compression incompatible with its RGB24 pixels was accepted");
+                    }
+                    put(30U, 0U);
+                }
+                bytes.resize(pixelOffset);
+                Require(!load().Succeeded(), "Truncated bitmap pixel row was accepted");
+                put(10U, static_cast<std::uint32_t>(bytes.size() + 100U));
+                Require(!load().Succeeded(), "Bitmap pixel offset beyond its input was accepted");
+                bytes.resize(20U);
+                Require(!load().Succeeded(), "Truncated bitmap header was accepted");
+            }
+        }
+    }
     struct TextureCase {
         const char* text;
         RenderTextureDimension dimension;
@@ -1152,6 +1211,18 @@ void RunTextureLoaderRefusesOversizedImageHeaderTest() {
     Require(!DecodeTextureSource("Short.png", { 0xFFU, 0xD8U, 0xFFU }).has_value() &&
             !DecodeTextureSource("Short.exr", { 0x76U }).has_value(),
         "A buffer shorter than an image signature was decoded");
+}
+
+// A JPEG's frame header states its size and the decoder fills every pixel it states, so a few hundred bytes that state
+// 16384 x 8192 pixels (found by fuzzing, fuzz/corpus/image) kept the decoder busy for over ten seconds. A file with
+// far more stated pixels than bytes is refused before decoding; a real small JPEG still decodes.
+void RunTextureLoaderRefusesJpegThatStatesMorePixelsThanItHasBytesTest() {
+    const std::vector<std::uint8_t> jpeg{ 0xFFU, 0xD8U, 0xFFU, 0xE0U, 0x00U, 0x10U, 'J', 'F', 'I', 'F', 0x00U, 0x01U, 0x01U, 0x00U, 0x00U, 0x01U, 0x00U,
+        0x01U, 0x00U, 0x00U, 0xFFU, 0xC0U, 0x00U, 0x11U, 0x08U, 0x40U, 0x00U, 0x20U, 0x00U, 0x03U, 0x01U, 0x22U, 0x00U, 0x02U, 0x11U, 0x01U, 0x03U,
+        0x11U, 0x01U, 0xFFU, 0xDAU, 0x00U, 0x0CU, 0x03U, 0x01U, 0x00U, 0x02U, 0x11U, 0x03U, 0x11U, 0x00U, 0x3FU, 0x00U, 0xFFU, 0xD9U };
+    const auto started = std::chrono::steady_clock::now();
+    Require(!DecodeTextureSource("Hostile.jpg", jpeg).has_value(), "A JPEG that states 134 million pixels in 60 bytes was decoded");
+    Require(std::chrono::steady_clock::now() - started < std::chrono::seconds(2), "A JPEG with an implausible size was not refused up front");
 }
 
 // TGA has no signature and its pixel data has no length: the decoder read past the end
@@ -3551,6 +3622,32 @@ void RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest() {
         "Render texture DDS fixture was not found");
 }
 
+void RunTextureLoaderChecksJpegSizeAfterMarkerPaddingTest() {
+    const auto read = [](const std::filesystem::path& relativePath) {
+        std::ifstream input{ ResolveFixturePath(relativePath), std::ios::binary };
+        Require(input.is_open(), "JPEG regression fixture was not found");
+        return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    // The fuzz corpus starts with the harness's path selector, followed by the actual JPEG.
+    std::vector<std::uint8_t> hostile = read("fuzz/corpus/image/regression-jpeg-marker-padding.bin");
+    Require(hostile.size() > 1U && hostile.front() == 0U, "JPEG regression fixture has an unexpected path selector");
+    hostile.erase(hostile.begin());
+    const std::size_t peakBefore = PeakCommittedBytes();
+    Require(!DecodeTextureSource("PaddedOversized.jpg", hostile).has_value(), "A JPEG size check was bypassed by padding between markers");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U, "A padded JPEG allocated its implausible declared image size");
+
+    std::vector<std::uint8_t> valid = read("third_party/bgfx.cmake/bgfx/examples/runtime/images/image1.jpg");
+    const auto expected = DecodeTextureSource("Original.jpg", valid);
+    Require(expected.has_value(), "The valid JPEG control must decode");
+    Require(valid.size() >= 6U && valid[2] == 0xFFU && valid[3] == 0xE0U, "The JPEG control must begin with an APP0 marker");
+    const std::size_t nextMarker = 4U + (static_cast<std::size_t>(valid[4]) << 8U) + valid[5];
+    Require(nextMarker < valid.size(), "The JPEG control's APP0 marker must fit in the file");
+    valid.insert(valid.begin() + static_cast<std::ptrdiff_t>(nextMarker), { 0x13U, 0x00U, 0x7FU, 0xFFU, 0xFFU });
+    const auto padded = DecodeTextureSource("PaddedValid.jpg", valid);
+    Require(padded.has_value() && padded->width == expected->width && padded->height == expected->height && padded->rgba8 == expected->rgba8,
+        "JPEG marker padding accepted by the decoder must preserve the decoded picture");
+}
+
 // The decoded-texture cache: a file must be decoded to RGBA8 at most once while unchanged on disk, so the many
 // scenes that reference the same texture (main scene + material preview + thumbnails) stop each paying the full
 // bimg decode - the multi-second stall on opening a Material Editor. Proven via the decode counter, with a
@@ -3721,6 +3818,7 @@ void RunPackagedMaterialRuntimeTests() {
 }
 
 void RunRenderResourceRegistryTests() {
+    RunTextureLoaderChecksJpegSizeAfterMarkerPaddingTest();
     RunMaterialHandlesAreGenerationalTest();
     RunGraphBlendModeDrivesResourceRenderStateTest();
     RunMaterialReloadInvalidatesStaleSceneBindingTest();
@@ -3742,6 +3840,7 @@ void RunRenderResourceRegistryTests() {
     RunFbxImporterRefusesUnboundedMaterialSlotsTest();
     RunTextureLoaderRefusesOversizedImageHeaderTest();
     RunTextureLoaderRefusesTruncatedTgaTest();
+    RunTextureLoaderRefusesJpegThatStatesMorePixelsThanItHasBytesTest();
     RunGltfImporterRefusesBufferLongerThanItsDataTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();

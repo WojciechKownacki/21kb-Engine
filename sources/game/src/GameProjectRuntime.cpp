@@ -6,6 +6,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/mods/ModRuntime.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
@@ -63,6 +64,51 @@ namespace {
         return static_cast<char>(std::tolower(value));
     });
     return extension;
+}
+
+// The mods installed in a Mods folder beside the game join its packs. The game's own packs have been
+// verified against the release by now and are not touched; the mods are mounted into a second pack
+// under their own trust (a mod pack is sealed by its author, not by the release key), and that pack
+// replaces the first only when it mounts. A mod that cannot load is reported and skipped; if the
+// extended set cannot mount at all, the game runs without mods.
+void MountInstalledMods(
+    std::shared_ptr<kb::assets::bake::RuntimeAssetPack>& pack,
+    const std::filesystem::path& packOrIndex,
+    const kb::assets::bake::BakeTargetProfile& profile,
+    const kb::assets::bake::AssetPackTrust& trust,
+    std::ostream& err) {
+    kb::mods::PublishLoadedMods({});
+    const std::filesystem::path modsRoot = packOrIndex.parent_path() / "Mods";
+    std::error_code error;
+    if (!std::filesystem::is_directory(modsRoot, error) || error) {
+        return;
+    }
+    const kb::mods::ModCatalog catalog{ modsRoot };
+    if (catalog.EnabledIds().empty()) {
+        return;
+    }
+    kb::mods::ModTrustPolicy policy = catalog.ReadTrustPolicy();
+    // A development player (no release key) with no trust file accepts unsigned mods, like it accepts an unsigned pack.
+    if (!trust.requiredSigner.has_value() && !std::filesystem::is_regular_file(modsRoot / std::string{ kb::mods::kModTrustFileName }, error)) {
+        policy.allowUnsigned = true;
+    }
+    auto extended = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
+    kb::mods::ModMountReport report;
+    const kb::assets::bake::RuntimeAssetPackStatus status = kb::mods::MountPackWithMods(
+        *extended, packOrIndex, profile, kb::assets::bake::AssetPackAccess::Ranged, trust, catalog, policy,
+        pack->ContainerCatalogIdentity(0U), report);
+    for (const kb::mods::ModInfo& refused : report.refused) {
+        err << "mod refused: " << refused.Describe() << '\n';
+    }
+    if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
+        err << "mods could not be mounted (" << kb::assets::bake::ToString(status) << "); the game runs without them\n";
+        return;
+    }
+    for (const kb::mods::ModInfo& loaded : report.loaded) {
+        err << "mod loaded: " << loaded.manifest.id << ' ' << kb::mods::ToString(loaded.manifest.version) << '\n';
+    }
+    pack = std::move(extended);
+    kb::mods::PublishLoadedMods(kb::mods::LoadedModsOf(report));
 }
 
 #if defined(_WIN32)
@@ -189,6 +235,7 @@ namespace {
     if (release != nullptr && !PackBelongsToRelease(*release, packPath, *pack, err)) {
         return false;
     }
+    MountInstalledMods(pack, packSet ? setIndex : packPath, targetProfile, trust, err);
     if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
         ConfigurePackagedSaveIntegrity(anchor.anchor, err);
     }

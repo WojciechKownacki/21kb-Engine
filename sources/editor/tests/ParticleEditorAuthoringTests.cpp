@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -32,6 +33,21 @@ void Require(bool condition, std::string_view message) {
     return rows;
 }
 
+using PanelLayout = kb::editor::ParticleEditorPanelLayout;
+
+[[nodiscard]] std::unique_ptr<PanelLayout> ResolveLayout(
+    const RECT& content, std::span<const kb::particle_editor::ParticleEmitterListRow> emitters,
+    int scrollOffset, unsigned int dpi = 96U,
+    const kb::particle_editor::ParticleEmitterInspectorView* inspector = nullptr,
+    std::size_t recipeCount = 0U,
+    const kb::particle_editor::ParticleEditorWorkspaceState* workspace = nullptr) {
+    // Initialize heap storage before assigning the out-of-line resolver's aggregate result.
+    auto layout = std::make_unique<PanelLayout>();
+    *layout = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        content, emitters, scrollOffset, dpi, inspector, recipeCount, workspace);
+    return layout;
+}
+
 [[nodiscard]] POINT Center(const RECT& rect) noexcept {
     return {(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2};
 }
@@ -43,9 +59,8 @@ void TestTwoToOneResponsiveGeometry() {
              std::pair{RECT{0, 0, 1280, 720}, 96U},
              std::pair{RECT{0, 0, 3840, 2160}, 192U},
          }) {
-        const auto layout = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-            kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
-                fixture.first, rows, 0, fixture.second));
+        const auto layout = ResolveLayout(
+            fixture.first, rows, 0, fixture.second);
         const LONG previewWidth = layout->preview.right - layout->preview.left;
         const LONG composerWidth = layout->composer.right - layout->composer.left;
         Require(previewWidth >= composerWidth * 2 - 2 && previewWidth <= composerWidth * 2 + 2,
@@ -57,8 +72,7 @@ void TestTwoToOneResponsiveGeometry() {
 }
 
 void TestCompactAuthoringMetrics() {
-    const auto layout = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(RECT{0, 0, 1280, 720}, Rows(2U), 0, 96U));
+    const auto layout = ResolveLayout(RECT{0, 0, 1280, 720}, Rows(2U), 0, 96U);
     Require(layout->toolbar.bottom - layout->toolbar.top == 40,
         "particle toolbar did not use the production height");
     Require(layout->statusBar.bottom - layout->statusBar.top == 22,
@@ -75,12 +89,10 @@ void TestCompactAuthoringMetrics() {
 void TestHitTestingScrollAndSelectionFocus() {
     const auto rows = Rows(kb::scene::kParticleEffectMaxEmitters);
     const RECT content{0, 0, 900, 300};
-    const auto unscrolled = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U));
+    const auto unscrolled = ResolveLayout(content, rows, 0, 96U);
     Require(kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(*unscrolled, 96U) > 0,
         "bounded emitter list did not expose scrolling in a short composer");
-    const auto scrolled = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 72, 96U));
+    const auto scrolled = ResolveLayout(content, rows, 72, 96U);
     Require(scrolled->emitterRows[0].bounds.top == unscrolled->emitterRows[0].bounds.top - 72,
         "composer scroll offset did not move emitter rows deterministically");
 
@@ -89,8 +101,7 @@ void TestHitTestingScrollAndSelectionFocus() {
             kb::editor::ParticleEditorPanelAction::None,
         "full emitter list did not disable the add hit target");
     const auto availableRows = Rows(kb::scene::kParticleEffectMaxEmitters - 1U);
-    const auto available = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, availableRows, 0, 96U));
+    const auto available = ResolveLayout(content, availableRows, 0, 96U);
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*available, add.x, add.y).action ==
             kb::editor::ParticleEditorPanelAction::AddEmitter,
         "available emitter slot did not route the add hit target");
@@ -136,8 +147,7 @@ void TestFullWidthNormalizedSlidersAndColorSwatch() {
         .type = kb::scene::ParticleModuleType::ColorOverLife, .label = "Color Over Life",
         .enabled = true, .selected = true});
     const RECT content{0, 0, 1280, 720};
-    const auto layout = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U, &inspector));
+    const auto layout = ResolveLayout(content, rows, 0, 96U, &inspector);
     Require(layout->propertyRowCount == 3U && layout->propertyRows[0].hasSlider,
         "normalized slider fixture did not expose a slider row");
     const LONG trackWidth = layout->propertyRows[0].sliderTrack.right - layout->propertyRows[0].sliderTrack.left;
@@ -177,8 +187,7 @@ void TestSortEnumChipsWrapAndStayReadable() {
     sort.enumLabels = {"None", "Back to Front", "Front to Back", "Distance", "Age", nullptr, nullptr, nullptr};
     inspector.properties.push_back(sort);
     const RECT content{0, 0, 1280, 720};
-    const auto layout = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U, &inspector));
+    const auto layout = ResolveLayout(content, rows, 0, 96U, &inspector);
     Require(layout->propertyRowCount == 1U && layout->propertyRows[0].enumChipCount == 5U,
         "sort enum fixture did not expose five chips");
     const auto& chips = layout->propertyRows[0].enumChips;
@@ -224,8 +233,7 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
         .propertyPath = "effect.emitter[0].output.type", .emitterId = rows[0].emitterId,
         .message = "unavailable"});
     const RECT content{0, 0, 1280, 720};
-    const auto layout = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U, &inspector));
+    const auto layout = ResolveLayout(content, rows, 0, 96U, &inspector);
     Require(layout->outputChoiceCount == 8U && layout->propertyRowCount == 1U &&
             layout->moduleRowCount == 2U && layout->dependencyRowCount == 1U &&
             layout->diagnosticRowCount == 1U,
@@ -252,8 +260,7 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
             std::abs(kb::editor::ParticleEditorPanelLayoutResolver::SliderValueAt(
                 layout->propertyRows[0].sliderTrack, layout->propertyRows[0].sliderTrack.left, 0.05F, 10.0F) - 0.05F) < 0.001F,
         "numeric property slider lost its drag route or range mapping");
-    const auto recipeLayout = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U, &inspector, 2U));
+    const auto recipeLayout = ResolveLayout(content, rows, 0, 96U, &inspector, 2U);
     const POINT recipe = Center(recipeLayout->recipeTiles[1]);
     Require(recipeLayout->recipeTileCount == 2U &&
             kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*recipeLayout, recipe.x, recipe.y).action ==
@@ -261,9 +268,15 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
             kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*recipeLayout, recipe.x, recipe.y).recipeIndex == 1U,
         "recipe tile did not preserve its registry ordering during hit testing");
     kb::particle_editor::ParticleEditorWorkspaceState workspace;
+    Require(layout->executionRowCount == 3U && layout->executionRows.back().bottom <= layout->diagnosticRows.front().top,
+        "runtime execution data overlaps diagnostic navigation");
+    workspace.ToggleComposerSection(kb::particle_editor::ParticleEditorComposerSection::Diagnostics);
+    const auto collapsedDiagnostics = ResolveLayout(content, rows, 0, 96U, &inspector, 0U, &workspace);
+    Require(collapsedDiagnostics->executionRowCount == 0U && collapsedDiagnostics->diagnosticRowCount == 0U,
+        "collapsed diagnostics retained runtime rows");
+    workspace.ToggleComposerSection(kb::particle_editor::ParticleEditorComposerSection::Diagnostics);
     workspace.ToggleComposerSection(kb::particle_editor::ParticleEditorComposerSection::Output);
-    const auto collapsedOutput = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U, &inspector, 0U, &workspace));
+    const auto collapsedOutput = ResolveLayout(content, rows, 0, 96U, &inspector, 0U, &workspace);
     const POINT outputHeader = Center(collapsedOutput->outputHeader);
     Require(collapsedOutput->outputChoiceCount == 0U &&
             kb::editor::ParticleEditorPanelLayoutResolver::HitTest(
@@ -276,16 +289,14 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
     Require(kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(*layout, 96U) >= 0,
         "composer scroll contract must remain defined at a standard authoring height");
     const RECT compactContent{0, 0, 900, 300};
-    const auto compactLayout = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(compactContent, rows, 0, 96U, &inspector, 2U));
+    const auto compactLayout = ResolveLayout(compactContent, rows, 0, 96U, &inspector, 2U);
     const int maximumScroll = kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(*compactLayout, 96U);
     const int moduleScroll = std::clamp(
         static_cast<int>(compactLayout->moduleRows[1].bounds.bottom - compactLayout->emitterList.bottom),
         0,
         maximumScroll);
-    const auto moduleScrolled = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
-            compactContent, rows, moduleScroll, 96U, &inspector, 2U));
+    const auto moduleScrolled = ResolveLayout(
+        compactContent, rows, moduleScroll, 96U, &inspector, 2U);
     const POINT grip = Center(moduleScrolled->moduleRows[1].dragGrip);
     const auto moduleHit = kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*moduleScrolled, grip.x, grip.y);
     Require(moduleHit.action == kb::editor::ParticleEditorPanelAction::BeginModuleDrag &&
@@ -293,9 +304,8 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
             kb::editor::ParticleEditorPanelLayoutResolver::ModuleReorderTargetAt(
                 *moduleScrolled, moduleScrolled->moduleRows[0].bounds.top) == 0U,
         "module drag hit lost stable identity or authored order");
-    const auto scrolled = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
-        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
-            compactContent, rows, maximumScroll, 96U, &inspector, 2U));
+    const auto scrolled = ResolveLayout(
+        compactContent, rows, maximumScroll, 96U, &inspector, 2U);
     const POINT dependency = Center(scrolled->dependencyRows[0]);
     const POINT diagnostic = Center(scrolled->diagnosticRows[0]);
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*scrolled, dependency.x, dependency.y).action ==

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <unordered_map>
+#include <unordered_set>
 #include <iomanip>
 #include <ostream>
 #include <stdexcept>
@@ -333,6 +335,60 @@ void ExportSystemSchedulerTraceToCsvFile(const SystemSchedulerTrace& trace, cons
     if (!output.good()) {
         throw std::runtime_error("Failed to write ECS scheduler csv export file: " + path.string());
     }
+}
+
+SystemSchedulerCriticalPath ComputeSystemSchedulerCriticalPath(const SystemSchedulerTrace& trace) {
+    SystemSchedulerCriticalPath path;
+    if (trace.events.empty()) {
+        return path;
+    }
+    // A system name is unique within a frame; if one repeats, the later event stands for it.
+    std::unordered_map<std::string_view, std::size_t> byName;
+    std::size_t last = 0;
+    for (std::size_t index = 0; index < trace.events.size(); ++index) {
+        byName[trace.events[index].systemName] = index;
+        if (trace.events[index].endTimeNanoseconds >= trace.events[last].endTimeNanoseconds) {
+            last = index;
+        }
+    }
+    std::vector<std::size_t> chain;
+    std::unordered_set<std::size_t> seen;
+    for (std::size_t current = last; seen.insert(current).second;) {
+        chain.push_back(current);
+        const SystemSchedulerTraceEvent& event = trace.events[current];
+        bool found = false;
+        std::size_t decisive = 0;
+        for (const std::string& dependency : event.blockedDependencies) {
+            const auto entry = byName.find(dependency);
+            if (entry == byName.end()) {
+                continue;
+            }
+            if (!found || trace.events[entry->second].endTimeNanoseconds > trace.events[decisive].endTimeNanoseconds) {
+                decisive = entry->second;
+                found = true;
+            }
+        }
+        if (!found) {
+            break;
+        }
+        current = decisive;
+    }
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        path.systems.push_back(trace.events[*it].systemName);
+        path.busyNanoseconds += trace.events[*it].durationNanoseconds;
+    }
+    const SystemSchedulerTraceEvent& first = trace.events[chain.back()];
+    const SystemSchedulerTraceEvent& end = trace.events[chain.front()];
+    path.wallNanoseconds = end.endTimeNanoseconds >= first.startTimeNanoseconds ? end.endTimeNanoseconds - first.startTimeNanoseconds : 0U;
+    return path;
+}
+
+std::uint64_t SumSystemSchedulerCpuNanoseconds(const SystemSchedulerTrace& trace) noexcept {
+    std::uint64_t total = 0;
+    for (const SystemSchedulerTraceEvent& event : trace.events) {
+        total += event.durationNanoseconds;
+    }
+    return total;
 }
 
 } // namespace kb::ecs

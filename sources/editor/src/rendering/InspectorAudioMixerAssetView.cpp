@@ -40,9 +40,11 @@ constexpr int kCheckboxSize = 16;
 
 [[nodiscard]] int SectionTop(InspectorSectionId section, const InspectorPanelState& state, const InspectorAudioMixerAssetModel& model) noexcept {
     int y = kHeaderHeight + kPanelPadTop;
-    if (section == InspectorSectionId::AudioMixerSnapshots) {
+    if (section == InspectorSectionId::AudioMixerSnapshots || section == InspectorSectionId::AudioMixerRuntime) {
         y += SectionHeight(state, InspectorSectionId::AudioMixerBuses, model.Rows(InspectorSectionId::AudioMixerBuses)) + kSectionGap;
     }
+    if (section == InspectorSectionId::AudioMixerRuntime)
+        y += SectionHeight(state, InspectorSectionId::AudioMixerSnapshots, model.Rows(InspectorSectionId::AudioMixerSnapshots)) + kSectionGap;
     return y;
 }
 
@@ -205,6 +207,11 @@ void PaintRow(
     const bool editing = InspectorAudioMixerAssetView::IsRowEditing(state, id, row);
     const std::string_view shown = editing ? std::string_view{ state.EditBuffer() } : std::string_view{ row.value };
     Frame(dc, valueRect, Color(theme.chrome), editing || hovered ? Color(theme.accent) : Color(theme.borderPanel));
+    if (row.kind == InspectorAudioMixerRowKind::Meter) {
+        RECT bar{valueRect.left + 1, valueRect.bottom - 5, valueRect.right - 1, valueRect.bottom - 1};
+        bar.right = bar.left + static_cast<int>(static_cast<float>(bar.right - bar.left) * std::clamp(row.meterLevel, 0.0F, 1.0F));
+        Fill(dc, bar, row.meterClipped ? RGB(198, 64, 64) : RGB(48, 152, 102));
+    }
     ScopedFont font(12, FW_NORMAL);
     const ScopedGdiObject selected(dc, font.handle);
     Text(dc, Rect(valueRect.left + 8, valueRect.top, valueRect.right - 4, valueRect.bottom), shown,
@@ -263,12 +270,15 @@ kb::assets::AssetHandle<kb::audio::AudioMixerAsset> InspectorAudioMixerAssetView
 
 int InspectorAudioMixerAssetView::ContentHeight(
     const InspectorPanelState& state,
-    const kb::audio::AudioMixerAsset& asset) {
-    const InspectorAudioMixerAssetModel model{ asset };
+    const kb::audio::AudioMixerAsset& asset,
+    const EditorAudioMixerRuntimeState* runtime) {
+    const InspectorAudioMixerAssetModel model{ asset, runtime };
     return kHeaderHeight + kPanelPadTop
         + SectionHeight(state, InspectorSectionId::AudioMixerBuses, model.Rows(InspectorSectionId::AudioMixerBuses))
         + kSectionGap
-        + SectionHeight(state, InspectorSectionId::AudioMixerSnapshots, model.Rows(InspectorSectionId::AudioMixerSnapshots));
+        + SectionHeight(state, InspectorSectionId::AudioMixerSnapshots, model.Rows(InspectorSectionId::AudioMixerSnapshots))
+        + (runtime != nullptr ? kSectionGap + SectionHeight(state, InspectorSectionId::AudioMixerRuntime,
+            model.Rows(InspectorSectionId::AudioMixerRuntime)) : 0);
 }
 
 bool InspectorAudioMixerAssetView::IsRowEditing(
@@ -294,11 +304,12 @@ void InspectorAudioMixerAssetView::Paint(
     const EditorTheme& theme,
     const InspectorPanelState& state,
     const kb::assets::AssetMetadata& metadata,
-    const kb::audio::AudioMixerAsset& asset) {
+    const kb::audio::AudioMixerAsset& asset,
+    const EditorAudioMixerRuntimeState* runtime) {
     if (dc == nullptr || content.right <= content.left || content.bottom <= content.top) {
         return;
     }
-    const InspectorAudioMixerAssetModel model{ asset };
+    const InspectorAudioMixerAssetModel model{ asset, runtime };
     Fill(dc, content, Color(theme.background));
     PaintHeader(dc, content, theme, metadata);
     const int busesTop = content.top + kHeaderHeight + kPanelPadTop;
@@ -307,6 +318,10 @@ void InspectorAudioMixerAssetView::Paint(
         + SectionHeight(state, InspectorSectionId::AudioMixerBuses, model.Rows(InspectorSectionId::AudioMixerBuses))
         + kSectionGap;
     PaintSection(dc, content, snapshotsTop, theme, state, metadata.id, InspectorSectionId::AudioMixerSnapshots, EditorText("inspector.audioMixer.snapshots", "Snapshots"), model.Rows(InspectorSectionId::AudioMixerSnapshots));
+    if (runtime != nullptr) PaintSection(dc, content,
+        content.top + SectionTop(InspectorSectionId::AudioMixerRuntime, state, model), theme, state, metadata.id,
+        InspectorSectionId::AudioMixerRuntime, EditorText("inspector.audioMixer.runtime", "Meters and preview"),
+        model.Rows(InspectorSectionId::AudioMixerRuntime));
 }
 
 InspectorAudioMixerAssetHit InspectorAudioMixerAssetView::HitTest(
@@ -314,11 +329,14 @@ InspectorAudioMixerAssetHit InspectorAudioMixerAssetView::HitTest(
     const InspectorPanelState& state,
     const kb::audio::AudioMixerAsset& asset,
     int x,
-    int y) {
-    const InspectorAudioMixerAssetModel model{ asset };
+    int y,
+    const EditorAudioMixerRuntimeState* runtime) {
+    const InspectorAudioMixerAssetModel model{ asset, runtime };
     for (const InspectorSectionId section : std::array{
              InspectorSectionId::AudioMixerBuses,
-             InspectorSectionId::AudioMixerSnapshots }) {
+             InspectorSectionId::AudioMixerSnapshots,
+             InspectorSectionId::AudioMixerRuntime }) {
+        if (section == InspectorSectionId::AudioMixerRuntime && runtime == nullptr) continue;
         const int top = content.top + SectionTop(section, state, model);
         const RECT header = Rect(content.left, top, content.right, top + kSectionHeaderHeight);
         if (Contains(header, x, y)) {
@@ -364,8 +382,9 @@ std::optional<RECT> InspectorAudioMixerAssetView::RowBounds(
     const RECT& content,
     const InspectorPanelState& state,
     const kb::audio::AudioMixerAsset& asset,
-    int flatIndex) {
-    return FindRowBounds(content, state, InspectorAudioMixerAssetModel{ asset }, flatIndex);
+    int flatIndex,
+    const EditorAudioMixerRuntimeState* runtime) {
+    return FindRowBounds(content, state, InspectorAudioMixerAssetModel{ asset, runtime }, flatIndex);
 }
 #endif
 

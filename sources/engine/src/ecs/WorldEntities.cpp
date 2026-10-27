@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -40,20 +41,20 @@ void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<co
 
     // A single entity needs no id array on the heap.
     ecs_entity_t singleEntityId = 0;
-    std::vector<ecs_entity_t> entityIds;
+    std::optional<std::vector<ecs_entity_t>> entityIds;
     if (entities.size() == 1U) {
         singleEntityId = FlecsEntityId(entities.front());
     } else {
-        entityIds.reserve(entities.size());
+        entityIds.emplace().reserve(entities.size());
         for (Entity entity : entities) {
-            entityIds.push_back(FlecsEntityId(entity));
+            entityIds->push_back(FlecsEntityId(entity));
         }
     }
 
     std::array<void*, FLECS_ID_DESC_MAX> componentData{};
-    std::vector<std::vector<std::byte>> expandedComponentData;
+    std::optional<std::vector<std::vector<std::byte>>> expandedComponentData;
     ecs_bulk_desc_t descriptor{};
-    descriptor.entities = entities.size() == 1U ? &singleEntityId : entityIds.data();
+    descriptor.entities = entities.size() == 1U ? &singleEntityId : entityIds->data();
     descriptor.count = static_cast<int32_t>(entities.size());
     descriptor.data = componentData.data();
     for (std::size_t index = 0; index < components.size(); ++index) {
@@ -66,10 +67,10 @@ void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<co
             continue;
         }
 
-        if (expandedComponentData.empty()) {
-            expandedComponentData.reserve(components.size());
+        if (!expandedComponentData.has_value()) {
+            expandedComponentData.emplace().reserve(components.size());
         }
-        std::vector<std::byte>& expanded = expandedComponentData.emplace_back();
+        std::vector<std::byte>& expanded = expandedComponentData->emplace_back();
         expanded.resize(entities.size() * component.componentSize);
         const auto* source = static_cast<const std::byte*>(component.data);
         for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {

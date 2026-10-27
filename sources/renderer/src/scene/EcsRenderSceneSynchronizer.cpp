@@ -1,3 +1,5 @@
+#include "kb/render/resources/RenderMap2DMeshBuilder.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 
 #include "engine/scene/CameraComponent.hpp"
@@ -458,7 +460,40 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     std::uint64_t skeletalMeshAssetId = 0U;
     std::uint64_t materialAssetId = ResolveMaterialAssetId(*sync->scene, renderer);
     std::uint32_t effectiveMaterialSlotOverrideCount = materialSlotOverrideCount;
-    bool visible = visibility.visible;
+    bool visible = visibility.visible && !renderer.previewHidden;
+    auto model = RenderModel(*sync, entity, transform, renderTransform);
+    auto tilemapOwner = entity;
+    const auto* ownedMap = sync->scene->Components().Tilemaps().TryGet(entity);
+    bool mapMesh = ownedMap && ownedMap->mapAssetId == renderer.meshAssetId;
+    bool generated = renderer.transient;
+    // A transient mesh made for a Sprite 2D is the sprite's own picture, drawn as long as the sprite is.
+    bool spriteVisual = false;
+    if (!ownedMap) {
+        auto ancestor = sync->scene->Hierarchy().Parent(entity);
+        while (ancestor.IsValid()) {
+            const auto* parentRenderer = sync->scene->Components().MeshRenderers().TryGet(ancestor);
+            generated = generated || (parentRenderer && parentRenderer->transient);
+            if (generated && sync->scene->Components().Sprites2D().Has(ancestor)) {
+                spriteVisual = true;
+                break;
+            }
+            if (sync->scene->Components().Tilemaps().Has(ancestor)) {
+                if (generated) { tilemapOwner = ancestor; mapMesh = true; }
+                break;
+            }
+            ancestor = sync->scene->Hierarchy().Parent(ancestor);
+        }
+    }
+    if (generated && !spriteVisual && !sync->scene->Components().TilemapRenderers().Has(tilemapOwner)) visible = false;
+    if (const auto* tilemap = sync->scene->Components().TilemapRenderers().TryGet(tilemapOwner); mapMesh && tilemap) {
+        visible = visible && tilemap->enabled;
+        const auto* grid = sync->scene->Components().Grids().TryGet(tilemapOwner);
+        const bool wall = grid != nullptr && grid->wall;
+        const float lift = static_cast<float>(std::clamp(tilemap->sortingOrder, -1000, 1000)) *
+            RenderMap2DMeshBuilder::kSortingOrderLift * (wall ? -1.0F : 1.0F);
+        const std::size_t axis = wall ? 8U : 4U;
+        for (std::size_t component = 0U; component < 3U; ++component) model[12U + component] += model[axis + component] * lift;
+    }
     bool castsShadow = renderer.castsShadow;
     bool receivesShadow = renderer.receivesShadow;
     std::uint32_t layer = renderer.layer & visibility.mask;
@@ -522,7 +557,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialAssetId = materialAssetId,
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
-        .model = RenderModel(*sync, entity, transform, renderTransform),
+        .model = model,
         .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, geometry, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,
@@ -530,6 +565,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .visible = visible,
         .castsShadow = castsShadow,
         .receivesShadow = receivesShadow,
+        .shadowOnly = renderer.shadowOnly,
         .layer = layer,
         .detailSwitchGroupId = detailSwitch != nullptr ? detailSwitch->groupId : 0U,
         .detailSwitchMinimumLod = detailSwitch != nullptr ? detailSwitch->minimumLod : 0U,

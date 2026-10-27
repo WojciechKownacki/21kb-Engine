@@ -348,6 +348,85 @@ void RichTextParserAppliesColorAndLineBreakWithoutChangingLiteralText() {
             "Screen UI disabled rich text did not preserve markup literally");
 }
 
+// The markup contract: tags nest and scope colours, anything that is not a complete tag stays literal text and never
+// fails, only broken UTF-8 fails (and then yields no glyphs), the work is bounded by the text, and every glyph points
+// back at its own byte in the authored string, in order.
+void RichTextParserKeepsItsContractOnNestedAndMalformedMarkup() {
+    const auto text = [](const ScreenUITextMarkup& markup) {
+        std::string result;
+        for (const ScreenUITextMarkupGlyph& glyph : markup.glyphs) result.push_back(static_cast<char>(glyph.codepoint));
+        return result;
+    };
+    const std::array<float, 4U> white{ 1.0F, 1.0F, 1.0F, 1.0F };
+    const std::array<float, 4U> red{ 1.0F, 0.0F, 0.0F, 1.0F };
+    const std::array<float, 4U> green{ 0.0F, 1.0F, 0.0F, 1.0F };
+
+    const std::string nested = "<color=#FF0000><color=#00FF00>x</color>y</color>z";
+    const ScreenUITextMarkup parsed = ScreenUITextMarkupParser{}.Parse(nested, true);
+    Require(parsed.succeeded && text(parsed) == "xyz" && parsed.glyphs[0U].color == green && parsed.glyphs[1U].color == red &&
+                parsed.glyphs[2U].color == white,
+        "Nested colour tags must scope to the innermost open tag and restore the outer one");
+    Require(nested[parsed.glyphs[0U].sourceOffset] == 'x' && nested[parsed.glyphs[1U].sourceOffset] == 'y' &&
+                nested[parsed.glyphs[2U].sourceOffset] == 'z',
+        "Every glyph must point at its own byte of the authored string");
+
+    // Not a complete tag: literal, and parsing still succeeds.
+    for (const std::string_view literal : { "<color=#12", "<color=#GGGGGG>x", "<color=#FF0000", "<br", "<>", "</color>", "a</color>b",
+                                            "<color=#FF00>x", "<color=FF0000>x", "<COLOR=#FF0000>x", "<br />" }) {
+        const ScreenUITextMarkup result = ScreenUITextMarkupParser{}.Parse(literal, true);
+        Require(result.succeeded && text(result) == literal,
+            (std::string{ "Text that is not a complete tag must stay literal: " } + std::string{ literal }).c_str());
+    }
+    // An unclosed colour tag colours the rest of the text and is not an error.
+    const ScreenUITextMarkup unclosed = ScreenUITextMarkupParser{}.Parse("<color=#FF0000>abc", true);
+    Require(unclosed.succeeded && text(unclosed) == "abc" && unclosed.glyphs[2U].color == red, "An unclosed colour tag must colour the rest of the text");
+    // Eight digits carry alpha; a break tag inside a colour keeps the colour.
+    const ScreenUITextMarkup alpha = ScreenUITextMarkupParser{}.Parse("<color=#FF000080>a<br/>b</color>", true);
+    Require(alpha.succeeded && text(alpha) == "a\nb" && NearlyEqual(alpha.glyphs[1U].color[3U], 128.0F / 255.0F) && alpha.glyphs[1U].color == alpha.glyphs[0U].color,
+        "A colour with alpha must apply to a line break inside it");
+
+    // Broken UTF-8 is the only failure and it leaves no glyphs behind.
+    for (const std::string_view broken : { std::string_view{ "\xC3" }, std::string_view{ "ok\xF0\x9F" }, std::string_view{ "<color=#FF0000>\xFF</color>" },
+                                           std::string_view{ "\x80" } }) {
+        const ScreenUITextMarkup result = ScreenUITextMarkupParser{}.Parse(broken, true);
+        Require(!result.succeeded && result.glyphs.empty(), "Broken UTF-8 must fail without leaving glyphs");
+    }
+
+    // The longest text a label holds, made only of tags, is bounded work and produces nothing visible.
+    std::string tags;
+    while (tags.size() + 15U <= 1023U) tags += "<color=#FFFFFF>";
+    const ScreenUITextMarkup onlyTags = ScreenUITextMarkupParser{}.Parse(tags, true);
+    Require(onlyTags.succeeded && onlyTags.glyphs.empty(), "A text of nothing but tags must parse to nothing");
+    std::string closes;
+    while (closes.size() + 8U <= 1023U) closes += "</color>";
+    Require(ScreenUITextMarkupParser{}.Parse(closes, true).succeeded, "Closing tags without an opening one must be literal text");
+
+    // Random text from the characters of the markup itself: it never crashes, offsets only grow and every glyph
+    // points inside the text.
+    const std::string alphabet = "<>/=#colr bF0xyz\n\xC3\xA9";
+    std::uint32_t state = 0xC0FFEEU;
+    for (int round = 0; round < 2000; ++round) {
+        std::string noise;
+        const std::size_t length = static_cast<std::size_t>(round % 70);
+        for (std::size_t index = 0U; index < length; ++index) {
+            state = state * 1664525U + 1013904223U;
+            noise.push_back(alphabet[(state >> 16U) % alphabet.size()]);
+        }
+        const ScreenUITextMarkup result = ScreenUITextMarkupParser{}.Parse(noise, true);
+        if (!result.succeeded) {
+            Require(result.glyphs.empty(), "A failed parse must leave no glyphs");
+            continue;
+        }
+        std::uint32_t previous = 0U;
+        for (std::size_t index = 0U; index < result.glyphs.size(); ++index) {
+            Require(result.glyphs[index].sourceOffset < noise.size() && (index == 0U || result.glyphs[index].sourceOffset >= previous),
+                "Glyph offsets must lie inside the text and never go backwards");
+            previous = result.glyphs[index].sourceOffset;
+        }
+        Require(result.glyphs.size() <= noise.size(), "Markup can only remove characters, never add them");
+    }
+}
+
 } // namespace
 
 void RunScreenUIDrawBatchTests() {
@@ -361,6 +440,7 @@ void RunScreenUIDrawBatchTests() {
     ImportCatalogOffersOnlyRasterizableFontFormats();
     FontPayloadValidatorRejectsUnsupportedAndTruncatedData();
     RichTextParserAppliesColorAndLineBreakWithoutChangingLiteralText();
+    RichTextParserKeepsItsContractOnNestedAndMalformedMarkup();
 }
 
 } // namespace kb::render::tests

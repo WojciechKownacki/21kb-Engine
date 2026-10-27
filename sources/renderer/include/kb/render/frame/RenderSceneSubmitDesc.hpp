@@ -235,6 +235,9 @@ struct RenderSceneSubmitDesc {
     EditorGridDesc editorGrid{};
     EditorGizmoDesc editorGizmo{};
     EditorSelectionBoxDesc editorSelectionBox{};
+    // Set for one submission after a camera teleport or a cut using the same camera.
+    // Scene/camera switches, projection-mode changes and resize invalidate history automatically.
+    bool resetTemporalHistory = false;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return target.IsValid() && postProcess.IsValid() && finalComposite.IsValid() &&

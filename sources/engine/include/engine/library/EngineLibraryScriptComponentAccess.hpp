@@ -14,6 +14,14 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/Body2DComponent.hpp"
+#include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -365,6 +373,102 @@ struct ScriptComponentAccess<kb::scene::GuideCurveComponent> {
     [[nodiscard]] static kb::scene::GuideCurveComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().GuideCurves().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::GuideCurveComponent& value) { scene.Components().GuideCurves().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().GuideCurves().Has(entity)) return false; scene.Components().GuideCurves().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::GridComponent> {
+    [[nodiscard]] static const kb::scene::GridComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Grids().TryGet(entity); }
+    [[nodiscard]] static kb::scene::GridComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Grids().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::GridComponent& value) { scene.Components().Grids().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Grids().Has(entity)) return false;
+        scene.Components().Grids().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::TilemapComponent> {
+    [[nodiscard]] static const kb::scene::TilemapComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Tilemaps().TryGet(entity); }
+    [[nodiscard]] static kb::scene::TilemapComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Tilemaps().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TilemapComponent& value) { scene.Components().Tilemaps().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Tilemaps().Has(entity)) return false;
+        scene.Components().Tilemaps().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::TilemapRendererComponent> {
+    [[nodiscard]] static const kb::scene::TilemapRendererComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().TilemapRenderers().TryGet(entity); }
+    [[nodiscard]] static kb::scene::TilemapRendererComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().TilemapRenderers().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TilemapRendererComponent& value) { scene.Components().TilemapRenderers().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().TilemapRenderers().Has(entity)) return false;
+        scene.Components().TilemapRenderers().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::TilemapColliderComponent> {
+    [[nodiscard]] static const kb::scene::TilemapColliderComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().TilemapColliders().TryGet(entity); }
+    [[nodiscard]] static kb::scene::TilemapColliderComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().TilemapColliders().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TilemapColliderComponent& value) { scene.Components().TilemapColliders().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().TilemapColliders().Has(entity)) return false;
+        scene.Components().TilemapColliders().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::CharacterController2DComponent> {
+    [[nodiscard]] static const kb::scene::CharacterController2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().CharacterControllers2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::CharacterController2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().CharacterControllers2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::CharacterController2DComponent& value) { scene.Components().CharacterControllers2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().CharacterControllers2D().Has(entity)) return false;
+        scene.Components().CharacterControllers2D().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::Collider2DComponent> {
+    [[nodiscard]] static const kb::scene::Collider2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Colliders2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::Collider2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Colliders2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::Collider2DComponent& value) { scene.Components().Colliders2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Colliders2D().Has(entity)) return false;
+        scene.Components().Colliders2D().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::Body2DComponent> {
+    [[nodiscard]] static const kb::scene::Body2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Bodies2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::Body2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Bodies2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::Body2DComponent& value) { scene.Components().Bodies2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Bodies2D().Has(entity)) return false;
+        scene.Components().Bodies2D().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::Sprite2DComponent> {
+    [[nodiscard]] static const kb::scene::Sprite2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Sprites2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::Sprite2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Sprites2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::Sprite2DComponent& value) { scene.Components().Sprites2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Sprites2D().Has(entity)) return false;
+        scene.Components().Sprites2D().Remove(entity);
+        return true;
+    }
 };
 
 template <>

@@ -532,6 +532,81 @@ bool BuildAssetPackPatch(const AssetPackPatchRequest& request, AssetPackPatchRep
     return WriteRuntimePack(nextSource, profile, patch, options, request.output, report.pack, error);
 }
 
+bool BuildAssetPackModChunk(const AssetPackModChunkRequest& request, AssetPackModChunkReport& report, std::string& error) {
+    report = {};
+    if (!IsValidBakeCacheName(request.label)) {
+        error = "a mod chunk needs a valid label (the mod id)";
+        return false;
+    }
+    BakeTargetProfile profile{};
+    AssetPackReader nextSource;
+    if (const AssetPackReadStatus status = nextSource.Mount(request.next); status != AssetPackReadStatus::Success) {
+        error = "the mod's cook does not mount: " + std::string{ ToString(status) };
+        return false;
+    }
+    if (nextSource.Header().role != AssetPackRole::Base || !ProfileOf(nextSource.Header(), profile, error)) {
+        if (error.empty()) {
+            error = "the mod's cook is not a complete base pack";
+        }
+        return false;
+    }
+    RuntimeAssetPack next;
+    if (const RuntimeAssetPackStatus status = next.Mount(request.next, profile); status != RuntimeAssetPackStatus::Success) {
+        error = "the mod's cook is not a valid runtime pack: " + std::string{ ToString(status) };
+        return false;
+    }
+    RuntimeAssetPack current;
+    std::string extension = request.base.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](char value) {
+        return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
+    });
+    const RuntimeAssetPackStatus currentStatus = extension == kAssetPackSetFileExtension
+        ? current.MountSetIndex(request.base, profile, AssetPackAccess::Ranged, request.baseTrust)
+        : current.Mount(request.base, profile, AssetPackAccess::Ranged, request.baseTrust);
+    if (currentStatus != RuntimeAssetPackStatus::Success) {
+        error = "the game's content does not mount for this profile: " + std::string{ ToString(currentStatus) };
+        if (currentStatus == RuntimeAssetPackStatus::ContainerRejected) {
+            error += " (" + std::string{ ToString(current.ContainerStatus()) } + ")";
+        }
+        return false;
+    }
+    for (std::uint32_t container = 1U; container < current.ContainerCount(); ++container) {
+        if (current.ContainerHeader(container).label == request.label) {
+            error = "the game's content already has a pack labelled " + request.label;
+            return false;
+        }
+    }
+
+    RuntimeAssetManifest chunk = next.Manifest();
+    chunk.partial = true;
+    chunk.assets.clear();
+    chunk.auxiliaryFiles.clear();
+    chunk.removedAssets.clear();
+    chunk.removedAuxiliaryFiles.clear();
+    for (const RuntimeAssetManifestEntry& asset : next.Manifest().assets) {
+        if (current.FindAsset(asset.id) != nullptr || current.FindAsset(asset.virtualPath) != nullptr) {
+            ++report.skippedExistingAssets;
+            continue;
+        }
+        ++report.addedAssets;
+        chunk.assets.push_back(asset);
+    }
+    if (chunk.assets.empty()) {
+        error = "the mod's cook adds no asset the game does not already have";
+        return false;
+    }
+
+    AssetPackWriterOptions options{};
+    options.compression = request.compression;
+    options.compressionLevel = request.compressionLevel;
+    options.role = AssetPackRole::Chunk;
+    options.label = request.label;
+    options.baseIdentity = current.ContainerCatalogIdentity(0U);
+    current.Unmount();
+    next.Unmount();
+    return WriteRuntimePack(nextSource, profile, chunk, options, request.output, report.pack, error);
+}
+
 bool RewrapAssetPackSetKeys(
     const std::filesystem::path& indexPath,
     const kb::security::AeadKey* releaseKey,

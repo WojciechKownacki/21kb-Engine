@@ -1,6 +1,17 @@
 #include "CliCommands.hpp"
+#include "CliAudioJson.hpp"
+#include "CliAudioMeterJson.hpp"
 
+#include "engine/core/JsonValue.hpp"
+#include "engine/input/InputRecording.hpp"
+#include "engine/ecs/SystemSchedulerTraceExport.hpp"
+#include "engine/ecs/World.hpp"
+#include "engine/ecs/WorldTelemetryExport.hpp"
+#include "engine/audio/AudioPlayback.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/AIBrainDecisionSnapshot.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -10,19 +21,104 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
 
 #include <filesystem>
+#include <array>
+#include <algorithm>
+#include <cmath>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
 namespace kb::cli {
 
 namespace {
+
+[[nodiscard]] kb::core::JsonValue AiDecisionsJson(kb::scene::Scene& scene) {
+    using kb::core::JsonValue;
+    using Snapshot = kb::scene::AIBrainDecisionSnapshot;
+    std::vector<std::pair<kb::scene::SceneEntity, Snapshot>> decisions;
+    scene.Runtime().EcsWorld().CreateQuery<Snapshot>().ForEach(
+        [](kb::scene::SceneEntity entity, const Snapshot& snapshot, void* output) {
+            static_cast<decltype(decisions)*>(output)->emplace_back(entity, snapshot);
+        }, &decisions);
+    std::ranges::sort(decisions, {}, [](const auto& entry) { return entry.first.Id(); });
+    auto report = JsonValue::MakeObject();
+    report.Set("schema", JsonValue::MakeString("21kb.ai-decisions/v1"));
+    report.Set("provider_active", JsonValue::MakeBool(scene.IsModuleActive("Gameplay.AI")));
+    report.Set("scope", JsonValue::MakeString("Last observed rule-list decisions; not a behavior tree or planner"));
+    constexpr std::array<std::string_view, 5U> states{ "pending", "running", "disabled", "inactive", "dead" };
+    auto entries = JsonValue::MakeArray();
+    for (const auto& [entity, decision] : decisions) {
+        auto entry = JsonValue::MakeObject();
+        entry.Set("entity", JsonValue::MakeString(std::to_string(entity.Id())));
+        entry.Set("name", JsonValue::MakeString(std::string{ scene.Entities().Name(entity) }));
+        entry.Set("state", JsonValue::MakeString(std::string{ states[static_cast<std::size_t>(decision.state)] }));
+        entry.Set("rule_index", JsonValue::MakeNumber(decision.ruleIndex));
+        entry.Set("condition", JsonValue::MakeString(std::string{ kb::scene::kAIConditionNames[static_cast<std::size_t>(decision.condition)] }));
+        entry.Set("condition_value", JsonValue::MakeNumber(decision.conditionValue));
+        entry.Set("action", JsonValue::MakeString(std::string{ kb::scene::kAIActionNames[static_cast<std::size_t>(decision.action)] }));
+        entry.Set("action_value", JsonValue::MakeNumber(decision.actionValue));
+        entry.Set("enemy", decision.enemy.IsValid() ? JsonValue::MakeString(std::to_string(decision.enemy.Id())) : JsonValue::MakeNull());
+        entry.Set("frame", JsonValue::MakeString(std::to_string(decision.frameIndex)));
+        entries.Append(std::move(entry));
+    }
+    report.Set("decisions", std::move(entries));
+    return report;
+}
+
+// The ECS scheduler of the last simulated frame. Wall time and CPU time are separate numbers: cpu_time_ns adds up the
+// durations of all systems over all workers, so it can exceed the frame's wall time.
+[[nodiscard]] kb::core::JsonValue EcsSchedulerJson(const kb::ecs::SystemSchedulerTrace& trace) {
+    using kb::core::JsonValue;
+    auto scheduler = JsonValue::MakeObject();
+    scheduler.Set("scope", JsonValue::MakeString("ECS world scheduler, last simulated frame; the physics and render stages have their own schedulers and are not in this trace"));
+    scheduler.Set("frame_index", JsonValue::MakeNumber(static_cast<double>(trace.frameIndex)));
+    scheduler.Set("frame_wall_ns", JsonValue::MakeNumber(static_cast<double>(trace.frameDurationNanoseconds)));
+    scheduler.Set("cpu_time_ns", JsonValue::MakeNumber(static_cast<double>(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace))));
+    scheduler.Set("cpu_time_basis", JsonValue::MakeString("sum of the durations of all systems over all workers; not wall time and may exceed frame_wall_ns"));
+    scheduler.Set("worker_count", JsonValue::MakeNumber(static_cast<double>(trace.workers.size())));
+    auto systems = JsonValue::MakeArray();
+    for (const kb::ecs::SystemSchedulerTraceEvent& event : trace.events) {
+        auto entry = JsonValue::MakeObject();
+        entry.Set("name", JsonValue::MakeString(event.systemName));
+        entry.Set("stage", JsonValue::MakeNumber(static_cast<double>(event.stageIndex)));
+        entry.Set("worker", JsonValue::MakeNumber(static_cast<double>(event.workerIndex)));
+        entry.Set("start_ns", JsonValue::MakeNumber(static_cast<double>(event.startTimeNanoseconds)));
+        entry.Set("end_ns", JsonValue::MakeNumber(static_cast<double>(event.endTimeNanoseconds)));
+        entry.Set("duration_ns", JsonValue::MakeNumber(static_cast<double>(event.durationNanoseconds)));
+        entry.Set("wait_ns", JsonValue::MakeNumber(static_cast<double>(event.waitTimeNanoseconds)));
+        entry.Set("wait_reason", JsonValue::MakeString(event.waitReason));
+        auto blockedBy = JsonValue::MakeArray();
+        for (const std::string& dependency : event.blockedDependencies) {
+            blockedBy.Append(JsonValue::MakeString(dependency));
+        }
+        entry.Set("blocked_by", std::move(blockedBy));
+        systems.Append(std::move(entry));
+    }
+    scheduler.Set("systems", std::move(systems));
+    const kb::ecs::SystemSchedulerCriticalPath path = kb::ecs::ComputeSystemSchedulerCriticalPath(trace);
+    auto critical = JsonValue::MakeObject();
+    auto names = JsonValue::MakeArray();
+    for (const std::string& name : path.systems) {
+        names.Append(JsonValue::MakeString(name));
+    }
+    critical.Set("systems", std::move(names));
+    critical.Set("wall_ns", JsonValue::MakeNumber(static_cast<double>(path.wallNanoseconds)));
+    critical.Set("busy_ns", JsonValue::MakeNumber(static_cast<double>(path.busyNanoseconds)));
+    critical.Set("basis", JsonValue::MakeString("from the system that finished last, the dependency that finished last of each system; wall_ns includes waits, busy_ns does not"));
+    scheduler.Set("critical_path", std::move(critical));
+    return scheduler;
+}
 
 [[nodiscard]] std::optional<int> ParseInt(const std::string& text) noexcept {
     try {
@@ -86,7 +182,7 @@ struct DiagnosticPrinter {
         for (const kb::script::ScriptDiagnostic& diagnostic : diagnostics) {
             ++total;
             std::string line = "[script error] ";
-            const std::string_view entity = scene.Entities().Name(diagnostic.entity);
+            const std::string entity = scene.Entities().Name(diagnostic.entity);
             if (!entity.empty()) {
                 line += "'" + std::string{ entity } + "', ";
             }
@@ -121,9 +217,72 @@ struct DiagnosticPrinter {
     }
 };
 
-} // namespace
+[[nodiscard]] kb::core::JsonValue ParticleExecutionReport(
+    const std::shared_ptr<const kb::particles::ParticleRenderSnapshot>& snapshot,
+    bool providerAvailable, std::uint64_t updateWallNanoseconds, bool succeeded) {
+    using kb::core::JsonValue;
+    auto report = JsonValue::MakeObject();
+    report.Set("schema", JsonValue::MakeString("21kb.particle-execution/v1"));
+    report.Set("succeeded", JsonValue::MakeBool(succeeded));
+    report.Set("provider_available", JsonValue::MakeBool(providerAvailable));
+    report.Set("snapshot_available", JsonValue::MakeBool(snapshot != nullptr));
+    report.Set("snapshot_revision", snapshot ? JsonValue::MakeString(std::to_string(snapshot->Revision())) : JsonValue::MakeNull());
+    report.Set("fixed_step", snapshot ? JsonValue::MakeString(std::to_string(snapshot->Header().fixedStepIndex)) : JsonValue::MakeNull());
+    report.Set("runtime_update_wall_ns", JsonValue::MakeString(std::to_string(updateWallNanoseconds)));
+    report.Set("gpu_time_ns", JsonValue::MakeNull());
+    auto emitters = JsonValue::MakeArray();
+    if (snapshot) {
+        for (const auto& emitter : snapshot->Emitters()) {
+            auto row = JsonValue::MakeObject();
+            row.Set("instance_id", JsonValue::MakeString(std::to_string(emitter.instanceId)));
+            row.Set("effect_asset_id", JsonValue::MakeString(std::to_string(emitter.effectAssetId)));
+            row.Set("emitter_id", JsonValue::MakeString(std::to_string(emitter.emitterId)));
+            row.Set("path", JsonValue::MakeString(emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu ? "gpu" : "cpu"));
+            row.Set("reason", JsonValue::MakeString(std::string{kb::particles::ParticleGpuFallbackReasonName(emitter.gpuFallbackReason)}));
+            row.Set("cpu_render_record_count", JsonValue::MakeNumber(emitter.particleCount));
+            row.Set("cpu_render_payload_bytes", JsonValue::MakeNumber(
+                static_cast<double>(emitter.particleCount) * sizeof(kb::particles::ParticleRenderRecord)));
+            row.Set("cpu_time_ns", JsonValue::MakeNull());
+            emitters.Append(std::move(row));
+        }
+    }
+    report.Set("emitters", std::move(emitters));
+    return report;
+}
 
-int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
+// What the streamed worlds of the scene hold, by kind, against what the streaming budget charged (see docs/world_memory.md).
+[[nodiscard]] kb::core::JsonValue WorldMemoryJson(const kb::world::WorldMemoryReport& memory) {
+    using kb::core::JsonValue;
+    static constexpr const char* kKindNames[kb::world::kWorldMemoryKindCount] = { "assets_cpu", "instances", "scripts", "physics", "gpu" };
+    static constexpr const char* kSourceNames[] = { "unavailable", "estimated", "measured" };
+    auto categories = JsonValue::MakeArray();
+    for (const kb::world::WorldMemoryCategory& category : memory.categories) {
+        auto row = JsonValue::MakeObject();
+        row.Set("kind", JsonValue::MakeString(kKindNames[static_cast<std::size_t>(category.kind)]));
+        row.Set("source", JsonValue::MakeString(kSourceNames[static_cast<std::size_t>(category.source)]));
+        row.Set("bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.bytes)));
+        row.Set("baseline_bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.baselineBytes)));
+        row.Set("note", JsonValue::MakeString(category.note));
+        categories.Append(std::move(row));
+    }
+    auto report = JsonValue::MakeObject();
+    report.Set("budget_bytes", JsonValue::MakeNumber(static_cast<double>(memory.budgetBytes)));
+    report.Set("estimated_resident_bytes", JsonValue::MakeNumber(static_cast<double>(memory.estimatedResidentBytes)));
+    report.Set("resident_units", JsonValue::MakeNumber(static_cast<double>(memory.residentUnits)));
+    report.Set("measured_bytes", JsonValue::MakeNumber(static_cast<double>(memory.measuredBytes)));
+    report.Set("has_unavailable_kinds", JsonValue::MakeBool(memory.hasUnavailableKinds));
+    report.Set("error_ratio", JsonValue::MakeNumber(memory.errorRatio));
+    report.Set("minimum_error_ratio", JsonValue::MakeNumber(memory.minimumErrorRatio));
+    report.Set("maximum_error_ratio", JsonValue::MakeNumber(memory.maximumErrorRatio));
+    report.Set("samples", JsonValue::MakeNumber(static_cast<double>(memory.samples)));
+    report.Set("categories", std::move(categories));
+    return report;
+}
+
+int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
+    std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr, std::ostream* inputReport = nullptr,
+    std::ostream* aiReport = nullptr) {
+    const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
         io.err << "error: run requires --project <dir>\n";
@@ -143,14 +302,94 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     float deltaSeconds = 1.0F / 60.0F;
     if (const std::optional<std::string> dtOption = arguments.Option("--dt"); dtOption.has_value()) {
         const std::optional<float> parsed = ParseFloat(*dtOption);
-        if (!parsed.has_value() || *parsed <= 0.0F) {
+        if (!parsed.has_value() || !std::isfinite(*parsed) || *parsed <= 0.0F) {
             io.err << "error: --dt expects a positive number of seconds\n";
             return 1;
         }
         deltaSeconds = *parsed;
     }
 
+    std::optional<std::pair<int, int>> viewport;
+    if (const auto option = arguments.Option("--viewport")) {
+        const auto separator = option->find('x');
+        const auto width = ParseInt(option->substr(0, separator));
+        const auto height = separator == std::string::npos ? std::nullopt : ParseInt(option->substr(separator + 1));
+        if (!width || !height || *width <= 0 || *height <= 0) {
+            io.err << "error: --viewport expects positive integer WIDTHxHEIGHT\n";
+            return 1;
+        }
+        viewport = std::pair{*width, *height};
+    }
+    kb::scene::UIEdges safeArea{};
+    if (const auto option = arguments.Option("--safe-area")) {
+        float* edges[] = {&safeArea.left, &safeArea.top, &safeArea.right, &safeArea.bottom};
+        std::size_t start = 0;
+        for (std::size_t index = 0; index < 4; ++index) {
+            const auto end = option->find(',', start);
+            const auto value = ParseFloat(option->substr(start, end == std::string::npos ? end : end - start));
+            if (!value || !std::isfinite(*value) || *value < 0 || (index < 3) != (end != std::string::npos)) {
+                io.err << "error: --safe-area expects finite nonnegative LEFT,TOP,RIGHT,BOTTOM in viewport pixels\n";
+                return 1;
+            }
+            *edges[index] = *value;
+            if (end != std::string::npos) start = end + 1;
+        }
+    }
+
+    const auto inputReplayPath = arguments.Option("--input-replay");
+    const auto inputRecordPath = arguments.Option("--input-record");
+    kb::input::InputRecording inputReplay;
+    kb::input::InputRecording inputRecording;
+    double playbackSeconds = static_cast<double>(frames) * deltaSeconds;
+    if ((inputReplayPath && inputReplayPath->empty()) || (inputRecordPath && inputRecordPath->empty())) {
+        io.err << "error: input recording paths must not be empty\n";
+        return 1;
+    }
+    if (inputReplayPath) {
+        if (arguments.Option("--dt") || audioReport != nullptr) {
+            io.err << "error: input replay supplies recorded frame durations and cannot use --dt or audio probes\n";
+            return 1;
+        }
+        auto loaded = kb::input::ReadInputRecording(std::filesystem::path{*inputReplayPath});
+        if (!loaded.succeeded || loaded.asset.empty()) {
+            io.err << "error: input replay: " << (loaded.succeeded ? "recording has no frames" : loaded.error) << '\n';
+            return 1;
+        }
+        inputReplay = std::move(loaded.asset);
+        if (!arguments.Option("--frames")) frames = static_cast<int>(inputReplay.size());
+        if (static_cast<std::size_t>(frames) > inputReplay.size()) {
+            io.err << "error: --frames exceeds the input recording length\n";
+            return 1;
+        }
+        playbackSeconds = 0.0;
+        for (int i = 0; i < frames; ++i) playbackSeconds += inputReplay[static_cast<std::size_t>(i)].deltaSeconds;
+    }
+    if (inputRecordPath && static_cast<std::uint32_t>(frames) > kb::input::InputAssetFormat::MaxRecordingFrameCount) {
+        io.err << "error: frame count exceeds the input recording limit\n";
+        return 1;
+    }
+    const bool realtime = arguments.Flag("--realtime");
+    std::optional<int> timeoutMilliseconds;
+    if (const auto value = arguments.Option("--timeout-ms")) {
+        timeoutMilliseconds = ParseInt(*value);
+        if (!timeoutMilliseconds || *timeoutMilliseconds <= 0 || *timeoutMilliseconds > 86400000) {
+            io.err << "error: --timeout-ms expects 1..86400000 milliseconds\n";
+            return 1;
+        }
+    }
+    const auto cancelFile = arguments.Option("--cancel-file");
+    if (cancelFile && cancelFile->empty()) {
+        io.err << "error: --cancel-file expects a nonempty path\n";
+        return 1;
+    }
+    if (realtime && playbackSeconds > 86400.0) {
+        io.err << "error: --realtime playback must not exceed 24 hours\n";
+        return 1;
+    }
     const bool quiet = arguments.Flag("--quiet");
+    if (audioReport != nullptr && frames > 600) {
+        io.err << "error: an audio execution probe accepts at most 600 simulation frames\n"; return 1;
+    }
 
     std::error_code pathError;
     const std::filesystem::path projectRoot =
@@ -210,6 +449,10 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string physicsLayersAsset = projectSettings.found && projectSettings.Succeeded()
         ? projectSettings.settings.physicsLayersAsset
         : loadedProject.legacySettings.physicsLayersAsset;
+    const bool inputEnabled = projectSettings.found && projectSettings.Succeeded()
+        ? projectSettings.settings.inputEnabled : loadedProject.legacySettings.inputEnabled;
+    const std::string inputMappingContext = projectSettings.found && projectSettings.Succeeded()
+        ? projectSettings.settings.inputMappingContext : loadedProject.legacySettings.inputMappingContext;
     kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
     // A headless run is a determinism tool: scripts see each physics step in the update that ran it.
     kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
@@ -253,7 +496,7 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         }
     }
     if (sceneOption.has_value()) {
-        if (!sceneOption->empty() && sceneOption->front() == '/') {
+        if (scene.Assets().Manager().Mounts().Resolve(*sceneOption).has_value()) {
             const kb::assets::AssetMetadata* metadata =
                 FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), *sceneOption);
             if (metadata == nullptr) {
@@ -274,9 +517,49 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
-    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene, scenePath)) {
-        io.err << "error: could not load scene into runtime: " << scenePath.generic_string() << '\n';
-        return 1;
+    {
+        const auto sceneDocument = kb::scene::SceneDocumentService::Load(scenePath);
+        if (!sceneDocument.succeeded) {
+            io.err << "error: could not load scene " << scenePath.generic_string() << ": " << sceneDocument.error << '\n';
+            return 1;
+        }
+        if (!kb::scene::SceneDocumentService::LoadIntoScene(scene, sceneDocument.document)) {
+            io.err << "error: could not load scene into runtime: " << scenePath.generic_string() << '\n';
+            return 1;
+        }
+    }
+    kb::scene::SceneInputActivation::Apply(scene);
+    static_cast<void>(scene.UI().SetSafeAreaInsets(safeArea));
+    if (inputEnabled && !inputMappingContext.empty()) {
+        const auto* mapping = scene.Assets().Manager().Registry().FindByPath(inputMappingContext);
+        if (mapping == nullptr || mapping->type != "InputMappingContext" ||
+            !scene.Input().AddMappingContext(mapping->id.value, 0)) {
+            io.err << "error: project input mapping could not be activated: "
+                   << inputMappingContext << '\n';
+            return 1;
+        }
+    }
+
+    std::uint32_t pcmFramesPerTick = 0U;
+    if (audioReport != nullptr) {
+        if (!kb::audio::AudioPlayback::ConfigureOffline(scene)) {
+            io.err << "error: the active audio provider could not configure offline rendering\n"; return 1;
+        }
+        const auto format = kb::audio::AudioPlayback::DspReport(scene);
+        double requested = std::round(static_cast<double>(format.sampleRate) * deltaSeconds);
+        if (const auto option = arguments.Option("--pcm-frames"); option.has_value()) {
+            const auto parsed = ParseInt(*option);
+            if (!parsed.has_value()) { io.err << "error: --pcm-frames requires a positive integer\n"; return 1; }
+            requested = *parsed;
+        }
+        if (requested < 1.0 || requested > kb::audio::kMaxOfflineAudioFramesPerRead
+            || requested * frames > 1920000.0) {
+            io.err << "error: audio probes require 1..384000 PCM frames per tick and at most 1920000 total frames\n"; return 1;
+        }
+        pcmFramesPerTick = static_cast<std::uint32_t>(requested);
+        if (requireMeters && !kb::audio::AudioMetering::Configure(scene, true)) {
+            io.err << "error: the active audio provider could not enable signal meters\n"; return 1;
+        }
     }
 
     kb::script::ScriptRuntimeHost host{ scene };
@@ -292,9 +575,17 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: script scene system could not be installed\n";
         return 1;
     }
+    // The script heap is the one kind of memory only this host can read; the engine reads the instances and the assets itself.
+    std::optional<kb::world::WorldPartitionRuntime> worlds;
+    if (worldMemoryReport != nullptr) {
+        worlds.emplace(scene);
+        worlds->SetMemoryProbe(kb::world::WorldMemoryKind::Scripts, [&host]() -> std::optional<std::uint64_t> {
+            return static_cast<std::uint64_t>(host.LuaRuntime().LuaMemoryUsedBytes());
+        });
+    }
 
     io.out << "running " << scenePath.filename().generic_string()
-           << " for " << frames << " frames (dt " << deltaSeconds << "s, "
+           << " for " << frames << " frames (" << (inputReplayPath ? "recorded dt, " : "fixed dt, ")
            << discovered << " assets discovered, "
            << scene.ActiveModuleCount() << " modules active)\n";
 
@@ -315,8 +606,93 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), 0U);
     static_cast<void>(host.DrainSceneSystemDiagnostics());
 
+    std::uint64_t updateWallNanoseconds = 0U;
+    std::uint64_t audioFrames = 0U, audioSamples = 0U, audioAboveUnit = 0U, mixWallNanoseconds = 0U;
+    std::uint64_t audioBlocks = 0U, audioShortBlocks = 0U, worstBlockMixNanoseconds = 0U;
+    double audioEnergy = 0.0, audioPeak = 0.0;
+    bool audioSucceeded = true;
+    std::string audioError;
+    int completedFrames = 0;
+    if (ecsReport != nullptr) {
+        scene.Runtime().SetEcsProfilerEnabled(true);
+    }
+    const auto playbackStarted = std::chrono::steady_clock::now();
+    int stopCode = 0;
+    std::string stopReason = "completed";
+    const auto stopRequested = [&] {
+        if (stopCode != 0) return true;
+        if (cancelFile) {
+            std::error_code cancelError;
+            const bool requested = std::filesystem::exists(std::filesystem::path{*cancelFile}, cancelError);
+            if (cancelError) {
+                stopCode = 1;
+                stopReason = "cancel-check-error";
+                io.err << "error: cannot inspect cancellation file: " << cancelError.message() << '\n';
+            } else if (requested) {
+                stopCode = 130;
+                stopReason = "cancelled";
+                io.err << "run cancelled by cancellation file\n";
+            }
+        }
+        if (stopCode == 0 && timeoutMilliseconds &&
+            std::chrono::steady_clock::now() - playbackStarted >= std::chrono::milliseconds{*timeoutMilliseconds}) {
+            stopCode = 124;
+            stopReason = "timeout";
+            io.err << "run playback time limit reached\n";
+        }
+        return stopCode != 0;
+    };
+    double elapsedSimulationSeconds = 0.0;
     for (int frame = 1; frame <= frames; ++frame) {
-        static_cast<void>(scene.Runtime().Update(deltaSeconds));
+        if (stopRequested()) break;
+        const float frameDeltaSeconds = inputReplayPath ?
+            inputReplay[static_cast<std::size_t>(frame - 1)].deltaSeconds : deltaSeconds;
+        if (realtime) {
+            const auto nextFrame = playbackStarted + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>{elapsedSimulationSeconds + frameDeltaSeconds});
+            // Poll during paced waits, including a very large authored time step.
+            while (std::chrono::steady_clock::now() < nextFrame && !stopRequested()) {
+                std::this_thread::sleep_until(std::min(nextFrame,
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds{10}));
+            }
+            if (stopRequested()) break;
+        }
+        if (inputReplayPath)
+            kb::input::ApplyInputFrame(scene.Input().MutableDeviceState(), inputReplay[static_cast<std::size_t>(frame - 1)]);
+        if (viewport) {
+            scene.Input().MutableDeviceState().SetPointerViewportExtent(
+                static_cast<std::uint32_t>(viewport->first), static_cast<std::uint32_t>(viewport->second));
+        }
+        if (inputRecordPath)
+            inputRecording.push_back(kb::input::CaptureInputFrame(scene.Input().DeviceState(), frameDeltaSeconds));
+        const auto updateStarted = std::chrono::steady_clock::now();
+        static_cast<void>(scene.Runtime().Update(frameDeltaSeconds));
+        elapsedSimulationSeconds += frameDeltaSeconds;
+        updateWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - updateStarted).count());
+        ++completedFrames;
+        if (audioReport != nullptr) {
+            const auto started = std::chrono::steady_clock::now();
+            const auto pcm = kb::audio::AudioPlayback::RenderOffline(scene, pcmFramesPerTick);
+            const auto blockNanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started).count());
+            mixWallNanoseconds += blockNanoseconds;
+            worstBlockMixNanoseconds = std::max(worstBlockMixNanoseconds, blockNanoseconds);
+            ++audioBlocks;
+            audioShortBlocks += pcm.frames != pcmFramesPerTick ? 1U : 0U;
+            audioFrames += pcm.frames;
+            audioSamples += pcm.samples.size();
+            for (const float sample : pcm.samples) {
+                const double value = sample;
+                audioPeak = std::max(audioPeak, std::abs(value)); audioEnergy += value * value;
+                if (std::abs(value) > 1.0) ++audioAboveUnit;
+            }
+            if (!pcm.succeeded || pcm.frames != pcmFramesPerTick) {
+                audioSucceeded = false;
+                audioError = pcm.error.empty() ? "no complete audio PCM block was produced" : pcm.error;
+                io.err << "error: " << audioError << '\n';
+            }
+        }
         const kb::script::ScriptRuntimeExecutionResult* result = host.InstalledSceneSystemLastResult();
         const kb::script::ScriptRuntimeAssetPrepareResult* prepare = host.InstalledSceneSystemLastPrepareResult();
         if (result == nullptr || prepare == nullptr) {
@@ -335,8 +711,33 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         printer.PrintPrepare(prepare->diagnostics, static_cast<std::size_t>(frame));
         printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(frame));
         static_cast<void>(host.DrainSceneSystemDiagnostics());
+        if (!audioSucceeded) break;
     }
 
+    const auto particleSnapshot = particleReport != nullptr
+        ? kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) : nullptr;
+    const bool particleProviderAvailable = kb::particles::ParticlePlayback::HasBackend(scene);
+    const auto audioSnapshot = audioReport != nullptr ? kb::audio::AudioPlayback::DspReport(scene) : kb::audio::AudioDspRuntimeReport{};
+    auto aiSnapshot = aiReport != nullptr ? AiDecisionsJson(scene) : kb::core::JsonValue::MakeObject();
+    const auto meterSnapshot = requireMeters ? kb::audio::AudioMetering::Report(scene) : kb::audio::AudioMeterReport{};
+    if (requireMeters) {
+        bool valid = meterSnapshot.backendAvailable && meterSnapshot.supported && meterSnapshot.initialized
+            && meterSnapshot.captureEnabled && meterSnapshot.master.available
+            && meterSnapshot.master.processedFrames >= audioFrames && audioFrames > 0U
+            && meterSnapshot.mixerAssetId == kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
+        for (const auto& bus : meterSnapshot.buses) valid = valid && bus.available && bus.processedFrames > 0U;
+        if (!valid) { audioSucceeded = false; audioError = "audio meters did not capture the actual mixer output"; }
+    }
+    if (audioReport != nullptr) {
+        audioSucceeded = audioSucceeded && audioSnapshot.backendAvailable && audioFrames > 0U
+            && audioSnapshot.mixerAssetId == kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
+        for (const auto& bus : audioSnapshot.buses) {
+            if (!bus.initialized || !bus.settingsCurrent) {
+                audioSucceeded = false;
+                io.err << "error: bus " << bus.bus << " DSP is not current: " << bus.error << '\n';
+            }
+        }
+    }
     if (!host.DispatchShutdownLifecycle(0.0F)) {
         io.err << "error: installed script scene system could not dispatch shutdown\n";
         return 1;
@@ -347,12 +748,152 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
     executedBehaviours += shutdown->executedBehaviours;
-    printer.PrintScript(shutdown->diagnostics, static_cast<std::size_t>(frames) + 1U);
-    printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(frames) + 1U);
+    printer.PrintScript(shutdown->diagnostics, static_cast<std::size_t>(completedFrames) + 1U);
+    printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(completedFrames) + 1U);
 
-    io.out << "done: " << frames << " frames, " << executedBehaviours << " behaviour executions, "
+    bool recordingWritten = false;
+    if (inputRecordPath) {
+        recordingWritten = kb::input::WriteInputRecording(std::filesystem::path{*inputRecordPath}, inputRecording);
+        if (!recordingWritten) {
+            io.err << "error: input recording could not be written\n";
+            stopCode = 1;
+            stopReason = "input-recording-write-failed";
+        }
+    }
+    if (aiReport != nullptr) {
+        aiSnapshot.Set("succeeded", kb::core::JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        aiSnapshot.Set("completed_frames", kb::core::JsonValue::MakeNumber(completedFrames));
+        *aiReport << aiSnapshot.Dump() << '\n';
+        if (!aiReport->good()) { io.err << "error: AI decision report could not be written\n"; return 1; }
+    }
+    if (inputReport != nullptr) {
+        using kb::core::JsonValue;
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.input-execution/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("simulation_seconds", JsonValue::MakeNumber(elapsedSimulationSeconds));
+        report.Set("replayed", JsonValue::MakeBool(inputReplayPath.has_value()));
+        report.Set("recording_written", JsonValue::MakeBool(recordingWritten));
+        report.Set("recorded_frames", JsonValue::MakeNumber(static_cast<double>(inputRecording.size())));
+        report.Set("timing", JsonValue::MakeString(inputReplayPath ? "recorded delta per tick" : "fixed delta per tick"));
+        report.Set("scope", JsonValue::MakeString("Input snapshots and action evaluation; not deterministic world simulation"));
+        *inputReport << report.Dump() << '\n';
+        if (!inputReport->good()) { io.err << "error: input report could not be written\n"; return 1; }
+    }
+
+    io.out << "done: " << completedFrames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";
-    return printer.total == 0U ? 0 : 1;
+    if (particleReport != nullptr) {
+        auto report = ParticleExecutionReport(particleSnapshot, particleProviderAvailable,
+            updateWallNanoseconds, printer.total == 0U && stopCode == 0);
+        report.Set("stop_reason", kb::core::JsonValue::MakeString(stopReason));
+        report.Set("completed_frames", kb::core::JsonValue::MakeNumber(completedFrames));
+        *particleReport << report.Dump() << '\n';
+        if (!particleReport->good()) {
+            io.err << "error: particle execution report could not be written\n";
+            return 1;
+        }
+    }
+    if (worldMemoryReport != nullptr && worlds.has_value()) {
+        using kb::core::JsonValue;
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.world-memory/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
+        report.Set("worlds", JsonValue::MakeNumber(static_cast<double>(worlds->Worlds().size())));
+        report.Set("memory", WorldMemoryJson(worlds->MemoryReport()));
+        *worldMemoryReport << report.Dump() << '\n';
+        if (!worldMemoryReport->good()) {
+            io.err << "error: the world memory report could not be written" << '\n';
+            return 1;
+        }
+    }
+    if (ecsReport != nullptr) {
+        // Read only: the telemetry of the scene's ECS world after the frames ran. Which numbers are measured,
+        // which are estimates and which are unavailable is stated in its metric_basis object.
+        using kb::core::JsonValue;
+        JsonValue telemetry;
+        std::string parseError;
+        if (!JsonValue::Parse(kb::ecs::WorldTelemetrySnapshotToJson(scene.Runtime().EcsWorld().TelemetrySnapshot()), telemetry, parseError)) {
+            io.err << "error: the ECS telemetry could not be formatted: " << parseError << '\n';
+            return 1;
+        }
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.ecs-telemetry/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
+        report.Set("telemetry", std::move(telemetry));
+        report.Set("scheduler", EcsSchedulerJson(scene.Runtime().LastEcsProfilerTrace()));
+        *ecsReport << report.Dump() << '\n';
+        if (!ecsReport->good()) {
+            io.err << "error: the ECS telemetry report could not be written" << '\n';
+            return 1;
+        }
+    }
+    if (audioReport != nullptr) {
+        auto report = AudioRuntimeJson(audioSnapshot);
+        using kb::core::JsonValue;
+        if (requireMeters) {
+            report.Set("schema", JsonValue::MakeString("21kb.audio-meters/v1"));
+            report.Set("meters", AudioMetersJson(meterSnapshot));
+        }
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && audioSucceeded && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
+        report.Set("error", JsonValue::MakeString(audioError));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("pcm_frames", JsonValue::MakeNumber(static_cast<double>(audioFrames)));
+        report.Set("peak", JsonValue::MakeNumber(audioPeak));
+        report.Set("rms", JsonValue::MakeNumber(audioSamples == 0U ? 0.0 : std::sqrt(audioEnergy / static_cast<double>(audioSamples))));
+        report.Set("above_unit_samples", JsonValue::MakeNumber(static_cast<double>(audioAboveUnit)));
+        report.Set("mix_wall_ns", JsonValue::MakeString(std::to_string(mixWallNanoseconds)));
+        // Offline rendering has no device to underrun: a block that comes back short is the offline kind of dropout. The mix cost against the
+        // duration of the audio is the headroom a real device would have; voice counts and decoder memory are not reported by the provider.
+        report.Set("blocks", JsonValue::MakeNumber(static_cast<double>(audioBlocks)));
+        report.Set("short_blocks", JsonValue::MakeNumber(static_cast<double>(audioShortBlocks)));
+        report.Set("worst_block_mix_ns", JsonValue::MakeString(std::to_string(worstBlockMixNanoseconds)));
+        const double audioSeconds = audioFrames == 0U || audioSnapshot.sampleRate == 0U ? 0.0 : static_cast<double>(audioFrames) / static_cast<double>(audioSnapshot.sampleRate);
+        report.Set("realtime_factor", audioSeconds <= 0.0 ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(mixWallNanoseconds) * 1e-9 / audioSeconds));
+        auto unavailable = JsonValue::MakeArray();
+        unavailable.Append(JsonValue::MakeString("voice_count"));
+        unavailable.Append(JsonValue::MakeString("decoder_memory_bytes"));
+        unavailable.Append(JsonValue::MakeString("device_underruns"));
+        report.Set("unavailable_metrics", std::move(unavailable));
+        *audioReport << report.Dump() << '\n';
+        if (!audioReport->good()) { io.err << "error: audio execution report could not be written\n"; return 1; }
+    }
+    return stopCode != 0 ? stopCode : (printer.total == 0U && audioSucceeded ? 0 : 1);
+}
+
+} // namespace
+
+int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
+    const auto report = arguments.Option("--report");
+    if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input or ai\n"; return 1; }
+    if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
+        io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
+    }
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai") {
+        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input or ai\n";
+        return 1;
+    }
+    if (report && *report == "ai") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
+    if (report && *report == "input") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, &io.out);
+    if (report && *report == "ecs") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, &io.out);
+    if (report && *report == "world-memory") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, &io.out);
+    if (report && (*report == "audio" || *report == "audio-meters")) return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, &io.out);
+    return report ? RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, &io.out)
+                  : RunSceneRuntime(arguments, io, nullptr);
 }
 
 } // namespace kb::cli

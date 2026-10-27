@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/audio/AudioSettings.hpp"
+#include "engine/audio/AudioDspRuntimeReport.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
@@ -112,6 +113,7 @@ enum class AudioDeviceStatus : std::uint8_t {
     Uninitialized,
     NoPlaybackDevice,
     PlaybackAvailable,
+    PlaybackSuspended,
 };
 
 enum class AudioSourceControlStatus : std::uint8_t {
@@ -171,6 +173,13 @@ public:
     [[nodiscard]] virtual AudioSourceControlResult IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity) = 0;
     [[nodiscard]] virtual AudioDeviceStatus DeviceStatus() const noexcept = 0;
     [[nodiscard]] virtual AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept = 0;
+    // Offline rendering is an explicit mode, separate from physical device status.
+    // Reinitialize returns to ordinary device playback.
+    [[nodiscard]] virtual bool ConfigureOffline(kb::scene::Scene&) noexcept { return false; }
+    [[nodiscard]] virtual AudioOfflinePcm RenderOffline(kb::scene::Scene&, std::uint32_t) {
+        return {.error = "audio backend does not support offline rendering"};
+    }
+    [[nodiscard]] virtual AudioDspRuntimeReport DspReport(kb::scene::Scene&) { return {}; }
     // LIB-148: per-voice control of a PlayOneShot result. A voiceId that is 0, never
     // existed, was stopped/stolen, or was reclaimed after finishing is never resurrected.
     // Pause succeeds only while the
@@ -230,6 +239,9 @@ public:
     [[nodiscard]] static AudioSourceControlResult IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
     [[nodiscard]] static AudioDeviceStatus DeviceStatus(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static bool ConfigureOffline(kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static AudioOfflinePcm RenderOffline(kb::scene::Scene& scene, std::uint32_t frames);
+    [[nodiscard]] static AudioDspRuntimeReport DspReport(kb::scene::Scene& scene);
     // LIB-148: per-voice facade - false when no backend is registered or the backend
     // reports the voice dead (see IAudioPlaybackBackend's own contract above).
     [[nodiscard]] static bool StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept;

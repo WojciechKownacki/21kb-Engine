@@ -6,6 +6,14 @@
 #include "scene/components/SceneRegionShapeComponentStore.hpp"
 #include "scene/components/SceneGuideCurveComponentStore.hpp"
 #include "scene/components/SceneContentInstanceComponentStore.hpp"
+#include "scene/components/SceneGridComponentStore.hpp"
+#include "scene/components/SceneTilemapComponentStore.hpp"
+#include "scene/components/SceneTilemapRendererComponentStore.hpp"
+#include "scene/components/SceneTilemapColliderComponentStore.hpp"
+#include "scene/components/SceneCharacterController2DComponentStore.hpp"
+#include "scene/components/SceneCollider2DComponentStore.hpp"
+#include "scene/components/SceneBody2DComponentStore.hpp"
+#include "scene/components/SceneSprite2DComponentStore.hpp"
 #include "scene/components/SceneStreamFocusComponentStore.hpp"
 #include "scene/components/SceneWorldBackdropComponentStore.hpp"
 #include "scene/components/SceneAmbientRadianceComponentStore.hpp"
@@ -89,7 +97,23 @@ public:
     [[nodiscard]] const SceneGuideCurveComponentStore& GuideCurves() const noexcept;
     [[nodiscard]] SceneGuideCurveComponentStore& GuideCurves() noexcept;
     [[nodiscard]] const SceneContentInstanceComponentStore& ContentInstances() const noexcept;
+    [[nodiscard]] const SceneGridComponentStore& Grids() const noexcept;
+    [[nodiscard]] const SceneTilemapComponentStore& Tilemaps() const noexcept;
+    [[nodiscard]] const SceneTilemapRendererComponentStore& TilemapRenderers() const noexcept;
+    [[nodiscard]] const SceneTilemapColliderComponentStore& TilemapColliders() const noexcept;
+    [[nodiscard]] const SceneCharacterController2DComponentStore& CharacterControllers2D() const noexcept;
+    [[nodiscard]] const SceneCollider2DComponentStore& Colliders2D() const noexcept;
+    [[nodiscard]] const SceneBody2DComponentStore& Bodies2D() const noexcept;
+    [[nodiscard]] const SceneSprite2DComponentStore& Sprites2D() const noexcept;
     [[nodiscard]] SceneContentInstanceComponentStore& ContentInstances() noexcept;
+    [[nodiscard]] SceneGridComponentStore& Grids() noexcept;
+    [[nodiscard]] SceneTilemapComponentStore& Tilemaps() noexcept;
+    [[nodiscard]] SceneTilemapRendererComponentStore& TilemapRenderers() noexcept;
+    [[nodiscard]] SceneTilemapColliderComponentStore& TilemapColliders() noexcept;
+    [[nodiscard]] SceneCharacterController2DComponentStore& CharacterControllers2D() noexcept;
+    [[nodiscard]] SceneCollider2DComponentStore& Colliders2D() noexcept;
+    [[nodiscard]] SceneBody2DComponentStore& Bodies2D() noexcept;
+    [[nodiscard]] SceneSprite2DComponentStore& Sprites2D() noexcept;
     [[nodiscard]] const SceneStreamFocusComponentStore& StreamFocuses() const noexcept;
     [[nodiscard]] SceneStreamFocusComponentStore& StreamFocuses() noexcept;
     [[nodiscard]] const SceneWorldBackdropComponentStore& WorldBackdrops() const noexcept;
@@ -157,6 +181,14 @@ private:
     SceneRegionShapeComponentStore regionShapes_;
     SceneGuideCurveComponentStore guideCurves_;
     SceneContentInstanceComponentStore contentInstances_;
+    SceneGridComponentStore grids_;
+    SceneTilemapComponentStore tilemaps_;
+    SceneTilemapRendererComponentStore tilemapRenderers_;
+    SceneTilemapColliderComponentStore tilemapColliders_;
+    SceneCharacterController2DComponentStore characterControllers2D_;
+    SceneCollider2DComponentStore colliders2D_;
+    SceneBody2DComponentStore bodies2D_;
+    SceneSprite2DComponentStore sprites2D_;
     SceneStreamFocusComponentStore streamFocuses_;
     SceneWorldBackdropComponentStore worldBackdrops_;
     SceneAmbientRadianceComponentStore ambientRadiances_;

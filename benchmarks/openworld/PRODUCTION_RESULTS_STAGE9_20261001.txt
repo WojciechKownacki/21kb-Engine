@@ -53,7 +53,7 @@ Zachowano początkowe odrzucone logi: błędny clearDepth fixture i brak CMake
 w PATH testu engine. Końcowy fixture i środowisko przeszły pełną walidację.
 
 Metoda i integralność
-Projekt: E:/21kbProjekty/OpenWorldProductionStage9_20261001.
+Projekt: <workdir>/OpenWorldProductionStage9_20261001.
 i7-13700F, RTX 4070 12 GB, 64 GB RAM, rzeczywiste D3D11 1920x1080,
 ForwardPlus, Release /O2 /DNDEBUG. Headless, bez przejmowania wejścia.
 54 procesy, 18 scenariuszy x 3, wszystkie exit 0. Results/raw zawiera 54 CSV
@@ -127,4 +127,4 @@ serie bez ich zastępowania. Results/measurement_verification.json potwierdza
 integralność; diagnostics/final2-full-validation.json i gpu_cap_mutant_final
 zachowują logi. shader_a_b/runtime_a_b zawierają surowe kontrole i stare shadery.
 Porównanie:
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage8_20261001 --after E:/21kbProjekty/OpenWorldProductionStage9_20261001
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionStage8_20261001 --after <workdir>/OpenWorldProductionStage9_20261001

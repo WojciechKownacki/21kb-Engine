@@ -1,0 +1,281 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "configure_runtime_rendering",
+      "width": 960,
+      "height": 540
+    },
+    {
+      "op": "create_scene",
+      "name": "MapLighting",
+      "template": "Empty"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/map2d/Tiles.png",
+      "destination": "Assets/2D Map Sprites/Nature/Tiles.png"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/2D Map Sprites/Nature/Ground.kbtileset",
+      "content": "21kb-tileset 1\nground \"Grass\" 20 32 \"/Game/2D Map Sprites/Nature/Tiles.png\"\ntiles 0\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "create_entity",
+      "id": "map",
+      "name": "Lit Map"
+    },
+    {
+      "op": "add_component",
+      "entity": "map",
+      "component": "World2DMap"
+    },
+    {
+      "op": "set_plugin",
+      "id": "Rendering.BasicLighting",
+      "enabled": true
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "lit-map-authoring",
+      "width": 1100,
+      "height": 700,
+      "inputs": [
+        "view wall",
+        "resize 20 12",
+        "pick g:Grass",
+        "place 6 3",
+        "place 7 3",
+        "place 8 3",
+        "place 9 3",
+        "place 10 3",
+        "place 11 3",
+        "place 12 3",
+        "place 13 3",
+        "place 14 3",
+        "place 6 4",
+        "place 7 4",
+        "place 8 4",
+        "place 9 4",
+        "place 10 4",
+        "place 11 4",
+        "place 12 4",
+        "place 13 4",
+        "place 14 4",
+        "place 6 5",
+        "place 7 5",
+        "place 8 5",
+        "place 9 5",
+        "place 10 5",
+        "place 11 5",
+        "place 12 5",
+        "place 13 5",
+        "place 14 5",
+        "place 6 6",
+        "place 7 6",
+        "place 8 6",
+        "place 9 6",
+        "place 10 6",
+        "place 11 6",
+        "place 12 6",
+        "place 13 6",
+        "place 14 6",
+        "place 6 7",
+        "place 7 7",
+        "place 8 7",
+        "place 9 7",
+        "place 10 7",
+        "place 11 7",
+        "place 12 7",
+        "place 13 7",
+        "place 14 7",
+        "place 6 8",
+        "place 7 8",
+        "place 8 8",
+        "place 9 8",
+        "place 10 8",
+        "place 11 8",
+        "place 12 8",
+        "place 13 8",
+        "place 14 8",
+        "place 6 9",
+        "place 7 9",
+        "place 8 9",
+        "place 9 9",
+        "place 10 9",
+        "place 11 9",
+        "place 12 9",
+        "place 13 9",
+        "place 14 9",
+        "pick p:/Game/2D Map Sprites/Nature/Tiles.png#32#3",
+        "place 10 6",
+        "select 10 6 10 6",
+        "lighting 1",
+        "occlusion 0",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "create_entity",
+      "id": "light",
+      "name": "Map Light"
+    },
+    {
+      "op": "add_component",
+      "entity": "light",
+      "component": "3D Radiance Emitter"
+    },
+    {
+      "op": "set_entity_position",
+      "entity": "light",
+      "x": -3,
+      "y": 8,
+      "z": -6
+    },
+    {
+      "op": "set_property",
+      "entity": "light",
+      "component": "Light",
+      "property": "range",
+      "value": 30
+    },
+    {
+      "op": "set_property",
+      "entity": "light",
+      "component": "Light",
+      "property": "intensity",
+      "value": 40
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/MapLighting.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 20
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "light-clear",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "lit-map-blocking",
+      "inputs": [
+        "occlusion 1",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/MapLighting.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 20,
+      "require_shadows": true
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "light-blocked",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "light-clear",
+      "after": "light-blocked"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "top-down-lit-map",
+      "inputs": [
+        "view flat",
+        "occlusion 0",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "set_entity_position",
+      "entity": "light",
+      "x": -3,
+      "y": 8,
+      "z": 3
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/MapLighting.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 20
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "top-down-light-clear",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "top-down-occlusion",
+      "inputs": [
+        "occlusion 1",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/MapLighting.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 20,
+      "require_shadows": true
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "top-down-light-blocked",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "top-down-light-clear",
+      "after": "top-down-light-blocked"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

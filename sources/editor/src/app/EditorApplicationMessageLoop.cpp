@@ -1,6 +1,7 @@
 #include <array>
 #include "app/EditorApplicationMessageLoop.hpp"
 #include "app/EditorAudioAssetPreview.hpp"
+#include "scene/audio/EditorAudioMixerRuntime.hpp"
 
 #if defined(_WIN32)
 
@@ -1327,6 +1328,9 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
+    const bool audioMetersChanged = EditorAudioMixerRuntime::ShouldRefresh(state.sceneContext.Scene());
+    if (audioMetersChanged) EditorWindowInvalidator::InvalidateDockPanel(
+        state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Inspector);
     if (audioPreviewChanged) {
         EditorWindowInvalidator::InvalidateDockPanel(
             state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Assets);
@@ -1376,7 +1380,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
         sceneParticlesChanged || scriptSaved ||
-        audioPreviewChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
+        audioPreviewChanged || audioMetersChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
 

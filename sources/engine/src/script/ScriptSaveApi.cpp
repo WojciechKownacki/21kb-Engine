@@ -216,6 +216,29 @@ ScriptFunctionCallResult Clear(const ScriptFunctionCallContext& context, std::sp
 
 using StoragePtr = std::shared_ptr<kb::platform::UserStorage>;
 
+ScriptFunctionCallResult FlushStorage(const StoragePtr& storage) {
+    return { .executed = true, .outputs = {
+        ScriptFunctionArgument{ "started", ScriptValue{ storage != nullptr && storage->Flush() } } }, .errors = {} };
+}
+
+ScriptFunctionCallResult StorageStatus(const StoragePtr& storage) {
+    using Status = kb::platform::UserStorageSyncStatus;
+    std::string status = "Unavailable";
+    if (storage != nullptr) {
+        switch (storage->SyncStatus()) {
+        case Status::Clean: status = "Clean"; break;
+        case Status::Dirty: status = "Dirty"; break;
+        case Status::Pending: status = "Pending"; break;
+        case Status::Failed: status = "Failed"; break;
+        case Status::Unavailable: break;
+        }
+    }
+    return { .executed = true, .outputs = {
+        ScriptFunctionArgument{ "status", ScriptValue{ std::move(status) } },
+        ScriptFunctionArgument{ "diagnostic", ScriptValue{ storage == nullptr
+            ? std::string{ "persistent user storage is not configured" } : storage->SyncDiagnostic() } } }, .errors = {} };
+}
+
 // Scripts never name a file: a slot is a bare name inside the host's per-game
 // user storage, and the domain picks the extension, so a save slot and a
 // settings slot of the same name are different files.
@@ -252,6 +275,18 @@ ScriptFunctionCallResult Write(const StoragePtr& storage, const ScriptFunctionCa
     const bool written = bytes.has_value() &&
         storage->Write(SlotStorageKey<Domain>(slot), std::string_view{ reinterpret_cast<const char*>(bytes->data()), bytes->size() });
     return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "written", ScriptValue{ written } } }, .errors = {} };
+}
+
+template <kb::save::SaveDomain Domain>
+ScriptFunctionCallResult DeleteSlot(const StoragePtr& storage, const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return NoScene();
+    std::string slot;
+    if (std::optional<ScriptFunctionCallResult> refused = RefuseSlot(storage, arguments, slot)) {
+        return *std::move(refused);
+    }
+    const bool deleted = storage->Delete(SlotStorageKey<Domain>(slot));
+    return { .executed = true, .outputs = { ScriptFunctionArgument{ "deleted", ScriptValue{ deleted } } }, .errors = {} };
 }
 
 [[nodiscard]] const char* StatusName(kb::save::SaveGameLoadStatus status) noexcept {
@@ -350,8 +385,15 @@ bool RegisterDomain(ScriptRuntimeHost& host, std::string_view prefix) {
     ok = RegisterFunction(host, name("Has"), { keyPin }, { ScriptFunctionPin{ "has", ScriptValueType::Bool, true } }, &Has<Domain>) && ok;
     ok = RegisterFunction(host, name("Remove"), { keyPin }, { ScriptFunctionPin{ "removed", ScriptValueType::Bool, true } }, &Remove<Domain>) && ok;
     ok = RegisterFunction(host, name("Clear"), {}, { ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true } }, &Clear<Domain>) && ok;
+    ok = RegisterFunction(host, name("Flush"), {}, { ScriptFunctionPin{ "started", ScriptValueType::Bool, true } },
+        [storage](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) { return FlushStorage(storage); }) && ok;
+    ok = RegisterFunction(host, name("StorageStatus"), {}, {
+        ScriptFunctionPin{ "status", ScriptValueType::String, true }, ScriptFunctionPin{ "diagnostic", ScriptValueType::String, true } },
+        [storage](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) { return StorageStatus(storage); }) && ok;
     ok = RegisterFunction(host, name("Write"), { slotPin }, { ScriptFunctionPin{ "written", ScriptValueType::Bool, true } },
         [storage](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return Write<Domain>(storage, context, arguments); }) && ok;
+    ok = RegisterFunction(host, name("Delete"), { slotPin }, { ScriptFunctionPin{ "deleted", ScriptValueType::Bool, true } },
+        [storage](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return DeleteSlot<Domain>(storage, context, arguments); }) && ok;
     ok = RegisterFunction(host, name("Read"), { slotPin },
         { ScriptFunctionPin{ "loaded", ScriptValueType::Bool, true }, ScriptFunctionPin{ "status", ScriptValueType::String, true },
             ScriptFunctionPin{ "diagnostic", ScriptValueType::String, true } },

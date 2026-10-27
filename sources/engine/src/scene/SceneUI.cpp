@@ -18,6 +18,7 @@
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
+#include "engine/ui/visual/UITextGraphemes.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityCounter.hpp"
@@ -276,10 +277,79 @@ void SetTextClipped(UIText& text, std::string_view value) noexcept {
     return event;
 }
 
+// A frame build only reads authored components. Consecutive reads of one entity can
+// share their results; every builder starts with fresh state for the next frame.
+class FrameUIComponentQueries {
+  public:
+    explicit FrameUIComponentQueries(const Scene& scene) noexcept
+        : source_(scene.Components().UI()), world_(SceneAccess::State(scene).world), native_(world_.NativeStorage()) {}
+
+    template <SceneUIComponent T>
+    [[nodiscard]] const T* TryGet(SceneEntity entity) const noexcept {
+        constexpr auto index = static_cast<std::size_t>(UIComponentTypeOf<T>::value);
+        static_assert(index < kComponentCount && index < 64U);
+        const auto bit = std::uint64_t{1U} << index;
+        UseEntity(entity);
+        if ((queried_ & bit) == 0U) {
+            // Authored UI components live in native storage; the backend is their mirror.
+            const auto id = ComponentIdFor<T>();
+            components_[index] = nativeEntity_
+                ? (id == 0U ? nullptr : native_.TryGetComponentData(entity, id)) : source_.TryGet<T>(entity);
+            queried_ |= bit;
+        }
+        return static_cast<const T*>(components_[index]);
+    }
+
+    template <SceneUIComponent T>
+    [[nodiscard]] bool Has(SceneEntity entity) const noexcept {
+        constexpr auto index = static_cast<std::size_t>(UIComponentTypeOf<T>::value);
+        static_assert(index < kComponentCount && index < 64U);
+        const auto bit = std::uint64_t{1U} << index;
+        UseEntity(entity);
+        if ((hasQueried_ & bit) == 0U) {
+            const auto id = ComponentIdFor<T>();
+            if (nativeEntity_ ? id != 0U && native_.HasComponent(entity, id) : source_.Has<T>(entity)) present_ |= bit;
+            hasQueried_ |= bit;
+        }
+        return (present_ & bit) != 0U;
+    }
+
+  private:
+    template <SceneUIComponent T>
+    kb::ecs::ComponentId ComponentIdFor() const noexcept {
+        constexpr auto index = static_cast<std::size_t>(UIComponentTypeOf<T>::value);
+        const auto bit = std::uint64_t{1U} << index;
+        if ((idsQueried_ & bit) == 0U) {
+            componentIds_[index] = world_.Component<T>();
+            idsQueried_ |= bit;
+        }
+        return componentIds_[index];
+    }
+    void UseEntity(SceneEntity entity) const noexcept {
+        if (entity != entity_) {
+            entity_ = entity;
+            nativeEntity_ = native_.IsAlive(entity);
+            queried_ = hasQueried_ = present_ = 0U;
+        }
+    }
+    static constexpr auto kComponentCount = static_cast<std::size_t>(UIComponentType::WidgetSwitcher) + 1U;
+    SceneUIComponentQueries source_;
+    const kb::ecs::World& world_;
+    const kb::ecs::NativeArchetypeStorage& native_;
+    mutable std::array<kb::ecs::ComponentId, kComponentCount> componentIds_{};
+    mutable std::uint64_t idsQueried_ = 0U;
+    mutable bool nativeEntity_ = false;
+    mutable SceneEntity entity_{};
+    mutable std::array<const void*, kComponentCount> components_{};
+    mutable std::uint64_t queried_ = 0U;
+    mutable std::uint64_t hasQueried_ = 0U;
+    mutable std::uint64_t present_ = 0U;
+};
+
 class FrameBuilder {
   public:
     FrameBuilder(const Scene& scene, Vec2 viewport)
-        : scene_(scene), state_(SceneAccess::State(scene)), ui_(scene.Components().UI()), viewport_(viewport) {
+        : scene_(scene), state_(SceneAccess::State(scene)), ui_(scene), viewport_(viewport) {
         frame_.viewportSize = viewport;
     }
 
@@ -334,7 +404,9 @@ class FrameBuilder {
             output.refusal = refusal_;
             return false;
         }
-        std::ranges::stable_sort(frame_.elements, [](const SceneUIFrameElement& a, const SceneUIFrameElement& b) {
+        ApplyModalCanvases();
+        // Traversal ordinals break every paint-order tie, allowing the full records to be sorted in place.
+        std::ranges::sort(frame_.elements, [](const SceneUIFrameElement& a, const SceneUIFrameElement& b) {
             if (a.canvasSortingOrder != b.canvasSortingOrder)
                 return a.canvasSortingOrder < b.canvasSortingOrder;
             if (a.zOrder != b.zOrder)
@@ -363,52 +435,54 @@ class FrameBuilder {
     // Returns the reason the entity cannot be laid out, or nullptr when it is sound. A bare
     // bool would force the caller to re-derive what went wrong, which is what made an invalid
     // widget indistinguishable from a renderer fault.
-    [[nodiscard]] const char* ValidateComponents(SceneEntity entity) const noexcept {
+    [[nodiscard]] const char* ValidateComponents(SceneEntity entity, SceneUIFrameElement& element) const {
         std::size_t layoutCount = 0U;
 #define KB_VALIDATE(Type)                                                                                              \
     if (const Type* value = ui_.TryGet<Type>(entity); value != nullptr && !IsUIComponentValid(*value))                 \
     return #Type " holds an invalid value"
+#define KB_VALIDATE_COPY(Type, Field) \
+    if (const Type* value = ui_.TryGet<Type>(entity)) { \
+        if (!IsUIComponentValid(*value)) return #Type " holds an invalid value"; \
+        element.Field = *value; \
+    }
+#define KB_VALIDATE_LAYOUT(Type) \
+    if (const Type* value = ui_.TryGet<Type>(entity)) { \
+        if (!IsUIComponentValid(*value)) return #Type " holds an invalid value"; \
+        ++layoutCount; \
+    }
         KB_VALIDATE(UIRectTransform);
         KB_VALIDATE(UICanvas);
         KB_VALIDATE(UICanvasScaler);
         KB_VALIDATE(UICanvasGroup);
-        if (ui_.Has<UIHorizontalLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIVerticalLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIGridLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIWrapLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIOverlayLayout>(entity))
-            ++layoutCount;
-        KB_VALIDATE(UIHorizontalLayout);
-        KB_VALIDATE(UIVerticalLayout);
-        KB_VALIDATE(UIGridLayout);
-        KB_VALIDATE(UIWrapLayout);
-        KB_VALIDATE(UIOverlayLayout);
+        KB_VALIDATE_LAYOUT(UIHorizontalLayout);
+        KB_VALIDATE_LAYOUT(UIVerticalLayout);
+        KB_VALIDATE_LAYOUT(UIGridLayout);
+        KB_VALIDATE_LAYOUT(UIWrapLayout);
+        KB_VALIDATE_LAYOUT(UIOverlayLayout);
         KB_VALIDATE(UILayoutElement);
         KB_VALIDATE(UIContentSizeFitter);
         KB_VALIDATE(UIAspectRatioFitter);
-        KB_VALIDATE(UISprite);
-        KB_VALIDATE(UIImage);
-        KB_VALIDATE(UIRawImage);
-        KB_VALIDATE(UIText);
-        KB_VALIDATE(UIBorder);
-        KB_VALIDATE(UIMask);
-        KB_VALIDATE(UIShadow);
-        KB_VALIDATE(UIOutline);
-        KB_VALIDATE(UIBackgroundBlur);
+        KB_VALIDATE_COPY(UISprite, sprite);
+        KB_VALIDATE_COPY(UIImage, image);
+        KB_VALIDATE_COPY(UIRawImage, rawImage);
+        KB_VALIDATE_COPY(UIText, text);
+        KB_VALIDATE_COPY(UIBorder, border);
+        KB_VALIDATE_COPY(UIMask, mask);
+        KB_VALIDATE_COPY(UIShadow, shadow);
+        KB_VALIDATE_COPY(UIOutline, outline);
+        KB_VALIDATE_COPY(UIBackgroundBlur, backgroundBlur);
         KB_VALIDATE(UISelectable);
         KB_VALIDATE(UIButton);
-        KB_VALIDATE(UIToggle);
-        KB_VALIDATE(UISlider);
-        KB_VALIDATE(UIScrollbar);
-        KB_VALIDATE(UIScrollView);
-        KB_VALIDATE(UIInputField);
-        KB_VALIDATE(UIDropdown);
-        KB_VALIDATE(UIProgressBar);
+        KB_VALIDATE_COPY(UIToggle, toggle);
+        KB_VALIDATE_COPY(UISlider, slider);
+        KB_VALIDATE_COPY(UIScrollbar, scrollbar);
+        KB_VALIDATE_COPY(UIScrollView, scrollView);
+        KB_VALIDATE_COPY(UIInputField, inputField);
+        KB_VALIDATE_COPY(UIDropdown, dropdown);
+        KB_VALIDATE_COPY(UIProgressBar, progressBar);
         KB_VALIDATE(UIWidgetSwitcher);
+#undef KB_VALIDATE_COPY
+#undef KB_VALIDATE_LAYOUT
 #undef KB_VALIDATE
         if (layoutCount > 1U)
             return "UI object carries more than one layout component";
@@ -504,6 +578,32 @@ class FrameBuilder {
         return size;
     }
 
+    // A shown modal canvas takes the input of every canvas drawn below it: those elements keep drawing but can neither
+    // be hit nor take focus. "Shown" means one of its elements is visible at all, so a faded-out dialog lets go.
+    void ApplyModalCanvases() {
+        bool found = false;
+        std::int32_t order = 0;
+        for (const SceneUIFrameElement& element : frame_.elements) {
+            if (element.effectiveOpacity <= 0.0F)
+                continue;
+            const UICanvas* canvas = ui_.TryGet<UICanvas>(element.canvas);
+            if (canvas != nullptr && canvas->modal && (!found || element.canvasSortingOrder > order)) {
+                found = true;
+                order = element.canvasSortingOrder;
+            }
+        }
+        if (!found)
+            return;
+        frame_.modalActive = true;
+        frame_.modalSortingOrder = order;
+        for (SceneUIFrameElement& element : frame_.elements) {
+            if (element.canvasSortingOrder < order) {
+                element.interactionEnabled = false;
+                element.hitTestable = false;
+            }
+        }
+    }
+
     void SearchForCanvas(SceneEntity entity) {
         if (!uiHierarchy_.contains(entity.Id()) || !scene_.Entities().IsActive(entity))
             return;
@@ -559,7 +659,8 @@ class FrameBuilder {
                  Affine2D inheritedTransform, const std::vector<std::array<Vec2, 4U>>& inheritedClipQuads) {
         if (!valid_ || !scene_.Entities().IsActive(entity))
             return;
-        if (const char* invalid = ValidateComponents(entity); invalid != nullptr) {
+        SceneUIFrameElement element;
+        if (const char* invalid = ValidateComponents(entity, element); invalid != nullptr) {
             Refuse(entity, invalid);
             return;
         }
@@ -594,14 +695,17 @@ class FrameBuilder {
             Refuse(entity, "Rect Transform holds an invalid value");
             return;
         }
-        const DesiredSize desired = Measure(entity);
-        const DesiredSize minimum = Measure(entity, true);
         Rect rect = allocated;
         if (const UIContentSizeFitter* fitter = ui_.TryGet<UIContentSizeFitter>(entity)) {
             if (!IsUIComponentValid(*fitter)) {
                 Refuse(entity, "Content Size Fitter holds an invalid value");
                 return;
             }
+            // Measuring walks the subtree; only request sizes consumed by the fitter.
+            const DesiredSize desired = fitter->horizontalFit == UIFitMode::PreferredSize || fitter->verticalFit == UIFitMode::PreferredSize
+                                            ? Measure(entity) : DesiredSize{};
+            const DesiredSize minimum = fitter->horizontalFit == UIFitMode::MinimumSize || fitter->verticalFit == UIFitMode::MinimumSize
+                                            ? Measure(entity, true) : DesiredSize{};
             const float width = fitter->horizontalFit == UIFitMode::Unconstrained
                                     ? rect.width
                                     : (fitter->horizontalFit == UIFitMode::MinimumSize ? minimum.width : desired.width);
@@ -650,7 +754,6 @@ class FrameBuilder {
         if (const auto graphic = toggleGraphics_.find(entity.Id()); graphic != toggleGraphics_.end() && !graphic->second)
             group.opacity = 0.0F;
 
-        SceneUIFrameElement element;
         element.entity = entity;
         element.canvas = canvas;
         element.canvasScale = scale;
@@ -695,31 +798,6 @@ class FrameBuilder {
             element.rect.width = std::round(element.rect.width);
             element.rect.height = std::round(element.rect.height);
         }
-#define KB_COPY(Type, Field)                                                                                           \
-    if (const Type* value = ui_.TryGet<Type>(entity)) {                                                                \
-        if (!IsUIComponentValid(*value)) {                                                                             \
-            Refuse(entity, #Type " holds an invalid value");                                                           \
-            return;                                                                                                    \
-        }                                                                                                              \
-        element.Field = *value;                                                                                        \
-    }
-        KB_COPY(UISprite, sprite)
-        KB_COPY(UIImage, image)
-        KB_COPY(UIRawImage, rawImage)
-        KB_COPY(UIText, text)
-        KB_COPY(UIBorder, border)
-        KB_COPY(UIMask, mask)
-        KB_COPY(UIShadow, shadow)
-        KB_COPY(UIOutline, outline)
-        KB_COPY(UIBackgroundBlur, backgroundBlur)
-        KB_COPY(UIToggle, toggle)
-        KB_COPY(UISlider, slider)
-        KB_COPY(UIScrollbar, scrollbar)
-        KB_COPY(UIScrollView, scrollView)
-        KB_COPY(UIDropdown, dropdown)
-        KB_COPY(UIProgressBar, progressBar)
-        KB_COPY(UIInputField, inputField)
-#undef KB_COPY
         if (const auto caption = captionTexts_.find(entity.Id()); caption != captionTexts_.end() && element.text.has_value()) {
             const UIDropdown& dropdown = *caption->second;
             static_cast<void>(SetUITextContent(
@@ -751,11 +829,12 @@ class FrameBuilder {
                     element.text->color.a *= 0.5F;
                     element.textCaretByteOffset = 0U;
                 } else if (type == UIInputContentType::Password || type == UIInputContentType::Pin) {
-                    // One dot per character; the caret keeps its place in character terms.
-                    const std::size_t caret = std::min<std::size_t>(element.textCaretByteOffset, content.size());
+                    // One dot per character as the player sees it (a letter with its accent is one); the caret keeps
+                    // its place in character terms.
+                    const std::size_t caret = SnapToUITextGraphemeBoundary(content, std::min<std::size_t>(element.textCaretByteOffset, content.size()));
                     element.textCaretByteOffset =
-                        static_cast<std::uint32_t>(Utf8CodePointCount(std::string_view{content}.substr(0U, caret)));
-                    SetTextClipped(*element.text, std::string(Utf8CodePointCount(content), '*'));
+                        static_cast<std::uint32_t>(UITextGraphemeCount(std::string_view{content}.substr(0U, caret)));
+                    SetTextClipped(*element.text, std::string(UITextGraphemeCount(content), '*'));
                 }
             }
         }
@@ -1181,7 +1260,7 @@ class FrameBuilder {
     const SceneState& state_;
     std::unordered_set<std::uint64_t> uiHierarchy_;
     std::vector<SceneEntity> uiRoots_;
-    SceneUIComponentQueries ui_;
+    FrameUIComponentQueries ui_;
     Vec2 viewport_{};
     // The player owning the canvas being laid out, and the soft edge of the mask around it.
     std::int32_t player_ = -1;
@@ -1439,15 +1518,6 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     return result;
 }
 
-[[nodiscard]] std::size_t PreviousUtf8Boundary(std::string_view text, std::size_t offset) noexcept {
-    if (offset == 0U)
-        return 0U;
-    --offset;
-    while (offset > 0U && (static_cast<unsigned char>(text[offset]) & 0xC0U) == 0x80U)
-        --offset;
-    return offset;
-}
-
 [[nodiscard]] std::size_t NextUtf8Boundary(std::string_view text, std::size_t offset) noexcept {
     if (offset >= text.size())
         return text.size();
@@ -1511,8 +1581,10 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     return false;
 }
 
-[[nodiscard]] bool EditFocusedText(Scene& scene, SceneState& state, const SceneUIInput& input, bool backspaceStarted,
+[[nodiscard]] bool EditFocusedText(Scene& scene, SceneState& state, SceneUIInput input, bool backspaceStarted,
                                    bool deleteStarted, bool moveLeft, bool moveRight) {
+    auto nativeEdit = std::move(state.uiPendingTextInput);
+    state.uiPendingTextInput.reset();
     if (!state.uiFocused.IsValid())
         return false;
     SceneUIComponents ui = scene.Components().UI();
@@ -1522,25 +1594,35 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         return false;
 
     std::string buffer{UITextContent(*text)};
-    state.uiTextCursorByteOffset = std::min(state.uiTextCursorByteOffset, buffer.size());
-    while (state.uiTextCursorByteOffset > 0U && state.uiTextCursorByteOffset < buffer.size() &&
-           (static_cast<unsigned char>(buffer[state.uiTextCursorByteOffset]) & 0xC0U) == 0x80U) {
-        --state.uiTextCursorByteOffset;
-    }
+    // The caret stands between characters as the player sees them: never inside a letter with its accent, an emoji
+    // with its skin tone or a joined family, so an arrow key, Backspace or Delete moves over or removes the whole of it.
+    state.uiTextCursorByteOffset = SnapToUITextGraphemeBoundary(buffer, std::min(state.uiTextCursorByteOffset, buffer.size()));
     if (moveLeft)
-        state.uiTextCursorByteOffset = PreviousUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        state.uiTextCursorByteOffset = PreviousUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
     if (moveRight)
-        state.uiTextCursorByteOffset = NextUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        state.uiTextCursorByteOffset = NextUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
     if (field->readOnly)
         return false;
 
+    const std::string original = nativeEdit ? buffer : std::string{};
+    const std::size_t originalCaret = state.uiTextCursorByteOffset;
+    if (nativeEdit && nativeEdit->entity != state.uiFocused) nativeEdit.reset();
+    if (nativeEdit) {
+        buffer.clear();
+        state.uiTextCursorByteOffset = 0U;
+        input.textInput = nativeEdit->text;
+        backspaceStarted = false;
+        deleteStarted = false;
+    }
+    std::size_t nativeCaret = 0U;
+    std::size_t nativeIndex = 0U;
     bool changed = false;
     bool sawBackspace = false;
     bool sawDelete = false;
     const auto eraseBack = [&] {
         if (state.uiTextCursorByteOffset == 0U)
             return;
-        const std::size_t previous = PreviousUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        const std::size_t previous = PreviousUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
         buffer.erase(previous, state.uiTextCursorByteOffset - previous);
         state.uiTextCursorByteOffset = previous;
         changed = true;
@@ -1548,11 +1630,12 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     const auto eraseForward = [&] {
         if (state.uiTextCursorByteOffset >= buffer.size())
             return;
-        const std::size_t next = NextUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        const std::size_t next = NextUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
         buffer.erase(state.uiTextCursorByteOffset, next - state.uiTextCursorByteOffset);
         changed = true;
     };
     for (const char32_t codePoint : input.textInput) {
+        if (nativeEdit && nativeIndex++ == nativeEdit->caret) nativeCaret = buffer.size();
         if (codePoint == U'\b') {
             sawBackspace = true;
             eraseBack();
@@ -1570,12 +1653,18 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         }
         if (codePoint != U'\n' && !AcceptsCharacter(field->contentType, buffer, state.uiTextCursorByteOffset, codePoint))
             continue;
-        if (field->characterLimit > 0U && Utf8CodePointCount(buffer) >= field->characterLimit)
-            continue;
         std::array<char, 4U> encoded{};
         const std::size_t encodedSize = EncodeUtf8(codePoint, encoded);
         if (encodedSize == 0U || buffer.size() + encodedSize >= UIText::MaxUtf8Bytes)
             continue;
+        if (field->characterLimit > 0U) {
+            // The limit counts characters as the player sees them: an accent or a skin tone typed after a letter or
+            // an emoji joins it and does not use up a place, while a new character at the limit is refused.
+            std::string candidate = buffer;
+            candidate.insert(state.uiTextCursorByteOffset, encoded.data(), encodedSize);
+            if (UITextGraphemeCount(candidate) > field->characterLimit)
+                continue;
+        }
         buffer.insert(state.uiTextCursorByteOffset, encoded.data(), encodedSize);
         state.uiTextCursorByteOffset += encodedSize;
         changed = true;
@@ -1584,6 +1673,13 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         eraseBack();
     if (deleteStarted && !sawDelete)
         eraseForward();
+    if (nativeEdit) {
+        if (nativeEdit->caret == nativeEdit->text.size()) nativeCaret = buffer.size();
+        state.uiTextCursorByteOffset = SnapToUITextGraphemeBoundary(buffer, nativeCaret);
+        changed = buffer != original;
+    }
+    if (!changed && nativeEdit)
+        return originalCaret != state.uiTextCursorByteOffset;
     if (!changed)
         return false;
     if (!SetUITextContent(*text, buffer))
@@ -1827,6 +1923,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     const SceneUIFrameElement* target = Find(state.uiFrame, entity);
     if (target == nullptr || !target->interactionEnabled)
         return false;
+    state.uiPendingTextInput.reset();
     if (state.uiFocused.IsValid())
         Queue(state, scene, SceneUIEventType::Blurred, state.uiFocused);
     state.uiFocused = entity;
@@ -1841,6 +1938,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
 }
 
 void ClearUIFocus(Scene& scene, SceneState& state) noexcept {
+    state.uiPendingTextInput.reset();
     if (state.uiFocused.IsValid())
         Queue(state, scene, SceneUIEventType::Blurred, state.uiFocused);
     state.uiFocused = {};
@@ -2418,6 +2516,9 @@ std::vector<std::uint64_t> SceneUIQueries::PendingImageAlpha() const {
             pending.push_back(element.image->imageAssetId);
     return pending;
 }
+bool SceneUIQueries::ModalCanvasActive() const noexcept {
+    return SceneAccess::State(scene_).uiFrame.modalActive;
+}
 SceneEntity SceneUIQueries::Dragged() const noexcept {
     const SceneState& state = SceneAccess::State(scene_);
     return state.uiDragging ? state.uiDragged : SceneEntity{};
@@ -2498,14 +2599,7 @@ bool SceneUIAccess::UpdateFromInput(float deltaSeconds) {
     input.pointerAvailable = device.HasFocus();
     input.pointerPosition = {device.PointerX(), device.PointerY()};
     input.primaryDown = device.IsKeyDown(kb::input::InputKey::MouseLeft);
-    for (const kb::input::InputTouchPoint& touch : device.TouchPoints()) {
-        if (touch.phase == kb::input::InputTouchPhase::Ended)
-            continue;
-        input.pointerAvailable = true;
-        input.pointerPosition = {touch.x, touch.y};
-        input.primaryDown = true;
-        break;
-    }
+    input.touchPoints = device.TouchPoints();
     const bool reverseTab =
         device.IsKeyDown(kb::input::InputKey::Tab) &&
         (device.IsKeyDown(kb::input::InputKey::LeftShift) || device.IsKeyDown(kb::input::InputKey::RightShift));
@@ -2566,6 +2660,9 @@ SceneEntity SceneUIAccess::Pressed() const noexcept {
 SceneEntity SceneUIAccess::Focused() const noexcept {
     return SceneAccess::State(scene_).uiFocused;
 }
+bool SceneUIAccess::ModalCanvasActive() const noexcept {
+    return SceneAccess::State(scene_).uiFrame.modalActive;
+}
 bool SceneUIAccess::HasFocusedTextInput() const noexcept {
     return SceneUIQueries{scene_}.HasFocusedTextInput();
 }
@@ -2585,7 +2682,34 @@ void SceneUIAccess::ClearFocus() noexcept {
     ClearUIFocus(scene_, SceneAccess::State(scene_));
 }
 
-bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& input, float deltaSeconds) {
+std::optional<SceneUITextInputState> SceneUIAccess::TextInputState() const {
+    const SceneState& state = SceneAccess::State(scene_);
+    if (!HasFocusedTextInput()) return std::nullopt;
+    const auto* field = scene_.Components().UI().TryGet<UIInputField>(state.uiFocused);
+    const auto* text = scene_.Components().UI().TryGet<UIText>(state.uiFocused);
+    if (field == nullptr || field->readOnly || text == nullptr) return std::nullopt;
+    const auto content = UITextContent(*text);
+    std::array<char32_t, UIText::MaxUtf8Bytes> decoded{};
+    const auto result = kb::input::DecodeUtf8(content, decoded);
+    if (!result.wellFormed || result.truncated) return std::nullopt;
+    SceneUITextInputState output{state.uiFocused, {decoded.data(), result.codePointCount}, 0U};
+    const auto prefix = kb::input::DecodeUtf8(content.substr(0U, std::min(state.uiTextCursorByteOffset, content.size())), decoded);
+    output.caret = prefix.codePointCount;
+    return output;
+}
+
+bool SceneUIAccess::QueueTextInputState(SceneUITextInputState input) {
+    if (!HasFocusedTextInput() || input.entity != Focused() || input.text.size() >= UIText::MaxUtf8Bytes ||
+        input.caret > input.text.size()) return false;
+    for (const char32_t value : input.text)
+        if (!kb::input::IsUnicodeScalar(value) || value == U'\b' || value == 0x7FU) return false;
+    SceneAccess::State(scene_).uiPendingTextInput = std::move(input);
+    return true;
+}
+
+bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& sourceInput, float deltaSeconds) {
+    SceneUIInput input = sourceInput;
+    bool pointerCancelled = false;
     if (!std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) || viewportWidth <= 0.0F ||
         viewportHeight <= 0.0F || !std::isfinite(deltaSeconds) || deltaSeconds < 0.0F ||
         !std::isfinite(input.scrollDelta) ||
@@ -2595,6 +2719,10 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     for (const char32_t codePoint : input.textInput)
         if (!kb::input::IsUnicodeScalar(codePoint))
             return false;
+    if (input.touchPoints.size() > kb::input::InputDeviceState::kMaxTouchPoints) return false;
+    for (const auto& touch : input.touchPoints) {
+        if (!std::isfinite(touch.x) || !std::isfinite(touch.y) || touch.phase > kb::input::InputTouchPhase::Cancelled) return false;
+    }
     SceneUIFrame frame;
     if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
         // Keep the last good frame so hit testing still answers, but carry the refusal on it
@@ -2617,10 +2745,32 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         state.uiFrame = std::move(clampedFrame);
         presentationDirty = false;
     }
+    const SceneEntity focusBeforeModal = state.uiFocused;
     if (state.uiFocused.IsValid()) {
         const SceneUIFrameElement* focused = Find(state.uiFrame, state.uiFocused);
         if (focused == nullptr || !focused->interactionEnabled)
             ClearFocus();
+    }
+    // A modal canvas appearing takes focus into itself and remembers where it was; going away gives it back.
+    if (state.uiFrame.modalActive != state.uiModalActive) {
+        if (state.uiFrame.modalActive) {
+            state.uiModalRestoreFocus = focusBeforeModal;
+            if (!state.uiFocused.IsValid()) {
+                const SceneUIFrameElement* first = nullptr;
+                for (const SceneUIFrameElement& element : state.uiFrame.elements)
+                    if (element.interactionEnabled && element.canvasSortingOrder >= state.uiFrame.modalSortingOrder &&
+                        (first == nullptr || element.traversalOrder < first->traversalOrder))
+                        first = &element;
+                if (first != nullptr)
+                    static_cast<void>(SetFocus(first->entity));
+            }
+        } else {
+            const SceneEntity restore = state.uiModalRestoreFocus;
+            state.uiModalRestoreFocus = {};
+            if (restore.IsValid() && !state.uiFocused.IsValid())
+                static_cast<void>(SetFocus(restore));
+        }
+        state.uiModalActive = state.uiFrame.modalActive;
     }
     for (SceneState::UIPlayerFocus& player : state.uiPlayers) {
         const SceneUIFrameElement* focused = Find(state.uiFrame, player.focused);
@@ -2631,6 +2781,36 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     }
     if (state.uiPressed.IsValid() && Find(state.uiFrame, state.uiPressed) == nullptr)
         state.uiPressed = {};
+    if (!input.touchPoints.empty() || state.uiTouchCapture.has_value()) {
+        const bool focused = input.pointerAvailable;
+        input.pointerAvailable = false;
+        input.primaryDown = false;
+        if (!focused) {
+            pointerCancelled = state.uiTouchCapture.has_value();
+            state.uiTouchCapture.reset();
+        } else if (state.uiTouchCapture.has_value()) {
+            // Keep a terminal sample's own position even while other fingers move.
+            const auto contact = std::ranges::find(input.touchPoints, *state.uiTouchCapture,
+                &kb::input::InputTouchPoint::id);
+            if (contact != input.touchPoints.end()) {
+                input.pointerPosition = {contact->x, contact->y};
+                pointerCancelled = contact->phase == kb::input::InputTouchPhase::Cancelled;
+                input.pointerAvailable = !pointerCancelled;
+                input.primaryDown = kb::input::IsTouchActive(contact->phase);
+            } else pointerCancelled = true;
+            if (!input.primaryDown) state.uiTouchCapture.reset();
+        } else {
+            for (const auto& contact : input.touchPoints) {
+                if (contact.phase != kb::input::InputTouchPhase::Began ||
+                    !state.uiFrame.HitTest({contact.x, contact.y}).IsValid()) continue;
+                state.uiTouchCapture = contact.id;
+                input.pointerPosition = {contact.x, contact.y};
+                input.pointerAvailable = true;
+                input.primaryDown = true;
+                break;
+            }
+        }
+    }
     const SceneEntity hovered = input.pointerAvailable ? state.uiFrame.HitTest(input.pointerPosition) : SceneEntity{};
     const bool tooltipShown = state.uiHoverSeconds >= kUITooltipDelaySeconds;
     if (hovered != state.uiHovered) {
@@ -2702,6 +2882,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     presentationDirty = UpdateScrollView(scene_, state, hovered, input, pressStarted, deltaSeconds) || presentationDirty;
     if (pressReleased && state.uiPressed.IsValid()) {
         const SceneEntity pressed = state.uiPressed;
+        if (pointerCancelled) Queue(state, scene_, SceneUIEventType::Canceled, pressed, &input);
         Queue(state, scene_, SceneUIEventType::Released, pressed, &input);
         const UIButton* button = scene_.Components().UI().TryGet<UIButton>(pressed);
         if (!dropped && pressed == hovered && (button == nullptr || button->submitOnRelease)) {
@@ -2822,6 +3003,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     }
     state.previousUIInput = input;
     state.previousUIInput.textInput = {};
+    state.previousUIInput.touchPoints = {};
     state.previousUIInput.scrollDelta = 0.0F;
     presentationDirty = UpdateDropdownList(scene_, state, deltaSeconds) || presentationDirty;
     presentationDirty = SyncScrollbars(scene_, state) || presentationDirty;
@@ -2831,16 +3013,27 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
             return false;
         state.uiFrame = std::move(refreshed);
     }
+    bool revealFocus = previousFrame.viewportSize.x != viewportWidth || previousFrame.viewportSize.y != viewportHeight;
+    const auto* previousFocused = Find(previousFrame, state.uiFocused);
+    const auto* currentFocused = Find(state.uiFrame, state.uiFocused);
+    if (previousFocused != nullptr && currentFocused != nullptr) {
+        const auto& before = previousFocused->clipRect;
+        const auto& after = currentFocused->clipRect;
+        revealFocus = revealFocus || before.x != after.x || before.y != after.y ||
+            before.width != after.width || before.height != after.height;
+    }
     // Focus handed to a widget created this frame - an opened list's item - lands once it has been laid out.
     if (state.uiPendingFocus.IsValid()) {
         const SceneEntity pending = state.uiPendingFocus;
         state.uiPendingFocus = {};
-        if (SetFocus(pending) && ScrollFocusedIntoView(scene_, state, input)) {
-            SceneUIFrame scrolled;
-            if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(scrolled))
-                return false;
-            state.uiFrame = std::move(scrolled);
-        }
+        revealFocus = SetFocus(pending) || revealFocus;
+    }
+    // Viewport and safe-area changes must keep the active field inside its scroll view's clip.
+    if (revealFocus && ScrollFocusedIntoView(scene_, state, input)) {
+        SceneUIFrame scrolled;
+        if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(scrolled))
+            return false;
+        state.uiFrame = std::move(scrolled);
     }
     ResolveInteractionPresentation(scene_, state, input.primaryDown, deltaSeconds, previousFrame, state.uiFrame, true);
     return true;

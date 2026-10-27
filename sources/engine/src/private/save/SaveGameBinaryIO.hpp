@@ -61,9 +61,10 @@ public:
     // Writes `bytes` to `path` atomically: creates parent dirs, writes a
     // sibling ".tmp", then replaces the target in one step (MoveFileEx with
     // REPLACE_EXISTING|WRITE_THROUGH on Windows, rename on POSIX). Returns
-    // false on any IO failure (and leaves any previous file at `path`
-    // untouched). Rejects an empty payload — a valid SaveGame always has a
-    // header.
+    // false on any IO failure. Write/flush failures before replacement leave
+    // the previous file untouched. A POSIX directory-flush failure after the
+    // rename can return false with the complete new file already visible.
+    // Empty payloads are supported for host storage.
     [[nodiscard]] static bool WriteBytesAtomically(const std::filesystem::path& path, std::span<const std::uint8_t> bytes);
 };
 

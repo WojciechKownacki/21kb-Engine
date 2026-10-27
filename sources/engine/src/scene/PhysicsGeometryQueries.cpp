@@ -253,6 +253,7 @@ bool IntersectRayCollider(
         return true;
     }
     case ColliderShape::Box:
+    case ColliderShape::OneWayBox:
         if (!IntersectRayAabb(localOrigin, localDirection, maxDistance, Vec3{}, Vec3{
             std::max(0.0001F, collider.boxSize.x * scale.x * 0.5F),
             std::max(0.0001F, collider.boxSize.y * scale.y * 0.5F),

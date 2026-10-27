@@ -9,6 +9,7 @@
 #include "kb/editor/docking/DockTypes.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <optional>
@@ -171,6 +172,9 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     if (!EditorParticleDocumentLifecycle::Resolve(
             messageWindow, sceneContext_,
             kb::particle_editor::ParticleDocumentTransition::ExitApplication)) {
+        return 0;
+    }
+    if (!EditorMap2DWindow::CloseAll(mainWindow_)) {
         return 0;
     }
     if (!EditorSceneLifecycleGuard::LeavePrefabEditMode(mainWindow_, sceneContext_, EditorPrefabLeaveReason::CloseEditor)) {

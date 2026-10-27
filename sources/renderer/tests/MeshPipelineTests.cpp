@@ -2242,6 +2242,16 @@ void RunRenderScenePropagatesMeshPassFlagsTest() {
 } // namespace
 
 void RunMeshPipelineTests() {
+    {
+        const SceneRenderMeshInstance occluder{.entityId = 1U, .meshAssetId = 42U, .shadowOnly = true};
+        RenderMaterialResource material{};
+        for (const auto pass : {MeshPassType::BaseOpaque, MeshPassType::Depth, MeshPassType::MotionVectors, MeshPassType::GBuffer, MeshPassType::SelectionId}) {
+            Require(!MeshPipelinePassPolicy::CanEverContain(pass, occluder, {}, UINT32_MAX) &&
+                !MeshPipelinePassPolicy::Accepts(pass, occluder, &material, {}, UINT32_MAX), "Tile occluders must never appear in color, depth or selection passes");
+        }
+        Require(MeshPipelinePassPolicy::CanEverContain(MeshPassType::ShadowDepth, occluder, {}, UINT32_MAX) &&
+            MeshPipelinePassPolicy::Accepts(MeshPassType::ShadowDepth, occluder, &material, {}, UINT32_MAX), "Tile occluders contribute shadow depth");
+    }
     auto shear = IdentityMatrix();
     shear[4] = 1.0F;
     const auto shearedBounds = MeshPipelineVisibility::TransformBounds(RenderBoundsSphere{.radius = 1.0F}, shear);

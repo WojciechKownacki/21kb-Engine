@@ -1,0 +1,86 @@
+diff --git a/bgfx/tools/shaderc/shaderc.cpp b/bgfx/tools/shaderc/shaderc.cpp
+index 1056e2cb0..719c493fd 100644
+--- a/bgfx/tools/shaderc/shaderc.cpp
++++ b/bgfx/tools/shaderc/shaderc.cpp
+@@ -1053,7 +1053,7 @@ namespace bgfx
+ 		{ '\0', "verbose",                 0, NULL,             "Be verbose."                                                                     },
+ 		{ '\0', "debug",                   0, NULL,             "Debug information. (Vulkan, DirectX and Metal only)"                             },
+ 		{ '\0', "disasm",                  0, NULL,             "Disassemble compiled shader. (DirectX only)"                                     },
+-		{ 'O',  NULL,                      1, "<level>",        "Set optimization level. Can be 0 to 3. (DirectX only)"                           },
++		{ 'O',  NULL,                      1, "<level>",        "Set optimization level (0-3). GLSL: 0 preserves functions."                           },
+ 		{ '\0', "Werror",                  0, NULL,             "Treat warnings as errors. (DirectX only)"                                        },
+ 		{ '\0', "avoid-flow-control",      0, NULL,             "Avoid flow control instructions. (DirectX only)"                                 },
+ 		{ '\0', "no-preshader",            0, NULL,             "Do not generate preshader. (DirectX only)"                                       },
+diff --git a/bgfx/tools/shaderc/shaderc_glsl.cpp b/bgfx/tools/shaderc/shaderc_glsl.cpp
+index 0fd666502..3b9c22db6 100644
+--- a/bgfx/tools/shaderc/shaderc_glsl.cpp
++++ b/bgfx/tools/shaderc/shaderc_glsl.cpp
+@@ -209,7 +209,12 @@ namespace bgfx { namespace glsl
+ 					bx::write(_messageWriter, &messageErr, "%s\n", _message);
+ 				});
+ 
+-			opt.RegisterPerformancePasses();
++			// Keep function boundaries when explicitly disabling optimization. Large
++			// inlined shaders can overwhelm downstream browser shader compilers.
++			if (!_options.optimize || 0 != _options.optimizationLevel)
++			{
++				opt.RegisterPerformancePasses();
++			}
+ 
+ 			std::vector<uint32_t> optimized;
+ 
+@@ -227,6 +232,10 @@ namespace bgfx { namespace glsl
+ 			compilerOptions.enable_420pack_extension           = false;
+ 			compilerOptions.emit_uniform_buffer_as_plain_uniforms = true;
+ 			compiler.set_common_options(compilerOptions);
++			if (_options.optimize && 0 == _options.optimizationLevel)
++			{
++				compiler.set_enabled_interface_variables(compiler.get_active_interface_variables() );
++			}
+ 
+ 			spirv_cross::ShaderResources resources = compiler.get_shader_resources();
+ 
+diff --git a/cmake/bgfxToolUtils.cmake b/cmake/bgfxToolUtils.cmake
+index 87feb8d97..68fcad14f 100644
+--- a/cmake/bgfxToolUtils.cmake
++++ b/cmake/bgfxToolUtils.cmake
+@@ -521,7 +521,7 @@ if(TARGET bgfx::shaderc)
+ 		endif()
+ 
+ 		# -O
+-		if(ARG_O)
++		if(DEFINED ARG_O)
+ 			list(APPEND CLI "-O" "${ARG_O}")
+ 		endif()
+ 
+@@ -562,15 +562,20 @@ if(TARGET bgfx::shaderc)
+ 	# 	INCLUDE_DIRS directories
+ 	# 	DEFINES defines
+ 	# 	[PROFILES profiles]
++	# 	[OPTIMIZATION level]
+ 	# 	[AS_HEADERS]
+ 	# 	[NO_SOURCE_GROUP]
+ 	# )
+ 	#
+ 	function(bgfx_compile_shaders)
+ 		set(options AS_HEADERS NO_SOURCE_GROUP)
+-		set(oneValueArgs TYPE VARYING_DEF OUTPUT_DIR OUT_FILES_VAR)
++		set(oneValueArgs TYPE VARYING_DEF OUTPUT_DIR OUT_FILES_VAR OPTIMIZATION)
+ 		set(multiValueArgs SHADERS INCLUDE_DIRS DEFINES PROFILES)
+ 		cmake_parse_arguments(ARGS "${options}" "${oneValueArgs}" "${multiValueArgs}" "${ARGN}")
++		set(SHADER_OPTIMIZATION "$<IF:$<CONFIG:Debug>,0,3>")
++		if(DEFINED ARGS_OPTIMIZATION)
++			set(SHADER_OPTIMIZATION "${ARGS_OPTIMIZATION}")
++		endif()
+ 
+ 		if(ARGS_PROFILES)
+ 			set(PROFILES ${ARGS_PROFILES})
+@@ -653,7 +658,7 @@ if(TARGET bgfx::shaderc)
+ 					FILE ${SHADER_FILE_ABSOLUTE}
+ 					OUTPUT ${OUTPUT}
+ 					PROFILE ${PROFILE}
+-					O "$<IF:$<CONFIG:Debug>,0,3>"
++					O "${SHADER_OPTIMIZATION}"
+ 					VARYINGDEF ${ARGS_VARYING_DEF}
+ 					INCLUDES ${BGFX_SHADER_INCLUDE_PATH} ${ARGS_INCLUDE_DIRS}
+ 					DEFINES ${ARGS_DEFINES}

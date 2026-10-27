@@ -75,6 +75,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
     include/kb/render/resources/RenderMeshSourceImport.hpp
     include/kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp
+    include/kb/render/resources/RenderMap2DMeshBuilder.hpp
     include/kb/render/resources/RenderTerrainMeshBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
     include/kb/render/resources/RenderResourceRegistry.hpp
@@ -117,6 +118,8 @@ add_library(kb_renderer STATIC
     include/kb/render/gi/SceneGiUniforms.hpp
     include/kb/render/gi/SceneGiVoxelGrid.hpp
     include/kb/render/particles/ParticleGpuEmitterSimulation.hpp
+    include/kb/render/particles/ParticleGpuReadback.hpp
+    include/kb/render/particles/ParticleGpuUpdateFailure.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
@@ -245,6 +248,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshAssetFinalizer.cpp
     src/resources/RenderMeshAssetFinalizer.hpp
     src/resources/RenderMeshAssetBuilder.cpp
+    src/resources/RenderMap2DMeshBuilder.cpp
     src/resources/RenderTerrainMeshBuilder.cpp
     src/resources/RenderMeshFbxImporter.cpp
     src/resources/RenderMeshFbxImporter.hpp
@@ -375,6 +379,7 @@ add_library(kb_renderer STATIC
     src/gi/SceneGiUniforms.cpp
     src/gi/SceneGiVoxelGrid.cpp
     src/particles/ParticleGpuEmitterSimulation.cpp
+    src/particles/ParticleGpuReadback.cpp
     src/shadow/PointShadowPassPlanner.hpp
     src/private/ui/ScreenUIBackgroundBlur.hpp
     src/private/ui/ScreenUIComposite.hpp
@@ -618,7 +623,6 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_exposure_luminance.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
-            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_ssgi_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_capture.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_prefilter.sc
@@ -634,6 +638,36 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         OUT_FILES_VAR KB_RENDERER_GENERATED_FRAGMENT_SHADERS
     )
 
+    # Preserve functions in the browser lighting shader. Unconditional SPIR-V
+    # inlining produces a large control-flow graph that crashes some downstream
+    # shader compilers; the graphics driver still optimizes the final program.
+    set(KB_RENDERER_DEFERRED_PROFILES spirv 430)
+    if(APPLE)
+        list(APPEND KB_RENDERER_DEFERRED_PROFILES metal)
+    elseif(WIN32 OR MINGW OR MSYS OR CYGWIN)
+        list(APPEND KB_RENDERER_DEFERRED_PROFILES s_5_0 s_6_0)
+    endif()
+    if(BGFX_CONFIG_RENDERER_WEBGPU)
+        list(APPEND KB_RENDERER_DEFERRED_PROFILES wgsl)
+    endif()
+    foreach(KB_RENDERER_DEFERRED_PROFILE IN LISTS KB_RENDERER_DEFERRED_PROFILES ITEMS 300_es)
+        set(KB_RENDERER_DEFERRED_OPTIMIZATION)
+        if(KB_RENDERER_DEFERRED_PROFILE STREQUAL "300_es")
+            set(KB_RENDERER_DEFERRED_OPTIMIZATION OPTIMIZATION 0)
+        endif()
+        bgfx_compile_shaders(
+            TYPE FRAGMENT
+            SHADERS ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
+            VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
+            OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
+            INCLUDE_DIRS ${KB_RENDERER_SHADER_INCLUDE_DIR} ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
+            PROFILES ${KB_RENDERER_DEFERRED_PROFILE}
+            ${KB_RENDERER_DEFERRED_OPTIMIZATION}
+            OUT_FILES_VAR KB_RENDERER_GENERATED_DEFERRED_SHADER
+        )
+        list(APPEND KB_RENDERER_GENERATED_FRAGMENT_SHADERS ${KB_RENDERER_GENERATED_DEFERRED_SHADER})
+    endforeach()
+
     bgfx_compile_shaders(
         TYPE COMPUTE
         SHADERS
@@ -643,6 +677,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_emit.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_collide.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_inspect.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_rebase.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_keys.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_step.sc
@@ -810,6 +845,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/RendererTests.cpp
         tests/AssetImportCatalogCoverageTests.cpp
         tests/GltfExternalResourceTests.cpp
+        tests/MeshReimportTests.cpp
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
         tests/RendererTestSupport.hpp
@@ -825,6 +861,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/GraphForwardGpuRenderTests.cpp
         tests/RendererCapabilityReportTests.cpp
         tests/RendererRuntimeSubmitTests.cpp
+        tests/ParticleGpuMotionTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp
         tests/SceneExposureMeterTests.cpp
@@ -866,9 +903,59 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         target_compile_definitions(kb_renderer_tests PRIVATE
             KB_21KB_PARTICLE_PLUGIN_PATH="$<TARGET_FILE:kb_21kb_particle_plugin>")
         add_dependencies(kb_renderer_tests kb_21kb_particle_plugin)
+        if(WIN32)
+            add_test(NAME kb_renderer_particle_motion
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-motion)
+            set_tests_properties(kb_renderer_particle_motion PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            add_test(NAME kb_renderer_particle_contact_death
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-contact-death)
+            set_tests_properties(kb_renderer_particle_contact_death PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            add_test(NAME kb_renderer_particle_depth_collision
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-depth-collision)
+            set_tests_properties(kb_renderer_particle_depth_collision PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+        endif()
     endif()
 
-    add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
+    # The complete node/profile sweep has separate bounded processes below.
+    add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-integration)
+    if(WIN32)
+        add_test(NAME kb_renderer_display_alpha COMMAND $<TARGET_FILE:kb_renderer_tests> display-alpha)
+        set_tests_properties(kb_renderer_display_alpha PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 180
+            FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        add_test(NAME kb_renderer_temporal_history COMMAND $<TARGET_FILE:kb_renderer_tests> detached-final-composite)
+        set_tests_properties(kb_renderer_temporal_history PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 180
+            FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        add_test(NAME kb_renderer_gi_resolve COMMAND $<TARGET_FILE:kb_renderer_tests> gi-resolve)
+        set_tests_properties(kb_renderer_gi_resolve PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;gi" TIMEOUT 180)
+        add_test(NAME kb_renderer_sky_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> sky-reflection)
+        set_tests_properties(kb_renderer_sky_reflection PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
+        # Screen-space ambient occlusion, reflections and bounce light, and the voxel grid built from mesh geometry.
+        add_test(NAME kb_renderer_screen_space COMMAND $<TARGET_FILE:kb_renderer_tests> screen-space)
+        set_tests_properties(kb_renderer_screen_space PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;screen-space" TIMEOUT 180)
+        # Point, spot, directional and cascaded shadows, and GPU mesh particles, with image readback.
+        add_test(NAME kb_renderer_shadows_particle_mesh COMMAND $<TARGET_FILE:kb_renderer_tests> particle-mesh-submit)
+        set_tests_properties(kb_renderer_shadows_particle_mesh PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;shadows" TIMEOUT 300)
+    endif()
+    set_tests_properties(kb_renderer_tests PROPERTIES
+        FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+    if(MSVC AND TARGET kb_test_process_error_tests)
+        find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+        add_dependencies(kb_renderer_tests kb_test_process_error_tests)
+        add_test(NAME kb_renderer_assertion_errors
+            COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/scripts/tests/test_test_process_errors.py
+                --probe $<TARGET_FILE:kb_test_process_error_tests> --debug-crt $<IF:$<CONFIG:Debug>,1,0>
+                --renderer-probe $<TARGET_FILE:kb_renderer_tests>)
+        set_tests_properties(kb_renderer_assertion_errors PROPERTIES TIMEOUT 60)
+    endif()
     add_test(NAME kb_renderer_editor_ui_view COMMAND $<TARGET_FILE:kb_renderer_tests> editor-ui-view)
     # The committed Vulkan and OpenGL shader binaries, executed on those backends where this
     # machine has a device for them (skipped, with the reason printed, where it has none).
@@ -897,6 +984,20 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         cmake_path(CONVERT "${KB_GRAPH_SHADERC_TOOL}" TO_CMAKE_PATH_LIST _kb_graph_shaderc_tool NORMALIZE)
     endif()
     if(_kb_graph_shaderc_tool)
+        foreach(_kb_graph_node_shard RANGE 0 3)
+            add_test(NAME kb_renderer_graph_shader_node_cook_${_kb_graph_node_shard}
+                COMMAND $<TARGET_FILE:kb_renderer_tests> graph-shader-node-cook ${_kb_graph_node_shard} 4)
+            set_tests_properties(kb_renderer_graph_shader_node_cook_${_kb_graph_node_shard} PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;shader;headless" TIMEOUT 900
+                FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        endforeach()
+        if(WIN32)
+            add_test(NAME kb_renderer_graph_program_lifetime
+                COMMAND $<TARGET_FILE:kb_renderer_tests> graph-program-lifetime)
+            set_tests_properties(kb_renderer_graph_program_lifetime PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 120
+                FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        endif()
         target_compile_definitions(kb_renderer_tests
             PRIVATE
                 KB_TEST_GRAPH_SHADERC_PATH="${_kb_graph_shaderc_tool}"

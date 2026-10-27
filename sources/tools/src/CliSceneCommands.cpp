@@ -1,6 +1,8 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/AssetFileName.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
@@ -123,7 +125,10 @@ struct SceneFileResolution {
     }
 
     const std::filesystem::path projectRoot = arguments.Option("--project").value_or("");
-    if (!sceneOption->empty() && sceneOption->front() == '/') {
+    const bool virtualPath = mountedScene != nullptr
+        ? mountedScene->Assets().Manager().Mounts().Resolve(*sceneOption).has_value()
+        : sceneOption->starts_with("/Game/") || sceneOption->starts_with("/Engine/");
+    if (virtualPath) {
         if (mountedScene == nullptr) {
             resolution.error = "virtual scene paths require --project <dir>";
             return resolution;
@@ -412,6 +417,64 @@ int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
         }
         io.out << "Startup scene: " << target.virtualPath << '\n';
     }
+    return 0;
+}
+
+int RunSceneAudioMixerCommand(const ArgumentList& arguments, CommandIo io) {
+    const auto project = arguments.Option("--project");
+    const auto mixer = arguments.Option("--mixer");
+    const auto snapshot = arguments.Option("--snapshot").value_or("");
+    if (!project.has_value() || !mixer.has_value()) {
+        io.err << "error: audio-mixer assign requires --project <dir> --mixer /Game/<path>.kbmixer|none\n";
+        return 1;
+    }
+    kb::scene::Scene scene;
+    std::string error;
+    if (!MountProjectAssets(scene, kb::assets::Utf8Path(*project), error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const auto resolved = ResolveSceneFile(arguments, &scene);
+    if (!resolved.succeeded) {
+        io.err << "error: " << resolved.error << '\n';
+        return 1;
+    }
+    std::uint64_t mixerId = 0U;
+    std::string selected = "none";
+    if (*mixer != "none") {
+        const auto* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), kb::assets::Utf8Path(*mixer));
+        if (metadata == nullptr) {
+            metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(),
+                ResolveInputPath(kb::assets::Utf8Path(*mixer), kb::assets::Utf8Path(*project)));
+        }
+        if (metadata == nullptr || metadata->type != kb::audio::kAudioMixerAssetType) {
+            io.err << "error: audio mixer asset was not found: " << *mixer << '\n';
+            return 1;
+        }
+        const auto assetId = metadata->id;
+        const auto loaded = scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(assetId);
+        if (!loaded.IsLoaded() || (!snapshot.empty() && loaded->FindSnapshot(snapshot) == nullptr)) {
+            io.err << "error: audio mixer or requested snapshot is invalid\n";
+            return 1;
+        }
+        mixerId = assetId.value;
+        selected = *mixer;
+    } else if (!snapshot.empty()) {
+        io.err << "error: a snapshot requires an audio mixer\n";
+        return 1;
+    }
+    auto loaded = kb::scene::SceneDocumentService::Load(resolved.path);
+    if (!loaded.succeeded) {
+        io.err << "error: scene could not be loaded: " << loaded.error << '\n';
+        return 1;
+    }
+    loaded.document.audioMixerAssetId = mixerId;
+    loaded.document.audioMixerSnapshot = snapshot;
+    if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {
+        io.err << "error: scene audio mixer could not be saved\n";
+        return 1;
+    }
+    io.out << "Audio mixer: " << selected << " snapshot=" << snapshot << '\n';
     return 0;
 }
 

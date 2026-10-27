@@ -14,6 +14,7 @@
 #include "assets/AssetRegistrySnapshotCache.hpp"
 
 #include <string>
+#include <algorithm>
 #include <exception>
 #include <system_error>
 #include <unordered_set>
@@ -125,6 +126,40 @@ bool AssetManager::RegisterAsset(AssetMetadata metadata) {
     return changed;
 }
 
+bool AssetManager::RegisterGeneratedAsset(AssetMetadata metadata) {
+    lastError_.clear();
+    const std::string path = NormalizeAssetPath(metadata.virtualPath);
+    if (!metadata.id.IsValid() || metadata.type.empty() || !path.starts_with("/Runtime/") ||
+        !metadata.physicalPath.empty() || !HasLoaderForType(metadata.type)) {
+        lastError_ = "Generated assets require a loader, an id and a file-less /Runtime/ path";
+        return false;
+    }
+    const bool owned = std::find(generatedAssets_.begin(), generatedAssets_.end(), metadata.id) != generatedAssets_.end();
+    const auto* existing = registry_.Find(metadata.id);
+    if ((!owned && registry_.Find(metadata.id) != nullptr) ||
+        (owned && existing != nullptr && (existing->type != metadata.type || NormalizeAssetPath(existing->virtualPath) != path)) ||
+        (registry_.FindByPath(metadata.virtualPath) != nullptr && registry_.FindByPath(metadata.virtualPath)->id != metadata.id)) {
+        lastError_ = "A generated asset cannot replace another asset";
+        return false;
+    }
+    const AssetId id = metadata.id;
+    if (!registry_.Upsert(std::move(metadata))) return false;
+    if (!owned) generatedAssets_.push_back(id);
+    static_cast<void>(Unload(id));
+    ++revision_;
+    return true;
+}
+
+bool AssetManager::ReleaseGeneratedAsset(AssetId id) {
+    const auto found = std::find(generatedAssets_.begin(), generatedAssets_.end(), id);
+    if (found == generatedAssets_.end()) return false;
+    static_cast<void>(Unload(id));
+    generatedAssets_.erase(found);
+    const bool removed = registry_.Remove(id);
+    if (removed) ++revision_;
+    return removed;
+}
+
 bool AssetManager::MountRuntimePack(std::shared_ptr<bake::RuntimeAssetPack> pack) {
     lastError_.clear();
     if (pack == nullptr || !pack->IsMounted()) {
@@ -160,6 +195,7 @@ bool AssetManager::MountRuntimePack(std::shared_ptr<bake::RuntimeAssetPack> pack
     asyncLoadGenerations_.clear();
     cache_.clear();
     registry_.Clear();
+    generatedAssets_.clear();
     mounts_.Clear();
     for (AssetMetadata& metadata : packaged) {
         if (!registry_.Upsert(std::move(metadata))) {
@@ -541,8 +577,14 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
         asyncLoadErrors_.erase(id.value);
         return true;
     }
-    if (asyncLoads_.contains(id.value)) {
-        return true;
+    if (const auto pending = asyncLoads_.find(id.value); pending != asyncLoads_.end()) {
+        if (pending->second.generation == asyncLoadGenerations_[id.value]) {
+            return true;
+        }
+        // The asset was unloaded while this read was running; PumpAsyncLoads would discard its result. Forget the
+        // record (the running job only writes into its own shared state) so that this new request starts a read
+        // of its own instead of being answered by the one that is already dead.
+        asyncLoads_.erase(pending);
     }
     const AssetMetadata* registered = registry_.Find(id);
     if (registered == nullptr || !registered->runtimeLoadable) {
@@ -609,7 +651,8 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
 
 void AssetManager::QueueAsyncLoad(AsyncLoadJob job) {
     if (asyncLane_ == nullptr) {
-        asyncLane_ = std::make_unique<streaming::BackgroundLane>(streaming::BackgroundLoadService::Shared());
+        asyncLane_ = std::make_unique<streaming::BackgroundLane>(
+            streaming::BackgroundLoadService::Shared(), streaming::BackgroundJobClass::Load, asyncConcurrency_);
     }
     // The lane is closed (cancelled and waited for) before this manager goes, so the job may
     // use it. PrepareAsyncLoad reports every failure through the job's prepared state.
@@ -617,6 +660,22 @@ void AssetManager::QueueAsyncLoad(AsyncLoadJob job) {
         PrepareAsyncLoad(std::move(job));
         return true;
     }));
+}
+
+bool AssetManager::SetAsyncLoadConcurrency(std::uint32_t concurrency) noexcept {
+    if (concurrency == 0U || asyncLane_ != nullptr) {
+        return false;
+    }
+    asyncConcurrency_ = concurrency;
+    return true;
+}
+
+AssetManager::AsyncLoadConcurrencyStats AssetManager::AsyncLoadConcurrency() const noexcept {
+    return AsyncLoadConcurrencyStats{
+        .serializedLoads = serializedLoads_.load(std::memory_order_relaxed),
+        .concurrentLoads = concurrentLoads_.load(std::memory_order_relaxed),
+        .peakSimultaneousLoads = peakActiveLoads_.load(std::memory_order_relaxed),
+    };
 }
 
 void AssetManager::StopAsyncLoads() noexcept {
@@ -688,7 +747,24 @@ void AssetManager::RestartAsyncLoads() {
 void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
     AsyncPreparedAsset prepared;
     try {
-        std::scoped_lock lock{ loaderExecutionMutex_ };
+        std::unique_lock lock{ loaderExecutionMutex_, std::defer_lock };
+        if (!job.loader->AllowsConcurrentLoad()) {
+            lock.lock();
+            serializedLoads_.fetch_add(1U, std::memory_order_relaxed);
+        } else {
+            concurrentLoads_.fetch_add(1U, std::memory_order_relaxed);
+        }
+        // Counted while the loader runs, so the peak is what really ran at the same moment.
+        struct ActiveLoad {
+            AssetManager& manager;
+            explicit ActiveLoad(AssetManager& owner) noexcept : manager(owner) {
+                const std::uint32_t now = manager.activeLoads_.fetch_add(1U, std::memory_order_acq_rel) + 1U;
+                std::uint32_t peak = manager.peakActiveLoads_.load(std::memory_order_relaxed);
+                while (now > peak && !manager.peakActiveLoads_.compare_exchange_weak(peak, now, std::memory_order_relaxed)) {
+                }
+            }
+            ~ActiveLoad() { manager.activeLoads_.fetch_sub(1U, std::memory_order_acq_rel); }
+        } activeLoad{ *this };
         const AssetLoadRequest request{
             .metadata = job.metadata,
             .resolvedPath = job.resolvedPath,
@@ -954,6 +1030,7 @@ void AssetManager::Clear() noexcept {
     asyncLoadGenerations_.clear();
     cache_.clear();
     registry_.Clear();
+    generatedAssets_.clear();
     mounts_.Clear();
     runtimePack_.reset();
     loaders_.clear();

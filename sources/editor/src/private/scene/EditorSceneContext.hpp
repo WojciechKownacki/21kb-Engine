@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/Map2DAsset.hpp"
 #include "engine/scene/SceneTemplates.hpp"
 #include "engine/assets/AssetImportTypes.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
@@ -358,6 +359,8 @@ public:
     [[nodiscard]] bool CanRedoSceneCommand() const noexcept;
     [[nodiscard]] bool UndoSceneCommand();
     [[nodiscard]] bool RedoSceneCommand();
+    [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation, EditorSceneHistoryCommand::AssetFile assetFile = {});
+    [[nodiscard]] bool ExecuteSceneCommand(std::unique_ptr<IEditorCommand> command);
     [[nodiscard]] bool BeginSceneEditTransaction(std::string label);
     [[nodiscard]] bool CommitSceneEditTransaction();
     void CancelSceneEditTransaction();
@@ -819,6 +822,11 @@ public:
     [[nodiscard]] bool SetAudioMixerBusParent(kb::assets::AssetId id, std::string_view name, std::string_view parent);
     [[nodiscard]] bool SetAudioMixerBusVolume(kb::assets::AssetId id, std::string_view name, float volume);
     [[nodiscard]] bool SetAudioMixerBusMute(kb::assets::AssetId id, std::string_view name, bool mute);
+    [[nodiscard]] bool AddAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, kb::audio::AudioDspKind kind);
+    [[nodiscard]] bool RemoveAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect);
+    [[nodiscard]] bool MoveAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, std::size_t index);
+    [[nodiscard]] bool SetAudioMixerEffectField(kb::assets::AssetId id, std::string_view bus, std::string_view effect,
+        std::string_view field, std::string_view value);
     [[nodiscard]] bool AddAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
     [[nodiscard]] bool RemoveAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
     [[nodiscard]] bool RenameAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name, std::string_view replacement);
@@ -1311,6 +1319,9 @@ public:
     // (i.e. any Inspector showing it should repaint). Not undoable (pure cache).
     [[nodiscard]] bool ReloadOpenScriptAsset();
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
+    // A World 2D Map's "Map Camera" (orthographic, from above, primary for Play) and pixel-exact
+    // image settings, as one undoable scene change.
+    [[nodiscard]] bool SetUpMap2DView(kb::scene::SceneEntity mapEntity, const kb::assets::Map2DAsset& map);
     [[nodiscard]] bool RemoveUIComponentFromEntity(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component);
     enum class UIDropdownOptionEdit : std::uint8_t { Add, Remove, Move };
@@ -1394,7 +1405,6 @@ private:
     [[nodiscard]] bool FinalizeActiveTransformEditApply(
         bool changed,
         std::span<const kb::scene::SceneEntity> touched);
-    [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation, EditorSceneHistoryCommand::AssetFile assetFile = {});
     [[nodiscard]] bool ExecuteMaterialAssetEdit(kb::assets::AssetId id, std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit);
     [[nodiscard]] bool RecordMaterialGraphWorkingCopyEdit(
         kb::assets::AssetId id,
@@ -1439,6 +1449,8 @@ private:
     void SurfaceScriptLibraryStartupReport();
     void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();
+    // Switches a plugin that new projects have on by default on for this project too.
+    [[nodiscard]] bool SwitchOnDefaultPlugin(std::string_view pluginId, std::string_view notice);
     [[nodiscard]] bool SaveProjectConfiguration();
     // Records the document the author has open, so reopening the project returns to it.
     void RememberLastOpenMap();
@@ -1452,7 +1464,7 @@ private:
     void InvalidateHierarchyRows() noexcept;
     [[nodiscard]] bool PrefabAssetHasSceneInstances(kb::assets::AssetId id, std::string_view action);
     void RebuildHierarchyRowsIfNeeded() const;
-    void ResetSceneEditState();
+    void ResetSceneEditState(bool clearHistory = true);
     void AdvanceSceneDocumentGeneration() noexcept;
     void SelectFirstSceneEntityOrClear() noexcept;
     [[nodiscard]] bool SaveSceneToPath(const std::filesystem::path& path);
@@ -1548,6 +1560,7 @@ private:
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
+    EditorCommandStack playModeDocumentCommands_;
     // The scene document's undo history, selection and unsaved state, kept aside while a prefab is edited.
     EditorCommandStack documentCommands_;
     std::vector<kb::scene::SceneEntity> documentSelection_;

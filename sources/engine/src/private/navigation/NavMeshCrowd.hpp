@@ -29,6 +29,7 @@ struct NavMeshCrowdAgentOutput {
     float remainingDistance = 0.0F;
     kb::scene::NavPathStatus status = kb::scene::NavPathStatus::Invalid;
     bool onLink = false;
+    bool restorePosition = false;
 };
 
 // A non-carving NavObstacle agents steer around, as a circle in the mesh's space.
@@ -95,6 +96,7 @@ private:
         // The off-mesh link the agent heads for next, and the one it is crossing.
         dtPolyRef nextLink = 0U;
         bool onLink = false;
+        std::optional<NavRuntimeLink> activeLink;
         kb::scene::NavLinkKind linkKind = kb::scene::NavLinkKind::Walk;
         kb::math::Vec3 linkStart{};
         kb::math::Vec3 linkEnd{};

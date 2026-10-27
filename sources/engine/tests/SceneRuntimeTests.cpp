@@ -3,20 +3,58 @@
 #include "SceneSystemTestSuites.hpp"
 #include "TestSuites.hpp"
 #include "TestSupport.hpp"
+#include "engine/ecs/World.hpp"
 
+#include <array>
 #include <atomic>
+#include <iostream>
 #include <cstdlib>
 #include <new>
 #include <string_view>
 
 namespace kb::tests {
+void RunEcsHierarchyDepthTests();
+void RunSceneHierarchyDepthTests();
+void RunPrefabHierarchyDepthTests();
+void RunEcsBatchHierarchyDepthTests();
 void RunScriptNativeHeaderReloadTest();
+void RunModTests();
+void RunScriptAudioMixerTests();
 void RunPhysicsReplayOnlyTest();
+void RunPhysicsOneWayOnlyTest();
 void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
+void RunSceneUIBuildFrameProfile();
+void RunSceneTransformGoldenTests();
 }
 
 namespace {
+
+void RunDeepParentCycleAllocationTest() {
+    kb::ecs::World world;
+    const auto root = world.CreateEntity();
+    auto leaf = root;
+    constexpr std::size_t depth = 256U;
+    for (std::size_t index = 0U; index < depth; ++index) {
+        const auto child = world.CreateEntity();
+        world.SetParent(child, leaf);
+        leaf = child;
+    }
+    kb::tests::BeginAllocationTally();
+    world.SetParent(root, leaf);
+    const auto single = kb::tests::EndAllocationTally();
+    const std::array children{root};
+    const std::array parents{leaf};
+    kb::tests::BeginAllocationTally();
+    world.SetParents(children, parents);
+    const auto batch = kb::tests::EndAllocationTally();
+    std::cout << "ecs_parent_cycle depth=" << depth << " single_allocations=" << single.count
+              << " batch_allocations=" << batch.count << '\n';
+    kb::tests::Require(!world.Parent(root).IsValid() && world.Parent(leaf).IsValid(),
+        "Deep ECS cycle rejection must preserve the original hierarchy");
+    kb::tests::Require(single.count == 0U && batch.count == 0U,
+        "Rejecting a deep parent cycle must not allocate ancestor storage");
+}
 
 bool RunSuite(std::string_view suite) {
     if (suite == "assets") {
@@ -27,24 +65,49 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunAssetPackTests();
     } else if (suite == "content-streaming") {
         kb::tests::RunContentStreamingTests();
+    } else if (suite == "mods") {
+        kb::tests::RunModTests();
     } else if (suite == "save") {
         kb::tests::RunSaveGameTests();
     } else if (suite == "security") {
         kb::tests::RunSecurityTests();
     } else if (suite == "ecs") {
         kb::tests::RunEcsRuntimeTests();
+    } else if (suite == "ecs-relations") {
+        kb::tests::RunEcsRelationTests();
+        RunDeepParentCycleAllocationTest();
+    } else if (suite == "ecs-hierarchy-depth") {
+        kb::tests::RunEcsHierarchyDepthTests();
+    } else if (suite == "scene-hierarchy-depth") {
+        kb::tests::RunSceneHierarchyDepthTests();
+    } else if (suite == "prefab-hierarchy-depth") {
+        kb::tests::RunPrefabHierarchyDepthTests();
+    } else if (suite == "ecs-batch-hierarchy-depth") {
+        kb::tests::RunEcsBatchHierarchyDepthTests();
     } else if (suite == "ecs-native") {
         kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
         kb::tests::RunSceneHierarchyTests();
+    } else if (suite == "scene-parenting") {
+        kb::tests::RunSceneHierarchyParentingTests();
     } else if (suite == "scene-transform-bench") {
         kb::tests::RunTransformWriteBenchmark();
     } else if (suite == "scene-ui") {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {
         kb::tests::RunSceneUIBuildFrameBenchmark();
+    } else if (suite == "scene-ui-profile") {
+        kb::tests::RunSceneUIBuildFrameProfile();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "script-net") {
+        kb::tests::RunScriptNetApiTests();
+    } else if (suite == "scene-system-parallel") {
+        kb::tests::RunSceneSystemParallelTests();
+    } else if (suite == "scene-system-parallel-bench") {
+        kb::tests::RunSceneSystemParallelBenchmark();
+    } else if (suite == "physics-one-way") {
+        kb::tests::RunPhysicsOneWayOnlyTest();
     } else if (suite == "physics-replay") {
         kb::tests::RunPhysicsReplayOnlyTest();
     } else if (suite == "physics-step-spikes") {
@@ -55,6 +118,12 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunAudioSceneSystemTests();
     } else if (suite == "scene-runtime") {
         kb::tests::RunSceneSystemTransformSyncTests();
+    } else if (suite == "scene-transform-lookup") {
+        kb::tests::RunSceneTransformLookupTests();
+    } else if (suite == "scene-transform-golden") {
+        kb::tests::RunSceneTransformGoldenTests();
+    } else if (suite == "scene-single-create") {
+        kb::tests::RunSceneSingleCreateObjectAllocationTest();
     } else if (suite == "scene-prefab") {
         kb::tests::RunScenePrefabTests();
     } else if (suite == "scene-prefab-instantiation") {
@@ -67,8 +136,12 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-save") {
+        kb::tests::RunScriptSaveTests();
     } else if (suite == "script-native-header") {
         kb::tests::RunScriptNativeHeaderReloadTest();
+    } else if (suite == "script-audio-mixer") {
+        kb::tests::RunScriptAudioMixerTests();
     } else if (suite == "script-api") {
         kb::tests::RunScriptApiCatalogTests();
     } else if (suite == "visual-graph") {
@@ -121,8 +194,14 @@ void RunAllSuites() {
     kb::tests::RunAssetPackTests();
     kb::tests::RunContentStreamingTests();
     kb::tests::RunSaveGameTests();
+    kb::tests::RunModTests();
     kb::tests::RunSecurityTests();
     kb::tests::RunEcsRuntimeTests();
+    RunDeepParentCycleAllocationTest();
+    kb::tests::RunEcsHierarchyDepthTests();
+    kb::tests::RunEcsBatchHierarchyDepthTests();
+    kb::tests::RunSceneHierarchyDepthTests();
+    kb::tests::RunPrefabHierarchyDepthTests();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
     kb::tests::RunSceneSystemTests();
@@ -182,7 +261,19 @@ void* operator new(std::size_t size) {
     throw std::bad_alloc{};
 }
 
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try {
+        return ::operator new(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void operator delete(void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
 void operator delete(void* memory) noexcept { std::free(memory); }
+#if !defined(_MSC_VER)
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+#endif
 
 int main(int argc, char** argv) {
     if (argc <= 1) {

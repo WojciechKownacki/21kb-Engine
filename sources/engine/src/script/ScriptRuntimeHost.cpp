@@ -50,6 +50,8 @@ public:
     void OnUpdate(kb::scene::SceneSystemContext& context) override;
     void OnFixedUpdate(kb::scene::SceneSystemContext& context) override;
     void OnDestroy(kb::scene::SceneSystemContext& context) override;
+    void ExecuteShutdown(kb::scene::Scene& scene, float deltaSeconds);
+    [[nodiscard]] ScriptRuntimeSceneSystem& System() noexcept { return system_; }
     [[nodiscard]] bool RequiresFixedStep() const override { return system_.RequiresFixedStep(); }
     [[nodiscard]] kb::scene::SceneUpdatePhase UpdatePhase() const noexcept override { return system_.UpdatePhase(); }
     [[nodiscard]] kb::scene::SceneFixedUpdatePhase FixedUpdatePhase() const noexcept override { return system_.FixedUpdatePhase(); }
@@ -91,7 +93,7 @@ struct ScriptRuntimeHostState final {
     // the scene runtime) so the host can drive its shutdown lifecycle (fire
     // Destroyed) on demand — e.g. when the editor stops play — without tearing
     // the system down. Set by the system's constructor, cleared by its destructor.
-    ScriptRuntimeSceneSystem* installedSceneSystem = nullptr;
+    ScriptRuntimeHostSceneSystem* installedSceneSystem = nullptr;
     // Per-frame script diagnostics (compile/behaviour errors) that
     // ExecuteFrame/PrepareScene would otherwise drop; drained by the host so
     // the editor can surface why a behaviour is not running. De-duplicated so a
@@ -106,11 +108,11 @@ ScriptRuntimeHostSceneSystem::ScriptRuntimeHostSceneSystem(std::shared_ptr<Scrip
     : state_(std::move(state))
     , system_(state_->runtime, state_->assetPreparer) {
     system_.SetFrameSettings(state_->frameSettings);
-    state_->installedSceneSystem = &system_;
+    state_->installedSceneSystem = this;
 }
 
 ScriptRuntimeHostSceneSystem::~ScriptRuntimeHostSceneSystem() {
-    if (state_ != nullptr && state_->installedSceneSystem == &system_) {
+    if (state_ != nullptr && state_->installedSceneSystem == this) {
         state_->installedSceneSystem = nullptr;
     }
 }
@@ -137,6 +139,12 @@ void ScriptRuntimeHostSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& 
 
 void ScriptRuntimeHostSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     system_.OnDestroy(context);
+    CollectDiagnostics();
+}
+
+void ScriptRuntimeHostSceneSystem::ExecuteShutdown(kb::scene::Scene& scene, float deltaSeconds) {
+    static_cast<void>(system_.ExecuteShutdown(scene, deltaSeconds));
+    CollectDiagnostics();
 }
 
 // The script file a behaviour refers to, or why there is none: a reference to a moved, renamed or
@@ -234,11 +242,11 @@ std::vector<std::string> ScriptRuntimeHost::DrainSceneSystemDiagnostics() {
 }
 
 const ScriptRuntimeExecutionResult* ScriptRuntimeHost::InstalledSceneSystemLastResult() const noexcept {
-    return state_->installedSceneSystem == nullptr ? nullptr : &state_->installedSceneSystem->LastResult();
+    return state_->installedSceneSystem == nullptr ? nullptr : &state_->installedSceneSystem->System().LastResult();
 }
 
 const ScriptRuntimeAssetPrepareResult* ScriptRuntimeHost::InstalledSceneSystemLastPrepareResult() const noexcept {
-    return state_->installedSceneSystem == nullptr ? nullptr : &state_->installedSceneSystem->LastPrepareResult();
+    return state_->installedSceneSystem == nullptr ? nullptr : &state_->installedSceneSystem->System().LastPrepareResult();
 }
 
 const std::vector<kb::library::EngineLibraryModuleReportEntry>& ScriptRuntimeHost::LibraryStartupReport() const noexcept {
@@ -261,7 +269,7 @@ bool ScriptRuntimeHost::DispatchShutdownLifecycle(float deltaSeconds) {
     if (state_->installedSceneSystem == nullptr) {
         return false;
     }
-    static_cast<void>(state_->installedSceneSystem->ExecuteShutdown(state_->scene, deltaSeconds));
+    state_->installedSceneSystem->ExecuteShutdown(state_->scene, deltaSeconds);
     return true;
 }
 

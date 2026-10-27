@@ -194,6 +194,11 @@ proxies.
 Given the same sequence of source positions, layer switches and budgets, and the same completion
 order of the loads, the runtime makes the same decisions in the same order.
 
+Completion events for independent cells can interleave as asynchronous work
+finishes. Replay tests compare the global decision order, every cell's complete
+ordered lifecycle, and the cells, entity counts and resource accounting after
+each settled source position.
+
 ## Building and packaging
 
 The build turns the object files into cell scenes (`.21kbscene` with `.meta`), HLOD proxies and the

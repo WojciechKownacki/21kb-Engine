@@ -12,6 +12,17 @@
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "docking/EditorDockModel.hpp"
+#include "Sprite2DRuntime.hpp"
+#include "Map2DView.hpp"
+#include "app/scene_viewport/EditorSceneViewportSelectionController.hpp"
+#ifdef DrawText
+#undef DrawText
+#endif
+#include "engine/scene/Sprite2DComponent.hpp"
+#include "assets/EditorAssetReimport.hpp"
+#include "kb/editor/docking/DockTypes.hpp"
+#include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "engine/scene/SceneTemplates.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -50,7 +61,9 @@
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTilemapRuntime.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -102,7 +115,11 @@
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/SceneObject.hpp"
+#include "scene/EditorMap2DService.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
@@ -115,6 +132,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <array>
 #include <atomic>
 #include <ranges>
@@ -169,7 +187,11 @@ struct ScenarioState {
     std::filesystem::path fixtureRoot;
     std::unordered_map<std::string, EntityAlias> entities;
     std::unordered_map<std::string, kb::assets::AssetId> assets;
+    std::unordered_map<std::string, kb::scene::MeshRendererComponent> rememberedMeshes;
     std::unordered_map<std::string, std::uint32_t> materialNodes;
+    // The dock workspace the workspace_* steps arrange, and the layouts saved by name.
+    EditorDockModel dock;
+    std::unordered_map<std::string, std::string> savedWorkspaces;
 };
 
 class ScopedProjectFile final {
@@ -448,6 +470,9 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     }
     if (component == "TerrainEditor") {
         return EditorTerrainService::IsTerrainEntity(scene, entity);
+    }
+    if (component == "World2DMap") {
+        return EditorMap2DService::IsMapEntity(scene, entity);
     }
     if (const kb::scene::UIComponentDescriptor* descriptor =
             kb::scene::FindUIComponentDescriptor(component);
@@ -1173,6 +1198,165 @@ ReadScriptValue(
     return std::nullopt;
 }
 
+// The editor's dock workspace as a scenario can drive it: float and close panels, save the arrangement under a name or
+// into a project file, reset to the default, restore a saved one, and check which panels are visible, hidden or
+// floating, and that every visible docked panel still has a place at the given window sizes.
+[[nodiscard]] const DockPanel* FindPanelByTitle(const EditorDockModel& dock, std::string_view title) {
+    for (const DockPanel& panel : dock.Queries().Panels()) {
+        if (panel.title == title) return &panel;
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool StringArrayMember(
+    const JsonValue& step, std::string_view name, std::vector<std::string>& output, std::string& error) {
+    const JsonValue* array = step.Find(name);
+    if (array == nullptr) return true;
+    if (array->GetKind() != JsonValue::Kind::Array) {
+        error = "'" + std::string{ name } + "' must be an array of panel titles";
+        return false;
+    }
+    for (std::size_t index = 0U; index < array->Size(); ++index) {
+        const JsonValue* item = array->At(index);
+        if (item == nullptr || item->GetKind() != JsonValue::Kind::String) {
+            error = "'" + std::string{ name } + "' must hold only strings";
+            return false;
+        }
+        output.push_back(item->AsString());
+    }
+    return true;
+}
+
+[[nodiscard]] std::optional<StepOutcome> ExecuteWorkspaceStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    if (operation == "workspace_float" || operation == "workspace_close") {
+        const auto title = StringMember(step, "panel", error);
+        if (!title) return StepOutcome{ false, error };
+        const DockPanel* panel = FindPanelByTitle(state.dock, *title);
+        if (panel == nullptr) return StepOutcome{ false, "no panel titled '" + *title + "'" };
+        const std::uint32_t id = panel->id;
+        if (operation == "workspace_close") {
+            return StepOutcome{ state.dock.Commands().ClosePanel(id), "closed " + *title };
+        }
+        const int x = static_cast<int>(NumberMember(step, "x", error, false).value_or(220.0));
+        const int y = static_cast<int>(NumberMember(step, "y", error, false).value_or(180.0));
+        const int width = static_cast<int>(NumberMember(step, "width", error, false).value_or(900.0));
+        const int height = static_cast<int>(NumberMember(step, "height", error, false).value_or(640.0));
+        if (!error.empty()) return StepOutcome{ false, error };
+        state.dock.Commands().UndockPanel(id, DockRect{ x, y, width, height });
+        const DockPanel* floated = state.dock.Queries().FindPanel(id);
+        return StepOutcome{ floated != nullptr && floated->area == DockArea::Floating, "floated " + *title };
+    }
+    if (operation == "workspace_save") {
+        const auto slot = StringMember(step, "slot", error);
+        const auto file = StringMember(step, "file", error, false);
+        if (!slot) return StepOutcome{ false, error };
+        error.clear();
+        const std::string text = state.dock.Commands().SerializeWorkspace();
+        state.savedWorkspaces[*slot] = text;
+        if (file) {
+            const auto resolved = ResolveProjectPath(*file, error);
+            if (!resolved) return StepOutcome{ false, error };
+            std::error_code fileError;
+            std::filesystem::create_directories(resolved->parent_path(), fileError);
+            std::ofstream output(*resolved, std::ios::binary | std::ios::trunc);
+            output << text << '\n';
+            if (!output.good()) return StepOutcome{ false, "the layout file could not be written" };
+        }
+        return StepOutcome{ !text.empty(), "saved '" + *slot + "' (" + std::to_string(text.size()) + " bytes)" };
+    }
+    if (operation == "workspace_reset") {
+        state.dock.Commands().ResetWorkspace();
+        return StepOutcome{ true, "default workspace restored" };
+    }
+    if (operation == "workspace_restore") {
+        const auto slot = StringMember(step, "slot", error, false);
+        const auto file = StringMember(step, "file", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        std::string text;
+        if (slot) {
+            const auto saved = state.savedWorkspaces.find(*slot);
+            if (saved == state.savedWorkspaces.end()) return StepOutcome{ false, "no saved layout named '" + *slot + "'" };
+            text = saved->second;
+        } else if (file) {
+            const auto resolved = ResolveProjectPath(*file, error);
+            if (!resolved) return StepOutcome{ false, error };
+            text = ReadText(*resolved, error);
+            if (!error.empty()) return StepOutcome{ false, error };
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+        } else {
+            return StepOutcome{ false, "restore needs 'slot' or 'file'" };
+        }
+        const bool restored = state.dock.Commands().RestoreWorkspace(text);
+        return StepOutcome{ restored, restored ? "layout restored" : "the layout text was refused" };
+    }
+    if (operation == "assert_workspace") {
+        std::vector<std::string> visible;
+        std::vector<std::string> hidden;
+        std::vector<std::string> floating;
+        if (!StringArrayMember(step, "visible", visible, error) || !StringArrayMember(step, "hidden", hidden, error) ||
+            !StringArrayMember(step, "floating", floating, error)) {
+            return StepOutcome{ false, error };
+        }
+        const auto sameAs = StringMember(step, "same_as_slot", error, false);
+        const auto differsFrom = StringMember(step, "differs_from_slot", error, false);
+        const auto fitsWidth = UInt32Member(step, "fits_width", error, false);
+        const auto fitsHeight = UInt32Member(step, "fits_height", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        for (const std::string& title : visible) {
+            const DockPanel* panel = FindPanelByTitle(state.dock, title);
+            if (panel == nullptr || !panel->visible) return StepOutcome{ false, "'" + title + "' should be visible" };
+        }
+        for (const std::string& title : hidden) {
+            const DockPanel* panel = FindPanelByTitle(state.dock, title);
+            if (panel == nullptr || panel->visible) return StepOutcome{ false, "'" + title + "' should be hidden" };
+        }
+        for (const std::string& title : floating) {
+            const DockPanel* panel = FindPanelByTitle(state.dock, title);
+            if (panel == nullptr || panel->area != DockArea::Floating || !panel->visible) {
+                return StepOutcome{ false, "'" + title + "' should be floating" };
+            }
+        }
+        const std::string current = state.dock.Commands().SerializeWorkspace();
+        if (sameAs) {
+            const auto saved = state.savedWorkspaces.find(*sameAs);
+            if (saved == state.savedWorkspaces.end() || saved->second != current) {
+                return StepOutcome{ false, "the layout differs from '" + *sameAs + "'" };
+            }
+        }
+        if (differsFrom) {
+            const auto saved = state.savedWorkspaces.find(*differsFrom);
+            if (saved == state.savedWorkspaces.end() || saved->second == current) {
+                return StepOutcome{ false, "the layout should differ from '" + *differsFrom + "'" };
+            }
+        }
+        std::size_t placed = 0U;
+        if (fitsWidth && fitsHeight) {
+            // A resize or a change of screen must not lose a panel: each visible docked panel has a frame in the layout.
+            const EditorMetrics metrics{};
+            const DockLayout layout = state.dock.Queries().BuildLayout(
+                static_cast<int>(*fitsWidth), static_cast<int>(*fitsHeight), metrics.menuHeight, metrics.toolbarHeight,
+                metrics.tabStripHeight, metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
+            for (const DockPanel& panel : state.dock.Queries().Panels()) {
+                if (!panel.visible || panel.area == DockArea::Floating) continue;
+                const bool found = std::ranges::any_of(layout.panels, [&](const DockPanelLayout& entry) { return entry.panelId == panel.id; });
+                if (!found) return StepOutcome{ false, "'" + panel.title + "' has no place at " + std::to_string(*fitsWidth) + "x" + std::to_string(*fitsHeight) };
+                ++placed;
+            }
+        }
+        return StepOutcome{ true, "panels=" + std::to_string(state.dock.Queries().Panels().size()) + " placed=" + std::to_string(placed) };
+    }
+    return std::nullopt;
+}
+
+// Steps that put data in place outside the editor's own controls (a file written or copied into the project). They are
+// listed in the report so a scenario that needs many of them shows how much the authoring path leaves undone.
+[[nodiscard]] bool IsWorkaroundOperation(std::string_view operation) noexcept {
+    return operation == "copy_fixture" || operation == "write_file" || operation == "touch" || operation == "write_pcm_wave" ||
+        operation == "copy_asset";
+}
+
 [[nodiscard]] StepOutcome ExecuteStep(
     ScenarioState& state, const JsonValue& step) {
     std::string error;
@@ -1187,10 +1371,52 @@ ReadScriptValue(
     if (std::optional<StepOutcome> navigation = ExecuteNavigationStep(state, step, *operation)) {
         return *navigation;
     }
+    if (std::optional<StepOutcome> workspace = ExecuteWorkspaceStep(state, step, *operation)) {
+        return *workspace;
+    }
     if (std::optional<StepOutcome> postProcess = ExecutePostProcessStep(state, step, *operation)) {
         return *postProcess;
     }
 
+    if (*operation == "sprite2d_image") {
+        // Chooses the picture of a Sprite 2D from a project asset, as one undoable change that also records the picture's size.
+        const auto alias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        if (!alias || !asset) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetMetadata* metadata = state.context.Scene().Assets().Manager().Registry().Find(ResolveAsset(state, *asset));
+        if (!state.context.Scene().Entities().IsAlive(entity) || metadata == nullptr) return { false, "the sprite entity or the picture asset was not found" };
+        const bool changed = state.context.ExecuteSceneCommand("Set Sprite Image", [&] {
+            return kb::world2d::AssignSprite2DImage(state.context.Scene(), entity, metadata);
+        });
+        const kb::scene::Sprite2DComponent* sprite = state.context.Scene().Components().Sprites2D().TryGet(entity);
+        return { changed && sprite != nullptr && sprite->imageAssetId == metadata->id.value,
+            sprite == nullptr ? "no sprite" : std::to_string(sprite->imageWidth) + "x" + std::to_string(sprite->imageHeight) + " px" };
+    }
+    if (*operation == "pick_generated_visual") {
+        // A click in the Scene View lands on the generated picture of a sprite; it must select the sprite's object, as it does for
+        // a tile map layer. The picture is the entity's child that carries a transient mesh.
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity owner = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(owner)) return { false, "entity alias is not alive" };
+        kb::scene::SceneEntity visual{};
+        for (const kb::scene::SceneEntity child : state.context.Scene().Hierarchy().ChildEntities(owner)) {
+            const auto* renderer = std::as_const(state.context.Scene()).Components().MeshRenderers().TryGet(child);
+            if (renderer != nullptr && renderer->transient) visual = child;
+        }
+        if (!visual.IsValid()) return { false, "the entity has no generated picture (play, or look at the scene once, first)" };
+        state.context.ClearHierarchySelection();
+        EditorSceneViewportSelectionController::ApplyClick(state.context, visual, EditorSceneViewportSelectionMode::Replace);
+        return { state.context.SelectedEntity() == owner, state.context.SelectedEntity() == owner ? "the sprite is selected" : "the click selected another object" };
+    }
+    if (*operation == "exact_colors") {
+        // The image settings pixel art wants: no tonemapping or automatic exposure, as the 2D map view sets up.
+        const bool assigned = state.context.ExecuteSceneCommand("Use Exact Colors", [&] {
+            return kb::world2d::UseExactColors(state.context.Scene(), EditorProjectPaths::AssetsRoot());
+        });
+        return { assigned, assigned ? "pixel-exact image settings assigned" : "the scene already has image settings or they could not be written" };
+    }
     if (*operation == "verify_prefab_round_trip") {
         return {state.automation.VerifyPrefabRoundTrip(), "Prefab create, place, override, apply, save, reopen, play, stop and undo keep the asset link"};
     }
@@ -2199,6 +2425,9 @@ ReadScriptValue(
             NumberMember(step, "min_size", error, false).value_or(0.0);
         const auto contains =
             StringMember(step, "contains", error, false);
+        // The text the file must not hold: proves an edit stayed in the file it was meant for.
+        const auto notContains =
+            StringMember(step, "not_contains", error, false);
         if (!error.empty() || minimum < 0.0 ||
             std::floor(minimum) != minimum) {
             return { false, error.empty()
@@ -2225,6 +2454,14 @@ ReadScriptValue(
                 text.find(*contains) == std::string::npos) {
                 return { false, readError.empty()
                     ? "file text was not found" : readError };
+            }
+        }
+        if (notContains.has_value()) {
+            std::string readError;
+            const std::string text = ReadText(*resolved, readError);
+            if (!readError.empty() || text.find(*notContains) != std::string::npos) {
+                return { false, readError.empty()
+                    ? "file holds text it must not hold" : readError };
             }
         }
         return { true, std::to_string(size) + " byte(s)" };
@@ -2299,15 +2536,54 @@ ReadScriptValue(
         return { imported != refused, sourcePath->string() };
     }
 
+    // "reimport_asset": the changed source replaces an imported model in place (Project Files > Reimport...). "on_conflict" is what to do with
+    // textures and materials edited since the import: report (default; nothing changes), keep_local or overwrite. "dry_run" plans only.
+    // "expect" is the outcome: updated (default), reused, conflict (refused over edits), failed; "conflicts" is how many edited assets the
+    // result names.
+    if (*operation == "reimport_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto source = StringMember(step, "source", error);
+        if (!asset || !source) return { false, error };
+        const auto sourcePath = ResolveProjectPath(*source, error);
+        if (!sourcePath) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetImportOptions options = EditorAssetReimport::OptionsOf(state.context.Scene().Assets().Manager(), id);
+        const std::string policy = StringMember(step, "on_conflict", error, false).value_or("report");
+        if (policy == "report") options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Report;
+        else if (policy == "keep_local") options.conflictPolicy = kb::assets::AssetImportConflictPolicy::KeepLocal;
+        else if (policy == "overwrite") options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Overwrite;
+        else return { false, "on_conflict must be report, keep_local or overwrite" };
+        options.dryRun = BoolMember(step, "dry_run", error, false).value_or(false);
+        const EditorAssetReimport::Outcome outcome = EditorAssetReimport::Run(state.context, id, *sourcePath, options);
+        const kb::assets::AssetImportItemResult& item = outcome.item;
+        const char* word = item.status == kb::assets::AssetImportItemStatus::Failed || item.status == kb::assets::AssetImportItemStatus::Missing
+            ? (item.conflicts.empty() ? "failed" : "conflict")
+            : (item.status == kb::assets::AssetImportItemStatus::Updated ? "updated" : "reused");
+        const std::string expect = StringMember(step, "expect", error, false).value_or("updated");
+        bool ok = expect == word;
+        if (const auto conflicts = NumberMember(step, "conflicts", error, false)) ok = ok && static_cast<double>(item.conflicts.size()) == *conflicts;
+        return { ok, std::string{ word } + ": " + std::to_string(item.changes.size()) + " asset(s) planned, " + std::to_string(item.conflicts.size()) + " edited" +
+            (item.error.empty() ? std::string{} : " (" + item.error + ")") };
+    }
+
+    // "undo_reimport": Undo Last Reimport, the files of the newest backup put back.
+    if (*operation == "undo_reimport") {
+        const bool expectFailure = BoolMember(step, "expect_nothing", error, false).value_or(false);
+        const bool undone = EditorAssetReimport::UndoLast(state.context);
+        return { undone != expectFailure, undone ? "restored" : "nothing to undo" };
+    }
+
     if (*operation == "create_entity") {
         const auto alias = StringMember(step, "id", error);
         const auto name = StringMember(step, "name", error, false);
+        const auto preset = StringMember(step, "preset", error, false);
+        const auto selectedAlias = StringMember(step, "selected_id", error, false);
         if (!alias) return { false, error };
         if (state.entities.contains(*alias)) {
             return { false, "entity alias already exists" };
         }
         const kb::scene::SceneEntity entity =
-            state.context.CreateHierarchyObject();
+            state.context.CreateMenuObject(preset.value_or("Empty"));
         if (!entity.IsValid()) {
             return { false, "entity creation failed" };
         }
@@ -2319,6 +2595,10 @@ ReadScriptValue(
             EntityAlias{
                 .entity = entity,
                 .name = state.context.Scene().Entities().Name(entity) });
+        if (selectedAlias) {
+            const auto selected = state.context.SelectedEntity();
+            state.entities.emplace(*selectedAlias, EntityAlias{ .entity = selected, .name = state.context.Scene().Entities().Name(selected) });
+        }
         return { true, *alias + '=' + std::to_string(entity.Id()) };
     }
 
@@ -2665,6 +2945,13 @@ ReadScriptValue(
         if (!state.context.Scene().Entities().IsAlive(entity)) {
             return { false, "entity alias is not alive" };
         }
+        if (*component == "World2DMap" || *component == "MeshRenderer") {
+            state.context.SelectEntity(entity);
+            const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap : InspectorSectionId::MeshRenderer;
+            const bool clicked = state.automation.InspectorClickRow(InspectorPropertyId::ComponentRemove, -1,
+                InspectorHitKind::ComponentMenuButton, section);
+            return { clicked && !HasAuthoredComponent(state.context.Scene(), entity, *component), *component };
+        }
         if (*component == "SkeletonBinding") {
             return { state.context.RemoveSkeletonBindingFromEntity(entity), *component };
         }
@@ -2672,6 +2959,26 @@ ReadScriptValue(
             return { state.context.RemoveDeformedGeometryFromEntity(entity), *component };
         }
         return { false, "component cannot be removed by this operation" };
+    }
+
+    if (*operation == "remember_mesh_renderer" || *operation == "assert_mesh_renderer_unchanged") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto* mesh = std::as_const(state.context.Scene()).Components().MeshRenderers().TryGet(ResolveEntity(state, *alias));
+        if (!mesh) return {false, "mesh renderer is missing"};
+        if (*operation == "remember_mesh_renderer") {
+            state.rememberedMeshes[*alias] = *mesh;
+            return {true, "remembered authored mesh renderer"};
+        }
+        const auto found = state.rememberedMeshes.find(*alias);
+        if (found == state.rememberedMeshes.end()) return {false, "mesh renderer was not remembered"};
+        const auto& saved = found->second;
+        const bool same = mesh->meshAssetId == saved.meshAssetId && mesh->materialAssetId == saved.materialAssetId &&
+            mesh->materialSlotAssetIds == saved.materialSlotAssetIds && mesh->materialSlotOverrideCount == saved.materialSlotOverrideCount &&
+            mesh->castsShadow == saved.castsShadow && mesh->receivesShadow == saved.receivesShadow && mesh->layer == saved.layer &&
+            mesh->materialInstanceHandle == saved.materialInstanceHandle && mesh->previewHidden == saved.previewHidden &&
+            mesh->shadowOnly == saved.shadowOnly && mesh->transient == saved.transient;
+        return {same, same ? "authored mesh renderer remains unchanged and visible" : "authored mesh renderer changed"};
     }
 
     if (*operation == "terrain_stamp") {
@@ -3693,6 +4000,25 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(nodeId) };
     }
 
+    if (*operation == "focus_material_node") {
+        const auto alias = StringMember(step, "node", error);
+        if (!alias) return { false, error };
+        const auto node = state.materialNodes.find(*alias);
+        return { node != state.materialNodes.end() && state.context.FocusMaterialGraphNode(node->second), *alias };
+    }
+
+    if (*operation == "assert_material_node_count") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto kindText = StringMember(step, "kind", error);
+        const auto expected = UInt32Member(step, "count", error);
+        if (!asset || !kindText || !expected) return { false, error };
+        const auto kind = kb::render::ParseRenderMaterialGraphNodeKind(*kindText);
+        const auto document = state.context.ReadMaterialDocumentAsset(ResolveAsset(state, *asset));
+        if (!kind || !document) return { false, "asset or node kind is invalid" };
+        const auto count = std::ranges::count(document->graph.nodes, *kind, &kb::render::RenderMaterialGraphNode::kind);
+        return { count == *expected, "node count=" + std::to_string(count) };
+    }
+
     if (*operation == "connect_material_nodes") {
         const auto asset = StringMember(step, "asset", error);
         const auto from = StringMember(step, "from", error);
@@ -4475,6 +4801,8 @@ ReadScriptValue(
                 parsedPhase = kb::input::InputTouchPhase::Moved;
             } else if (*phase == "ended") {
                 parsedPhase = kb::input::InputTouchPhase::Ended;
+            } else if (*phase == "cancelled") {
+                parsedPhase = kb::input::InputTouchPhase::Cancelled;
             } else {
                 return { false, "invalid touch phase" };
             }
@@ -4562,6 +4890,174 @@ ReadScriptValue(
                 static_cast<std::size_t>(*frames),
                 static_cast<float>(delta)),
             std::to_string(*frames) + " editor particle frame(s)" };
+    }
+
+    if (*operation == "verify_particle_depth_authoring") {
+        using Property = kb::particle_editor::ParticleEditorProperty;
+        const auto inspector = state.context.ParticleEditorInspector();
+        const auto row = std::find_if(inspector.properties.begin(), inspector.properties.end(), [](const auto& value) {
+            return value.property == Property::OutputScreenDepthCollision;
+        });
+        if (row == inspector.properties.end() || row->boolValue) return {false, "expected a disabled screen-depth toggle"};
+        const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
+        if (!state.context.EditParticleEditorProperty(index, "true")) return {false, "screen-depth toggle was rejected"};
+        const auto enabled = state.context.ParticleEditorInspector();
+        const bool warning = std::any_of(enabled.diagnostics.begin(), enabled.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.propertyPath.ends_with(".screenDepthCollision") &&
+                diagnostic.severity == kb::scene::ParticleEffectDiagnosticSeverity::Warning;
+        });
+        const bool requested = state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        const bool disabled = state.context.EditParticleEditorProperty(index, "false") &&
+            !state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        const bool undone = state.context.UndoParticleEditorCommand() &&
+            state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        const bool redone = state.context.RedoParticleEditorCommand() &&
+            !state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        return {requested && warning && disabled && undone && redone,
+            "screen-depth requested=" + std::to_string(requested) + " warning=" + std::to_string(warning) +
+                " disabled=" + std::to_string(disabled) + " undo=" + std::to_string(undone) + " redo=" + std::to_string(redone)};
+    }
+
+    if (*operation == "verify_particle_contact_authoring") {
+        const auto original = *state.context.ParticleEditorWorkingAsset();
+        if (!state.context.AddParticleEditorModule(kb::scene::ParticleModuleType::CollisionPlane, 0U))
+            return {false, "collision module could not be added"};
+        const auto inspector = state.context.ParticleEditorInspector();
+        const auto row = std::find_if(inspector.properties.begin(), inspector.properties.end(), [](const auto& value) {
+            return value.property == kb::particle_editor::ParticleEditorProperty::ModulePayload && value.payloadField == 5U;
+        });
+        if (row == inspector.properties.end() || row->widget != kb::particle_editor::ParticleEditorPropertyWidget::Toggle || row->boolValue)
+            return {false, "expected a disabled kill-on-contact toggle"};
+        const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
+        const auto killed = [&] {
+            const auto* asset = state.context.ParticleEditorWorkingAsset();
+            for (const auto& emitter : asset->emitters) {
+                for (const auto& module : emitter.modules) {
+                    if (module.type == kb::scene::ParticleModuleType::CollisionPlane)
+                        return std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact;
+                }
+            }
+            return false;
+        };
+        const bool enabled = state.context.EditParticleEditorProperty(index, "true") && killed();
+        const bool undone = state.context.UndoParticleEditorCommand() && !killed();
+        const bool redone = state.context.RedoParticleEditorCommand() && killed();
+        const bool restored = state.context.ApplyParticleEditorWorkingCopy(original);
+        return {enabled && undone && redone && restored,
+            "contact enabled=" + std::to_string(enabled) + " undo=" + std::to_string(undone) +
+                " redo=" + std::to_string(redone) + " restored=" + std::to_string(restored)};
+    }
+
+    if (*operation == "verify_particle_ordered_motion") {
+        const auto original = *state.context.ParticleEditorWorkingAsset();
+        auto candidate = original;
+        candidate.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        if (!state.context.ApplyParticleEditorWorkingCopy(candidate)) return {false, "GPU preview policy was rejected"};
+        using Type = kb::scene::ParticleModuleType;
+        const std::array types{Type::Noise, Type::AxisRotation, Type::Attraction, Type::Noise, Type::AxisRotation, Type::Attraction};
+        kb::scene::ParticleStableId first = 0U;
+        for (const auto type : types) {
+            if (!state.context.AddParticleEditorModule(type, 0U)) return {false, "repeatable motion module was rejected"};
+            const auto selected = state.context.ParticleEditorWorkspace().SelectedModuleId();
+            if (first == 0U) first = selected;
+            const auto inspector = state.context.ParticleEditorInspector();
+            const auto row = std::find_if(inspector.properties.begin(), inspector.properties.end(), [selected](const auto& value) {
+                return value.moduleId == selected && value.property == kb::particle_editor::ParticleEditorProperty::ModulePayload &&
+                    value.payloadField == 0U;
+            });
+            if (row == inspector.properties.end()) return {false, "motion property control is missing"};
+            const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
+            if (!state.context.EditParticleEditorProperty(index, type == Type::Noise ? "0.7" : "1 2 3"))
+                return {false, "motion property edit was rejected"};
+        }
+        const bool moved = state.context.MoveParticleEditorModule(first, 7U);
+        const bool undone = moved && state.context.UndoParticleEditorCommand();
+        const bool redone = undone && state.context.RedoParticleEditorCommand();
+        const bool preview = state.automation.PresentParticlePreview() &&
+            state.context.TickParticleEditorPreview(1.0F / 60.0F) && state.automation.PresentParticlePreview();
+        const auto inspector = state.context.ParticleEditorInspector();
+        const bool gpu = inspector.execution && inspector.execution->path == kb::particles::ParticleEmitterSimulationPath::Gpu &&
+            inspector.execution->reason == kb::particles::ParticleGpuFallbackReason::None;
+        const bool restored = state.context.ApplyParticleEditorWorkingCopy(original);
+        return {moved && undone && redone && preview && gpu && restored,
+            "ordered motion move=" + std::to_string(moved) + " undo=" + std::to_string(undone) + " redo=" +
+                std::to_string(redone) + " preview=" + std::to_string(preview) + " gpu=" + std::to_string(gpu)};
+    }
+
+    if (*operation == "verify_particle_emitter_material") {
+        const auto* original = state.context.ParticleEditorWorkingAsset();
+        const auto* shared = state.context.Scene().Assets().Manager().Registry().FindByPath(
+            "/21kbParticle/Materials/DefaultParticle.kbmat");
+        if (original == nullptr || original->emitters.size() != 1U || shared == nullptr)
+            return {false, "expected a new project effect and shared material"};
+        const auto local = original->emitters.front().output.material;
+        const auto selectedMaterial = [&] {
+            const auto* asset = state.context.ParticleEditorWorkingAsset();
+            const auto selected = state.context.ParticleEditorWorkspace().SelectedEmitterId();
+            const auto found = std::find_if(asset->emitters.begin(), asset->emitters.end(),
+                [selected](const auto& emitter) { return emitter.emitterId == selected; });
+            return found == asset->emitters.end() ? kb::scene::ParticleAssetReference{} : found->output.material;
+        };
+        if (!state.context.AddParticleEditorEmitter(shared->id)) return {false, "explicit emitter material failed"};
+        const auto explicitId = state.context.ParticleEditorWorkspace().SelectedEmitterId();
+        const auto explicitMaterial = selectedMaterial();
+        const bool explicitMatches = explicitMaterial.assetId == shared->id.value &&
+            explicitMaterial.virtualPath == shared->virtualPath.generic_string();
+        if (!state.context.AddParticleEditorEmitter({})) return {false, "selected emitter material failed"};
+        const auto inherited = selectedMaterial();
+        const bool selectedMatches = inherited.assetId == explicitMaterial.assetId &&
+            inherited.virtualPath == explicitMaterial.virtualPath;
+        if (!state.context.RemoveParticleEditorEmitter(state.context.ParticleEditorWorkspace().SelectedEmitterId()) ||
+            !state.context.RemoveParticleEditorEmitter(explicitId) || !state.context.AddParticleEditorEmitter({}))
+            return {false, "local material fixture could not be restored"};
+        const auto projectMaterial = selectedMaterial();
+        const bool projectMatches = projectMaterial.assetId == local.assetId && projectMaterial.virtualPath == local.virtualPath &&
+            projectMaterial.virtualPath.starts_with("/Game/");
+        const bool saved = state.context.SaveParticleEditorAsset();
+        return {explicitMatches && selectedMatches && projectMatches && saved,
+            "emitter materials: explicit=" + std::to_string(explicitMatches) + " selected=" +
+                std::to_string(selectedMatches) + " project=" + std::to_string(projectMatches) + " saved=" + std::to_string(saved)};
+    }
+
+    if (*operation == "verify_particle_execution") {
+        const auto* current = state.context.ParticleEditorWorkingAsset();
+        if (current == nullptr || current->emitters.empty()) return {false, "particle document is not open"};
+        const auto original = *current;
+        auto candidate = original;
+        if (!state.automation.PresentParticlePreview()) return {false, "particle preview renderer could not present"};
+        const auto check = [&](kb::particles::ParticleEmitterSimulationPath path,
+                               kb::particles::ParticleGpuFallbackReason reason) {
+            if (!state.context.ApplyParticleEditorWorkingCopy(candidate) ||
+                !state.context.TickParticleEditorPreview(1.0F / 60.0F)) return false;
+            const auto view = state.context.ParticleEditorInspector();
+            return view.execution && view.execution->path == path && view.execution->reason == reason &&
+                view.execution->snapshotRevision == state.context.ParticleEditorPreviewRevision();
+        };
+        using Path = kb::particles::ParticleEmitterSimulationPath;
+        using Reason = kb::particles::ParticleGpuFallbackReason;
+        candidate.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+        const bool cpu = check(Path::Cpu, Reason::CpuPolicy);
+        candidate.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        const bool gpu = check(Path::Gpu, Reason::None);
+        candidate.emitters.front().output.alignment = kb::scene::ParticleAlignment::Local;
+        const bool fallback = check(Path::Cpu, Reason::LocalAlignment);
+        using Section = kb::particle_editor::ParticleEditorComposerSection;
+        const std::array sections{Section::Emitters, Section::Settings, Section::Recipes, Section::Modules, Section::Output};
+        std::vector<Section> collapsed;
+        for (const auto section : sections) {
+            if (state.context.ParticleEditorWorkspace().ComposerSectionExpanded(section)) {
+                state.context.ToggleParticleEditorComposerSection(section);
+                collapsed.push_back(section);
+            }
+        }
+        const bool captured = state.automation.CapturePanelScreenshotMatrix("particle_editor", "particle-execution-diagnostics");
+        for (const auto section : collapsed) state.context.ToggleParticleEditorComposerSection(section);
+        const bool restored = state.context.ApplyParticleEditorWorkingCopy(original) &&
+            state.context.TickParticleEditorPreview(1.0F / 60.0F);
+        return {cpu && gpu && fallback && captured && restored,
+            "preview execution: cpu=" + std::to_string(cpu) + " gpu=" + std::to_string(gpu) +
+                " local-fallback=" + std::to_string(fallback) + " captured=" + std::to_string(captured) +
+                " restored=" + std::to_string(restored)};
     }
 
     if (*operation == "verify_particle_picker") {
@@ -4791,6 +5287,146 @@ ReadScriptValue(
                  "material_preview:" + *checkpoint };
     }
 
+    if (*operation == "map2d_layer_toggle") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto field = StringMember(step, "field", error);
+        if (!alias || !field) return { false, error };
+        const auto entity = ResolveEntity(state, *alias);
+        state.context.SelectEntity(entity);
+        const bool lock = *field == "locked";
+        const bool visible = *field == "visible";
+        const auto property = lock ? InspectorPropertyId::World2DMapLocked : visible ? InspectorPropertyId::World2DMapVisible : InspectorPropertyId::World2DMapCollision;
+        const auto component = lock ? "Tilemap" : visible ? "TilemapRenderer" : "TilemapCollider";
+        const auto key = lock ? "locked" : "enabled";
+        const auto before = kb::script::ScriptSceneComponentApi::GetProperty(state.context.Scene(), entity, component, key);
+        if (!before.succeeded || !state.automation.InspectorClickRow(property, -1, InspectorHitKind::BoolField)) return { false, "layer checkbox could not be clicked" };
+        const auto after = kb::script::ScriptSceneComponentApi::GetProperty(state.context.Scene(), entity, component, key);
+        return { after.succeeded && before.value.AsBool() != after.value.AsBool(), "layer checkbox changed ECS state" };
+    }
+    if (*operation == "map2d_dock") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        state.context.SelectEntity(ResolveEntity(state, *alias));
+        HWND host = CreateWindowExW(0, L"STATIC", L"Tilemap docking test", WS_POPUP | WS_CLIPCHILDREN,
+            0, 0, 1100, 800, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!host) return { false, "docking host could not be created" };
+        const RECT bounds{ 20, 40, 920, 740 };
+        EditorMap2DWindow::SyncDocked(host, bounds, state.context);
+        HWND child = GetWindow(host, GW_CHILD);
+        RECT size{};
+        const bool docked = child && GetParent(child) == host && (GetWindowLongPtrW(child, GWL_STYLE) & WS_CHILD) &&
+            GetClientRect(child, &size) && size.right == 900 && size.bottom == 700;
+        EditorMap2DWindow::HideDocked(host);
+        const bool hidden = child && !(GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE);
+        DestroyWindow(host);
+        return { docked && hidden, "native map canvas docks and hides with its panel" };
+    }
+    if (*operation == "map2d_editor") {
+        // The World 2D Map Editor of an entity's map driven by "inputs" (EditorMap2DWindow::Drive)
+        // and drawn to screenshots/<checkpoint>.png; its strokes reach the scene unsaved.
+        const auto alias = StringMember(step, "entity", error);
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const JsonValue* inputs = Member(step, "inputs", JsonValue::Kind::Array, error);
+        const double width = NumberMember(step, "width", error, false).value_or(0.0);
+        const double height = NumberMember(step, "height", error, false).value_or(0.0);
+        if (!alias || !checkpoint || inputs == nullptr || !error.empty()) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        std::vector<std::string> lines;
+        for (std::size_t index = 0U; index < inputs->Size(); ++index) lines.emplace_back(inputs->At(index)->AsString());
+        std::string failure;
+        const bool driven = EditorMap2DWindow::Drive(state.context, entity, lines,
+            state.automation.ArtifactRoot() / "screenshots" / (*checkpoint + ".png"), static_cast<int>(width), static_cast<int>(height), &failure);
+        return { driven, driven ? "map2d:" + *checkpoint : failure };
+    }
+
+    if (*operation == "assert_map2d_sharing") {
+        const auto first = StringMember(step, "entity", error);
+        const auto second = StringMember(step, "other", error);
+        const auto shared = BoolMember(step, "shared", error);
+        const auto sameContent = BoolMember(step, "same_content", error);
+        if (!first || !second || !shared || !sameContent) return { false, error };
+        const auto& scene = state.context.Scene();
+        const auto* firstMetadata = EditorMap2DService::MapMetadata(scene, ResolveEntity(state, *first));
+        const auto* secondMetadata = EditorMap2DService::MapMetadata(scene, ResolveEntity(state, *second));
+        if (!firstMetadata || !secondMetadata) return { false, "both map assets must be registered" };
+        if ((firstMetadata->id == secondMetadata->id) != *shared)
+            return { false, "map asset sharing differs from the expected ownership" };
+        const auto firstMap = EditorMap2DService::Load(scene, firstMetadata->id, &error);
+        const auto secondMap = EditorMap2DService::Load(scene, secondMetadata->id, &error);
+        if (!firstMap || !secondMap) return { false, error };
+        const bool equal = kb::assets::Map2DAssetIO::Write(*firstMap) == kb::assets::Map2DAssetIO::Write(*secondMap);
+        return { equal == *sameContent, "persisted map content and asset ownership checked" };
+    }
+
+    if (*operation == "assert_map2d_runtime") {
+        const auto alias = StringMember(step,"entity",error);
+        if (!alias) return {false,error};
+        const auto entity = ResolveEntity(state,*alias);
+        const auto* runtime = state.context.Scene().Runtime().Tilemaps();
+        if (!runtime) {
+            std::string detail = "tilemap runtime is not attached";
+            for (const auto& diagnostic : state.context.Scene().ModuleDiagnostics()) detail += "; " + diagnostic;
+            return {false,detail};
+        }
+        const auto* map = runtime->Map(entity);
+        const auto expected = StringMember(step,"contains",error,false);
+        if (!map || !error.empty()) return {false,error.empty() ? "runtime has no entity map" : error};
+        const auto text = kb::assets::Map2DAssetIO::Write(*map);
+        return {!expected || text.find(*expected)!=std::string::npos,"live tilemap data matches the authored sequence"};
+    }
+
+    if (*operation == "assert_map2d_collision") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expected = UInt32Member(step, "boxes", error);
+        if (!alias || !expected) return { false, error };
+        kb::scene::Scene& scene = state.context.Scene();
+        const auto entity = ResolveEntity(state, *alias);
+        if (!scene.Entities().IsAlive(entity)) return { false, "map entity is not alive" };
+        std::size_t count = 0U;
+        for (const auto& group : scene.Entities().Object(entity).Children()) {
+            if (group.Name() != "Map Collision") continue;
+            for (const auto& child : group.Children()) {
+                const auto* collider = scene.Components().Colliders().TryGet(child.Entity());
+                if (collider == nullptr || collider->shape != kb::scene::ColliderShape::Box || collider->trigger) {
+                    return { false, "map collision must contain solid boxes" };
+                }
+                ++count;
+            }
+        }
+        return { count == *expected, "map collision boxes: " + std::to_string(count) };
+    }
+
+    if (*operation == "assert_map2d_camera") {
+        // The map's Map Camera: primary, orthographic, looking straight down at the map (or straight
+        // at a wall map along +Z); the message reports where it is.
+        const auto alias = StringMember(step, "entity", error);
+        const auto orientation = StringMember(step, "orientation", error, false);
+        if (!alias || !error.empty()) return { false, error };
+        if (orientation && *orientation != "flat" && *orientation != "wall") return { false, "orientation must be flat or wall" };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        kb::scene::Scene& scene = state.context.Scene();
+        if (!scene.Entities().IsAlive(entity)) return { false, "map entity is not alive" };
+        for (const kb::scene::SceneObject& child : scene.Entities().Object(entity).Children()) {
+            if (child.Name() != "Map Camera") continue;
+            const kb::scene::CameraComponent* lens = scene.Components().Cameras().TryGet(child.Entity());
+            const kb::scene::TransformComponent& placed = scene.Transforms().Get(child.Entity());
+            const kb::scene::Vec3 position = placed.worldDirty ? placed.localPosition : placed.worldPosition;
+            const kb::scene::Quat q = placed.worldDirty ? placed.localRotation : placed.worldRotation;
+            const float forwardY = 2.0F * (q.y * q.z - q.w * q.x);
+            const float forwardZ = 1.0F - 2.0F * (q.x * q.x + q.y * q.y);
+            std::ostringstream report;
+            report << "position " << position.x << ' ' << position.y << ' ' << position.z << " forward.y " << forwardY
+                   << " forward.z " << forwardZ << " ortho " << (lens != nullptr ? lens->orthographicHeight : 0.0F)
+                   << " play camera " << (state.context.PlayCameraEntity() == child.Entity() ? "yes" : "no");
+            const bool direction = !orientation ? (forwardY < -0.99F || forwardZ > 0.99F) :
+                *orientation == "flat" ? forwardY < -0.99F : forwardZ > 0.99F;
+            const bool ok = lens != nullptr && lens->primary && lens->projection == kb::scene::CameraProjection::Orthographic && direction &&
+                (!state.context.HasPlayModeSceneSession() || state.context.PlayCameraEntity() == child.Entity());
+            return { ok, report.str() };
+        }
+        return { false, "the map has no Map Camera" };
+    }
+
     if (*operation == "capture_scene_viewport") {
         // The Scene panel's viewport as the GPU renders it in edit mode (its camera, its
         // overlays such as the world cell grid), read back to a PNG.
@@ -4838,6 +5474,26 @@ ReadScriptValue(
         }
         return { matching >= minimum, "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) +
             " (minimum " + std::to_string(minimum) + ")" };
+    }
+
+    if (*operation == "assert_capture_color") {
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const auto* color = Member(step, "color", JsonValue::Kind::Array, error);
+        const auto minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        const auto tolerance = NumberMember(step, "tolerance", error, false).value_or(16.0);
+        if (!checkpoint || !color || color->Size() != 3U || !error.empty()) return {false, "color must be [r, g, b]"};
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap captured((state.automation.ArtifactRoot() / "screenshots" / (*checkpoint + ".png")).wstring().c_str());
+        if (captured.GetLastStatus() != Gdiplus::Ok) return {false, "capture is not readable"};
+        std::size_t matching = 0;
+        for (UINT y = 0; y < captured.GetHeight(); ++y) for (UINT x = 0; x < captured.GetWidth(); ++x) {
+            Gdiplus::Color pixel{};
+            if (captured.GetPixel(x, y, &pixel) != Gdiplus::Ok) return {false, "capture pixel read failed"};
+            if (std::fabs(pixel.GetR() - color->At(0)->AsNumber()) <= tolerance &&
+                std::fabs(pixel.GetG() - color->At(1)->AsNumber()) <= tolerance &&
+                std::fabs(pixel.GetB() - color->At(2)->AsNumber()) <= tolerance) ++matching;
+        }
+        return {matching >= minimum, "matching pixels: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) + ")"};
     }
 
     if (*operation == "capture_runtime") {
@@ -5339,6 +5995,12 @@ int EditorAutomationScenarioRunner::Run(
     }
 
     std::vector<std::string> reportLines;
+    // Objective measures of the authoring path, counted from the steps themselves: what was done, what was only
+    // checked, what failed, and which steps prepared data outside the editor's own controls.
+    std::size_t actionCount = 0U;
+    std::size_t assertionCount = 0U;
+    std::size_t failureCount = 0U;
+    std::vector<std::string> workaroundOperations;
     bool passed = true;
     {
         EditorSceneContext context;
@@ -5366,6 +6028,13 @@ int EditorAutomationScenarioRunner::Run(
                 line << " - " << outcome.detail;
             }
             reportLines.push_back(line.str());
+            if (operationName.rfind("assert_", 0U) == 0U || operationName.rfind("verify_", 0U) == 0U) {
+                ++assertionCount;
+            } else {
+                ++actionCount;
+            }
+            if (!outcome.succeeded) ++failureCount;
+            if (IsWorkaroundOperation(operationName)) workaroundOperations.push_back(operationName);
             state.automation.Trace(
                 "scenario_step", outcome.succeeded,
                 std::to_string(index + 1U) + ':' + operationName);
@@ -5391,6 +6060,14 @@ int EditorAutomationScenarioRunner::Run(
     report << "========================================\n"
            << "RESULT: " << (passed ? "PASS" : "FAIL") << '\n';
     if (!report.good()) return 1;
+    // The report is a file on the machine that ran the scenario; a failing step is also said on standard error, so a
+    // test log (a CI job's, for one) names what failed without the file.
+    if (!passed) {
+        for (const std::string& line : reportLines) {
+            if (line.starts_with("[FAIL]")) std::fprintf(stderr, "%s\n", line.c_str());
+        }
+        std::fflush(stderr);
+    }
 
     std::ofstream manifest(
         absoluteArtifacts / "manifest.txt",
@@ -5407,6 +6084,15 @@ int EditorAutomationScenarioRunner::Run(
     reportJson << "{\"schema\":\"21kb.editor-automation-report/v1\",\"result\":\""
                << (passed ? "PASS" : "FAIL")
                << "\",\"stepsExecuted\":" << reportLines.size()
+               << ",\"metrics\":{\"actions\":" << actionCount
+               << ",\"assertions\":" << assertionCount
+               << ",\"failures\":" << failureCount
+               << ",\"workarounds\":" << workaroundOperations.size()
+               << ",\"workaroundOperations\":[";
+    for (std::size_t index = 0U; index < workaroundOperations.size(); ++index) {
+        reportJson << (index == 0U ? "" : ",") << '"' << workaroundOperations[index] << '"';
+    }
+    reportJson << "],\"basis\":\"counted by the runner from the steps of this scenario; an automated run, not a study with people\"}"
                << "}\n";
     std::ofstream manifestJson(
         absoluteArtifacts / "artifact-manifest.json",

@@ -1,9 +1,11 @@
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "localization/EditorLocalization.hpp"
 
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "scene/audio/EditorAudioMixerRuntime.hpp"
 #include "inspection/InspectorPostProcessProfileModel.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
@@ -79,6 +81,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "scene/EditorMap2DService.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
@@ -1542,7 +1545,8 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
             const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
                 InspectorAudioMixerAssetView::LoadCached(manager, metadata->id);
             if (mixer.IsLoaded()) {
-                InspectorAudioMixerAssetView::Paint(dc, content, theme, inspector, *metadata, *mixer);
+                const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), metadata->id);
+                InspectorAudioMixerAssetView::Paint(dc, content, theme, inspector, *metadata, *mixer, &runtime);
             } else {
                 DrawEmpty(dc, content, theme);
             }
@@ -2533,14 +2537,17 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
     for (const InspectorUIPropertyRow& row : rows)
         if (row.name == "optionCount") options = static_cast<std::uint32_t>(std::stoul(row.value));
     for (const DropdownInspectorItem& item : layout.items) {
-        const InspectorUIPropertyRow* row = item.row >= 0 ? &rows[static_cast<std::size_t>(item.row)] : nullptr;
+        const InspectorUIPropertyRow* row = item.row >= 0 && static_cast<std::size_t>(item.row) < rows.size()
+            ? &rows[static_cast<std::size_t>(item.row)] : nullptr;
         const bool selectedOption = item.option >= 0 && item.option == state.DropdownSelectedOption();
         switch (item.kind) {
         case DropdownInspectorItem::Kind::Object:
+            if (row == nullptr) break;
             DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, row->label,
                 InspectorUIComponentModel::EntityReferenceLabel(sceneContext.Scene(), std::stoull(row->value)), item.row);
             break;
         case DropdownInspectorItem::Kind::Field:
+            if (row == nullptr) break;
             DrawFieldRow(dc, item.rect, theme, state, section, property, row->label, row->value, item.row);
             break;
         case DropdownInspectorItem::Kind::Warning:
@@ -2552,9 +2559,11 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
             inspector_panel_rows::DrawGroupRow(dc, item.rect, theme, item.label);
             break;
         case DropdownInspectorItem::Kind::OptionText:
+            if (row == nullptr) break;
             DrawDropdownOptionTextRow(dc, item.rect, theme, state, section, property, item.row, item.option, row->value, selectedOption);
             break;
         case DropdownInspectorItem::Kind::OptionImage:
+            if (row == nullptr) break;
             DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, "      " + item.label,
                 AssetDisplayName(sceneContext, std::stoull(row->value)), item.row);
             if (selectedOption) {
@@ -3232,6 +3241,66 @@ void DrawTerrainMaterialLayers(
     return Rect(labelRight, top, content.right - kValueRightInset, top + kValueHeight);
 }
 
+constexpr int kWorld2DMapSectionRows = 9;
+
+struct World2DMapSummaryText {
+    std::string size;
+    std::string orientation;
+    std::string view;
+};
+
+// The map's size and settings, read once per version of the map file.
+[[nodiscard]] const World2DMapSummaryText& World2DMapSummary(const kb::assets::AssetMetadata& metadata, const EditorSceneContext& context, kb::scene::SceneEntity entity) {
+    static std::filesystem::path cachedPath;
+    static std::uint64_t cachedHash = 0U;
+    static World2DMapSummaryText cached;
+    if (cachedPath != metadata.physicalPath || cachedHash != metadata.contentHash || cached.size.empty()) {
+        cachedPath = metadata.physicalPath;
+        cachedHash = metadata.contentHash;
+        const std::optional<kb::assets::Map2DAsset> map = EditorMap2DWindow::CurrentMap(context, entity);
+        if (!map.has_value()) {
+            cached = World2DMapSummaryText{ std::string{ EditorText("inspector.world2dMap.unreadable", "The map file could not be read") }, "-", "-" };
+        } else {
+            cached.size = EditorLocalization::Format("inspector.world2dMap.sizeValue", "{width} x {height} tiles, {tiles} painted",
+                { { "width", std::to_string(map->width) }, { "height", std::to_string(map->height) }, { "tiles", std::to_string(map->tiles.size()) } });
+            cached.orientation = map->orientation == kb::assets::Map2DOrientation::Wall
+                ? std::string{ EditorText("map2d.sideView", "Side view (platformer)") }
+                : std::string{ EditorText("map2d.topDown", "View from above") };
+            cached.view = EditorLocalization::Format("inspector.world2dMap.viewValue", "{width} x {height} tiles",
+                { { "width", std::to_string(map->viewWidth) }, { "height", std::to_string(map->viewHeight) } });
+        }
+    }
+    return cached;
+}
+
+void PaintWorld2DMapSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::assets::AssetMetadata& metadata,
+    const EditorSceneContext& context,
+    kb::scene::SceneEntity entity) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::World2DMap,
+        HeroIconKind::RectangleGroup, EditorText("inspector.world2dMap.title", "World 2D Map"), true);
+    const World2DMapSummaryText& summary = World2DMapSummary(metadata, context, entity);
+    section.Field(EditorText("inspector.world2dMap.map", "Map"), metadata.virtualPath.generic_string());
+    section.Field(EditorText("inspector.world2dMap.size", "Size"), summary.size);
+    section.Field(EditorText("inspector.world2dMap.orientation", "Orientation"), summary.orientation, InspectorPropertyId::World2DMapOrientation);
+    section.Field(EditorText("inspector.world2dMap.view", "Client Box"), summary.view, InspectorPropertyId::World2DMapView);
+    section.Action(EditorText("map2d.resetCamera", "Reset map camera"), InspectorPropertyId::World2DMapSetUpView);
+    section.Action(EditorText("inspector.world2dMap.open", "Open Map Editor"), InspectorPropertyId::World2DMapOpenEditor, true);
+    const auto components = context.Scene().Components();
+    const auto* tilemap = components.Tilemaps().TryGet(entity);
+    const auto* renderer = components.TilemapRenderers().TryGet(entity);
+    const auto* collider = components.TilemapColliders().TryGet(entity);
+    section.Bool(EditorText("map2d.layerVisible", "Visible"), renderer == nullptr || renderer->enabled, InspectorPropertyId::World2DMapVisible);
+    section.Bool(EditorText("map2d.layerLocked", "Lock painting"), tilemap != nullptr && tilemap->locked, InspectorPropertyId::World2DMapLocked);
+    section.Bool(EditorText("map2d.layerCollision", "Collision"), collider == nullptr || collider->enabled, InspectorPropertyId::World2DMapCollision);
+    y = section.Bottom() + kSectionGap;
+}
+
 void PaintTerrainSection(
     HDC dc,
     RECT content,
@@ -3678,7 +3747,13 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
-    if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
+    if (const auto* map = EditorMap2DService::MapMetadata(scene, selected)) {
+        const int h = SectionHeight(inspector, InspectorSectionId::World2DMap, kWorld2DMapSectionRows);
+        if (sectionVisible(y, h)) PaintWorld2DMapSection(dc, content, y, theme, inspector, *map, sceneContext, selected);
+        else y += h + kSectionGap;
+    }
+    if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected);
+        meshRenderer != nullptr && !EditorMap2DService::IsMapMeshRenderer(scene, selected)) {
         const bool isTerrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!isTerrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
             const kb::assets::TerrainAsset* terrain = isTerrain
@@ -3898,8 +3973,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             sceneContext.Scene().Assets().Manager());
         const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
             InspectorAudioMixerAssetView::LoadCached(manager, metadata.id);
+        const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), metadata.id);
         return mixer.IsLoaded()
-            ? InspectorAudioMixerAssetView::ContentHeight(inspector, *mixer)
+            ? InspectorAudioMixerAssetView::ContentHeight(inspector, *mixer, &runtime)
             : height;
     }
 
@@ -3993,7 +4069,11 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().ParticleEffects().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::ParticleEffect, 3) + kSectionGap;
     }
-    if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
+    if (EditorMap2DService::IsMapEntity(scene, selected)) {
+        height += SectionHeight(inspector, InspectorSectionId::World2DMap, kWorld2DMapSectionRows) + kSectionGap;
+    }
+    if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected);
+        renderer != nullptr && !EditorMap2DService::IsMapMeshRenderer(scene, selected)) {
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
             const kb::assets::TerrainAsset* terrainAsset = terrain
@@ -5313,8 +5393,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (!mixer.IsLoaded()) {
                 return {};
             }
+            const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), metadata->id);
             const InspectorAudioMixerAssetHit mixerHit =
-                InspectorAudioMixerAssetView::HitTest(viewport, state, *mixer, x, scrolledY);
+                InspectorAudioMixerAssetView::HitTest(viewport, state, *mixer, x, scrolledY, &runtime);
             return InspectorPanelRenderer::Hit{
                 .kind = mixerHit.kind,
                 .section = mixerHit.section,
@@ -5728,6 +5809,29 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         y += kSectionGap;
     }
 
+    if (EditorMap2DService::IsMapEntity(sceneContext.Scene(), selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::World2DMap, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::World2DMap)) {
+            AdvanceRow(y); // Map.
+            AdvanceRow(y); // Size.
+            for (const InspectorPropertyId property : { InspectorPropertyId::World2DMapOrientation, InspectorPropertyId::World2DMapView,
+                     InspectorPropertyId::World2DMapSetUpView, InspectorPropertyId::World2DMapOpenEditor }) {
+                const RECT row = RowRect(viewport, y);
+                if (Contains(row, x, scrolledY)) return MakeHit(InspectorHitKind::TextField, InspectorSectionId::World2DMap, property, row);
+                AdvanceRow(y);
+            }
+            for (const InspectorPropertyId property : { InspectorPropertyId::World2DMapVisible,
+                     InspectorPropertyId::World2DMapLocked, InspectorPropertyId::World2DMapCollision }) {
+                if (const auto hit = HitBool(RowRect(viewport, y), InspectorSectionId::World2DMap, property, x, scrolledY);
+                    hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+
     if (sceneContext.IsProjectPluginEnabled("Editor.Terrain") &&
         EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
         if (InspectorPanelRenderer::Hit hit = HitTestTerrainSection(viewport, state, sceneContext, x, scrolledY, y); hit.kind != InspectorHitKind::None) return hit;
@@ -5735,7 +5839,8 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(selected);
-        renderer != nullptr && !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
+        renderer != nullptr && !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected) &&
+        !EditorMap2DService::IsMapMeshRenderer(sceneContext.Scene(), selected)) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::MeshRenderer, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
             return hit;
         }

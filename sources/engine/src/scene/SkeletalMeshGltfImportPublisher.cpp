@@ -75,6 +75,20 @@ void Rollback(std::vector<StagedAsset>& staged) noexcept {
 
 } // namespace
 
+std::vector<std::filesystem::path> SkeletalMeshGltfImportPublisher::AnimationPaths(
+    const std::filesystem::path& meshPath, std::span<const std::string> names, std::size_t count) {
+    std::vector<std::filesystem::path> paths;
+    std::set<std::string> used;
+    for (std::size_t index = 0U; index < count; ++index) {
+        const std::string base = meshPath.stem().string() + "_" +
+            ClipFileName(index < names.size() ? names[index] : std::string{}, index);
+        std::string name = base;
+        for (std::size_t suffix = 2U; !used.insert(name).second; ++suffix) name = base + "_" + std::to_string(suffix);
+        paths.push_back(meshPath.parent_path() / (name + kAnimationClipAssetExtension));
+    }
+    return paths;
+}
+
 std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Publish(
     kb::assets::AssetManager& manager,
     const SkeletalMeshGltfImportPlan& plan,
@@ -91,8 +105,6 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
     if (!plan.skeletonAssetId.IsValid() || plan.skeletonVirtualPath.empty() || plan.meshVirtualPath.empty()) {
         return Fail<SkeletalMeshGltfPublishResult>(error, "Skeletal glTF import plan is incomplete.");
     }
-    const std::filesystem::path folder = plan.meshVirtualPath.parent_path();
-    const std::string stem = plan.meshVirtualPath.stem().string();
     const std::filesystem::path meshVirtualPath = plan.meshVirtualPath;
     const auto meshPhysicalPath = PhysicalPath(manager, meshVirtualPath);
     if (!meshPhysicalPath) return Fail<SkeletalMeshGltfPublishResult>(error,
@@ -142,23 +154,15 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
         Rollback(staged);
         return Fail<SkeletalMeshGltfPublishResult>(error, "Skeletal glTF mesh staging write failed.");
     }
-    std::vector<std::filesystem::path> clipVirtualPaths;
-    clipVirtualPaths.reserve(plan.imported.clips.size());
-    std::set<std::string> clipNames;
+    const auto clipVirtualPaths = AnimationPaths(plan.meshVirtualPath, plan.imported.clipNames, plan.imported.clips.size());
     for (std::size_t index = 0U; index < plan.imported.clips.size(); ++index) {
-        // Named after the source's animation - Hero_Walk for Blender's Walk action of Hero.blend.
-        const std::string base = stem + "_" + ClipFileName(
-            index < plan.imported.clipNames.size() ? plan.imported.clipNames[index] : std::string{}, index);
-        std::string name = base;
-        for (std::size_t suffix = 2U; !clipNames.insert(name).second; ++suffix) name = base + "_" + std::to_string(suffix);
-        const std::filesystem::path clipPath = folder / (name + kAnimationClipAssetExtension);
+        const auto& clipPath = clipVirtualPaths[index];
         if (!add(clipPath, [&](const auto& path) {
                 return AnimationAssetIO::SaveClip(path, plan.imported.clips[index]);
             })) {
             Rollback(staged);
             return Fail<SkeletalMeshGltfPublishResult>(error, "Skeletal glTF animation staging write failed.");
         }
-        clipVirtualPaths.push_back(clipPath);
     }
     for (StagedAsset& asset : staged) {
         std::error_code existsError;

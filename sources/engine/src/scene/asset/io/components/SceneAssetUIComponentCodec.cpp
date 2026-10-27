@@ -1,5 +1,6 @@
 #include "scene/asset/io/components/SceneAssetUIComponentCodec.hpp"
 
+#include "engine/scene/SceneDocument.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
 
@@ -41,7 +42,9 @@ bool ReadValue(Reader& in, UICanvas& v) { return in.ReadInt32(v.sortingOrder)&&i
 bool ReadValue(Reader& in, UICanvas& v, std::uint32_t fileVersion) {
     if (!ReadValue(in, v)) return false;
     if (fileVersion < 39U) { v.respectSafeArea = false; return true; }
-    return Read(in,v.renderMode)&&in.ReadFloat(v.pixelsPerUnit)&&in.ReadBool(v.respectSafeArea)&&in.ReadInt32(v.player);
+    if (!(Read(in,v.renderMode)&&in.ReadFloat(v.pixelsPerUnit)&&in.ReadBool(v.respectSafeArea)&&in.ReadInt32(v.player))) return false;
+    // v52 added the modal flag; an older canvas never blocked the canvases below it.
+    return fileVersion < SceneDocument::ModalCanvasFileVersion || in.ReadBool(v.modal);
 }
 bool ReadValue(Reader& in, UICanvasScaler& v) { return Read(in,v.scaleMode)&&Read(in,v.referenceResolution)&&in.ReadFloat(v.scaleFactor)&&in.ReadFloat(v.matchWidthOrHeight); }
 bool ReadValue(Reader& in, UICanvasGroup& v) { return in.ReadFloat(v.opacity)&&in.ReadBool(v.interactable)&&in.ReadBool(v.blocksRaycasts)&&in.ReadBool(v.ignoreParentGroups); }
@@ -178,7 +181,7 @@ template <typename T> bool ReadValue(Reader& in, T& v, std::uint32_t) requires r
 
 #define KB_WRITE_FIELD(Field) Write(out, v.Field)
 void WriteValue(std::vector<std::uint8_t>& out, const UIRectTransform& v) { KB_WRITE_FIELD(anchorMin);KB_WRITE_FIELD(anchorMax);KB_WRITE_FIELD(offsetMin);KB_WRITE_FIELD(offsetMax);KB_WRITE_FIELD(pivot);KB_WRITE_FIELD(scale);SceneAssetBinaryIO::WriteFloat(out,v.rotationDegrees);SceneAssetBinaryIO::WriteInt32(out,v.zOrder); }
-void WriteValue(std::vector<std::uint8_t>& out, const UICanvas& v) { SceneAssetBinaryIO::WriteInt32(out,v.sortingOrder);SceneAssetBinaryIO::WriteBool(out,v.pixelPerfect);KB_WRITE_FIELD(renderMode);SceneAssetBinaryIO::WriteFloat(out,v.pixelsPerUnit);SceneAssetBinaryIO::WriteBool(out,v.respectSafeArea);SceneAssetBinaryIO::WriteInt32(out,v.player); }
+void WriteValue(std::vector<std::uint8_t>& out, const UICanvas& v) { SceneAssetBinaryIO::WriteInt32(out,v.sortingOrder);SceneAssetBinaryIO::WriteBool(out,v.pixelPerfect);KB_WRITE_FIELD(renderMode);SceneAssetBinaryIO::WriteFloat(out,v.pixelsPerUnit);SceneAssetBinaryIO::WriteBool(out,v.respectSafeArea);SceneAssetBinaryIO::WriteInt32(out,v.player);SceneAssetBinaryIO::WriteBool(out,v.modal); }
 void WriteValue(std::vector<std::uint8_t>& out, const UICanvasScaler& v) { KB_WRITE_FIELD(scaleMode);KB_WRITE_FIELD(referenceResolution);SceneAssetBinaryIO::WriteFloat(out,v.scaleFactor);SceneAssetBinaryIO::WriteFloat(out,v.matchWidthOrHeight); }
 void WriteValue(std::vector<std::uint8_t>& out, const UICanvasGroup& v) { SceneAssetBinaryIO::WriteFloat(out,v.opacity);SceneAssetBinaryIO::WriteBool(out,v.interactable);SceneAssetBinaryIO::WriteBool(out,v.blocksRaycasts);SceneAssetBinaryIO::WriteBool(out,v.ignoreParentGroups);SceneAssetBinaryIO::WriteBool(out,v.visible);SceneAssetBinaryIO::WriteFloat(out,v.transitionSeconds);KB_WRITE_FIELD(hiddenOffset);SceneAssetBinaryIO::WriteFloat(out,v.hiddenScale); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIHorizontalLayout& v) { KB_WRITE_FIELD(padding);SceneAssetBinaryIO::WriteFloat(out,v.spacing);KB_WRITE_FIELD(horizontalAlignment);KB_WRITE_FIELD(verticalAlignment);SceneAssetBinaryIO::WriteBool(out,v.controlChildWidth);SceneAssetBinaryIO::WriteBool(out,v.controlChildHeight);SceneAssetBinaryIO::WriteBool(out,v.expandChildWidth);SceneAssetBinaryIO::WriteBool(out,v.expandChildHeight); }

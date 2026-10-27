@@ -1,4 +1,5 @@
 #include "scene/asset/io/SceneAssetComponentCodec.hpp"
+#include "engine/scene/SceneDocument.hpp"
 
 #include "engine/scene/SceneDocument.hpp"
 
@@ -63,6 +64,15 @@ enum SceneNodeComponentBits : std::uint64_t {
       SocketAttachmentBit = 1ULL << 39U,
       CombatantBit = 1ULL << 40U,
       AIBrainBit = 1ULL << 41U,
+      GridBit = 1ULL << 42U,
+      TilemapBit = 1ULL << 43U,
+      TilemapRendererBit = 1ULL << 44U,
+      TilemapColliderBit = 1ULL << 45U,
+      CharacterController2DBit = 1ULL << 49U,
+      Collider2DBit = 1ULL << 48U,
+      Body2DBit = 1ULL << 47U,
+      Sprite2DBit = 1ULL << 46U,
+
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -82,7 +92,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -130,6 +140,14 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.socketAttachment.has_value(), SocketAttachmentBit);
     include(components.combatant.has_value(), CombatantBit);
     include(components.aiBrain.has_value(), AIBrainBit);
+    include(components.grid.has_value(), GridBit);
+    include(components.tilemap.has_value(), TilemapBit);
+    include(components.tilemapRenderer.has_value(), TilemapRendererBit);
+    include(components.tilemapCollider.has_value(), TilemapColliderBit);
+    include(components.characterController2D.has_value(), CharacterController2DBit);
+    include(components.collider2D.has_value(), Collider2DBit);
+    include(components.body2D.has_value(), Body2DBit);
+    include(components.sprite2D.has_value(), Sprite2DBit);
     return componentBits;
 }
 
@@ -604,6 +622,120 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!ok || !IsAIBrainComponentValid(brain)) return false;
         output.aiBrain = brain;
     }
+    if ((componentBits & GridBit) != 0U) {
+        GridComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadFloat(value.cellSize)) return false;
+        if (!input.ReadFloat(value.floorHeight)) return false;
+        if (!input.ReadBool(value.wall)) return false;
+        output.grid = value;
+    }
+    if ((componentBits & TilemapBit) != 0U) {
+        TilemapComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadUInt64(value.mapAssetId)) return false;
+        if (!input.ReadBool(value.locked)) return false;
+        output.tilemap = value;
+    }
+    if ((componentBits & TilemapRendererBit) != 0U) {
+        TilemapRendererComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadInt32(value.sortingOrder)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        output.tilemapRenderer = value;
+    }
+    if ((componentBits & TilemapColliderBit) != 0U) {
+        TilemapColliderComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        output.tilemapCollider = value;
+    }
+    if ((componentBits & CharacterController2DBit) != 0U) {
+        CharacterController2DComponent value{};
+        if (fileVersion < SceneDocument::CharacterController2DFileVersion) return false;
+        if (!input.ReadFloat(value.radius)) return false;
+        if (!input.ReadFloat(value.height)) return false;
+        if (!input.ReadFloat(value.gravityScale)) return false;
+        if (!input.ReadBool(value.useGravity)) return false;
+        if (!input.ReadFloat(value.slopeLimitDegrees)) return false;
+        if (!input.ReadFloat(value.stepHeight)) return false;
+        if (!input.ReadInt32(value.layer)) return false;
+        if (!input.ReadUInt32(value.collidesWith)) return false;
+        if (!input.ReadBool(value.sideView)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsCharacterController2DComponentValid(value)) return false;
+        output.characterController2D = value;
+    }
+    if ((componentBits & Collider2DBit) != 0U) {
+        Collider2DComponent value{};
+        if (fileVersion < SceneDocument::Collider2DFileVersion) return false;
+        if (!input.ReadInt32(value.shape)) return false;
+        if (!input.ReadFloat(value.width)) return false;
+        if (!input.ReadFloat(value.height)) return false;
+        if (!input.ReadFloat(value.radius)) return false;
+        if (!input.ReadFloat(value.offsetX)) return false;
+        if (!input.ReadFloat(value.offsetY)) return false;
+        if (!input.ReadFloat(value.angleDegrees)) return false;
+        if (!input.ReadBool(value.isTrigger)) return false;
+        if (!input.ReadFloat(value.density)) return false;
+        if (!input.ReadFloat(value.friction)) return false;
+        if (!input.ReadFloat(value.restitution)) return false;
+        if (!input.ReadInt32(value.layer)) return false;
+        if (!input.ReadUInt32(value.collidesWith)) return false;
+        if (!input.ReadBool(value.sideView)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsCollider2DComponentValid(value)) return false;
+        output.collider2D = value;
+    }
+    if ((componentBits & Body2DBit) != 0U) {
+        Body2DComponent value{};
+        if (fileVersion < SceneDocument::Body2DFileVersion) return false;
+        if (!input.ReadInt32(value.type)) return false;
+        if (!input.ReadFloat(value.gravityScale)) return false;
+        if (!input.ReadFloat(value.linearDamping)) return false;
+        if (!input.ReadFloat(value.angularDamping)) return false;
+        if (!input.ReadBool(value.fixedRotation)) return false;
+        if (!input.ReadBool(value.bullet)) return false;
+        if (!input.ReadBool(value.allowSleep)) return false;
+        if (!input.ReadBool(value.sideView)) return false;
+        if (!input.ReadFloat(value.startVelocityX)) return false;
+        if (!input.ReadFloat(value.startVelocityY)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsBody2DComponentValid(value)) return false;
+        output.body2D = value;
+    }
+    if ((componentBits & Sprite2DBit) != 0U) {
+        Sprite2DComponent value{};
+        if (fileVersion < SceneDocument::Sprite2DFileVersion) return false;
+        if (!input.ReadUInt64(value.imageAssetId)) return false;
+        if (!input.ReadUInt64(value.materialAssetId)) return false;
+        if (!input.ReadUInt32(value.cellWidth)) return false;
+        if (!input.ReadUInt32(value.cellHeight)) return false;
+        if (!input.ReadUInt32(value.margin)) return false;
+        if (!input.ReadUInt32(value.spacing)) return false;
+        if (!input.ReadUInt32(value.imageWidth)) return false;
+        if (!input.ReadUInt32(value.imageHeight)) return false;
+        if (!input.ReadUInt32(value.cell)) return false;
+        if (!input.ReadUInt32(value.frameCount)) return false;
+        if (!input.ReadFloat(value.framesPerSecond)) return false;
+        if (!input.ReadBool(value.loop)) return false;
+        if (!input.ReadBool(value.playing)) return false;
+        if (!input.ReadFloat(value.time)) return false;
+        if (!input.ReadFloat(value.pixelsPerUnit)) return false;
+        if (!input.ReadFloat(value.pivotX)) return false;
+        if (!input.ReadFloat(value.pivotY)) return false;
+        if (!input.ReadBool(value.flipX)) return false;
+        if (!input.ReadBool(value.flipY)) return false;
+        if (!input.ReadFloat(value.tintR)) return false;
+        if (!input.ReadFloat(value.tintG)) return false;
+        if (!input.ReadFloat(value.tintB)) return false;
+        if (!input.ReadFloat(value.tintA)) return false;
+        if (!input.ReadInt32(value.sortingOrder)) return false;
+        if (!input.ReadBool(value.wall)) return false;
+        if (!input.ReadBool(value.visible)) return false;
+        if (!IsSprite2DComponentValid(value)) return false;
+        output.sprite2D = value;
+    }
     return true;
 }
 
@@ -949,6 +1081,101 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         }
         SceneAssetBinaryIO::WriteBool(output, brain.enabled);
     }
+    if (components.grid.has_value()) {
+        const auto& value = *components.grid;
+        SceneAssetBinaryIO::WriteFloat(output, value.cellSize);
+        SceneAssetBinaryIO::WriteFloat(output, value.floorHeight);
+        SceneAssetBinaryIO::WriteBool(output, value.wall);
+    }
+    if (components.tilemap.has_value()) {
+        const auto& value = *components.tilemap;
+        SceneAssetBinaryIO::WriteUInt64(output, value.mapAssetId);
+        SceneAssetBinaryIO::WriteBool(output, value.locked);
+    }
+    if (components.tilemapRenderer.has_value()) {
+        const auto& value = *components.tilemapRenderer;
+        SceneAssetBinaryIO::WriteInt32(output, value.sortingOrder);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.tilemapCollider.has_value()) {
+        const auto& value = *components.tilemapCollider;
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.characterController2D.has_value()) {
+        const auto& value = *components.characterController2D;
+        SceneAssetBinaryIO::WriteFloat(output, value.radius);
+        SceneAssetBinaryIO::WriteFloat(output, value.height);
+        SceneAssetBinaryIO::WriteFloat(output, value.gravityScale);
+        SceneAssetBinaryIO::WriteBool(output, value.useGravity);
+        SceneAssetBinaryIO::WriteFloat(output, value.slopeLimitDegrees);
+        SceneAssetBinaryIO::WriteFloat(output, value.stepHeight);
+        SceneAssetBinaryIO::WriteInt32(output, value.layer);
+        SceneAssetBinaryIO::WriteUInt32(output, value.collidesWith);
+        SceneAssetBinaryIO::WriteBool(output, value.sideView);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.collider2D.has_value()) {
+        const auto& value = *components.collider2D;
+        SceneAssetBinaryIO::WriteInt32(output, value.shape);
+        SceneAssetBinaryIO::WriteFloat(output, value.width);
+        SceneAssetBinaryIO::WriteFloat(output, value.height);
+        SceneAssetBinaryIO::WriteFloat(output, value.radius);
+        SceneAssetBinaryIO::WriteFloat(output, value.offsetX);
+        SceneAssetBinaryIO::WriteFloat(output, value.offsetY);
+        SceneAssetBinaryIO::WriteFloat(output, value.angleDegrees);
+        SceneAssetBinaryIO::WriteBool(output, value.isTrigger);
+        SceneAssetBinaryIO::WriteFloat(output, value.density);
+        SceneAssetBinaryIO::WriteFloat(output, value.friction);
+        SceneAssetBinaryIO::WriteFloat(output, value.restitution);
+        SceneAssetBinaryIO::WriteInt32(output, value.layer);
+        SceneAssetBinaryIO::WriteUInt32(output, value.collidesWith);
+        SceneAssetBinaryIO::WriteBool(output, value.sideView);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.body2D.has_value()) {
+        const auto& value = *components.body2D;
+        SceneAssetBinaryIO::WriteInt32(output, value.type);
+        SceneAssetBinaryIO::WriteFloat(output, value.gravityScale);
+        SceneAssetBinaryIO::WriteFloat(output, value.linearDamping);
+        SceneAssetBinaryIO::WriteFloat(output, value.angularDamping);
+        SceneAssetBinaryIO::WriteBool(output, value.fixedRotation);
+        SceneAssetBinaryIO::WriteBool(output, value.bullet);
+        SceneAssetBinaryIO::WriteBool(output, value.allowSleep);
+        SceneAssetBinaryIO::WriteBool(output, value.sideView);
+        SceneAssetBinaryIO::WriteFloat(output, value.startVelocityX);
+        SceneAssetBinaryIO::WriteFloat(output, value.startVelocityY);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.sprite2D.has_value()) {
+        const auto& value = *components.sprite2D;
+        SceneAssetBinaryIO::WriteUInt64(output, value.imageAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, value.materialAssetId);
+        SceneAssetBinaryIO::WriteUInt32(output, value.cellWidth);
+        SceneAssetBinaryIO::WriteUInt32(output, value.cellHeight);
+        SceneAssetBinaryIO::WriteUInt32(output, value.margin);
+        SceneAssetBinaryIO::WriteUInt32(output, value.spacing);
+        SceneAssetBinaryIO::WriteUInt32(output, value.imageWidth);
+        SceneAssetBinaryIO::WriteUInt32(output, value.imageHeight);
+        SceneAssetBinaryIO::WriteUInt32(output, value.cell);
+        SceneAssetBinaryIO::WriteUInt32(output, value.frameCount);
+        SceneAssetBinaryIO::WriteFloat(output, value.framesPerSecond);
+        SceneAssetBinaryIO::WriteBool(output, value.loop);
+        SceneAssetBinaryIO::WriteBool(output, value.playing);
+        SceneAssetBinaryIO::WriteFloat(output, value.time);
+        SceneAssetBinaryIO::WriteFloat(output, value.pixelsPerUnit);
+        SceneAssetBinaryIO::WriteFloat(output, value.pivotX);
+        SceneAssetBinaryIO::WriteFloat(output, value.pivotY);
+        SceneAssetBinaryIO::WriteBool(output, value.flipX);
+        SceneAssetBinaryIO::WriteBool(output, value.flipY);
+        SceneAssetBinaryIO::WriteFloat(output, value.tintR);
+        SceneAssetBinaryIO::WriteFloat(output, value.tintG);
+        SceneAssetBinaryIO::WriteFloat(output, value.tintB);
+        SceneAssetBinaryIO::WriteFloat(output, value.tintA);
+        SceneAssetBinaryIO::WriteInt32(output, value.sortingOrder);
+        SceneAssetBinaryIO::WriteBool(output, value.wall);
+        SceneAssetBinaryIO::WriteBool(output, value.visible);
+    }
+
 }
 
 } // namespace kb::scene

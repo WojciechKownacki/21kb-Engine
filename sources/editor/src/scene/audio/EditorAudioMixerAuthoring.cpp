@@ -2,6 +2,7 @@
 
 #include "console/EditorConsoleState.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
+#include "engine/audio/AudioMixerEffectEditing.hpp"
 #include "engine/scene/Scene.hpp"
 
 #include <algorithm>
@@ -27,8 +28,8 @@ template <typename Range>
 EditorAudioMixerAuthoring::EditorAudioMixerAuthoring(
     kb::scene::Scene& scene,
     EditorAssetBrowserState& browser,
-    EditorConsoleState& console) noexcept
-    : gateway_(scene, browser)
+    EditorConsoleState& console, EditorCommandStack* commands) noexcept
+    : gateway_(scene, browser, commands)
     , scene_(scene)
     , console_(console) {}
 
@@ -64,6 +65,33 @@ bool EditorAudioMixerAuthoring::AddBus(kb::assets::AssetId id, std::string_view 
         }
         asset.buses.push_back(kb::audio::AudioMixerBus{ .name = std::string{ name } });
         return true;
+    });
+}
+
+bool EditorAudioMixerAuthoring::AddEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect,
+    kb::audio::AudioDspKind kind) {
+    return gateway_.Mutate(id, [&](kb::audio::AudioMixerAsset& asset) {
+        return kb::audio::AddAudioMixerEffect(asset, bus, effect, kind).empty();
+    });
+}
+
+bool EditorAudioMixerAuthoring::RemoveEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect) {
+    return gateway_.Mutate(id, [&](kb::audio::AudioMixerAsset& asset) {
+        return kb::audio::RemoveAudioMixerEffect(asset, bus, effect).empty();
+    });
+}
+
+bool EditorAudioMixerAuthoring::MoveEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect,
+    std::size_t index) {
+    return gateway_.Mutate(id, [&](kb::audio::AudioMixerAsset& asset) {
+        return kb::audio::MoveAudioMixerEffect(asset, bus, effect, index).empty();
+    });
+}
+
+bool EditorAudioMixerAuthoring::SetEffectField(kb::assets::AssetId id, std::string_view bus, std::string_view effect,
+    std::string_view field, std::string_view value) {
+    return gateway_.Mutate(id, [&](kb::audio::AudioMixerAsset& asset) {
+        return kb::audio::SetAudioMixerEffectField(asset, bus, effect, field, value).empty();
     });
 }
 

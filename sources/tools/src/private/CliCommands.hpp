@@ -10,10 +10,15 @@
 namespace kb::cli {
 
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSkeletonCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAbilityCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAiCommand(const ArgumentList& arguments, CommandIo io);
+// World 2D maps: new/view work on a scene (CliEntityCommands.cpp), the rest on map and tileset files.
+[[nodiscard]] int RunMap2DCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io);
 // Places a baked navigation mesh in the scene of --project/--scene (once), as the editor's Bake does.
 [[nodiscard]] bool PlaceSceneNavMesh(const ArgumentList& arguments, const std::filesystem::path& navMesh, CommandIo io);
 [[nodiscard]] int RunApiCheckCommand(const ArgumentList& arguments, CommandIo io);
@@ -38,6 +43,8 @@ namespace kb::cli {
 [[nodiscard]] int RunMaterialInstanceShowCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPostProcessNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVfxCommand(std::string_view command, const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunVfxProfileCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunRendererInfoCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPostProcessSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptBuildCommand(const ArgumentList& arguments, CommandIo io);
@@ -45,6 +52,8 @@ namespace kb::cli {
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackCommand(const ArgumentList& arguments, CommandIo io);
+// Mods of a game: build, install, list, verify, enable, disable, remove, trust (CliModCommands.cpp).
+[[nodiscard]] int RunModCommand(const ArgumentList& arguments, CommandIo io);
 // The pack subcommands that work on pack contents and pack sets (CliPackSetCommands.cpp).
 [[nodiscard]] int RunPackInfoCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackCompressCommand(const ArgumentList& arguments, CommandIo io);

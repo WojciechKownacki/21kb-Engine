@@ -144,9 +144,6 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
     const float gamma = std::max(desc.outputTransform.gamma, 0.001F);
     const float tonemap[4]{ResolveFullscreenTextureExposureStops(desc.outputTransform), 1.0F / gamma,
                            TonemapValue(desc.outputTransform.tonemap), 0.0F};
-    bgfx::setUniform(viewportUniform_, viewport);
-    bgfx::setUniform(tonemapParamsUniform_, tonemap);
-
     const float outputScaleX = static_cast<float>(outputRect.extent.width) / static_cast<float>(desc.presentationExtent.width);
     const float outputScaleY = static_cast<float>(outputRect.extent.height) / static_cast<float>(desc.presentationExtent.height);
     for (const ScreenUIDrawBatch& batch : drawList.batches) {
@@ -168,6 +165,7 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         const float clipRect[4]{batch.clipRect.left, batch.clipRect.top, batch.clipRect.right, batch.clipRect.bottom};
         // The fourth tonemap lane carries the batch's soft clip edge; the other three are per view.
         const float batchTonemap[4]{tonemap[0], tonemap[1], tonemap[2], batch.style.clipSoftness};
+        bgfx::setUniform(viewportUniform_, viewport);
         bgfx::setUniform(tonemapParamsUniform_, batchTonemap);
         bgfx::setUniform(fillColorUniform_, batch.style.fillColor.data());
         bgfx::setUniform(borderColorUniform_, batch.style.borderColor.data());

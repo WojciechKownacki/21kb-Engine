@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/audio/AudioRoutingContract.hpp"
+#include "engine/audio/AudioDspEffect.hpp"
 
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@ struct AudioMixerBus {
     std::string parentBus;
     float volume = 1.0F;
     bool mute = false;
+    std::vector<AudioDspEffect> effects;
 };
 
 // LIB-147: one named per-bus volume override inside a snapshot.

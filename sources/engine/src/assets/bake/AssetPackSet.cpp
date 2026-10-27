@@ -1,6 +1,7 @@
 #include "engine/assets/bake/AssetPackSet.hpp"
 
 #include "engine/assets/bake/AssetBakeKey.hpp"
+#include "engine/library/EngineLibraryTextEncoding.hpp"
 #include "engine/security/Crypto.hpp"
 
 #include <algorithm>
@@ -55,7 +56,7 @@ std::string_view ToString(AssetPackSetStatus status) noexcept {
 
 bool IsValidAssetPackSetPath(std::string_view path) noexcept {
     if (path.empty() || path.size() > kMaxPathBytes || path.front() == '/' || path.front() == ' ' ||
-        path.back() == ' ') {
+        path.back() == ' ' || !kb::library::IsValidUtf8(path)) {
         return false;
     }
     if (std::ranges::any_of(path, [](char value) {
@@ -260,6 +261,7 @@ AssetPackSetStatus ReadAssetPackSetIndex(const std::filesystem::path& path, Asse
 }
 
 std::filesystem::path ResolveAssetPackSetPath(const std::filesystem::path& indexPath, std::string_view entryPath) {
+    if (!IsValidAssetPackSetPath(entryPath)) return {};
     const std::u8string portable{ reinterpret_cast<const char8_t*>(entryPath.data()), entryPath.size() };
     return (indexPath.parent_path() / std::filesystem::path{ portable }).lexically_normal();
 }

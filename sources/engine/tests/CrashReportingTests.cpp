@@ -438,6 +438,8 @@ void RunCrashKindsTest() {
     const CrashCase cases[] = {
         { L"access-violation", "unhandled-exception", EXCEPTION_ACCESS_VIOLATION },
         { L"stack-overflow", "unhandled-exception", EXCEPTION_STACK_OVERFLOW },
+        { L"access-violation-early", "unhandled-exception", EXCEPTION_ACCESS_VIOLATION },
+        { L"stack-overflow-early", "unhandled-exception", EXCEPTION_STACK_OVERFLOW },
         { L"terminate", "std-terminate: helper terminate reason", 0xE0216B01U },
         { L"abort", "abort", 0xE0216B02U },
         { L"pure-call", "pure-virtual-call", 0xE0216B03U },

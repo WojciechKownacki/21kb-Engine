@@ -27,6 +27,15 @@ enum class ScenePrefabBakedComponentMask : std::uint64_t {
     RegionShape = 1ULL << 16U,
     GuideCurve = 1ULL << 17U,
     ContentInstance = 1ULL << 18U,
+    Grid = 1ULL << 40U,
+    Tilemap = 1ULL << 41U,
+    TilemapRenderer = 1ULL << 42U,
+    TilemapCollider = 1ULL << 43U,
+    CharacterController2D = 1ULL << 47U,
+    Collider2D = 1ULL << 46U,
+    Body2D = 1ULL << 45U,
+    Sprite2D = 1ULL << 44U,
+
     StreamFocus = 1ULL << 19U,
     WorldBackdrop = 1ULL << 20U,
     AmbientRadiance = 1ULL << 21U,
@@ -75,6 +84,15 @@ struct ScenePrefabBakedArchetype {
     std::vector<RegionShapeComponent> regionShapes;
     std::vector<GuideCurveComponent> guideCurves;
     std::vector<ContentInstanceComponent> contentInstances;
+    std::vector<GridComponent> grids;
+    std::vector<TilemapComponent> tilemaps;
+    std::vector<TilemapRendererComponent> tilemapRenderers;
+    std::vector<TilemapColliderComponent> tilemapColliders;
+    std::vector<CharacterController2DComponent> characterControllers2D;
+    std::vector<Collider2DComponent> colliders2D;
+    std::vector<Body2DComponent> bodies2D;
+    std::vector<Sprite2DComponent> sprites2D;
+
     std::vector<StreamFocusComponent> streamFocuses;
     std::vector<WorldBackdropComponent> worldBackdrops;
     std::vector<AmbientRadianceComponent> ambientRadiances;

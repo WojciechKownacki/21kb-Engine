@@ -37,6 +37,7 @@ public:
     [[nodiscard]] bool Flag(std::string_view name) const noexcept;
     [[nodiscard]] const std::vector<std::string>& Positionals() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Errors() const noexcept;
+    [[nodiscard]] std::vector<std::string> UnknownOptions(std::span<const std::string_view> allowed) const;
 
 private:
     std::vector<std::pair<std::string, std::string>> options_;

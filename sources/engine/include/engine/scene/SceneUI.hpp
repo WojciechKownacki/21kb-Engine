@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/math/EngineMath.hpp"
+#include "engine/input/InputTouchPoint.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/ui/UIComponentSet.hpp"
 
@@ -9,12 +10,21 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 namespace kb::scene {
 
 class Scene;
+
+// A committed native editor snapshot. The caret counts Unicode scalar values.
+// Composition stays in the platform editor until it is committed.
+struct SceneUITextInputState {
+    SceneEntity entity;
+    std::u32string text;
+    std::size_t caret = 0U;
+};
 
 enum class UIInteractionState : std::uint8_t {
     Normal,
@@ -51,6 +61,9 @@ struct SceneUIInput {
     bool deleteDown = false;
     float scrollDelta = 0.0F;
     std::span<const char32_t> textInput;
+    // Independent device contacts. A begin over UI owns its pointer until release;
+    // contacts that start outside UI remain available to gameplay.
+    std::span<const kb::input::InputTouchPoint> touchPoints;
     // Controllers of players 1, 2 and 3. Mouse, keyboard and the first controller are player 0.
     std::array<SceneUIPlayerNavigation, 3U> otherPlayers{};
 };
@@ -173,6 +186,10 @@ struct SceneUIFrame {
     kb::math::Vec2 viewportSize{};
     std::vector<SceneUIFrameElement> elements;
     SceneUIFrameRefusal refusal{};
+    // True while a modal canvas is shown; every element on a canvas sorted below modalSortingOrder is then neither
+    // hit-testable nor interactive.
+    bool modalActive = false;
+    std::int32_t modalSortingOrder = 0;
 
     [[nodiscard]] SceneEntity HitTest(kb::math::Vec2 point) const noexcept;
     // The topmost hit that is not `excluded` or inside it - where a dragged widget is being dropped.
@@ -188,6 +205,8 @@ class SceneUIQueries {
     [[nodiscard]] SceneEntity PlayerFocused(std::uint32_t player) const noexcept;
     // The widget being dragged, if any.
     [[nodiscard]] SceneEntity Dragged() const noexcept;
+    // Whether a modal canvas is shown, so the canvases below it take no input.
+    [[nodiscard]] bool ModalCanvasActive() const noexcept;
     [[nodiscard]] bool HasImageAlpha(std::uint64_t imageAssetId) const noexcept;
     // Image assets the current frame hit-tests by opacity whose opacity has not been published yet.
     [[nodiscard]] std::vector<std::uint64_t> PendingImageAlpha() const;
@@ -221,11 +240,15 @@ class SceneUIAccess {
     [[nodiscard]] SceneEntity Hovered() const noexcept;
     [[nodiscard]] SceneEntity Pressed() const noexcept;
     [[nodiscard]] SceneEntity Focused() const noexcept;
+    [[nodiscard]] bool ModalCanvasActive() const noexcept;
     [[nodiscard]] bool HasFocusedTextInput() const noexcept;
     [[nodiscard]] std::span<const SceneUIEvent> Events() const noexcept;
     [[nodiscard]] std::vector<SceneUIEvent> DrainEvents();
     [[nodiscard]] bool SetFocus(SceneEntity entity);
     void ClearFocus() noexcept;
+    [[nodiscard]] std::optional<SceneUITextInputState> TextInputState() const;
+    // Applied during the next UI update using the field's normal validation and events.
+    [[nodiscard]] bool QueueTextInputState(SceneUITextInputState input);
 
   private:
     Scene& scene_;

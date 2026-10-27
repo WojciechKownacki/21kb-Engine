@@ -10,8 +10,10 @@ namespace {
     const InspectorAddComponentBrowserModel::PluginEnabledPredicate* pluginEnabled) {
     const std::string_view requiredPlugin =
         InspectorComponentCatalog::RequiredPluginId(tile.id);
-    // Gameplay.AI is on by default: its components are offered and adding one switches it on.
-    return pluginEnabled == nullptr || requiredPlugin.empty() || requiredPlugin == "Gameplay.AI" || (*pluginEnabled)(requiredPlugin);
+    // Gameplay.AI and World.Map2D are on by default: their components are offered and adding one
+    // switches the plugin on.
+    return pluginEnabled == nullptr || requiredPlugin.empty() || requiredPlugin == "Gameplay.AI" ||
+        requiredPlugin == "World.Map2D" || (*pluginEnabled)(requiredPlugin);
 }
 
 [[nodiscard]] std::vector<AddComponentRow> BuildRows(

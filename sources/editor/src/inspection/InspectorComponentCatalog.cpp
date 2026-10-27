@@ -17,6 +17,8 @@ namespace {
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Particle Effect", .category = "Rendering", .label = "Particle Effect", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "TerrainEditor", .category = "World", .label = "Terrain Editor", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "World2DMap", .category = "World", .label = "World 2D Map", .icon = HeroIconKind::RectangleGroup },
+        InspectorComponentTile{ .id = "Sprite2D", .category = "World", .label = "Sprite 2D", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Ambient Radiance", .category = "Rendering", .label = "Ambient Radiance", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "Detail Switch", .category = "Rendering", .label = "Detail Switch", .icon = HeroIconKind::Cube },
@@ -46,6 +48,9 @@ namespace {
         InspectorComponentTile{ .id = "Collider", .category = "Physics", .label = "Collider", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "CharacterController", .category = "Physics", .label = "Character Controller", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "Joint", .category = "Physics", .label = "Joint", .icon = HeroIconKind::RotationSnap },
+        InspectorComponentTile{ .id = "Body2D", .category = "Physics", .label = "Body 2D", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "Collider2D", .category = "Physics", .label = "Collider 2D", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "CharacterController2D", .category = "Physics", .label = "Character Controller 2D", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "NavAgent", .category = "Navigation", .label = "Nav Agent", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "NavObstacle", .category = "Navigation", .label = "Nav Obstacle", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "NavLink", .category = "Navigation", .label = "Nav Link", .icon = HeroIconKind::RotationSnap },
@@ -87,17 +92,83 @@ namespace {
     return lowered;
 }
 
-[[nodiscard]] bool Matches(const InspectorComponentTile& tile, std::string_view query) {
+struct ComponentNames {
+    std::string_view id;
+    std::string_view keywords;
+    std::string_view description;
+};
+
+constexpr ComponentNames kComponentNames[] = {
+    {"Camera", "view, viewport, eye, player view", "Shows the scene from this object: what the player sees."},
+    {"Light", "lamp, sun, point light, spot light, shadow", "Lights the objects around it, and can cast shadows."},
+    {"MeshRenderer", "mesh, model, 3d model, draw", "Draws a 3D model with a material at this object."},
+    {"Particle Effect", "vfx, fx, smoke, fire, sparks, explosion, effect", "Plays a particle effect such as smoke, sparks or fire at this object."},
+    {"TerrainEditor", "terrain, landscape, ground, heightmap, hills", "Sculpts and paints a landscape in the editor."},
+    {"World2DMap", "tilemap, tile map, 2d map, tiles, level", "Holds a 2D tile map you paint with the Map Editor."},
+    {"Sprite2D", "sprite, 2d sprite, animated sprite, picture, image, character art, flipbook, sprite sheet, atlas", "Draws a picture, or one cell of a sprite sheet, and plays a frame animation."},
+    {"WorldBackdrop", "sky, skybox, background, horizon", "Draws the sky and distant background behind the scene."},
+    {"Ambient Radiance", "ambient light, global illumination, gi, light probe, bounce light", "Adds soft indirect light that fills shadows around it."},
+    {"Detail Switch", "lod, level of detail, distance, simplify", "Swaps to simpler models as the object gets far from the camera, to save speed."},
+    {"Visibility Blocker", "occluder, occlusion, hide behind, wall culling", "Marks solid geometry that hides what is behind it, so hidden objects are not drawn."},
+    {"Visibility Cell", "occlusion cell, room, pvs, visible set", "Defines a region that knows which objects can be seen from inside it."},
+    {"Region Portal", "portal, doorway, room link, opening", "Marks an opening between two regions so the view can continue through it."},
+    {"Secondary Frame", "render texture, second camera, mirror, minimap, security camera, picture in picture", "Renders a second view of the scene into a picture you can show on a surface or screen."},
+    {"Geometry Swarm", "instancing, instanced mesh, foliage, grass, trees, scatter, crowd, many copies", "Draws thousands of copies of one model cheaply, for grass, trees or crowds."},
+    {"Surface Cast", "decal, projected, stamp, bullet hole, stain, paint on surface", "Projects a picture onto the surfaces in front of it, like a stain or a mark."},
+    {"Facing Panel", "billboard, sprite, camera facing, always faces camera, flat image, quad", "A flat picture that always turns to face the camera, like a tree sprite or a label in the world."},
+    {"Line Renderer", "line, beam, rope, wire, laser, path line", "Draws a line or beam through a list of points."},
+    {"Trail Renderer", "trail, ribbon, swoosh, streak, motion trail", "Leaves a fading ribbon behind a moving object."},
+    {"Tags", "tag, layer, label, group, category, classification", "Gives the object names and layers so game logic and the editor can find it."},
+    {"RegionShape", "zone, area, volume, trigger zone, bounds", "Describes an area of space other features can use."},
+    {"GuideCurve", "spline, path, rail, curve, route", "A curve in space that other features can follow."},
+    {"ContentInstance", "prefab link, linked scene, reference, sub scene", "Places another saved piece of content in this scene."},
+    {"StreamFocus", "streaming, loader, load around, focus point", "Tells the world where to load content around."},
+    {"AudioSource", "sound, speaker, music, sfx, play sound, audio clip", "Plays a sound from this object, in 3D space if you choose."},
+    {"AudioListener", "ears, microphone, hearing, listener", "Marks where the player hears from."},
+    {"Animator", "animation, animate, state machine, controller, character animation", "Plays and blends animations on a character through a state machine."},
+    {"SkeletonBinding", "skeleton, bones, rig, skinned mesh", "Attaches a model to a skeleton so bones move it."},
+    {"SocketAttachment", "socket, hold, attach to bone, weapon grip, hand", "Attaches this object to a named point on a character, such as a hand."},
+    {"Combatant", "health, hp, team, damage, fighter, enemy, senses", "Gives the object health, a team and senses so it can fight and be hurt."},
+    {"AIBrain", "ai, behaviour, behavior, enemy brain, rules, npc", "Lets the object decide what to do from simple rules, like chase or flee."},
+    {"DeformedGeometry", "cloth, soft, wobble, bend, deform, jelly", "Bends and wobbles a model while it moves."},
+    {"Rigidbody", "physics body, gravity, falls, pushable, simulation", "Makes the object move by physics: fall, bounce and be pushed."},
+    {"Collider", "hitbox, collision, trigger, solid, blocks", "Gives the object a solid shape that things collide with, or a trigger area."},
+    {"CharacterController", "player controller, walking, movement, character movement, capsule", "Moves a character through the world without falling through floors or walls."},
+    {"Body2D", "2d physics, 2d rigidbody, box2d, gravity, platformer, falls, pushable", "Makes the object move by 2D physics: fall, bounce and be pushed in the side view or the top-down plane."},
+    {"Collider2D", "2d collision, 2d shape, hitbox, trigger zone, box, circle, capsule", "Gives the object a 2D shape that collides, or a trigger zone that reports who enters it."},
+    {"CharacterController2D", "2d player controller, platformer player, top down player, 2d character, walking", "Walks a 2D character through the world: slopes, small steps, jumping, without falling through floors or walls."},
+    {"Joint", "hinge, door, constraint, connect, spring, rope joint", "Connects two physics bodies, like a hinge or a spring."},
+    {"NavAgent", "pathfinding, path, walk to, ai movement, navigation", "Lets the object walk to a point along a route that avoids obstacles."},
+    {"NavObstacle", "blocker, avoid, obstacle, block path", "Makes walkers go around this object."},
+    {"NavLink", "jump link, off mesh, ladder, connection, drop down", "Joins two walkable places that are not next to each other, like a jump or a ladder."},
+};
+
+[[nodiscard]] const ComponentNames* FindNames(std::string_view componentId) noexcept {
+    for (const ComponentNames& names : kComponentNames) {
+        if (names.id == componentId) {
+            return &names;
+        }
+    }
+    return nullptr;
+}
+
+// 0: no match; 1: the label, id or category names it; 2: only an everyday name (keyword) does. Search lists the
+// first kind before the second, so typing a component's own name still puts that component first.
+[[nodiscard]] int MatchRank(const InspectorComponentTile& tile, std::string_view query) {
     if (query.empty()) {
-        return true;
+        return 1;
     }
     const std::string loweredQuery = LowerAscii(query);
     // The names the user reads match as well as the English ones the catalog keeps.
-    return LowerAscii(tile.label).find(loweredQuery) != std::string::npos ||
+    if (LowerAscii(tile.label).find(loweredQuery) != std::string::npos ||
         LowerAscii(tile.category).find(loweredQuery) != std::string::npos ||
         LowerAscii(tile.id).find(loweredQuery) != std::string::npos ||
         LowerAscii(InspectorComponentCatalog::DisplayLabel(tile)).find(loweredQuery) != std::string::npos ||
-        LowerAscii(InspectorComponentCatalog::CategoryLabel(tile.category)).find(loweredQuery) != std::string::npos;
+        LowerAscii(InspectorComponentCatalog::CategoryLabel(tile.category)).find(loweredQuery) != std::string::npos) {
+        return 1;
+    }
+    const ComponentNames* names = FindNames(tile.id);
+    return names != nullptr && LowerAscii(names->keywords).find(loweredQuery) != std::string::npos ? 2 : 0;
 }
 
 } // namespace
@@ -139,13 +210,18 @@ std::vector<const InspectorComponentTile*> InspectorComponentCatalog::InCategory
 
 std::vector<const InspectorComponentTile*> InspectorComponentCatalog::Search(std::string_view query) {
     std::vector<const InspectorComponentTile*> result;
+    std::vector<const InspectorComponentTile*> byKeyword;
     const std::span<const InspectorComponentTile> tiles = Tiles();
     result.reserve(tiles.size());
     for (const InspectorComponentTile& tile : tiles) {
-        if (Matches(tile, query)) {
+        const int rank = MatchRank(tile, query);
+        if (rank == 1) {
             result.push_back(&tile);
+        } else if (rank == 2) {
+            byKeyword.push_back(&tile);
         }
     }
+    result.insert(result.end(), byKeyword.begin(), byKeyword.end());
     return result;
 }
 
@@ -164,6 +240,8 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "MeshRenderer") return std::string{ EditorText("component.meshRenderer", "Mesh Renderer") };
     if (tile.id == "Particle Effect") return std::string{ EditorText("component.particleEffect", "Particle Effect") };
     if (tile.id == "TerrainEditor") return std::string{ EditorText("component.terrainEditor", "Terrain Editor") };
+    if (tile.id == "World2DMap") return std::string{ EditorText("component.world2dMap", "World 2D Map") };
+    if (tile.id == "Sprite2D") return std::string{ EditorText("component.sprite2D", "Sprite 2D") };
     if (tile.id == "WorldBackdrop") return std::string{ EditorText("component.worldBackdrop", "World Backdrop") };
     if (tile.id == "Ambient Radiance") return std::string{ EditorText("component.ambientRadiance", "Ambient Radiance") };
     if (tile.id == "Detail Switch") return std::string{ EditorText("component.detailSwitch", "Detail Switch") };
@@ -192,6 +270,9 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "Rigidbody") return std::string{ EditorText("component.rigidbody", "Rigidbody") };
     if (tile.id == "Collider") return std::string{ EditorText("component.collider", "Collider") };
     if (tile.id == "CharacterController") return std::string{ EditorText("component.characterController", "Character Controller") };
+    if (tile.id == "Body2D") return std::string{ EditorText("component.body2D", "Body 2D") };
+    if (tile.id == "Collider2D") return std::string{ EditorText("component.collider2D", "Collider 2D") };
+    if (tile.id == "CharacterController2D") return std::string{ EditorText("component.characterController2D", "Character Controller 2D") };
     if (tile.id == "Joint") return std::string{ EditorText("component.joint", "Joint") };
     if (tile.id == "NavAgent") return std::string{ EditorText("component.navAgent", "Nav Agent") };
     if (tile.id == "NavObstacle") return std::string{ EditorText("component.navObstacle", "Nav Obstacle") };
@@ -213,6 +294,7 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
 std::string_view InspectorComponentCatalog::CategoryLabel(std::string_view category) {
     if (category == "Animation") return EditorText("component.category.animation", "Animation");
     if (category == "Audio") return EditorText("component.category.audio", "Audio");
+    if (category == "Gameplay") return EditorText("component.category.gameplay", "Gameplay");
     if (category == "Navigation") return EditorText("component.category.navigation", "Navigation");
     if (category == "Physics") return EditorText("component.category.physics", "Physics");
     if (category == "Rendering") return EditorText("component.category.rendering", "Rendering");
@@ -222,8 +304,19 @@ std::string_view InspectorComponentCatalog::CategoryLabel(std::string_view categ
     return category;
 }
 
+std::string_view InspectorComponentCatalog::Keywords(std::string_view componentId) noexcept {
+    const ComponentNames* names = FindNames(componentId);
+    return names == nullptr ? std::string_view{} : names->keywords;
+}
+
+std::string_view InspectorComponentCatalog::Description(std::string_view componentId) noexcept {
+    const ComponentNames* names = FindNames(componentId);
+    return names == nullptr ? std::string_view{} : names->description;
+}
+
 std::string_view InspectorComponentCatalog::RequiredPluginId(std::string_view componentId) noexcept {
     if (componentId == "TerrainEditor") return "Editor.Terrain"; // editor-only component
+    if (componentId == "World2DMap") return "World.Map2D";
     // Every scene component's plugin lives in the engine table the CLI uses too.
     const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(componentId);
     return kind == nullptr ? std::string_view{} : kind->requiredPlugin;

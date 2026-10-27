@@ -1,0 +1,18 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector", "Project Files", "Console"], "hidden": ["Project Settings"], "fits_width": 1600, "fits_height": 960},
+    {"op": "workspace_save", "slot": "default"},
+    {"op": "workspace_float", "panel": "Console", "x": 300, "y": 200, "width": 800, "height": 400},
+    {"op": "workspace_close", "panel": "Project Files"},
+    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector", "Console"], "hidden": ["Project Files"], "floating": ["Console"], "differs_from_slot": "default", "fits_width": 1600, "fits_height": 960},
+    {"op": "workspace_save", "slot": "arranged", "file": "Saved/Layouts/arranged.layout"},
+    {"op": "assert_file", "path": "Saved/Layouts/arranged.layout"},
+    {"op": "assert_workspace", "fits_width": 1024, "fits_height": 600},
+    {"op": "assert_workspace", "fits_width": 3840, "fits_height": 2160},
+    {"op": "workspace_reset"},
+    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector", "Project Files", "Console"], "same_as_slot": "default", "fits_width": 1600, "fits_height": 960},
+    {"op": "workspace_restore", "file": "Saved/Layouts/arranged.layout"},
+    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector"], "hidden": ["Project Files"], "same_as_slot": "arranged", "fits_width": 1600, "fits_height": 960}
+  ]
+}

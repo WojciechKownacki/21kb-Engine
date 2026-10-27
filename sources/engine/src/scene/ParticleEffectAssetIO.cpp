@@ -431,6 +431,8 @@ void ReadFlipbook(Reader& reader, const std::string& base, ParticleFlipbookAsset
     reader.Required(base + ".rows", flipbook.rows, ParseUInt<std::uint32_t>);
     reader.Required(base + ".framesPerSecond", flipbook.framesPerSecond, ParseFloat);
     reader.Required(base + ".looping", flipbook.looping, ParseBool);
+    static_cast<void>(reader.Optional(base + ".startFrame", flipbook.startFrame, ParseUInt<std::uint32_t>));
+    static_cast<void>(reader.Optional(base + ".frameCount", flipbook.frameCount, ParseUInt<std::uint32_t>));
 }
 
 [[nodiscard]] std::optional<std::size_t> ParsePathIndex(std::string_view path, std::string_view marker) noexcept {
@@ -504,6 +506,8 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
         reader.Required(IndexPath(emitterIndex, "simulationSpace"), emitter.simulationSpace,
                         ParseEnum<ParticleSimulationSpace>, ParticleEffectDiagnosticCode::InvalidEnum);
         static_cast<void>(reader.Optional(IndexPath(emitterIndex, "absolutePosition"), emitter.absolutePosition,
+                                          ParseBool));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "screenDepthCollision"), emitter.screenDepthCollision,
                                           ParseBool));
         reader.Required(IndexPath(emitterIndex, "spawn.mode"), emitter.spawn.mode, ParseEnum<ParticleSpawnMode>,
                         ParticleEffectDiagnosticCode::InvalidEnum);
@@ -737,7 +741,9 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
     reader.Finish();
     if (asset.formatVersion != kParticleEffectFormatVersion)
         Error(result, ParticleEffectDiagnosticCode::UnsupportedVersion, reader.ProvenanceLine("effect.formatVersion"),
-              "effect.formatVersion", "future or unsupported version");
+              "effect.formatVersion", "Particle effect version " + std::to_string(asset.formatVersion) +
+                  " is unsupported; this engine writes version " + std::to_string(kParticleEffectFormatVersion) +
+                  ". Open newer assets with a newer engine.");
     if (result.diagnostics.empty()) {
         auto validation = ParticleEffectAssetValidator::ValidateStructure(asset);
         for (ParticleEffectDiagnostic& diagnostic : validation.diagnostics)
@@ -885,7 +891,9 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                 const std::string_view versionText = content.substr(std::string_view{"21kb ParticleEffect "}.size());
                 if (ParseUInt(versionText, version) && version > kParticleEffectFormatVersion)
                     Error(result, ParticleEffectDiagnosticCode::UnsupportedVersion, lineNumber, "effect.formatVersion",
-                          "future version is unsupported");
+                          "Particle effect version " + std::to_string(version) +
+                              " requires a newer engine; this engine supports up to version " +
+                              std::to_string(kParticleEffectFormatVersion) + ". Open the effect with a newer engine.");
                 else
                     Error(result, ParticleEffectDiagnosticCode::InvalidHeader, lineNumber, "effect.formatVersion",
                           "versioned header is not canonical");
@@ -1041,6 +1049,8 @@ void WriteFlipbook(std::string& out, const std::string& base, const ParticleFlip
     Line(out, base + ".rows", std::to_string(value.rows));
     Line(out, base + ".framesPerSecond", Float(value.framesPerSecond));
     BoolLine(out, base + ".looping", value.looping);
+    if (value.startFrame != 0U) Line(out, base + ".startFrame", std::to_string(value.startFrame));
+    if (value.frameCount != 0U) Line(out, base + ".frameCount", std::to_string(value.frameCount));
 }
 
 } // namespace
@@ -1148,6 +1158,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         Line(out, IndexPath(ei, "maxParticles"), std::to_string(e.maxParticles));
         Line(out, IndexPath(ei, "simulationSpace"), EnumText(e.simulationSpace));
         if (e.absolutePosition) BoolLine(out, IndexPath(ei, "absolutePosition"), true);
+        if (e.screenDepthCollision) BoolLine(out, IndexPath(ei, "screenDepthCollision"), true);
         Line(out, IndexPath(ei, "spawn.mode"), EnumText(e.spawn.mode));
         WriteCurve(out, IndexPath(ei, "spawn.rate"), e.spawn.rateOverTime);
         Line(out, IndexPath(ei, "spawn.burstCount"), std::to_string(e.spawn.bursts.size()));

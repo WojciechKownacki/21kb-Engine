@@ -1,12 +1,14 @@
 #include "scene/audio/EditorAudioMixerAssetGateway.hpp"
 
 #include "assets/EditorAssetBrowserState.hpp"
+#include "commands/EditorCommandStack.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 
 #include <system_error>
+#include <memory>
 #include <utility>
 
 namespace kb::editor {
@@ -19,7 +21,7 @@ namespace {
     for (std::size_t index = 0U; index < left.buses.size(); ++index) {
         const kb::audio::AudioMixerBus& a = left.buses[index];
         const kb::audio::AudioMixerBus& b = right.buses[index];
-        if (a.name != b.name || a.parentBus != b.parentBus || a.volume != b.volume || a.mute != b.mute) {
+        if (a.name != b.name || a.parentBus != b.parentBus || a.volume != b.volume || a.mute != b.mute || a.effects != b.effects) {
             return false;
         }
     }
@@ -39,13 +41,51 @@ namespace {
     return true;
 }
 
+class AudioMixerEditCommand final : public IEditorCommand {
+public:
+    AudioMixerEditCommand(kb::scene::Scene& scene, EditorAssetBrowserState& browser,
+        kb::assets::AssetId id, kb::audio::AudioMixerAsset before, kb::audio::AudioMixerAsset after)
+        : scene_(scene), browser_(browser), id_(id), before_(std::move(before)), after_(std::move(after)) {}
+
+    std::string_view Label() const noexcept override { return "Edit Audio Mixer"; }
+    bool AffectsSceneDocument() const noexcept override { return false; }
+    bool AffectsHierarchySelection() const noexcept override { return false; }
+    EditorCommandHistoryKey HistoryKey() const noexcept override { return EditorCommandHistoryKey::AudioMixerAsset(id_.value); }
+    bool Execute() override { return Write(before_, after_); }
+    bool Undo() override { return Write(after_, before_); }
+    bool Redo() override { return Write(before_, after_); }
+
+private:
+    bool Write(const kb::audio::AudioMixerAsset& expected, const kb::audio::AudioMixerAsset& replacement) {
+        // Use the same atomic save, validation, cache refresh and rollback path as an edit.
+        EditorAudioMixerAssetGateway gateway{scene_, browser_};
+        return gateway.Mutate(id_, [&](kb::audio::AudioMixerAsset& asset) {
+            if (!Equal(asset, expected)) return false;
+            asset = replacement;
+            return true;
+        });
+    }
+    kb::scene::Scene& scene_;
+    EditorAssetBrowserState& browser_;
+    kb::assets::AssetId id_;
+    kb::audio::AudioMixerAsset before_;
+    kb::audio::AudioMixerAsset after_;
+};
+
 } // namespace
 
 EditorAudioMixerAssetGateway::EditorAudioMixerAssetGateway(
     kb::scene::Scene& scene,
-    EditorAssetBrowserState& browser) noexcept
+    EditorAssetBrowserState& browser, EditorCommandStack* commands) noexcept
     : scene_(scene)
-    , browser_(browser) {}
+    , browser_(browser), commands_(commands) {}
+
+EditorCommandHistoryKey EditorAudioMixerAssetGateway::SelectedHistoryKey(
+    const kb::scene::Scene& scene, const EditorAssetBrowserState& browser) noexcept {
+    const auto* metadata = scene.Assets().Manager().Registry().Find(browser.InspectorAsset());
+    return metadata != nullptr && metadata->type == kb::audio::kAudioMixerAssetType
+        ? EditorCommandHistoryKey::AudioMixerAsset(metadata->id.value) : EditorCommandHistoryKey::Scene();
+}
 
 std::optional<std::filesystem::path> EditorAudioMixerAssetGateway::ResolveFolder(
     const std::filesystem::path& virtualFolder) const {
@@ -109,6 +149,9 @@ bool EditorAudioMixerAssetGateway::Mutate(kb::assets::AssetId id, const Mutation
     if (!mutation(candidate) || !kb::audio::ValidateAudioMixerAsset(candidate).empty()
         || Equal(candidate, *loaded)) {
         return false;
+    }
+    if (commands_ != nullptr) {
+        return commands_->Execute(std::make_unique<AudioMixerEditCommand>(scene_, browser_, id, *loaded, std::move(candidate)));
     }
     if (!kb::audio::AudioMixerAssetIO::Save(*path, candidate)) {
         return false;

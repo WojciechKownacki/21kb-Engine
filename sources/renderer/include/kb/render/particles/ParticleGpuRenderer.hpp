@@ -33,7 +33,7 @@ enum class ParticleVolumetricQuality : std::uint8_t { Low, High };
 
 class ParticleGpuRenderer final {
 public:
-    [[nodiscard]] bool Initialize();
+    [[nodiscard]] bool Initialize(std::uint64_t particleBufferBudgetBytes = 0U);
     void Shutdown() noexcept;
     void Warmup(std::uint32_t particleCapacity);
     [[nodiscard]] bool IsInitialized() const noexcept;
@@ -80,6 +80,9 @@ public:
     // colliding emitters sample it; SubmitGpuEmitters draws every emitter of the scene into the given view.
     [[nodiscard]] bool GpuEmittersReady() const noexcept;
     [[nodiscard]] bool HasGpuEmitters(std::uint64_t sceneId) const noexcept;
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::Draw> GpuEmitterDraws(std::uint64_t sceneId) const noexcept;
+    [[nodiscard]] std::uint64_t GpuEmitterAllocatedBytes() const noexcept;
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> RejectedGpuUpdates(std::uint64_t sceneId) const noexcept;
     // `renderOrigin` is the render origin of the scene's frame (GPU particle positions are drawn relative to it).
     void SyncGpuEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex,
         const kb::math::DVec3& renderOrigin = {});

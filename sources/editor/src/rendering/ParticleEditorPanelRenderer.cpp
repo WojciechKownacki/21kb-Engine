@@ -606,6 +606,13 @@ void ParticleEditorPanelRenderer::Paint(
     const std::string diagnosticCount = std::to_string(inspector.diagnostics.size());
     DrawSectionHeader(dc, layout.diagnosticHeader, theme, EditorText("particleEditor.diagnostics", "Diagnostics"), HeroIconKind::CommandLine,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Diagnostics), diagnosticCount);
+    const auto executionRows = kb::particle_editor::ParticleEmitterInspectorModel::ExecutionRows(inspector);
+    for (std::size_t index = 0U; index < layout.executionRowCount; ++index) {
+        RECT text = layout.executionRows[index];
+        text.left += 8;
+        DrawTextUtf8(dc, text, executionRows[index].c_str(), kStudioMuted,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
     for (std::size_t index = 0U; index < layout.diagnosticRowCount; ++index) {
         FillRound(dc, layout.diagnosticRows[index], RGB(48, 28, 30), RGB(128, 72, 76), 4.0F);
         RECT text = layout.diagnosticRows[index];

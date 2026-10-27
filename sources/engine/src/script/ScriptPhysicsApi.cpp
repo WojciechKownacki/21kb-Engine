@@ -431,6 +431,22 @@ ScriptFunctionCallResult CharacterJump(const ScriptFunctionCallContext& context,
     return BoolResult("applied", applied);
 }
 
+// Coyote time. Off (0) unless a script asks, so every character keeps jumping from the ground only.
+// The request travels to the Jolt plugin as a CharacterJump of a speed in [-1.5, -1]: grace = -speed - 1.
+// Such a speed was never a jump (a jump needs a positive speed), and carrying it that way keeps
+// IPhysicsBackend, and with it the module ABI, unchanged. kCharacterJumpGraceCodeLow/High in
+// JoltPhysicsSceneSystem.cpp decodes it.
+ScriptFunctionCallResult SetCharacterJumpGrace(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const float seconds = FloatArg(arguments, "seconds", 0.0F);
+    if (!std::isfinite(seconds) || seconds < 0.0F || seconds > 0.5F) {
+        return Error("Physics.SetCharacterJumpGrace seconds must be a number from 0 to 0.5");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::CharacterJump(*context.scene, EntityArg(arguments, "entity"), -1.0F - seconds));
+}
+
 ScriptFunctionCallResult CharacterVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return Error("physics api requires an active scene");
@@ -735,6 +751,16 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
     characterJumpDesc.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
     characterJumpDesc.callback = &CharacterJump;
     ok = host.RegisterFunction(std::move(characterJumpDesc)) && ok;
+
+    ScriptFunctionDesc jumpGraceDesc;
+    jumpGraceDesc.signature.name = "Physics.SetCharacterJumpGrace";
+    jumpGraceDesc.signature.inputs = {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "seconds", ScriptValueType::Float, true },
+    };
+    jumpGraceDesc.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
+    jumpGraceDesc.callback = &SetCharacterJumpGrace;
+    ok = host.RegisterFunction(std::move(jumpGraceDesc)) && ok;
 
     ok = RegisterVectorGetter(host, "Physics.CharacterVelocity", &CharacterVelocity) && ok;
     ok = RegisterEntityBoolQuery(host, "Physics.CharacterIsGrounded", "grounded", &CharacterIsGrounded) && ok;

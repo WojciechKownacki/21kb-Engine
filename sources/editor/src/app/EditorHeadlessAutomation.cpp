@@ -49,6 +49,7 @@
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/PanelContentRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
+#include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -618,7 +619,8 @@ struct EditorHeadlessAutomation::Impl {
     [[nodiscard]] bool RenderScene(
         EditorSceneContext& context,
         std::uint64_t viewportKey,
-        bool editorOverlaysEnabled) {
+        bool editorOverlaysEnabled,
+        std::optional<float> deltaSeconds = std::nullopt) {
         if (window == nullptr) return false;
         if (!editorOverlaysEnabled && runtimeWidth != 0U) {
             if (!context.PlayCameraEntity().IsValid()) return false;
@@ -633,7 +635,7 @@ struct EditorHeadlessAutomation::Impl {
             renderFailed = false;
             viewport.BeginPaintLayout(window);
             viewport.Present(window, bounds, context.Scene(), settings);
-            viewport.EndPaintLayout();
+            viewport.EndPaintLayout(deltaSeconds);
             const auto stats = viewport.LastSceneSubmitStats();
             if (stats.HasMissingResources() || stats.droppedInstanceCount != 0U) {
                 context.Console().Error("Renderer", "Runtime frame has missing resources or dropped instances.");
@@ -653,7 +655,7 @@ struct EditorHeadlessAutomation::Impl {
             settings.presentToHost = false;
             settings.postProcessEnabled = false;
             viewport.Present(window, RECT{0,0,640,360},context.Scene(),settings);
-            viewport.EndPaintLayout();
+            viewport.EndPaintLayout(deltaSeconds);
             return std::string_view{viewport.ActiveBackendLabel()} != "Not initialized";
         }
         constexpr RECT bounds{ 0, 0, 640, 360 };
@@ -688,13 +690,13 @@ struct EditorHeadlessAutomation::Impl {
         viewport.BeginPaintLayout(window);
         viewport.Present(
             window, bounds, context.Scene(), settings);
-        viewport.EndPaintLayout();
+        viewport.EndPaintLayout(deltaSeconds);
         return std::string_view{ viewport.ActiveBackendLabel() } !=
             "Not initialized";
     }
 
-    [[nodiscard]] bool Render(EditorSceneContext& context) {
-        return RenderScene(context, 1U, false);
+    [[nodiscard]] bool Render(EditorSceneContext& context, float deltaSeconds = 0.0F) {
+        return RenderScene(context, 1U, false, deltaSeconds);
     }
 
     // The Scene panel's own present settings (ScenePanelContentRenderer::BuildSettings), so a
@@ -1209,15 +1211,21 @@ bool EditorHeadlessAutomation::VerifyPrefabRoundTrip() {
     const std::filesystem::path scenePath = EditorProjectPaths::ScenesRoot() / "PrefabRoundTrip.21kbscene";
     if (!step("save", context_.SaveCurrentSceneAs(scenePath)) ||
         !step("reopen", context_.OpenScene(scenePath) && positionX("RoundTripCrate") == 4.0F && positionX("RoundTripPlaced") == 4.0F) ||
+        !step("edit-before-play", context_.ToggleEntityVisibility(findNamed("RoundTripPlaced"))) ||
         !step("play", context_.BeginPlayModeSceneSession() && context_.TickPlayModeSceneSession(1.0F / 60.0F)) ||
         !step("stop", context_.RestorePlayModeSceneSession())) {
         return false;
     }
 
-    // Stopping Play starts a fresh history, so the undo step undoes an edit made after it.
-    return step("edit", context_.ToggleEntityVisibility(findNamed("RoundTripPlaced"))) &&
-        step("undo", context_.UndoSceneCommand() &&
-            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode != kb::scene::VisibilityMode::Hidden);
+    const auto sourcePrefab = context_.Scene().Prefabs().SourcePrefab(
+        context_.Scene().Prefabs().RootInstance(findNamed("RoundTripCrate")));
+    return step("undo-before-play-edit", context_.UndoSceneCommand() &&
+            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode != kb::scene::VisibilityMode::Hidden) &&
+        step("play-with-redo", context_.BeginPlayModeSceneSession()) &&
+        step("stop-with-redo", context_.RestorePlayModeSceneSession()) &&
+        step("redo-before-play-edit", context_.RedoSceneCommand() &&
+            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode == kb::scene::VisibilityMode::Hidden) &&
+        step("instance-count", context_.Scene().Prefabs().RefreshInstances(sourcePrefab) == 2U);
 }
 
 bool EditorHeadlessAutomation::VerifyUI2DEditing() {
@@ -1592,7 +1600,16 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
     for (const auto& [item, command] : commands) {
         const std::string id{ item->id };
         if (!EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command, context_)) return fail(id + ": creation failed");
-        const kb::scene::SceneEntity entity = context_.SelectedEntity();
+        kb::scene::SceneEntity entity = context_.SelectedEntity();
+        // A map is a Grid with four tilemap layers and a Map Camera (six rows); the menu selects its Terrain layer, ready to paint.
+        const bool map = item->id == "Map Top Down" || item->id == "Map Platformer";
+        if (map) {
+            const kb::scene::SceneEntity root = context_.Scene().Hierarchy().Parent(entity);
+            if (context_.Scene().Entities().Name(entity) != "Terrain" || !root.IsValid() ||
+                context_.Scene().Components().Grids().TryGet(root) == nullptr ||
+                context_.Scene().Components().Tilemaps().TryGet(entity) == nullptr) return fail(id + ": not a map with a Terrain layer");
+            entity = root;
+        }
         if (context_.Scene().Entities().Name(entity) != item->name) return fail(id + ": wrong name");
         const auto has = [&](std::string_view component) { return kb::scene::SceneComponentAuthoring::Has(context_.Scene(), entity, component); };
         const bool shape = kb::assets::FindBuiltInShape(item->id) != nullptr;
@@ -1608,8 +1625,9 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
         if (shape && context_.Scene().Components().MeshRenderers().TryGet(entity)->meshAssetId !=
                 kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)
             return fail(id + ": not the engine shape");
-        if (context_.HierarchyRows().size() != baseline + 1U || !context_.UndoSceneCommand() ||
-            context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
+        const std::size_t created = context_.HierarchyRows().size() - baseline;
+        if (created != (map ? 6U : 1U)) return fail(id + ": created " + std::to_string(created) + " rows");
+        if (!context_.UndoSceneCommand() || context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
         Trace("scene_creation_menu", true, id);
     }
     return true;
@@ -2374,6 +2392,10 @@ bool EditorHeadlessAutomation::SetGameplayTouches(
             Trace("gameplay_touches", false, "invalid-position");
             return false;
         }
+        if (point.phase > kb::input::InputTouchPhase::Cancelled) {
+            Trace("gameplay_touches", false, "invalid-phase");
+            return false;
+        }
     }
     context_.Scene().Input().MutableDeviceState().SetTouchPoints(
         points);
@@ -2454,7 +2476,7 @@ bool EditorHeadlessAutomation::StepRuntime(
             return false;
         }
         const auto simulated = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-        if (!impl_->Render(context_)) {
+        if (!impl_->Render(context_, deltaSeconds)) {
             Trace("step_runtime", false, "render-backend-failed");
             return false;
         }
@@ -3745,14 +3767,15 @@ bool EditorHeadlessAutomation::InspectorPointerDrag(
     return routed;
 }
 
-bool EditorHeadlessAutomation::InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind) {
+bool EditorHeadlessAutomation::InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind, InspectorSectionId section) {
     // Scrolled the way a person scrolls to a row below the panel's height.
     for (int offset = 0; offset <= 4000; offset += 150) {
         static_cast<void>(context_.Inspector().SetScrollOffset(offset, std::numeric_limits<int>::max()));
         for (int y = kInspectorContent.top + 1; y < kInspectorContent.bottom; y += 2) {
             for (int x = kInspectorContent.left + 8; x < kInspectorContent.right; x += 16) {
                 const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kInspectorContent, context_, x, y);
-                if (hit.property != property || hit.kind != kind || (index >= 0 && hit.index != index)) {
+                if (hit.property != property || hit.kind != kind || (index >= 0 && hit.index != index) ||
+                    (section != InspectorSectionId::None && hit.section != section)) {
                     continue;
                 }
                 const bool pressed = InspectorPointerDown(x, y);
@@ -3875,6 +3898,16 @@ bool EditorHeadlessAutomation::CapturePanel(
         "capture_panel", succeeded,
         std::string{ panel } + ':' + path.filename().string());
     return succeeded;
+}
+
+bool EditorHeadlessAutomation::PresentParticlePreview() {
+    if (impl_->window == nullptr || !context_.HasParticleEditorAsset()) return false;
+    const DockPanel panel{.id = 15U, .kind = DockPanelKind::ParticleEditor};
+    impl_->viewport.BeginPaintLayout(impl_->window);
+    const bool presented = ParticleEditorPanelRenderer::PresentViewport(
+        impl_->viewport, impl_->window, RECT{0, 0, 960, 540}, panel, context_, impl_->backendSettings);
+    impl_->viewport.EndPaintLayout();
+    return presented && std::string_view{impl_->viewport.ActiveBackendLabel()} != "Not initialized";
 }
 
 bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(

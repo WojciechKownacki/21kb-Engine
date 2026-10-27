@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -819,7 +820,16 @@ void RunGraphShaderDeepCacheRootCookTest() {
 // The negator's sweep: every node kind alone, each of its outputs routed into the Material
 // Output, compiled to shader source and cooked by shaderc (BaseOpaque, SPIR-V). Unconnected
 // inputs take the node's defaults, as in the editor; a texture input gets a Texture Object.
-void RunGraphShaderEveryNodeOutputCooksTest() {
+void RunGraphShaderEveryNodeOutputCooksTest(std::uint32_t shard, std::uint32_t shardCount) {
+    Require(shardCount != 0U && shard < shardCount, "Shader node cook partition is invalid");
+    std::size_t totalCases = 0U;
+    std::size_t selectedCases = 0U;
+    const auto makeRequest = [shard, shardCount](std::string pass) {
+        auto request = MakeCookRequest(std::move(pass));
+        request.cacheRoot = (std::filesystem::path{ request.cacheRoot } /
+            ("node-sweep-" + std::to_string(shardCount) + "-" + std::to_string(shard))).generic_string();
+        return request;
+    };
     std::ostringstream failures;
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
     for (const RenderMaterialGraphNodeKind kind : AllRenderMaterialGraphNodeKinds()) {
@@ -842,6 +852,12 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
         const std::string kindName{ RenderMaterialGraphNodeKindName(kind) };
         for (const std::string& hint : SweepHints(kind))
         for (const std::string& outPin : RenderMaterialGraphNodeOutputPinNames(kind)) {
+            const std::size_t caseIndex = totalCases++;
+            if (caseIndex % shardCount != shard) continue;
+            ++selectedCases;
+            std::fprintf(stderr, "graph_shader_sweep case=%zu shard=%u/%u node=%s output=%s\n",
+                caseIndex, shard, shardCount, kindName.c_str(), outPin.c_str());
+            std::fflush(stderr);
             const RenderMaterialGraphPinType outType = RenderMaterialGraphPinDataType(kind, outPin, true);
             RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
             RenderMaterialGraphNode subject{ .id = 2U, .kind = kind };
@@ -937,7 +953,7 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
                     }
                 }
                 const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(
-                    pass == kRenderMaterialGraphMotionVectorsPass ? masked.shader : compiled.shader, backends, MakeCookRequest(pass));
+                    pass == kRenderMaterialGraphMotionVectorsPass ? masked.shader : compiled.shader, backends, makeRequest(pass));
                 if (!cooked.Succeeded()) {
                     failures << where << " (" << pass << "): shaderc: "
                              << (cooked.diagnostics.empty() ? std::string{} : cooked.diagnostics.front().message.substr(cooked.diagnostics.front().message.size() > 700U ? cooked.diagnostics.front().message.size() - 700U : 0U)) << "@@";
@@ -952,7 +968,7 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
                     { kb::assets::bake::ShaderBakePlatform::MacOS, { RenderMaterialGraphShaderBackend::Metal } },
                 } };
                 for (const auto& [platform, profileBackends] : profiles) {
-                    RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+                    RenderMaterialGraphShaderArtifactRequest request = makeRequest("BaseOpaque");
                     request.shaderPlatform = platform;
                     const RenderMaterialGraphShaderArtifactResult cooked =
                         CookRenderMaterialGraphShaderArtifact(compiled.shader, profileBackends, request);
@@ -971,28 +987,58 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
     if (!report.empty()) {
         std::fprintf(stderr, "%s", report.c_str());
     }
+    Require(selectedCases != 0U, "Shader node cook partition did not exercise any output");
     Require(report.empty(), "KBMAT-MAT50: every node output must cook through shaderc (see the list above)");
+    std::fprintf(stderr, "graph_shader_sweep passed shard=%u/%u selected=%zu total=%zu\n",
+        shard, shardCount, selectedCases, totalCases);
+    std::fflush(stderr);
 }
 
 #endif
 
-void RunGraphShaderArtifactCookTests() {
-    RunGraphShaderWrapperSourceTest();
-    RunGraphShaderBackendMetadataTest();
-    RunGraphShaderReflectionHashTest();
-    RunGraphShaderManifestValidationTest();
-    RunGraphShaderManifestRoundTripTest();
+void RunGraphShaderArtifactCacheTests() {
+    const auto check = [](const char* name, void (*run)()) {
+        std::fprintf(stderr, "graph_shader_tests begin %s\n", name);
+        std::fflush(stderr);
+        const auto started = std::chrono::steady_clock::now();
+        run();
+        const double milliseconds = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        std::fprintf(stderr, "graph_shader_tests passed %s elapsed_ms=%.3f\n", name, milliseconds);
+        std::fflush(stderr);
+    };
+    check("RunGraphShaderWrapperSourceTest", &RunGraphShaderWrapperSourceTest);
+    check("RunGraphShaderBackendMetadataTest", &RunGraphShaderBackendMetadataTest);
+    check("RunGraphShaderReflectionHashTest", &RunGraphShaderReflectionHashTest);
+    check("RunGraphShaderManifestValidationTest", &RunGraphShaderManifestValidationTest);
+    check("RunGraphShaderManifestRoundTripTest", &RunGraphShaderManifestRoundTripTest);
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
-    RunGraphShaderCookProducesBinaryTest();
-    RunGraphShaderVariantArtifactCoexistenceTest();
-    RunGraphShaderSameKeyConcurrentCookTest();
-    RunGraphShadowDepthVertexAndAlphaCookTest();
-    RunGraphShaderCookShadercFailureTest();
-    RunGraphShaderArtifactDependencyInvalidationTest();
-    RunGraphShaderAutomaticIncludeInvalidationTest();
-    RunGraphShaderToolchainIdentityInvalidationTest();
-    RunGraphShaderDeepCacheRootCookTest();
-    RunGraphShaderEveryNodeOutputCooksTest();
+    check("RunGraphShaderCookProducesBinaryTest", &RunGraphShaderCookProducesBinaryTest);
+    check("RunGraphShaderVariantArtifactCoexistenceTest", &RunGraphShaderVariantArtifactCoexistenceTest);
+    check("RunGraphShaderSameKeyConcurrentCookTest", &RunGraphShaderSameKeyConcurrentCookTest);
+    check("RunGraphShadowDepthVertexAndAlphaCookTest", &RunGraphShadowDepthVertexAndAlphaCookTest);
+    check("RunGraphShaderCookShadercFailureTest", &RunGraphShaderCookShadercFailureTest);
+    check("RunGraphShaderArtifactDependencyInvalidationTest", &RunGraphShaderArtifactDependencyInvalidationTest);
+    check("RunGraphShaderAutomaticIncludeInvalidationTest", &RunGraphShaderAutomaticIncludeInvalidationTest);
+    check("RunGraphShaderToolchainIdentityInvalidationTest", &RunGraphShaderToolchainIdentityInvalidationTest);
+    check("RunGraphShaderDeepCacheRootCookTest", &RunGraphShaderDeepCacheRootCookTest);
+#endif
+}
+
+void RunGraphShaderNodeCookTests(std::uint32_t shard, std::uint32_t shardCount) {
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunGraphShaderEveryNodeOutputCooksTest(shard, shardCount);
+#else
+    static_cast<void>(shard);
+    static_cast<void>(shardCount);
+    Require(false, "Shader node cook validation requires the shader compiler");
+#endif
+}
+
+void RunGraphShaderArtifactCookTests() {
+    RunGraphShaderArtifactCacheTests();
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunGraphShaderNodeCookTests(0U, 1U);
 #endif
 }
 

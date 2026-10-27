@@ -43,6 +43,11 @@ public:
     [[nodiscard]] const std::array<float, 4>& Origin() const noexcept { return origin_; }
     // Voxels marked occupied by the last rebuild.
     [[nodiscard]] std::uint32_t OccupiedVoxelCount() const noexcept { return occupiedVoxels_; }
+    // Mesh instances the last rebuild rasterised from their triangles, and those it had to fill as their whole
+    // bounding box because the mesh kept no triangles (a dynamic or skinned mesh). The second count is the
+    // diagnostic for a thin wall or an opening that the grid cannot see: such a mesh blocks light as a solid box.
+    [[nodiscard]] std::uint32_t GeometryMeshCount() const noexcept { return geometryMeshes_; }
+    [[nodiscard]] std::uint32_t BoundingBoxMeshCount() const noexcept { return boundingBoxMeshes_; }
 
 private:
     // Occupancy of a mesh in a cubic-cell grid over its bounds, with a summed-volume table so a box of cells
@@ -70,6 +75,8 @@ private:
     std::vector<std::uint16_t> emissiveVoxels_;
     std::unordered_map<std::uint64_t, MeshMask> masks_;
     std::uint32_t occupiedVoxels_ = 0U;
+    std::uint32_t geometryMeshes_ = 0U;
+    std::uint32_t boundingBoxMeshes_ = 0U;
 };
 
 } // namespace kb::render

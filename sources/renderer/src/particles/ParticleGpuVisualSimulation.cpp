@@ -105,17 +105,15 @@ bool ParticleGpuVisualSimulation::Prepare(
     if (byteCount64 > std::numeric_limits<std::uint32_t>::max()) return false;
     const bgfx::Memory* memory = CopyMemory(source.data(), static_cast<std::uint32_t>(byteCount64));
     if (memory == nullptr) return false;
-    constexpr std::array<std::uint32_t, 4U> clearedCounters{};
-    const bgfx::Memory* counterMemory = CopyMemory(clearedCounters.data(),
-        static_cast<std::uint32_t>(sizeof(clearedCounters)));
-    if (counterMemory == nullptr) return false;
     const std::uint64_t maskByteCount64 = static_cast<std::uint64_t>(count) * sizeof(std::uint32_t);
     if (maskByteCount64 > std::numeric_limits<std::uint32_t>::max()) return false;
     const bgfx::Memory* maskMemory = CopyMemory(visualMask.data(), static_cast<std::uint32_t>(maskByteCount64));
     if (maskMemory == nullptr) return false;
     bgfx::update(sourceBuffer_, 0U, memory);
     bgfx::update(visualMask_, 0U, maskMemory);
-    bgfx::update(aliveCounters_, 0U, counterMemory);
+    // Compute-write buffers cannot be updated by the CPU. Buffer copies run before compute in this view.
+    bgfx::blit(viewId, bgfx::BufferRegion{.handle = aliveCounters_},
+        bgfx::BufferRegion{.handle = counterZeros_, .size = 4U * sizeof(std::uint32_t)});
     const bool continuesPriorVisualStep = preparedSceneId_ == sceneId &&
         fixedStepIndex > preparedFixedStepIndex_;
     const std::array<float, 4U> params{
@@ -155,6 +153,10 @@ bgfx::DynamicVertexBufferHandle ParticleGpuVisualSimulation::InstanceBuffer() co
     return outputBuffer_;
 }
 
+bgfx::DynamicIndexBufferHandle ParticleGpuVisualSimulation::CounterBuffer() const noexcept {
+    return aliveCounters_;
+}
+
 kb::particles::ParticleGpuVisualAvailability ParticleGpuVisualSimulation::Availability() const noexcept {
     const bgfx::Caps* caps = bgfx::getCaps();
     if (caps == nullptr) return kb::particles::ParticleGpuVisualAvailability::RendererUnavailable;
@@ -170,7 +172,8 @@ kb::particles::ParticleGpuVisualAvailability ParticleGpuVisualSimulation::Availa
     if (!bgfx::isValid(sourceBuffer_) || !bgfx::isValid(outputBuffer_) ||
         !bgfx::isValid(positionBuffers_[0]) || !bgfx::isValid(positionBuffers_[1]) ||
         !bgfx::isValid(velocityBuffers_[0]) || !bgfx::isValid(velocityBuffers_[1]) ||
-        !bgfx::isValid(visualMask_) || !bgfx::isValid(aliveCounters_) || !bgfx::isValid(indirectArgs_)) {
+        !bgfx::isValid(visualMask_) || !bgfx::isValid(aliveCounters_) || !bgfx::isValid(counterZeros_) ||
+        !bgfx::isValid(indirectArgs_)) {
         return kb::particles::ParticleGpuVisualAvailability::ResourceUnavailable;
     }
     return kb::particles::ParticleGpuVisualAvailability::Ready;
@@ -196,7 +199,8 @@ bool ParticleGpuVisualSimulation::EnsureCapacity(std::uint32_t requestedCapacity
     if (requestedCapacity <= capacity_ && bgfx::isValid(sourceBuffer_) && bgfx::isValid(outputBuffer_) &&
         bgfx::isValid(positionBuffers_[0]) && bgfx::isValid(positionBuffers_[1]) &&
         bgfx::isValid(velocityBuffers_[0]) && bgfx::isValid(velocityBuffers_[1]) &&
-        bgfx::isValid(visualMask_) && bgfx::isValid(aliveCounters_) && bgfx::isValid(indirectArgs_)) {
+        bgfx::isValid(visualMask_) && bgfx::isValid(aliveCounters_) && bgfx::isValid(counterZeros_) &&
+        bgfx::isValid(indirectArgs_)) {
         return true;
     }
     DestroyBuffers();
@@ -215,11 +219,20 @@ bool ParticleGpuVisualSimulation::EnsureCapacity(std::uint32_t requestedCapacity
     velocityBuffers_[1] = bgfx::createDynamicVertexBuffer(capacity_, vec4Layout, BGFX_BUFFER_COMPUTE_READ_WRITE);
     visualMask_ = bgfx::createDynamicIndexBuffer(capacity_, BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ);
     aliveCounters_ = bgfx::createDynamicIndexBuffer(4U, BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ_WRITE);
+    constexpr std::array<std::uint32_t, 4U> clearedCounters{};
+    const bgfx::Memory* counterMemory = CopyMemory(clearedCounters.data(),
+        static_cast<std::uint32_t>(sizeof(clearedCounters)));
+    if (counterMemory == nullptr) {
+        DestroyBuffers();
+        return false;
+    }
+    counterZeros_ = bgfx::createIndexBuffer(counterMemory, BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ);
     indirectArgs_ = bgfx::createIndirectBuffer(1U);
     if (!bgfx::isValid(sourceBuffer_) || !bgfx::isValid(outputBuffer_) ||
         !bgfx::isValid(positionBuffers_[0]) || !bgfx::isValid(positionBuffers_[1]) ||
         !bgfx::isValid(velocityBuffers_[0]) || !bgfx::isValid(velocityBuffers_[1]) ||
-        !bgfx::isValid(visualMask_) || !bgfx::isValid(aliveCounters_) || !bgfx::isValid(indirectArgs_)) {
+        !bgfx::isValid(visualMask_) || !bgfx::isValid(aliveCounters_) || !bgfx::isValid(counterZeros_) ||
+        !bgfx::isValid(indirectArgs_)) {
         DestroyBuffers();
         return false;
     }
@@ -229,6 +242,7 @@ bool ParticleGpuVisualSimulation::EnsureCapacity(std::uint32_t requestedCapacity
 void ParticleGpuVisualSimulation::DestroyBuffers() noexcept {
     if (bgfx::isValid(indirectArgs_)) bgfx::destroy(indirectArgs_);
     if (bgfx::isValid(aliveCounters_)) bgfx::destroy(aliveCounters_);
+    if (bgfx::isValid(counterZeros_)) bgfx::destroy(counterZeros_);
     if (bgfx::isValid(visualMask_)) bgfx::destroy(visualMask_);
     if (bgfx::isValid(outputBuffer_)) bgfx::destroy(outputBuffer_);
     if (bgfx::isValid(sourceBuffer_)) bgfx::destroy(sourceBuffer_);
@@ -242,6 +256,7 @@ void ParticleGpuVisualSimulation::DestroyBuffers() noexcept {
     }
     indirectArgs_ = BGFX_INVALID_HANDLE;
     aliveCounters_ = BGFX_INVALID_HANDLE;
+    counterZeros_ = BGFX_INVALID_HANDLE;
     visualMask_ = BGFX_INVALID_HANDLE;
     outputBuffer_ = BGFX_INVALID_HANDLE;
     sourceBuffer_ = BGFX_INVALID_HANDLE;

@@ -11,6 +11,7 @@
 
 #include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace kb::cli {
@@ -19,6 +20,12 @@ namespace {
 [[nodiscard]] std::string Utf8Text(const std::filesystem::path& path) {
     const std::u8string text = path.generic_u8string();
     return std::string{ reinterpret_cast<const char*>(text.data()), text.size() };
+}
+
+[[nodiscard]] std::string ProjectPathText(const std::filesystem::path& path, const std::filesystem::path& projectRoot) {
+    std::error_code error;
+    const std::filesystem::path relative = std::filesystem::relative(path, projectRoot, error);
+    return Utf8Text(error || relative.empty() ? path : relative);
 }
 
 [[nodiscard]] std::optional<kb::script::ScriptLanguage> ParseLanguage(std::string text) {
@@ -77,7 +84,7 @@ namespace {
     if (!module.empty() && !std::filesystem::is_regular_file(module, error)) {
         return "the build command succeeded but did not write " + Utf8Text(module);
     }
-    io.out << "Built " << Utf8Text(metadata.virtualPath) << ": " << Utf8Text(module.lexically_relative(projectRoot)) << '\n';
+    io.out << "Built " << Utf8Text(metadata.virtualPath) << ": " << ProjectPathText(module, projectRoot) << '\n';
     return {};
 }
 
@@ -116,7 +123,7 @@ int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io) {
         io.out << "Lua script created: " << asset << '\n';
         return 0;
     }
-    io.out << "C++ script created: " << asset << " (source " << Utf8Text(created.source.lexically_relative(projectRoot))
+    io.out << "C++ script created: " << asset << " (source " << ProjectPathText(created.source, projectRoot)
            << ")\nBuild it with: kb_cli script-build --project \"" << *arguments.Option("--project") << "\" --script " << asset
            << '\n';
     return 0;

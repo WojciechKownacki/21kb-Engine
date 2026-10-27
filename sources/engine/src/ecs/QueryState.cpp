@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -26,20 +27,27 @@ thread_local QueryBatchExecutionScratch tBatchExecutionScratch{};
 thread_local bool tBatchExecutionScratchInUse = false;
 
 inline constexpr std::size_t kMaxKeptQueryStateBlocks = 256U;
+constinit std::atomic<bool> gQueryStateBlocksDestroyed{false};
 
 struct QueryStateBlocks {
     QueryStateBlocks() {
         blocks.reserve(kMaxKeptQueryStateBlocks);
     }
 
+    ~QueryStateBlocks() {
+        gQueryStateBlocksDestroyed.store(true, std::memory_order_release);
+        for (void* block : blocks) ::operator delete(block);
+    }
+
     std::mutex mutex;
     std::vector<void*> blocks;
 };
 
-// Never destroyed: a query state may be freed during static destruction.
-[[nodiscard]] QueryStateBlocks& KeptQueryStateBlocks() {
-    static QueryStateBlocks* const blocks = new QueryStateBlocks{};
-    return *blocks;
+// Queries released after cache teardown use the global allocator instead of touching destroyed storage.
+[[nodiscard]] QueryStateBlocks* KeptQueryStateBlocks() {
+    if (gQueryStateBlocksDestroyed.load(std::memory_order_acquire)) return nullptr;
+    static QueryStateBlocks blocks;
+    return &blocks;
 }
 
 class ScopedQueryWorkerContext {
@@ -1049,12 +1057,13 @@ void QueryState::CommitRecordVersions(const ChangeVersionSnapshots& snapshots) c
 
 void* QueryState::operator new(std::size_t size) {
     if (size == sizeof(QueryState)) {
-        QueryStateBlocks& kept = KeptQueryStateBlocks();
-        const std::lock_guard lock{ kept.mutex };
-        if (!kept.blocks.empty()) {
-            void* block = kept.blocks.back();
-            kept.blocks.pop_back();
-            return block;
+        if (QueryStateBlocks* kept = KeptQueryStateBlocks(); kept != nullptr) {
+            const std::lock_guard lock{ kept->mutex };
+            if (!kept->blocks.empty()) {
+                void* block = kept->blocks.back();
+                kept->blocks.pop_back();
+                return block;
+            }
         }
     }
     return ::operator new(size);
@@ -1062,11 +1071,12 @@ void* QueryState::operator new(std::size_t size) {
 
 void QueryState::operator delete(void* pointer, std::size_t size) noexcept {
     if (pointer != nullptr && size == sizeof(QueryState)) {
-        QueryStateBlocks& kept = KeptQueryStateBlocks();
-        const std::lock_guard lock{ kept.mutex };
-        if (kept.blocks.size() < kMaxKeptQueryStateBlocks) {
-            kept.blocks.push_back(pointer);
-            return;
+        if (QueryStateBlocks* kept = KeptQueryStateBlocks(); kept != nullptr) {
+            const std::lock_guard lock{ kept->mutex };
+            if (kept->blocks.size() < kMaxKeptQueryStateBlocks) {
+                kept->blocks.push_back(pointer);
+                return;
+            }
         }
     }
     // The analyzer reaches here on a path from a null QueryState; a real pointer came from operator new above.

@@ -212,6 +212,55 @@ void RunSpinSchemaTest() {
     Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "a reversed spin range passed validation");
 }
 
+void RunFlipbookRangeSchemaTest() {
+    using namespace kb::scene;
+    auto asset = MakeComprehensiveAsset();
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    const auto legacy = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(legacy && legacy->find(".startFrame") == std::string::npos && legacy->find(".frameCount") == std::string::npos,
+        "default atlas ranges must preserve canonical legacy files");
+    const auto old = ParticleEffectAssetIO::Parse(*legacy);
+    Require(old.Succeeded() && std::get<ParticleBillboardOutput>(old.asset->emitters[0].output.payload).flipbook.frameCount == 0U,
+        "old atlases must retain their full frame range");
+    auto& range = std::get<ParticleBillboardOutput>(asset.emitters[0].output.payload).flipbook;
+    range.startFrame = 1U;
+    range.frameCount = 2U;
+    const auto encoded = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(encoded.has_value(), "partial atlas must serialize");
+    const auto decoded = ParticleEffectAssetIO::Parse(*encoded);
+    Require(decoded.Succeeded(), "partial atlas must load");
+    const auto& restored = std::get<ParticleBillboardOutput>(decoded.asset->emitters[0].output.payload).flipbook;
+    Require(restored.startFrame == 1U && restored.frameCount == 2U && !restored.looping,
+        "start, active range and one-shot policy must survive save/load");
+    range.frameCount = UINT32_MAX;
+    Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "overflowing atlas range must fail validation");
+    range.frameCount = 0U;
+    range.startFrame = 3U;
+    Require(ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "last atlas cell is a valid static range");
+    range.startFrame = 4U;
+    Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "start past the atlas must fail validation");
+}
+
+void RunScreenDepthCollisionSchemaTest() {
+    auto asset = MakeComprehensiveAsset();
+    std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
+    const auto legacy = kb::scene::ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(legacy && legacy->find("screenDepthCollision") == std::string::npos,
+        "default particle assets unexpectedly enabled screen-depth collision");
+    const auto oldAsset = kb::scene::ParticleEffectAssetIO::Parse(*legacy);
+    Require(oldAsset.Succeeded() && !oldAsset.asset->emitters[0].screenDepthCollision,
+        "an older particle asset did not retain disabled screen-depth collision");
+    asset.emitters[0].screenDepthCollision = true;
+    const auto text = kb::scene::ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(text && text->find("effect.emitter[0].screenDepthCollision true") != std::string::npos,
+        "screen-depth collision was not serialized explicitly");
+    const auto loaded = kb::scene::ParticleEffectAssetIO::Parse(*text);
+    Require(loaded.Succeeded() && loaded.asset->emitters[0].screenDepthCollision,
+        "screen-depth collision did not survive the source round trip");
+    Require(!kb::scene::ParticleEffectAssetIO::Parse(*legacy + "effect.emitter[0].screenDepthCollision invalid\n").Succeeded(),
+        "screen-depth collision accepted an invalid boolean");
+}
+
 // The spawn shape, velocity modes, emitter clock, beam, field modules, killing plane, WhileAlive rate and the
 // output's colour intensity, light and decal depth survive a save and a load; an asset without them writes none.
 void RunMotionAndOutputSchemaTest() {
@@ -506,7 +555,22 @@ void RunMalformedInputTest() {
     check(canonical + "effect.unknown 1\n", ParticleEffectDiagnosticCode::UnknownKey, "effect.unknown", true);
     std::string future = canonical;
     ReplaceOnce(future, "21kb ParticleEffect 2", "21kb ParticleEffect 3");
-    check(std::move(future), ParticleEffectDiagnosticCode::UnsupportedVersion, "effect.formatVersion", true);
+    check(future, ParticleEffectDiagnosticCode::UnsupportedVersion, "effect.formatVersion", true);
+    const auto futureResult = ParticleEffectAssetIO::Parse(future);
+    const auto& futureDiagnostic = futureResult.diagnostics.front();
+    Require(futureDiagnostic.message.find("version 3") != std::string::npos &&
+        futureDiagnostic.message.find("up to version 2") != std::string::npos &&
+        futureDiagnostic.message.find("newer engine") != std::string::npos && futureDiagnostic.line == 1U,
+        "Future effects must identify both versions, the header line and the required action");
+    std::string futureFields = canonical;
+    ReplaceOnce(futureFields, "effect.formatVersion 2", "effect.formatVersion 3");
+    const auto futureFieldsResult = ParticleEffectAssetIO::Parse(futureFields);
+    Require(!futureFieldsResult.Succeeded() && std::any_of(futureFieldsResult.diagnostics.begin(),
+        futureFieldsResult.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.code == ParticleEffectDiagnosticCode::UnsupportedVersion && diagnostic.line == 2U &&
+                diagnostic.message.find("version 3") != std::string::npos &&
+                diagnostic.message.find("newer engine") != std::string::npos;
+        }), "A future effect property version must preserve its source line and actionable diagnostic");
     std::string badHeader = canonical;
     ReplaceOnce(badHeader, "21kb ParticleEffect 2", "21kb ParticleEffect two");
     check(std::move(badHeader), ParticleEffectDiagnosticCode::InvalidHeader, "effect.formatVersion", true);
@@ -1224,6 +1288,8 @@ int main() {
         RunCanonicalGoldenTest();
         RunComprehensiveSchemaTest();
         RunSpinSchemaTest();
+        RunFlipbookRangeSchemaTest();
+        RunScreenDepthCollisionSchemaTest();
         RunMotionAndOutputSchemaTest();
         RunAuthoringOrderTest();
         RunHardLimitBoundaryTest();

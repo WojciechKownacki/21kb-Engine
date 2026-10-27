@@ -11,6 +11,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/hierarchy/SceneHierarchyDepthGuard.hpp"
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
@@ -150,6 +151,15 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<RegionShapeComponent> regionShapes;
     std::vector<GuideCurveComponent> guideCurves;
     std::vector<ContentInstanceComponent> contentInstances;
+    std::vector<GridComponent> grids;
+    std::vector<TilemapComponent> tilemaps;
+    std::vector<TilemapRendererComponent> tilemapRenderers;
+    std::vector<TilemapColliderComponent> tilemapColliders;
+    std::vector<CharacterController2DComponent> characterControllers2D;
+    std::vector<Collider2DComponent> colliders2D;
+    std::vector<Body2DComponent> bodies2D;
+    std::vector<Sprite2DComponent> sprites2D;
+
     std::vector<StreamFocusComponent> streamFocuses;
     std::vector<WorldBackdropComponent> worldBackdrops;
     std::vector<AmbientRadianceComponent> ambientRadiances;
@@ -240,6 +250,38 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::ContentInstance)) {
             RepeatComponents(contentInstances, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const ContentInstanceComponent>{ contentInstances });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Grid)) {
+            RepeatComponents(grids, std::span<const GridComponent>{ archetype.grids }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const GridComponent>{ grids });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tilemap)) {
+            RepeatComponents(tilemaps, std::span<const TilemapComponent>{ archetype.tilemaps }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const TilemapComponent>{ tilemaps });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapRenderer)) {
+            RepeatComponents(tilemapRenderers, std::span<const TilemapRendererComponent>{ archetype.tilemapRenderers }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const TilemapRendererComponent>{ tilemapRenderers });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapCollider)) {
+            RepeatComponents(tilemapColliders, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const TilemapColliderComponent>{ tilemapColliders });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController2D)) {
+            RepeatComponents(characterControllers2D, std::span<const CharacterController2DComponent>{ archetype.characterControllers2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const CharacterController2DComponent>{ characterControllers2D });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Collider2D)) {
+            RepeatComponents(colliders2D, std::span<const Collider2DComponent>{ archetype.colliders2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const Collider2DComponent>{ colliders2D });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Body2D)) {
+            RepeatComponents(bodies2D, std::span<const Body2DComponent>{ archetype.bodies2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const Body2DComponent>{ bodies2D });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
+            RepeatComponents(sprites2D, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const Sprite2DComponent>{ sprites2D });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
             RepeatComponents(streamFocuses, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
@@ -409,6 +451,38 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::ContentInstance)) {
             AddCommandComponentPatternView(views, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Grid)) {
+            AddCommandComponentPatternView(views, std::span<const GridComponent>{ archetype.grids }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const GridComponent>{ archetype.grids }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tilemap)) {
+            AddCommandComponentPatternView(views, std::span<const TilemapComponent>{ archetype.tilemaps }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const TilemapComponent>{ archetype.tilemaps }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapRenderer)) {
+            AddCommandComponentPatternView(views, std::span<const TilemapRendererComponent>{ archetype.tilemapRenderers }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const TilemapRendererComponent>{ archetype.tilemapRenderers }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapCollider)) {
+            AddCommandComponentPatternView(views, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController2D)) {
+            AddCommandComponentPatternView(views, std::span<const CharacterController2DComponent>{ archetype.characterControllers2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const CharacterController2DComponent>{ archetype.characterControllers2D }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Collider2D)) {
+            AddCommandComponentPatternView(views, std::span<const Collider2DComponent>{ archetype.colliders2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const Collider2DComponent>{ archetype.colliders2D }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Body2D)) {
+            AddCommandComponentPatternView(views, std::span<const Body2DComponent>{ archetype.bodies2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const Body2DComponent>{ archetype.bodies2D }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
+            AddCommandComponentPatternView(views, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
             AddCommandComponentPatternView(views, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
@@ -1042,7 +1116,7 @@ void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc
     state.lastPrefabInstantiationStats = ScenePrefabInstantiationStats{
         .requestedInstances = count,
     };
-    if (count == 0 || !ScenePrefabValidator::IsValid(prefab)) {
+    if (count == 0 || !ScenePrefabValidator::IsValid(prefab, SceneChildDepth(state, settings.parent.Entity()))) {
         return {};
     }
 

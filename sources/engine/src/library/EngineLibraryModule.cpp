@@ -20,6 +20,10 @@
 #include "engine/script/ScriptParticleSystemApi.hpp"
 #include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptNavigationApi.hpp"
+#include "engine/script/ScriptMap2DApi.hpp"
+#include "engine/script/ScriptModsApi.hpp"
+#include "engine/script/ScriptPhysics2DApi.hpp"
+#include "engine/script/ScriptNetApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRendererApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -311,6 +315,30 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::scene::SceneNavigation",
             .Register = &kb::script::ScriptNavigationApi::Register,
         },
+        LibraryModuleDesc{
+            .name = "Map2D",
+            .ownerRuntime = "kb::scene::SceneTilemapRuntime",
+            .Register = &kb::script::ScriptMap2DApi::Register,
+        },
+        // Physics2D.*: velocity, forces, ray and overlap queries, character movement and joints of the 2D physics of a scene.
+        LibraryModuleDesc{
+            .name = "Physics2D",
+            .ownerRuntime = "kb::scene::ScenePhysics2DRuntime",
+            .Register = &kb::script::ScriptPhysics2DApi::Register,
+        },
+        // Net.*: the script face of a network session attached to the scene (kb_net's dedicated server
+        // or a game client). Offline scenes answer it too.
+        LibraryModuleDesc{
+            .name = "Net",
+            .ownerRuntime = "kb::network::INetworkScriptRuntime",
+            .Register = &kb::script::ScriptNetApi::Register,
+        },
+        // Mods.*: the mods the running game has loaded and the entry scene each names.
+        LibraryModuleDesc{
+            .name = "Mods",
+            .ownerRuntime = "kb::mods::PublishedLoadedMods",
+            .Register = &kb::script::ScriptModsApi::Register,
+        },
     };
     return kCatalog;
 }
@@ -371,13 +399,29 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
         host.Functions().SetRegistrationAllocationTelemetry(&entry.registrationAllocationTelemetry);
         const bool registered = module.Register != nullptr && module.Register(host);
         host.Functions().SetRegistrationAllocationTelemetry(nullptr);
-        if (!registered) {
+        if (module.Register == nullptr) {
+            entry.installed = false;
+            entry.reason = "the module has capability but no Register function";
+            result.succeeded = false;
+            result.diagnostics.emplace_back("module '" + module.name + "' has capability but no Register function");
+        } else if (!registered) {
             entry.installed = false;
             entry.reason = "script API could not be fully registered";
             result.succeeded = false;
             result.diagnostics.emplace_back(module.name + " script API could not be fully registered");
         } else {
             entry.installed = true;
+            // A function the catalog audits has to exist once Register() has run; an audit entry without a
+            // registered function would pass every metadata check while describing nothing callable.
+            for (const LibraryFunctionDesc& function : module.functions) {
+                if (host.Functions().FindSignature(function.canonicalName) == nullptr) {
+                    entry.installed = false;
+                    entry.reason = "an audited function was not registered";
+                    result.succeeded = false;
+                    result.diagnostics.emplace_back(
+                        "module '" + module.name + "' audits '" + function.canonicalName + "', but Register() did not register it");
+                }
+            }
             // LIB-025: apply each audited function's declared deprecation
             // (if any) to the now-registered ScriptFunctionRegistry entry —
             // the one place kb::library is allowed to reach into a
@@ -406,6 +450,8 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
 
 std::string FormatStartupReport(const std::vector<EngineLibraryModuleReportEntry>& report) {
     std::string text = "kb::library startup report (" + std::to_string(report.size()) + " module" + (report.size() == 1U ? "" : "s") + "):\n";
+    text += "  (registration-alloc counts only what the script function registry allocated while a module registered its"
+            " functions; it says nothing about runtime memory, CPU or GPU use)\n";
     for (const EngineLibraryModuleReportEntry& entry : report) {
         text += "  ";
         text += entry.installed ? "[installed] " : "[disabled]  ";
@@ -419,7 +465,7 @@ std::string FormatStartupReport(const std::vector<EngineLibraryModuleReportEntry
         text += " (";
         text += entry.ownerRuntime;
         text += ')';
-        text += " alloc=";
+        text += " registration-alloc=";
         text += std::to_string(entry.registrationAllocationTelemetry.used);
         text += '/';
         text += std::to_string(entry.registrationAllocationTelemetry.budget);

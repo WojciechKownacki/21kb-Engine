@@ -1,4 +1,5 @@
 #include "rendering/PanelContentRenderer.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
@@ -386,6 +387,12 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::BuildGame:
         BuildGamePanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        break;
+    case DockPanelKind::TilemapEditor:
+        DrawText(dc, RECT{ visibleContent.left + 24, visibleContent.top + 32, visibleContent.right - 24, visibleContent.bottom - 24 },
+            EditorText("map2d.selectLayerHint", "Select a map layer in the Hierarchy, or create a map from Create > 2D Object."),
+            Color(theme.textSecondary), 12, FW_NORMAL, DT_CENTER | DT_WORDBREAK);
+        EditorMap2DWindow::SyncDocked(sceneViewportHost, visibleContent, sceneContext);
         break;
     case DockPanelKind::ScriptEditor:
         ScriptEditorPanelRenderer{}.Paint(dc, content, theme, sceneContext, EditorScriptEditorOverlay::IsDirty(sceneViewportHost));

@@ -140,6 +140,14 @@ std::vector<EditorHierarchyRow> EditorSceneCommandController::HierarchyRows() co
     return EditorHierarchyRowBuilder::Build(scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
 }
 
+bool EditorSceneCommandController::Execute(std::unique_ptr<IEditorCommand> command) {
+    if (pendingTransactionLabel_.has_value() || !command || !commandStack_.Execute(std::move(command))) return false;
+    RemapRecreatedEntities();
+    if (commandStack_.LastCompletedCommandAffectsHierarchySelection()) NormalizeHierarchySelectionAfterSceneRestore();
+    NotifySceneChanged(commandStack_.LastCompletedCommandAffectsSceneDocument());
+    return true;
+}
+
 void EditorSceneCommandController::NormalizeHierarchySelectionAfterSceneRestore() {
     const std::vector<EditorHierarchyRow> rows = HierarchyRows();
     EditorHierarchySelectionNormalizer::NormalizeAfterSceneRestore(scene_, hierarchySelection_, rows);

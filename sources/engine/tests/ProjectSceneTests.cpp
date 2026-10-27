@@ -34,6 +34,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneDocument.hpp"
+#include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -1461,6 +1462,136 @@ void RunSceneV32BackwardCompatibilityTest() {
         "v32 scene did not load after the v33 component extension");
 }
 
+// Scenes saved by older engines stay readable: stored files of version 34 (dropdown options still child
+// objects) and 40 (nested nodes with their parents) load into the nodes they were saved with.
+void RunStoredOlderSceneFilesLoadTest() {
+    const std::filesystem::path fixtures = std::filesystem::path{ __FILE__ }.parent_path() / "fixtures" / "scene";
+    const kb::scene::SceneDocumentLoadResult button = kb::scene::SceneDocumentService::Load(fixtures / "IncompleteButton.21kbscene");
+    Require(button.succeeded && button.document.fileVersion == 34U && button.document.worldPrefab.Nodes().size() == 1U &&
+            button.document.worldPrefab.Nodes()[0].name == "Entity",
+        ("the stored version 34 scene did not load: " + button.error).c_str());
+    kb::scene::Scene buttonScene;
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(buttonScene, button.document) && buttonScene.Entities().Count() == 1U,
+        "the stored version 34 scene did not load into a runtime scene");
+
+    const kb::scene::SceneDocumentLoadResult prefabs = kb::scene::SceneDocumentService::Load(fixtures / "LegacyPrefabs.21kbscene");
+    Require(prefabs.succeeded && prefabs.document.fileVersion == 40U && prefabs.document.worldPrefab.Nodes().size() == 9U,
+        ("the stored version 40 scene did not load: " + prefabs.error).c_str());
+    constexpr std::array<std::string_view, 9U> names{ "CrateA", "Lid", "Hinge", "Handle", "CrateB", "BigLid", "Hinge", "Handle", "Sticker" };
+    constexpr std::array<std::uint32_t, 9U> parents{ kb::scene::ScenePrefabNodeDesc::NoParent, 0U, 1U, 0U,
+        kb::scene::ScenePrefabNodeDesc::NoParent, 4U, 5U, 4U, 4U };
+    const auto nodes = prefabs.document.worldPrefab.Nodes();
+    for (std::size_t index = 0U; index < names.size(); ++index) {
+        Require(nodes[index].name == names[index] && nodes[index].parentNode == parents[index],
+            "a node of the stored version 40 scene changed its name or parent");
+    }
+    kb::scene::Scene prefabScene;
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(prefabScene, prefabs.document) && prefabScene.Entities().Count() == 9U,
+        "the stored version 40 scene did not load into a runtime scene");
+}
+
+void RunProjectFromNewerEngineIsExplainedTest() {
+    CleanTempRoot();
+    const auto projectFile = TempRoot() / "Newer.21kbproject";
+    const auto metaFile = TempRoot() / "Newer.meta";
+    Require(kb::project::ProjectManager::CreateProject(projectFile, {}), "Future-version fixture must be created");
+    for (const bool metadata : {false, true}) {
+        const auto& file = metadata ? metaFile : projectFile;
+        const auto original = ReadBytes(file);
+        const auto supported = metadata ? kb::project::ProjectDescriptorMeta::CurrentFileVersion :
+            kb::project::ProjectDescriptor::CurrentFileVersion;
+        const auto offset = metadata ? kProjectMetaMagic.size() : kProjectMagic.size();
+        auto newer = original;
+        WriteUInt32(newer, offset, supported + 1U);
+        Require(WriteBytes(file, newer), "Future version must be written");
+        const auto result = kb::project::ProjectManager::LoadProject(projectFile);
+        Require(!result.succeeded && result.error.find("version " + std::to_string(supported + 1U)) != std::string::npos &&
+            result.error.find("up to version " + std::to_string(supported)) != std::string::npos &&
+            result.error.find("newer engine") != std::string::npos,
+            ("Future project data must give an actionable version diagnostic: " + result.error).c_str());
+        Require(ReadBytes(file) == newer, "Refusing newer project data must not rewrite it");
+        auto zero = original;
+        WriteUInt32(zero, offset, 0U);
+        Require(WriteBytes(file, zero), "Zero version must be written");
+        const auto corrupt = kb::project::ProjectManager::LoadProject(projectFile);
+        Require(!corrupt.succeeded && corrupt.error.find("header is invalid") != std::string::npos,
+            "Version zero must remain a corruption diagnostic");
+        Require(WriteBytes(file, original) && kb::project::ProjectManager::LoadProject(projectFile).succeeded,
+            "Current project data must still load");
+    }
+}
+
+// A file from a newer engine says so, with both versions, and is told apart from a damaged header.
+void RunSceneFromNewerEngineIsExplainedTest() {
+    CleanTempRoot();
+    const std::filesystem::path sceneFile = TempRoot() / "Newer.21kbscene";
+    kb::scene::SceneDocument current;
+    current.guid = "scene:newer";
+    current.name = "Newer";
+    Require(kb::scene::SceneDocumentService::Save(current, sceneFile), "the newer-version fixture could not be saved");
+    const std::vector<std::uint8_t> original = ReadBytes(sceneFile);
+    const std::filesystem::path metaFile = sceneFile.parent_path() / "Newer.meta";
+    const std::vector<std::uint8_t> originalMeta = ReadBytes(metaFile);
+
+    // Rewrites the scene bytes and the metadata that vouches for them, as the version 32 test does.
+    const auto rewrite = [&](const std::vector<std::uint8_t>& sceneBytes) {
+        Require(WriteBytes(sceneFile, sceneBytes), "the scene fixture could not be rewritten");
+        const TestIntegrity integrity = ComputeIntegrity(sceneBytes);
+        std::vector<std::uint8_t> metaBytes = originalMeta;
+        std::size_t integrityOffset = 12U;
+        for (std::uint32_t stringIndex = 0U; stringIndex < 4U; ++stringIndex) integrityOffset = SkipString(metaBytes, integrityOffset);
+        WriteUInt64(metaBytes, integrityOffset, sceneBytes.size());
+        WriteUInt64(metaBytes, integrityOffset + sizeof(std::uint64_t), integrity.hash);
+        WriteUInt32(metaBytes, integrityOffset + sizeof(std::uint64_t) * 2U, integrity.checksum);
+        Require(WriteBytes(metaFile, metaBytes), "the metadata fixture could not be rewritten");
+        return kb::scene::SceneDocumentService::Load(sceneFile);
+    };
+
+    std::vector<std::uint8_t> newer = original;
+    WriteUInt32(newer, kSceneMagic.size(), kb::scene::SceneDocument::CurrentFileVersion + 1U);
+    const kb::scene::SceneDocumentLoadResult tooNew = rewrite(newer);
+    const std::string nextVersion = std::to_string(kb::scene::SceneDocument::CurrentFileVersion + 1U);
+    Require(!tooNew.succeeded && tooNew.error.find("version " + nextVersion) != std::string::npos &&
+            tooNew.error.find("newer engine") != std::string::npos &&
+            tooNew.error.find("up to version " + std::to_string(kb::scene::SceneDocument::CurrentFileVersion)) != std::string::npos &&
+            tooNew.error.find("invalid") == std::string::npos,
+        ("a scene of a newer version must be refused with both versions named: " + tooNew.error).c_str());
+
+    std::vector<std::uint8_t> zero = original;
+    WriteUInt32(zero, kSceneMagic.size(), 0U);
+    const kb::scene::SceneDocumentLoadResult unversioned = rewrite(zero);
+    Require(!unversioned.succeeded && unversioned.error.find("header is invalid") != std::string::npos,
+        ("version 0 is a damaged header, not a newer file: " + unversioned.error).c_str());
+
+    std::vector<std::uint8_t> damaged = original;
+    damaged[0] = 'X';
+    const kb::scene::SceneDocumentLoadResult notAScene = rewrite(damaged);
+    Require(!notAScene.succeeded && notAScene.error.find("header is invalid") != std::string::npos,
+        ("a file without the scene magic is a damaged header: " + notAScene.error).c_str());
+
+    const kb::scene::SceneDocumentLoadResult restored = rewrite(original);
+    auto newerMeta = originalMeta;
+    const auto metaVersion = kb::scene::SceneAssetMeta::CurrentFileVersion;
+    WriteUInt32(newerMeta, kSceneMagic.size(), metaVersion + 1U);
+    Require(WriteBytes(metaFile, newerMeta), "Future scene metadata must be written");
+    const auto futureMeta = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(!futureMeta.succeeded && futureMeta.error.find("Scene meta version " + std::to_string(metaVersion + 1U)) != std::string::npos &&
+        futureMeta.error.find("up to version " + std::to_string(metaVersion)) != std::string::npos &&
+        futureMeta.error.find("newer engine") != std::string::npos,
+        ("Future scene metadata must explain the required engine: " + futureMeta.error).c_str());
+    Require(ReadBytes(metaFile) == newerMeta && ReadBytes(sceneFile) == original,
+        "Refusing future scene metadata must preserve both files");
+    WriteUInt32(newerMeta, kSceneMagic.size(), 0U);
+    Require(WriteBytes(metaFile, newerMeta), "Invalid scene metadata must be written");
+    const auto corruptMeta = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(!corruptMeta.succeeded && corruptMeta.error.find("header is invalid") != std::string::npos,
+        "Zero scene metadata version must be diagnosed as corruption");
+    Require(WriteBytes(metaFile, originalMeta) && kb::scene::SceneDocumentService::Load(sceneFile).succeeded,
+        "Restored scene metadata must load");
+    Require(restored.succeeded && restored.document.fileVersion == kb::scene::SceneDocument::CurrentFileVersion,
+        "the untouched scene still loads");
+}
+
 // v44: the scene's post-process profile is saved with the scene, reloaded into the runtime scene the
 // renderer reads, and captured back, as a Unity global Volume or a Godot WorldEnvironment is.
 void RunScenePostProcessProfileDocumentTest() {
@@ -1694,6 +1825,7 @@ void RunProjectSceneTests() {
     RunIniDocumentRoundTripTest();
     RunIniDocumentToleratesAuthoredTextTest();
     RunProjectDescriptorRoundTripTest();
+    RunProjectFromNewerEngineIsExplainedTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
@@ -1723,6 +1855,8 @@ void RunProjectSceneTests() {
     RunSceneAudioDocumentBackwardCompatibilityTest();
     RunScenePostProcessProfileDocumentTest();
     RunSceneV32BackwardCompatibilityTest();
+    RunStoredOlderSceneFilesLoadTest();
+    RunSceneFromNewerEngineIsExplainedTest();
     RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
     RunSceneTagSingleSelectionTest();

@@ -17,6 +17,9 @@ namespace kb::audio_miniaudio {
     if (extension == ".mp3") {
         return ma_encoding_format_mp3;
     }
+    if (extension == ".ogg") {
+        return ma_encoding_format_vorbis;
+    }
     return ma_encoding_format_unknown;
 }
 

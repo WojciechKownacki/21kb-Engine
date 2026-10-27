@@ -1,0 +1,187 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "ReimportSample",
+      "template": "Empty"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Triangle.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],\"materials\":[{\"name\":\"Skin\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},\"metallicFactor\":0.25,\"roughnessFactor\":0.75}}],\"textures\":[{\"source\":0}],\"images\":[{\"uri\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4//8/AAX+Av6nNYGEAAAAAElFTkSuQmCC\"}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA\"}]}"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/Triangle.gltf",
+      "destination": "/Game/Meshes",
+      "import_textures": true,
+      "import_materials": true
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Meshes/Triangle.importrecord",
+      "contains": "asset "
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Meshes/Materials/Triangle_Skin_bbc30756.kbmat",
+      "contains": "roughnessFactor 0.75"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Meshes/Triangle.21kb",
+      "source": "Source/Triangle.gltf",
+      "expect": "reused"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Triangle.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],\"materials\":[{\"name\":\"Skin\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},\"metallicFactor\":0.25,\"roughnessFactor\":0.75}}],\"textures\":[{\"source\":0}],\"images\":[{\"uri\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4//8/AAX+Av6nNYGEAAAAAElFTkSuQmCC\"}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[2,2,0]}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAA\"}]}"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Meshes/Triangle.21kb",
+      "source": "Source/Triangle.gltf",
+      "dry_run": true,
+      "expect": "updated"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Meshes/Triangle.21kb",
+      "source": "Source/Triangle.gltf",
+      "expect": "updated"
+    },
+    {
+      "op": "open_asset",
+      "asset": "/Game/Meshes/Materials/Triangle_Skin_bbc30756.kbmat"
+    },
+    {
+      "op": "set_material",
+      "asset": "/Game/Meshes/Materials/Triangle_Skin_bbc30756.kbmat",
+      "property": "roughness",
+      "value": 0.5
+    },
+    {
+      "op": "save_material",
+      "asset": "/Game/Meshes/Materials/Triangle_Skin_bbc30756.kbmat"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Meshes/Materials/Triangle_Skin_bbc30756.kbmat",
+      "contains": "roughnessFactor 0.5"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Triangle.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],\"materials\":[{\"name\":\"Skin\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},\"metallicFactor\":0.25,\"roughnessFactor\":0.2}}],\"textures\":[{\"source\":0}],\"images\":[{\"uri\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4//8/AAX+Av6nNYGEAAAAAElFTkSuQmCC\"}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[3,3,0]}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAABAQAAAAAAAAAAAAAAAAAAAQEAAAAAA\"}]}"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Meshes/Triangle.21kb",
+      "source": "Source/Triangle.gltf",
+      "expect": "conflict",
+      "conflicts": 1
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Meshes/Materials/Triangle_Skin_bbc30756.kbmat",
+      "contains": "roughnessFactor 0.5"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Meshes/Triangle.21kb",
+      "source": "Source/Triangle.gltf",
+      "on_conflict": "keep_local",
+      "expect": "updated",
+      "conflicts": 1
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Meshes/Materials/Triangle_Skin_bbc30756.kbmat",
+      "contains": "roughnessFactor 0.5"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Triangle.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],\"materials\":[{\"name\":\"Skin\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},\"metallicFactor\":0.25,\"roughnessFactor\":0.2}}],\"textures\":[{\"source\":0}],\"images\":[{\"uri\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4//8/AAX+Av6nNYGEAAAAAElFTkSuQmCC\"}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[4,4,0]}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAQAAAAAAAAAAAAAAAAAAAgEAAAAAA\"}]}"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Meshes/Triangle.21kb",
+      "source": "Source/Triangle.gltf",
+      "on_conflict": "overwrite",
+      "expect": "updated",
+      "conflicts": 1
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Meshes/Materials/Triangle_Skin_bbc30756.kbmat",
+      "contains": "roughnessFactor 0.2"
+    },
+    {
+      "op": "undo_reimport"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Meshes/Materials/Triangle_Skin_bbc30756.kbmat",
+      "contains": "roughnessFactor 0.5"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Character.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAABAAIAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAACAPw==\",\"byteLength\":244}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},{\"buffer\":0,\"byteOffset\":60,\"byteLength\":48},{\"buffer\":0,\"byteOffset\":108,\"byteLength\":6},{\"buffer\":0,\"byteOffset\":116,\"byteLength\":128}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"},{\"bufferView\":4,\"componentType\":5126,\"count\":2,\"type\":\"MAT4\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2},\"indices\":3}]}],\"nodes\":[{\"name\":\"Root\",\"children\":[1]},{\"name\":\"Spine\",\"translation\":[0,1,0]},{\"mesh\":0,\"skin\":0}],\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4}]}"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/Character.gltf",
+      "destination": "/Game/Characters",
+      "skeletal": true
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Characters/Character.kbskeletalmesh",
+      "source": "Source/Character.gltf",
+      "expect": "reused"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Replacement.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAABAAIAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAACAPw==\",\"byteLength\":244}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},{\"buffer\":0,\"byteOffset\":60,\"byteLength\":48},{\"buffer\":0,\"byteOffset\":108,\"byteLength\":6},{\"buffer\":0,\"byteOffset\":116,\"byteLength\":128}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"},{\"bufferView\":4,\"componentType\":5126,\"count\":2,\"type\":\"MAT4\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2},\"indices\":3}]}],\"nodes\":[{\"name\":\"Root\",\"children\":[1]},{\"name\":\"Spine\",\"translation\":[0,1,0]},{\"mesh\":0,\"skin\":0}],\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4}]}"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Characters/Character.kbskeletalmesh",
+      "source": "Source/Replacement.gltf",
+      "dry_run": true,
+      "expect": "updated"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Characters/Character.kbskeletalmesh",
+      "contains": "vertex 0 -1 0 0 "
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Characters/Character.kbskeletalmesh",
+      "source": "Source/Replacement.gltf",
+      "expect": "updated"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Characters/Character.kbskeletalmesh",
+      "contains": "vertex 0 -2 0 0 "
+    },
+    {
+      "op": "undo_reimport"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Characters/Character.kbskeletalmesh",
+      "contains": "vertex 0 -1 0 0 "
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

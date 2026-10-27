@@ -8,6 +8,10 @@
 #include <limits>
 #include <utility>
 
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    #include <emscripten/emscripten.h>
+#endif
+
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -22,9 +26,21 @@
     #include <fcntl.h>
     #include <sys/stat.h>
     #include <unistd.h>
+    #if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
+        #include <aio.h>
+        #include <signal.h>
+        #define KB_BACKGROUND_POSIX_AIO 1
+    #endif
 #endif
 
 namespace kb::assets::streaming {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+struct BackgroundCooperativeDispatch {
+    BackgroundLoadService* service = nullptr;
+    bool scheduled = false;
+    std::uint32_t normalDispatches = 0U;
+};
+#endif
 namespace {
 
 // One request reads at most this much. Content streaming reads one pack block at a time, and a
@@ -47,6 +63,42 @@ struct AlignedBufferDeleter {
     }
 };
 using AlignedBuffer = std::unique_ptr<std::uint8_t, AlignedBufferDeleter>;
+#endif
+
+#if defined(KB_BACKGROUND_POSIX_AIO)
+struct NativeAsyncRead {
+    // Some libc control blocks contain a zero-length array and cannot be embedded in C++.
+    std::unique_ptr<aiocb> control = std::make_unique<aiocb>();
+    bool issued = false;
+    int error = 0;
+    ssize_t result = 0;
+
+    bool Start(int descriptor, std::uint64_t offset, std::span<std::uint8_t> bytes) noexcept {
+        *control = {};
+        control->aio_fildes = descriptor;
+        control->aio_offset = static_cast<off_t>(offset);
+        control->aio_buf = bytes.data();
+        control->aio_nbytes = bytes.size();
+        control->aio_sigevent.sigev_notify = SIGEV_NONE;
+        issued = ::aio_read(control.get()) == 0;
+        error = issued ? 0 : errno;
+        return issued;
+    }
+
+    void Wait() noexcept {
+        if (!issued) return;
+        while ((error = ::aio_error(control.get())) == EINPROGRESS) {
+            const aiocb* waitList[] = { control.get() };
+            if (::aio_suspend(waitList, 1, nullptr) != 0 && errno != EINTR) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+            }
+        }
+        result = ::aio_return(control.get());
+        issued = false;
+    }
+
+    ~NativeAsyncRead() { Wait(); }
+};
 #endif
 
 } // namespace
@@ -85,16 +137,24 @@ BackgroundLoadService::BackgroundLoadService(BackgroundLoadServiceOptions option
     options_.jobWorkers = std::clamp<std::uint32_t>(
         options_.jobWorkers, 1U, std::max<std::uint32_t>(1U, options_.workerCount - 1U));
     options_.longJobWorkers = std::clamp<std::uint32_t>(options_.longJobWorkers, 1U, 64U);
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(KB_BACKGROUND_POSIX_AIO)
     options_.requestsInFlightPerWorker = 1U;
 #endif
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    cooperative_ = std::make_shared<BackgroundCooperativeDispatch>();
+    cooperative_->service = this;
+#else
     workers_.reserve(options_.workerCount);
     for (std::uint32_t index = 0U; index < options_.workerCount; ++index) {
         workers_.emplace_back([this] { WorkerLoop(); });
     }
+#endif
 }
 
 BackgroundLoadService::~BackgroundLoadService() {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    cooperative_->service = nullptr;
+#endif
     std::vector<QueueEntry> abandoned;
     {
         std::scoped_lock lock{ mutex_ };
@@ -195,6 +255,9 @@ BackgroundRequestHandle BackgroundLoadService::Run(BackgroundJob job, Background
 }
 
 BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle request, BackgroundPriority priority) {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    request->cooperative_ = cooperative_;
+#endif
     request->priority_.store(priority, std::memory_order_relaxed);
     request->submittedAt_ = std::chrono::steady_clock::now();
     {
@@ -214,6 +277,7 @@ BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle re
             request->jobClass_ = lane->second.jobClass;
         }
         const bool longJob = request->isJob_ && request->jobClass_ == BackgroundJobClass::Long;
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
         if (longJob) {
             // One long worker for every long job that could run now, up to the limit. A thread
             // that cannot start throws before anything is queued.
@@ -223,18 +287,89 @@ BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle re
                 longWorkers_.emplace_back([this] { LongWorkerLoop(); });
             }
         }
+#endif
         request->sequence_ = nextSequence_++;
         std::vector<QueueEntry>& queue = request->isJob_ ? JobQueue(request->jobClass_) : reads_;
         queue.push_back(QueueEntry{ priority, request->sequence_, 0U, request });
         std::push_heap(queue.begin(), queue.end(), QueueOrder{});
         if (longJob) {
             longWake_.notify_all();
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
             return request;
+#endif
         }
     }
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    ScheduleCooperative();
+#else
     wake_.notify_one();
+#endif
     return request;
 }
+
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+void BackgroundLoadService::ScheduleCooperative() {
+    {
+        std::scoped_lock lock{ mutex_ };
+        if (stopping_ || cooperative_->scheduled || (reads_.empty() && jobs_.empty() && longJobs_.empty())) return;
+        cooperative_->scheduled = true;
+    }
+    auto* ticket = new std::shared_ptr<BackgroundCooperativeDispatch>{ cooperative_ };
+    emscripten_async_call([](void* pointer) {
+        const std::unique_ptr<std::shared_ptr<BackgroundCooperativeDispatch>> owned{
+            static_cast<std::shared_ptr<BackgroundCooperativeDispatch>*>(pointer) };
+        const auto state = *owned;
+        state->scheduled = false;
+        if (state->service != nullptr) state->service->PumpCooperative();
+    }, ticket, 0);
+}
+
+void BackgroundLoadService::PumpCooperative() {
+    // A job may release the last external shared owner while this dispatch is running.
+    const auto keepAlive = weak_from_this().lock();
+    const auto takeLongJob = [this]() -> BackgroundRequestHandle {
+        std::scoped_lock lock{ mutex_ };
+        if (!stopping_) {
+            if (auto job = TakeJob(longJobs_)) {
+                ++longJobsRunning_;
+                stats_.peakLongJobsRunning = std::max(stats_.peakLongJobsRunning, longJobsRunning_);
+                return job;
+            }
+        }
+        return nullptr;
+    };
+    std::vector<BackgroundRequestHandle> batch;
+    // Give long work a turn even while streaming keeps the normal queues populated.
+    constexpr std::uint32_t kNormalDispatchQuota = 8U;
+    if (cooperative_->normalDispatches >= kNormalDispatchQuota) {
+        if (auto job = takeLongJob()) batch.push_back(std::move(job));
+    }
+    if (batch.empty()) batch = TakeBatch(1U, false);
+    if (batch.empty()) {
+        if (auto job = takeLongJob()) batch.push_back(std::move(job));
+    }
+    if (!batch.empty()) {
+        if (batch.front()->isJob_ && batch.front()->jobClass_ == BackgroundJobClass::Long) {
+            cooperative_->normalDispatches = 0U;
+        } else {
+            cooperative_->normalDispatches = std::min(cooperative_->normalDispatches + 1U, kNormalDispatchQuota);
+        }
+        if (batch.front()->isJob_) {
+            RunJob(batch.front());
+        } else {
+            const auto count = inFlight_.fetch_add(1U, std::memory_order_acq_rel) + 1U;
+            {
+                std::scoped_lock lock{ mutex_ };
+                stats_.peakInFlight = std::max(stats_.peakInFlight, count);
+            }
+            ServeBatch(batch);
+            inFlight_.fetch_sub(1U, std::memory_order_acq_rel);
+        }
+    }
+    // Yield after one job or read so input and rendering can run between requests.
+    ScheduleCooperative();
+}
+#endif
 
 bool BackgroundLoadService::Reprioritize(const BackgroundRequestHandle& request, BackgroundPriority priority) {
     if (request == nullptr) {
@@ -332,10 +467,19 @@ void BackgroundLoadService::WaitForLane(BackgroundLaneId lane) noexcept {
         return;
     }
     std::unique_lock lock{ mutex_ };
-    laneIdle_.wait(lock, [this, lane] {
+    const auto idle = [this, lane] {
         const auto found = lanes_.find(lane);
         return found == lanes_.end() || found->second.running == 0U;
-    });
+    };
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    while (!idle()) {
+        lock.unlock();
+        PumpCooperative();
+        lock.lock();
+    }
+#else
+    laneIdle_.wait(lock, idle);
+#endif
 }
 
 void BackgroundLoadService::DrainLane(BackgroundLaneId lane) noexcept {
@@ -346,7 +490,7 @@ void BackgroundLoadService::DrainLane(BackgroundLaneId lane) noexcept {
         return entry.request->lane_ == lane && IsLive(entry);
     };
     std::unique_lock lock{ mutex_ };
-    laneIdle_.wait(lock, [&] {
+    const auto idle = [&] {
         const auto found = lanes_.find(lane);
         if (found == lanes_.end()) {
             return true;
@@ -354,7 +498,16 @@ void BackgroundLoadService::DrainLane(BackgroundLaneId lane) noexcept {
         const std::vector<QueueEntry>& queue = JobQueue(found->second.jobClass);
         return found->second.running == 0U && std::ranges::none_of(queue, queuedOfLane) &&
             std::ranges::none_of(found->second.parked, queuedOfLane);
-    });
+    };
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    while (!idle()) {
+        lock.unlock();
+        PumpCooperative();
+        lock.lock();
+    }
+#else
+    laneIdle_.wait(lock, idle);
+#endif
 }
 
 void BackgroundLoadService::Forget(const std::filesystem::path& path) {
@@ -394,12 +547,18 @@ bool BackgroundLoadService::WaitUntilDone(const BackgroundRequestHandle& request
         if (std::chrono::steady_clock::now() >= deadline) {
             return false;
         }
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        const auto state = request->cooperative_.lock();
+        if (state == nullptr || state->service == nullptr) return false;
+        state->service->PumpCooperative();
+#else
         std::this_thread::sleep_for(std::chrono::microseconds{ 100 });
+#endif
     }
     return request != nullptr;
 }
 
-std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_t count) {
+std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_t count, bool wait) {
     std::vector<BackgroundRequestHandle> batch;
     std::unique_lock lock{ mutex_ };
     for (;;) {
@@ -431,6 +590,7 @@ std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_
         if (!batch.empty()) {
             return batch;
         }
+        if (!wait) return batch;
         wake_.wait(lock, [this] {
             return stopping_ || !reads_.empty() || (!jobs_.empty() && jobsRunning_ < options_.jobWorkers);
         });
@@ -623,6 +783,9 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
         AlignedBuffer buffer;
         OVERLAPPED overlapped{};
         bool issued = false;
+#elif defined(KB_BACKGROUND_POSIX_AIO)
+        // Destroy the operation before its file and request buffers, including on exceptions.
+        std::unique_ptr<NativeAsyncRead> native;
 #endif
     };
     std::vector<Pending> pending;
@@ -650,6 +813,14 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
             Finish(request, true);
             continue;
         }
+#if !defined(_WIN32)
+        const auto maxOffset = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+        if (request->offset_ > maxOffset || request->length_ > maxOffset - request->offset_) {
+            request->error_ = "the requested range exceeds the platform file offsets";
+            Finish(request, false);
+            continue;
+        }
+#endif
         std::string error;
         std::shared_ptr<FileHandle> file = AcquireFile(request->path_, error);
         if (file == nullptr) {
@@ -665,8 +836,14 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
         pending.push_back(std::move(read));
     }
 
+    const auto recordIssued = [this](std::uint32_t count) {
+        std::scoped_lock lock{ mutex_ };
+        stats_.asynchronousReads += count;
+        stats_.peakSubmittedReadBatch = std::max(stats_.peakSubmittedReadBatch, count);
+    };
 #if defined(_WIN32)
     // Issue every read of the batch before waiting for any, so the device sees them together.
+    std::uint32_t issuedCount = 0U;
     for (Pending& read : pending) {
         if (read.alignedLength == 0U) {
             continue;
@@ -688,7 +865,9 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
             continue;
         }
         read.issued = true;
+        ++issuedCount;
     }
+    recordIssued(issuedCount);
     for (Pending& read : pending) {
         bool succeeded = false;
         if (read.alignedLength == 0U) {
@@ -725,7 +904,51 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
         }
         Finish(read.request, succeeded);
     }
+#elif defined(KB_BACKGROUND_POSIX_AIO)
+    // Allocate every buffer before any submission; control blocks never move while issued.
+    for (Pending& read : pending) {
+        read.request->bytes_.resize(static_cast<std::size_t>(read.request->length_));
+        read.native = std::make_unique<NativeAsyncRead>();
+    }
+    std::uint32_t issuedCount = 0U;
+    for (Pending& read : pending) {
+        if (read.request->length_ != 0U && read.native->Start(
+                read.file->descriptor, read.request->offset_, read.request->bytes_)) {
+            ++issuedCount;
+        }
+    }
+    recordIssued(issuedCount);
+    // Wait and publish in priority order even if native completion order differs.
+    for (Pending& read : pending) {
+        BackgroundRequest& request = *read.request;
+        std::size_t done = 0U;
+        bool succeeded = true;
+        while (done < request.bytes_.size()) {
+            read.native->Wait();
+            if (read.native->error != 0 || read.native->result < 0) {
+                request.error_ = "the asynchronous read failed (errno " + std::to_string(read.native->error) + ")";
+                succeeded = false;
+                break;
+            }
+            if (read.native->result == 0) {
+                request.error_ = "the file ended before the requested range";
+                succeeded = false;
+                break;
+            }
+            done += static_cast<std::size_t>(read.native->result);
+            if (done < request.bytes_.size() && read.native->Start(read.file->descriptor,
+                    request.offset_ + done, std::span{ request.bytes_ }.subspan(done))) {
+                recordIssued(1U);
+            }
+        }
+        {
+            std::scoped_lock lock{ mutex_ };
+            ++stats_.bufferedReads;
+        }
+        Finish(read.request, succeeded);
+    }
 #else
+    static_cast<void>(recordIssued);
     for (Pending& read : pending) {
         BackgroundRequest& request = *read.request;
         request.bytes_.assign(static_cast<std::size_t>(request.length_), 0U);

@@ -1,5 +1,11 @@
 #include "RendererTestSupport.hpp"
+#include "RendererAssertionPolicy.hpp"
 
+#include <bgfx/bgfx.h>
+
+#include <chrono>
+#include <charconv>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <exception>
@@ -29,6 +35,13 @@ std::size_t PeakCommittedBytes() noexcept {
 }
 
 void RunGraphForwardGpuRenderTests();
+void RunGraphProgramLifetimeTests();
+void RunDisplayAlphaGpuTests();
+void RunRendererScreenUiSubmitTests();
+void RunRendererReportsRejectedGpuStateUpdateTest();
+void RunParticleGpuVisualCounterTests(bgfx::RendererType::Enum backend);
+void RunGraphShaderArtifactCacheTests();
+void RunGraphShaderNodeCookTests(std::uint32_t shard, std::uint32_t shardCount);
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
 void RunSkinnedMeshGpuReadbackTests();
@@ -39,6 +52,7 @@ void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
 void RunAssetImportCatalogCoverageTests();
 void RunGltfExternalResourceTests();
+void RunMeshReimportTests();
 void RunRuntimeAssetShaderProviderTests();
 void RunRuntimeAssetPackValidationTests();
 void RunPackagedMaterialRuntimeTests();
@@ -47,6 +61,8 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererGiResolveTests();
+void RunRendererSkyReflectionTests();
 void RunRendererCommandReuseTests();
 void RunRendererTransparentGpuReadbackTests();
 void RunRendererDefaultSubmissionResultTest();
@@ -59,6 +75,11 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
 void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
+void RunRendererParticleContactDeathTest();
+void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend);
+void RunRendererParticleMotionPixelsTest(bgfx::RendererType::Enum backend);
+void RunRendererParticleDepthAuthoringTest();
+void RunRendererParticleSortModesTest();
 void RunRendererScreenSpaceEffectTests();
 void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererParticleVolumetricSnapshotSubmitTest();
@@ -83,7 +104,25 @@ void RunScreenUIDrawBatchTests();
 void RunLargeWorldRenderTests();
 }
 
+namespace {
+void RunSuite(const char* name, void (*run)()) {
+    std::fprintf(stderr, "renderer_tests begin %s\n", name);
+    std::fflush(stderr);
+    const auto started = std::chrono::steady_clock::now();
+    run();
+    const double milliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    std::fprintf(stderr, "renderer_tests passed %s elapsed_ms=%.3f\n", name, milliseconds);
+    std::fflush(stderr);
+}
+} // namespace
+
 int main(int argc, char** argv) {
+    kb::render::tests::InstallRendererAssertionPolicy();
+    if (argc == 2 && std::string_view{ argv[1] } == "assert-probe") {
+        kb::render::tests::ProbeRendererAssertion();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "command-reuse") {
         kb::render::tests::RunMeshPipelineTests();
         kb::render::tests::RunRenderSceneSyncTests();
@@ -137,6 +176,19 @@ int main(int argc, char** argv) {
         kb::render::tests::RunGraphShaderArtifactCookTests();
         return EXIT_SUCCESS;
     }
+    if (argc >= 2 && std::string_view{ argv[1] } == "graph-shader-node-cook") {
+        if (argc != 4) return EXIT_FAILURE;
+        const auto parse = [](std::string_view value, std::uint32_t& output) {
+            const auto result = std::from_chars(value.data(), value.data() + value.size(), output);
+            return result.ec == std::errc{} && result.ptr == value.data() + value.size();
+        };
+        std::uint32_t shard = 0U;
+        std::uint32_t count = 0U;
+        if (!parse(argv[2], shard) || !parse(argv[3], count) || count == 0U || count > 64U || shard >= count)
+            return EXIT_FAILURE;
+        kb::render::tests::RunGraphShaderNodeCookTests(shard, count);
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "shader-manifest") {
         kb::render::tests::RunShaderManifestTests();
         return EXIT_SUCCESS;
@@ -155,6 +207,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "gltf-external") {
         kb::render::tests::RunGltfExternalResourceTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-reimport") {
+        kb::render::tests::RunMeshReimportTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "import-catalog") {
@@ -193,6 +249,30 @@ int main(int argc, char** argv) {
         kb::render::tests::RunGraphForwardGpuRenderTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "graph-program-lifetime") {
+        kb::render::tests::RunGraphProgramLifetimeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "runtime-submit") {
+        kb::render::tests::RunRendererRuntimeSubmitTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "gi-resolve") {
+        kb::render::tests::RunRendererGiResolveTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "sky-reflection") {
+        kb::render::tests::RunRendererSkyReflectionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-state-rejection") {
+        kb::render::tests::RunRendererReportsRejectedGpuStateUpdateTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-submit") {
+        kb::render::tests::RunRendererScreenUiSubmitTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "backend-shader-gpu") {
         kb::render::tests::RunPrebuiltBackendShaderGpuTests();
         return EXIT_SUCCESS;
@@ -203,6 +283,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "capabilities") {
         kb::render::tests::RunRendererCapabilityReportTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "display-alpha") {
+        kb::render::tests::RunDisplayAlphaGpuTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "exposure-meter") {
@@ -228,6 +312,59 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "scene-render-target-format") {
         kb::render::tests::RunSceneRenderTargetFormatTests();
         return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-sort-modes") {
+        try {
+            kb::render::tests::RunRendererParticleSortModesTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "%s\n", error.what());
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-depth-collision") {
+        try {
+            kb::render::tests::RunRendererParticleDepthAuthoringTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "%s\n", error.what());
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc >= 2 && (std::string_view{argv[1]} == "particle-motion" || std::string_view{argv[1]} == "particle-motion-kernel" ||
+        std::string_view{argv[1]} == "particle-visual-counters")) {
+        if ((argc != 2 && argc != 4) || (argc == 4 && std::string_view{argv[2]} != "--backend")) {
+            std::fprintf(stderr, "%s expects [--backend d3d11|d3d12|vulkan|opengl]\n", argv[1]);
+            return EXIT_FAILURE;
+        }
+        auto backend = bgfx::RendererType::Direct3D11;
+        if (argc == 4) {
+            const std::string_view name{argv[3]};
+            if (name == "d3d11") backend = bgfx::RendererType::Direct3D11;
+            else if (name == "d3d12") backend = bgfx::RendererType::Direct3D12;
+            else if (name == "vulkan") backend = bgfx::RendererType::Vulkan;
+            else if (name == "opengl") backend = bgfx::RendererType::OpenGL;
+            else {
+                std::fprintf(stderr, "%s received an unsupported backend\n", argv[1]);
+                return EXIT_FAILURE;
+            }
+        }
+        if (std::string_view{argv[1]} == "particle-visual-counters") {
+            kb::render::tests::RunParticleGpuVisualCounterTests(backend);
+            return EXIT_SUCCESS;
+        }
+        kb::render::tests::RunParticleGpuMotionTests(std::string_view{argv[1]} == "particle-motion-kernel", backend);
+        if (std::string_view{argv[1]} == "particle-motion") kb::render::tests::RunRendererParticleMotionPixelsTest(backend);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && (std::string_view{ argv[1] } == "particle-contact-death" || std::string_view{ argv[1] } == "particle-collision-fallback")) {
+        try {
+            kb::render::tests::RunRendererParticleContactDeathTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "%s\n", error.what());
+            return EXIT_FAILURE;
+        }
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
         kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();
@@ -305,41 +442,44 @@ int main(int argc, char** argv) {
         kb::render::tests::RunSceneLightGridGpuTests();
         return EXIT_SUCCESS;
     }
-    if (argc != 1) {
+    const bool integrationOnly = argc == 2 && std::string_view{ argv[1] } == "renderer-integration";
+    if (argc != 1 && !integrationOnly) {
         return EXIT_FAILURE;
     }
-    kb::render::tests::RunSceneLightGridTests();
-    kb::render::tests::RunSceneLightGridGpuTests();
-    kb::render::tests::RunGraphForwardGpuRenderTests();
-    kb::render::tests::RunFinalCompositePassTests();
-    kb::render::tests::RunPostProcessChainTests();
-    kb::render::tests::RunRenderFramePipelineTests();
-    kb::render::tests::RunRenderResourceRegistryTests();
-    kb::render::tests::RunAssetImportCatalogCoverageTests();
-    kb::render::tests::RunGltfExternalResourceTests();
-    kb::render::tests::RunRuntimeAssetShaderProviderTests();
-    kb::render::tests::RunRuntimeAssetPackValidationTests();
-    kb::render::tests::RunRenderMaterialTypeSchemaTests();
-    kb::render::tests::RunGraphShaderArtifactCookTests();
-    kb::render::tests::RunMaterialProgramRegistryTests();
-    kb::render::tests::RunSceneMeshPassProgramSelectionTests();
-    kb::render::tests::RunRendererCapabilityReportTests();
-    kb::render::tests::RunRendererRuntimeSubmitTests();
-    kb::render::tests::RunRendererDefaultSubmissionResultTest();
-    kb::render::tests::RunMeshPipelineTests();
-    kb::render::tests::RunSceneDisplayCompositeTests();
-    kb::render::tests::RunSceneExposureMeterTests();
-    kb::render::tests::RunSceneDepthPolicyTests();
-    kb::render::tests::RunRenderSceneSyncTests();
-    kb::render::tests::RunLargeWorldRenderTests();
-    kb::render::tests::RunSceneRenderTargetFormatTests();
-    kb::render::tests::RunSceneRenderExtractorTests();
-    kb::render::tests::RunShaderManifestTests();
-    kb::render::tests::RunShaderPrewarmParseTests();
-    kb::render::tests::RunScreenUIDrawBatchTests();
-    kb::render::tests::RunMeshBakeTests();
-    kb::render::tests::RunWorldHlodMeshBakerTests();
-    kb::render::tests::RunTextureBakeTests();
-    kb::render::tests::RunRuntimeContentStreamingTests();
+    RunSuite("RunSceneLightGridTests", &kb::render::tests::RunSceneLightGridTests);
+    RunSuite("RunSceneLightGridGpuTests", &kb::render::tests::RunSceneLightGridGpuTests);
+    RunSuite("RunGraphForwardGpuRenderTests", &kb::render::tests::RunGraphForwardGpuRenderTests);
+    RunSuite("RunFinalCompositePassTests", &kb::render::tests::RunFinalCompositePassTests);
+    RunSuite("RunPostProcessChainTests", &kb::render::tests::RunPostProcessChainTests);
+    RunSuite("RunRenderFramePipelineTests", &kb::render::tests::RunRenderFramePipelineTests);
+    RunSuite("RunRenderResourceRegistryTests", &kb::render::tests::RunRenderResourceRegistryTests);
+    RunSuite("RunAssetImportCatalogCoverageTests", &kb::render::tests::RunAssetImportCatalogCoverageTests);
+    RunSuite("RunGltfExternalResourceTests", &kb::render::tests::RunGltfExternalResourceTests);
+    RunSuite("RunMeshReimportTests", &kb::render::tests::RunMeshReimportTests);
+    RunSuite("RunRuntimeAssetShaderProviderTests", &kb::render::tests::RunRuntimeAssetShaderProviderTests);
+    RunSuite("RunRuntimeAssetPackValidationTests", &kb::render::tests::RunRuntimeAssetPackValidationTests);
+    RunSuite("RunRenderMaterialTypeSchemaTests", &kb::render::tests::RunRenderMaterialTypeSchemaTests);
+    RunSuite(integrationOnly ? "RunGraphShaderArtifactCacheTests" : "RunGraphShaderArtifactCookTests",
+        integrationOnly ? &kb::render::tests::RunGraphShaderArtifactCacheTests : &kb::render::tests::RunGraphShaderArtifactCookTests);
+    RunSuite("RunMaterialProgramRegistryTests", &kb::render::tests::RunMaterialProgramRegistryTests);
+    RunSuite("RunSceneMeshPassProgramSelectionTests", &kb::render::tests::RunSceneMeshPassProgramSelectionTests);
+    RunSuite("RunRendererCapabilityReportTests", &kb::render::tests::RunRendererCapabilityReportTests);
+    RunSuite("RunRendererRuntimeSubmitTests", &kb::render::tests::RunRendererRuntimeSubmitTests);
+    RunSuite("RunRendererDefaultSubmissionResultTest", &kb::render::tests::RunRendererDefaultSubmissionResultTest);
+    RunSuite("RunMeshPipelineTests", &kb::render::tests::RunMeshPipelineTests);
+    RunSuite("RunSceneDisplayCompositeTests", &kb::render::tests::RunSceneDisplayCompositeTests);
+    RunSuite("RunSceneExposureMeterTests", &kb::render::tests::RunSceneExposureMeterTests);
+    RunSuite("RunSceneDepthPolicyTests", &kb::render::tests::RunSceneDepthPolicyTests);
+    RunSuite("RunRenderSceneSyncTests", &kb::render::tests::RunRenderSceneSyncTests);
+    RunSuite("RunLargeWorldRenderTests", &kb::render::tests::RunLargeWorldRenderTests);
+    RunSuite("RunSceneRenderTargetFormatTests", &kb::render::tests::RunSceneRenderTargetFormatTests);
+    RunSuite("RunSceneRenderExtractorTests", &kb::render::tests::RunSceneRenderExtractorTests);
+    RunSuite("RunShaderManifestTests", &kb::render::tests::RunShaderManifestTests);
+    RunSuite("RunShaderPrewarmParseTests", &kb::render::tests::RunShaderPrewarmParseTests);
+    RunSuite("RunScreenUIDrawBatchTests", &kb::render::tests::RunScreenUIDrawBatchTests);
+    RunSuite("RunMeshBakeTests", &kb::render::tests::RunMeshBakeTests);
+    RunSuite("RunWorldHlodMeshBakerTests", &kb::render::tests::RunWorldHlodMeshBakerTests);
+    RunSuite("RunTextureBakeTests", &kb::render::tests::RunTextureBakeTests);
+    RunSuite("RunRuntimeContentStreamingTests", &kb::render::tests::RunRuntimeContentStreamingTests);
     return EXIT_SUCCESS;
 }

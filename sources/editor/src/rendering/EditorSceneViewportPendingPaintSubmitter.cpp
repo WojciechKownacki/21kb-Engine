@@ -223,6 +223,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     }
     const auto endStart = std::chrono::steady_clock::now();
     viewport_.renderer_.EndFrame();
+    viewport_.ReportGpuParticleRejection();
     const double endMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - endStart).count();
     if (endMs >= kSlowStageMs) {

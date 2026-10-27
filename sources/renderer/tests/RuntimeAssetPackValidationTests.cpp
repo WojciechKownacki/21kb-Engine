@@ -348,10 +348,11 @@ void RuntimeAudioSourceMustBeDecodeReady() {
         std::string_view extension;
         std::string_view filename;
     };
-    constexpr std::array<Fixture, 3U> fixtures{
+    constexpr std::array<Fixture, 4U> fixtures{
         Fixture{ .extension = ".wav", .filename = "tone.wav" },
         Fixture{ .extension = ".flac", .filename = "tone.flac" },
         Fixture{ .extension = ".mp3", .filename = "tone.mp3" },
+        Fixture{ .extension = ".ogg", .filename = "tone.ogg" },
     };
     const std::filesystem::path fixtureRoot{ KB_TEST_AUDIO_ASSET_DIR };
     const std::filesystem::path root =
@@ -374,7 +375,7 @@ void RuntimeAudioSourceMustBeDecodeReady() {
         });
     }
     Require(ValidateAudioPack(root / "valid", valid).Succeeded(),
-        "Runtime pack validation rejected decode-ready WAV/FLAC/MP3 payloads");
+        "Runtime pack validation rejected decode-ready audio payloads");
 
     const std::vector<std::uint8_t> corrupt(32U, 0U);
     for (const Fixture& fixture : fixtures) {
@@ -392,7 +393,7 @@ void RuntimeAudioSourceMustBeDecodeReady() {
             Require(!validation.Succeeded() &&
                     validation.error.find("audio source payload is not decode-ready") !=
                         std::string::npos,
-                "Runtime pack validation accepted a corrupt WAV/FLAC/MP3 payload");
+                "Runtime pack validation accepted a corrupt audio payload");
         }
     }
 }

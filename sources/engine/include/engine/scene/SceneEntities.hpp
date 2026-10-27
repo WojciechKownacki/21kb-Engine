@@ -41,7 +41,8 @@ public:
     explicit SceneEntities(Scene& scene) noexcept;
 
     [[nodiscard]] SceneObject CreateObject();
-    [[nodiscard]] SceneObject CreateObject(SceneObjectDesc desc);
+    // Creation borrows the descriptor for the call; the scene owns its copied name and components.
+    [[nodiscard]] SceneObject CreateObject(const SceneObjectDesc& desc);
     // Bulk spawn: creates one object per descriptor in a single call. Structural
     // changes batch through the world's version-based query-plan invalidation, so
     // the query cache rebuilds lazily once rather than per spawned object.
@@ -50,7 +51,7 @@ public:
     // the objects in their archetype (World::MakeBulkComponentView / MakeBulkComponentBroadcastView).
     [[nodiscard]] std::vector<SceneObject> CreateObjects(std::span<const SceneObjectDesc> descs, std::span<const kb::ecs::World::BulkComponentView> components);
     [[nodiscard]] SceneEntity CreateEntity();
-    [[nodiscard]] SceneEntity CreateEntity(SceneObjectDesc desc);
+    [[nodiscard]] SceneEntity CreateEntity(const SceneObjectDesc& desc);
     [[nodiscard]] SceneObject Duplicate(SceneObject object);
     [[nodiscard]] std::vector<SceneObject> Duplicate(std::span<const SceneObject> objects);
     void Destroy(SceneObject object) noexcept;

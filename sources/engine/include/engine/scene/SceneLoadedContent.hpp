@@ -24,6 +24,11 @@ struct SceneStreamingSettings {
 struct SceneStreamingStats {
     std::size_t operations = 0U;
     double milliseconds = 0.0;
+    // Frames since the scene was created in which streaming took longer than maxMillisecondsPerFrame, and the longest
+    // frame it took. The limit is checked between steps, so one step (a provider callback, the creation of a batch
+    // of entities) can run past it; these two numbers say how often and by how much.
+    std::size_t overBudgetFrames = 0U;
+    double longestFrameMilliseconds = 0.0;
 };
 
 // LIB-073: one flat notification of a scene lifecycle transition

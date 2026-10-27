@@ -4,7 +4,7 @@ Cel: 21kb ma być konkurencyjnym silnikiem komercyjnym — jakość obrazu i wyd
 wiodących silników rynkowych. Pracujemy małymi partiami (jedno zadanie = jeden lub kilka małych commitów),
 każda partia ma test, który przechodzi bez okna (headless).
 
-Źródła: raport z benchmarku (`E:\EngineBenchmarks\FiveEngine\engines\21kb\NOTES.md`), pomiary i profile z
+Źródła: raport z benchmarku (poza tym repozytorium), pomiary i profile z
 bieżącej pracy. Priorytety poniżej to **ocena inżynierska**, nie zatwierdzony plan produktu — kolejność można zmienić.
 
 ## Stan na dziś (zrobione i zmergowane do `Release`, PR #77)
@@ -82,10 +82,9 @@ Kryterium „zrobione" = test, który musi przejść; test ma być headless (bez
 
 ## Poza zakresem (decyzje użytkownika)
 
-- Adaptery benchmarku (`E:\EngineBenchmarks\...`) nie są poprawiane — zmiany robimy w silniku.
+- Adaptery benchmarku (poza tym repozytorium) nie są poprawiane — zmiany robimy w silniku.
 - Nazwy innych silników nie mogą pojawić się w niczym, co trafia do gita (kod, komentarze, commity, PR-y, dokumenty).
 
 ## Zasady wykonania
 
-Prompt dla agenta wykonującego te zadania: `docs/engine-quality-agent-prompt.md`.
 Po zakończeniu zadania: zaktualizować status w tym pliku w tym samym commicie.

@@ -45,6 +45,30 @@ namespace {
     if (components.contentInstance.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::ContentInstance);
     }
+    if (components.grid.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Grid);
+    }
+    if (components.tilemap.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Tilemap);
+    }
+    if (components.tilemapRenderer.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::TilemapRenderer);
+    }
+    if (components.tilemapCollider.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::TilemapCollider);
+    }
+    if (components.characterController2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::CharacterController2D);
+    }
+    if (components.collider2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Collider2D);
+    }
+    if (components.body2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Body2D);
+    }
+    if (components.sprite2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Sprite2D);
+    }
     if (components.streamFocus.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::StreamFocus);
     }
@@ -175,6 +199,30 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.contentInstance.has_value()) {
             archetype.contentInstances.push_back(*node.components.contentInstance);
+        }
+        if (node.components.grid.has_value()) {
+            archetype.grids.push_back(*node.components.grid);
+        }
+        if (node.components.tilemap.has_value()) {
+            archetype.tilemaps.push_back(*node.components.tilemap);
+        }
+        if (node.components.tilemapRenderer.has_value()) {
+            archetype.tilemapRenderers.push_back(*node.components.tilemapRenderer);
+        }
+        if (node.components.tilemapCollider.has_value()) {
+            archetype.tilemapColliders.push_back(*node.components.tilemapCollider);
+        }
+        if (node.components.characterController2D.has_value()) {
+            archetype.characterControllers2D.push_back(*node.components.characterController2D);
+        }
+        if (node.components.collider2D.has_value()) {
+            archetype.colliders2D.push_back(*node.components.collider2D);
+        }
+        if (node.components.body2D.has_value()) {
+            archetype.bodies2D.push_back(*node.components.body2D);
+        }
+        if (node.components.sprite2D.has_value()) {
+            archetype.sprites2D.push_back(*node.components.sprite2D);
         }
         if (node.components.streamFocus.has_value()) {
             archetype.streamFocuses.push_back(*node.components.streamFocus);

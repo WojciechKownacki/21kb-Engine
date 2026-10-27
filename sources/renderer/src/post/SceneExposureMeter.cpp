@@ -11,6 +11,13 @@ bool SceneHdrExposureReadbackDesc::IsValid() const noexcept {
     return bgfx::isValid(hdrColor) && extent.IsValid();
 }
 
+namespace {
+// std::clamp and std::max pass a NaN through, which would poison the adapted luminance for every later frame.
+[[nodiscard]] float FiniteOr(float value, float fallback) noexcept {
+    return std::isfinite(value) ? value : fallback;
+}
+} // namespace
+
 SceneExposureMeter::SceneExposureMeter() = default;
 
 SceneExposureMeter::~SceneExposureMeter() = default;
@@ -66,13 +73,17 @@ void SceneExposureMeter::Reset() noexcept {
 
 void SceneExposureMeter::Prime(float luminance) noexcept {
     adaptedAverageLuminance_ = std::clamp(
-        luminance,
+        std::isnan(luminance) ? 0.18F : luminance,
         SceneExposureHistogramBuilder::kMinAverageLuminance,
         SceneExposureHistogramBuilder::kMaxAverageLuminance);
     hasHistory_ = true;
 }
 
 float SceneExposureMeter::Update(float meteredAverageLuminance, SceneExposureAdaptationDesc desc) noexcept {
+    // A measurement that is not a number carries no information: keep the exposure the eye has adapted to.
+    if (std::isnan(meteredAverageLuminance)) {
+        meteredAverageLuminance = hasHistory_ ? adaptedAverageLuminance_ : 0.18F;
+    }
     const float target = std::clamp(
         meteredAverageLuminance,
         SceneExposureHistogramBuilder::kMinAverageLuminance,
@@ -84,13 +95,13 @@ float SceneExposureMeter::Update(float meteredAverageLuminance, SceneExposureAda
     }
 
     const float currentLog = std::log2(std::clamp(
-        adaptedAverageLuminance_,
+        FiniteOr(adaptedAverageLuminance_, 0.18F),
         SceneExposureHistogramBuilder::kMinAverageLuminance,
         SceneExposureHistogramBuilder::kMaxAverageLuminance));
     const float targetLog = std::log2(target);
     const float rate = targetLog > currentLog ? desc.brightAdaptationRate : desc.darkAdaptationRate;
-    const float alpha = 1.0F - std::exp(-std::max(rate, 0.0F) * std::max(desc.deltaSeconds, 0.0F));
-    adaptedAverageLuminance_ = std::exp2(currentLog + ((targetLog - currentLog) * std::clamp(alpha, 0.0F, 1.0F)));
+    const float alpha = 1.0F - std::exp(-std::max(FiniteOr(rate, 0.0F), 0.0F) * std::max(FiniteOr(desc.deltaSeconds, 0.0F), 0.0F));
+    adaptedAverageLuminance_ = std::exp2(currentLog + ((targetLog - currentLog) * std::clamp(FiniteOr(alpha, 0.0F), 0.0F, 1.0F)));
     return std::clamp(
         adaptedAverageLuminance_,
         SceneExposureHistogramBuilder::kMinAverageLuminance,

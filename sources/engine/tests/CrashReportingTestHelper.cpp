@@ -56,7 +56,9 @@ int wmain(int argc, wchar_t** argv) {
         std::fputs("usage: kb_crash_reporting_test_helper <report directory> <mode>\n", stderr);
         return 2;
     }
-    const std::wstring_view mode{ argv[2] };
+    std::wstring_view mode{ argv[2] };
+    const bool immediate = mode.ends_with(L"-early");
+    if (immediate) mode.remove_suffix(6U);
 #if defined(_DEBUG)
     // A debug CRT asserts before it reports an invalid parameter; keep that
     // assertion out of a dialog so the reporter is what the test observes.
@@ -115,8 +117,8 @@ int wmain(int argc, wchar_t** argv) {
             static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(notesEnd - notesBegin).count()) / kNotes);
         return 0;
     }
-    // Let the reporter thread finish starting, as it has long before any real crash.
-    Sleep(200U);
+    // Test both a warmed reporter and crashes racing its asynchronous startup.
+    if (!immediate) Sleep(200U);
     if (mode == L"access-violation") {
         volatile int* pointer = nullptr;
         *pointer = 42;

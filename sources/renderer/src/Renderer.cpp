@@ -314,7 +314,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     ShaderLoader::SetBinaryProvider(shaderBinaryProvider_);
 
     sceneRenderer_ = std::make_unique<SceneRenderer>();
-    if (!sceneRenderer_->Initialize()) {
+    if (!sceneRenderer_->Initialize(displayConfig_.particleGpuBufferBudgetBytes)) {
         Shutdown();
         return false;
     }
@@ -354,10 +354,6 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
-    // Optional: without its shader screen-space GI simply contributes nothing.
-    static_cast<void>(giResolvePass_.Initialize());
-    // Without it (no shader variant or renderable cube map) reflections keep the environment colour.
-    static_cast<void>(skyReflection_.Initialize());
     static_cast<void>(giVoxelGrid_.Initialize());
     if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();
@@ -1090,6 +1086,15 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     particleRenderSynchronizer_->Sync(scene, renderScene);
     sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_,
         static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL, renderScene.RenderOrigin());
+    for (const auto& rejection : sceneRenderer_->RejectedGpuParticleUpdates(scene.Id())) {
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::ParticleGpuUpdateRejected,
+            .particleEmitterId = rejection.key.emitterId,
+            .particleInstanceId = rejection.key.instanceId,
+            .particleGpuUpdateFailure = rejection.failure,
+        });
+    }
     if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
         if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;
@@ -1155,7 +1160,9 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
         effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass ||
         // Screen-space GI, ambient occlusion and reflections read the G-buffer, so they imply the deferred path.
-        UsesScreenSpaceEffects(effectiveLightingConfig);
+        // Fog is applied by the deferred lighting pass too: without this a profile that turns fog on would be
+        // ignored without a word on the forward path.
+        UsesScreenSpaceEffects(effectiveLightingConfig) || effectiveLightingConfig.fogEnabled;
     RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
@@ -1433,6 +1440,24 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 ? resolvedPostProcessSettings->temporalJitterEnabled
                 : defaultPostProcessSettings_.temporalJitterEnabled);
     {
+        auto& history = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+        const auto* cameraProxy = desc.cameraOverride.has_value() ? nullptr :
+            renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
+        const std::uint64_t cameraEntityId = cameraProxy != nullptr ? cameraProxy->entityId : 0U;
+        const bool orthographic = overlayCamera != nullptr && overlayCamera->projection[15] != 0.0F;
+        if (desc.resetTemporalHistory || history.sceneId != scene.Id() ||
+            history.cameraEntityId != cameraEntityId || history.cameraOverride != desc.cameraOverride.has_value() ||
+            history.orthographic != orthographic || !history.taaEnabled || !temporalAntiAliasingEnabled ||
+            history.historyFrame + 1U != frameIndex) {
+            history.hasHistory = false;
+        }
+        history.sceneId = scene.Id();
+        history.cameraEntityId = cameraEntityId;
+        history.cameraOverride = desc.cameraOverride.has_value();
+        history.orthographic = orthographic;
+        history.taaEnabled = temporalAntiAliasingEnabled;
+    }
+    {
         std::ostringstream message;
         message << "Scene receive AA viewportId=" << desc.target.viewport.id.value
                 << " viewportIndex=" << desc.target.viewport.viewportIndex
@@ -1565,6 +1590,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         }
         SceneGiBinding giBinding{};
         const bool giEnabled = UsesScreenSpaceEffects(effectiveLightingConfig);
+        // Compile the optional resolve shader only for a viewport that uses it.
+        if (giEnabled) static_cast<void>(giResolvePass_.Initialize());
         if (giEnabled && giHistories_[desc.target.viewport.viewportIndex].Ensure(desc.target.viewport.extent, desc.target.colorFormat)) {
             giBinding = giHistories_[desc.target.viewport.viewportIndex].Binding();
         }
@@ -1636,7 +1663,14 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             // The forward transparent pass depth-tests against the scene depth, so it samples a copy of it
             // (decals, soft particles, depth-fading materials): a texture bound as the depth attachment reads
             // back as zero. The GPU particle emitters above read the depth itself, in a view that does not bind it.
-            sceneRenderer_->SetSceneDepthTexture(TransparentDepthCopy(viewportPlan.viewIds.transparentScene, desc.target));
+            const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
+            const bool hasDepthConsumers = renderScene.MeshProxyCount() != 0U ||
+                renderScene.GeometrySwarmProxyCount() != 0U || renderScene.SurfaceCastProxyCount() != 0U ||
+                renderScene.SpaceStrokeProxyCount() != 0U ||
+                (particleSnapshot != nullptr && !particleSnapshot->IsTombstone() && !particleSnapshot->Emitters().empty());
+            sceneRenderer_->SetSceneDepthTexture(hasDepthConsumers
+                ? TransparentDepthCopy(viewportPlan.viewIds.transparentScene, desc.target)
+                : bgfx::TextureHandle{bgfx::kInvalidHandle});
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
@@ -1881,7 +1915,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit invalid output");
                 return false;
             }
-            // Unreal's post-process materials (Before Tonemapping): the scene's Post Process materials over the HDR image.
+            temporalState.historyFrame = frameIndex;
+            // Apply the scene's post-process materials to the HDR image before tonemapping.
             scenePostProcessOutput = sceneRenderer_->SubmitPostProcessMaterials(renderScene, ScenePostProcessMaterialChainDesc{
                 .views = viewportPlan.viewIds.postProcessMaterialViews,
                 .frameBuffers = { sampledSceneDesc.postProcess.finalFrameBuffer, sampledSceneDesc.postProcess.combineFrameBuffer },
@@ -2444,6 +2479,19 @@ bgfx::TextureHandle Renderer::TransparentDepthCopy(bgfx::ViewId viewId, const Re
 
 void Renderer::PrepareParticleScene(kb::scene::Scene& scene) noexcept {
     if (sceneRenderer_ != nullptr) sceneRenderer_->PrepareGpuParticleConsumer(scene);
+}
+
+std::span<const ParticleGpuEmitterSimulation::Draw> Renderer::GpuParticleDraws(const kb::scene::Scene& scene) const noexcept {
+    return sceneRenderer_ == nullptr ? std::span<const ParticleGpuEmitterSimulation::Draw>{} : sceneRenderer_->GpuParticleDraws(scene.Id());
+}
+
+std::uint64_t Renderer::GpuEmitterAllocatedBytes() const noexcept {
+    return sceneRenderer_ == nullptr ? 0U : sceneRenderer_->GpuEmitterAllocatedBytes();
+}
+
+std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> Renderer::RejectedGpuParticleUpdates(const kb::scene::Scene& scene) const noexcept {
+    return sceneRenderer_ == nullptr ? std::span<const ParticleGpuEmitterSimulation::RejectedUpdate>{}
+        : sceneRenderer_->RejectedGpuParticleUpdates(scene.Id());
 }
 
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {

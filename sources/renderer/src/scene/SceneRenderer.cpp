@@ -113,7 +113,7 @@ SceneRenderer::~SceneRenderer() {
     Shutdown();
 }
 
-bool SceneRenderer::Initialize() {
+bool SceneRenderer::Initialize(std::uint64_t particleBufferBudgetBytes) {
     if (initialized_) {
         return true;
     }
@@ -124,7 +124,7 @@ bool SceneRenderer::Initialize() {
         return false;
     }
     particleRenderer_ = std::make_unique<ParticleGpuRenderer>();
-    if (!particleRenderer_->Initialize()) {
+    if (!particleRenderer_->Initialize(particleBufferBudgetBytes)) {
         Shutdown();
         return false;
     }
@@ -176,6 +176,11 @@ void SceneRenderer::SyncGpuParticleEmitters(
 void SceneRenderer::PrepareGpuParticleConsumer(kb::scene::Scene& scene) noexcept {
     if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
     kb::particles::ParticlePlayback::SetGpuEmitterConsumer(scene, true);
+}
+
+std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> SceneRenderer::RejectedGpuParticleUpdates(std::uint64_t sceneId) const noexcept {
+    return particleRenderer_ == nullptr ? std::span<const ParticleGpuEmitterSimulation::RejectedUpdate>{}
+        : particleRenderer_->RejectedGpuUpdates(sceneId);
 }
 
 void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
@@ -585,6 +590,14 @@ kb::particles::ParticleGpuVisualAvailability SceneRenderer::ParticleGpuVisualAva
     return particleRenderer_ == nullptr
         ? kb::particles::ParticleGpuVisualAvailability::RendererUnavailable
         : particleRenderer_->GpuVisualAvailability();
+}
+
+std::span<const ParticleGpuEmitterSimulation::Draw> SceneRenderer::GpuParticleDraws(std::uint64_t sceneId) const noexcept {
+    return particleRenderer_ == nullptr ? std::span<const ParticleGpuEmitterSimulation::Draw>{} : particleRenderer_->GpuEmitterDraws(sceneId);
+}
+
+std::uint64_t SceneRenderer::GpuEmitterAllocatedBytes() const noexcept {
+    return particleRenderer_ == nullptr ? 0U : particleRenderer_->GpuEmitterAllocatedBytes();
 }
 
 void SceneRenderer::SetParticleVolumetricLowQuality(bool lowQuality) noexcept {

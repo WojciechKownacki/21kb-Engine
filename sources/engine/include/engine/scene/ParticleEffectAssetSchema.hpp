@@ -291,6 +291,9 @@ struct ParticleFlipbookAsset {
     std::uint32_t rows = 1U;
     float framesPerSecond = 0.0F;
     bool looping = true;
+    std::uint32_t startFrame = 0U;
+    // Zero uses every remaining atlas cell, preserving existing effect files.
+    std::uint32_t frameCount = 0U;
 };
 struct ParticleBillboardOutput {
     ParticleFlipbookAsset flipbook;
@@ -381,6 +384,8 @@ struct ParticleEmitterAsset {
     // World space: localPosition is a point of the world; the emitter stays there while its owner moves
     // (the crater at the end of a meteor's flight).
     bool absolutePosition = false;
+    // Optional visual response to the available GPU scene depth; independent of collision planes.
+    bool screenDepthCollision = false;
     ParticleSpawnAsset spawn;
     std::vector<ParticleModuleAsset> modules;
     ParticleOutputAsset output;

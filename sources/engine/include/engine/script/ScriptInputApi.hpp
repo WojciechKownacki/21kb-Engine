@@ -9,7 +9,8 @@ class ScriptRuntimeHost;
 // (CallFunction) and a Visual Graph CallNative node, a single registration here
 // exposes input to all three scripting backends from one source of truth.
 //
-// Every function below also takes an optional trailing `player:Int` pin (LIB-115).
+// Action queries and mapping operations also take an optional trailing
+// `player:Int` pin (LIB-115).
 // Omitted or <= 0 means the primary/default local user - the exact single-player
 // behavior every function had before this pin existed. player=N queries/mutates
 // local user N's own independent InputSubsystem instead (see LocalUserId).
@@ -54,6 +55,16 @@ class ScriptRuntimeHost;
 //   AddMappingContext(context:String, priority:Int)  -> added:Bool
 //   RemoveMappingContext(context:String)             -> removed:Bool
 // (context is the decimal string form of the mapping-context asset id.)
+//
+// Physical touch contacts are shared by local users and take no player pin:
+//   Input.TouchCount() -> count:Int (includes pending terminal samples)
+//   Input.TouchPoint(index:Int) -> valid:Bool, id:UInt32, x:Float, y:Float,
+//                                  phase:Int, active:Bool
+// Index is zero-based and can change between frames; track the returned ID.
+// Coordinates use active render-viewport pixels. Phases are Began=0, Moved=1,
+// Ended=2, Cancelled=3; only the first two are active. Out-of-range indices
+// return valid=false, active=false and zero ID/position with phase=Cancelled.
+// These queries do not consume contacts or change UI capture.
 //
 // Pointer (LIB-117) - the mouse is a singular physical device (unlike
 // gamepads), shared by every local user, so these take NO player pin and

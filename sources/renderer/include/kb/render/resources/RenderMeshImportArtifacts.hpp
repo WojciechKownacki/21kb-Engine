@@ -50,6 +50,25 @@ public:
         const std::filesystem::path& destinationVirtualFolder,
         const kb::assets::AssetImportOptions& options);
 
+    // Reimport: replaces an imported static model with a changed source, in place (same id and path, so every reference keeps working), and
+    // republishes the textures and materials the options ask for. What the last import wrote is kept in `<asset>.importrecord`: a texture or
+    // material edited since then is a local override, and options.conflictPolicy says what happens to it (report and change nothing, keep
+    // it, or overwrite it). Whatever is overwritten is backed up first (AssetImportBackups, item.backupId). options.dryRun writes nothing and
+    // only fills item.changes. The static and skeletal imports above apply the same rule when they publish over assets that exist.
+    [[nodiscard]] static kb::assets::AssetImportItemResult ReimportStatic(
+        kb::assets::AssetManager& manager,
+        kb::assets::AssetId id,
+        const std::filesystem::path& sourcePath,
+        const kb::assets::AssetImportOptions& options);
+
+    // Dispatch by the existing asset type and preserve its path and identity,
+    // even when the replacement source has a different filename.
+    [[nodiscard]] static kb::assets::AssetImportItemResult Reimport(
+        kb::assets::AssetManager& manager,
+        kb::assets::AssetId id,
+        const std::filesystem::path& sourcePath,
+        const kb::assets::AssetImportOptions& options);
+
     // Skeletal import of FBX, glTF and GLB sources: a Skeleton (reused when the project already has
     // the same one), the Skeletal Mesh and one Animation Clip per source animation, with the
     // source's textures and materials when the options ask for them. Each item's id is the

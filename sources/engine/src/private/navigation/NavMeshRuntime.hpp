@@ -125,6 +125,9 @@ public:
 
     // Raised whenever a polygon tile is added, removed or rebuilt.
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
+    [[nodiscard]] std::uint64_t Revision(std::uint32_t profile) const noexcept {
+        return profile < meshes_.size() ? meshes_[profile].revision : 0U;
+    }
     [[nodiscard]] std::size_t TileRebuilds() const noexcept { return rebuilds_; }
     // Baked tiles in use (one per profile and coordinate) and Detour tiles (one per layer).
     [[nodiscard]] std::size_t ActiveTileCount(std::uint32_t profile) const noexcept;
@@ -136,6 +139,7 @@ public:
     [[nodiscard]] dtNavMeshQuery* Query(std::uint32_t profile) noexcept;
     // The link an off-mesh connection polygon stands for.
     [[nodiscard]] const NavRuntimeLink* LinkForPolygon(std::uint32_t profile, dtPolyRef polygon) const;
+    [[nodiscard]] const NavRuntimeLink* LinkById(std::uint64_t id) const;
 
     void SetAreaCost(kb::scene::NavAreaId area, float cost) noexcept;
     [[nodiscard]] float AreaCost(kb::scene::NavAreaId area) const noexcept;
@@ -195,6 +199,7 @@ private:
         std::unique_ptr<dtNavMeshQuery, QueryDeleter> query;
         int capacity = 0;
         std::uint64_t generation = 0U;
+        std::uint64_t revision = 1U;
     };
 
     [[nodiscard]] bool CreateMesh(std::uint32_t profile, int capacity);

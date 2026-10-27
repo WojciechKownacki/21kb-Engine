@@ -1,6 +1,7 @@
 #pragma once
 
 namespace kb::editor::tests {
+void RunEditorAudioMixerRuntimeTests();
 
 void RunEditorHierarchyTests();
 void RunEditorAssetBrowserTests();

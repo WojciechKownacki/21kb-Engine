@@ -23,16 +23,21 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "cs_massive_fill.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "cs_particle_visual_integrate.sc", .stage = ShaderStage::Compute,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuVisual)},
-    // Optional: without it (no Metal variant is generated on Windows hosts) emitters fall back to the CPU path.
-    ShaderManifestEntry{.name = "cs_particle_gpu_emit.sc", .stage = ShaderStage::Compute, .required = false},
-    // Optional likewise: emitters with collisions then simulate without them.
-    ShaderManifestEntry{.name = "cs_particle_gpu_collide.sc", .stage = ShaderStage::Compute, .required = false},
-    // Optional likewise: the live particles of world-space emitters are then cleared when the render origin moves.
-    ShaderManifestEntry{.name = "cs_particle_gpu_rebase.sc", .stage = ShaderStage::Compute, .required = false},
-    // Optional likewise: alpha-blended emitters are then drawn in ring order instead of back to front.
-    ShaderManifestEntry{.name = "cs_particle_gpu_sort_keys.sc", .stage = ShaderStage::Compute, .required = false},
-    ShaderManifestEntry{.name = "cs_particle_gpu_sort_step.sc", .stage = ShaderStage::Compute, .required = false},
-    ShaderManifestEntry{.name = "cs_particle_gpu_sort_gather.sc", .stage = ShaderStage::Compute, .required = false},
+    // Cook the complete emitter pipeline with each target's prebuilt or generated variants.
+    // Runtime capability checks retain CPU simulation on devices without compute support.
+    ShaderManifestEntry{.name = "cs_particle_gpu_emit.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
+    ShaderManifestEntry{.name = "cs_particle_gpu_collide.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
+    ShaderManifestEntry{.name = "cs_particle_gpu_inspect.sc", .stage = ShaderStage::Compute, .required = false},
+    ShaderManifestEntry{.name = "cs_particle_gpu_rebase.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_keys.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_step.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_gather.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
     ShaderManifestEntry{.name = "fs_editor_gizmo.sc", .stage = ShaderStage::Fragment,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::Editor)},
     ShaderManifestEntry{.name = "fs_editor_gizmo_resolve.sc", .stage = ShaderStage::Fragment,
@@ -207,12 +212,14 @@ std::vector<std::string_view> RequiredPackagedShaderNames(
 ShaderRuntimeFeatureMask PackagedGameShaderFeatures(
     kb::assets::bake::ShaderBakeBackend backend) noexcept {
     using kb::assets::bake::ShaderBakeBackend;
+    const auto emitters = static_cast<std::uint32_t>(backend) < kb::assets::bake::kShaderBakeBackendCount
+        ? ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters) : 0U;
     if (backend == ShaderBakeBackend::Dxbc || backend == ShaderBakeBackend::Dxil ||
         backend == ShaderBakeBackend::Spirv || backend == ShaderBakeBackend::Wgsl) {
-        return ShaderRuntimeFeatureBit(ShaderRuntimeFeature::GpuDrivenCulling) |
+        return emitters | ShaderRuntimeFeatureBit(ShaderRuntimeFeature::GpuDrivenCulling) |
             ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuVisual);
     }
-    return 0U;
+    return emitters;
 }
 
 ShaderManifestValidationResult ValidateShaderManifestProfile(

@@ -21,6 +21,8 @@ enum class SceneUpdatePhase : std::uint8_t {
 // before the matching physics step.
 enum class SceneFixedUpdatePhase : std::uint8_t {
     PreSimulation,
+    // Materialize commands such as tile geometry after scripts and before physics.
+    PrepareSimulation,
     Simulation,
     PostSimulation,
 };

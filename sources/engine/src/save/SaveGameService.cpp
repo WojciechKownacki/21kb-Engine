@@ -22,6 +22,11 @@ namespace {
     if (save.Entries().size() > SaveGameFormat::kMaxEntries) {
         return false;
     }
+    // Account for the authenticated envelope, domain and entry count before
+    // allocating encoded payload buffers. Per-entry limits alone permit tens
+    // of gigabytes which would otherwise be rejected only after encoding.
+    std::size_t encodedBytes = SaveGameFormat::kMagic.size() + sizeof(std::uint32_t) +
+        2U * sizeof(std::uint64_t) + kb::security::kSha512Bytes + sizeof(std::uint8_t) + sizeof(std::uint32_t);
     for (const auto& [key, value] : save.Entries()) {
         if (key.size() > SaveGameFormat::kMaxKeyBytes) {
             return false;
@@ -29,6 +34,18 @@ namespace {
         if (value.type == SaveValueType::String && value.stringValue.size() > SaveGameFormat::kMaxStringValueBytes) {
             return false;
         }
+        std::size_t valueBytes = 0U;
+        switch (value.type) {
+        case SaveValueType::Bool: valueBytes = 1U; break;
+        case SaveValueType::Int:
+        case SaveValueType::Float:
+        case SaveValueType::AssetRef: valueBytes = 8U; break;
+        case SaveValueType::String: valueBytes = sizeof(std::uint32_t) + value.stringValue.size(); break;
+        default: return false;
+        }
+        const std::size_t entryBytes = sizeof(std::uint32_t) + key.size() + sizeof(std::uint8_t) + valueBytes;
+        if (entryBytes > SaveGameFormat::kMaxSerializedBytes - encodedBytes) return false;
+        encodedBytes += entryBytes;
     }
     return true;
 }

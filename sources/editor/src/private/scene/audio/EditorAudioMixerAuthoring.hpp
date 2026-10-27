@@ -23,7 +23,7 @@ public:
     EditorAudioMixerAuthoring(
         kb::scene::Scene& scene,
         EditorAssetBrowserState& browser,
-        EditorConsoleState& console) noexcept;
+        EditorConsoleState& console, EditorCommandStack* commands = nullptr) noexcept;
 
     [[nodiscard]] bool Create(const std::filesystem::path& virtualFolder);
     [[nodiscard]] std::optional<kb::audio::AudioMixerAsset> Read(kb::assets::AssetId id) const;
@@ -34,6 +34,12 @@ public:
     [[nodiscard]] bool SetBusParent(kb::assets::AssetId id, std::string_view name, std::string_view parent);
     [[nodiscard]] bool SetBusVolume(kb::assets::AssetId id, std::string_view name, float volume);
     [[nodiscard]] bool SetBusMute(kb::assets::AssetId id, std::string_view name, bool mute);
+
+    [[nodiscard]] bool AddEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, kb::audio::AudioDspKind kind);
+    [[nodiscard]] bool RemoveEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect);
+    [[nodiscard]] bool MoveEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, std::size_t index);
+    [[nodiscard]] bool SetEffectField(kb::assets::AssetId id, std::string_view bus, std::string_view effect,
+        std::string_view field, std::string_view value);
 
     [[nodiscard]] bool AddSnapshot(kb::assets::AssetId id, std::string_view name);
     [[nodiscard]] bool RemoveSnapshot(kb::assets::AssetId id, std::string_view name);

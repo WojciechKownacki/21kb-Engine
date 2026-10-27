@@ -255,6 +255,11 @@ function(kb_add_bgfx_subdirectory)
 endfunction()
 
 function(kb_apply_quality_gates target_name)
+    get_target_property(_kb_quality_target_type ${target_name} TYPE)
+    if(MSVC AND BUILD_TESTING AND _kb_quality_target_type STREQUAL "EXECUTABLE" AND "${target_name}" MATCHES "_tests$")
+        target_sources(${target_name} PRIVATE "${PROJECT_SOURCE_DIR}/sources/engine/tests/TestProcessErrors.cpp")
+    endif()
+
     # This function is called only by first-party kb_* targets. Vendor projects
     # are added separately and intentionally do not inherit these flags: their
     # pre-existing diagnostics must stay visible without blocking a clean build
@@ -344,6 +349,10 @@ set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
 set(FLECS_SHARED OFF CACHE BOOL "Do not build Flecs as a shared library" FORCE)
 set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)
 add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
+# Bound live entity depth while leaving room for a retained leaf relation record.
+set(KB_ECS_HIERARCHY_DEPTH_LIMIT 8192)
+math(EXPR KB_ECS_BACKEND_DAG_DEPTH_LIMIT "${KB_ECS_HIERARCHY_DEPTH_LIMIT} + 1")
+target_compile_definitions(flecs_static PRIVATE FLECS_DAG_DEPTH_MAX=${KB_ECS_BACKEND_DAG_DEPTH_LIMIT})
 if(EMSCRIPTEN)
     # The browser player uses Flecs storage, systems and its pipeline. Exclude
     # editor-facing addons (HTTP, REST, JSON, script, metrics and units) so
@@ -386,6 +395,18 @@ set(MINIAUDIO_BUILD_TESTS OFF CACHE BOOL "Do not build miniaudio tests" FORCE)
 set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "Do not build miniaudio tools" FORCE)
 set(MINIAUDIO_INSTALL OFF CACHE BOOL "Do not install vendored miniaudio" FORCE)
 add_subdirectory(third_party/miniaudio third_party/miniaudio EXCLUDE_FROM_ALL)
+include(CMake/EnableMiniaudioVorbis.cmake)
+
+# Box2D is the 2D physics of the World.Map2D plugin (Physics 2D bodies, shapes and the character mover). Only its library is built: no
+# samples, tests, benchmarks, documentation or heavy validation, and no AVX2 (the plugin runs on every x64 machine).
+set(BOX2D_SAMPLES OFF CACHE BOOL "Do not build the Box2D samples" FORCE)
+set(BOX2D_UNIT_TESTS OFF CACHE BOOL "Do not build the Box2D unit tests" FORCE)
+set(BOX2D_BENCHMARKS OFF CACHE BOOL "Do not build the Box2D benchmarks" FORCE)
+set(BOX2D_DOCS OFF CACHE BOOL "Do not build the Box2D documentation" FORCE)
+set(BOX2D_VALIDATE OFF CACHE BOOL "No heavy Box2D validation" FORCE)
+set(BOX2D_PROFILE OFF CACHE BOOL "No Box2D profiling" FORCE)
+set(BOX2D_AVX2 OFF CACHE BOOL "No Box2D AVX2" FORCE)
+add_subdirectory(third_party/box2d third_party/box2d EXCLUDE_FROM_ALL)
 
 # ufbx is intentionally built as a small isolated C library. The engine owns
 # conversion into its canonical skeletal asset types; no ufbx types escape the
@@ -533,6 +554,19 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(kb_recast)
 if(NOT TARGET kb_recast)
+    # A recycled crowd slot must not retain the previous agent's link animation.
+    # Keep the pinned upstream source intact and compile a marked generated copy.
+    file(READ "${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourCrowd.cpp" _kb_crowd_source)
+    set(_kb_crowd_reset "m_agents[idx].active = false;")
+    string(FIND "${_kb_crowd_source}" "${_kb_crowd_reset}" _kb_crowd_reset_offset)
+    if(_kb_crowd_reset_offset EQUAL -1)
+        message(FATAL_ERROR "The pinned crowd source no longer matches the agent reset patch")
+    endif()
+    string(REPLACE "${_kb_crowd_reset}"
+        "// Engine patch: cancel link animation before the slot can be reused.\n\t\tm_agentAnims[idx].active = false;\n\t\tm_agents[idx].active = false;"
+        _kb_crowd_source "${_kb_crowd_source}")
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.cpp"
+        CONTENT "${_kb_crowd_source}" @ONLY)
     add_library(kb_recast STATIC
         ${kb_recast_SOURCE_DIR}/Recast/Source/Recast.cpp
         ${kb_recast_SOURCE_DIR}/Recast/Source/RecastAlloc.cpp
@@ -552,7 +586,7 @@ if(NOT TARGET kb_recast)
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshBuilder.cpp
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshQuery.cpp
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNode.cpp
-        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourCrowd.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourLocalBoundary.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourObstacleAvoidance.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathCorridor.cpp
@@ -580,6 +614,8 @@ add_subdirectory(sources/plugins/audio_miniaudio audio_miniaudio)
 add_subdirectory(sources/plugins/basic_lighting basic_lighting)
 add_subdirectory(sources/plugins/21kb_particle 21kb_particle)
 add_subdirectory(sources/plugins/ai ai)
+add_subdirectory(sources/net net)
+add_subdirectory(sources/http http)
 if(BUILD_TESTING AND TARGET kb_21kb_particle_stage2_tests)
     target_link_libraries(kb_21kb_particle_stage2_tests PRIVATE kb_21kb_particle_core)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
@@ -608,7 +644,8 @@ if(TARGET kb_engine_tests)
 endif()
 
 if(TARGET kb_cli_tests)
-    add_dependencies(kb_cli_tests kb_physics_jolt_plugin)
+    add_dependencies(kb_cli_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin
+        kb_basic_lighting_plugin kb_21kb_particle_plugin kb_ai_plugin)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
         set(KB_PHYSICS_JOLT_CLI_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_physics_jolt_plugin>")
     else()
@@ -659,8 +696,13 @@ if(KB_BUILD_RENDERER)
 
     include(CMake/KbBgfxRuntimeShaders.cmake)
     add_subdirectory(sources/renderer renderer)
+    if(TARGET kb_cli)
+        kb_target_copy_bgfx_runtime_shaders(kb_cli)
+    endif()
     # The terrain editor imports heightmaps through bimg_decode, which comes with the renderer.
     add_subdirectory(sources/plugins/terrain_editor terrain_editor)
+    # World 2D maps draw through the renderer's mesh loader and write its materials.
+    add_subdirectory(sources/plugins/world_2d world_2d)
     add_subdirectory(sources/game game)
     add_subdirectory(samples/render_smoke render_smoke)
     add_subdirectory(samples/standalone_player standalone_player)

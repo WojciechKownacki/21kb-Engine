@@ -20,6 +20,8 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserNativeCommandMap.cpp
     src/private/app/EditorAudioAssetPreview.hpp
     src/app/EditorAudioAssetPreview.cpp
+    src/scene/audio/EditorAudioMixerRuntime.cpp
+    src/inspection/InspectorAudioMixerRuntimeInteraction.cpp
     src/app/EditorAudioAssetInspectorDropHandler.cpp
     src/app/EditorAudioInspectorDropPolicy.cpp
     src/app/EditorAnimatorAssetInspectorDropHandler.cpp
@@ -137,6 +139,7 @@ add_executable(kb_editor WIN32
     src/assets/EditorAssetBrowserChromeHitTester.cpp
     src/assets/EditorAssetBrowserContentLayout.cpp
     src/assets/EditorAssetBrowserContextMenuState.cpp
+    src/assets/EditorAssetReimport.cpp
     src/assets/EditorAssetBrowserContextMenuLayout.cpp
     src/assets/EditorAssetBrowserContentHitTester.cpp
     src/assets/EditorAssetBrowserDeleteConfirmState.cpp
@@ -279,6 +282,7 @@ add_executable(kb_editor WIN32
     src/private/docking/FloatingWindowRegistry.hpp
     src/private/docking/FloatingWindowResizeEventResolver.hpp
     src/private/assets/EditorAssetBrowserAssetRows.hpp
+    src/private/assets/EditorAssetReimport.hpp
     src/private/assets/EditorAssetBrowserBreadcrumbHitTester.hpp
     src/private/assets/EditorAssetBrowserBottomBarLayout.hpp
     src/private/assets/EditorAssetBrowserChromeHitTester.hpp
@@ -450,6 +454,8 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorModalMessageLoop.hpp
     src/private/platform/win32/EditorNewSceneDialog.hpp
     src/private/platform/win32/EditorTextEntryDialog.hpp
+    src/private/platform/win32/EditorMap2DForm.hpp
+    src/private/platform/win32/EditorMap2DWindow.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
     src/private/rendering/EditorMaterialThumbnailService.hpp
     src/private/rendering/EditorParticleThumbnailService.hpp
@@ -646,6 +652,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
     src/private/scene/EditorTerrainService.hpp
+    src/private/scene/EditorMap2DService.hpp
     src/private/scene/EditorSceneObjectEditCommands.hpp
     src/private/scene/EditorSceneObjectEditTypes.hpp
     src/private/scene/EditorScenePrefabActions.hpp
@@ -703,6 +710,8 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorTagNameDialog.cpp
     src/platform/win32/EditorNewSceneDialog.cpp
     src/platform/win32/EditorTextEntryDialog.cpp
+    src/platform/win32/EditorMap2DForm.cpp
+    src/platform/win32/EditorMap2DWindow.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
@@ -914,6 +923,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorTerrainService.cpp
+    src/scene/EditorMap2DService.cpp
+    src/scene/EditorMap2DPreview.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
@@ -1028,6 +1039,19 @@ add_custom_command(
 add_custom_target(kb_editor_localization DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp")
 add_dependencies(kb_editor kb_editor_localization)
 
+# The World 2D Map Editor's tutorial pictures, copied like the language catalogs.
+file(GLOB KB_EDITOR_MAP2D_CONTENT CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Map2D/*")
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_map2d_content.stamp"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Map2D"
+        "${KB_EDITOR_RUNTIME_DIR}/Content/EditorShell/Map2D"
+    COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_map2d_content.stamp"
+    DEPENDS ${KB_EDITOR_MAP2D_CONTENT}
+    VERBATIM)
+add_custom_target(kb_editor_map2d_content DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_map2d_content.stamp")
+add_dependencies(kb_editor kb_editor_map2d_content)
+
 add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kb_editor>" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor.exe"
@@ -1079,6 +1103,7 @@ target_link_libraries(kb_editor
         kb_engine
         kb_renderer
         kb_terrain_editor_core
+        kb_world2d_core
         kb_21kb_particle_editor_core
 )
 
@@ -1136,6 +1161,19 @@ endif()
 
 if(TARGET kb_terrain_editor_plugin)
     add_dependencies(kb_editor kb_terrain_editor_plugin)
+endif()
+
+if(TARGET kb_world2d_plugin)
+    add_dependencies(kb_editor kb_world2d_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_WORLD2D_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_world2d_plugin>")
+    else()
+        set(KB_WORLD2D_EDITOR_PLUGIN_PATH "")
+    endif()
+    target_compile_definitions(kb_editor
+        PRIVATE
+            "KB_WORLD2D_PLUGIN_PATH=\"${KB_WORLD2D_EDITOR_PLUGIN_PATH}\""
+    )
 endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
@@ -1196,6 +1234,8 @@ if(TARGET kb_21kb_particle_plugin)
             VERBATIM
         )
         add_dependencies(kb_editor_stage_particle_plugin kb_21kb_particle_plugin)
+        include("${CMAKE_SOURCE_DIR}/CMake/SerializeParticleRuntimeStaging.cmake")
+        kb_serialize_particle_runtime_staging(kb_editor_stage_particle_plugin)
         add_dependencies(kb_editor kb_editor_stage_particle_plugin)
     else()
         set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "")
@@ -1267,6 +1307,7 @@ if(BUILD_TESTING)
         tests/EditorAssetBrowserTests.cpp
         tests/EditorAudioMixerAuthoringTests.cpp
         tests/EditorAudioMixerInspectorTests.cpp
+        tests/EditorAudioMixerRuntimeTests.cpp
         tests/EditorSceneAudioInspectorTests.cpp
         tests/EditorViewportPreviewTests.cpp
         tests/EditorMaterialGraphCookServiceTests.cpp
@@ -1384,6 +1425,9 @@ if(BUILD_TESTING)
         src/scene/EditorSceneAssetBrowserCommands.cpp
         src/scene/audio/EditorAudioMixerAssetGateway.cpp
         src/scene/audio/EditorAudioMixerAuthoring.cpp
+        src/scene/audio/EditorAudioMixerRuntime.cpp
+        src/app/EditorAudioAssetPreview.cpp
+        src/inspection/InspectorAudioMixerRuntimeInteraction.cpp
         src/scene/audio/EditorSceneAudioSettingsService.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneHierarchyActions.cpp
@@ -1465,6 +1509,13 @@ if(BUILD_TESTING)
             src/private
             tests
     )
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_audio_miniaudio_plugin)
+        set_property(SOURCE tests/EditorAudioMixerRuntimeTests.cpp APPEND PROPERTY
+            COMPILE_DEFINITIONS KB_EDITOR_TEST_AUDIO_PLUGIN="$<TARGET_FILE:kb_audio_miniaudio_plugin>")
+        add_dependencies(kb_editor_tests kb_audio_miniaudio_plugin)
+        add_test(NAME kb_editor_audio_mixer_runtime COMMAND $<TARGET_FILE:kb_editor_tests> audio-mixer-runtime)
+        set_tests_properties(kb_editor_audio_mixer_runtime PROPERTIES LABELS "editor;audio" TIMEOUT 30)
+    endif()
 
     target_link_libraries(kb_editor_tests
         PRIVATE
@@ -1488,6 +1539,36 @@ if(BUILD_TESTING)
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+    if(TARGET kb_cli AND TARGET kb_cooker AND TARGET kb_game AND KB_BUILD_PROVIDER_MODULES_AS_DLL
+        AND TARGET kb_physics_jolt_plugin AND TARGET kb_audio_miniaudio_plugin
+        AND TARGET kb_basic_lighting_plugin AND TARGET kb_21kb_particle_plugin AND TARGET kb_ai_plugin
+        AND TARGET kb_world2d_plugin)
+        find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+        set(_kb_editor_dsp_shaderc "${KB_COOKER_SHADERC}")
+        if(TARGET bgfx::shaderc)
+            set(_kb_editor_dsp_shaderc "$<TARGET_FILE:bgfx::shaderc>")
+        endif()
+        set(_kb_editor_dsp_runtime_args)
+        if(MSVC AND KB_ENABLE_SANITIZERS)
+            list(APPEND _kb_editor_dsp_runtime_args "--runtime-dll" "${KB_MSVC_ASAN_DYNAMIC_RUNTIME}")
+        endif()
+        add_test(NAME kb_editor_audio_dsp_package COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/sources/game/tests/AudioDspPackagedTests.py"
+            "--editor-tests" "$<TARGET_FILE:kb_editor_tests>"
+            "--cli" "$<TARGET_FILE:kb_cli>" "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>" "--engine-root" "${PROJECT_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/editor_audio_dsp_package_tests"
+            "--shaderc" "${_kb_editor_dsp_shaderc}" ${_kb_editor_dsp_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_editor_audio_dsp_package PROPERTIES
+            LABELS "editor;audio;runtime;packaging" TIMEOUT 180)
+    endif()
+
     add_test(NAME kb_editor_script_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests> script-editor)
     set_tests_properties(kb_editor_script_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -1498,6 +1579,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-UI-UserWidget")
     set_tests_properties(kb_editor_user_widget_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_play_history_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPlayHistoryScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Play-History")
+    set_tests_properties(kb_editor_play_history_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;scene" TIMEOUT 180)
     add_test(NAME kb_editor_ui_component_catalog_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIComponentCatalogScenario.json"
@@ -1548,6 +1636,24 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-New-Scene")
     set_tests_properties(kb_editor_new_scene_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    # The dock workspace from the command line: float and close panels, save the arrangement to a file, reset to the default,
+    # restore the file, and check at several window sizes that no panel is lost.
+    add_test(NAME kb_editor_workspace_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorkspaceScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Workspace")
+    set_tests_properties(kb_editor_workspace_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;docking" TIMEOUT 180)
+    # A changed source replaces an imported model in place; an edited material is kept or replaced as told, and the reimport can be undone.
+    add_test(NAME kb_editor_asset_reimport_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/AssetReimportScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-AssetReimport")
+    set_tests_properties(kb_editor_asset_reimport_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets" TIMEOUT 180)
+
     # Every editor language, one after another: each panel's texts fit where they are drawn.
     add_test(NAME kb_editor_languages_headless
         COMMAND $<TARGET_FILE:kb_editor>
@@ -1567,6 +1673,88 @@ if(BUILD_TESTING)
             --selftest-task
             "SELFTEST-002-External-Scenario"
     )
+    add_test(
+        NAME kb_editor_map2d_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DAutomationScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D")
+    set_tests_properties(kb_editor_map2d_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d" TIMEOUT 180)
+    add_test(NAME kb_editor_map2d_component
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DComponentScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D-Component")
+    set_tests_properties(kb_editor_map2d_component PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;map2d" TIMEOUT 180)
+    add_test(NAME kb_editor_map2d_lighting
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DLightingScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D-Lighting")
+    set_tests_properties(kb_editor_map2d_lighting PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;rendering" TIMEOUT 180)
+    if(TARGET kb_game AND TARGET kb_cooker AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        add_test(NAME kb_editor_map2d_packaged
+            COMMAND ${CMAKE_COMMAND}
+                "-DEDITOR=$<TARGET_FILE:kb_editor>"
+                "-DCOOKER=$<TARGET_FILE:kb_cooker>"
+                "-DPLAYER=$<TARGET_FILE:kb_game>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
+        set_tests_properties(kb_editor_map2d_packaged PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;map2d" TIMEOUT 240)
+        add_test(NAME kb_editor_map2d_component_packaged
+            COMMAND ${CMAKE_COMMAND}
+                "-DEDITOR=$<TARGET_FILE:kb_editor>"
+                "-DCOOKER=$<TARGET_FILE:kb_cooker>"
+                "-DPLAYER=$<TARGET_FILE:kb_game>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
+                "-DSCENARIO=Map2DComponentScenario.json"
+                "-DTASK=SELFTEST-Map2D-Component-Package"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
+        set_tests_properties(kb_editor_map2d_component_packaged PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;map2d" TIMEOUT 240)
+        # A Sprite 2D and an Animated Sprite made in the editor, cooked, and drawn by the packaged player.
+        add_test(NAME kb_editor_sprite2d_packaged
+            COMMAND ${CMAKE_COMMAND}
+                "-DEDITOR=$<TARGET_FILE:kb_editor>"
+                "-DCOOKER=$<TARGET_FILE:kb_cooker>"
+                "-DPLAYER=$<TARGET_FILE:kb_game>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
+                "-DSCENARIO=Sprite2DScenario.json"
+                "-DTASK=SELFTEST-Sprite2D-Package"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
+        set_tests_properties(kb_editor_sprite2d_packaged PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;map2d" TIMEOUT 240)
+        # One representative 3D scene (lights and shadows, materials, sky, fog, ambient occlusion, vignette, auto exposure, a particle effect
+        # and a terrain) drawn by the editor's Play view and by the packaged player at the same size, and compared pixel by pixel.
+        find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+        add_test(NAME kb_editor_scene3d_parity_packaged
+            COMMAND ${CMAKE_COMMAND}
+                "-DEDITOR=$<TARGET_FILE:kb_editor>"
+                "-DCOOKER=$<TARGET_FILE:kb_cooker>"
+                "-DPLAYER=$<TARGET_FILE:kb_game>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
+                "-DSCENARIO=Scene3DParityScenario.json"
+                "-DTASK=SELFTEST-Scene3D-Package"
+                "-DWIDTH=960" "-DHEIGHT=540" "-DSCREENSHOT_FRAME=240"
+                "-DPYTHON=${Python3_EXECUTABLE}"
+                "-DPARITY_CHECKPOINT=scene3d-editor"
+                "-DPARITY_PIXEL_TOLERANCE=12" "-DPARITY_MAX_MEAN=2.0" "-DPARITY_MAX_DIFFERING=0.002"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
+        set_tests_properties(kb_editor_scene3d_parity_packaged PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;rendering" TIMEOUT 600)
+    endif()
     set_tests_properties(
         kb_editor_headless_automation_scenario
         PROPERTIES

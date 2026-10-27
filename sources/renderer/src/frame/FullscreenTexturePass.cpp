@@ -97,16 +97,21 @@ FullscreenTexturePass::~FullscreenTexturePass() {
 }
 
 float ResolveFullscreenTextureExposureStops(const FullscreenTextureOutputTransform& transform) noexcept {
+    // A value that is not a number must not reach the shader: it would turn the whole image into NaN. It counts
+    // as the neutral setting (no exposure change, middle gray, no bias).
+    const auto finiteOr = [](float value, float fallback) noexcept { return std::isfinite(value) ? value : fallback; };
     if (!transform.autoExposure.enabled) {
-        return transform.exposureStops;
+        return finiteOr(transform.exposureStops, 0.0F);
     }
 
-    const float luminance = std::max(transform.autoExposure.meteredAverageLuminance, 0.0001F);
-    const float middleGray = std::max(transform.autoExposure.middleGray, 0.0001F);
-    const float minStops = std::min(transform.autoExposure.minExposureStops, transform.autoExposure.maxExposureStops);
-    const float maxStops = std::max(transform.autoExposure.minExposureStops, transform.autoExposure.maxExposureStops);
-    const float autoStops = std::log2(middleGray / luminance) + transform.autoExposure.biasStops;
-    return std::clamp(autoStops, minStops, maxStops);
+    const float luminance = std::max(finiteOr(transform.autoExposure.meteredAverageLuminance, 0.18F), 0.0001F);
+    const float middleGray = std::max(finiteOr(transform.autoExposure.middleGray, 0.18F), 0.0001F);
+    const float lowest = finiteOr(transform.autoExposure.minExposureStops, -4.0F);
+    const float highest = finiteOr(transform.autoExposure.maxExposureStops, 4.0F);
+    const float minStops = std::min(lowest, highest);
+    const float maxStops = std::max(lowest, highest);
+    const float autoStops = std::log2(middleGray / luminance) + finiteOr(transform.autoExposure.biasStops, 0.0F);
+    return std::clamp(finiteOr(autoStops, 0.0F), minStops, maxStops);
 }
 
 bool FullscreenTexturePassDesc::IsValid() const noexcept {
@@ -216,7 +221,7 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
         ResolveFullscreenTextureExposureStops(desc.outputTransform),
         1.0F / gamma,
         TonemapOperatorValue(desc.outputTransform.tonemap),
-        0.0F,
+        desc.forceOpaqueAlpha ? 1.0F : 0.0F,
     };
     const float colorGradeParams[4] = {
         kLutSize,

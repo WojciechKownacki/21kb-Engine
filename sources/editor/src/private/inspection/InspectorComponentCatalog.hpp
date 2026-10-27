@@ -41,6 +41,11 @@ public:
     [[nodiscard]] static std::string DisplayLabel(const InspectorComponentTile& tile);
     [[nodiscard]] static std::string_view CategoryLabel(std::string_view category);
     [[nodiscard]] static std::string_view RequiredPluginId(std::string_view componentId) noexcept;
+    // Everyday and technical names a component is also known by, comma separated and lower case (billboard for Facing
+    // Panel, decal for Surface Cast), which Search matches next to the label. Empty when the label says it all.
+    [[nodiscard]] static std::string_view Keywords(std::string_view componentId) noexcept;
+    // One plain sentence, in English, on what the component does for the author; empty for a component without one.
+    [[nodiscard]] static std::string_view Description(std::string_view componentId) noexcept;
 };
 
 } // namespace kb::editor

@@ -2,6 +2,12 @@
 
 #include "script/ScriptUIComponentApi.hpp"
 
+#include "engine/assets/AssetKind.hpp"
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAudioListenerComponents.hpp"
+#include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/CameraComponent.hpp"
@@ -14,6 +20,22 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/SceneGridComponents.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/SceneTilemapComponents.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/SceneTilemapRendererComponents.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/SceneTilemapColliderComponents.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/SceneCharacterController2DComponents.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/SceneCollider2DComponents.hpp"
+#include "engine/scene/Body2DComponent.hpp"
+#include "engine/scene/SceneBody2DComponents.hpp"
+#include "engine/scene/Sprite2DComponent.hpp"
+#include "engine/scene/SceneSprite2DComponents.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -255,7 +277,7 @@ struct ComponentAccess {
             KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
             return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
-            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::Mesh)) { return false; } \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::OneWayBox)) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::ColliderShape>(value.AsInt()); \
             return true; \
         } }
@@ -295,7 +317,9 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 41> kComponentNames{
+constexpr std::array<std::string_view, 51> kComponentNames{
+    "AudioSource",
+    "AudioListener",
     "Transform",
     "Visibility",
     "Camera",
@@ -313,6 +337,14 @@ constexpr std::array<std::string_view, 41> kComponentNames{
     "Tags",
     "RegionShape",
     "GuideCurve",
+    "Grid",
+    "Tilemap",
+    "TilemapRenderer",
+    "TilemapCollider",
+    "CharacterController2D",
+    "Collider2D",
+    "Body2D",
+    "Sprite2D",
     "ContentInstance",
     "StreamFocus",
     "WorldBackdrop",
@@ -373,6 +405,100 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kGuideCurvePropertyDes
     ScriptSceneComponentPropertyDesc{ "interpolation", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "closed", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kGridPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "cellSize", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "floorHeight", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "wall", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 2> kTilemapPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "mapAssetId", ScriptValueType::Hash, true },
+    ScriptSceneComponentPropertyDesc{ "locked", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 2> kTilemapRendererPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "sortingOrder", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kSprite2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "imageAssetId", ScriptValueType::Hash, true },
+    ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash, true },
+    ScriptSceneComponentPropertyDesc{ "cellWidth", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "cellHeight", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "margin", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "spacing", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "imageWidth", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "imageHeight", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "cell", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "frameCount", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "framesPerSecond", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "loop", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "playing", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "time", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "pixelsPerUnit", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "pivotX", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "pivotY", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "flipX", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "flipY", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "tintR", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "tintG", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "tintB", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "tintA", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "sortingOrder", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "wall", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "linearDamping", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "fixedRotation", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "bullet", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "allowSleep", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "sideView", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "startVelocityX", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "startVelocityY", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kCollider2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "offsetX", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "offsetY", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "angleDegrees", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "isTrigger", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "density", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "friction", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "restitution", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "collidesWith", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "sideView", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kCharacterController2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "slopeLimitDegrees", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "stepHeight", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "collidesWith", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "sideView", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTilemapColliderPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kContentInstancePropertyDescs{
@@ -549,6 +675,32 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "clearColor.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "clearColor.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "clearColor.z", ScriptValueType::Float },
+};
+
+constexpr std::array<std::string_view, 4> kAudioAttenuationNames{ "None", "Inverse", "Linear", "Exponential" };
+constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kAudioSourcePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "clipAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "volume", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "pitch", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "loop", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "spatial", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "autoplay", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "mute", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "pan", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "spatialBlend", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "attenuationModel", ScriptValueType::Int, true, kAudioAttenuationNames },
+    ScriptSceneComponentPropertyDesc{ "minDistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxDistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rolloff", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "dopplerFactor", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "outputBus", ScriptValueType::String },
+};
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kAudioListenerPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "localUser", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "primary", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 20> kLightPropertyDescs{
@@ -869,6 +1021,63 @@ constexpr std::array<FieldBinding, 3> kVisibilityFields{
         } },
 };
 
+constexpr std::array<FieldBinding, 16> kAudioSourceFields{
+    FieldBinding{ "clipAssetId",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<const kb::scene::AudioSourceComponent*>(c)->clipAssetId, ScriptValueType::Hash };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            if (v.Type() != ScriptValueType::Hash) return false;
+            static_cast<kb::scene::AudioSourceComponent*>(c)->clipAssetId = v.AsUInt64();
+            return true;
+        } },
+    KB_FLOAT(kb::scene::AudioSourceComponent, volume),
+    KB_FLOAT(kb::scene::AudioSourceComponent, pitch),
+    KB_BOOL(kb::scene::AudioSourceComponent, loop),
+    KB_BOOL(kb::scene::AudioSourceComponent, spatial),
+    KB_BOOL(kb::scene::AudioSourceComponent, autoplay),
+    KB_BOOL(kb::scene::AudioSourceComponent, enabled),
+    KB_BOOL(kb::scene::AudioSourceComponent, mute),
+    KB_FLOAT(kb::scene::AudioSourceComponent, pan),
+    KB_FLOAT(kb::scene::AudioSourceComponent, spatialBlend),
+    FieldBinding{ "attenuationModel",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AudioSourceComponent*>(c)->attenuationModel) };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            if (v.Type() != ScriptValueType::Int) return false;
+            static_cast<kb::scene::AudioSourceComponent*>(c)->attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(v.AsInt());
+            return true;
+        } },
+    KB_FLOAT(kb::scene::AudioSourceComponent, minDistance),
+    KB_FLOAT(kb::scene::AudioSourceComponent, maxDistance),
+    KB_FLOAT(kb::scene::AudioSourceComponent, rolloff),
+    KB_FLOAT(kb::scene::AudioSourceComponent, dopplerFactor),
+    FieldBinding{ "outputBus",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ std::string{kb::scene::AudioSourceOutputBus(*static_cast<const kb::scene::AudioSourceComponent*>(c))} };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            return v.Type() == ScriptValueType::String && kb::scene::SetAudioSourceOutputBus(
+                *static_cast<kb::scene::AudioSourceComponent*>(c), v.AsString());
+        } },
+};
+constexpr std::array<FieldBinding, 4> kAudioListenerFields{
+    KB_INT(kb::scene::AudioListenerComponent, priority),
+    FieldBinding{ "localUser",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<const kb::scene::AudioListenerComponent*>(c)->localUser.value };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            if (v.Type() != ScriptValueType::UInt32 && (v.Type() != ScriptValueType::Int || v.AsInt() < 0)) return false;
+            const auto user = v.Type() == ScriptValueType::UInt32 ? v.AsUInt32() : static_cast<std::uint32_t>(v.AsInt());
+            static_cast<kb::scene::AudioListenerComponent*>(c)->localUser = kb::input::LocalUserId{user};
+            return true;
+        } },
+    KB_BOOL(kb::scene::AudioListenerComponent, primary),
+    KB_BOOL(kb::scene::AudioListenerComponent, enabled),
+};
+
 constexpr std::array<FieldBinding, 13> kCameraFields{
     KB_CAMERA_PROJECTION(kb::scene::CameraComponent, projection),
     KB_FLOAT(kb::scene::CameraComponent, verticalFovDegrees),
@@ -1037,7 +1246,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule1Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[0].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[0].action == kb::scene::AIAction::UseAbility && b.rules[0].actionValue < 1.0F) b.rules[0].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[0].action == kb::scene::AIAction::UseAbility && b.rules[0].actionValue < 1.0F) {
+                b.rules[0].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule1DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[0].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[0].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1050,7 +1262,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule2Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[1].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[1].action == kb::scene::AIAction::UseAbility && b.rules[1].actionValue < 1.0F) b.rules[1].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[1].action == kb::scene::AIAction::UseAbility && b.rules[1].actionValue < 1.0F) {
+                b.rules[1].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule2DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[1].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[1].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1063,7 +1278,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule3Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[2].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[2].action == kb::scene::AIAction::UseAbility && b.rules[2].actionValue < 1.0F) b.rules[2].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[2].action == kb::scene::AIAction::UseAbility && b.rules[2].actionValue < 1.0F) {
+                b.rules[2].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule3DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[2].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[2].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1076,7 +1294,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule4Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[3].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[3].action == kb::scene::AIAction::UseAbility && b.rules[3].actionValue < 1.0F) b.rules[3].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[3].action == kb::scene::AIAction::UseAbility && b.rules[3].actionValue < 1.0F) {
+                b.rules[3].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule4DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[3].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[3].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1089,7 +1310,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule5Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[4].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[4].action == kb::scene::AIAction::UseAbility && b.rules[4].actionValue < 1.0F) b.rules[4].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[4].action == kb::scene::AIAction::UseAbility && b.rules[4].actionValue < 1.0F) {
+                b.rules[4].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule5DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[4].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[4].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1102,7 +1326,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule6Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[5].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[5].action == kb::scene::AIAction::UseAbility && b.rules[5].actionValue < 1.0F) b.rules[5].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[5].action == kb::scene::AIAction::UseAbility && b.rules[5].actionValue < 1.0F) {
+                b.rules[5].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule6DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[5].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[5].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1115,7 +1342,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule7Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[6].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[6].action == kb::scene::AIAction::UseAbility && b.rules[6].actionValue < 1.0F) b.rules[6].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[6].action == kb::scene::AIAction::UseAbility && b.rules[6].actionValue < 1.0F) {
+                b.rules[6].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule7DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[6].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[6].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1128,7 +1358,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule8Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[7].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[7].action == kb::scene::AIAction::UseAbility && b.rules[7].actionValue < 1.0F) b.rules[7].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[7].action == kb::scene::AIAction::UseAbility && b.rules[7].actionValue < 1.0F) {
+                b.rules[7].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule8DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[7].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[7].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1280,6 +1513,105 @@ constexpr std::array<FieldBinding, 4> kGuideCurveFields{
         [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; const auto interpolation=static_cast<kb::scene::GuideCurveInterpolation>(value.AsInt()); if (!kb::scene::IsGuideCurveInterpolationValid(interpolation)) return false; static_cast<kb::scene::GuideCurveComponent*>(component)->interpolation=interpolation; return true; } },
     KB_BOOL(kb::scene::GuideCurveComponent, closed),
     KB_BOOL(kb::scene::GuideCurveComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 3> kGridFields{
+    FieldBinding{ "cellSize", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::GridComponent*>(component)->cellSize }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() <= 0.0F || value.AsFloat() > 1000000.0F) return false; static_cast<kb::scene::GridComponent*>(component)->cellSize = value.AsFloat(); return true; } },
+    FieldBinding{ "floorHeight", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::GridComponent*>(component)->floorHeight }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F || value.AsFloat() > 1000000.0F) return false; static_cast<kb::scene::GridComponent*>(component)->floorHeight = value.AsFloat(); return true; } },
+    KB_BOOL(kb::scene::GridComponent, wall),
+};
+
+constexpr std::array<FieldBinding, 2> kTilemapFields{
+    FieldBinding{ "mapAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::TilemapComponent*>(component)->mapAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::TilemapComponent*>(component)->mapAssetId = value.AsUInt64(); return true; } },
+    KB_BOOL(kb::scene::TilemapComponent, locked),
+};
+
+constexpr std::array<FieldBinding, 2> kTilemapRendererFields{
+    KB_INT(kb::scene::TilemapRendererComponent, sortingOrder),
+    KB_BOOL(kb::scene::TilemapRendererComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 26> kSprite2DFields{
+    FieldBinding{ "imageAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::Sprite2DComponent*>(component)->imageAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::Sprite2DComponent*>(component)->imageAssetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "materialAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::Sprite2DComponent*>(component)->materialAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::Sprite2DComponent*>(component)->materialAssetId = value.AsUInt64(); return true; } },
+    KB_UINT32(kb::scene::Sprite2DComponent, cellWidth),
+    KB_UINT32(kb::scene::Sprite2DComponent, cellHeight),
+    KB_UINT32(kb::scene::Sprite2DComponent, margin),
+    KB_UINT32(kb::scene::Sprite2DComponent, spacing),
+    KB_UINT32(kb::scene::Sprite2DComponent, imageWidth),
+    KB_UINT32(kb::scene::Sprite2DComponent, imageHeight),
+    KB_UINT32(kb::scene::Sprite2DComponent, cell),
+    KB_UINT32(kb::scene::Sprite2DComponent, frameCount),
+    KB_FLOAT(kb::scene::Sprite2DComponent, framesPerSecond),
+    KB_BOOL(kb::scene::Sprite2DComponent, loop),
+    KB_BOOL(kb::scene::Sprite2DComponent, playing),
+    KB_FLOAT(kb::scene::Sprite2DComponent, time),
+    KB_FLOAT(kb::scene::Sprite2DComponent, pixelsPerUnit),
+    KB_FLOAT(kb::scene::Sprite2DComponent, pivotX),
+    KB_FLOAT(kb::scene::Sprite2DComponent, pivotY),
+    KB_BOOL(kb::scene::Sprite2DComponent, flipX),
+    KB_BOOL(kb::scene::Sprite2DComponent, flipY),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintR),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintG),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintB),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintA),
+    KB_INT(kb::scene::Sprite2DComponent, sortingOrder),
+    KB_BOOL(kb::scene::Sprite2DComponent, wall),
+    KB_BOOL(kb::scene::Sprite2DComponent, visible),
+};
+
+constexpr std::array<FieldBinding, 11> kBody2DFields{
+    KB_INT(kb::scene::Body2DComponent, type),
+    KB_FLOAT(kb::scene::Body2DComponent, gravityScale),
+    KB_FLOAT(kb::scene::Body2DComponent, linearDamping),
+    KB_FLOAT(kb::scene::Body2DComponent, angularDamping),
+    KB_BOOL(kb::scene::Body2DComponent, fixedRotation),
+    KB_BOOL(kb::scene::Body2DComponent, bullet),
+    KB_BOOL(kb::scene::Body2DComponent, allowSleep),
+    KB_BOOL(kb::scene::Body2DComponent, sideView),
+    KB_FLOAT(kb::scene::Body2DComponent, startVelocityX),
+    KB_FLOAT(kb::scene::Body2DComponent, startVelocityY),
+    KB_BOOL(kb::scene::Body2DComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 15> kCollider2DFields{
+    KB_INT(kb::scene::Collider2DComponent, shape),
+    KB_FLOAT(kb::scene::Collider2DComponent, width),
+    KB_FLOAT(kb::scene::Collider2DComponent, height),
+    KB_FLOAT(kb::scene::Collider2DComponent, radius),
+    KB_FLOAT(kb::scene::Collider2DComponent, offsetX),
+    KB_FLOAT(kb::scene::Collider2DComponent, offsetY),
+    KB_FLOAT(kb::scene::Collider2DComponent, angleDegrees),
+    KB_BOOL(kb::scene::Collider2DComponent, isTrigger),
+    KB_FLOAT(kb::scene::Collider2DComponent, density),
+    KB_FLOAT(kb::scene::Collider2DComponent, friction),
+    KB_FLOAT(kb::scene::Collider2DComponent, restitution),
+    KB_INT(kb::scene::Collider2DComponent, layer),
+    KB_UINT32(kb::scene::Collider2DComponent, collidesWith),
+    KB_BOOL(kb::scene::Collider2DComponent, sideView),
+    KB_BOOL(kb::scene::Collider2DComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 10> kCharacterController2DFields{
+    KB_FLOAT(kb::scene::CharacterController2DComponent, radius),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, height),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, gravityScale),
+    KB_BOOL(kb::scene::CharacterController2DComponent, useGravity),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, slopeLimitDegrees),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, stepHeight),
+    KB_INT(kb::scene::CharacterController2DComponent, layer),
+    KB_UINT32(kb::scene::CharacterController2DComponent, collidesWith),
+    KB_BOOL(kb::scene::CharacterController2DComponent, sideView),
+    KB_BOOL(kb::scene::CharacterController2DComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 1> kTilemapColliderFields{
+    KB_BOOL(kb::scene::TilemapColliderComponent, enabled),
 };
 
 constexpr std::array<FieldBinding, 4> kContentInstanceFields{
@@ -1570,6 +1902,14 @@ void MarkNavLinkModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity)
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
+void MarkGridModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Grids().MarkModified(entity); }
+void MarkTilemapModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tilemaps().MarkModified(entity); }
+void MarkTilemapRendererModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapRenderers().MarkModified(entity); }
+void MarkSprite2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Sprites2D().MarkModified(entity); }
+void MarkBody2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Bodies2D().MarkModified(entity); }
+void MarkCollider2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Colliders2D().MarkModified(entity); }
+void MarkCharacterController2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().CharacterControllers2D().MarkModified(entity); }
+void MarkTilemapColliderModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapColliders().MarkModified(entity); }
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
 void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().WorldBackdrops().MarkModified(entity); }
@@ -1585,11 +1925,21 @@ void MarkFacingPanelModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
 void MarkSpaceStrokeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SpaceStrokes().MarkModified(entity); }
 void MarkHistoryRibbonModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().HistoryRibbons().MarkModified(entity); }
 void MarkParticleEffectModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ParticleEffects().MarkModified(entity); }
+void MarkAudioSourceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AudioSources().MarkModified(entity); }
+void MarkAudioListenerModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AudioListeners().MarkModified(entity); }
 void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().LensEchoes().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
         return {};
+    }
+    if (componentName == "AudioSource") {
+        auto* component = scene.Components().AudioSources().TryGet(entity);
+        return ComponentAccess{ component, component, kAudioSourceFields, &MarkAudioSourceModified };
+    }
+    if (componentName == "AudioListener") {
+        auto* component = scene.Components().AudioListeners().TryGet(entity);
+        return ComponentAccess{ component, component, kAudioListenerFields, &MarkAudioListenerModified };
     }
     if (componentName == "Transform") {
         kb::scene::TransformComponent* component = scene.Transforms().TryGet(entity);
@@ -1675,6 +2025,38 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::GuideCurveComponent* component = scene.Components().GuideCurves().TryGet(entity);
         return ComponentAccess{ component, component, kGuideCurveFields, &MarkGuideCurveModified };
     }
+    if (componentName == "Grid") {
+        auto* component = scene.Components().Grids().TryGet(entity);
+        return ComponentAccess{ component, component, kGridFields, &MarkGridModified };
+    }
+    if (componentName == "Tilemap") {
+        auto* component = scene.Components().Tilemaps().TryGet(entity);
+        return ComponentAccess{ component, component, kTilemapFields, &MarkTilemapModified };
+    }
+    if (componentName == "TilemapRenderer") {
+        auto* component = scene.Components().TilemapRenderers().TryGet(entity);
+        return ComponentAccess{ component, component, kTilemapRendererFields, &MarkTilemapRendererModified };
+    }
+    if (componentName == "Sprite2D") {
+        auto* component = scene.Components().Sprites2D().TryGet(entity);
+        return ComponentAccess{ component, component, kSprite2DFields, &MarkSprite2DModified };
+    }
+    if (componentName == "Body2D") {
+        auto* component = scene.Components().Bodies2D().TryGet(entity);
+        return ComponentAccess{ component, component, kBody2DFields, &MarkBody2DModified };
+    }
+    if (componentName == "Collider2D") {
+        auto* component = scene.Components().Colliders2D().TryGet(entity);
+        return ComponentAccess{ component, component, kCollider2DFields, &MarkCollider2DModified };
+    }
+    if (componentName == "CharacterController2D") {
+        auto* component = scene.Components().CharacterControllers2D().TryGet(entity);
+        return ComponentAccess{ component, component, kCharacterController2DFields, &MarkCharacterController2DModified };
+    }
+    if (componentName == "TilemapCollider") {
+        auto* component = scene.Components().TilemapColliders().TryGet(entity);
+        return ComponentAccess{ component, component, kTilemapColliderFields, &MarkTilemapColliderModified };
+    }
     if (componentName == "ContentInstance") {
         kb::scene::ContentInstanceComponent* component = scene.Components().ContentInstances().TryGet(entity);
         return ComponentAccess{ component, component, kContentInstanceFields, &MarkContentInstanceModified };
@@ -1756,6 +2138,8 @@ std::span<const std::string_view> ScriptSceneComponentApi::ComponentNames() noex
 
 std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::ComponentProperties(std::string_view componentName) noexcept {
     componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
+    if (componentName == "AudioSource") return kAudioSourcePropertyDescs;
+    if (componentName == "AudioListener") return kAudioListenerPropertyDescs;
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::ComponentProperties(componentName);
     }
@@ -1769,6 +2153,14 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
         return kRegionShapePropertyDescs;
     }
     if (componentName == "GuideCurve") return kGuideCurvePropertyDescs;
+    if (componentName == "Grid") return kGridPropertyDescs;
+    if (componentName == "Tilemap") return kTilemapPropertyDescs;
+    if (componentName == "TilemapRenderer") return kTilemapRendererPropertyDescs;
+    if (componentName == "TilemapCollider") return kTilemapColliderPropertyDescs;
+    if (componentName == "CharacterController2D") return kCharacterController2DPropertyDescs;
+    if (componentName == "Collider2D") return kCollider2DPropertyDescs;
+    if (componentName == "Body2D") return kBody2DPropertyDescs;
+    if (componentName == "Sprite2D") return kSprite2DPropertyDescs;
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
     if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;
@@ -1877,6 +2269,22 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
     const ScriptSceneComponentPropertyDesc* property = FindPropertyDesc(ComponentProperties(componentName), propertyName);
     if (property != nullptr && !property->writable) {
         return ScriptSceneComponentMutationResult{ .error = "component property is read-only for scripts" };
+    }
+
+    if (componentName == "AudioSource") {
+        auto candidate = *static_cast<const kb::scene::AudioSourceComponent*>(component.immutable);
+        if (!field->write(&candidate, value)) {
+            return ScriptSceneComponentMutationResult{ .error = "value does not match the audio property type or format" };
+        }
+        if (!kb::scene::IsAudioSourceComponentPersistable(candidate)) {
+            return ScriptSceneComponentMutationResult{ .error = "Audio Source values must remain finite and within valid playback and distance ranges" };
+        }
+        if (propertyName == "clipAssetId" && candidate.clipAssetId != 0U) {
+            const auto* metadata = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{candidate.clipAssetId});
+            if (metadata == nullptr || !kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Audio)) {
+                return ScriptSceneComponentMutationResult{ .error = "audio clip must reference an existing audio asset" };
+            }
+        }
     }
 
     if (componentName == "Region Portal" && (propertyName == "sourceCell" || propertyName == "targetCell")) {

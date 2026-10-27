@@ -109,6 +109,8 @@ struct ParticleEditorPanelLayout {
     std::array<RECT, kb::scene::kParticleEffectMaxDependencyAssets> dependencyRows{};
     std::size_t dependencyRowCount = 0U;
     RECT diagnosticHeader{};
+    std::array<RECT, 3U> executionRows{};
+    std::size_t executionRowCount = 0U;
     std::array<RECT, kb::scene::kParticleEffectMaxDiagnostics> diagnosticRows{};
     std::size_t diagnosticRowCount = 0U;
     int composerContentHeight = 0;

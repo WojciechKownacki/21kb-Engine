@@ -42,6 +42,8 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioListenerAccess.hpp"
+#include "engine/scene/SceneAudioListenerComponents.hpp"
+#include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -72,6 +74,7 @@
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
+#include "engine/script/NativeScriptPlugin.hpp"
 #include "engine/script/NativeScriptPluginManager.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
@@ -99,6 +102,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -109,6 +113,14 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
 
 namespace {
 
@@ -637,6 +649,52 @@ void RunNativeScriptPluginManagerDispatchTest() {
     kb::tests::Require(afterFailedReload.Succeeded() && afterFailedReload.executedBehaviours == 1U,
         "Native script plugin callback did not remain callable after a failed reload rollback");
 
+#if !KB_SKIP_NATIVE_SCRIPT_SHADOW_COPY_FAILURE_LOAD_TEST
+    const auto privateBytes = []() -> std::uint64_t {
+#if defined(_WIN32)
+        PROCESS_MEMORY_COUNTERS_EX counters{};
+        kb::tests::Require(GetProcessMemoryInfo(GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)) != 0,
+            "Native reload process memory measurement must succeed");
+        return static_cast<std::uint64_t>(counters.PrivateUsage);
+#else
+        return 0U;
+#endif
+    };
+    kb::tests::Require(runtime.SharedState().Set("reload.saved", kb::script::ScriptValue{37}), "Native reload state must be seeded");
+    auto previousPath = loaded.loadedPath;
+    std::uint64_t memoryBaseline = 0U, memoryMaximum = 0U;
+    for (int iteration = 0; iteration < 80; ++iteration) {
+        const auto replacement = plugins.LoadOrReload({.key = "test-plugin", .modulePath = pluginPath,
+            .shadowCopy = true, .shadowCopyDirectory = TestRoot() / "NativePluginShadow"});
+        kb::tests::Require(replacement.Succeeded() && replacement.loadedPath != previousPath,
+            "Native reload must load a distinct replacement library");
+#if defined(_WIN32)
+        kb::tests::Require(GetModuleHandleW(previousPath.c_str()) == nullptr &&
+            GetModuleHandleW(replacement.loadedPath.c_str()) != nullptr,
+            "Native reload must unmap the previous library and retain its replacement");
+#endif
+        previousPath = replacement.loadedPath;
+        if (iteration % 8 == 0) {
+            const auto refused = plugins.LoadOrReload({.key = "test-plugin", .modulePath = pluginPath,
+                .entryPoint = "kb_missing_native_script_entrypoint", .shadowCopy = true,
+                .shadowCopyDirectory = TestRoot() / "NativePluginShadow"});
+            kb::tests::Require(!refused.Succeeded() && plugins.IsLoaded("test-plugin"), "Repeated failed reload must retain the working module");
+        }
+        const auto continued = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        const auto saved = runtime.SharedState().Get("reload.saved");
+        kb::tests::Require(continued.Succeeded() && continued.executedBehaviours == 1U && saved && saved->AsInt() == 37,
+            "Repeated native reload must preserve bindings and host-owned state");
+        const auto bytes = privateBytes();
+        if (iteration == 15) memoryBaseline = bytes;
+        if (iteration >= 15) memoryMaximum = std::max(memoryMaximum, bytes);
+    }
+    kb::tests::Require(memoryMaximum <= memoryBaseline + 8U * 1024U * 1024U,
+        "Native reload private memory must remain bounded after warmup");
+    std::printf("native_reload iterations=80 failed_reloads=10 private_bytes_baseline=%llu private_bytes_maximum=%llu memory_available=%d\n",
+        static_cast<unsigned long long>(memoryBaseline), static_cast<unsigned long long>(memoryMaximum), memoryBaseline != 0U ? 1 : 0);
+#endif
+
     plugins.Unload("test-plugin");
     kb::tests::Require(!plugins.IsLoaded("test-plugin"), "Native script plugin manager did not unload the DLL");
     const kb::script::ScriptRuntimeExecutionResult afterUnload = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
@@ -651,6 +709,11 @@ void RunNativeScriptPluginManagerDispatchTest() {
         .shadowCopyDirectory = TestRoot() / "NativePluginShadow",
     });
     kb::tests::Require(!failedLoad.Succeeded(), "Native script plugin manager accepted a plugin whose registration returned false");
+    // A plugin built against another SDK version must be told what to do, not just refused.
+    kb::tests::Require(std::ranges::any_of(failedLoad.errors, [](const std::string& message) {
+        return message.find("rebuild the plugin against the current SDK") != std::string::npos &&
+            message.find("SDK API " + std::to_string(kb::script::kNativeScriptPluginApiVersion)) != std::string::npos;
+    }), "Native script plugin manager did not tell the author to rebuild a plugin whose registration returned false");
     kb::tests::Require(!plugins.IsLoaded("partial-failure-plugin"), "Native script plugin manager tracked a failed plugin load");
     kb::tests::Require(native->BindAssetSymbol(kNativeAsset, "tests.NativePluginPartialFailure"), "Native script partial failure asset symbol binding failed");
     const kb::script::ScriptRuntimeExecutionResult afterFailedLoad = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
@@ -673,6 +736,41 @@ void RunNativeScriptBuildPipelineTest() {
     });
     kb::tests::Require(built.Succeeded(), "Native script build pipeline did not execute the build command");
     kb::tests::Require(std::filesystem::is_regular_file(marker), "Native script build pipeline did not create the build marker");
+
+#if defined(_WIN32)
+    // GUI hosts may have no console handles. Their build still needs to work.
+    const HANDLE previousInput = GetStdHandle(STD_INPUT_HANDLE);
+    const HANDLE previousError = GetStdHandle(STD_ERROR_HANDLE);
+    SetStdHandle(STD_INPUT_HANDLE, nullptr);
+    SetStdHandle(STD_ERROR_HANDLE, nullptr);
+    const auto detachedMarker = projectRoot / "detached_build.marker";
+    const auto detached = kb::script::NativeScriptBuildPipeline::Build({
+        .enabled = true, .command = "cmake -E touch \"" + detachedMarker.string() + "\"",
+        .workingDirectory = projectRoot});
+    SetStdHandle(STD_INPUT_HANDLE, previousInput);
+    SetStdHandle(STD_ERROR_HANDLE, previousError);
+    kb::tests::Require(detached.Succeeded() && std::filesystem::is_regular_file(detachedMarker),
+        "Native compilation must also work in a host without console handles");
+#endif
+
+    const kb::script::NativeScriptBuildResult missingTool = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true,
+        .command = "kb_native_build_tool_that_does_not_exist",
+        .workingDirectory = projectRoot,
+    });
+    kb::tests::Require(!missingTool.Succeeded() && missingTool.exitCode != 0,
+        "Native script build pipeline reported success for a build tool that does not exist");
+    kb::tests::Require(std::ranges::any_of(missingTool.errors, [](const std::string& message) {
+        return message.find("native script build command failed with exit code") != std::string::npos &&
+            message.find("install the C++ compiler, CMake") != std::string::npos &&
+            message.find(".native descriptor and retry script-build") != std::string::npos;
+    }), "Native script build pipeline did not report the failing exit code");
+    const kb::script::NativeScriptBuildResult emptyCommand = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true,
+        .command = "",
+        .workingDirectory = projectRoot,
+    });
+    kb::tests::Require(!emptyCommand.Succeeded(), "Native script build pipeline accepted an empty build command");
 }
 
 void RunScriptRuntimeExecutionOrderTest() {
@@ -769,7 +867,7 @@ void RunLuaScriptRuntimeDispatchTest() {
 
 void RunPucLuaScriptRuntimeDispatchTest() {
     kb::script::PucLuaScriptRuntime luaRuntime;
-    kb::tests::Require(!luaRuntime.IsExecutionBudgetEnabled(), "Default PUC Lua execution budget must remain disabled");
+    kb::tests::Require(luaRuntime.IsExecutionBudgetEnabled(), "Default PUC Lua execution must have an instruction limit");
     constexpr kb::assets::AssetId kLuaAsset{3101U};
     const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
 function Tick(self, dt)
@@ -1021,13 +1119,218 @@ end
         "Lua Fail execution budget policy did not produce an explicit diagnostic");
 }
 
+// A small host for the Lua safety tests below: one runtime, a scene with a behaviour per script and the dispatcher.
+struct LuaSafetyHost {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntime dispatcher;
+    LuaSafetyHost() {
+        kb::tests::Require(dispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua safety backend registration failed");
+    }
+    void Attach(kb::assets::AssetId asset) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Safety" });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true });
+    }
+    kb::script::ScriptRuntimeExecutionResult Tick() {
+        return dispatcher.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    }
+    std::int64_t Shared(const char* key) const {
+        const std::optional<kb::script::ScriptValue> value = dispatcher.SharedState().Get(key);
+        return value.has_value() ? value->AsInt() : -1;
+    }
+};
+
+// Hostile or careless scripts cannot reach the machine or hang the host: the sandbox has no way to load code,
+// open files or processes, a loop that never ends fails with a diagnostic instead of freezing the frame (also in
+// the code at the top of a script, which runs while it loads), and the other scripts keep running.
+void RunPucLuaHostileScriptsTest() {
+    LuaSafetyHost host;
+    kb::tests::Require(host.luaRuntime.IsExecutionBudgetEnabled() &&
+        kb::script::ScriptExecutionBudgetSettings{}.luaInstructionsPerBehaviour == 1'000'000U,
+        "A default runtime must bound Lua execution without host configuration");
+    constexpr kb::assets::AssetId kProbe{ 3601U };
+    constexpr kb::assets::AssetId kForever{ 3602U };
+    constexpr kb::assets::AssetId kHealthy{ 3603U };
+    constexpr kb::assets::AssetId kCoroutine{ 3606U };
+    constexpr kb::assets::AssetId kCaught{ 3607U };
+    constexpr kb::assets::AssetId kImported{ 3610U };
+    kb::tests::Require(host.luaRuntime.RegisterModule("BudgetLoop", "while true do end", "BudgetLoop.lua").succeeded,
+        "The lazy module budget fixture must register");
+    kb::tests::Require(host.luaRuntime.LoadScript(kProbe, R"(
+function Tick(self, dt)
+    SetShared("sandbox.require", require == nil and 1 or 0)
+    SetShared("sandbox.package", package == nil and 1 or 0)
+    SetShared("sandbox.load", load == nil and 1 or 0)
+    SetShared("sandbox.dofile", dofile == nil and 1 or 0)
+    SetShared("sandbox.loadfile", loadfile == nil and 1 or 0)
+    SetShared("sandbox.os", os == nil and 1 or 0)
+    SetShared("sandbox.io", io == nil and 1 or 0)
+    SetShared("sandbox.debug", debug == nil and 1 or 0)
+    SetShared("sandbox.collectgarbage", collectgarbage == nil and 1 or 0)
+end
+)", "Probe.lua").succeeded, "The sandbox probe did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kForever, R"(
+function Tick(self, dt)
+    while true do end
+end
+)", "Forever.lua").succeeded, "The endless loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kCoroutine, R"(
+function Tick(self, dt)
+    coroutine.wrap(function() while true do end end)()
+end
+)", "CoroutineForever.lua").succeeded, "The coroutine loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kCaught, R"(
+function Tick(self, dt)
+    while true do pcall(function() while true do end end) end
+end
+)", "CaughtForever.lua").succeeded, "The protected loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kImported,
+        "function Tick(self, dt) while true do local value, diagnostic = Import('BudgetLoop') end end",
+        "ImportedForever.lua").succeeded, "The imported loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kHealthy, R"(
+function Tick(self, dt)
+    SetShared("healthy.ticks", (GetShared("healthy.ticks") or 0) + 1)
+end
+)", "Healthy.lua").succeeded, "The healthy script did not load");
+    host.Attach(kProbe);
+    host.Attach(kForever);
+    host.Attach(kCoroutine);
+    host.Attach(kCaught);
+    host.Attach(kImported);
+    host.Attach(kHealthy);
+    for (int tick = 0; tick < 3; ++tick) {
+        const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
+        std::vector<std::uint64_t> failed;
+        for (const auto& diagnostic : result.diagnostics)
+            if (diagnostic.message.find("execution budget exceeded") != std::string::npos) failed.push_back(diagnostic.assetId.value);
+        std::ranges::sort(failed);
+        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value, kCaught.value, kImported.value},
+            "Direct, coroutine, protected and imported loops must fail with budget diagnostics on every tick");
+    }
+    kb::tests::Require(host.Shared("healthy.ticks") == 3, "A script that loops forever must not stop the other scripts");
+    for (const char* name : { "sandbox.require", "sandbox.package", "sandbox.load", "sandbox.dofile", "sandbox.loadfile", "sandbox.os",
+                              "sandbox.io", "sandbox.debug", "sandbox.collectgarbage" }) {
+        kb::tests::Require(host.Shared(name) == 1, (std::string{ "The sandbox must not offer " } + name).c_str());
+    }
+    // The same endless loop at the top of a script, which runs while it loads, is stopped as well.
+    const kb::script::PucLuaLoadResult atLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3604U }, "while true do end", "LoadForever.lua");
+    kb::tests::Require(!atLoad.succeeded && atLoad.error.find("execution budget exceeded") != std::string::npos,
+        "An endless loop in the code at the top of a script must fail the load with the budget diagnostic");
+    const kb::script::PucLuaLoadResult nested = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3605U },
+        "local n = 0 for i = 1, 10000000 do n = n + i end", "LoadHeavy.lua");
+    kb::tests::Require(!nested.succeeded, "Top-level work beyond the instruction budget must fail the load");
+    const auto caughtAtLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{3608U},
+        "while true do pcall(function() while true do end end) end", "CaughtLoadForever.lua");
+    kb::tests::Require(!caughtAtLoad.succeeded && caughtAtLoad.error.find("execution budget exceeded") != std::string::npos,
+        "Catching an exhausted instruction budget must not allow top-level code to loop forever");
+    const auto importedAtLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{3609U},
+        "while true do local value, diagnostic = Import('BudgetLoop') end", "ImportLoadForever.lua");
+    kb::tests::Require(!importedAtLoad.succeeded && importedAtLoad.error.find("execution budget exceeded") != std::string::npos,
+        "Ignoring a failed import must not relax an exhausted instruction hook");
+}
+
+// A script that fails reports where: the file, the line and the message, with the whole path; the rest of the scene
+// goes on and the document still saves.
+void RunPucLuaErrorsNameFileAndLineTest() {
+    LuaSafetyHost host;
+    constexpr kb::assets::AssetId kBroken{ 3611U };
+    constexpr kb::assets::AssetId kHealthy{ 3612U };
+    kb::tests::Require(host.luaRuntime.LoadScript(kBroken, "function Tick(self, dt)\n    local x = 1\n    error('bad thing happened')\nend\n",
+                           "Assets/Scripts/Deep/Folder/Player.lua").succeeded, "The broken script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kHealthy, "function Tick(self, dt)\n    SetShared('other.ticks', (GetShared('other.ticks') or 0) + 1)\nend\n",
+                           "Assets/Scripts/Other.lua").succeeded, "The other script did not load");
+    host.Attach(kBroken);
+    host.Attach(kHealthy);
+    const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
+    bool located = false;
+    for (const auto& diagnostic : result.diagnostics) {
+        located = located || (diagnostic.message.find("Assets/Scripts/Deep/Folder/Player.lua:3:") != std::string::npos &&
+                              diagnostic.message.find("bad thing happened") != std::string::npos);
+    }
+    kb::tests::Require(!result.Succeeded() && located, "A script error must name the whole file path, the line and the message");
+    kb::tests::Require(host.Shared("other.ticks") == 1, "The scripts next to a failing one must keep running");
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_script_error_scene.21kbscene";
+    kb::scene::SceneDocument document;
+    document.name = "After a script error";
+    document.guid = "scene:after-script-error";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, path), "A scene must still save after a script failed");
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
+// A reload that fails keeps the running script; a reload that works replaces it; hundreds of reloads do not grow
+// the Lua state or leave coroutines behind.
+void RunPucLuaReloadKeepsTheWorkingScriptTest() {
+    LuaSafetyHost host;
+    constexpr kb::assets::AssetId kAsset{ 3621U };
+    kb::tests::Require(host.luaRuntime.LoadScript(kAsset, "function Tick(self, dt) SetShared('reload.version', 1) end", "Reload.lua", 1U).succeeded,
+        "The first version did not load");
+    host.Attach(kAsset);
+    kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == 1, "The first version must run");
+    const kb::script::PucLuaLoadResult runtimeError = host.luaRuntime.ReloadScript(kAsset, "error('boom at load')", "Reload.lua", 2U);
+    kb::tests::Require(!runtimeError.succeeded && runtimeError.error.find("Reload.lua:1:") != std::string::npos && host.luaRuntime.IsScriptCurrent(kAsset, 1U),
+        "An error in the code at the top of a script must fail the reload and keep the old script and its hash");
+    const kb::script::PucLuaLoadResult syntaxError = host.luaRuntime.ReloadScript(kAsset, "function Tick(self, dt) SetShared('reload.version', 2) ", "Reload.lua", 3U);
+    kb::tests::Require(!syntaxError.succeeded && host.luaRuntime.IsScriptCurrent(kAsset, 1U), "A syntax error must fail the reload and keep the old script");
+    kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == 1, "After failed reloads the old version must still run");
+    std::size_t atTen = 0U;
+    kb::tests::Require(host.luaRuntime.RegisterModule("Reload.Value", "return {version=1}", "Reload/Value.lua", 1U).succeeded,
+        "Reload module fixture must register");
+    for (std::uint64_t version = 10U; version < 210U; ++version) {
+        kb::tests::Require(host.luaRuntime.RegisterModule("Reload.Value", "return {version=" + std::to_string(version) + "}",
+            "Reload/Value.lua", version).succeeded, "A valid module replacement must succeed");
+        const std::string source = "local module = Import('Reload.Value')\nlocal padding = {} for i = 1, 50 do padding[i] = i end\nfunction Tick(self, dt) SetShared('reload.version', " +
+            std::to_string(version) + "); SetShared('reload.module', module.version) end";
+        kb::tests::Require(host.luaRuntime.ReloadScript(kAsset, source, "Reload.lua", version).succeeded, "A valid reload must succeed");
+        kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == static_cast<std::int64_t>(version), "A reloaded script must run its new code");
+        kb::tests::Require(host.Shared("reload.module") == static_cast<std::int64_t>(version), "A reloaded script must import its replacement module");
+        if (version == 19U) atTen = host.luaRuntime.LuaMemoryUsedBytes();
+    }
+    kb::tests::Require(host.luaRuntime.IsScriptCurrent(kAsset, 209U) && host.luaRuntime.SuspendedCoroutineCount() == 0U,
+        "After many reloads the last version must be current with no coroutine left");
+    kb::tests::Require(atTen > 0U && host.luaRuntime.LuaMemoryUsedBytes() < atTen * 3U + 256U * 1024U,
+        "Two hundred reloads must not make the Lua state grow without bound");
+}
+
+// A debugger that goes away must not leave the game paused: clearing the settings and the pause lets the script
+// finish on the next tick while the others never stopped.
+void RunPucLuaDebuggerDisconnectTest() {
+    LuaSafetyHost host;
+    constexpr kb::assets::AssetId kDebugged{ 3631U };
+    constexpr kb::assets::AssetId kTicker{ 3632U };
+    kb::tests::Require(host.luaRuntime.LoadScript(kDebugged, "function Tick(self, dt)\n    local a = 1\n    SetShared('disconnect.done', (GetShared('disconnect.done') or 0) + a)\nend\n",
+                           "Disconnect.lua").succeeded, "The debugged script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kTicker, "function Tick(self, dt) SetShared('disconnect.ticker', (GetShared('disconnect.ticker') or 0) + 1) end", "DisconnectTicker.lua").succeeded,
+        "The ticker script did not load");
+    host.Attach(kDebugged);
+    host.Attach(kTicker);
+    host.luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = { kb::script::PucLuaDebugBreakpoint{ .chunkName = "Disconnect.lua", .line = 3 } } });
+    kb::tests::Require(host.Tick().Succeeded() && host.luaRuntime.IsDebugPaused() && host.luaRuntime.SuspendedCoroutineCount() == 1U,
+        "The breakpoint must pause the script");
+    kb::tests::Require(host.Tick().Succeeded() && host.Shared("disconnect.ticker") == 2 && host.Shared("disconnect.done") == -1,
+        "A held pause must not stop the game loop or the other scripts");
+    // The client vanishes: no breakpoints, and the pause is released.
+    host.luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{});
+    host.luaRuntime.ResumeDebugExecution();
+    host.luaRuntime.ClearDebugPause();
+    kb::tests::Require(!host.luaRuntime.IsDebugPaused(), "Releasing the pause must clear the debugger state");
+    for (int tick = 0; tick < 3; ++tick) kb::tests::Require(host.Tick().Succeeded(), "The game loop must run on after the debugger went away");
+    kb::tests::Require(host.luaRuntime.SuspendedCoroutineCount() == 0U && !host.luaRuntime.IsDebugPaused() && host.Shared("disconnect.ticker") == 5 &&
+            host.Shared("disconnect.done") >= 1,
+        "After the debugger went away the script must run to the end and nothing may stay suspended");
+}
+
+
 // One Lua runtime runs every script of a host, so its allocations are capped:
 // a script that exhausts the cap fails as that script's error, and the other
 // scripts of the same runtime keep running on later ticks.
 void RunPucLuaMemoryLimitTest() {
     constexpr std::size_t kLimit = std::size_t{ 16U } << 20U;
     kb::script::PucLuaScriptRuntime luaRuntime;
-    luaRuntime.SetExecutionBudgetSettings({ .luaMemoryBytes = kLimit });
+    // Isolate allocation exhaustion from the independent default instruction cap.
+    luaRuntime.SetExecutionBudgetSettings({ .luaInstructionsPerBehaviour = 0U, .luaMemoryBytes = kLimit });
     constexpr kb::assets::AssetId kHugeString{ 3210U };
     constexpr kb::assets::AssetId kGrowingTable{ 3211U };
     constexpr kb::assets::AssetId kHealthy{ 3212U };
@@ -1131,6 +1434,7 @@ void RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest() {
     });
 
     kb::script::PucLuaScriptRuntime luaRuntime;
+    luaRuntime.SetExecutionBudgetSettings({.luaInstructionsPerBehaviour = 10'000U});
     const kb::script::PucLuaLoadResult module = luaRuntime.RegisterModule("Shared.Math", R"(
 local M = {}
 function M.add(a, b)
@@ -1158,6 +1462,21 @@ end
     kb::tests::Require(tick.Succeeded(), "PUC Lua module import execution produced diagnostics");
     std::optional<kb::script::ScriptValue> sum = runtime.SharedState().Get("lua.module.sum");
     kb::tests::Require(sum.has_value() && sum->AsInt() == 7, "PUC Lua module import did not return callable module table");
+
+    kb::tests::Require(luaRuntime.RegisterModule("Nested.First", "return {}", "Nested/First.lua").succeeded,
+        "Nested module fixture must register lazily");
+    for (const auto source : {"function Broken(", "error('module reload failed')", "while true do end",
+             "local nested = Import('Nested.First'); while true do end"}) {
+        const auto refused = luaRuntime.RegisterModule("Shared.Math", source, "Shared/Math.lua", 99U);
+        kb::tests::Require(!refused.succeeded && !refused.error.empty() && luaRuntime.IsModuleCurrent("Shared.Math", 0U) &&
+            !luaRuntime.IsModuleCurrent("Shared.Math", 99U), "Invalid module reload must preserve its previous value and hash");
+        const auto consumer = luaRuntime.ReloadScript(kLuaAsset,
+            "local Math = Import('Shared.Math')\nfunction Tick(self, dt) SetShared('lua.module.sum', Math.add(2,5)) end",
+            "Player.lua", 100U);
+        kb::tests::Require(consumer.succeeded && runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F).Succeeded() &&
+            runtime.SharedState().Get("lua.module.sum")->AsInt() == 7,
+            "A fresh import after rejected module reload must still use the working module");
+    }
 
     const kb::script::PucLuaLoadResult reloaded = luaRuntime.ReloadScript(kLuaAsset, R"(
 local Math = Import("Shared.Math")
@@ -1500,6 +1819,22 @@ end
     }
     kb::tests::Require(sawReloadedLabel && sawRetainedOverride,
         "Lua exposed variables did not refresh non-overridden defaults while preserving explicit overrides");
+
+    const auto checkRejectedSchema = [&](std::string_view source) {
+        WriteTextFile(assetsRoot / "Logic" / "Mover.lua", source);
+        kb::tests::Require(scene.Assets().Discover() == 1U, "Invalid schema edit must be discovered");
+        const auto rejected = preparer.PrepareBehaviour(*scene.Components().Behaviours().TryGet(object.Entity()));
+        kb::tests::Require(!rejected.Succeeded() && rejected.reloadedAssets.empty(), "Invalid code must not replace its working schema");
+        const auto retained = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(retained.Succeeded() && retained.emittedEvents.size() == 1U,
+            "The retained script must still run with its old variable types");
+        bool retainedLabel = false;
+        for (const auto& argument : retained.emittedEvents.front().arguments)
+            retainedLabel = retainedLabel || (argument.name == "label" && argument.value.AsString() == "Walker");
+        kb::tests::Require(retainedLabel, "A rejected edit must not change defaults of the running script");
+    };
+    checkRejectedSchema("-- @expose speed String = Invalid\n-- @expose label String = Rejected\nfunction Tick(\n");
+    checkRejectedSchema("-- @expose speed String = Invalid\n-- @expose label String = Rejected\nerror('reload rejected')\n");
 
     const kb::script::ScriptRuntimeExecutionResult destroyed = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Destroyed, 0.0F);
     kb::tests::Require(destroyed.Succeeded(), "Lua exposed variables Destroyed lifecycle produced diagnostics");
@@ -3126,7 +3461,7 @@ void RunScriptAudioSourceAndDeviceApiTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script audio source/device API host did not initialize");
-    for (const char* name : { "Audio.PlaySource", "Audio.PauseSource", "Audio.ResumeSource", "Audio.StopSource", "Audio.IsSourcePlaying", "Audio.DeviceStatus", "Audio.Reinitialize", "Audio.SetListenerLocalUser", "Audio.ListenerLocalUser" }) {
+    for (const char* name : { "Audio.PlaySource", "Audio.PauseSource", "Audio.ResumeSource", "Audio.StopSource", "Audio.IsSourcePlaying", "Audio.DeviceStatus", "Audio.Reinitialize", "Audio.SetListenerLocalUser", "Audio.ListenerLocalUser", "Audio.ConfigureOffline", "Audio.RenderOffline", "Audio.DspState", "Audio.ConfigureMeters", "Audio.ResetMeters", "Audio.Meter" }) {
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr,
             "Script audio source/device API did not register a function");
         kb::tests::Require(host.VisualGraphRuntimeBindings().Find(
@@ -3170,9 +3505,20 @@ void RunScriptAudioSourceAndDeviceApiTest() {
             && statusOf(noBackendDevice) == static_cast<int>(kb::audio::AudioDeviceStatus::BackendUnavailable)
             && !noBackendDevice.Output("available").value_or(kb::script::ScriptValue{ true }).AsBool(),
         "Script device status fabricated availability without an audio backend");
+    const std::array invalidOfflineFrames{kb::script::ScriptFunctionArgument{"frames", kb::script::ScriptValue{0}}};
+    kb::tests::Require(!host.Functions().Call("Audio.ConfigureOffline", {}, context).Succeeded()
+            && !host.Functions().Call("Audio.RenderOffline", invalidOfflineFrames, context).Succeeded(),
+        "Script offline audio fabricated backend execution or accepted an invalid frame count");
 
     ProbeAudioPlaybackBackend backend;
     kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+    const std::array meterCapture{kb::script::ScriptFunctionArgument{"enabled", kb::script::ScriptValue{true}}};
+    const std::array meterRead{kb::script::ScriptFunctionArgument{"bus", kb::script::ScriptValue{std::string{}}},
+        kb::script::ScriptFunctionArgument{"channel", kb::script::ScriptValue{0}}};
+    kb::tests::Require(!host.Functions().Call("Audio.ConfigureMeters", meterCapture, context).Succeeded()
+            && !host.Functions().Call("Audio.ResetMeters", {}, context).Succeeded()
+            && !host.Functions().Call("Audio.Meter", meterRead, context).Succeeded(),
+        "Script meters fabricated capability for a playback-only backend");
     const kb::script::ScriptFunctionCallResult selfPlay = host.Functions().Call("Audio.PlaySource", {}, context);
     kb::tests::Require(selfPlay.Output("succeeded").value_or(kb::script::ScriptValue{ false }).AsBool()
             && selfPlay.Output("playing").value_or(kb::script::ScriptValue{ false }).AsBool()
@@ -4679,13 +5025,13 @@ void RunAudioMixerAssetIOAndAccessTest() {
     WriteTextFile(TestRoot() / "UnknownOnlyMixer.kbmixer", "futureRecord value\n");
     kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "UnknownOnlyMixer.kbmixer").has_value(),
         "An unknown-record-only legacy mixer must not masquerade as a valid empty asset");
-    WriteTextFile(TestRoot() / "FutureMixer.kbmixer", "kbmixer 2\n");
+    WriteTextFile(TestRoot() / "FutureMixer.kbmixer", "kbmixer 3\n");
     kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "FutureMixer.kbmixer").has_value(),
         "An unsupported audio mixer format version must be rejected");
     WriteTextFile(TestRoot() / "TabbedMixer.kbmixer", "kbmixer\t1\n");
     kb::tests::Require(kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedMixer.kbmixer").has_value(),
         "A tab-separated current audio mixer header must parse consistently");
-    WriteTextFile(TestRoot() / "TabbedFutureMixer.kbmixer", "kbmixer\t2\n");
+    WriteTextFile(TestRoot() / "TabbedFutureMixer.kbmixer", "kbmixer\t3\n");
     kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedFutureMixer.kbmixer").has_value(),
         "A tab-separated unsupported mixer version must not bypass header validation");
 
@@ -4834,7 +5180,7 @@ void RunAudioMixerAssetIOAndAccessTest() {
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U, "Clearing must remove exactly the named override");
 
     // LIB-150: snapshot transition - deterministic scene-delta advance, FROM state stays
-    // active until completion, retarget completes the previous transition first.
+    // active until completion, including when a running transition is retargeted.
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Calm"),
         "Audio snapshot fixture setup failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 1.0F),
@@ -4865,9 +5211,9 @@ void RunAudioMixerAssetIOAndAccessTest() {
         "A non-finite transition delta must be a non-mutating no-op");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 1.0F),
         "A transition back to authored volumes must start");
-    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm"
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
             && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot.empty(),
-        "Retargeting mid-transition must complete the previous transition instantly first");
+        "Retargeting must retain the last completed snapshot until the new transition completes");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 0.0F),
         "A valid immediate snapshot transition must succeed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
@@ -10507,6 +10853,152 @@ end
     kb::tests::Require(host.SharedState().Get("input.player2Jump")->AsBool(), "Lua Input.IsPressed(action, 2) should see player 2's Jump");
 }
 
+void RunScriptTouchApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{scene};
+    kb::tests::Require(host.Succeeded(), "Touch script host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Input.TouchCount") != nullptr &&
+        host.Functions().FindSignature("Input.TouchPoint") != nullptr,
+        "Independent touch contact queries must be registered for gameplay scripts");
+
+    using kb::script::ScriptFunctionArgument;
+    using kb::script::ScriptValue;
+    using kb::script::ScriptValueType;
+    using Phase = kb::input::InputTouchPhase;
+    std::array points{
+        kb::input::InputTouchPoint{.id = 0xFFFFFFFFU, .x = 30.0F, .y = 40.0F, .phase = Phase::Began},
+        kb::input::InputTouchPoint{.id = 23U, .x = 310.0F, .y = 140.0F, .phase = Phase::Began},
+    };
+    const kb::script::ScriptFunctionCallContext callContext{.scene = &scene};
+    const auto query = [&](int index) {
+        const std::array args{ScriptFunctionArgument{"index", ScriptValue{index}}};
+        return host.Functions().Call("Input.TouchPoint", args, callContext);
+    };
+    kb::tests::Require(!host.Functions().Call("Input.TouchCount", {}, {}).Succeeded(),
+        "Touch queries require a scene instead of inventing a snapshot");
+    for (int index : {-1, 0, 10, 2147483647}) {
+        const auto result = query(index);
+        kb::tests::Require(result.Succeeded() && !result.Output("valid")->AsBool() &&
+            !result.Output("active")->AsBool() && result.Output("id")->AsUInt32() == 0U &&
+            result.Output("phase")->AsInt() == 3,
+            "An invalid touch index must return a complete inactive result");
+    }
+
+    constexpr kb::assets::AssetId nativeAsset{8823U}, luaAsset{8824U}, graphAsset{8825U};
+    for (const auto& [asset, backend] : std::array{
+        std::pair{nativeAsset, kb::scene::BehaviourBackend::Native},
+        std::pair{luaAsset, kb::scene::BehaviourBackend::Lua},
+        std::pair{graphAsset, kb::scene::BehaviourBackend::VisualGraph}}) {
+        const auto object = scene.Entities().CreateObject({.name = "Touch Caller"});
+        scene.Components().Behaviours().Set(object.Entity(), {.behaviourAssetId = asset.value, .backend = backend});
+    }
+    kb::script::ScriptFunctionCallResult nativePoint;
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(nativeAsset, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::script::ScriptExecutionContext& context) {
+            const std::array args{ScriptFunctionArgument{"index", ScriptValue{1}}};
+            nativePoint = context.CallFunction("Input.TouchPoint", args);
+        }), "Native touch caller registration failed");
+    kb::tests::Require(host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local point = Input.TouchPoint(1)
+    SetShared("touch.count", Input.TouchCount())
+    SetShared("touch.id", tostring(point.id))
+    SetShared("touch.x", point.x)
+    SetShared("touch.y", point.y)
+    SetShared("touch.phase", point.phase)
+    SetShared("touch.active", point.active)
+    SetShared("touch.valid", point.valid)
+    SetShared("touch.invalid", Input.TouchPoint(-1).valid)
+    local ok = pcall(Input.TouchPoint, 4294967296)
+    SetShared("touch.overflowRejected", not ok)
+end
+)").succeeded, "Lua touch caller did not load");
+
+    std::vector<ScriptFunctionArgument> graphPoint;
+    const auto* pointSignature = host.Functions().FindSignature("Input.TouchPoint");
+    kb::script::ScriptFunctionDesc observer;
+    observer.signature.name = "Tests.ObserveTouch";
+    observer.signature.description = "Records compiled graph contact outputs for cross-frontend validation.";
+    observer.signature.inputs = pointSignature->outputs;
+    observer.signature.inputs.push_back({"count", ScriptValueType::Int, true});
+    observer.callback = [&](const kb::script::ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+        graphPoint.assign(arguments.begin(), arguments.end());
+        return kb::script::ScriptFunctionCallResult{.executed = true};
+    };
+    kb::tests::Require(host.RegisterFunction(std::move(observer)), "Graph touch observer registration failed");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register({
+        .opcode = kb::visual::VisualGraphIrOpcode::GetProperty, .symbol = "TouchTestIndex",
+        .outputs = {{.name = "value", .type = kb::visual::VisualGraphValueType::Int}},
+        .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+            context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{1});
+        }}), "Graph touch index registration failed");
+    kb::visual::VisualGraphAsset graph;
+    graph.name = "Touch Caller";
+    graph.nodes = {
+        {.id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event},
+        {.id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "TouchTestIndex"},
+        {.id = 3U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.TouchCount"},
+        {.id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.TouchPoint"},
+        {.id = 5U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.ObserveTouch"},
+    };
+    using Direction = kb::visual::VisualGraphPinDirection;
+    using Type = kb::visual::VisualGraphValueType;
+    using Edge = kb::visual::VisualGraphEdgeKind;
+    graph.pins = {{1U, Direction::Output, "then", Type::Void}, {2U, Direction::Output, "value", Type::Int}};
+    for (const auto& [node, function] : std::array{
+        std::pair{3U, "Input.TouchCount"}, std::pair{4U, "Input.TouchPoint"}, std::pair{5U, "Tests.ObserveTouch"}}) {
+        graph.pins.push_back({node, Direction::Input, "exec", Type::Void});
+        graph.pins.push_back({node, Direction::Output, "then", Type::Void});
+        const auto* signature = host.Functions().FindSignature(function);
+        for (const auto& pin : signature->inputs) graph.pins.push_back({node, Direction::Input, pin.name, ToVisualGraphValueType(pin.type)});
+        for (const auto& pin : signature->outputs) graph.pins.push_back({node, Direction::Output, pin.name, ToVisualGraphValueType(pin.type)});
+    }
+    graph.edges = {{1U, "then", 3U, "exec", Edge::Execution}, {3U, "then", 4U, "exec", Edge::Execution},
+        {4U, "then", 5U, "exec", Edge::Execution}, {2U, "value", 4U, "index", Edge::Data},
+        {3U, "count", 5U, "count", Edge::Data}};
+    for (const auto& pin : host.Functions().FindSignature("Input.TouchPoint")->outputs)
+        graph.edges.push_back({4U, pin.name, 5U, pin.name, Edge::Data});
+    const auto compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Touch graph did not compile");
+    host.VisualGraphs().Store({.assetId = graphAsset, .graphName = graph.name, .module = compiled.module});
+
+    for (int frame = 0; frame < 4; ++frame) {
+        if (frame == 1) { std::swap(points[0], points[1]); points[1].phase = Phase::Moved; points[1].x = 80.0F; }
+        if (frame == 2) points[1].phase = Phase::Ended;
+        if (frame == 3) { points[1].phase = Phase::Cancelled; scene.Input().MutableDeviceState().SetHasFocus(false); }
+        scene.Input().MutableDeviceState().SetTouchPoints(points);
+        kb::tests::Require(host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F).Succeeded(),
+            "Touch script lifecycle execution failed");
+        const kb::script::ScriptFunctionCallResult graphResult{.executed = true, .outputs = graphPoint};
+        kb::tests::Require(graphResult.Output("count").has_value() && graphResult.Output("count")->AsInt() == 2,
+            "Compiled graph must enumerate both touch samples including terminal contacts");
+        const auto& expected = points[1];
+        for (const auto& result : {query(1), nativePoint, graphResult}) {
+            kb::tests::Require(result.Succeeded() && result.Output("valid")->AsBool() &&
+                result.Output("id")->Type() == ScriptValueType::UInt32 && result.Output("id")->AsUInt32() == expected.id &&
+                result.Output("phase")->AsInt() == static_cast<int>(expected.phase) &&
+                result.Output("active")->AsBool() == kb::input::IsTouchActive(expected.phase) &&
+                kb::tests::NearlyEqual(result.Output("x")->AsFloat(), expected.x) &&
+                kb::tests::NearlyEqual(result.Output("y")->AsFloat(), expected.y),
+                "Native and compiled graph touch queries must preserve ID, position and terminal state");
+        }
+        kb::tests::Require(host.SharedState().Get("touch.count")->AsInt() == 2 &&
+            host.SharedState().Get("touch.id")->AsString() == std::to_string(expected.id) &&
+            host.SharedState().Get("touch.phase")->AsInt() == static_cast<int>(expected.phase) &&
+            host.SharedState().Get("touch.active")->AsBool() == kb::input::IsTouchActive(expected.phase) &&
+            host.SharedState().Get("touch.valid")->AsBool() && !host.SharedState().Get("touch.invalid")->AsBool() &&
+            host.SharedState().Get("touch.overflowRejected")->AsBool() &&
+            kb::tests::NearlyEqual(host.SharedState().Get("touch.x")->AsFloat(), expected.x) &&
+            kb::tests::NearlyEqual(host.SharedState().Get("touch.y")->AsFloat(), expected.y),
+            "Lua touch queries must preserve independent contacts and reject index truncation");
+        kb::tests::Require(scene.Input().DeviceState().TouchPoints().size() == 2U,
+            "Script queries must not consume touch samples");
+    }
+    scene.Input().MutableDeviceState().SetTouchPoints({});
+    kb::tests::Require(host.Functions().Call("Input.TouchCount", {}, callContext).Output("count")->AsInt() == 0 &&
+        !query(1).Output("valid")->AsBool(), "Consumed touch samples must disappear from script queries");
+}
+
 // LIB-117: Pointer.Position/Delta/Button/Scroll/Ray, both as direct native calls and
 // through the Lua wrapper table - proving the engine-side pointer position
 // storage (InputDeviceState::SetPointerPosition, LIB-117) reaches script.
@@ -12465,6 +12957,53 @@ end
         "A consumed button event must not be delivered again on the next frame");
 }
 
+void RunScriptAudioComponentPropertiesTest() {
+    using Api = kb::script::ScriptSceneComponentApi;
+    using Value = kb::script::ScriptValue;
+    kb::scene::Scene scene;
+    const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Audio Properties" });
+    const auto entity = object.Entity();
+    scene.Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{});
+    scene.Components().AudioListeners().Set(entity, kb::scene::AudioListenerComponent{});
+    kb::tests::Require(Api::HasComponent(scene, entity, "Audio Source") && Api::HasComponent(scene, entity, "AudioListener") &&
+        Api::ComponentProperties("AudioSource").size() == 16 && Api::ComponentProperties("Audio Listener").size() == 4,
+        "Audio components must expose every authored property through their canonical and display names");
+    kb::tests::Require(Api::SetProperty(scene, entity, "Audio Source", "volume", Value{0.25F}).succeeded &&
+        Api::GetProperty(scene, entity, "AudioSource", "volume").value.AsFloat() == 0.25F,
+        "Audio source volume did not round-trip through the shared property surface");
+    const auto reject = [&](std::string_view field, const Value& value) {
+        const auto before = Api::GetProperty(scene, entity, "AudioSource", field);
+        const auto mutation = Api::SetProperty(scene, entity, "AudioSource", field, value);
+        const auto after = Api::GetProperty(scene, entity, "AudioSource", field);
+        kb::tests::Require(before.succeeded && after.succeeded && !mutation.succeeded && before.value == after.value,
+            "An invalid audio source property changed the live component");
+    };
+    reject("volume", Value{-0.1F});
+    reject("volume", Value{std::numeric_limits<float>::quiet_NaN()});
+    reject("volume", Value{std::numeric_limits<float>::infinity()});
+    reject("pitch", Value{0.0F});
+    reject("pan", Value{1.1F});
+    reject("spatialBlend", Value{-0.1F});
+    reject("minDistance", Value{1000.0F});
+    reject("maxDistance", Value{0.5F});
+    reject("rolloff", Value{-1.0F});
+    reject("dopplerFactor", Value{-1.0F});
+    reject("attenuationModel", Value{99});
+    reject("clipAssetId", Value{std::uint64_t{123U}, kb::script::ScriptValueType::Hash});
+    kb::tests::Require(Api::SetProperty(scene, entity, "AudioSource", "outputBus", Value{std::string{"Effects"}}).succeeded,
+        "A valid audio routing token could not be authored");
+    reject("outputBus", Value{std::string{"invalid bus"}});
+    reject("outputBus", Value{std::string(64, 'a')});
+    kb::tests::Require(Api::SetProperty(scene, entity, "AudioListener", "localUser", Value{std::uint32_t{0xFFFFFFFFU}}).succeeded &&
+        Api::GetProperty(scene, entity, "Audio Listener", "localUser").value.AsUInt32() == 0xFFFFFFFFU,
+        "Audio listener local user id was truncated");
+    kb::tests::Require(Api::SetProperty(scene, entity, "AudioListener", "localUser", Value{3}).succeeded &&
+        Api::GetProperty(scene, entity, "AudioListener", "localUser").value.AsUInt32() == 3U &&
+        !Api::SetProperty(scene, entity, "AudioListener", "localUser", Value{-1}).succeeded &&
+        Api::GetProperty(scene, entity, "AudioListener", "localUser").value.AsUInt32() == 3U,
+        "Audio listener integer user id conversion lost or changed its value");
+}
+
 // LIB-077: exhaustive, name-driven coverage that the generated-accessor
 // FieldBinding mechanism (ScriptSceneComponentApi.cpp's KB_BOOL/KB_INT/
 // KB_UINT32/KB_FLOAT/KB_NESTED_FLOAT/KB_TICKGROUP/KB_CAMERA_PROJECTION/
@@ -12479,6 +13018,14 @@ end
 void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Generated Accessor Coverage" });
+    scene.Components().Grids().Set(object.Entity(), kb::scene::GridComponent{});
+    scene.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 19U });
+    scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
+    scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
+    scene.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 21U, .cellWidth = 16U });
+    scene.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{});
+    scene.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{});
+    scene.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{});
     scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
@@ -12518,6 +13065,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
     scene.Components().LensEchoes().Set(object.Entity(), kb::scene::LensEchoComponent{});
     scene.Components().ParticleEffects().Set(object.Entity(), kb::scene::ParticleEffectComponent{ .effectAssetId = 17U });
+    scene.Components().AudioSources().Set(object.Entity(), kb::scene::AudioSourceComponent{});
+    scene.Components().AudioListeners().Set(object.Entity(), kb::scene::AudioListenerComponent{});
     AttachAllUIComponents(scene, object.Entity());
 
     std::size_t fieldsChecked = 0U;
@@ -12544,7 +13093,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             }
 
             kb::script::ScriptValue validValue;
-            if (IsUIComponentName(componentName)) {
+            if (componentName == "AudioSource" && property.name == "clipAssetId") {
+                validValue = kb::script::ScriptValue{std::uint64_t{0U}, kb::script::ScriptValueType::Hash};
+            } else if (componentName == "AudioSource" && (property.name == "pan" || property.name == "spatialBlend")) {
+                validValue = kb::script::ScriptValue{0.5F};
+            } else if (IsUIComponentName(componentName)) {
                 const kb::script::ScriptSceneComponentPropertyResult current =
                     kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
                 kb::tests::Require(current.succeeded,
@@ -12605,7 +13158,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             } else if (property.type == kb::script::ScriptValueType::UInt32) {
                 kb::tests::Require(get.value.AsUInt32() == 3U, ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Hash) {
-                kb::tests::Require(get.value.AsUInt64() == 17U, ("Script component API did not round-trip " + fieldLabel).c_str());
+                kb::tests::Require(get.value.AsUInt64() == validValue.AsUInt64(), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Bool) {
                 kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::String) {
@@ -12631,7 +13184,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    kb::tests::Require(fieldsChecked == 766U, "Script component API generated accessor coverage test did not exercise the expected total field count (766, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(fieldsChecked == 857U, "Script component API generated accessor coverage test did not exercise the expected total field count (857, including audio fields and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12653,6 +13206,14 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
 void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "No Raw Pointer" });
+    scene.Components().Grids().Set(object.Entity(), kb::scene::GridComponent{});
+    scene.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 19U });
+    scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
+    scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
+    scene.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 21U, .cellWidth = 16U });
+    scene.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{});
+    scene.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{});
+    scene.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{});
     scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
@@ -12688,6 +13249,8 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
     scene.Components().LensEchoes().Set(object.Entity(), kb::scene::LensEchoComponent{});
     scene.Components().ParticleEffects().Set(object.Entity(), kb::scene::ParticleEffectComponent{ .effectAssetId = 17U });
+    scene.Components().AudioSources().Set(object.Entity(), kb::scene::AudioSourceComponent{});
+    scene.Components().AudioListeners().Set(object.Entity(), kb::scene::AudioListenerComponent{});
     AttachAllUIComponents(scene, object.Entity());
 
     std::size_t propertiesChecked = 0U;
@@ -12718,7 +13281,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 766U, "LIB-082 raw-pointer audit did not exercise the expected total field count (766, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 857U, "LIB-082 raw-pointer audit did not exercise the expected total field count (857, including audio fields and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -13971,6 +14534,11 @@ void RunScriptSaveApiTest() {
     };
     const kb::script::ScriptFunctionCallResult written = call("Save.Write", { slotArg("slot_1") });
     kb::tests::Require(written.Output("written")->AsBool(), "Save.Write must write the ambient save to disk");
+    kb::tests::Require(call("Save.Flush", {}).Output("started")->AsBool() &&
+        call("Settings.Flush", {}).Output("started")->AsBool() &&
+        call("Save.StorageStatus", {}).Output("status")->AsString() == "Clean" &&
+        call("Settings.StorageStatus", {}).Output("diagnostic")->AsString().empty(),
+        "Native save/settings synchronization must report completed filesystem writes");
     kb::tests::Require(std::filesystem::is_regular_file(storageRoot / "slot_1.kbsave"), "Save.Write must store the slot inside the host's user storage root");
     kb::tests::Require(call("Save.Clear", {}).Output("cleared")->AsBool(), "Save.Clear must clear the ambient buffer");
     kb::tests::Require(!call("Save.Has", { keyArg("flag") }).Output("has")->AsBool(), "Save.Clear must have emptied the buffer");
@@ -14012,6 +14580,8 @@ void RunScriptSaveApiTest() {
             "Save.Write", std::vector<kb::script::ScriptFunctionArgument>{ slotArg("slot_1") }, kb::script::ScriptFunctionCallContext{ .scene = &unconfiguredScene });
         kb::tests::Require(!unconfigured.Succeeded() && unconfigured.errors.front().find("not configured") != std::string::npos,
             "Save.Write without a configured user storage root must report a script error");
+        kb::tests::Require(!unconfiguredHost.Functions().Call("Save.Flush", {}, {}).Output("started")->AsBool(),
+            "Flush without configured storage must not report success");
     }
 
     // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
@@ -14037,6 +14607,33 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(!crossRead.Output("loaded")->AsBool() && crossRead.Output("status")->AsString() == "WrongDomain", "Save.Read of a Settings file must be rejected as WrongDomain, keeping the domains separated");
     const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { slotArg("profile") });
     kb::tests::Require(settingsRead.Output("loaded")->AsBool() && settingsRead.Output("status")->AsString() == "Ok", "Settings.Read of a Settings file must succeed");
+
+    kb::tests::Require(call("Save.Delete", { slotArg("profile") }).Output("deleted")->AsBool() &&
+        call("Save.Read", { slotArg("profile") }).Output("status")->AsString() == "FileNotFound" &&
+        call("Settings.Read", { slotArg("profile") }).Output("loaded")->AsBool(),
+        "Deleting a save slot must preserve the settings slot with the same name");
+    kb::tests::Require(call("Save.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 111,
+        "Deleting a named slot must preserve the active save document");
+    kb::tests::Require(call("Settings.Delete", { slotArg("profile") }).Output("deleted")->AsBool() &&
+        call("Settings.Read", { slotArg("profile") }).Output("status")->AsString() == "FileNotFound" &&
+        call("Save.Read", { slotArg("slot_1") }).Output("loaded")->AsBool(),
+        "Deleting settings must preserve another save slot");
+    kb::tests::Require(!call("Save.Delete", { slotArg("missing") }).Output("deleted")->AsBool() &&
+        !call("Settings.Delete", { slotArg("missing") }).Output("deleted")->AsBool(),
+        "Deleting a missing slot must not report a removed file");
+    for (const std::string_view function : { "Save.Delete", "Settings.Delete" }) {
+        for (const std::string& invalid : { std::string{}, std::string{"../outside"}, std::string{"name.kbsave"}, std::string(65U, 'a') }) {
+            kb::tests::Require(!call(function, { slotArg(invalid) }).Succeeded(),
+                "Slot deletion must use the same validated names as reads and writes");
+        }
+        kb::scene::Scene unconfiguredScene;
+        kb::script::ScriptRuntimeHost unconfiguredHost{unconfiguredScene};
+        const std::vector<kb::script::ScriptFunctionArgument> deletionArguments{ slotArg("profile") };
+        const auto refused = unconfiguredHost.Functions().Call(function, deletionArguments,
+            kb::script::ScriptFunctionCallContext{ .scene = &unconfiguredScene });
+        kb::tests::Require(!refused.Succeeded() && !refused.errors.empty(),
+            "Unconfigured storage must refuse slot deletion");
+    }
 }
 
 // LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain
@@ -16383,6 +16980,80 @@ function Destroyed(self, dt) SetShared("wasDestroyed", true) end
         "DispatchShutdownLifecycle must return false when no scene system is installed");
 }
 
+void RunHostShutdownDoesNotRestartBehavioursTest() {
+    ResetTestRoot();
+    const auto projectRoot = TestRoot() / "ShutdownOnce";
+    WriteTextFile(projectRoot / "Assets/Shutdown.lua", R"(
+function Ready(self, dt) SetShared("readyCount", (GetShared("readyCount") or 0) + 1) end
+function Destroyed(self, dt) SetShared("destroyedCount", (GetShared("destroyedCount") or 0) + 1) end
+)");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Shutdown-once asset discovery failed");
+    const auto* asset = scene.Assets().Manager().Registry().FindByPath("/Game/Shutdown.lua");
+    kb::tests::Require(asset != nullptr, "Shutdown-once asset was not registered");
+    const auto assetId = asset->id;
+    kb::script::ScriptRuntimeHost host{scene};
+    const auto addBehaviour = [&](const char* name) {
+        const auto object = scene.Entities().CreateObject({.name = name});
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = assetId.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    };
+    const auto count = [&](std::string_view key) {
+        return host.SharedState().Get(key).value_or(kb::script::ScriptValue{0}).AsInt();
+    };
+    addBehaviour("Started");
+    kb::tests::Require(host.Succeeded() && host.InstallSceneSystem(), "Shutdown-once host setup failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(count("readyCount") == 1 && host.DrainSceneSystemDiagnostics().empty(),
+        "Shutdown-once fixture did not start exactly one behaviour");
+    addBehaviour("NotStartedYet");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && count("readyCount") == 1 &&
+        count("destroyedCount") == 1, "Shutdown must tear down only started behaviours without starting new ones");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && count("readyCount") == 1 &&
+        count("destroyedCount") == 1, "Repeated shutdown must not restart or destroy behaviours again");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(count("readyCount") == 3 && host.DrainSceneSystemDiagnostics().empty(),
+        "A normal frame after shutdown must start both enabled behaviours");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && count("readyCount") == 3 &&
+        count("destroyedCount") == 3, "Resumed behaviours must each shut down exactly once");
+}
+
+void RunHostShutdownLifecycleReportsErrorsTest() {
+    ResetTestRoot();
+    const auto projectRoot = TestRoot() / "ShutdownDiagnostics";
+    WriteTextFile(projectRoot / "Assets/Shutdown.lua", R"(
+function Tick(self, dt) end
+function Destroyed(self, dt) error("shutdown fault control") end
+)");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Shutdown error script asset discovery failed");
+    const auto* asset = scene.Assets().Manager().Registry().FindByPath("/Game/Shutdown.lua");
+    kb::tests::Require(asset != nullptr, "Shutdown error script asset was not registered");
+    kb::script::ScriptRuntimeHost host{ scene, {.disableFailingBehaviours = true} };
+    const auto object = scene.Entities().CreateObject({.name = "ShutdownError"});
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = asset->id.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::tests::Require(host.Succeeded() && host.InstallSceneSystem(), "Shutdown error fixture setup failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(host.DrainSceneSystemDiagnostics().empty(), "Shutdown fixture failed before shutdown");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F), "Shutdown error fixture was not dispatched");
+    const auto errors = host.DrainSceneSystemDiagnostics();
+    kb::tests::Require(std::any_of(errors.begin(), errors.end(), [](const std::string& error) {
+        return error.find("ShutdownError") != std::string::npos &&
+            error.find("shutdown fault control") != std::string::npos;
+    }), "Shutdown Lua error must reach the normal host diagnostic queue with its entity");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && host.DrainSceneSystemDiagnostics().empty(),
+        "Repeated shutdown must not repeat the terminal error");
+}
+
 // Exposed-variable override end to end: an editor-authored per-instance override
 // stored on the scene (delta-over-default) must be seeded into the Lua runtime
 // before Created and observed by the script, instead of the @expose default.
@@ -16481,11 +17152,28 @@ end
 
 namespace kb::tests {
 
+void RunScriptSaveTests() {
+    RunScriptSaveApiTest();
+}
+
 void RunScriptNativeHeaderReloadTest() {
     RunScriptRuntimeHostNativeDescriptorBindingTest();
 }
 
+void RunScriptComponentPropertyTests() {
+    RunScriptSceneComponentApiTest();
+    RunScriptAudioComponentPropertiesTest();
+    RunScriptSceneComponentGeneratedAccessorCoverageTest();
+    RunScriptSceneComponentPropertiesNeverExposeRawPointerTest();
+}
+
+void RunScriptAudioMixerTests() {
+    RunAudioMixerAssetIOAndAccessTest();
+    RunScriptAudioMixerApiTest();
+}
+
 void RunScriptRuntimeTests() {
+    RunScriptTouchApiTest();
     RunNativeScriptRuntimeDispatchTest();
     RunNativeScriptPluginManagerDispatchTest();
     RunNativeScriptBuildPipelineTest();
@@ -16496,6 +17184,10 @@ void RunScriptRuntimeTests() {
     RunPucLuaCoroutineGeneratorTest();
     RunPucLuaExecutionBudgetPolicyTest();
     RunPucLuaMemoryLimitTest();
+    RunPucLuaHostileScriptsTest();
+    RunPucLuaErrorsNameFileAndLineTest();
+    RunPucLuaReloadKeepsTheWorkingScriptTest();
+    RunPucLuaDebuggerDisconnectTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunPucLuaDebuggerSuspendsAtBreakpointTest();
@@ -16595,6 +17287,8 @@ void RunScriptRuntimeTests() {
     RunTransformHierarchyEdgeCaseTest();
     RunWorldDestroyDeferredFlagTest();
     RunHostShutdownLifecycleFiresDestroyedTest();
+    RunHostShutdownDoesNotRestartBehavioursTest();
+    RunHostShutdownLifecycleReportsErrorsTest();
     RunExposedVariableOverrideSeedingTest();
     RunInspectorTableRuntimeTest();
     RunWorldActiveStateTest();
@@ -16633,6 +17327,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeHostNativeDescriptorBindingTest();
     RunScriptRuntimeHostFrameSettingsTest();
     RunScriptSceneComponentApiTest();
+    RunScriptAudioComponentPropertiesTest();
     RunScriptUIApiTest();
     RunScriptUIEventDispatchTest();
     RunScriptSceneComponentGeneratedAccessorCoverageTest();

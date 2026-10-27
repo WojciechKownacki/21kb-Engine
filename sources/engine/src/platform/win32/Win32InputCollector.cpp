@@ -107,7 +107,7 @@ void Win32InputCollector::AdvanceTouchFrame() noexcept {
     std::size_t writeIndex = 0U;
     for (std::size_t readIndex = 0U; readIndex < touchPointCount_; ++readIndex) {
         InputTouchPoint point = touchPoints_[readIndex];
-        if (point.phase == InputTouchPhase::Ended) {
+        if (IsTouchTerminal(point.phase)) {
             continue;
         }
         if (point.phase == InputTouchPhase::Began) {
@@ -120,6 +120,10 @@ void Win32InputCollector::AdvanceTouchFrame() noexcept {
 
 bool Win32InputCollector::HandleWindowMessage(
     HWND ownerWindow, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_CANCELMODE) {
+        for (std::size_t index = 0U; index < touchPointCount_; ++index) touchPoints_[index].phase = InputTouchPhase::Cancelled;
+        return false;
+    }
     if (message == WM_CHAR) {
         const std::uint16_t repeatCount =
             (std::max)(static_cast<std::uint16_t>(LOWORD(lparam)), std::uint16_t{1U});
@@ -148,7 +152,8 @@ bool Win32InputCollector::HandleWindowMessage(
         if (ownerWindow == nullptr || ScreenToClient(ownerWindow, &client) == 0) {
             return false;
         }
-        const InputTouchPhase phase = message == WM_POINTERDOWN
+        const InputTouchPhase phase = (touchInfo.pointerInfo.pointerFlags & POINTER_FLAG_CANCELED) != 0U
+            ? InputTouchPhase::Cancelled : message == WM_POINTERDOWN
             ? InputTouchPhase::Began
             : (message == WM_POINTERUP ? InputTouchPhase::Ended : InputTouchPhase::Moved);
         UpdateTouchPoint(

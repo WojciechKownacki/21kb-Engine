@@ -332,6 +332,8 @@ public:
     std::unique_ptr<SceneHistoryRecording> historyRecording;
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
+    class SceneTilemapRuntime* tilemapRuntime = nullptr;
+    class ScenePhysics2DRuntime* physics2DRuntime = nullptr;
     SceneRuntimeFixedStepSettings fixedStepSettings;
     // The delta exposed by Time.FixedDelta. In an installed production
     // ScriptRuntimeSceneSystem this mirrors fixedStepSettings exactly: script
@@ -829,11 +831,16 @@ public:
     SceneEntity uiHovered{};
     SceneEntity uiPressed{};
     SceneEntity uiFocused{};
+    // A modal canvas was shown in the last frame, and the widget that had focus before it appeared.
+    bool uiModalActive = false;
+    SceneEntity uiModalRestoreFocus{};
     SceneUIInput previousUIInput{};
+    std::optional<std::uint32_t> uiTouchCapture;
     SceneEntity uiInertialScrollView{};
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
     std::size_t uiTextCursorByteOffset = 0U;
+    std::optional<SceneUITextInputState> uiPendingTextInput;
     // The dropdown list that is open or fading out: the dropdown it belongs to, the cloned list, the
     // full-screen blocker under it, one cloned item per option in option order, and its fade.
     struct UIDropdownList {

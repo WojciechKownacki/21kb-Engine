@@ -4,6 +4,8 @@
 #include "engine/save/SaveGame.hpp"
 #include "engine/save/SaveGameMigration.hpp"
 #include "engine/save/SaveGameService.hpp"
+#include "engine/save/SaveGameChunkStore.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/library/EngineLibraryAssetRef.hpp"
 
 #include <algorithm>
@@ -125,6 +127,209 @@ void RunSaveGameAtomicWriteTest() {
     oversize.SetInt(std::string(2000U, 'k'), 1); // key longer than kMaxKeyBytes (1024)
     kb::tests::Require(!kb::save::SaveGameService::Save(oversizePath, oversize), "Save must refuse an entry that exceeds the format limits");
     kb::tests::Require(!std::filesystem::exists(oversizePath), "A refused Save must not write any file");
+}
+
+// The size limit is exact: a save that serializes to exactly kMaxSaveGameSerializedBytes is written and read back
+// whole, one byte more is refused at Save and Serialize and leaves the previous save at the path untouched, and a
+// buffer or file of limit + 1 bytes is refused on the way in. The limit applies to the whole file, not to one entry.
+void RunSaveGameExactSizeLimitTest() {
+    ResetSaveTestRoot();
+    const std::filesystem::path path = SaveTestRoot() / "limit.kbsave";
+    const auto build = [](std::size_t lastLength) {
+        kb::save::SaveGame save;
+        for (int index = 0; index < 15; ++index) {
+            save.SetString("block" + std::to_string(index), std::string(1U << 20U, static_cast<char>('a' + index)));
+        }
+        save.SetString("tail", std::string(lastLength, 'z'));
+        return save;
+    };
+    const auto base = kb::save::SaveGameService::Serialize(build(0U));
+    kb::tests::Require(base.has_value() && base->size() < kb::save::SaveGameService::MaxSerializedBytes,
+        "The sizing fixture must serialize below the limit");
+    const std::size_t room = kb::save::SaveGameService::MaxSerializedBytes - base->size();
+    kb::tests::Require(room > 0U && room <= (1U << 20U), "The sizing fixture must leave less than one string of room");
+
+    const auto exact = kb::save::SaveGameService::Serialize(build(room));
+    kb::tests::Require(exact.has_value() && exact->size() == kb::save::SaveGameService::MaxSerializedBytes,
+        "A save of exactly the limit must serialize");
+    kb::tests::Require(kb::save::SaveGameService::Save(path, build(room)), "A save of exactly the limit must be written");
+    kb::tests::Require(std::filesystem::file_size(path) == kb::save::SaveGameService::MaxSerializedBytes,
+        "The file of a maximal save must have exactly the limit size");
+    const kb::save::SaveGameLoadResult loaded = kb::save::SaveGameService::Load(path);
+    std::string tail;
+    kb::tests::Require(loaded.Succeeded() && loaded.save.GetString("tail", tail) && tail.size() == room,
+        "A maximal save must load back whole");
+
+    // One byte more: refused, and the maximal save already at the path survives.
+    kb::tests::Require(!kb::save::SaveGameService::Serialize(build(room + 1U)).has_value(), "A save over the limit must not serialize");
+    kb::tests::Require(!kb::save::SaveGameService::Save(path, build(room + 1U)), "A save over the limit must be refused");
+    const kb::save::SaveGameLoadResult survivor = kb::save::SaveGameService::Load(path);
+    kb::tests::Require(survivor.Succeeded() && std::filesystem::file_size(path) == kb::save::SaveGameService::MaxSerializedBytes,
+        "A refused over-limit save must leave the previous save intact");
+    std::vector<std::uint8_t> oversized = *exact;
+    oversized.push_back(0U);
+    kb::tests::Require(kb::save::SaveGameService::Deserialize(oversized).status == kb::save::SaveGameLoadStatus::TooLarge,
+        "A buffer of limit + 1 bytes must be refused as too large");
+    kb::tests::Require(kb::save::SaveGameService::Deserialize(*exact).Succeeded(), "A buffer of exactly the limit must load");
+}
+
+// A write that cannot complete leaves the previous save loadable and byte for byte unchanged; a stale temp file from
+// an earlier crash is overwritten and gone afterwards; no strict prefix of a valid file ever loads.
+void RunSaveGameInterruptedWriteTest() {
+    ResetSaveTestRoot();
+    const std::filesystem::path path = SaveTestRoot() / "slot.kbsave";
+    const std::filesystem::path tempPath = std::filesystem::path{ path }.concat(".tmp");
+    const auto readAll = [](const std::filesystem::path& file) {
+        std::ifstream input{ file, std::ios::binary };
+        return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+    };
+
+    kb::save::SaveGame first;
+    first.SetInt("generation", 1);
+    first.SetString("name", "first");
+    kb::tests::Require(kb::save::SaveGameService::Save(path, first), "The first save must be written");
+    const std::vector<std::uint8_t> before = readAll(path);
+
+    // The temporary file cannot be created: a directory of that name stands in its way.
+    std::error_code error;
+    std::filesystem::create_directory(tempPath, error);
+    kb::tests::Require(!error, "The blocking directory must be created");
+    kb::save::SaveGame second;
+    second.SetInt("generation", 2);
+    kb::tests::Require(!kb::save::SaveGameService::Save(path, second), "A save whose temporary file cannot be written must fail");
+    kb::tests::Require(readAll(path) == before, "A failed save must leave the previous save byte for byte unchanged");
+    std::int64_t generation = 0;
+    const kb::save::SaveGameLoadResult stillFirst = kb::save::SaveGameService::Load(path);
+    kb::tests::Require(stillFirst.Succeeded() && stillFirst.save.GetInt("generation", generation) && generation == 1,
+        "The previous save must still load after a failed save");
+    std::filesystem::remove_all(tempPath, error);
+
+    // A temporary file left by a crash does not stop the next save, and is not left behind by it.
+    WriteRawFile(tempPath, { 1U, 2U, 3U, 4U, 5U });
+    kb::tests::Require(kb::save::SaveGameService::Save(path, second), "A stale temporary file must not block a save");
+    kb::tests::Require(!std::filesystem::exists(tempPath), "The stale temporary file must be gone after the save");
+    const kb::save::SaveGameLoadResult nowSecond = kb::save::SaveGameService::Load(path);
+    kb::tests::Require(nowSecond.Succeeded() && nowSecond.save.GetInt("generation", generation) && generation == 2,
+        "The save after a stale temporary file must be the new one");
+
+    // Whatever a crash cuts off, a partial file is never returned as a save.
+    const auto bytes = kb::save::SaveGameService::Serialize(second);
+    kb::tests::Require(bytes.has_value() && bytes->size() > 16U, "The truncation fixture must serialize");
+    for (std::size_t length = 0U; length < bytes->size(); ++length) {
+        const kb::save::SaveGameLoadResult cut = kb::save::SaveGameService::Deserialize(
+            std::span<const std::uint8_t>{ bytes->data(), length });
+        kb::tests::Require(!cut.Succeeded(), "A truncated save must never load");
+    }
+}
+
+void RunSaveGameChunkStoreTest() {
+    ResetSaveTestRoot();
+    kb::platform::UserStorage storage(SaveTestRoot(), 64U << 20U);
+    kb::save::SaveGameChunkStore chunks(storage, "World");
+    kb::save::SaveGame first, second;
+    for (int index = 0; index < 10; ++index) {
+        first.SetString("block" + std::to_string(index), std::string(1U << 20U, 'a'));
+        second.SetString("block" + std::to_string(index), std::string(1U << 20U, 'b'));
+    }
+    std::array updates{ kb::save::SaveGameChunkUpdate{ "West", &first }, kb::save::SaveGameChunkUpdate{ "East", &second } };
+    std::string error;
+    kb::tests::Require(chunks.Commit(updates, &error), "A chunked save larger than the single-buffer limit must commit");
+    const auto original = chunks.Open();
+    kb::tests::Require(original.succeeded && original.chunks.size() == 2U &&
+        chunks.Load(original, "West").save.Count() == 10U && chunks.Load(original, "East").save.Count() == 10U,
+        "Chunked save must load each region independently");
+    kb::save::SaveGame revised;
+    revised.SetInt("revision", 2);
+    const std::array partial{ kb::save::SaveGameChunkUpdate{ "West", &revised } };
+    kb::tests::Require(chunks.Commit(partial, &error), "Partial chunk update must commit");
+    const auto current = chunks.Open();
+    std::int64_t revision = 0;
+    kb::tests::Require(current.chunks.at("East") == original.chunks.at("East") &&
+        chunks.Load(current, "West").save.GetInt("revision", revision) && revision == 2 &&
+        chunks.Load(original, "West").save.Count() == 10U,
+        "A partial update must preserve unchanged chunks and previously opened snapshots");
+    const auto chunkPath = "World/chunks/" + current.chunks.at("West") + ".kbsave";
+    const auto validBytes = storage.Read(chunkPath);
+    kb::tests::Require(validBytes.has_value() && !storage.ReadBounded(chunkPath, validBytes->size() - 1U) &&
+        storage.Write(chunkPath, "broken") && !chunks.Load(current, "West").Succeeded() &&
+        storage.Write(chunkPath, *validBytes), "Chunk corruption and oversized bounded reads must fail safely");
+    const auto oldChunkPath = "World/chunks/" + original.chunks.at("West") + ".kbsave";
+    kb::tests::Require(chunks.Prune(&error) && !storage.Read(oldChunkPath) && chunks.Load(current, "East").Succeeded(),
+        "Explicit pruning must remove only unreferenced chunks");
+    const std::array remove{ kb::save::SaveGameChunkUpdate{ "East", nullptr } };
+    kb::tests::Require(chunks.Commit(remove, &error) && chunks.Open().chunks.size() == 1U,
+        "A partial commit must support removing a region");
+    const auto indexBefore = storage.Read("World/index.kbsave");
+    const std::array invalid{ kb::save::SaveGameChunkUpdate{ "../outside", &revised } };
+    kb::tests::Require(!chunks.Commit(invalid, &error) && storage.Read("World/index.kbsave") == indexBefore,
+        "Invalid chunk names must not change the committed index");
+    std::vector<kb::save::SaveGameChunkUpdate> tooMany;
+    for (std::size_t index = 0; index <= kb::save::SaveGameChunkStore::MaxChunks; ++index)
+        tooMany.push_back({ "Region" + std::to_string(index), &revised });
+    kb::tests::Require(!chunks.Commit(tooMany, &error) && storage.Read("World/index.kbsave") == indexBefore,
+        "An excessive chunk count must be refused before publication");
+    kb::tests::Require(storage.Write("World/index.kbsave", "broken") && !chunks.Open().succeeded &&
+        !chunks.Commit(partial, &error), "A corrupt index must not be silently replaced by a partial save");
+}
+
+void RunSaveGameChunkFailureTest() {
+    ResetSaveTestRoot();
+    kb::platform::UserStorage storage(SaveTestRoot(), 4096U);
+    kb::save::SaveGameChunkStore chunks(storage, "World");
+    kb::save::SaveGame original;
+    original.SetInt("revision", 1);
+    const std::array initial{ kb::save::SaveGameChunkUpdate{ "Base", &original } };
+    kb::tests::Require(chunks.Commit(initial), "Quota fixture initial save failed");
+    const auto indexBefore = storage.Read("World/index.kbsave");
+    const auto filesBefore = storage.List();
+    kb::save::SaveGame small, large;
+    small.SetString("payload", std::string(1000U, 's'));
+    large.SetString("payload", std::string(5000U, 'l'));
+    const std::array failing{ kb::save::SaveGameChunkUpdate{ "First", &small }, kb::save::SaveGameChunkUpdate{ "Second", &large } };
+    kb::tests::Require(!chunks.Commit(failing) && storage.Read("World/index.kbsave") == indexBefore &&
+        chunks.Open().chunks.size() == 1U && chunks.Load(chunks.Open(), "Base").Succeeded(),
+        "Exhausting host storage midway through a commit must preserve the entire previous generation");
+    kb::tests::Require(storage.List().size() > filesBefore.size() && chunks.Prune() && storage.List() == filesBefore,
+        "An interrupted commit must leave only reclaimable unreferenced chunks");
+    const auto blocked = SaveTestRoot() / "World/index.kbsave.tmp";
+    kb::tests::Require(std::filesystem::create_directory(blocked), "Index-failure fixture could not be created");
+    const std::array next{ kb::save::SaveGameChunkUpdate{ "Base", &small } };
+    kb::tests::Require(!chunks.Commit(next) && storage.Read("World/index.kbsave") == indexBefore &&
+        chunks.Load(chunks.Open(), "Base").Succeeded(), "Index publication failure must preserve the old snapshot");
+    kb::tests::Require(std::filesystem::remove(blocked) && chunks.Prune() && chunks.Commit(next),
+        "A failed partial commit must be recoverable after storage becomes available");
+}
+
+void RunSaveGameInvalidValueTest() {
+    kb::save::SaveGame invalid;
+    kb::save::SaveValue value;
+    value.type = static_cast<kb::save::SaveValueType>(255U);
+    invalid.SetEntries({ { "invalid", value } });
+    kb::tests::Require(!kb::save::SaveGameService::Serialize(invalid),
+        "Save must refuse an invalid scalar tag instead of writing an unreadable file");
+}
+
+void RunSaveGameStorageFullTest() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    // /dev/full is a real kernel ENOSPC sink. Point only our temporary file at
+    // it so a failed flush exercises preservation of an existing valid save.
+    ResetSaveTestRoot();
+    const auto path = SaveTestRoot() / "full.kbsave";
+    kb::save::SaveGame first;
+    first.SetInt("generation", 1);
+    kb::tests::Require(kb::save::SaveGameService::Save(path, first), "Disk-full fixture could not save its first generation");
+    const auto temporary = std::filesystem::path{ path }.concat(".tmp");
+    std::error_code error;
+    std::filesystem::create_symlink("/dev/full", temporary, error);
+    kb::tests::Require(!error, "Disk-full fixture could not create its temporary sink");
+    kb::save::SaveGame second;
+    second.SetString("payload", std::string(65536U, 'x'));
+    kb::tests::Require(!kb::save::SaveGameService::Save(path, second), "An ENOSPC write must fail");
+    const auto loaded = kb::save::SaveGameService::Load(path);
+    std::int64_t generation = 0;
+    kb::tests::Require(loaded.Succeeded() && loaded.save.GetInt("generation", generation) && generation == 1 &&
+        !std::filesystem::exists(temporary), "ENOSPC must preserve the previous save and discard the partial temporary file");
+#endif
 }
 
 // LIB-162: every corruption / bad-header path returns a precise status rather
@@ -505,6 +710,12 @@ namespace kb::tests {
 void RunSaveGameTests() {
     RunSaveGameRoundTripTest();
     RunSaveGameAtomicWriteTest();
+    RunSaveGameExactSizeLimitTest();
+    RunSaveGameInterruptedWriteTest();
+    RunSaveGameInvalidValueTest();
+    RunSaveGameStorageFullTest();
+    RunSaveGameChunkStoreTest();
+    RunSaveGameChunkFailureTest();
     RunSaveGameCorruptionTest();
     RunSaveGameMigrationTest();
     RunSaveGameDomainSeparationTest();

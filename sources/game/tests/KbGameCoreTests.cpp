@@ -19,6 +19,10 @@
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/assets/bake/AssetPackTools.hpp"
+#include "engine/assets/bake/AssetPackWriter.hpp"
+#include "engine/assets/bake/RuntimeAssetManifest.hpp"
+#include "engine/mods/ModCatalog.hpp"
+#include "engine/mods/ModRuntime.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -647,6 +651,201 @@ void RunNativeBehaviourPackagingTests() {
     const auto rejected = kb::game::CookProject(request, diagnostics);
     Require(!rejected.succeeded && Mentions(rejected.error, "native behaviour DLL"),
         "Native package accepted a missing DLL after authoring content was removed");
+}
+
+// A mod is mounted beside a game whose player requires its release key: the game's packs keep that
+// requirement, the mod's chunk is read under its own author's seal, and a chunk that holds an asset the
+// game has is refused by the runtime with the mod named, while the rest of the mods still load.
+void RunModMountTests() {
+    namespace bake = kb::assets::bake;
+    namespace mods = kb::mods;
+    const std::filesystem::path root = TestRoot() / "mods_package";
+    std::error_code removeError;
+    std::filesystem::remove_all(root, removeError);
+
+    const auto cookProject = [&](const std::filesystem::path& project, const std::filesystem::path& output, const std::string& map) {
+        kb::project::ProjectSettings settings;
+        settings.defaultMap = map;
+        settings.physicsLayersAsset.clear();
+        settings.inputEnabled = false;
+        WriteSettings(project, settings);
+        std::ostringstream diagnostics;
+        const auto cooked = kb::game::CookProject(
+            kb::game::ProjectCookRequest{ .projectPath = project, .targetProfileId = "Windows.x64", .outputPackPath = output }, diagnostics);
+        Require(cooked.succeeded, cooked.error.c_str());
+    };
+
+    // The game: sealed by its release key, as a packaged release is.
+    const Fixture game = BuildFixture(root / "game_project", "Project");
+    const std::filesystem::path gameDirectory = root / "Release";
+    const std::filesystem::path gamePack = gameDirectory / "Game.kbpack";
+    cookProject(game.root, gamePack, game.sceneVirtualPath);
+    kb::security::ReleaseSigningKey release;
+    Require(kb::security::GenerateReleaseSigningKey(release), "Mod test release key could not be generated");
+    std::string error;
+    Require(bake::SealAssetPack(gamePack, release, nullptr, error), error.c_str());
+    bake::AssetPackTrust trust{};
+    trust.requiredSigner = release.publicKey;
+    bake::AssetBakeDigest identity{};
+    Require(mods::ReadGameIdentity(gamePack, trust, identity, error), error.c_str());
+
+    // A mod project: the game's content and one scene more, which is its start scene so that the cook holds it.
+    const auto extendedCook = [&](const std::string& name, const std::string& scene) {
+        const Fixture project = BuildFixture(root / (name + "_project"), "Project");
+        {
+            kb::scene::Scene authored;
+            Require(authored.Assets().MountProject(project.root), "Mod project could not be mounted");
+            static_cast<void>(authored.Assets().Discover());
+            for (std::size_t index = 0U; index < 2U; ++index) {
+                static_cast<void>(authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = scene + "_" + std::to_string(index) }));
+            }
+            Require(kb::scene::SceneDocumentService::Save(authored, project.root / "Assets" / "Scenes" / (scene + ".21kbscene"), scene),
+                "Mod scene could not be saved");
+        }
+        const std::filesystem::path cooked = root / "Cooks" / (name + ".kbpack");
+        cookProject(project.root, cooked, "/Game/Scenes/" + scene + ".21kbscene");
+        return cooked;
+    };
+    kb::security::ReleaseSigningKey author;
+    Require(kb::security::GenerateReleaseSigningKey(author), "Mod test author key could not be generated");
+
+    const auto makeMod = [&](const std::string& id, const std::filesystem::path& chunkPack, const kb::security::ReleaseSigningKey& key) {
+        const std::filesystem::path folder = root / "ModBuilds" / id;
+        std::filesystem::create_directories(folder);
+        std::filesystem::copy_file(chunkPack, folder / (id + ".kbpack"), std::filesystem::copy_options::overwrite_existing);
+        Require(bake::SealAssetPack(folder / (id + ".kbpack"), key, nullptr, error), error.c_str());
+        kb::mods::ModManifest manifest;
+        manifest.id = id;
+        manifest.name = id;
+        manifest.pack = id + ".kbpack";
+        Require(kb::mods::BindModManifestToPack(folder, manifest, error), error.c_str());
+        WriteTextFile(folder / "Mod.kbmod", kb::mods::EncodeModManifest(manifest));
+        return folder;
+    };
+
+    const std::filesystem::path crateCook = extendedCook("crates", "CrateScene");
+    const std::filesystem::path crateChunk = root / "ModBuilds" / "crates.chunk";
+    bake::AssetPackModChunkReport built{};
+    {
+        std::filesystem::create_directories(crateChunk.parent_path());
+        bake::AssetPackModChunkRequest request{};
+        request.base = gamePack;
+        request.next = crateCook;
+        request.output = crateChunk;
+        request.label = "acme.crates";
+        Require(bake::BuildAssetPackModChunk(request, built, error), error.c_str());
+        Require(built.addedAssets >= 1U, "The mod chunk holds nothing the game lacks");
+    }
+    const std::filesystem::path crates = makeMod("acme.crates", crateChunk, author);
+
+    // A chunk that holds an asset the game has: written by hand, past the builder, from the game's own pack.
+    const std::filesystem::path redefineChunk = root / "ModBuilds" / "redefine.chunk";
+    {
+        bake::RuntimeAssetPack runtime;
+        Require(runtime.Mount(gamePack, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success, "The game pack did not mount");
+        bake::RuntimeAssetManifest manifest = runtime.Manifest();
+        const bake::RuntimeAssetManifestEntry* main = runtime.FindAsset(game.sceneVirtualPath);
+        Require(main != nullptr, "The game pack has no start scene");
+        const bake::RuntimeAssetManifestEntry copy = *main;
+        manifest.partial = true;
+        manifest.assets = { copy };
+        manifest.auxiliaryFiles.clear();
+        bake::AssetPackReader source;
+        Require(source.Mount(gamePack) == bake::AssetPackReadStatus::Success, "The game pack did not mount for reading");
+        bake::AssetPackWriterOptions options{};
+        options.role = bake::AssetPackRole::Chunk;
+        options.label = "acme.redefine";
+        options.baseIdentity = identity;
+        bake::AssetPackWriter writer{ redefineChunk, bake::WindowsX64BakeTargetProfile(), options };
+        for (const bake::RuntimeArtifactReference& reference : copy.artifacts) {
+            const bake::AssetPackArtifactEntry* artifact = source.FindArtifact(reference.digest);
+            Require(artifact != nullptr && writer.CopyArtifact(source, *artifact) == bake::BakedAssetSinkStatus::Success, "An artifact could not be copied");
+        }
+        std::vector<std::uint8_t> manifestBytes;
+        Require(bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) == bake::RuntimeAssetManifestStatus::Success, "The manifest does not encode");
+        bake::AssetBakeKey key{};
+        key.sourceContentHash = bake::HashBakeBytes(manifestBytes) | 1U;
+        key.bakerId = "RuntimeManifest";
+        key.bakerVersion = "1";
+        key.targetProfileId = "Windows.x64";
+        key.targetProfileHash = bake::BakeTargetProfileFingerprint(bake::WindowsX64BakeTargetProfile());
+        key.settingsHash = 3U;
+        Require(writer.BeginAsset(bake::BakedAssetDescriptor{ .key = key, .assetTypeId = std::string{ bake::kRuntimeManifestAssetTypeId } }) ==
+                    bake::BakedAssetSinkStatus::Success &&
+                writer.WritePrimaryBlock(manifestBytes, bake::WindowsX64BakeTargetProfile().packageBlockAlignmentBytes) == bake::BakedAssetSinkStatus::Success &&
+                writer.CommitAsset() == bake::BakedAssetSinkStatus::Success && writer.Finish() == bake::BakedAssetSinkStatus::Success,
+            "The doctored chunk could not be written");
+    }
+    const std::filesystem::path redefine = makeMod("acme.redefine", redefineChunk, author);
+
+    kb::mods::ModCatalog catalog{ gameDirectory / "Mods" };
+    kb::mods::ModHost host;
+    host.baseIdentity = identity;
+    kb::mods::ModTrustPolicy policy;
+    policy.signers.push_back(author.publicKey);
+    kb::mods::ModInfo installed;
+    Require(catalog.Install(crates, host, policy, false, installed, error), error.c_str());
+    Require(catalog.Install(redefine, host, policy, false, installed, error), error.c_str());
+
+    // The runtime refuses the chunk that redefines the game's scene, names the mod, and mounts the other.
+    bake::RuntimeAssetPack pack;
+    kb::mods::ModMountReport report;
+    Require(kb::mods::MountPackWithMods(pack, gamePack, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust, catalog, policy, identity,
+                report) == bake::RuntimeAssetPackStatus::Success,
+        "The game did not mount with its mods");
+    Require(report.loaded.size() == 1U && report.loaded.front().manifest.id == "acme.crates" && report.refused.size() == 1U &&
+            report.refused.front().manifest.id == "acme.redefine" && report.refused.front().problem == kb::mods::ModProblem::MountRefused &&
+            Mentions(report.refused.front().detail, "ManifestDuplicate"),
+        "A mod that replaces an asset of the game was not refused by name");
+    Require(pack.ContainerCount() == 2U && pack.FindAsset(game.sceneVirtualPath) != nullptr && pack.AssetContainer(pack.FindAsset(game.sceneVirtualPath)->id) == 0U,
+        "The game's own scene is not served by the game's pack");
+    const bake::RuntimeAssetManifestEntry* added = pack.FindAsset("/Game/Scenes/CrateScene.21kbscene");
+    Require(added != nullptr && pack.AssetContainer(added->id) == 1U, "The mod's scene is not served by the mod's pack");
+    Require(pack.ContainerSeal(0U) != nullptr && pack.ContainerSeal(0U)->signer == release.publicKey && pack.ContainerSeal(1U) != nullptr &&
+            pack.ContainerSeal(1U)->signer == author.publicKey,
+        "Each pack is not sealed by its own key");
+    bake::RuntimeAssetPayload payload{};
+    Require(pack.ReadAssetPayload(added->id, bake::RuntimeArtifactEncoding::SourceBytes, {}, payload) == bake::RuntimeAssetPackStatus::Success,
+        "The mod's scene could not be read through the mounted set");
+    pack.Unmount();
+
+    // The release key still decides about the game's packs: a mod chunk mounted as one of them, without its own trust, is refused.
+    {
+        std::vector<bake::RuntimeAssetPackMount> mounts{ bake::RuntimeAssetPackMount{ .path = gamePack },
+            bake::RuntimeAssetPackMount{ .path = crates / "acme.crates.kbpack", .role = bake::AssetPackRole::Chunk, .label = "acme.crates" } };
+        bake::RuntimeAssetPack strict;
+        Require(strict.MountSet(mounts, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust) ==
+                    bake::RuntimeAssetPackStatus::ContainerRejected &&
+                strict.ContainerStatus() == bake::AssetPackReadStatus::UntrustedSigner && strict.RefusedContainer() == 1U,
+            "A chunk sealed by another key than the release key mounted as one of the game's packs");
+        mounts[1].trust = bake::AssetPackTrust{ .requiredSigner = author.publicKey };
+        Require(strict.MountSet(mounts, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust) == bake::RuntimeAssetPackStatus::Success,
+            "A chunk did not mount under the trust given to it alone");
+        mounts[1].trust = bake::AssetPackTrust{ .requiredSigner = release.publicKey };
+        Require(strict.MountSet(mounts, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust) ==
+                    bake::RuntimeAssetPackStatus::ContainerRejected,
+            "A chunk sealed by a key other than the one its mount required was accepted");
+    }
+
+    // A mod cooked against another build of the game is refused.
+    {
+        const Fixture other = BuildFixture(root / "other_project", "Project");
+        {
+            kb::scene::Scene authored;
+            Require(authored.Assets().MountProject(other.root), "Other project could not be mounted");
+            static_cast<void>(authored.Assets().Discover());
+            static_cast<void>(authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Different" }));
+            Require(kb::scene::SceneDocumentService::Save(authored, other.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"), "Other scene could not be saved");
+        }
+        const std::filesystem::path otherPack = root / "OtherRelease" / "Game.kbpack";
+        cookProject(other.root, otherPack, other.sceneVirtualPath);
+        bake::AssetBakeDigest otherIdentity{};
+        Require(kb::mods::ReadGameIdentity(otherPack, {}, otherIdentity, error) && otherIdentity != identity, "The other build has the same identity");
+        kb::mods::ModHost otherHost;
+        otherHost.baseIdentity = otherIdentity;
+        Require(kb::mods::InspectMod(gameDirectory / "Mods" / "acme.crates", otherHost, policy).problem == kb::mods::ModProblem::BaseMismatch,
+            "A mod cooked against another build of the game was not refused");
+    }
 }
 
 // A player with a trust anchor (a packaged release) mounts only packs sealed by its release key
@@ -1569,7 +1768,7 @@ void RunSceneMetaCookValidationTests() {
             "Cooker rejection did not identify the scene metadata failure");
         Require(
             Mentions(cook.error, std::string{ readerDiagnostic }),
-            "Cooker rejection did not preserve the metadata reader diagnostic");
+            ("Cooker rejection did not preserve the metadata reader diagnostic: " + cook.error).c_str());
         Require(
             !std::filesystem::exists(outputPack),
             "Cooker published a package after rejecting unreadable scene metadata");
@@ -1590,7 +1789,7 @@ void RunSceneMetaCookValidationTests() {
         WriteTextFile(
             fixture.root / "Assets" / "Scenes" / "Main.meta",
             "not a 21kb scene metadata descriptor");
-        requireRejectedCook(fixture, "no readable scene metadata sidecar", "descriptor fields are invalid");
+        requireRejectedCook(fixture, "no readable scene metadata sidecar", "header is invalid");
     }
 
     {
@@ -2300,6 +2499,11 @@ int main(int argc, char** argv) {
         RunPackagedTrustTests();
         RunPackSetPackagingTests();
         std::fputs("kb_game_core packaged trust tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "--mods") {
+        RunModMountTests();
+        std::fputs("kb_game_core mod mount tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "--partitioned-world") {

@@ -57,4 +57,12 @@ void SceneHistory::RemapEntities(std::span<const SceneEntityRemap> remap) {
     SceneHistoryService::RemapEntities(scene_, remap);
 }
 
+SceneHistorySnapshot SceneHistory::Suspend() {
+    return SceneHistoryService::Suspend(scene_);
+}
+
+bool SceneHistory::Resume(SceneHistorySnapshot& snapshot, std::span<const SceneEntityRemap> remap) {
+    return SceneHistoryService::Resume(scene_, snapshot, remap);
+}
+
 } // namespace kb::scene

@@ -1,12 +1,14 @@
 #include "PackagedRuntimeModules.hpp"
 
 #include "PackagedRuntimeModuleContract.hpp"
+#include "GameScriptLog.hpp"
 
 #include "AIModule.hpp"
 #include "BasicLightingModule.hpp"
 #include "JoltPhysicsModule.hpp"
 #include "MiniaudioModule.hpp"
 #include "ParticleModule.hpp"
+#include "World2DModule.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/script/ScriptModule.hpp"
 
@@ -27,6 +29,7 @@ bool CreatePackagedRuntimeModules(
     kb::script::ScriptModuleOptions scriptOptions;
     scriptOptions.runtimeOptions.userStorageRoot = std::move(scriptUserStorageRoot);
     scriptOptions.runtimeOptions.disableFailingBehaviours = true;
+    scriptOptions.configureHost = &ConfigureGameScriptLog;
     auto script = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     candidate.script = script.get();
     candidate.modules.push_back(std::move(script));
@@ -57,6 +60,9 @@ bool CreatePackagedRuntimeModules(
             break;
         case PackagedRuntimeModuleKind::AI:
             candidate.modules.push_back(std::make_unique<kb::ai_plugin::AIModule>());
+            break;
+        case PackagedRuntimeModuleKind::World2D:
+            candidate.modules.push_back(std::make_unique<kb::world2d::World2DModule>());
             break;
         }
     }

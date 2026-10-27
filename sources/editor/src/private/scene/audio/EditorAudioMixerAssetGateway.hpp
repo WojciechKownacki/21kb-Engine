@@ -1,5 +1,7 @@
 #pragma once
 
+#include "commands/IEditorCommand.hpp"
+
 #include "engine/assets/AssetId.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 
@@ -17,12 +19,17 @@ class Scene;
 namespace kb::editor {
 
 class EditorAssetBrowserState;
+class EditorCommandStack;
 
 class EditorAudioMixerAssetGateway {
 public:
     using Mutation = std::function<bool(kb::audio::AudioMixerAsset&)>;
 
-    EditorAudioMixerAssetGateway(kb::scene::Scene& scene, EditorAssetBrowserState& browser) noexcept;
+    EditorAudioMixerAssetGateway(kb::scene::Scene& scene, EditorAssetBrowserState& browser,
+        EditorCommandStack* commands = nullptr) noexcept;
+
+    [[nodiscard]] static EditorCommandHistoryKey SelectedHistoryKey(
+        const kb::scene::Scene& scene, const EditorAssetBrowserState& browser) noexcept;
 
     [[nodiscard]] std::optional<std::filesystem::path> ResolveFolder(const std::filesystem::path& virtualFolder) const;
     [[nodiscard]] static std::filesystem::path UniqueFilePath(
@@ -49,6 +56,7 @@ private:
 
     kb::scene::Scene& scene_;
     EditorAssetBrowserState& browser_;
+    EditorCommandStack* commands_ = nullptr;
 };
 
 } // namespace kb::editor

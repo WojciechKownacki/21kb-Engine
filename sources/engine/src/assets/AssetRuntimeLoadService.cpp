@@ -77,7 +77,10 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
 
     AssetLoadResult result;
     {
-        std::scoped_lock lock{ loaderExecutionMutex };
+        std::unique_lock lock{ loaderExecutionMutex, std::defer_lock };
+        if (!loader->AllowsConcurrentLoad()) {
+            lock.lock();
+        }
         result = loader->Load(request);
     }
     if (!result.Succeeded()) {

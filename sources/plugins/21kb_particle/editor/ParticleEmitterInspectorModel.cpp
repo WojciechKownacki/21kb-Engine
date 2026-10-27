@@ -5,6 +5,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
+#include "engine/particles/ParticleRenderSnapshot.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -17,6 +18,41 @@
 #include <system_error>
 
 namespace kb::particle_editor {
+std::optional<ParticleEmitterExecutionView> ParticleEmitterInspectorModel::ReadExecution(
+    const kb::particles::ParticleRenderSnapshot* snapshot, std::uint64_t effectAssetId,
+    kb::scene::ParticleStableId emitterId) {
+    if (snapshot == nullptr || snapshot->IsTombstone() || effectAssetId == 0U || emitterId == 0U) return std::nullopt;
+    for (const auto& emitter : snapshot->Emitters()) {
+        if (emitter.effectAssetId != effectAssetId || emitter.emitterId != emitterId) continue;
+        return ParticleEmitterExecutionView{.path = emitter.simulationPath, .reason = emitter.gpuFallbackReason,
+            .snapshotRevision = snapshot->Revision(), .cpuRenderRecords = emitter.particleCount,
+            .cpuRenderBytes = static_cast<std::uint64_t>(emitter.particleCount) * sizeof(kb::particles::ParticleRenderRecord)};
+    }
+    return std::nullopt;
+}
+
+std::array<std::string, 3U> ParticleEmitterInspectorModel::ExecutionRows(const ParticleEmitterInspectorView& view) {
+    const std::string unavailable{ParticleText("particle.execution.unavailable", "Unavailable")};
+    std::string simulation = unavailable;
+    std::string records = unavailable;
+    if (view.execution) {
+        simulation = view.execution->path == kb::particles::ParticleEmitterSimulationPath::Gpu ? "GPU" : "CPU";
+        if (view.execution->reason != kb::particles::ParticleGpuFallbackReason::None) {
+            simulation += " (";
+            simulation += kb::particles::ParticleGpuFallbackReasonName(view.execution->reason);
+            simulation += ')';
+        }
+        records = ParticleFormat("particle.execution.records", "{count} ({bytes} bytes)", {
+            {"count", std::to_string(view.execution->cpuRenderRecords)},
+            {"bytes", std::to_string(view.execution->cpuRenderBytes)}});
+    }
+    return {
+        ParticleFormat("particle.execution.simulation", "Simulation: {value}", {{"value", simulation}}),
+        ParticleFormat("particle.execution.cpu_records", "CPU render records: {value}", {{"value", records}}),
+        ParticleFormat("particle.execution.timings", "CPU/GPU timings: {value}", {{"value", unavailable}}),
+    };
+}
+
 namespace {
 
 [[nodiscard]] std::string_view OutputName(kb::scene::ParticleOutputType type) {
@@ -193,6 +229,8 @@ void AddModuleProperties(ParticleEmitterInspectorView& view, const kb::scene::Pa
             AddSlider(add(std::string{ ParticleText("particle.property.restitution", "Restitution") }, ScalarText(payload.restitution)), payload.restitution, 0.0F, 1.0F);
             AddSlider(add(std::string{ ParticleText("particle.property.friction", "Friction") }, ScalarText(payload.friction)), payload.friction, 0.0F, 1.0F);
             AddIntegerSlider(add(std::string{ ParticleText("particle.property.max_events", "Max events") }, ScalarText(payload.maxEventsPerStep)), payload.maxEventsPerStep, 1U, 256U);
+            AddToggle(add(std::string{ ParticleText("particle.property.kill_on_contact", "Kill on contact") },
+                payload.killOnContact ? "true" : "false"), payload.killOnContact);
         } else if constexpr (std::is_same_v<T, kb::scene::ParticleSubEmitterModule>) {
             add(std::string{ ParticleText("particle.property.target_emitter", "Target emitter") }, ScalarText(payload.targetEmitterId));
             AddEnum(add(std::string{ ParticleText("particle.property.trigger", "Trigger") }, ScalarText(static_cast<std::uint32_t>(payload.trigger))),
@@ -446,6 +484,9 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             selected->output.depthTest ? "true" : "false"), selected->output.depthTest);
         AddToggle(addProperty(ParticleEditorProperty::OutputDepthWrite, std::string{ ParticleText("particle.property.depth_write", "Depth write") },
             selected->output.depthWrite ? "true" : "false"), selected->output.depthWrite);
+        AddToggle(addProperty(ParticleEditorProperty::OutputScreenDepthCollision,
+            std::string{ParticleText("particle.property.screen_depth_collision", "Screen depth collision (GPU)")},
+            selected->screenDepthCollision ? "true" : "false"), selected->screenDepthCollision);
         AddToggle(addProperty(ParticleEditorProperty::OutputSoftParticles, std::string{ ParticleText("particle.property.soft_particles", "Soft particles") },
             selected->output.softParticles ? "true" : "false"), selected->output.softParticles);
         AddToggle(addProperty(ParticleEditorProperty::OutputAntiAliasing, std::string{ ParticleText("particle.property.anti_aliasing", "Anti-aliasing") },
@@ -460,9 +501,16 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
                           std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput> ||
                           std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>) {
                 AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookColumns, std::string{ ParticleText("particle.property.atlas_columns", "Atlas columns") },
-                    ScalarText(payload.flipbook.columns)), payload.flipbook.columns, 1U, 16U);
+                    ScalarText(payload.flipbook.columns)), payload.flipbook.columns, 1U, 256U);
                 AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookRows, std::string{ ParticleText("particle.property.atlas_rows", "Atlas rows") },
-                    ScalarText(payload.flipbook.rows)), payload.flipbook.rows, 1U, 16U);
+                    ScalarText(payload.flipbook.rows)), payload.flipbook.rows, 1U, 256U);
+                const auto atlasCells = payload.flipbook.columns * payload.flipbook.rows;
+                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookStartFrame,
+                    std::string{ParticleText("particle.property.flipbook_start", "First atlas frame")}, ScalarText(payload.flipbook.startFrame)),
+                    payload.flipbook.startFrame, 0U, atlasCells > 0U ? atlasCells - 1U : 0U);
+                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookFrameCount,
+                    std::string{ParticleText("particle.property.flipbook_count", "Frame count (0: remaining)")}, ScalarText(payload.flipbook.frameCount)),
+                    payload.flipbook.frameCount, 0U, atlasCells > payload.flipbook.startFrame ? atlasCells - payload.flipbook.startFrame : 0U);
                 AddSlider(addProperty(ParticleEditorProperty::FlipbookFramesPerSecond, std::string{ ParticleText("particle.property.frame_rate", "Frame rate") },
                     ScalarText(payload.flipbook.framesPerSecond)), payload.flipbook.framesPerSecond, 0.0F, 60.0F);
                 AddToggle(addProperty(ParticleEditorProperty::FlipbookLooping, std::string{ ParticleText("particle.property.flipbook_loop", "Flipbook loop") },

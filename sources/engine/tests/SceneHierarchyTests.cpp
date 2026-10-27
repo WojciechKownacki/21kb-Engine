@@ -58,6 +58,10 @@ void RunDeepHierarchyDestructionTest() {
         parent = scene.Entities().CreateObject({ .parent = parent });
     }
     const auto leaf = parent;
+    kb::tests::Require(!scene.Hierarchy().SetParent(root, leaf),
+        "Deep hierarchy parenting must reject cycles before changing the backend hierarchy");
+    kb::tests::Require(scene.Hierarchy().Parent(root.Entity()) == survivor.Entity(),
+        "Rejected deep hierarchy cycle must preserve the original parent");
     const auto sibling = scene.Entities().CreateObject({ .parent = root });
     const auto retainedSibling = scene.Entities().CreateObject({ .parent = survivor });
     scene.Entities().Destroy(root);
@@ -425,6 +429,150 @@ void RunParentChildrenOwnershipTest() {
     kb::tests::Require(scene.Hierarchy().ChildEntities(secondParent.Entity()).empty(), "Parent still exposes a destroyed child");
     kb::tests::Require(!scene.Entities().IsAlive(grandchild), "Destroying a child did not destroy its descendant");
     kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "Destroying plain hierarchy should not register prefabs");
+}
+
+void RunHierarchyCycleRejectionTest() {
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        const auto root = scene.Entities().CreateObject({.name = "Root"});
+        const auto child = scene.Entities().CreateObject({.name = "Child", .parent = root});
+        const auto leaf = scene.Entities().CreateObject({.name = "Leaf", .parent = child});
+        const auto replacement = scene.Entities().CreateObject({.name = "Replacement"});
+        scene.Runtime().SynchronizeTransforms();
+        const auto roots = scene.Hierarchy().RootEntities();
+        const auto topologyVersion = kb::scene::SceneAccess::State(scene).hierarchyTopologyVersion;
+        kb::tests::Require(scene.History().Record("Rejected parenting"), "Cycle rejection history command did not open");
+        const auto undoCount = scene.History().UndoCount();
+        std::cout << "scene_parent_cycle mirrored=" << mirrored << '\n';
+        kb::tests::Require(!scene.Hierarchy().SetParent(root, leaf) &&
+            !scene.Hierarchy().SetParent(child.Entity(), leaf.Entity()) &&
+            !scene.Hierarchy().SetParent(child, child), "Scene parenting must reject cycles with or without backend mirroring");
+        scene.History().Commit();
+        kb::tests::Require(scene.Hierarchy().RootEntities() == roots &&
+            scene.Hierarchy().Parent(root.Entity()) == kb::scene::SceneEntity{} &&
+            scene.Hierarchy().Parent(child.Entity()) == root.Entity() &&
+            scene.Hierarchy().Parent(leaf.Entity()) == child.Entity() &&
+            kb::scene::SceneAccess::State(scene).hierarchyTopologyVersion == topologyVersion && scene.History().UndoCount() == undoCount,
+            "Rejected parenting must preserve roots, parents, cached topology and history");
+        scene.History().Clear();
+        kb::tests::Require(scene.History().Record("Reparent subtree"), "Valid parenting history command did not open");
+        kb::tests::Require(scene.Hierarchy().SetParent(child, replacement), "Valid subtree parenting failed after cycle rejection");
+        scene.History().Commit();
+        kb::tests::Require(scene.History().UndoCount() == 1U && scene.History().Undo() &&
+            scene.Hierarchy().Parent(child.Entity()) == root.Entity() && scene.History().Redo() &&
+            scene.Hierarchy().Parent(child.Entity()) == replacement.Entity(),
+            "Valid parenting must remain undoable and redoable after cycle rejection");
+        scene.Runtime().SynchronizeTransforms();
+        scene.Entities().Destroy(root);
+        kb::tests::Require(scene.Entities().IsAlive(child) && scene.Entities().IsAlive(leaf),
+            "Cycle rejection must preserve the subtree through a subsequent move and root destruction");
+        scene.Entities().Destroy(replacement);
+        kb::tests::Require(scene.Entities().Count() == 0U, "Cycle rejection must retain consistent subtree destruction");
+    }
+}
+
+void RunCreationParentValidationTest() {
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        kb::scene::Scene other{config};
+        const auto parent = scene.Entities().CreateObject({.name = "Parent"});
+        const auto foreign = other.Entities().CreateObject({.name = "Foreign parent"});
+        const auto stale = scene.Entities().CreateObject({.name = "Stale parent"});
+        scene.Entities().Destroy(stale);
+        const auto reject = [&](auto create) {
+            const auto roots = scene.Hierarchy().RootEntities();
+            const auto count = scene.Entities().Count();
+            const auto children = scene.Hierarchy().ChildEntities(parent.Entity());
+            bool rejected = false;
+            try {
+                create();
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            kb::tests::Require(rejected && scene.Entities().Count() == count && scene.Hierarchy().RootEntities() == roots &&
+                scene.Hierarchy().ChildEntities(parent.Entity()) == children,
+                "Creation with a foreign or stale parent must reject the whole operation without changing the scene");
+        };
+        for (const auto invalidParent : {foreign, stale}) {
+            reject([&] { static_cast<void>(scene.Entities().CreateObject({.parent = invalidParent})); });
+            reject([&] { static_cast<void>(scene.Entities().CreateEntity({.parent = invalidParent})); });
+            const std::array<kb::scene::SceneObjectDesc, 2U> descs{{{.parent = parent}, {.parent = invalidParent}}};
+            reject([&] { static_cast<void>(scene.Entities().CreateObjects(descs)); });
+        }
+        const auto child = scene.Entities().CreateObject({.parent = parent});
+        kb::tests::Require(kb::ecs::GeneratedEntityIndex(child.Entity()) == kb::ecs::GeneratedEntityIndex(stale.Entity()) &&
+            child.Entity() != stale.Entity(), "Parent validation fixture must reuse the destroyed parent's index with a new generation");
+        reject([&] { static_cast<void>(scene.Entities().CreateObject({.parent = stale})); });
+        kb::tests::Require(scene.Hierarchy().Parent(child.Entity()) == parent.Entity() && other.Entities().IsAlive(foreign),
+            "Rejected parent creation must leave valid parenting and the other scene usable");
+    }
+}
+
+void RunPrefabParentValidationTest() {
+    struct Mode { bool mirrored; bool sync; };
+    for (const auto mode : std::array<Mode, 3U>{{{true, false}, {true, true}, {false, false}}}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mode.mirrored;
+        config.mirrorNativeComponentChangesToBackend = mode.mirrored;
+        kb::scene::Scene scene{config};
+        kb::scene::Scene other{config};
+        const auto parent = scene.Entities().CreateObject({.name = "Parent"});
+        const auto foreign = other.Entities().CreateObject({.name = "Foreign parent"});
+        const auto stale = scene.Entities().CreateObject({.name = "Stale parent"});
+        scene.Entities().Destroy(stale);
+        kb::scene::ScenePrefab prefab;
+        const auto root = prefab.AddNode({.name = "Template root"});
+        static_cast<void>(prefab.AddNode({.name = "Template child", .parentNode = root}));
+        const auto registered = scene.Prefabs().Register("ParentValidation", prefab);
+        const auto spawn = [&](int form, std::size_t count, const kb::scene::ScenePrefabInstantiationSettings& settings) {
+            switch (form) {
+            case 0: static_cast<void>(scene.Prefabs().Instantiate(prefab, settings)); break;
+            case 1: static_cast<void>(scene.Prefabs().InstantiateMany(prefab, count, settings)); break;
+            case 2: static_cast<void>(scene.Prefabs().InstantiateBatch(prefab, count, settings)); break;
+            case 3: static_cast<void>(scene.Prefabs().Instantiate(registered, settings)); break;
+            case 4: static_cast<void>(scene.Prefabs().InstantiateMany(registered, count, settings)); break;
+            case 5: static_cast<void>(scene.Prefabs().InstantiateBatch(registered, count, settings)); break;
+            }
+        };
+        kb::scene::ScenePrefabInstantiationSettings settings{.parent = parent, .syncWorldHierarchy = mode.sync};
+        for (int form = 0; form < 6; ++form) {
+            const std::size_t instances = form % 3 == 0 ? 1U : 2U;
+            const auto count = scene.Entities().Count();
+            const auto childCount = scene.Hierarchy().ChildCount(parent.Entity());
+            spawn(form, instances, settings);
+            kb::tests::Require(scene.Entities().Count() == count + 2U * instances &&
+                scene.Hierarchy().ChildCount(parent.Entity()) == childCount + instances,
+                "Prefab parent validation control must create and parent every requested node");
+        }
+        for (const auto invalidParent : {foreign, stale}) {
+            settings.parent = invalidParent;
+            for (int form = 0; form < 6; ++form) {
+                const auto count = scene.Entities().Count();
+                const auto roots = scene.Hierarchy().RootEntities();
+                const auto children = scene.Hierarchy().ChildEntities(parent.Entity());
+                const auto handles = kb::scene::SceneAccess::State(scene).prefabInstances.Handles();
+                try {
+                    spawn(form, 2U, settings);
+                } catch (const std::invalid_argument&) {
+                }
+                kb::tests::Require(scene.Entities().Count() == count && scene.Hierarchy().RootEntities() == roots &&
+                    scene.Hierarchy().ChildEntities(parent.Entity()) == children &&
+                    kb::scene::SceneAccess::State(scene).prefabInstances.Handles() == handles,
+                    "Invalid prefab parents must not leave nodes, hierarchy changes or instance records");
+            }
+            const auto count = scene.Entities().Count();
+            for (const int form : {1, 2, 4, 5}) spawn(form, 0U, settings);
+            kb::tests::Require(scene.Entities().Count() == count, "Zero-count prefab spawning must remain a no-op with an unused parent");
+        }
+        kb::tests::Require(other.Entities().Count() == 1U && other.Hierarchy().ChildCount(foreign.Entity()) == 0U,
+            "Prefab spawning must not modify the scene that owns a foreign parent");
+    }
 }
 
 void RunHierarchyStableCreationOrderTest() {
@@ -1311,6 +1459,84 @@ void RunSceneBatchDuplicateTest() {
     kb::tests::Require(!scene.Entities().IsAlive(child), "Batch destroy did not destroy child hierarchy");
 }
 
+void RunSceneHistorySuspendAndResumeTest() {
+    kb::scene::Scene scene;
+    const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Before"});
+    kb::tests::Require(scene.History().Record("Rename"), "History suspension could not record rename");
+    scene.Entities().SetName(object, "After");
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Record("Move"), "History suspension could not record move");
+    auto transform = scene.Transforms().Get(object);
+    transform.localPosition.x = 2.0F;
+    scene.Transforms().Set(object, transform);
+    kb::tests::Require(scene.History().Undo(), "History suspension could not prepare Redo");
+    const auto document = kb::scene::SceneDocumentService::Capture(scene, "HistorySnapshot");
+    auto history = scene.History().Suspend();
+    kb::tests::Require(!scene.History().CanUndo() && !scene.History().CanRedo(),
+        "Suspended history remained reachable during temporary edits");
+    kb::tests::Require(scene.History().Record("Temporary rename"), "Temporary scene history could not record");
+    scene.Entities().SetName(object, "Temporary");
+    scene.History().Commit();
+    kb::scene::Scene other;
+    kb::tests::Require(!other.History().Resume(history), "Detached history was accepted by another scene");
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document),
+        "History suspension could not restore the document");
+    const auto restored = scene.Hierarchy().RootEntities().front();
+    const std::array remap{kb::scene::SceneEntityRemap{object.Entity(), restored}};
+    kb::tests::Require(scene.History().Resume(history, remap) &&
+            scene.History().UndoCount() == 1U && scene.History().RedoCount() == 1U,
+        "Resuming history did not replace temporary commands with both authored directions");
+    kb::tests::Require(scene.History().Redo() && scene.Transforms().Get(restored).localPosition.x == 2.0F,
+        "Resumed Redo did not target the restored entity");
+    kb::tests::Require(scene.History().Undo() && scene.Transforms().Get(restored).localPosition.x == 0.0F &&
+            scene.History().Undo() && scene.Entities().Name(restored) == "Before" &&
+            scene.History().Redo() && scene.Entities().Name(restored) == "After",
+        "Resumed Undo/Redo lost document edits or leaked temporary changes");
+    kb::tests::Require(!scene.History().Resume(history), "Detached history could be resumed twice");
+}
+
+void RunSceneHistoryResumePrefabBindingsTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const auto rootNode = prefab.AddNode({.name = "HistoryRoot"});
+    static_cast<void>(prefab.AddNode({.name = "HistoryChild", .parentNode = rootNode}));
+    const auto source = scene.Prefabs().Register("HistoryPrefab", std::move(prefab));
+    const auto first = scene.Prefabs().Instantiate(source);
+    kb::tests::Require(scene.History().Record("Create instance"), "Could not record prefab creation");
+    const auto second = scene.Prefabs().Instantiate(source);
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Record("Unpack instance") &&
+        scene.Prefabs().Unpack(second.Handle(), kb::scene::ScenePrefabUnpackMode::RootOnly),
+        "Could not record prefab unpacking");
+    kb::tests::Require(scene.History().Undo(), "Could not prepare prefab Redo");
+    const auto rootsBefore = scene.Hierarchy().RootEntities();
+    const auto document = kb::scene::SceneDocumentService::Capture(scene, "PrefabHistory");
+    auto history = scene.History().Suspend();
+    kb::tests::Require(scene.Prefabs().IsInstance(first.Handle()), "Unrelated prefab was lost before reload");
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "Prefab history reload failed");
+    const auto rootsAfter = scene.Hierarchy().RootEntities();
+    kb::tests::Require(rootsBefore.size() == 2U && rootsAfter.size() == 2U, "Prefab reload changed root count");
+    std::vector<kb::scene::SceneEntityRemap> remap;
+    for (std::size_t index = 0U; index < rootsBefore.size(); ++index) {
+        remap.push_back({rootsBefore[index], rootsAfter[index]});
+        const auto oldChildren = index == 0U ? first.Objects() : second.Objects();
+        const auto children = scene.Hierarchy().Children(scene.Entities().Object(rootsAfter[index]));
+        kb::tests::Require(children.size() == 1U, "Prefab reload lost its child");
+        remap.push_back({oldChildren[1].Entity(), children.front().Entity()});
+    }
+    kb::tests::Require(scene.History().Resume(history, remap), "Prefab history resume failed");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(source) == 2U, "Reload duplicated prefab records");
+    kb::tests::Require(scene.History().Redo() && !scene.Prefabs().RootInstance(rootsAfter[1]).IsValid(),
+        "Resumed Redo did not unpack the restored instance");
+    kb::tests::Require(scene.History().Undo() && scene.Prefabs().RootInstance(rootsAfter[1]).IsValid(),
+        "Resumed Undo did not restore the prefab binding");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(source) == 2U, "Resumed history duplicated prefab records");
+    kb::tests::Require(scene.History().Undo() && scene.Entities().Count() == 2U &&
+        scene.Prefabs().RefreshInstances(source) == 1U, "Resumed creation Undo retained a prefab record");
+    kb::tests::Require(scene.History().Redo() && scene.Entities().Count() == 4U &&
+        scene.Prefabs().RefreshInstances(source) == 2U, "Resumed creation Redo lost prefab bindings");
+}
+
 void RunSceneHistoryUndoRedoTest() {
     kb::scene::Scene scene;
     kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Initial" });
@@ -1506,7 +1732,7 @@ void RunSceneHistoryUndoRedoEachEditKindTest() {
     const kb::scene::SceneObject c = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "C" });
     const kb::scene::SceneObject a1 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A1", .parent = a });
     const kb::scene::SceneObject a2 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2", .parent = a });
-    const kb::scene::SceneObject a3 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A3", .parent = a });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A3", .parent = a }));
     const kb::scene::SceneObject a2a = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2a", .parent = a2 });
     scene.Components().Lights().Set(b.Entity(), kb::scene::LightComponent{ .intensity = 7.0F });
     scene.Components().Joints().Set(c.Entity(), kb::scene::JointComponent{ .connectedEntity = a1.Entity() });
@@ -1886,6 +2112,9 @@ void RunTransformWriteBenchmark() {
 
 void RunSceneHierarchyTests() {
     RunEntityCreationBudgetRollbackTest();
+    RunHierarchyCycleRejectionTest();
+    RunCreationParentValidationTest();
+    RunPrefabParentValidationTest();
     RunDeepHierarchyDestructionTest();
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
@@ -1916,12 +2145,21 @@ void RunSceneHierarchyTests() {
     RunSceneHierarchyRootCollectorUsesUnsafeHotQueryTest();
     RunSceneBehaviourIterationUsesUnsafeHotQueryTest();
     RunSceneBatchDuplicateTest();
+    RunSceneHistorySuspendAndResumeTest();
+    RunSceneHistoryResumePrefabBindingsTest();
     RunSceneHistoryUndoRedoTest();
     RunSceneHistoryRecordsOnlyEditedObjectsTest();
     RunSceneHistoryUndoRedoEachEditKindTest();
     RunDestroyedEntityHandleDoesNotAffectNewEntityTest();
     RunSceneCameraLightVisitorBatchPathTest();
     RunTransformLinkBitsFollowHierarchyTest();
+}
+
+void RunSceneHierarchyParentingTests() {
+    RunHierarchyCycleRejectionTest();
+    RunCreationParentValidationTest();
+    RunPrefabParentValidationTest();
+    RunParentChildrenOwnershipTest();
 }
 
 } // namespace kb::tests

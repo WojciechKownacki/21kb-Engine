@@ -6,6 +6,8 @@
 #include "engine/scene/SceneAssets.hpp"
 
 #include "engine/scene/AIBrainComponent.hpp"
+#include "engine/scene/AIBrainDecisionSnapshot.hpp"
+#include "engine/ecs/World.hpp"
 #include "engine/scene/CombatantComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -18,6 +20,9 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <cmath>
+#include <algorithm>
+#include <chrono>
+#include <vector>
 #include <filesystem>
 #include <cstdio>
 #include <cstdlib>
@@ -56,13 +61,180 @@ kb::scene::Vec3 At(const kb::scene::Scene& scene, kb::scene::SceneEntity entity)
 float Flat(kb::scene::Vec3 a, kb::scene::Vec3 b) { return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z)); }
 
 void Run(kb::scene::Scene& scene, float seconds) {
-    for (float time = 0.0F; time < seconds; time += 0.05F) static_cast<void>(scene.Runtime().Update(0.05F));
+    constexpr float deltaSeconds = 0.05F;
+    const int steps = static_cast<int>(std::ceil(seconds / deltaSeconds));
+    for (int step = 0; step < steps; ++step) static_cast<void>(scene.Runtime().Update(deltaSeconds));
     Require(scene.Runtime().DrainSceneSystemErrors().empty(), "the AI produced scene system errors");
 }
 
 } // namespace
 
+// The brain says why it acts: the rule it took, its condition and action, and the enemy; a brain whose rules never hold
+// reports no rule and idles without errors; a decision follows the situation, not the preset.
+void RunDecisionReasonTest() {
+    kb::scene::Scene scene;
+    auto system = std::make_unique<kb::ai_plugin::AIBrainSystem>();
+    const kb::ai_plugin::AIBrainSystem* const brains = system.get();
+    Require(scene.Runtime().AddSceneSystem(std::move(system)).IsValid(), "the AI system could not be added");
+    const kb::scene::SceneEntity goblin = Spawn(scene, "Goblin", { 0.0F, 0.0F, 10.0F }, 2U);
+    Brain(scene, goblin, kb::scene::AIBrainPreset::Melee);
+    const kb::scene::SceneEntity idler = Spawn(scene, "Idler", { 60.0F, 0.0F, 60.0F }, 2U);
+    kb::scene::AIBrainComponent silent{};
+    for (kb::scene::AIRule& rule : silent.rules) rule = kb::scene::AIRule{};
+    Require(scene.Components().AIBrains().Set(idler, silent), "a silent brain could not be authored");
+    scene.Runtime().SetPlaying(true);
+    Run(scene, 1.0F);
+    const kb::scene::AIBrainComponent* melee = scene.Components().AIBrains().TryGet(goblin);
+    const auto alone = brains->LastDecision(goblin);
+    Require(alone.has_value() && alone->ruleIndex >= 0 && !alone->enemy.IsValid(), "a monster with nobody around must report the rule it follows and no enemy");
+    Require(melee->rules[static_cast<std::size_t>(alone->ruleIndex)].action == alone->action &&
+                melee->rules[static_cast<std::size_t>(alone->ruleIndex)].when == alone->condition &&
+                alone->action != kb::scene::AIAction::Chase,
+        "the reported rule must be the one whose action the monster is doing, and it cannot be a chase with no enemy");
+    const kb::scene::SceneEntity hero = Spawn(scene, "Hero", { 0.0F, 0.0F, 0.0F }, 1U, 500.0F);
+    Run(scene, 1.0F);
+    const auto hunting = brains->LastDecision(goblin);
+    Require(hunting.has_value() && hunting->enemy == hero && hunting->ruleIndex != alone->ruleIndex && hunting->action != alone->action,
+        "a monster that senses an enemy must report another rule, its action and that enemy");
+    Require(melee->rules[static_cast<std::size_t>(hunting->ruleIndex)].action == hunting->action, "the reported rule must match the action of the monster");
+    const auto silentDecision = brains->LastDecision(idler);
+    Require(silentDecision.has_value() && silentDecision->ruleIndex == -1 && silentDecision->action == kb::scene::AIAction::Idle &&
+                !silentDecision->enemy.IsValid(),
+        "a brain whose rules never hold must report no rule and idle");
+    Require(!brains->LastDecision(hero).has_value(), "an object without a brain has no decision");
+    static_cast<void>(scene.Gameplay().ApplyDamage(goblin, 1000.0F));
+    Run(scene, 1.0F);
+}
+
+void RunLiveRuleAndSnapshotTest() {
+    using Snapshot = kb::scene::AIBrainDecisionSnapshot;
+    using State = kb::scene::AIBrainDecisionState;
+    kb::scene::Scene scene;
+    auto system = std::make_unique<kb::ai_plugin::AIBrainSystem>();
+    const auto* brains = system.get();
+    const auto handle = scene.Runtime().AddSceneSystem(std::move(system));
+    Require(handle.IsValid(), "AI provider must attach");
+    const auto actor = Spawn(scene, "Actor", { 0.0F, 0.0F, 3.0F }, 2U);
+    static_cast<void>(Spawn(scene, "Target", {}, 1U));
+    Brain(scene, actor, kb::scene::AIBrainPreset::Ranged);
+    scene.Runtime().SetPlaying(true);
+    Run(scene, 0.3F);
+    const auto* initial = scene.Runtime().EcsWorld().TryGet<Snapshot>(actor);
+    Require(initial != nullptr && initial->state == State::Running && initial->action == kb::scene::AIAction::KeepDistance &&
+        initial->ruleIndex == 0 && initial->conditionValue == 5.0F, "published diagnostics must explain the selected distance rule");
+    auto changed = *scene.Components().AIBrains().TryGet(actor);
+    changed.preset = kb::scene::AIBrainPreset::Custom;
+    changed.rules = {};
+    changed.rules[0] = { kb::scene::AICondition::Always, 0.0F, kb::scene::AIAction::Idle, 0.0F };
+    Require(scene.Components().AIBrains().Set(actor, changed), "live rules must be editable");
+    const auto stopped = At(scene, actor);
+    Run(scene, 0.05F);
+    const auto* edited = scene.Runtime().EcsWorld().TryGet<Snapshot>(actor);
+    Require(edited != nullptr && edited->action == kb::scene::AIAction::Idle && edited->condition == kb::scene::AICondition::Always &&
+        Flat(stopped, At(scene, actor)) < 0.001F, "a live rule edit must interrupt the previous action on the next update");
+    changed.enabled = false;
+    Require(scene.Components().AIBrains().Set(actor, changed), "brain disable must succeed");
+    Run(scene, 0.05F);
+    Require(scene.Runtime().EcsWorld().TryGet<Snapshot>(actor)->state == State::Disabled && !brains->LastDecision(actor),
+        "disabled brains must not expose a stale active decision");
+    changed.enabled = true;
+    Require(scene.Components().AIBrains().Set(actor, changed), "brain enable must succeed");
+    Run(scene, 0.05F);
+    Require(scene.Runtime().EcsWorld().TryGet<Snapshot>(actor)->state == State::Running,
+        "re-enabled brains must publish a fresh decision");
+    scene.Entities().SetActive(actor, false);
+    Run(scene, 0.05F);
+    Require(scene.Runtime().EcsWorld().TryGet<Snapshot>(actor)->state == State::Inactive && !brains->LastDecision(actor),
+        "inactive brains must not expose a stale active decision");
+    scene.Entities().SetActive(actor, true);
+    Run(scene, 0.3F);
+    Require(scene.Runtime().EcsWorld().TryGet<Snapshot>(actor)->state == State::Running,
+        "reactivated brains must resume decisions");
+    static_cast<void>(scene.Gameplay().ApplyDamage(actor, 1000.0F));
+    Run(scene, 0.05F);
+    Require(scene.Runtime().EcsWorld().TryGet<Snapshot>(actor)->state == State::Dead && !brains->LastDecision(actor),
+        "dead brains must not expose a stale active decision");
+    scene.Components().AIBrains().Remove(actor);
+    Run(scene, 0.05F);
+    Require(scene.Runtime().EcsWorld().TryGet<Snapshot>(actor) == nullptr && !brains->LastDecision(actor),
+        "removing a brain must discard its runtime state and diagnostics");
+    Brain(scene, actor, kb::scene::AIBrainPreset::Guard);
+    Run(scene, 0.3F);
+    Require(scene.Runtime().EcsWorld().TryGet<Snapshot>(actor) != nullptr, "recreated brains must publish diagnostics");
+    Require(scene.Runtime().RemoveSceneSystem(handle) && scene.Runtime().EcsWorld().TryGet<Snapshot>(actor) == nullptr,
+        "detaching the AI provider must discard its published diagnostics");
+}
+
+void RunPerceptionMemoryTest() {
+    kb::scene::Scene scene;
+    const auto observer = Spawn(scene, "Observer", {}, 1U);
+    const auto first = Spawn(scene, "First", { 0.0F, 0.0F, 2.0F }, 2U);
+    const auto second = Spawn(scene, "Second", { 0.0F, 0.0F, 4.0F }, 2U);
+    scene.Runtime().SetPlaying(true);
+    Run(scene, 0.3F);
+    Require(scene.Gameplay().Perceived(observer).size() == 2U && scene.Gameplay().NearestEnemy(observer)->entity == first,
+        "initial perception must find both targets and select the nearest");
+    scene.Transforms().Set(first, kb::scene::TransformComponent{ .localPosition = { 0.0F, 0.0F, 6.0F } });
+    Run(scene, 0.3F);
+    Require(scene.Gameplay().Perceived(observer).size() == 2U && scene.Gameplay().NearestEnemy(observer)->entity == second,
+        "memory must update the correct target after distance ordering changes");
+    scene.Transforms().Set(second, kb::scene::TransformComponent{ .localPosition = { 1000.0F, 0.0F, 0.0F } });
+    Run(scene, 0.3F);
+    const auto remembered = scene.Gameplay().Perceived(observer);
+    const auto found = std::ranges::find(remembered, second, &kb::scene::PerceivedCombatant::entity);
+    Require(found != remembered.end() && !found->sensed && found->lastKnownPosition.z == 4.0F,
+        "out-of-range targets must retain their last sensed position");
+    scene.Entities().Destroy(first);
+    Run(scene, 0.3F);
+    Require(scene.Gameplay().Perceived(observer).size() == 1U,
+        "destroyed targets must be removed from perception memory");
+    Run(scene, 5.1F);
+    Require(scene.Gameplay().Perceived(observer).empty(), "lost targets must expire from memory");
+}
+
+void RunManyBrainMeasurements() {
+    for (const bool perception : { false, true }) {
+        for (const int count : { 100, 1000 }) {
+            kb::scene::Scene scene;
+            Require(scene.Runtime().AddSceneSystem(std::make_unique<kb::ai_plugin::AIBrainSystem>()).IsValid(), "benchmark AI must attach");
+            for (int index = 0; index < count; ++index) {
+                const auto actor = perception ? Spawn(scene, "IdleActor",
+                    { static_cast<float>(index % 32) * 2.0F, 0.0F, static_cast<float>(index / 32) * 2.0F }, 2U) :
+                    scene.Entities().CreateObject({ .name = "IdleActor" }).Entity();
+                kb::scene::AIBrainComponent brain;
+                brain.rules = {};
+                brain.rules[0] = { kb::scene::AICondition::Always, 0.0F, kb::scene::AIAction::Idle, 0.0F };
+                Require(scene.Components().AIBrains().Set(actor, brain), "benchmark brain must attach");
+            }
+            scene.Runtime().SetPlaying(true);
+            Run(scene, 0.3F);
+            std::vector<double> timings;
+            for (int frame = 0; frame < 120; ++frame) {
+                const auto start = std::chrono::steady_clock::now();
+                static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+                timings.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+            }
+            std::ranges::sort(timings);
+            Require(scene.Runtime().DrainSceneSystemErrors().empty(), "many brains must run without system errors");
+            std::size_t snapshots = 0U;
+            scene.Runtime().EcsWorld().CreateQuery<kb::scene::AIBrainDecisionSnapshot>().ForEach(
+                [](kb::scene::SceneEntity, const kb::scene::AIBrainDecisionSnapshot& snapshot, void* countOut) {
+                    Require(snapshot.state == kb::scene::AIBrainDecisionState::Running && snapshot.ruleIndex == 0,
+                        "every benchmark brain must have a current decision");
+                    ++*static_cast<std::size_t*>(countOut);
+                }, &snapshots);
+            Require(snapshots == static_cast<std::size_t>(count), "all brains must publish their decisions");
+            std::printf("AI: %d idle brains%s, frame median %.3f ms, p95 %.3f ms\n", count,
+                perception ? " with friendly combatants and perception" : "", timings[60], timings[114]);
+        }
+    }
+}
+
 int main() {
+    RunDecisionReasonTest();
+    RunLiveRuleAndSnapshotTest();
+    RunPerceptionMemoryTest();
+    RunManyBrainMeasurements();
     // A melee monster runs to the hero and hits it; a rabbit (no team) runs from the hero; a guard
     // attacks only what comes near and goes back to its post; the dead stop thinking.
     {

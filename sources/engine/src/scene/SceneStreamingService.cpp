@@ -317,7 +317,10 @@ void SceneStreamingService::Pump(Scene& scene) {
     if (!state.streaming) return;
     auto& streaming = *state.streaming;
     const auto start = Clock::now();
+    const SceneStreamingStats previous = streaming.stats;
     streaming.stats = {};
+    streaming.stats.overBudgetFrames = previous.overBudgetFrames;
+    streaming.stats.longestFrameMilliseconds = previous.longestFrameMilliseconds;
     scene.Assets().Manager().PumpAsyncLoads();
     // Acquire strong ownership before switching the decoded cache to weak
     // retention. Several cells can request the same source concurrently.
@@ -361,7 +364,10 @@ void SceneStreamingService::Pump(Scene& scene) {
     const auto expired = [&] { return std::chrono::duration<double, std::milli>(Clock::now() - start).count() >= streaming.settings.maxMillisecondsPerFrame; };
     const std::size_t size = streaming.jobs.size();
     std::size_t idle = 0U;
-    while (size != 0U && idle < size && streaming.stats.operations < streaming.settings.maxOperationsPerFrame && !expired()) {
+    // Poll each idle job and permit one work batch even if bookkeeping already
+    // consumed the time budget. Otherwise a small budget can starve forever.
+    while (size != 0U && idle < size && streaming.stats.operations < streaming.settings.maxOperationsPerFrame &&
+        (streaming.stats.operations == 0U || !expired())) {
         const std::size_t index = streaming.nextJob++ % size;
         auto& job = streaming.jobs[index];
         const bool busy = std::ranges::any_of(streaming.jobs, [](const auto& candidate) { return candidate.preparation.valid(); });
@@ -376,6 +382,10 @@ void SceneStreamingService::Pump(Scene& scene) {
         idle = operations == 0U ? idle + 1U : 0U;
     }
     streaming.stats.milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    if (streaming.stats.milliseconds > static_cast<double>(streaming.settings.maxMillisecondsPerFrame)) {
+        ++streaming.stats.overBudgetFrames;
+    }
+    streaming.stats.longestFrameMilliseconds = std::max(streaming.stats.longestFrameMilliseconds, streaming.stats.milliseconds);
 }
 SceneLoadStatus SceneStreamingService::Status(const Scene& scene, std::uint64_t id) noexcept {
     const auto* job = Find(scene, id);

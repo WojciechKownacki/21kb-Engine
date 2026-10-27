@@ -12,7 +12,141 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  web-player:
+    name: Web player bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/build/ccache-web
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up the browser toolchain
+        uses: emscripten-core/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        with:
+          version: 6.0.9
+          actions-cache-folder: emsdk-cache
+      - name: Install the compiler cache
+        id: compiler_cache
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ccache
+      - name: Restore Web compiler objects
+        id: web_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/ccache-web
+          key: ${{ runner.os }}-emsdk-6.0.9-webgl-ccache-v1-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-emsdk-6.0.9-webgl-ccache-v1-
+      - name: Build the production WebGL player
+        env:
+          EM_COMPILER_WRAPPER: ccache
+        run: |
+          ccache --max-size=1G
+          cmake -S . -B build/web-player -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DKB_BUILD_EDITOR=OFF -DKB_BUILD_RENDERER=ON \
+            -DKB_BUILD_GRAPH_SHADERC=OFF -DKB_GENERATE_RENDERER_SHADERS=OFF \
+            -DKB_BUILD_PACKAGED_GAME_HOST=ON -DKB_WEB_RENDERER=WEBGL
+          cmake --build build/web-player --target kb_game_webgl --parallel 4
+      - name: Verify bootstrap failures before native startup
+        run: |
+          python3 -m venv build/web-player-tools
+          build/web-player-tools/bin/python -m pip install --require-hashes -r sources/game/tests/web/requirements.txt
+          browser="$(command -v google-chrome || command -v chromium)"
+          build/web-player-tools/bin/python sources/game/tests/web/run_wasm_bootstrap_failure_tests.py \
+            --browser "$browser" --directory build/web-player/bin --output build/web-player-results
+      - name: Report Web compiler cache statistics
+        if: always() && steps.compiler_cache.outcome == 'success'
+        run: ccache --show-stats
+      - name: Keep Web compiler objects
+        if: always() && steps.web_cache.outputs.cache-primary-key != '' && steps.web_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/ccache-web
+          key: ${{ steps.web_cache.outputs.cache-primary-key }}
+      - name: Keep bootstrap results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-player-bootstrap
+          path: |
+            build/web-player-results/**/result.json
+            build/web-player-results/**/*events.json
+            build/web-player-results/**/*browser.log
+            build/web-player-results/**/*states.json
+          if-no-files-found: ignore
+
+  web-input:
+    name: Web input ASan UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up the browser toolchain
+        uses: emscripten-core/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        with:
+          version: 6.0.9
+          actions-cache-folder: emsdk-cache
+      - name: Build the production touch collector with sanitizers
+        run: |
+          cmake -S sources/game/tests/web -B build/web-input -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/web-input --parallel 2
+      - name: Verify cooperative browser work lifetimes
+        run: node build/web-input/BackgroundLoadTests.js
+      - name: Verify trusted browser touches and native readback
+        run: |
+          python3 -m venv build/web-input-tools
+          build/web-input-tools/bin/python -m pip install --require-hashes -r sources/game/tests/web/requirements.txt
+          browser="$(command -v google-chrome || command -v chromium)"
+          build/web-input-tools/bin/python sources/game/tests/web/run_input_tests.py \
+            --browser "$browser" --directory build/web-input --output build/web-input-results
+      - name: Keep browser input results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-input-results
+          path: |
+            build/web-input-results/result.json
+            build/web-input-results/browser-events.json
+            build/web-input-results/browser.log
+          if-no-files-found: ignore
+
+  native-read-batches:
+    name: Linux native read batches
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build isolated native read tests with sanitizers
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -g -pthread \
+            -Isources/engine/include sources/engine/src/assets/streaming/BackgroundLoadService.cpp \
+            sources/engine/tests/BackgroundReadBatchTests.cpp -lrt -o background-read-tests
+      - name: Verify native batches, priority, cancellation and exact ranges
+        run: ./background-read-tests
+
+  native-save-storage:
+    name: Linux save storage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build isolated save and storage tests
+        run: |
+          cmake -S sources/engine/tests/save_storage -B build/save-storage -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/save-storage --parallel 2
+      - name: Verify persistence, chunk commits, corruption and ENOSPC
+        run: ctest --test-dir build/save-storage --output-on-failure
+
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -23,28 +157,31 @@ jobs:
           - name: Windows MSVC
             os: windows-2025-vs2026
             generator: "Visual Studio 18 2026"
+            configuration: "Release"
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
-            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_21kb_particle_renderer_tests;kb_skeletal_animator_benchmarks;kb_terrain_editor_tests;kb_editor_particle_authoring_tests;kb_editor_particle_bake_host_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_game_core_tests;kb_game_tests;kb_editor_build_game_tests;kb_crash_reporting_tests;kb_standalone_player;kb_editor;kb_cli;kb_cli_tests"
+            targets: ""
             api_compat_check: "ON"
             test_regex: ""
           - name: Windows MSVC ASan
             os: windows-2025-vs2026
             generator: "Visual Studio 18 2026"
+            configuration: "Debug"
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "ON"
-            targets: "kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests"
+            targets: "kb_engine_tests;kb_editor_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests;kb_background_read_tests;kb_test_process_error_tests"
             api_compat_check: "OFF"
-            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests)$"
+            test_regex: "^(kb_engine_scene_ui|kb_engine_scene_transform_golden|kb_engine_scene_parenting|kb_engine_hierarchy_depth|kb_engine_scene_hierarchy_depth|kb_engine_prefab_hierarchy_depth|kb_engine_ecs_batch_hierarchy_depth|kb_editor_audio_mixer_runtime|kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests|kb_test_process_errors|kb_renderer_assertion_errors|kb_renderer_display_alpha|kb_renderer_graph_program_lifetime|kb_renderer_graph_shader_node_cook_[0-3])$"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"
+            configuration: "Debug"
             build_editor: "OFF"
             build_renderer: "OFF"
             sanitizer: "ON"
-            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
+            targets: ""
             api_compat_check: "OFF"
             test_regex: ""
     steps:
@@ -65,7 +202,7 @@ jobs:
           if ("${{ github.event_name }}" -eq "pull_request") {
             $base = "${{ github.event.pull_request.base.sha }}"
           }
-          if ($base -and $base -ne "0000000000000000000000000000000000000000" -and (git cat-file -e "$base^{commit}" 2>$null)) {
+          if ($base -and $base -ne "0000000000000000000000000000000000000000" -and (git rev-parse --verify --quiet "$base^{commit}" 2>$null)) {
             git diff --check $base HEAD
           } else {
             git diff --check HEAD^ HEAD
@@ -83,28 +220,36 @@ jobs:
             "-G", "${{ matrix.generator }}",
             "-DKB_BUILD_EDITOR=${{ matrix.build_editor }}",
             "-DKB_BUILD_RENDERER=${{ matrix.build_renderer }}",
+            "-DBUILD_TESTING=ON",
             "-DKB_ENABLE_SANITIZERS=${{ matrix.sanitizer }}",
             "-DKB_STRICT_OWN_WARNINGS=ON"
           )
           if (-not "${{ matrix.generator }}".StartsWith("Visual Studio")) {
-            $configureArgs += "-DCMAKE_BUILD_TYPE=Debug"
+            $configureArgs += "-DCMAKE_BUILD_TYPE=${{ matrix.configuration }}"
           }
           cmake @configureArgs
 
       - name: Clean build with strict first-party warnings
         shell: pwsh
         run: |
-          "${{ matrix.targets }}".Split(';') | ForEach-Object {
-            cmake --build build/ci --config Debug --parallel 4 --target $_
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
+          # Full jobs build the default graph, including every registered test executable.
+          # The focused sanitizer job builds only the targets selected by its test regex.
+          $buildArgs = @("--build", "build/ci", "--config", "${{ matrix.configuration }}", "--parallel", "4")
+          if ("${{ matrix.targets }}") {
+            $buildArgs += "--target"
+            $buildArgs += "${{ matrix.targets }}".Split(';')
+          }
+          cmake @buildArgs
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
           }
 
       - name: Test
+        id: tests
         shell: pwsh
         run: |
-          $testArgs = @("--test-dir", "build/ci", "-C", "Debug", "--output-on-failure")
+          $testArgs = @("--test-dir", "build/ci", "-C", "${{ matrix.configuration }}", "--output-on-failure",
+            "--no-tests=error", "--output-junit", "TestResults.xml")
           # Sanitizers deliberately distort timings; correctness and safety tests still run,
           # while the performance budget remains enforced by the unsanitized Windows job.
           if ("${{ matrix.sanitizer }}" -eq "ON") {
@@ -118,6 +263,43 @@ jobs:
             exit $LASTEXITCODE
           }
 
+      - name: Profile Linux UI after a test failure
+        if: failure() && runner.os == 'Linux' && steps.tests.outcome == 'failure'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          if ! grep -q ':kb_engine_scene_ui$' build/ci/Testing/Temporary/LastTestsFailed.log; then
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends linux-tools-generic
+          # Kernel tool packages expose perf through versioned symlinks.
+          perf_tool="$(find -L /usr/lib/linux-tools -type f -name perf | sort -V | tail -n 1)"
+          test -x "$perf_tool"
+          mkdir -p build/ci/ui-profile
+          # Upload aggregated symbols and call graphs only, never the raw recording.
+          trap 'sudo rm -f build/ci/ui-profile/perf.data build/ci/ui-profile/perf.data.old' EXIT
+          sudo "$perf_tool" record --event cpu-clock:u --freq 199 --call-graph fp \
+            --output build/ci/ui-profile/perf.data -- \
+            build/ci/engine/kb_engine_tests scene-ui-profile > build/ci/ui-profile/workload.log 2>&1
+          sudo "$perf_tool" report --stdio --no-children --sort symbol --percent-limit 0.5 \
+            --input build/ci/ui-profile/perf.data > build/ci/ui-profile/symbols.txt
+          sudo "$perf_tool" report --stdio --children --sort symbol --percent-limit 0.5 \
+            --input build/ci/ui-profile/perf.data > build/ci/ui-profile/call-graph.txt
+
+      - name: Keep test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.name }}
+          path: |
+            build/ci/TestResults.xml
+            build/ci/Testing/Temporary/LastTest.log
+            build/ci/ui-profile/workload.log
+            build/ci/ui-profile/symbols.txt
+            build/ci/ui-profile/call-graph.txt
+          if-no-files-found: ignore
+
       # LIB-024: fail the build on a breaking change to the script API
       # surface versus the committed baseline. Runs only on the full
       # Windows build that generated the baseline; the reconstructed catalog
@@ -130,7 +312,7 @@ jobs:
         if: matrix.api_compat_check == 'ON'
         shell: pwsh
         run: |
-          & "build/ci/bin/Debug/kb_cli.exe" api-check --baseline tests/api_baseline/script_api.json
+          & "build/ci/bin/${{ matrix.configuration }}/kb_cli.exe" api-check --baseline tests/api_baseline/script_api.json
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -177,7 +359,7 @@ jobs:
           }
           $scope = ""
           if ("${{ github.event_name }}" -ne "schedule" -and "${{ github.event_name }}" -ne "workflow_dispatch" -and
-              $base -and $base -ne "0000000000000000000000000000000000000000" -and (git cat-file -e "$base^{commit}" 2>$null)) {
+              $base -and $base -ne "0000000000000000000000000000000000000000" -and (git rev-parse --verify --quiet "$base^{commit}" 2>$null)) {
             $scope = "--changed-since $base"
           }
           cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && python scripts/clang_tidy_gate.py --build-dir build/tidy --jobs 4 $scope"

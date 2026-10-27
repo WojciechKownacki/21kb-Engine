@@ -1,4 +1,5 @@
 #include "app/EditorWindowMessageRouter.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
@@ -39,6 +40,7 @@ namespace {
 }
 
 void FinishTerrainStroke(EditorWindowMessageContext& context) {
+    EditorMap2DWindow::FinishSceneStroke(context.sceneContext);
     EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     if (!tool.strokeActive) {
         return;

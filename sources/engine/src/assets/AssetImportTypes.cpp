@@ -88,6 +88,8 @@ std::string_view ToString(AssetImportItemStatus status) noexcept {
         return "unsupported";
     case AssetImportItemStatus::Failed:
         return "failed";
+    case AssetImportItemStatus::Updated:
+        return "updated";
     case AssetImportItemStatus::None:
     default:
         return "none";

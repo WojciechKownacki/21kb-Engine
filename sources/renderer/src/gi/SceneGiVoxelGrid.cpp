@@ -227,6 +227,8 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
     albedoVoxels_.assign(static_cast<std::size_t>(kVoxelCount) * 4U, 0U);
     emissiveVoxels_.assign(static_cast<std::size_t>(kVoxelCount) * 4U, 0U);
     occupiedVoxels_ = 0U;
+    geometryMeshes_ = 0U;
+    boundingBoxMeshes_ = 0U;
     const auto dimension = static_cast<int>(kDimension);
     for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
         static_cast<void>(entityId);
@@ -246,6 +248,11 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
             !ResolveSurface(desc, resources, resourceMap, surface)) {
             continue;
         }
+        if (mask != nullptr) {
+            ++geometryMeshes_;
+        } else {
+            ++boundingBoxMeshes_;
+        }
         const std::array<float, 16>& model = desc.model;
         std::array<float, 16> inverse{};
         bx::mtxInverse(inverse.data(), model.data());
@@ -258,12 +265,16 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
             worldHalf[axis] = std::abs(model[axis]) * box.halfExtents[0] + std::abs(model[4 + axis]) * box.halfExtents[1] +
                 std::abs(model[8 + axis]) * box.halfExtents[2];
         }
-        // Local-space slack for half a voxel diagonal along each local axis.
+        // Local-space slack along each local axis: 0.87 of half a voxel, which is what the bounce-light tuning of
+        // thick objects was made with. Along an axis where the object is thinner than a voxel (a wall without
+        // thickness) the slack is half a voxel and a little more, so that a surface lying exactly on a voxel face
+        // still marks the voxel; with the small slack such a wall vanished from the grid and let the light through.
         std::array<float, 3> slack{};
         for (int axis = 0; axis < 3; ++axis) {
             const float rowLength = std::sqrt(inverse[axis] * inverse[axis] + inverse[4 + axis] * inverse[4 + axis] +
                 inverse[8 + axis] * inverse[8 + axis]);
-            slack[axis] = 0.5F * 0.87F * voxelSize * rowLength;
+            const bool thin = box.halfExtents[axis] < 0.5F * voxelSize * rowLength;
+            slack[axis] = (thin ? 0.505F : 0.5F * 0.87F) * voxelSize * rowLength;
         }
         std::array<int, 3> lo{};
         std::array<int, 3> hi{};

@@ -1,1 +1,3 @@
 sources/engine/tests/fixtures/CanonicalParticleEffectV2.kbvfx text eol=lf
+# Unified diffs retain context markers before indentation and blank lines.
+third_party/bgfx-patches/*.patch text eol=lf -whitespace

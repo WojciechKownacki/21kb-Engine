@@ -24,6 +24,14 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/Body2DComponent.hpp"
+#include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -112,9 +120,41 @@ public:
     static void RemoveGuideCurve(Scene& scene, SceneEntity entity) noexcept;
     static void MarkGuideCurveModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static ContentInstanceComponent* TryGetContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static GridComponent* TryGetGrid(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static TilemapComponent* TryGetTilemap(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static TilemapRendererComponent* TryGetTilemapRenderer(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static TilemapColliderComponent* TryGetTilemapCollider(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static CharacterController2DComponent* TryGetCharacterController2D(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static Collider2DComponent* TryGetCollider2D(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static Body2DComponent* TryGetBody2D(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static Sprite2DComponent* TryGetSprite2D(Scene& scene, SceneEntity entity) noexcept;
     static void SetContentInstance(Scene& scene, SceneEntity entity, const ContentInstanceComponent& component);
+    static void SetGrid(Scene& scene, SceneEntity entity, const GridComponent& component);
+    static void SetTilemap(Scene& scene, SceneEntity entity, const TilemapComponent& component);
+    static void SetTilemapRenderer(Scene& scene, SceneEntity entity, const TilemapRendererComponent& component);
+    static void SetTilemapCollider(Scene& scene, SceneEntity entity, const TilemapColliderComponent& component);
+    static void SetCharacterController2D(Scene& scene, SceneEntity entity, const CharacterController2DComponent& component);
+    static void SetCollider2D(Scene& scene, SceneEntity entity, const Collider2DComponent& component);
+    static void SetBody2D(Scene& scene, SceneEntity entity, const Body2DComponent& component);
+    static void SetSprite2D(Scene& scene, SceneEntity entity, const Sprite2DComponent& component);
     static void RemoveContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveGrid(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveTilemap(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveTilemapRenderer(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveTilemapCollider(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveCharacterController2D(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveCollider2D(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveBody2D(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveSprite2D(Scene& scene, SceneEntity entity) noexcept;
     static void MarkContentInstanceModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkGridModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkTilemapModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkTilemapRendererModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkTilemapColliderModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkCharacterController2DModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkCollider2DModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkBody2DModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkSprite2DModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static StreamFocusComponent* TryGetStreamFocus(Scene& scene, SceneEntity entity) noexcept;
     static void SetStreamFocus(Scene& scene, SceneEntity entity, const StreamFocusComponent& component);
     static void RemoveStreamFocus(Scene& scene, SceneEntity entity) noexcept;

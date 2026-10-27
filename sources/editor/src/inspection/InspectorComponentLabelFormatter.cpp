@@ -75,6 +75,8 @@ std::string_view InspectorComponentLabelFormatter::ColliderShapeName(kb::scene::
     switch (shape) {
     case kb::scene::ColliderShape::Box:
         return EditorText("inspector.collider.shape.box", "Box");
+    case kb::scene::ColliderShape::OneWayBox:
+        return EditorText("inspector.collider.shape.oneWayBox", "One-way platform");
     case kb::scene::ColliderShape::Sphere:
         return EditorText("inspector.collider.shape.sphere", "Sphere");
     case kb::scene::ColliderShape::Capsule:

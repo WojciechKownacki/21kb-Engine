@@ -1,14 +1,14 @@
 #include "bgfx_compute.sh"
 
-// First step of sorting a GPU emitter's instances back to front: one key per slot, x = distance to the
-// camera, y = slot. (Compute views of vertex buffers are float4 typed in Direct3D 11, so the key is a vec4.)
-// Dead slots (zero-sized instances) get distance 0 and the padding up to a power of two gets -1, so
-// after a descending sort the first `count` keys are the real slots, farthest live particle first.
+// One key per slot: authored view depth, distance or normalized age, with the slot as tie breaker.
+// Dead slots and power-of-two padding sort after every live slot, including negative front-to-back keys.
 BUFFER_RO(instances, vec4, 0);
 BUFFER_WO(keys, vec4, 1);
+BUFFER_RO(spawns, vec4, 2);
 
 uniform vec4 u_gpuSortCamera; // xyz = camera position, w = slot count
-uniform vec4 u_gpuSortParams; // x = padded count, y = 1 when the instances are in the mesh layout
+uniform vec4 u_gpuSortDepth; // view-space depth row, including translation
+uniform vec4 u_gpuSortParams; // x = padded count, y = mesh layout, z = sort mode, w = simulation time
 
 NUM_THREADS(64, 1, 1)
 void main()
@@ -18,19 +18,40 @@ void main()
     {
         return;
     }
-    float key = -1.0;
+    float key = -3.402823e38;
     if (i < uint(u_gpuSortCamera.w))
     {
+        vec3 position;
+        bool live;
         if (u_gpuSortParams.y > 0.5)
         {
             // Mesh layout: the translation is the fourth column, a live instance has fade 1 in the third.
-            bool live = instances[i * 5u + 2u].w > 0.5;
-            key = live ? distance(instances[i * 5u + 3u].xyz, u_gpuSortCamera.xyz) : 0.0;
+            live = instances[i * 5u + 2u].w > 0.5;
+            position = instances[i * 5u + 3u].xyz;
         }
         else
         {
             vec4 instance = instances[i * 5u];
-            key = instance.w > 0.0 ? distance(instance.xyz, u_gpuSortCamera.xyz) : 0.0;
+            live = instance.w > 0.0;
+            position = instance.xyz;
+        }
+        if (live)
+        {
+            if (u_gpuSortParams.z < 2.5)
+            {
+                key = dot(vec4(position, 1.0), u_gpuSortDepth);
+                if (u_gpuSortParams.z > 1.5) key = -key;
+            }
+            else if (u_gpuSortParams.z < 3.5)
+            {
+                vec3 offset = position - u_gpuSortCamera.xyz;
+                key = dot(offset, offset);
+            }
+            else
+            {
+                float age = clamp((u_gpuSortParams.w - spawns[i * 2u].w) / max(spawns[i * 2u + 1u].w, 0.000001), 0.0, 1.0);
+                key = floor(age * 65535.0 + 0.5);
+            }
         }
     }
     keys[i] = vec4(key, float(i), 0.0, 0.0);

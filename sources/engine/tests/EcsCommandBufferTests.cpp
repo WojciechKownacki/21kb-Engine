@@ -239,6 +239,46 @@ void RunCommandBufferMultiWorkerDeterministicStructuralChangesTest() {
     kb::tests::Require(first.positionX == second.positionX, "ECS command buffer multi-worker structural playback produced nondeterministic component values");
 }
 
+// Declared playback order: lanes are replayed in lane index order and each lane in the order its
+// commands were recorded. The order in which different workers recorded their commands, and the
+// number of lanes, do not matter; of two conflicting writes the one in the higher lane wins.
+void RunCommandBufferLaneOrderResolvesConflictsTest() {
+    const auto playback = [](std::size_t laneCount, std::span<const std::size_t> recordingOrder) {
+        kb::ecs::World world;
+        const kb::ecs::Entity target = world.CreateEntity();
+        world.Set(target, EcsPosition{ .x = 0.0F, .y = 0.0F });
+        kb::ecs::CommandBuffer buffer{ laneCount };
+        std::vector<kb::ecs::CommandEntity> created(recordingOrder.size());
+        for (std::size_t step = 0; step < recordingOrder.size(); ++step) {
+            const std::size_t lane = recordingOrder[step];
+            kb::ecs::CommandBuffer::WorkerBuffer worker = buffer.Worker(lane);
+            worker.Set(target, EcsPosition{ .x = static_cast<float>(lane + 1U), .y = static_cast<float>(step) });
+            created[lane] = worker.CreateEntity();
+            worker.Set(created[lane], EcsPosition{ .x = static_cast<float>(100U + lane), .y = 0.0F });
+        }
+        const kb::ecs::CommandBufferPlaybackResult result = buffer.Playback(world);
+        std::vector<float> values;
+        values.push_back(world.TryGet<EcsPosition>(target)->x);
+        for (std::size_t lane = 0; lane < laneCount; ++lane) {
+            // Created entities are numbered in lane order: the position of lane N is the N-th creation.
+            values.push_back(world.TryGet<EcsPosition>(result.Resolve(created[lane]))->x);
+        }
+        return values;
+    };
+
+    const std::array<std::size_t, 4> ascending{ 0U, 1U, 2U, 3U };
+    const std::array<std::size_t, 4> descending{ 3U, 2U, 1U, 0U };
+    const std::array<std::size_t, 4> shuffled{ 2U, 0U, 3U, 1U };
+    const std::vector<float> reference = playback(4U, ascending);
+    kb::tests::Require(reference.size() == 5U && kb::tests::NearlyEqual(reference[0], 4.0F),
+        "ECS command buffer did not let the highest lane win a conflicting write");
+    kb::tests::Require(playback(4U, descending) == reference && playback(4U, shuffled) == reference,
+        "ECS command buffer playback depended on the order in which workers recorded their commands");
+    const std::array<std::size_t, 2> twoLanes{ 1U, 0U };
+    kb::tests::Require(kb::tests::NearlyEqual(playback(2U, twoLanes)[0], 2.0F),
+        "ECS command buffer playback changed the conflict winner when the lane count changed");
+}
+
 void RunCommandBufferRandomStructuralChangeStressTest() {
     kb::ecs::World world;
     std::vector<kb::ecs::Entity> liveEntities;
@@ -1473,6 +1513,7 @@ namespace kb::tests {
 void RunEcsCommandBufferTests() {
     RunCommandBufferDeterministicPlaybackTest();
     RunCommandBufferMultiWorkerDeterministicStructuralChangesTest();
+    RunCommandBufferLaneOrderResolvesConflictsTest();
     RunCommandBufferRandomStructuralChangeStressTest();
     RunCommandBufferBulkParentChangesTest();
     RunCommandBufferTrustedNestedParentsAndDestroyTest();

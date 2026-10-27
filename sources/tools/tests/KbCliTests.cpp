@@ -1,8 +1,10 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
@@ -10,10 +12,12 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/input/InputRecording.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneJointComponents.hpp"
@@ -32,7 +36,9 @@
 #include "engine/world/WorldObjectFile.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
 #if KB_CLI_RENDERER
+#include "RendererAssertionPolicy.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -41,19 +47,23 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <memory>
 #include <span>
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -184,6 +194,31 @@ void RunMiniJsonTests() {
     Require(!JsonValue::Parse("\"\\q\"", value, error), "MiniJson accepted an invalid escape");
 }
 
+void RunFlexibleAssetPathTests() {
+    ResetTestRoot();
+    const std::filesystem::path originalDirectory = std::filesystem::current_path();
+    const std::filesystem::path file = TestRoot() / "Assets" / "Field.21kbnavmesh";
+    WriteTextFile(file, "asset path fixture");
+    // Root-relative paths also reproduce leading-slash physical inputs on Windows.
+    std::filesystem::current_path(TestRoot());
+    const std::filesystem::path physical = std::filesystem::weakly_canonical(file);
+    const std::filesystem::path rooted = physical.root_directory() / physical.relative_path();
+    kb::assets::AssetRegistry registry;
+    const auto id = kb::assets::MakeAssetId("/Game/Field.21kbnavmesh:NavMesh");
+    Require(registry.Upsert(kb::assets::AssetMetadata{ .id = id, .type = "NavMesh",
+        .virtualPath = "/Game/Field.21kbnavmesh", .physicalPath = physical }), "asset path fixture registration failed");
+    for (const std::filesystem::path& input : { std::filesystem::path{ "/Game/Field.21kbnavmesh" },
+             physical, rooted, std::filesystem::path{ "Assets/../Assets/Field.21kbnavmesh" } }) {
+        const auto* found = kb::cli::FindAssetByFlexiblePath(registry, input);
+        Require(found != nullptr && found->id == id, "registered virtual or physical asset path was not resolved: " + input.generic_string());
+    }
+    Require(kb::cli::FindAssetByFlexiblePath(registry, "/Game/Missing.21kbnavmesh") == nullptr,
+        "an unregistered virtual asset path was resolved");
+    Require(kb::cli::FindAssetByFlexiblePath(registry, physical.parent_path() / "Missing.21kbnavmesh") == nullptr,
+        "an unregistered physical asset path was resolved");
+    std::filesystem::current_path(originalDirectory);
+}
+
 void RunArgumentListTests() {
     const std::vector<std::string> raw{ "--project", "p", "--quiet", "file.lua", "--frames", "12" };
     const kb::cli::ArgumentList arguments{ raw, kFlagNames };
@@ -197,6 +232,12 @@ void RunArgumentListTests() {
     const std::vector<std::string> broken{ "--project" };
     const kb::cli::ArgumentList brokenArguments{ broken, kFlagNames };
     Require(!brokenArguments.Errors().empty(), "ArgumentList did not flag a value-less option");
+    constexpr std::array<std::string_view, 2U> allowed{ "--project", "--quiet" };
+    Require(arguments.UnknownOptions(allowed) == std::vector<std::string>{"--frames"},
+        "ArgumentList did not reject an unknown value option");
+    constexpr std::array<std::string_view, 2U> valuesOnly{ "--project", "--frames" };
+    Require(arguments.UnknownOptions(valuesOnly) == std::vector<std::string>{"--quiet"},
+        "ArgumentList did not reject an unknown flag");
 }
 
 void PrepareProject() {
@@ -326,6 +367,21 @@ void RunRunCommandTests() {
     Require(Contains(run.output, "PlayerTicked"), "run did not report emitted events");
     Require(Contains(run.output, "0 diagnostics"), "run summary is wrong");
 
+    const std::string diagnosticName = "Script diagnostic entity with a name longer than the small string buffer";
+    Require(Run(&kb::cli::RunEntityCommand, {
+        "rename", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--name", "Player", "--to", diagnosticName,
+    }).exitCode == 0, "run test could not rename the diagnostic entity");
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua",
+        "function Tick(self, dt) error('diagnostic lifetime probe') end\n");
+    const CommandRun failedScript = Run(&kb::cli::RunRunCommand, {
+        "--project", root, "--scene", "Assets/Scenes/Main.21kbscene", "--frames", "3",
+    });
+    Require(failedScript.exitCode != 0 &&
+            Contains(failedScript.output, "[script error] '" + diagnosticName + "', ") &&
+            Contains(failedScript.output, "diagnostic lifetime probe"),
+        "run did not preserve the full entity name while reporting a script failure");
+
     kb::project::ProjectDescriptor brokenDescriptor;
     brokenDescriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Physics.Missing",
@@ -346,6 +402,137 @@ void RunRunCommandTests() {
         "run silently continued when a project-configured plugin could not load");
     Require(Contains(missingPlugin.output, "[module error]"),
         "run did not expose the project plugin load diagnostic");
+}
+
+void RunParticleReportCommandTests() {
+    PrepareProject();
+    const auto reportFor = [](const std::string& root) {
+        const std::vector<std::string> raw{
+            "--project", root, "--frames", "12", "--dt", "0.1", "--report", "particles"};
+        const kb::cli::ArgumentList arguments{raw, kFlagNames};
+        std::ostringstream out;
+        std::ostringstream err;
+        const int result = kb::cli::RunRunCommand(arguments, {.out = out, .err = err});
+        Require(result == 0, "particle report runtime failed: " + err.str());
+        JsonValue report;
+        std::string error;
+        Require(JsonValue::Parse(out.str(), report, error), "particle report stdout was not clean JSON");
+        Require(report.Find("schema") && report.Find("schema")->AsString() == "21kb.particle-execution/v1" &&
+            report.Find("succeeded") && report.Find("succeeded")->AsBool(), "particle report has no versioned success contract");
+        Require(Contains(err.str(), "done:") && report.Find("runtime_update_wall_ns") &&
+            report.Find("gpu_time_ns") && report.Find("gpu_time_ns")->IsNull(),
+            "particle report lost stderr logs or fabricated GPU timing");
+        return report;
+    };
+    const auto unavailable = reportFor(TestRoot().string());
+    Require(unavailable.Find("provider_available") && !unavailable.Find("provider_available")->AsBool() &&
+        unavailable.Find("emitters") && unavailable.Find("emitters")->Size() == 0U,
+        "particle report fabricated a provider for an empty project");
+    Require(Run(&kb::cli::RunRunCommand, {"--project", TestRoot().string(), "--report", "unknown"}).exitCode != 0,
+        "run accepted an unknown report format");
+
+    // The ECS telemetry report is read only and says how to read its numbers.
+    {
+        const std::vector<std::string> raw{"--project", TestRoot().string(), "--frames", "3", "--report", "ecs"};
+        const kb::cli::ArgumentList arguments{raw, kFlagNames};
+        std::ostringstream out;
+        std::ostringstream err;
+        Require(kb::cli::RunRunCommand(arguments, {.out = out, .err = err}) == 0, "ECS telemetry report failed: " + err.str());
+        JsonValue report;
+        std::string error;
+        Require(JsonValue::Parse(out.str(), report, error), "ECS telemetry stdout was not clean JSON: " + error);
+        const JsonValue* telemetry = report.Find("telemetry");
+        Require(report.Find("schema") && report.Find("schema")->AsString() == "21kb.ecs-telemetry/v1" &&
+            report.Find("succeeded") && report.Find("succeeded")->AsBool() && telemetry != nullptr &&
+            telemetry->Find("schema") && telemetry->Find("schema")->AsString() == "kb.ecs.world_telemetry.v1",
+            "ECS telemetry report has no versioned contract");
+        const JsonValue* basis = telemetry->Find("metric_basis");
+        Require(basis != nullptr && basis->Find("hardware_counters") && basis->Find("hardware_counters")->AsString() == "unavailable" &&
+            basis->Find("estimated") && basis->Find("estimated")->Size() > 0U && telemetry->Find("committed_bytes") != nullptr &&
+            telemetry->Find("query_estimated_gigabytes_per_second") != nullptr,
+            "ECS telemetry report does not separate measured, estimated and unavailable numbers");
+        Require(basis->Find("memory_scope") && Contains(basis->Find("memory_scope")->AsString(), "not process RSS") &&
+                basis->Find("budget_scope") && Contains(basis->Find("budget_scope")->AsString(), "side_payload_bytes"),
+            "ECS telemetry must distinguish capped payload from uncapped memory and physical process counters");
+        const JsonValue* scheduler = report.Find("scheduler");
+        Require(scheduler != nullptr && scheduler->Find("frame_wall_ns") != nullptr && scheduler->Find("cpu_time_ns") != nullptr &&
+            scheduler->Find("cpu_time_basis") != nullptr && scheduler->Find("cpu_time_basis")->AsString().find("not wall time") != std::string::npos &&
+            scheduler->Find("systems") != nullptr && scheduler->Find("critical_path") != nullptr &&
+            scheduler->Find("critical_path")->Find("systems") != nullptr && scheduler->Find("critical_path")->Find("wall_ns") != nullptr,
+            "ECS report must carry the scheduler trace with wall and CPU time kept apart and a critical path");
+        Require(Contains(err.str(), "done:"), "ECS telemetry report lost the stderr log");
+    }
+
+    std::istringstream requests{R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"/Game/Scenes/Main.21kbscene","frames":1,"report":"particles"}}})"};
+    std::ostringstream mcpOut;
+    std::ostringstream mcpErr;
+    const std::vector<std::string> mcpRaw{"--project", TestRoot().string()};
+    const kb::cli::ArgumentList mcpArguments{mcpRaw};
+    Require(kb::cli::RunMcpCommand(mcpArguments, requests, {.out = mcpOut, .err = mcpErr}) == 0,
+        "MCP particle report failed");
+    JsonValue response;
+    JsonValue mcpReport;
+    std::string parseError;
+    Require(JsonValue::Parse(mcpOut.str(), response, parseError) && response.Find("result"),
+        "MCP particle report response was not JSON-RPC");
+    const auto* content = response.Find("result")->Find("content");
+    Require(content && content->At(0U) && content->At(0U)->Find("text") &&
+        JsonValue::Parse(content->At(0U)->Find("text")->AsString(), mcpReport, parseError) && mcpReport.Find("schema"),
+        "MCP did not expose the same clean particle report as CLI");
+
+#if KB_CLI_RENDERER
+    const auto parent = TestRoot() / "ParticleReports";
+    Require(Run(&kb::cli::RunNewCommand, {"--parent", parent.string(), "--name", "Sample", "--template", "Empty"}).exitCode == 0,
+        "particle report could not create its project");
+    const auto project = (parent / "Sample").string();
+    const auto newEffect = [](const kb::cli::ArgumentList& args, kb::cli::CommandIo io) {
+        return kb::cli::RunVfxCommand("vfx-new", args, io);
+    };
+    const auto setEffect = [](const kb::cli::ArgumentList& args, kb::cli::CommandIo io) {
+        return kb::cli::RunVfxCommand("vfx-set", args, io);
+    };
+    Require(Run(newEffect, {"--project", project, "--name", "ReportEffect"}).exitCode == 0 &&
+        Run(&kb::cli::RunEntityCommand, {"add", "--project", project, "--name", "Emitter"}).exitCode == 0 &&
+        Run(&kb::cli::RunComponentCommand, {"add", "--project", project, "--entity", "Emitter", "--type", "Particle Effect",
+            "--set", "effectAssetId=/Game/Particles/ReportEffect.kbvfx"}).exitCode == 0,
+        "particle report could not author its effect through the public commands");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx", "--set",
+        "effect.emitter[0].screenDepthCollision=true"}).exitCode == 0,
+        "CLI could not enable explicit screen-depth collision");
+    const auto authoredDepth = kb::scene::ParticleEffectAssetIO::LoadDetailed(parent / "Sample/Assets/Particles/ReportEffect.kbvfx");
+    Require(authoredDepth.Succeeded() && authoredDepth.asset->emitters[0].screenDepthCollision,
+        "CLI screen-depth edit did not persist");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx", "--set",
+        "effect.emitter[0].screenDepthCollision=false"}).exitCode == 0 &&
+        Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx", "--set",
+        "effect.emitter[0].screenDepthCollision=invalid"}).exitCode != 0,
+        "CLI screen-depth disable or invalid-value rejection failed");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx",
+        "--set", "effect.emitter[0].output.payload.flipbook.columns=4",
+        "--set", "effect.emitter[0].output.payload.flipbook.rows=2",
+        "--set", "effect.emitter[0].output.payload.flipbook.startFrame=2",
+        "--set", "effect.emitter[0].output.payload.flipbook.frameCount=5"}).exitCode == 0,
+        "CLI must author optional partial-atlas fields");
+    const auto atlas = kb::scene::ParticleEffectAssetIO::LoadDetailed(parent / "Sample/Assets/Particles/ReportEffect.kbvfx");
+    Require(atlas.Succeeded() && std::get<kb::scene::ParticleBillboardOutput>(atlas.asset->emitters[0].output.payload).flipbook.startFrame == 2U &&
+        std::get<kb::scene::ParticleBillboardOutput>(atlas.asset->emitters[0].output.payload).flipbook.frameCount == 5U,
+        "CLI-authored atlas range must survive save/reload");
+    const auto active = reportFor(project);
+    const auto* emitters = active.Find("emitters");
+    Require(active.Find("provider_available")->AsBool() && active.Find("snapshot_available")->AsBool() &&
+        emitters && emitters->Size() == 1U, "particle report lost the live provider or snapshot emitter");
+    const auto* emitter = emitters->At(0U);
+    Require(emitter->Find("path")->AsString() == "cpu" && emitter->Find("reason")->AsString() == "cpu-policy" &&
+        emitter->Find("cpu_render_record_count")->AsNumber() > 0.0 &&
+        emitter->Find("cpu_render_payload_bytes")->AsNumber() == emitter->Find("cpu_render_record_count")->AsNumber() * 80.0 &&
+        emitter->Find("cpu_time_ns")->IsNull() && emitter->Find("effect_asset_id")->GetKind() == JsonValue::Kind::String,
+        "particle report changed routing, payload units, unavailable timing or exact asset identity");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx",
+        "--set", "effect.backendPolicy=GpuVisualPreferred"}).exitCode == 0, "particle report could not update backend policy");
+    const auto fallback = reportFor(project);
+    Require(fallback.Find("emitters")->At(0U)->Find("reason")->AsString() == "gpu-consumer-unavailable",
+        "headless particle report claimed GPU execution without a GPU consumer");
+#endif
 }
 
 // LIB-013: PlayerController.lua is no longer duplicated as a hardcoded
@@ -2072,7 +2259,7 @@ void RunNewCommandTests() {
     // The project directory alone is enough to run it, whatever the descriptor's name.
     const CommandRun ran = Run(&kb::cli::RunRunCommand,
         { "--project", (parent / "Gra").string(), "--scene", "/Game/Scenes/Main.21kbscene", "--frames", "1" });
-    Require(ran.exitCode == 0, "a new project could not be run from its directory");
+    Require(ran.exitCode == 0, "a new project could not be run from its directory: " + ran.output);
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" }).exitCode != 0,
         "new over an existing project must be refused");
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "zla nazwa" }).exitCode != 0,
@@ -2228,6 +2415,12 @@ void RunScriptCommandTests() {
     }
     // A name the C++ script's source folder already has is taken, even from another Assets folder.
     refusedWith({ "--name", "Enemy", "--language", "cpp", "--folder", "Assets/Other" }, "Source/NativeScripts/Enemy");
+    std::filesystem::create_directories(parent / "Traversal");
+    const CommandRun alternateCpp = Run(&kb::cli::RunScriptNewCommand,
+        { "--project", (parent / "Traversal" / ".." / "Skrypty").string(), "--name", "AliasEnemy", "--language", "cpp" });
+    Require(alternateCpp.exitCode == 0 && Contains(alternateCpp.output, "source Source/NativeScripts/AliasEnemy/AliasEnemy.cpp)") &&
+        std::filesystem::is_regular_file(root / "Source" / "NativeScripts" / "AliasEnemy" / "AliasEnemy.cpp"),
+        "script-new must report a project-relative source through an alternate project path: " + alternateCpp.output);
 #endif
 
     // script-build: one built, one failing, one without a build command; the exit code says it.
@@ -2245,6 +2438,12 @@ void RunScriptCommandTests() {
     const CommandRun good = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject, "--script", "/Game/Scripts/Good.native" });
     Require(good.exitCode == 0 && Contains(good.output, "Built /Game/Scripts/Good.native: Binaries/NativeScripts/Good.dll"),
         "script-build of a script that builds failed: " + good.output);
+    std::filesystem::create_directories(builds / "Traversal");
+    const std::string alternateProject = (builds / "Traversal" / ".." / "Budowa").string();
+    const CommandRun alternate = Run(&kb::cli::RunScriptBuildCommand,
+        { "--project", alternateProject, "--script", "/Game/Scripts/Good.native" });
+    Require(alternate.exitCode == 0 && Contains(alternate.output, "Built /Game/Scripts/Good.native: Binaries/NativeScripts/Good.dll"),
+        "script-build must report the same project-relative module through an alternate project path: " + alternate.output);
 
     WriteTextFile(buildRoot / "Assets" / "Scripts" / "Broken.native",
         "name = Broken\nsymbol = project.Broken\nmodule = ../../Binaries/NativeScripts/Broken.dll\nbuild = exit 3\n");
@@ -2275,8 +2474,17 @@ void RunEntityComponentCommandTests() {
         "--rotation", "35,30,0" }).exitCode == 0, "entity add failed");
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light",
         "--set", "intensity=2.5", "--set", "color=1,0.5,0.25" }).exitCode == 0, "component add with settings failed");
-    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light" }).exitCode != 0,
-        "a second Light must be refused");
+    {
+        // A refusal names the object and the cause and gives a command that works.
+        const auto second = Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light" });
+        Require(second.exitCode != 0, "a second Light must be refused");
+        Require(Contains(second.output, "'Sun' already has Light") &&
+                Contains(second.output, "Fix: kb_cli component set --entity Sun --type Light --set <name>=<value>"),
+            "a refused add must name the object, the cause and a command that works: " + second.output);
+        const auto unknown = Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "NoSuchThing" });
+        Require(unknown.exitCode != 0 && Contains(unknown.output, "unknown component 'NoSuchThing'") && Contains(unknown.output, "Fix: kb_cli schema"),
+            "an unknown component must say how to find the right one: " + unknown.output);
+    }
     Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "Light",
         "--set", "nosuch=1" }).exitCode != 0, "an unknown property must be refused");
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Nobody", "--type", "Camera" }).exitCode != 0,
@@ -2415,11 +2623,33 @@ void RunEntityComponentCommandTests() {
         "new failed");
     const std::filesystem::path foreign = parent / "Obcy" / "Assets" / "Scenes" / "Main.21kbscene";
     const auto foreignSize = std::filesystem::file_size(foreign);
-    for (const std::string& scenePath : { foreign.string(), std::string{ "../Obcy/Assets/Scenes/Main.21kbscene" } }) {
+    for (const std::string& scenePath : { foreign.string(), std::string{ "../Obcy/Assets/Scenes/Main.21kbscene" },
+             std::string{ "/UnregisteredAssets/Scenes/Main.21kbscene" } }) {
         const CommandRun outside = Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--scene", scenePath,
             "--name", "Intruder" });
         Require(outside.exitCode != 0 && Contains(outside.output, "is outside the project"),
             "a scene outside the project must be refused: " + outside.output);
+        const CommandRun sceneOutside = Run(&kb::cli::RunSceneListCommand,
+            { "--project", project, "--scene", scenePath });
+        Require(sceneOutside.exitCode != 0 && Contains(sceneOutside.output, "is outside the project"),
+            "scene-list must distinguish physical paths from mounted assets: " + sceneOutside.output);
+        const CommandRun runOutside = Run(&kb::cli::RunRunCommand,
+            { "--project", project, "--scene", scenePath, "--frames", "1" });
+        Require(runOutside.exitCode != 0 && Contains(runOutside.output, "is outside the project"),
+            "run must distinguish physical paths from mounted assets: " + runOutside.output);
+    }
+    const auto projectScene = std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbscene";
+    for (const std::string& scenePath : { projectScene.generic_string(), std::string{ "/Game/Scenes/Main.21kbscene" } }) {
+        const CommandRun inside = Run(&kb::cli::RunEntityCommand,
+            { "rename", "--project", project, "--scene", scenePath, "--name", "Door", "--to", "PathProbe" });
+        Require(inside.exitCode == 0,
+            "physical and mounted project scene paths must remain editable: " + inside.output);
+        Require(Run(&kb::cli::RunEntityCommand,
+                    { "rename", "--project", project, "--scene", scenePath, "--name", "PathProbe", "--to", "Door" }).exitCode == 0,
+            "project scene path probe could not restore the entity name");
+        const CommandRun sceneInside = Run(&kb::cli::RunSceneListCommand,
+            { "--project", project, "--scene", scenePath });
+        Require(sceneInside.exitCode == 0, "scene-list rejected a project scene path: " + sceneInside.output);
     }
     Require(std::filesystem::file_size(foreign) == foreignSize, "another project's scene must stay untouched");
     std::filesystem::remove_all(parent, error);
@@ -3213,6 +3443,14 @@ void RunMcpCommandTests() {
     input += '\n';
     input += R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"import_asset","arguments":{"source":"Assets/Logic/Player.lua","destination":"/Game/Data"}}})";
     input += '\n';
+    input += R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"scene_list","arguments":{"scene":"Assets/Scenes/Main.21kbscene"}}})";
+    input += '\n';
+    input += R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"scene_attach","arguments":{"scene":"Assets/Scenes/Main.21kbscene","node":"Player","script":"/Game/Logic/Player.lua"}}})";
+    input += '\n';
+    input += R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"Assets/Scenes/Main.21kbscene","frames":2}}})";
+    input += '\n';
+    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"format":"json"}}})";
+    input += '\n';
 
     std::istringstream in{ input };
     std::ostringstream out;
@@ -3230,7 +3468,7 @@ void RunMcpCommandTests() {
             responses.push_back(line);
         }
     }
-    Require(responses.size() == 5U, "mcp server response count is wrong");
+    Require(responses.size() == 9U, "mcp server response count is wrong");
 
     for (const std::string& response : responses) {
         JsonValue parsed;
@@ -3244,6 +3482,217 @@ void RunMcpCommandTests() {
     Require(Contains(responses[2], "OK") && Contains(responses[2], "\"isError\":false"), "mcp validate_script call failed");
     Require(Contains(responses[3], "-32601"), "mcp unknown method error is wrong");
     Require(Contains(responses[4], "created /Game/Data/Player.21kb") && Contains(responses[4], "\"isError\":false"), "mcp import_asset call failed");
+    Require(Contains(responses[5], "Player") && Contains(responses[5], "Camera") && Contains(responses[5], "\"isError\":false"), "mcp scene_list did not list the scene");
+    Require(Contains(responses[6], "\"isError\":false"), "mcp scene_attach call failed");
+    Require(Contains(responses[7], "diagnostics") && Contains(responses[7], "\"isError\":false"), "mcp run_scene call failed");
+    Require(Contains(responses[8], "Input.IsPressed") && Contains(responses[8], "\"isError\":false"), "mcp api_reference call failed");
+}
+
+// Over MCP an unknown tool, a call without its required arguments and a path that leaves the project are refused as tool
+// errors that say why, and every tool tools/list offers is a tool the server can dispatch.
+void RunMcpCommandRefusalTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const auto call = [](int id, const std::string& name, const std::string& arguments) {
+        return R"({"jsonrpc":"2.0","id":)" + std::to_string(id) + R"(,"method":"tools/call","params":{"name":")" + name +
+            R"(","arguments":)" + arguments + "}}\n";
+    };
+    std::string input = R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})" + std::string{ "\n" };
+    input += call(2, "no_such_tool", "{}");
+    input += call(3, "scene_attach", "{}");
+    input += call(4, "scene_list", R"({"scene":"../outside.21kbscene"})");
+    input += call(5, "validate_script", "{}");
+    input += call(6, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":1.5})");
+    input += call(7, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":1e100})");
+    input += call(8, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":"2"})");
+    input += call(9, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","inputRecord":"../Outside.kbinput"})");
+    input += call(10, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","inputReplay":"../Outside.kbinput"})");
+    input += call(11, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","framez":2})");
+    input += call(12, "run_scene", "[]");
+    input += call(13, "scene_attach", R"({"scene":"Assets/Scenes/Main.21kbscene","node":"Player","script":"/Game/Logic/Player.lua","executionOrder":1e100})");
+    input += call(14, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":1,"inputRecord":"McpRecord.kbinput"})");
+    std::istringstream in{ input };
+    std::ostringstream out;
+    std::ostringstream err;
+    const std::vector<std::string> raw{ "--project", root };
+    const kb::cli::ArgumentList arguments{ raw, kFlagNames };
+    Require(kb::cli::RunMcpCommand(arguments, in, kb::cli::CommandIo{ .out = out, .err = err }) == 0, "mcp server exited with an error");
+    std::vector<std::string> responses;
+    std::istringstream lines{ out.str() };
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (!line.empty()) responses.push_back(line);
+    }
+    Require(responses.size() == 14U, "mcp refusal response count is wrong");
+    Require(Contains(responses[1], "\"isError\":true") && Contains(responses[1], "unknown tool: no_such_tool"), "mcp must refuse an unknown tool by name");
+    Require(Contains(responses[2], "\"isError\":true"), "mcp must refuse scene_attach without its node and script");
+    Require(Contains(responses[3], "\"isError\":true") && Contains(responses[3], "outside the project"), "mcp must refuse a scene outside the project");
+    Require(Contains(responses[4], "\"isError\":true"), "mcp must refuse validate_script without its path");
+    for (std::size_t index = 5U; index < 13U; ++index)
+        Require(Contains(responses[index], "\"isError\":true"), "Invalid MCP arguments must fail before dispatch: " + responses[index]);
+    Require(Contains(responses[8], "outside the project") && Contains(responses[9], "outside the project"),
+        "MCP recording paths must not escape the bound project");
+    Require(Contains(responses[13], "\"isError\":false") &&
+        kb::input::ReadInputRecording(TestRoot() / "McpRecord.kbinput").succeeded,
+        "A new relative recording path must resolve inside the bound project");
+
+    // Every tool the list offers is dispatched: calling it without arguments may fail, but never as an unknown tool.
+    JsonValue listed;
+    std::string parseError;
+    Require(JsonValue::Parse(responses[0], listed, parseError), "mcp tools/list is not JSON");
+    const JsonValue* result = listed.Find("result");
+    const JsonValue* tools = result != nullptr ? result->Find("tools") : nullptr;
+    Require(tools != nullptr && tools->Size() >= 6U, "mcp tools/list must offer the tools");
+    std::string probes;
+    std::vector<std::string> names;
+    for (std::size_t index = 0; index < tools->Size(); ++index) {
+        const JsonValue* tool = tools->At(index);
+        const JsonValue* name = tool != nullptr ? tool->Find("name") : nullptr;
+        Require(name != nullptr, "an mcp tool has no name");
+        names.push_back(name->AsString());
+        probes += call(static_cast<int>(index) + 1, names.back(), "{}");
+    }
+    std::istringstream probeIn{ probes };
+    std::ostringstream probeOut;
+    std::ostringstream probeErr;
+    Require(kb::cli::RunMcpCommand(arguments, probeIn, kb::cli::CommandIo{ .out = probeOut, .err = probeErr }) == 0, "mcp probe run failed");
+    Require(probeOut.str().find("unknown tool") == std::string::npos, "tools/list offers a tool the server cannot dispatch");
+}
+
+void RunAudioMixerCommandTests() {
+    const auto parent = TestRoot() / "audio_mixer";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand,
+        {"--parent", parent.string(), "--name", "Sample", "--template", "Empty"}).exitCode == 0,
+        "audio mixer project could not be created");
+    const auto root = parent / "Sample";
+    const auto mixerFile = root / "Assets/Audio/Main.kbmixer";
+    const auto sceneFile = root / "Assets/Scenes/Main.21kbscene";
+    const auto run = [&](std::vector<std::string> arguments) {
+        arguments.insert(arguments.end(), {"--project", root.string()});
+        return Run(&kb::cli::RunAudioMixerCommand, std::move(arguments));
+    };
+    const auto bytes = [](const std::filesystem::path& path) {
+        std::ifstream input{path, std::ios::binary};
+        Require(input.is_open(), "audio mixer fixture could not be read");
+        return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    };
+    auto result = run({"new", "--name", "Main", "--bus", "Output", "--bus", "Effects.Main",
+        "--set", "Effects.Main.parent=Output", "--set", "Output.volume=0.5", "--set", "Effects.Main.volume=0.25"});
+    Require(result.exitCode == 0, "audio mixer creation failed: " + result.output);
+    auto loaded = kb::audio::AudioMixerAssetIO::Load(mixerFile);
+    Require(loaded && loaded->buses.size() == 2U && loaded->FindBus("Output")->volume == 0.5F
+        && loaded->FindBus("Effects.Main")->parentBus == "Output"
+        && loaded->FindBus("Effects.Main")->volume == 0.25F, "audio mixer graph did not round trip");
+    result = run({"show", "--mixer", "/Game/Audio/Main.kbmixer"});
+    Require(result.exitCode == 0 && Contains(result.output, "bus Effects.Main parent=Output volume=0.25 mute=false"),
+        "audio mixer inspection did not show the saved graph");
+    const auto original = bytes(mixerFile);
+    for (const auto& invalid : std::vector<std::vector<std::string>>{
+        {"new", "--name", "Main"},
+        {"set", "--set", "Output.parent=Effects.Main"},
+        {"set", "--bus", "Output"},
+        {"set", "--set", "Output.parent=Missing"},
+        {"set", "--set", "Output.volume=nan"},
+        {"set", "--set", "Output.volume=inf"},
+        {"set", "--set", "Output.volume=-1"},
+        {"set", "--set", "Output.volume=1e100"},
+        {"set", "--set", "Output.mute=yes"},
+        {"set", "--set", "Output.unknown=1"},
+        {"set", "--set", "Output.volume=0.75", "--set", "Missing.mute=true"},
+        {"set", "--remove-bus", "Output"},
+        {"set", "--remove-bus", "Missing"},
+        {"set", "--unknown", "value"}, {"set"}, {"unknown"}}) {
+        auto arguments = invalid;
+        arguments.insert(arguments.end(), {"--mixer", "/Game/Audio/Main.kbmixer"});
+        Require(run(std::move(arguments)).exitCode != 0 && bytes(mixerFile) == original,
+            "a rejected mixer operation changed the saved graph");
+    }
+    Require(run({"new", "--name", "Outside", "--folder", "../Outside"}).exitCode != 0,
+        "mixer authoring escaped the project assets");
+    const auto outside = parent / "Outside.kbmixer";
+    Require(kb::audio::AudioMixerAssetIO::Save(outside, *loaded), "outside mixer fixture failed");
+    Require(run({"show", "--mixer", outside.string()}).exitCode != 0,
+        "mixer lookup escaped the project assets");
+    Require(run({"set", "--mixer", "/Game/Audio/Main.kbmixer", "--add-snapshot", "Quiet",
+        "--snapshot", "Quiet", "--set-snapshot", "Effects.Main=0.1"}).exitCode == 0,
+        "mixer snapshot authoring failed");
+    result = run({"set", "--mixer", "Assets/Audio/Main.kbmixer", "--bus", "Transient",
+        "--set", "Output.mute=1", "--set", "Effects.Main.volume=0.5"});
+    Require(result.exitCode == 0, "mixer edit failed: " + result.output);
+    loaded = kb::audio::AudioMixerAssetIO::Load(mixerFile);
+    Require(loaded && loaded->FindBus("Output")->mute && loaded->FindBus("Effects.Main")->volume == 0.5F
+        && loaded->FindSnapshot("Quiet") && loaded->FindSnapshot("Quiet")->busVolumes[0].volume == 0.1F,
+        "mixer edit lost bus parameters or snapshot data");
+    Require(run({"set", "--mixer", "/Game/Audio/Main.kbmixer", "--remove-bus", "Transient",
+        "--set", "Output.mute=false"}).exitCode == 0, "unused mixer bus removal failed");
+    Require(run({"assign", "--mixer", "/Game/Audio/Main.kbmixer", "--snapshot", "Quiet"}).exitCode == 0,
+        "mixer snapshot assignment failed");
+    auto scene = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(scene.succeeded && scene.document.audioMixerAssetId ==
+        kb::assets::MakeAssetId("/Game/Audio/Main.kbmixer:AudioMixer").value
+        && scene.document.audioMixerSnapshot == "Quiet", "scene mixer assignment did not persist");
+    const auto assigned = bytes(sceneFile);
+    for (const auto& invalid : std::vector<std::vector<std::string>>{
+        {"assign", "--mixer", "/Game/Audio/Main.kbmixer", "--snapshot", "Missing"},
+        {"assign", "--mixer", "/Game/Scenes/Main.21kbscene"},
+        {"assign", "--mixer", outside.string()},
+        {"assign", "--mixer", "none", "--snapshot", "Quiet"}}) {
+        Require(run(invalid).exitCode != 0 && bytes(sceneFile) == assigned,
+            "a rejected mixer assignment changed the scene");
+    }
+    Require(run({"assign", "--mixer", "none"}).exitCode == 0, "mixer clearing failed");
+    scene = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(scene.succeeded && scene.document.audioMixerAssetId == 0U && scene.document.audioMixerSnapshot.empty(),
+        "clearing the mixer left a scene reference");
+
+    const auto snapshotFile = root / "Assets/Audio/Snapshots.kbmixer";
+    result = run({"new", "--name", "Snapshots", "--bus", "Output", "--bus", "Layer=Low",
+        "--add-snapshot", "Quiet=Low", "--snapshot", "Quiet=Low",
+        "--set-snapshot", "Layer=Low=0.25", "--set-snapshot", "Layer=Low=0.125"});
+    Require(result.exitCode == 0, "snapshot creation failed: " + result.output);
+    auto snapshots = kb::audio::AudioMixerAssetIO::Load(snapshotFile);
+    Require(snapshots && snapshots->snapshots.size() == 1U && snapshots->snapshots[0].name == "Quiet=Low"
+        && snapshots->snapshots[0].busVolumes.size() == 1U && snapshots->snapshots[0].busVolumes[0].bus == "Layer=Low"
+        && snapshots->snapshots[0].busVolumes[0].volume == 0.125F, "snapshot overrides did not upsert or round trip");
+    const auto editSnapshot = [&](std::vector<std::string> arguments) {
+        arguments.insert(arguments.begin(), "set");
+        arguments.insert(arguments.end(), {"--mixer", "/Game/Audio/Snapshots.kbmixer"});
+        return run(std::move(arguments));
+    };
+    Require(editSnapshot({"--add-snapshot", "Loud"}).exitCode == 0, "adding an empty snapshot failed");
+    const auto originalSnapshots = bytes(snapshotFile);
+    for (const auto& invalid : std::vector<std::vector<std::string>>{
+        {"--add-snapshot", "Quiet=Low"}, {"--remove-snapshot", "Missing"},
+        {"--snapshot", "Missing", "--set-snapshot", "Output=0.2"},
+        {"--set-snapshot", "Output=0.2"}, {"--snapshot", "Quiet=Low"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "invalid"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "=0.2"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Missing=0.2"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=nan"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=inf"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=-1"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=1e100"},
+        {"--snapshot", "Quiet=Low", "--clear-snapshot-bus", "Missing"},
+        {"--remove-bus", "Layer=Low"},
+        {"--set", "Output.volume=0.75", "--snapshot", "Quiet=Low", "--set-snapshot", "Missing=1"}}) {
+        Require(editSnapshot(invalid).exitCode != 0 && bytes(snapshotFile) == originalSnapshots,
+            "a rejected snapshot batch modified the saved mixer");
+    }
+    Require(run({"new", "--name", "InvalidSnapshots", "--add-snapshot", "Quiet", "--snapshot", "Quiet",
+        "--set-snapshot", "Missing=0.5"}).exitCode != 0
+        && !std::filesystem::exists(root / "Assets/Audio/InvalidSnapshots.kbmixer"),
+        "an invalid new snapshot asset was saved");
+    Require(editSnapshot({"--snapshot", "Quiet=Low", "--clear-snapshot-bus", "Layer=Low",
+        "--remove-bus", "Layer=Low"}).exitCode == 0, "atomic removal of a bus and its snapshot override failed");
+    snapshots = kb::audio::AudioMixerAssetIO::Load(snapshotFile);
+    Require(snapshots && snapshots->buses.size() == 1U && snapshots->snapshots.size() == 2U
+        && snapshots->FindSnapshot("Quiet=Low")->busVolumes.empty(), "cleared snapshot override did not persist");
+    Require(editSnapshot({"--remove-snapshot", "Quiet=Low"}).exitCode == 0, "snapshot removal failed");
+    snapshots = kb::audio::AudioMixerAssetIO::Load(snapshotFile);
+    Require(snapshots && snapshots->snapshots.size() == 1U && snapshots->snapshots[0].name == "Loud"
+        && snapshots->FindBus("Output")->volume == 1.0F, "snapshot removal changed unrelated mixer data");
 }
 
 } // namespace
@@ -3286,10 +3735,20 @@ void RunWorldCommandTests() {
     Require(again.exitCode == 1 && Contains(again.output, "already exists"), "world migrate overwrote an existing world");
     // Without --project the build finds the project above the world.
     const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--world", (root / "Assets" / "Level.21kbworld").string() });
+#if defined(KB_CLI_WORLD_HLOD)
     Require(build.exitCode == 0 && Contains(build.output, "built 3 cells and 1 HLOD proxies from 3 objects"), build.output.c_str());
+#else
+    Require(build.exitCode == 0 && Contains(build.output, "built 3 cells and 0 HLOD proxies from 3 objects") &&
+            Contains(build.output, "without the renderer; HLOD proxies are not built"), build.output.c_str());
+#endif
     const kb::world::WorldCellIndexReadResult index =
         kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Assets" / "Level.21kbworld"));
-    Require(index.succeeded && index.index.units.size() == 3U && index.index.hlods.size() == 1U, "world build did not write cells and the proxy");
+    Require(index.succeeded && index.index.units.size() == 3U, "world build did not write every cell");
+#if defined(KB_CLI_WORLD_HLOD)
+    Require(index.index.hlods.size() == 1U, "world build did not write the proxy");
+#else
+    Require(index.index.hlods.empty(), "world build advertised unavailable HLOD proxies");
+#endif
     std::filesystem::create_directories(TestRoot() / "world_without_project", error);
     std::filesystem::copy(root / "Assets" / "Level.21kbworld", TestRoot() / "world_without_project" / "Level.21kbworld",
         std::filesystem::copy_options::overwrite_existing, error);
@@ -3297,8 +3756,13 @@ void RunWorldCommandTests() {
         "--world", (TestRoot() / "world_without_project" / "Level.21kbworld").string() });
     Require(orphan.exitCode == 1 && Contains(orphan.output, "--project"), "a folder without a project file is not a project");
     const CommandRun chunks = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText });
+#if defined(KB_CLI_WORLD_HLOD)
     Require(chunks.exitCode == 0 && Contains(chunks.output, "chunk Level.r_0_0=/Game/Level.cells/base/r_0_0/,/Game/Level.cells/hlod/r_0_0/"),
         chunks.output.c_str());
+#else
+    Require(chunks.exitCode == 0 && Contains(chunks.output, "chunk Level.r_0_0=/Game/Level.cells/base/r_0_0/") &&
+            !Contains(chunks.output, "/hlod/"), chunks.output.c_str());
+#endif
     const CommandRun claimed = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText, "--exclude", "/Game/Level.cells/" });
     Require(claimed.exitCode == 0 && !Contains(claimed.output, "chunk "), "excluded world files must not form chunks");
     const CommandRun unknown = Run(&kb::cli::RunWorldCommand, { "explode" });
@@ -3414,8 +3878,8 @@ void RunLightingQualityCommandTests() {
     const std::filesystem::path parent = TestRoot() / std::string{ folder };
     std::error_code error;
     std::filesystem::remove_all(parent, error);
-    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Empty" }).exitCode == 0,
-        "new failed for an authoring project");
+    const auto created = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Empty" });
+    Require(created.exitCode == 0, "new failed for an authoring project: " + created.output);
     return (parent / "Studio").string();
 }
 
@@ -3683,9 +4147,973 @@ void RunMaterialGraphUtilityNodeCommandTests() {
 }
 #endif
 
-int main() {
+struct CliRun {
+    int exitCode = 0;
+    std::string out;
+    std::string err;
+};
+
+[[nodiscard]] CliRun RunCliProgram(std::initializer_list<std::string_view> words) {
+    const std::vector<std::string> arguments{ words.begin(), words.end() };
+    std::istringstream in;
+    std::ostringstream out;
+    std::ostringstream err;
+    const int exitCode = kb::cli::RunCli(arguments, in, kb::cli::CommandIo{ .out = out, .err = err });
+    return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+}
+
+void RunInputRecordingCliTests() {
+    PrepareProject();
+    const auto root = TestRoot();
+    const auto project = root.string();
+    std::filesystem::create_directories(root / "Assets/Input");
+    kb::input::InputActionAsset action;
+    action.name = "Axis";
+    action.valueType = kb::input::InputActionValueType::Axis1D;
+    Require(kb::input::WriteInputAction(root / "Assets/Input/Axis.21kbinputaction", action), "Replay action must be saved");
+    kb::input::InputMappingContextAsset context;
+    context.mappings.push_back({.actionId = kb::assets::MakeAssetId("/Game/Input/Axis.21kbinputaction:InputAction").value,
+        .key = kb::input::InputKey::GamepadLeftStickX, .gamepadIndex = 3U});
+    Require(kb::input::WriteInputMappingContext(root / "Assets/Input/Replay.21kbinputcontext", context), "Replay mapping must be saved");
+    auto settings = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings;
+    settings.inputMappingContext = "/Game/Input/Replay.21kbinputcontext";
+    std::string settingsError;
+    Require(kb::project::ProjectSettingsStore::Save(kb::project::ProjectSettingsStore::FilePath(root), settings, settingsError),
+        "Project replay mapping must be saved");
+    WriteTextFile(root / "Assets/Logic/Player.lua", R"(
+local frame = 0
+local durations = {0.02, 0.04, 0.06, 0.03}
+local axes = {0.75, -0.5, 0, 0.25}
+function Tick(self, dt)
+    frame = frame + 1
+    assert(math.abs(dt - durations[frame]) < 0.00001, 'recorded duration')
+    local axis, error = CallFunction('Input.Value', {action='Axis'})
+    assert(axis ~= nil and math.abs(axis - axes[frame]) < 0.00001, error or 'recorded controller action')
+    assert(Input.IsGamepadConnected(3), 'recorded controller slot')
+    Log('replay tick ' .. frame)
+end
+)");
+    Require(RunCliProgram({"scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "Replay script must attach");
+    kb::input::InputRecording recording;
+    const std::array<float, 4> durations{0.02F, 0.04F, 0.06F, 0.03F};
+    const std::array<float, 4> axes{0.75F, -0.5F, 0.0F, 0.25F};
+    for (std::size_t i = 0; i < durations.size(); ++i) {
+        kb::input::InputDeviceState device;
+        device.SetHasFocus(true);
+        device.SetGamepadConnected(3U, true);
+        device.SetAnalog(kb::input::InputKey::GamepadLeftStickX, axes[i], 3U);
+        recording.push_back(kb::input::CaptureInputFrame(device, durations[i]));
+    }
+    const auto source = (root / "source.21kbinputrecording").string();
+    const auto copy = (root / "copy.21kbinputrecording").string();
+    Require(kb::input::WriteInputRecording(source, recording), "Source recording must be written");
+    const auto result = RunCliProgram({"run", "--project", project, "--input-replay", source,
+        "--input-record", copy, "--report", "input", "--json"});
+    JsonValue report;
+    std::string error;
+    Require(result.exitCode == 0 && JsonValue::Parse(result.out, report, error),
+        "Replay must execute the scene and emit JSON: " + result.out + result.err);
+    Require(report.Find("completed_frames")->AsNumber() == 4 && report.Find("recording_written")->AsBool() &&
+        std::abs(report.Find("simulation_seconds")->AsNumber() - 0.15) < 0.00001 && Contains(result.err, "replay tick 4"),
+        "Replay must evaluate all recorded ticks with actual script assertions");
+    const auto saved = kb::input::ReadInputRecording(copy);
+    Require(saved.succeeded && kb::input::EncodeInputRecording(saved.asset) == kb::input::EncodeInputRecording(recording),
+        "Recording replayed input must preserve all consumed snapshots");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--frames", "2",
+        "--input-record", copy}).exitCode == 0 && kb::input::ReadInputRecording(copy).asset.size() == 2U,
+        "A replay prefix must record exactly its two consumed frames");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--dt", "0.1"}).exitCode != 0,
+        "Replay timing cannot be silently overridden");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--frames", "5"}).exitCode != 0,
+        "Replay cannot silently invent missing frames");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--input-record", project}).exitCode != 0,
+        "Recording write failure must fail the command");
+    auto malformed = kb::input::EncodeInputRecording(recording);
+    malformed[8] = 99U;
+    const auto bad = root / "unknown.21kbinputrecording";
+    std::ofstream stream{bad, std::ios::binary};
+    stream.write(reinterpret_cast<const char*>(malformed.data()), static_cast<std::streamsize>(malformed.size()));
+    stream.close();
+    const auto rejected = RunCliProgram({"run", "--project", project, "--input-replay", bad.string()});
+    Require(rejected.exitCode != 0 && Contains(rejected.err, "Unsupported input recording version") &&
+        !Contains(rejected.err + rejected.out, "replay tick"), "Unknown recording version must fail before executing scripts");
+}
+
+void RunNewerSceneMetadataCliTest() {
+    PrepareProject();
+    const auto root = TestRoot();
+    const auto meta = root / "Assets/Scenes/Main.meta";
+    const auto read = [&] {
+        std::ifstream file{meta, std::ios::binary};
+        return std::string{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+    };
+    const auto original = read();
+    Require(original.size() >= 12U, "Scene metadata must have a versioned header");
+    auto future = original;
+    future[8] = 127;
+    future[9] = future[10] = future[11] = 0;
+    WriteTextFile(meta, future);
+    const auto result = RunCliProgram({"run", "--project", root.string(), "--frames", "1"});
+    Require(result.exitCode == 1 && Contains(result.err, "Scene meta version 127") &&
+        Contains(result.err, "newer engine") && Contains(result.err, "Main.21kbscene"),
+        "CLI must preserve scene-load diagnostics and identify the scene: " + result.out + result.err);
+    Require(read() == future, "Refusing a newer scene must not rewrite its metadata");
+    WriteTextFile(meta, original);
+}
+
+void RunSafeAreaCliTests() {
+    PrepareProject();
+    const auto root = TestRoot();
+    const auto project = root.string();
+    const auto run = [&](std::vector<std::string> arguments) {
+        arguments.insert(arguments.end(), {"--project", project});
+        std::istringstream in;
+        std::ostringstream out, err;
+        const int code = kb::cli::RunCli(arguments, in, {.out = out, .err = err});
+        Require(code == 0, "Safe-area authoring must succeed: " + out.str() + err.str());
+    };
+    run({"entity", "add", "--name", "CanvasRoot"});
+    run({"component", "add", "--entity", "CanvasRoot", "--type", "Rect Transform",
+        "--set", "anchorMax=1,1", "--set", "offsetMax=0,0"});
+    run({"component", "add", "--entity", "CanvasRoot", "--type", "Canvas"});
+    run({"component", "add", "--entity", "CanvasRoot", "--type", "Canvas Scaler", "--set", "scaleMode=0"});
+    for (const std::string name : {"Top", "Bottom"}) {
+        run({"entity", "add", "--name", name, "--parent", "CanvasRoot"});
+        const bool bottom = name == "Bottom";
+        run({"component", "add", "--entity", "CanvasRoot/" + name, "--type", "Rect Transform",
+            "--set", bottom ? "anchorMax=1,1" : "anchorMax=0,0",
+            "--set", bottom ? "anchorMin=1,1" : "anchorMin=0,0",
+            "--set", bottom ? "offsetMin=-80,-40" : "offsetMin=0,0",
+            "--set", bottom ? "offsetMax=0,0" : "offsetMax=80,40"});
+        run({"component", "add", "--entity", "CanvasRoot/" + name, "--type", "Selectable"});
+    }
+    WriteTextFile(root / "Assets/Logic/Player.lua", R"(
+local frames = 0
+function Tick(self, dt)
+    frames = frames + 1
+    if frames < 2 then return end
+    assert(UI.HitTest(110, 60) == World.FindByName('Top'), 'top safe-area hit test')
+    assert(UI.HitTest(700, 550) == World.FindByName('Bottom'), 'bottom safe-area hit test')
+    assert(UI.HitTest(10, 10) == 0, 'cutout must exclude controls')
+    Log('safe-area layout verified')
+end
+)");
+    run({"scene-attach", "--scene", "Assets/Scenes/Main.21kbscene", "--node", "Player", "--script", "/Game/Logic/Player.lua"});
+    const auto result = RunCliProgram({"run", "--project", project, "--frames", "3",
+        "--viewport", "800x600", "--safe-area", "100,50,30,20"});
+    Require(result.exitCode == 0 && Contains(result.out, "safe-area layout verified"),
+        "CLI must use native layout and hit testing: " + result.out + result.err);
+    for (const auto value : {"", "1,2,3", "1,2,3,4,5", "-1,0,0,0", "nan,0,0,0", "0,0,0,inf"}) {
+        const auto bad = RunCliProgram({"run", "--project", project, "--safe-area", value});
+        Require(bad.exitCode != 0 && Contains(bad.err, "--safe-area expects"), "Malformed safe area must fail before simulation");
+    }
+    for (const auto value : {"", "800", "0x600", "-1x600", "800x600x1", "800xnan", "2147483648x600"}) {
+        const auto bad = RunCliProgram({"run", "--project", project, "--viewport", value});
+        Require(bad.exitCode != 0 && Contains(bad.err, "--viewport expects"), "Malformed viewport must fail before simulation");
+    }
+}
+
+void RunPlaybackStopTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua",
+        "function Destroyed(self, dt) Log('playback shutdown complete') end\n");
+    Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "stop fixture must attach its shutdown observer");
+    const auto verifyStopped = [](const CliRun& result, int code, std::string_view reason) {
+        JsonValue report;
+        std::string error;
+        Require(result.exitCode == code && JsonValue::Parse(result.out, report, error),
+            "stopped playback must preserve its exit code and JSON output: " + result.out + result.err);
+        Require(report.Find("stop_reason") && report.Find("stop_reason")->AsString() == reason &&
+                report.Find("succeeded") && !report.Find("succeeded")->AsBool() &&
+                report.Find("completed_frames") && report.Find("completed_frames")->AsNumber() == 0.0,
+            "stopped playback must report zero completed ticks and its actual reason");
+        Require(Contains(result.err, "playback shutdown complete"), "stopping playback must dispatch script shutdown");
+    };
+    const auto started = std::chrono::steady_clock::now();
+    const auto timed = RunCliProgram({"run", "--project", root, "--frames", "2", "--dt", "5", "--realtime",
+        "--timeout-ms", "30", "--report", "ecs"});
+    verifyStopped(timed, 124, "timeout");
+    Require(std::chrono::steady_clock::now() - started < std::chrono::seconds{4},
+        "timeout must interrupt a paced wait before the first five-second tick");
+    const auto cancelPath = TestRoot() / "cancel-playback";
+    const auto cancel = cancelPath.string();
+    std::jthread requestCancel{[cancelPath] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        std::ofstream output{cancelPath};
+        output << "stop";
+    }};
+    const auto cancelled = RunCliProgram({"run", "--project", root, "--frames", "2", "--dt", "5", "--realtime",
+        "--timeout-ms", "2000", "--cancel-file", cancel, "--report", "particles"});
+    requestCancel.join();
+    verifyStopped(cancelled, 130, "cancelled");
+    Require(std::filesystem::exists(cancelPath), "playback must not consume the caller's cancellation file");
+    verifyStopped(RunCliProgram({"run", "--project", root, "--frames", "2", "--cancel-file", cancel,
+        "--report", "ecs"}), 130, "cancelled");
+    std::filesystem::remove(cancelPath);
+    const auto complete = RunCliProgram({"run", "--project", root, "--frames", "2", "--timeout-ms", "2000",
+        "--cancel-file", cancel, "--report", "ecs"});
+    JsonValue report;
+    std::string error;
+    Require(complete.exitCode == 0 && JsonValue::Parse(complete.out, report, error) &&
+            report.Find("stop_reason") && report.Find("stop_reason")->AsString() == "completed",
+        "a new playback must not retain an earlier cancellation");
+    for (const std::string_view invalid : {"0", "-1", "86400001", "abc"})
+        Require(RunCliProgram({"run", "--project", root, "--timeout-ms", invalid}).exitCode == 1,
+            "invalid playback timeout must be rejected");
+}
+
+// The one result object --json prints for a command that has no JSON of its own.
+[[nodiscard]] JsonValue ParseCliResult(const CliRun& run) {
+    JsonValue result;
+    std::string error;
+    Require(JsonValue::Parse(run.out, result, error) && result.GetKind() == JsonValue::Kind::Object,
+        "kb_cli --json did not print one JSON object: " + run.out);
+    Require(result.Find("schema") != nullptr && result.Find("schema")->AsString() == "21kb.cli-result/v1",
+        "kb_cli --json result has no schema");
+    Require(result.Find("ok") != nullptr && result.Find("exitCode") != nullptr && result.Find("command") != nullptr &&
+            result.Find("output") != nullptr && result.Find("errors") != nullptr &&
+            result.Find("errors")->GetKind() == JsonValue::Kind::Array,
+        "kb_cli --json result misses a field: " + run.out);
+    return result;
+}
+
+void RunCliJsonTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    for (const std::string invalid : {"\xC0\xAF", "\xE0\x80\x80", "\xED\xA0\x80", "\xF0\x80\x80\x80", "\xF4\x90\x80\x80", "\xE2\x82"}) {
+        std::string replacement;
+        for (std::size_t index = 0U; index < invalid.size(); ++index) replacement += "\xEF\xBF\xBD";
+        const auto result = ParseCliResult(RunCliProgram({"--json", invalid}));
+        Require(result.Find("command")->AsString() == replacement,
+            "JSON output must replace overlong UTF-8, surrogate scalars, overflow and truncated sequences");
+    }
+    const std::string boundaries = "\xE0\xA0\x80\xED\x9F\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF";
+    Require(kb::cli::ToValidUtf8(boundaries) == boundaries, "Valid Unicode boundary scalars must remain unchanged");
+
+    // Without --json nothing changes: text, the error on stderr, the usage after it, exit code 1.
+    const CliRun unknownText = RunCliProgram({ "no-such-command" });
+    Require(unknownText.exitCode == 1 && unknownText.out.empty() &&
+            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "Exit codes:"),
+        "an unknown command must print the error and the usage on stderr and exit 1");
+
+    // An unknown command with --json: one object, the exit code in the process and in the object.
+    const CliRun unknown = RunCliProgram({ "--json", "no-such-command" });
+    const JsonValue unknownResult = ParseCliResult(unknown);
+    Require(unknown.exitCode == 1 && unknown.err.empty(), "an unknown command with --json must exit 1 and keep stderr empty");
+    Require(!unknownResult.Find("ok")->AsBool() && unknownResult.Find("exitCode")->AsNumber() == unknown.exitCode,
+        "the result of an unknown command must be not ok and carry the exit code");
+    Require(unknownResult.Find("command")->AsString() == "no-such-command" && unknownResult.Find("output")->AsString().empty(),
+        "the result must name the command");
+    Require(unknownResult.Find("errors")->Size() == 1U &&
+            unknownResult.Find("errors")->At(0U)->AsString() == "unknown command 'no-such-command'",
+        "the result must list the error without the 'error: ' prefix and without the usage");
+
+    // A command that succeeds: ok, exit code 0, its text in "output".
+    const CliRun valid = RunCliProgram({ "validate", "--project", root, "Assets/Logic/Player.lua", "--json" });
+    const JsonValue validResult = ParseCliResult(valid);
+    Require(valid.exitCode == 0 && validResult.Find("ok")->AsBool() && validResult.Find("exitCode")->AsNumber() == 0.0,
+        "a command that succeeds must report ok and exit code 0: " + valid.out);
+    Require(Contains(validResult.Find("output")->AsString(), "OK") && validResult.Find("errors")->Size() == 0U,
+        "the result must carry the text the command printed");
+    Require(valid.err.empty(), "--json must not print on stderr when the command prints nothing there");
+
+    // A command that fails after it printed: both streams are kept apart.
+    const CliRun broken = RunCliProgram({ "validate", "--json", "--project", root, "Assets/Logic/Player.lua", "Assets/Logic/Broken.lua" });
+    const JsonValue brokenResult = ParseCliResult(broken);
+    Require(broken.exitCode == 1 && !brokenResult.Find("ok")->AsBool() && brokenResult.Find("exitCode")->AsNumber() == 1.0,
+        "a failing command must report not ok and exit code 1");
+    Require(Contains(brokenResult.Find("output")->AsString(), "OK") && brokenResult.Find("errors")->Size() == 1U &&
+            Contains(brokenResult.Find("errors")->At(0U)->AsString(), "FAIL Assets/Logic/Broken.lua"),
+        "stdout goes to output and the stderr lines to errors");
+
+    // Bad arguments and non-ASCII command names still give one object.
+    const CliRun missingValue = RunCliProgram({ "validate", "--json", "--project" });
+    Require(missingValue.exitCode == 1 && !ParseCliResult(missingValue).Find("ok")->AsBool(), "an option without a value must fail with a result");
+    const CliRun unicode = RunCliProgram({ "--json", "polecenie-\xC5\xBC\xC3\xB3\xC5\x82w" });
+    Require(ParseCliResult(unicode).Find("command")->AsString() == "polecenie-\xC5\xBC\xC3\xB3\xC5\x82w",
+        "a command name with letters must come back unchanged");
+
+    // help: the exit codes are documented in it, as text and as a result.
+    const CliRun help = RunCliProgram({ "help" });
+    Require(help.exitCode == 0 && Contains(help.out, "Exit codes: normally 0 on success and 1 on failure") &&
+            Contains(help.out, "124 on timeout and 130 on cancellation") && Contains(help.out, "--json"),
+        "help must document --json and the exit codes");
+    const CliRun helpJson = RunCliProgram({ "help", "--json" });
+    Require(helpJson.exitCode == 0 && ParseCliResult(helpJson).Find("ok")->AsBool() &&
+            Contains(ParseCliResult(helpJson).Find("output")->AsString(), "Exit codes:"),
+        "help --json must wrap the usage");
+    Require(RunCliProgram({}).exitCode == 0, "no command must print the usage and exit 0");
+
+    // A command with JSON of its own keeps it, not wrapped; its failures are still a result.
+    const CliRun mixer = RunCliProgram({ "audio-mixer", "new", "--project", root, "--name", "CliJson", "--bus", "Output", "--json" });
+    JsonValue mixerResult;
+    std::string error;
+    Require(mixer.exitCode == 0 && JsonValue::Parse(mixer.out, mixerResult, error) &&
+            mixerResult.Find("schema") != nullptr && mixerResult.Find("schema")->AsString() == "21kb.audio-mixer/v1" &&
+            mixerResult.Find("exitCode") == nullptr,
+        "a command that prints its own JSON must keep it: " + mixer.out + mixer.err);
+    const CliRun mixerMissing = RunCliProgram({ "audio-mixer", "show", "--project", root, "--mixer", "/Game/Audio/Missing.kbmixer", "--json" });
+    Require(mixerMissing.exitCode == 1 && !ParseCliResult(mixerMissing).Find("ok")->AsBool(),
+        "a failing command with JSON of its own must report the failure as a result");
+}
+
+void RunCommandCatalogTests() {
+    PrepareProject();
+    const auto root = TestRoot().string();
+    const auto catalog = RunCliProgram({"commands", "--json"});
+    JsonValue described;
+    std::string error;
+    Require(catalog.exitCode == 0 && JsonValue::Parse(catalog.out, described, error) &&
+        described.Find("schema")->AsString() == "21kb.cli-commands/v1", "Command discovery must return versioned JSON");
+    Require(described.Find("commands")->Size() == kb::cli::CliCommandCatalog().size(),
+        "Discovery and dispatch must use the same complete command catalog");
+    std::vector<std::string_view> names;
+    std::vector<std::string_view> tools;
+    for (const auto& entry : kb::cli::CliCommandCatalog()) {
+        Require(std::ranges::find(names, entry.name) == names.end() && kb::cli::FindCliCommand(entry.name) == &entry,
+            "Command names must uniquely resolve to their registered handler");
+        names.push_back(entry.name);
+        if (entry.available && !entry.mcpTool.empty()) {
+            Require(std::ranges::find(tools, entry.mcpTool) == tools.end(), "MCP aliases must be unique");
+            tools.push_back(entry.mcpTool);
+        }
+    }
+    const auto mcp = [&](std::string request) {
+        std::istringstream input{std::move(request)};
+        std::ostringstream output, diagnostics;
+        const std::vector<std::string> words{"--project", root};
+        Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{words}, input, {.out = output, .err = diagnostics}) == 0,
+            "Catalog MCP session must finish cleanly");
+        JsonValue response;
+        std::string parseError;
+        Require(JsonValue::Parse(output.str(), response, parseError), "Catalog MCP response must be JSON: " + output.str());
+        return response;
+    };
+    const auto listed = mcp(R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})");
+    const auto* descriptors = listed.Find("result")->Find("tools");
+    Require(descriptors->Size() == tools.size() && tools.size() >= 11U, "MCP must discover all registered authoring tools");
+    for (std::size_t index = 0U; index < descriptors->Size(); ++index)
+        Require(std::ranges::find(tools, descriptors->At(index)->Find("name")->AsString()) != tools.end(),
+            "MCP discovery must not invent operations outside the CLI catalog");
+    const auto call = [&](std::string_view name, std::string_view arguments, bool succeeds = true) {
+        const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
+            std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
+        Require(response.Find("result") && response.Find("result")->Find("isError")->AsBool() != succeeds,
+            "Catalog tool result disagrees with its expected outcome: " + response.Dump());
+    };
+    call("component_schema", "{}");
+    call("scene_create", R"({"name":"McpScene","template":"Empty"})");
+    call("entity_edit", R"({"action":"add","name":"Probe","scene":"/Game/Scenes/McpScene.21kbscene","position":"1,2,3"})");
+    call("component_edit", R"({"action":"set","entity":"Probe","type":"Transform","scene":"/Game/Scenes/McpScene.21kbscene","set":["localPosition=3,4,5","localScale=2,2,2"]})");
+    call("script_create", R"({"name":"McpBehaviour","language":"lua"})");
+    call("validate_script", R"({"path":"Assets/Scripts/McpBehaviour.lua"})");
+    call("component_edit", R"({"action":"invalid","entity":"Probe","type":"Transform","set":["localPosition=9,9,9"]})", false);
+    call("component_edit", R"({"action":"set","entity":"Probe","type":"Transform","set":[42]})", false);
+    call("entity_edit", R"({"action":"add","name":"Outside","scene":"../Outside.21kbscene"})", false);
+    call("script_create", R"({"name":"Outside","language":"lua","folder":"../Outside"})", false);
+    call("scene_create", R"({"name":"Outside","project":"../Other"})", false);
+    Require(RunCliProgram({"scene-new", "--project", root, "--name", "CliScene", "--template", "Empty"}).exitCode == 0 &&
+        RunCliProgram({"entity", "add", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--name", "Probe", "--position", "1,2,3"}).exitCode == 0 &&
+        RunCliProgram({"component", "set", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--entity", "Probe", "--type", "Transform",
+            "--set", "localPosition=3,4,5", "--set", "localScale=2,2,2"}).exitCode == 0, "Matching CLI authoring must succeed");
+    for (const auto file : {"McpScene.21kbscene", "CliScene.21kbscene"}) {
+        kb::scene::Scene scene;
+        const auto document = kb::scene::SceneDocumentService::Load(TestRoot() / "Assets/Scenes" / file);
+        Require(document.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, document.document), "Authored scene must reload");
+        const auto roots = scene.Hierarchy().RootEntities();
+        Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "Probe", "CLI and MCP must author equivalent entities");
+        const auto transform = scene.Transforms().Get(roots.front());
+        Require(transform.localPosition.x == 3.0F && transform.localPosition.y == 4.0F && transform.localPosition.z == 5.0F &&
+            transform.localScale.x == 2.0F && transform.localScale.y == 2.0F && transform.localScale.z == 2.0F,
+            "CLI and MCP property arrays must produce equivalent transforms");
+    }
+    const auto unknown = RunCliProgram({"vfx-unregistered", "--project", root, "--module", "1", "--json"});
+    Require(unknown.exitCode != 0 && Contains(unknown.out, "unknown command"),
+        "An unregistered particle command must never fall through to module removal");
+}
+
+// Every file of a folder with its bytes: two of these are equal when nothing was touched.
+[[nodiscard]] std::map<std::string, std::string> Fingerprint(const std::filesystem::path& root) {
+    std::map<std::string, std::string> files;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        if (!entry.is_regular_file()) continue;
+        std::ifstream input{ entry.path(), std::ios::binary };
+        files[std::filesystem::relative(entry.path(), root).generic_string()] =
+            std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    }
+    return files;
+}
+
+void RunBatchCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "batch_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path projectPath = parent / "Scena";
+    const std::string project = projectPath.string();
+    const std::filesystem::path good = parent / "good.txt";
+    const std::filesystem::path bad = parent / "bad.txt";
+    WriteTextFile(good, "# three changes that belong together\n"
+        "entity add --name Alpha --position 1,2,3\n"
+        "script-new --name Probe --language lua\n"
+        "component add --entity Alpha --type Light --set intensity=2.5\n");
+    // The fourth operation fails (a second Light is refused) after three have written files.
+    WriteTextFile(bad, "entity add --name Alpha\n"
+        "script-new --name Probe --language lua\n"
+        "component add --entity Alpha --type Light\n"
+        "component add --entity Alpha --type Light\n");
+
+    const auto before = Fingerprint(projectPath);
+
+    const CliRun failed = RunCliProgram({ "batch", "--project", project, "--file", bad.string() });
+    Require(failed.exitCode == 1 && Contains(failed.out, "rolled back: operation 4 failed"),
+        "a failing operation must fail the batch and say so: " + failed.out + failed.err);
+    Require(Fingerprint(projectPath) == before, "a failed batch must leave every file as it was");
+
+    const CliRun failedJson = RunCliProgram({ "batch", "--project", project, "--file", bad.string(), "--json" });
+    JsonValue failedResult;
+    std::string parseError;
+    Require(failedJson.exitCode == 1 && JsonValue::Parse(failedJson.out, failedResult, parseError) &&
+            failedResult.Find("schema")->AsString() == "21kb.batch/v1" && !failedResult.Find("ok")->AsBool() &&
+            failedResult.Find("rolledBack")->AsBool() && failedResult.Find("failedOperation")->AsNumber() == 4.0 &&
+            failedResult.Find("operations")->Size() == 4U &&
+            failedResult.Find("operations")->At(3U)->Find("exitCode")->AsNumber() != 0.0 &&
+            failedResult.Find("changes")->Size() == 0U,
+        "a failed batch must report the failing operation as JSON: " + failedJson.out);
+    Require(Fingerprint(projectPath) == before, "a failed batch with --json must leave every file as it was");
+
+    const CliRun dry = RunCliProgram({ "batch", "--project", project, "--file", good.string(), "--dry-run", "--json" });
+    JsonValue dryResult;
+    Require(dry.exitCode == 0 && JsonValue::Parse(dry.out, dryResult, parseError) && dryResult.Find("ok")->AsBool() &&
+            dryResult.Find("dryRun")->AsBool() && !dryResult.Find("applied")->AsBool() && dryResult.Find("rolledBack")->AsBool(),
+        "a dry run must succeed without applying: " + dry.out);
+    Require(Fingerprint(projectPath) == before, "a dry run must not change any file");
+    bool sceneDiff = false;
+    bool scriptAdded = false;
+    const JsonValue& changes = *dryResult.Find("changes");
+    for (std::size_t index = 0U; index < changes.Size(); ++index) {
+        const JsonValue& change = *changes.At(index);
+        const std::string& path = change.Find("path")->AsString();
+        if (path.ends_with(".21kbscene") && change.Find("status")->AsString() == "modified") {
+            for (std::size_t line = 0U; line < change.Find("diff")->Size(); ++line) {
+                const std::string& text = change.Find("diff")->At(line)->AsString();
+                sceneDiff = sceneDiff || (text.starts_with("+") && Contains(text, "Alpha"));
+            }
+        }
+        scriptAdded = scriptAdded || (path.ends_with("Probe.lua") && change.Find("status")->AsString() == "added" &&
+                                      change.Find("diff")->Size() > 1U);
+    }
+    Require(sceneDiff && scriptAdded, "a dry run must list the scene diff and the new script: " + dry.out);
+    const CliRun dryText = RunCliProgram({ "batch", "--project", project, "--file", good.string(), "--dry-run" });
+    Require(dryText.exitCode == 0 && Contains(dryText.out, "dry run:") && Contains(dryText.out, "modified ") &&
+            Contains(dryText.out, "added "),
+        "a text dry run must list the changes: " + dryText.out);
+
+    const CliRun applied = RunCliProgram({ "batch", "--project", project, "--file", good.string() });
+    Require(applied.exitCode == 0 && Contains(applied.out, "applied: 3 operation(s)"), "a good batch must apply: " + applied.out + applied.err);
+    Require(Fingerprint(projectPath) != before, "a good batch must write its files");
+    Require(std::filesystem::exists(projectPath / "Assets" / "Scripts" / "Probe.lua"), "the batch did not create its script");
+    const CliRun scene = RunCliProgram({ "scene-list", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene" });
+    Require(scene.exitCode == 0 && Contains(scene.out, "Alpha"), "the batch did not save its scene changes: " + scene.out);
+
+    // Batch and mcp cannot be nested, and one transaction is one project.
+    const auto afterApply = Fingerprint(projectPath);
+    WriteTextFile(parent / "nested.txt", "entity add --name Gamma\nbatch --file good.txt\n");
+    WriteTextFile(parent / "other.txt", "entity add --name Gamma\nentity add --name Delta --project " + (parent / "Elsewhere").string() + "\n");
+    Require(RunCliProgram({ "batch", "--project", project, "--file", (parent / "nested.txt").string() }).exitCode == 1 &&
+            RunCliProgram({ "batch", "--project", project, "--file", (parent / "other.txt").string() }).exitCode == 1,
+        "an operation that starts a batch or names another project must be refused");
+    Require(Fingerprint(projectPath) == afterApply, "a refused batch must not run any operation");
+    Require(RunCliProgram({ "batch", "--project", project }).exitCode == 1, "batch without --file must fail");
+
+    WriteTextFile(parent / "duplicate.txt", "entity add --name Gamma --project \"" + project +
+        "\" --project \"" + project + "\"\n");
+    const auto duplicate = RunCliProgram({"batch", "--project", project, "--file", (parent / "duplicate.txt").string(), "--json"});
+    Require(duplicate.exitCode == 1 && Contains(duplicate.out, "at most once") && Fingerprint(projectPath) == afterApply,
+        "ambiguous project options must fail before any operation runs");
+
+    // Exercise failure recovery independently of an individual author's normal edit shape.
+    // Import and migration operations can replace a file with a directory, or the reverse.
+    WriteTextFile(projectPath / "original-file", "original bytes");
+    WriteTextFile(projectPath / "original-directory" / "child", "original child");
+    WriteTextFile(projectPath / "unchanged-file", "keep unchanged");
+    const auto unchangedTime = std::filesystem::last_write_time(projectPath / "unchanged-file");
+    std::filesystem::create_directories(projectPath / "empty-directory");
+    const auto original = Fingerprint(projectPath);
+    for (const int mode : {0, 1, 2}) {
+        const std::vector<std::string> words{"--project", project, "--file", good.string(), "--json", "--dry-run"};
+        const std::array<std::string_view, 2> flags{"--json", "--dry-run"};
+        std::ostringstream output, diagnostics;
+        unsigned calls = 0U;
+        const auto replaceKinds = [&](std::span<const std::string>, kb::cli::CommandIo) -> int {
+            ++calls;
+            std::filesystem::remove(projectPath / "original-file");
+            WriteTextFile(projectPath / "original-file" / "nested" / "replacement", "new bytes");
+            std::filesystem::remove_all(projectPath / "original-directory");
+            WriteTextFile(projectPath / "original-directory", "replacement file");
+            std::filesystem::remove(projectPath / "empty-directory");
+            std::filesystem::create_directories(projectPath / "new-empty-directory");
+            if (mode == 2) throw 42;
+            return mode == 0 ? 1 : 0;
+        };
+        // One operation is enough for the success/dry-run path as well.
+        const auto single = parent / "replace.txt";
+        WriteTextFile(single, "entity add --name Temporary\n");
+        auto arguments = words;
+        arguments[3] = single.string();
+        const int result = kb::cli::RunBatchCommand(kb::cli::ArgumentList{arguments, flags},
+            {.out = output, .err = diagnostics}, replaceKinds);
+        JsonValue report;
+        Require(calls == 1U && result == (mode == 1 ? 0 : 1) &&
+            JsonValue::Parse(output.str(), report, parseError) && report.Find("rolledBack")->AsBool(),
+            "file/directory replacements and unexpected exceptions must roll back: " + output.str());
+        Require(Fingerprint(projectPath) == original && std::filesystem::is_directory(projectPath / "empty-directory") &&
+            !std::filesystem::exists(projectPath / "new-empty-directory"),
+            "rollback must restore every original byte and empty directory, removing newly created directories");
+        Require(std::filesystem::last_write_time(projectPath / "unchanged-file") == unchangedTime,
+            "rollback must not rewrite unchanged files");
+    }
+    const auto link = projectPath / "linked-directory";
+    std::filesystem::create_directory_symlink(parent, link, error);
+    if (!error) {
+        const auto refused = RunCliProgram({"batch", "--project", project, "--file", good.string(), "--dry-run", "--json"});
+        std::filesystem::remove(link);
+        Require(refused.exitCode == 1 && Contains(refused.out, "symbolic links") && Fingerprint(projectPath) == original,
+            "a linked project tree must be refused before any transaction writes files");
+    }
+}
+
+#if KB_CLI_RENDERER
+// The play camera of a map is set from the command line: pixel density, target, smoothing, drag margins, bounds.
+void RunMap2DCameraCliTests() {
+    const std::filesystem::path parent = TestRoot() / "camera_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Cam", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::string project = (parent / "Cam").string();
+    const std::string map = "/Game/Maps/World.kbmap2d";
+    Require(RunCliProgram({ "map2d", "new", "--project", project, "--name", "World", "--size", "32x24" }).exitCode == 0, "map2d new failed");
+    const std::filesystem::path file = parent / "Cam" / "Assets" / "Maps" / "World.kbmap2d";
+    const auto text = [&]() {
+        std::ifstream input{ file, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    Require(!Contains(text(), "camera "), "a new map has the plain camera");
+
+    const CliRun set = RunCliProgram({ "map2d", "set", "--project", project, "--map", map, "--camera-pixels-per-unit", "16", "--camera-follow", "Hero",
+        "--camera-smoothing", "0.25", "--camera-dead-zone", "1.5,0.5", "--camera-clamp", "yes" });
+    Require(set.exitCode == 0, "map2d set with camera options failed: " + set.out + set.err);
+    Require(Contains(text(), "camera 16 0.25 1.5 0.5 true \"Hero\""), "the camera settings must be in the map file: " + text());
+    const CliRun info = RunCliProgram({ "map2d", "info", "--project", project, "--map", map });
+    Require(Contains(info.out, "pixel perfect at 16") && Contains(info.out, "follows Hero") && Contains(info.out, "kept inside the map"),
+        "info must describe the play camera: " + info.out);
+
+    const std::string before = text();
+    for (const std::vector<std::string_view>& bad : { std::vector<std::string_view>{ "--camera-pixels-per-unit", "-4" },
+             std::vector<std::string_view>{ "--camera-pixels-per-unit", "many" }, std::vector<std::string_view>{ "--camera-smoothing", "100" },
+             std::vector<std::string_view>{ "--camera-dead-zone", "1" }, std::vector<std::string_view>{ "--camera-clamp", "maybe" } }) {
+        std::vector<std::string> words{ "map2d", "set", "--project", project, "--map", map };
+        words.insert(words.end(), bad.begin(), bad.end());
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        Require(kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err }) == 1, "a camera option that is not sensible must fail");
+        Require(text() == before, "a refused camera option must leave the map file as it was");
+    }
+    Require(RunCliProgram({ "map2d", "set", "--project", project, "--map", map, "--camera-follow", "none", "--camera-pixels-per-unit", "0", "--camera-smoothing", "0",
+                            "--camera-dead-zone", "0,0", "--camera-clamp", "no" }).exitCode == 0 && !Contains(text(), "camera "),
+        "setting everything back to its defaults writes no camera line");
+    const std::string unchanged = text();
+    const auto pathReport = [&](std::string_view option, std::string_view value, int expected) {
+        const auto run = RunCliProgram({"map2d", "path", "--project", project, "--map", map,
+            "--from", "1,1", "--to", "4,4", option, value});
+        kb::core::JsonValue report;
+        std::string parseError;
+        Require(run.exitCode == expected && kb::core::JsonValue::Parse(run.out, report, parseError),
+            "path command must return its status and JSON: " + run.out + run.err);
+        Require(text() == unchanged, "path queries must not change the authored map");
+        return report;
+    };
+    const auto straight = pathReport("--timeout-ms", "1000", 0);
+    Require(straight.Find("cost")->AsNumber() == 60.0 && straight.Find("status")->AsString() == "found",
+        "orthogonal path must have the expected accumulated cost");
+    const auto diagonal = pathReport("--diagonal", "safe", 0);
+    Require(diagonal.Find("cost")->AsNumber() == 42.0, "safe diagonal path must use diagonal costs");
+    Require(pathReport("--max-visited", "1", 3).Find("budget_exceeded")->AsString() == "visited",
+        "visited limit must be distinguishable from an unreachable destination");
+    Require(pathReport("--timeout-ms", "0.000000001", 3).Find("budget_exceeded")->AsString() == "time",
+        "time limit must report an incomplete search");
+    for (const auto value : {"nan", "inf", "-1", "0", "60001"}) {
+        Require(RunCliProgram({"map2d", "path", "--project", project, "--map", map,
+            "--from", "1,1", "--to", "4,4", "--timeout-ms", value}).exitCode == 1,
+            "invalid time budgets must be refused");
+    }
+    Require(RunCliProgram({"map2d", "block", "--project", project, "--map", map,
+        "--at", "1,1,4294967296"}).exitCode == 1 && text() == unchanged,
+        "an overflowing floor must not wrap around and edit another floor");
+    Require(RunCliProgram({"map2d", "block", "--project", project, "--map", map, "--at", "4,4"}).exitCode == 0,
+        "path fixture must block the destination");
+    const auto blocked = RunCliProgram({"map2d", "path", "--project", project, "--map", map,
+        "--from", "1,1", "--to", "4,4"});
+    Require(blocked.exitCode == 2 && Contains(blocked.out, "end-blocked"),
+        "a blocked destination must return no-path exit status");
+}
+// `import --reimport`: a changed source replaces the model in place; a material edited since the import is not overwritten without being
+// told; --diff plans without writing; what a reimport overwrote can be listed and undone.
+void RunMeshReimportCliTests() {
+    const std::filesystem::path parent = TestRoot() / "mesh_reimport_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Reimport", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Reimport";
+    const std::string project = root.string();
+    const std::filesystem::path sources = parent / "Source";
+    std::filesystem::create_directories(sources, error);
+    const auto writeBytes = [](const std::filesystem::path& path, const std::string& bytes) {
+        std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    };
+    const auto read = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const auto triangle = [](float scale) {
+        std::string bytes;
+        for (const float value : { 0.0F, 0.0F, 0.0F, scale, 0.0F, 0.0F, 0.0F, scale, 0.0F }) {
+            const auto bits = std::bit_cast<std::uint32_t>(value);
+            for (unsigned shift = 0U; shift < 32U; shift += 8U) bytes.push_back(static_cast<char>((bits >> shift) & 0xFFU));
+        }
+        return bytes;
+    };
+    const auto document = [](const std::string& roughness) {
+        return std::string{ R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)" } +
+            R"("meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],)" +
+            R"("materials":[{"name":"Skin","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.25,"roughnessFactor":)" + roughness + "}}]," +
+            R"("textures":[{"source":0}],"images":[{"uri":"Skin.png"}],)" +
+            R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],)" +
+            R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],"buffers":[{"byteLength":36,"uri":"Triangle.bin"}]})";
+    };
+    const std::array<unsigned char, 69U> pngBytes{ 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
+        0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02,
+        0xFE, 0xA7, 0x35, 0x81, 0x84, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82 };
+    const std::string png{ reinterpret_cast<const char*>(pngBytes.data()), pngBytes.size() };
+    writeBytes(sources / "Skin.png", png);
+    writeBytes(sources / "Triangle.bin", triangle(1.0F));
+    writeBytes(sources / "Triangle.gltf", document("0.75"));
+
+    const CliRun imported = RunCliProgram({ "import", "--project", project, "--destination", "/Game/Meshes", "--import-materials", "yes", (sources / "Triangle.gltf").string() });
+    Require(imported.exitCode == 0 && Contains(imported.out, "created /Game/Meshes/Triangle.21kb"), "the first import failed: " + imported.out + imported.err);
+    const std::filesystem::path meshFile = root / "Assets/Meshes/Triangle.21kb";
+    const std::filesystem::path materialFile = [&] {
+        for (const auto& entry : std::filesystem::directory_iterator(root / "Assets/Meshes/Materials")) return entry.path();
+        return std::filesystem::path{};
+    }();
+    Require(Contains(read(root / "Assets/Meshes/Triangle.importrecord"), "asset ") && !materialFile.empty(), "the import left a record");
+    const std::string asset = "/Game/Meshes/Triangle.21kb";
+    const std::string gltf = (sources / "Triangle.gltf").string();
+
+    // Nothing changed: reused, nothing backed up.
+    const CliRun same = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf });
+    Require(same.exitCode == 0 && Contains(same.out, "reused " + asset) && !Contains(same.out, "backup"), "an unchanged reimport is reused: " + same.out + same.err);
+
+    // A changed model: planned, then replaced in place, with a backup that can be listed and undone.
+    const std::string before = read(meshFile);
+    writeBytes(sources / "Triangle.bin", triangle(2.0F));
+    const CliRun plan = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--diff" });
+    Require(plan.exitCode == 0 && Contains(plan.out, "would be updated " + asset) && Contains(plan.out, "~ " + asset) && read(meshFile) == before, "--diff plans and writes nothing: " + plan.out + plan.err);
+    const CliRun updated = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf });
+    Require(updated.exitCode == 0 && Contains(updated.out, "updated " + asset) && Contains(updated.out, "backup ") && read(meshFile) != before, "a changed model is replaced in place: " + updated.out + updated.err);
+    const std::string backup = updated.out.substr(updated.out.find("backup ") + 7U, updated.out.find(' ', updated.out.find("backup ") + 7U) - updated.out.find("backup ") - 7U);
+    Require(Contains(RunCliProgram({ "import", "--project", project, "--list-backups" }).out, backup), "the backup is listed");
+    Require(RunCliProgram({ "import", "--project", project, "--undo", backup }).exitCode == 0 && read(meshFile) == before, "undo puts the old model back");
+    Require(RunCliProgram({ "import", "--project", project, "--undo", backup }).exitCode == 1, "a backup is restored once");
+    Require(RunCliProgram({ "import", "--project", project, "--undo", "../x" }).exitCode == 1, "a backup id is not a path");
+
+    // An edited material is not overwritten without being told.
+    std::string material = read(materialFile);
+    const std::size_t at = material.find("roughnessFactor 0.75");
+    Require(at != std::string::npos, "the imported material has its roughness");
+    material.replace(at, 20U, "roughnessFactor 0.5");
+    writeBytes(materialFile, material);
+    writeBytes(sources / "Triangle.gltf", document("0.2"));
+    const CliRun refused = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf });
+    Require(refused.exitCode == 1 && Contains(refused.err, "edited since the last import") && Contains(refused.out + refused.err, "! "), "the default refuses over an edited material: " + refused.out + refused.err);
+    Require(read(materialFile) == material, "a refusal changes nothing");
+    const CliRun kept = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--on-conflict", "keep-local" });
+    Require(kept.exitCode == 0 && Contains(kept.out, "kept ") && read(materialFile) == material, "keep-local leaves the edit: " + kept.out + kept.err);
+    const CliRun overwritten = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--on-conflict", "overwrite" });
+    Require(overwritten.exitCode == 0 && Contains(overwritten.out, "replaced ") && Contains(overwritten.out, "backup ") && Contains(read(materialFile), "roughnessFactor 0.2") && Contains(overwritten.out, "updated "),
+        "overwrite replaces the edit: " + overwritten.out + overwritten.err);
+    const std::string overwriteBackup = overwritten.out.substr(overwritten.out.find("backup ") + 7U, overwritten.out.find(' ', overwritten.out.find("backup ") + 7U) - overwritten.out.find("backup ") - 7U);
+    Require(RunCliProgram({ "import", "--project", project, "--undo", overwriteBackup }).exitCode == 0 && read(materialFile) == material, "undo brings back the edited material");
+    Require(RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--on-conflict", "sometimes" }).exitCode == 1, "an unknown policy is refused");
+    Require(RunCliProgram({ "import", "--project", project, "--reimport", "/Game/Meshes/Nothing.21kb", gltf }).exitCode == 1, "a missing asset is refused");
+}
+
+// `run --report world-memory`: a project with a built partitioned world streams its cells around a stream focus, and the report splits what
+// they hold by kind and states which kinds it could not read.
+void RunWorldMemoryCliTests() {
+    const std::filesystem::path parent = TestRoot() / "world_memory_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Big", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Big";
+    const std::string project = root.string();
+    for (int index = 0; index < 6; ++index) {
+        const std::string position = std::to_string(index * 60) + ",0," + std::to_string(index * 30);
+        Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", "Cube" + std::to_string(index), "--position", position }).exitCode == 0, "adding a cube failed");
+    }
+    Require(RunCliProgram({ "world", "migrate", "--scene", (root / "Assets/Scenes/Main.21kbscene").string(), "--out", "Assets/Worlds/Big.21kbworld", "--cell-size", "64", "--project", project }).exitCode == 0, "world migrate failed");
+    Require(RunCliProgram({ "world", "build", "--world", "Assets/Worlds/Big.21kbworld", "--project", project }).exitCode == 0, "world build failed");
+    // The migrated objects live in the world now: the scene keeps only a place for the world and a stream focus to load around.
+    for (int index = 0; index < 6; ++index) {
+        Require(RunCliProgram({ "entity", "remove", "--project", project, "--name", "Cube" + std::to_string(index) }).exitCode == 0, "removing a cube failed");
+    }
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Holder" }).exitCode == 0, "adding the holder failed");
+    Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Holder", "--type", "ContentInstance" }).exitCode == 0, "adding the content instance failed");
+    const std::string worldId = std::to_string(kb::assets::MakeAssetId("/Game/Worlds/Big.21kbworld:World").value);
+    const CliRun placed = RunCliProgram({ "component", "set", "--project", project, "--entity", "Holder", "--type", "ContentInstance", "--set", "assetId=" + worldId, "--set", "kind=3" });
+    Require(placed.exitCode == 0, "placing the world failed: " + placed.out + placed.err);
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Streamer", "--position", "100,0,50" }).exitCode == 0, "adding the streamer failed");
+    Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Streamer", "--type", "StreamFocus" }).exitCode == 0, "adding the stream focus failed");
+    Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Streamer", "--type", "StreamFocus", "--set", "outerRadius=300.0", "--set", "innerRadius=250.0" }).exitCode == 0, "setting the stream focus failed");
+
+    // Streaming performs real asynchronous I/O. Run a four-second playback instead of racing
+    // through simulation ticks before the worker threads have had time to finish reading.
+    const auto playbackStarted = std::chrono::steady_clock::now();
+    const CliRun ran = RunCliProgram({ "run", "--project", project, "--frames", "240", "--realtime", "--report", "world-memory" });
+    Require(std::chrono::steady_clock::now() - playbackStarted >= std::chrono::milliseconds(3900), "realtime playback did not pace simulation ticks");
+    Require(ran.exitCode == 0, "run --report world-memory failed: " + ran.out + ran.err);
+    kb::core::JsonValue report;
+    std::string parseError;
+    Require(kb::core::JsonValue::Parse(ran.out, report, parseError), "the world memory report is not JSON: " + parseError + ran.out);
+    Require(report.Find("schema") != nullptr && report.Find("schema")->AsString() == "21kb.world-memory/v1" && report.Find("succeeded")->AsBool(), "the report has its schema and succeeded");
+    Require(report.Find("worlds")->AsNumber() == 1.0, "one world is placed");
+    const kb::core::JsonValue* memory = report.Find("memory");
+    Require(memory != nullptr && memory->Find("resident_units")->AsNumber() >= 5.0 && memory->Find("estimated_resident_bytes")->AsNumber() > 0.0, "the world's cells streamed in: " + ran.out);
+    const kb::core::JsonValue* categories = memory->Find("categories");
+    Require(categories != nullptr && categories->Size() == 5U, "five kinds are reported");
+    const auto kind = [&](const char* name) -> const kb::core::JsonValue* {
+        for (std::size_t index = 0U; index < categories->Size(); ++index) {
+            if (categories->At(index)->Find("kind")->AsString() == name) return categories->At(index);
+        }
+        return nullptr;
+    };
+    Require(kind("instances") != nullptr && kind("instances")->Find("source")->AsString() == "measured" && kind("instances")->Find("bytes")->AsNumber() > 0.0, "the instances are measured");
+    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "estimated", "the assets are estimated from file sizes");
+    Require(kind("scripts") != nullptr && kind("scripts")->Find("source")->AsString() == "measured", "the script heap is measured");
+    Require(kind("physics")->Find("source")->AsString() == "unavailable" && kind("physics")->Find("bytes")->IsNull() &&
+            kind("gpu")->Find("source")->AsString() == "unavailable" && memory->Find("has_unavailable_kinds")->AsBool(),
+        "kinds this host cannot read are unavailable, not zero");
+    Require(memory->Find("samples")->AsNumber() >= 1.0 && memory->Find("minimum_error_ratio")->AsNumber() > 0.0 &&
+            memory->Find("minimum_error_ratio")->AsNumber() <= memory->Find("maximum_error_ratio")->AsNumber(), "the error ratio was sampled");
+    const CliRun refused = RunCliProgram({ "run", "--project", project, "--report", "bogus" });
+    Require(refused.exitCode == 1 && Contains(refused.err, "world-memory"), "the report list names world-memory: " + refused.err);
+    const CliRun excessive = RunCliProgram({ "run", "--project", project, "--frames", "240", "--dt", "1000", "--realtime" });
+    Require(excessive.exitCode == 1 && Contains(excessive.err, "24 hours"), "unbounded realtime playback was accepted");
+}
+
+// A Sprite 2D from the command line: created from the Create menu, its picture chosen by path (which records the picture's
+// size), refused for something that is not a picture, and run headless without errors.
+void RunSprite2DCliTests() {
+    const std::filesystem::path parent = TestRoot() / "sprite2d_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Pixels", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Pixels";
+    const std::string project = root.string();
+    WriteRedPixelPng(root / "Assets" / "Sprites" / "Hero.png");
+    const CliRun created = RunCliProgram({ "entity", "add", "--project", project, "--create", "Animated Sprite", "--name", "Hero" });
+    Require(created.exitCode == 0, "entity add --create 'Animated Sprite' failed: " + created.out + created.err);
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Sprite 2D", "--name", "Still" }).exitCode == 0, "entity add --create 'Sprite 2D' failed");
+    const CliRun chosen = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D",
+        "--set", "image=/Game/Sprites/Hero.png", "--set", "pixelsPerUnit=1", "--set", "framesPerSecond=6", "--set", "sortingOrder=3" });
+    Require(chosen.exitCode == 0, "choosing the picture failed: " + chosen.out + chosen.err);
+    const CliRun refused = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D", "--set", "image=/Game/Missing.png" });
+    Require(refused.exitCode != 0 && Contains(refused.out + refused.err, "is not a picture"), "a missing picture must be refused with a reason: " + refused.out + refused.err);
+    const auto loaded = kb::scene::SceneDocumentService::Load(root / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(loaded.succeeded, "the scene must load");
+    const kb::scene::Sprite2DComponent* hero = nullptr;
+    const kb::scene::Sprite2DComponent* still = nullptr;
+    for (const auto& node : loaded.document.worldPrefab.Nodes()) {
+        if (node.components.sprite2D && node.components.sprite2D->frameCount == 4U) hero = &*node.components.sprite2D;
+        if (node.components.sprite2D && node.components.sprite2D->frameCount == 0U) still = &*node.components.sprite2D;
+    }
+    Require(hero != nullptr && still != nullptr, "both sprites are in the scene");
+    Require(hero->imageAssetId == kb::assets::MakeAssetId("/Game/Sprites/Hero.png:RenderTexture").value && hero->imageWidth == 1U && hero->imageHeight == 1U &&
+            hero->framesPerSecond == 6.0F && hero->sortingOrder == 3 && hero->pixelsPerUnit == 1.0F,
+        "the picture, its size and the settings are saved");
+    const CliRun ran = RunCliProgram({ "run", "--project", project, "--frames", "3" });
+    Require(ran.exitCode == 0 && Contains(ran.out + ran.err, "0 diagnostics"), "the scene with sprites runs headless without errors: " + ran.out + ran.err);
+}
+
+#endif
+
+#if KB_CLI_RENDERER
+// `entity add --create 'Platformer Player'` and 'Top Down Player': the entity, its script, its input and the map cameras.
+void RunPlayerPresetCliTests() {
+    const std::filesystem::path parent = TestRoot() / "player_preset";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Game", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Game";
+    const std::string project = root.string();
+    Require(RunCliProgram({ "map2d", "new", "--project", project, "--name", "World", "--size", "32x24", "--orientation", "wall" }).exitCode == 0, "map2d new failed");
+    const auto read = [](const std::filesystem::path& file) {
+        std::ifstream input{ file, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+
+    const CliRun added = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--position", "2,3,0" });
+    Require(added.exitCode == 0, "the Platformer Player preset failed: " + added.out + added.err);
+    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DPlayer.lua";
+    Require(std::filesystem::exists(script) && Contains(read(script), "@expose coyoteTime") && Contains(read(script), "@expose jumpBuffer"),
+        "the preset must write the platformer script, with its tunables");
+    for (const char* file : { "Move.21kbinputaction", "Jump.21kbinputaction", "PlayerInput.21kbinputcontext" }) {
+        Require(std::filesystem::exists(root / "Assets" / "Input" / file), std::string{ "the preset must write the input asset " } + file);
+    }
+    Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.inputMappingContext ==
+                "/Game/Input/PlayerInput.21kbinputcontext", "the project's input context must be the preset's");
+    const CliRun listed = RunCliProgram({ "scene-list", "--project", project });
+    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController"),
+        "the scene must hold a Player with a CharacterController: " + listed.out);
+    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DPlayer.lua" });
+    Require(behaviours.exitCode == 0, "the preset script must validate: " + behaviours.out + behaviours.err);
+    const CliRun info = RunCliProgram({ "map2d", "info", "--project", project, "--map", "/Game/Maps/World.kbmap2d" });
+    Require(Contains(info.out, "follows Player") && Contains(info.out, "kept inside the map"), "the map camera must follow the Player: " + info.out);
+
+    // The script is the project's: a second player keeps the edited file, takes the camera, and a name is not used twice.
+    {
+        std::ofstream out{ script, std::ios::binary | std::ios::app };
+        out << "-- edited by the author\n";
+    }
+    const std::string edited = read(script);
+    const CliRun second = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--name", "Hero" });
+    Require(second.exitCode == 0 && read(script) == edited, "a second preset must keep the edited script: " + second.out + second.err);
+    Require(Contains(RunCliProgram({ "map2d", "info", "--project", project, "--map", "/Game/Maps/World.kbmap2d" }).out, "follows Hero"),
+        "the map camera follows the latest player");
+    const CliRun again = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player" });
+    Require(again.exitCode == 1 && Contains(again.err, "already exists"), "a second entity named Player must be refused: " + again.err);
+    const CliRun topDown = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--name", "Walker" });
+    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DPlayer.lua"),
+        "the top-down preset works and notes that the map is a platformer map: " + topDown.out + topDown.err);
+    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
+
+    // The same players on the 2D physics.
+    const CliRun box2d = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "2d", "--name", "Hero2D" });
+    Require(box2d.exitCode == 0 && Contains(box2d.out, "Platformer2DBox2DPlayer.lua"), "the 2D physics preset failed: " + box2d.out + box2d.err);
+    Require(Contains(read(root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua"), "Physics2D.MoveCharacter"), "the preset must write the 2D physics script");
+    Require(Contains(RunCliProgram({ "scene-list", "--project", project }).out, "CharacterController2D"), "the scene must hold a Character Controller 2D");
+    const CliRun box2dTopDown = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--physics", "2d", "--name", "Walker2D" });
+    Require(box2dTopDown.exitCode == 0 && Contains(read(root / "Assets" / "Scripts" / "TopDown2DBox2DPlayer.lua"), "eightWay"), "the top-down 2D physics preset failed: " + box2dTopDown.out + box2dTopDown.err);
+    Require(RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DBox2DPlayer.lua" }).exitCode == 0, "the 2D physics script must validate");
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--physics", "2d", "--name", "Cube2D" }).exitCode == 1, "--physics is only for the players");
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--physics", "4d", "--name", "Odd" }).exitCode == 1, "an unknown physics is refused");
+
+    // The project runs with the new players.
+    const CliRun run = RunCliProgram({ "run", "--project", project, "--frames", "30" });
+    Require(run.exitCode == 0 && Contains(run.out, "0 diagnostics"), "the scene with the players must run cleanly: " + run.out + run.err);
+}
+#endif
+
+#if !KB_CLI_RENDERER
+void RunSprite2DAssetRefusalTests() {
+    const std::filesystem::path parent = TestRoot() / "sprite2d_without_renderer";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Sprites", "--template", "Empty" }).exitCode == 0,
+        "creating the sprite project failed");
+    const std::filesystem::path root = parent / "Sprites";
+    const std::string project = root.string();
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Hero" }).exitCode == 0, "creating the sprite entity failed");
+    const CliRun added = RunCliProgram({ "component", "add", "--project", project, "--entity", "Hero", "--type", "Sprite2D" });
+    Require(added.exitCode != 0 && Contains(added.err, "World.Map2D"),
+        "adding a sprite must explain its disabled plugin: " + added.out + added.err);
+    // A renderer-free tool can still edit data authored by a renderer-enabled tool.
+    const auto scenePath = root / "Assets" / "Scenes" / "Main.21kbscene";
+    auto document = kb::scene::SceneDocumentService::Load(scenePath);
+    Require(document.succeeded, "the sprite scene must load");
+    bool foundHero = false;
+    for (std::uint32_t index = 0U; index < document.document.worldPrefab.NodeCount(); ++index) {
+        auto* node = document.document.worldPrefab.TryGetMutableNode(index);
+        if (node->name == "Hero") {
+            node->components.sprite2D = kb::scene::Sprite2DComponent{};
+            foundHero = true;
+        }
+    }
+    Require(foundHero && kb::scene::SceneDocumentService::Save(document.document, scenePath), "the authored sprite fixture must save");
+    const CliRun edited = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D", "--set", "sortingOrder=7" });
+    Require(edited.exitCode == 0, "editing ordinary sprite properties must not require the renderer: " + edited.out + edited.err);
+    const auto savedScene = [&]() {
+        std::ifstream input{ root / "Assets" / "Scenes" / "Main.21kbscene", std::ios::binary };
+        Require(input.is_open(), "the sprite scene must exist");
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const std::string before = savedScene();
+    for (const std::string selection : { "image=none", "material=none", "imageAssetId=/Game/Picture.png", "materialAssetId=/Game/Surface.kbmat" }) {
+        const CliRun refused = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D",
+            "--set", "sortingOrder=9", "--set", selection });
+        Require(refused.exitCode != 0 && Contains(refused.err, "requires a CLI built with renderer support"),
+            "sprite asset selection must explain the missing capability: " + refused.out + refused.err);
+        Require(savedScene() == before, "a refused sprite asset selection must not save partial property changes");
+    }
+}
+#endif
+
+int main(int argc, char** argv) {
+#if KB_CLI_RENDERER
+    kb::render::tests::InstallRendererAssertionPolicy();
+    if (argc == 2 && std::string_view{ argv[1] } == "assert-probe") {
+        kb::render::tests::ProbeRendererAssertion();
+        return EXIT_SUCCESS;
+    }
+#else
+    static_cast<void>(argv);
+#endif
+    if (argc == 2 && std::string_view{argv[1]} == "audio-mixer") {
+        RunAudioMixerCommandTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "cli-json") {
+        RunCliJsonTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "batch") {
+        RunBatchCommandTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
+        RunInputRecordingCliTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "safe-area") {
+        RunSafeAreaCliTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "data-version") {
+        RunNewerSceneMetadataCliTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "sprite2d") {
+#if KB_CLI_RENDERER
+        RunSprite2DCliTests();
+#else
+        RunSprite2DAssetRefusalTests();
+#endif
+        return EXIT_SUCCESS;
+    }
+    if (argc != 1) return EXIT_FAILURE;
+    RunAudioMixerCommandTests();
+    RunCliJsonTests();
+    RunCommandCatalogTests();
+    RunBatchCommandTests();
     RunMiniJsonTests();
     RunArgumentListTests();
+    RunFlexibleAssetPathTests();
     RunValidateCommandTests();
     RunImportCommandTests();
 #if KB_CLI_RENDERER
@@ -3693,9 +5121,21 @@ int main() {
     RunImportSettingsCommandTests();
     RunMaterialAuthoringCommandTests();
     RunMaterialGraphUtilityNodeCommandTests();
+    RunMap2DCameraCliTests();
+    RunSprite2DCliTests();
+    RunWorldMemoryCliTests();
+    RunMeshReimportCliTests();
+    RunPlayerPresetCliTests();
+#else
+    RunSprite2DAssetRefusalTests();
 #endif
     RunSceneCommandTests();
     RunRunCommandTests();
+    RunPlaybackStopTests();
+    RunInputRecordingCliTests();
+    RunSafeAreaCliTests();
+    RunNewerSceneMetadataCliTest();
+    RunParticleReportCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();
     RunSceneNewCommandTests();
@@ -3704,6 +5144,7 @@ int main() {
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();
+    RunMcpCommandRefusalTests();
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
     RunNavMeshCommandTests();

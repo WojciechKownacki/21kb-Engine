@@ -148,6 +148,32 @@ are rewritten authenticated in place (`migrated` in the load result). An unauthe
 cannot be told apart from a forged one, so a game whose first release already wrote schema 3
 should set `SaveGameIntegrity::acceptUnauthenticatedLegacySaves` to `false`.
 
+A single save document is one buffer, written and read whole. The limits are: 16 MiB for the serialized file
+(`kMaxSaveGameSerializedBytes`; a file of exactly 16 MiB saves and loads, one byte more is refused by
+`Save` and `Serialize` and by `Deserialize`/`Load` as `TooLarge`), 65536 entries, 1 KiB per key and
+1 MiB per string value. `SaveGameChunkStore` groups up to 1024 such documents into a larger save,
+with a 256 KiB authenticated index. `Commit` accepts named chunk updates (a null document removes
+a chunk), writes changed chunks one at a time, then atomically publishes their index. It never
+serializes the entire world into one buffer. A chunk's name is a 1–64 character storage slot name;
+one update batch contains at most 2048 entries, allowing replacement of all 1024 names.
+
+Readers call `Open` once and `Load(snapshot, name)` for individual chunks. Each content hash is
+bound into the authenticated index, preventing a valid chunk from another generation being
+silently substituted. Old snapshots remain readable until explicit `Prune`; only prune after
+their readers have finished. This removes obsolete chunks and leftovers from interrupted commits.
+One writer owns each slot. The host's `UserStorage` quota bounds total disk use, including retained
+generations; a quota failure midway through a commit leaves the previous index intact. This is
+chunk-level loading and partial updates, not streaming individual values within a document.
+
+A save is written to `<path>.tmp` and then moved over the old file,
+so a failed or interrupted write before replacement leaves the previous save byte for byte unchanged;
+an out-of-space error is a failed `Save`, never a partial file at the final path. The serialized size
+is checked before allocating encoding buffers. Native save and user-storage writes flush file data
+before replacement (`_commit` on Windows, `fsync` on POSIX); POSIX also flushes the parent directory
+after the rename. If that final directory flush fails, the operation reports failure but the complete
+new file may already be visible. Callers should reload to determine which complete version is present.
+Browser writes still require the asynchronous user-storage flush to reach IndexedDB.
+
 ## Crash reports
 
 A Windows player writes a crash report to `%LOCALAPPDATA%\21kb\CrashReports\<executable name>` and

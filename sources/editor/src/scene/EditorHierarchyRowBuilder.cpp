@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "scene/EditorHierarchyRowFactory.hpp"
 #include "scene/EditorHierarchySearchMatcher.hpp"
 
@@ -31,6 +32,7 @@ void EditorHierarchyRowBuilder::AppendRoot(const kb::scene::Scene& scene,
 }
 
 void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<EditorHierarchyRow>& rows) {
+    if (const auto* renderer = scene.Components().MeshRenderers().TryGet(entity); renderer && renderer->transient) return;
     const EditorHierarchyRow row = EditorHierarchyRowFactory::Make(scene, collapsedEntities, entity, depth);
     rows.push_back(row);
     if (!row.expanded) {
@@ -43,6 +45,7 @@ void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const Coll
 }
 
 bool EditorHierarchyRowBuilder::AppendFiltered(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::uint32_t depth, std::string_view normalizedQuery, std::vector<EditorHierarchyRow>& rows) {
+    if (const auto* renderer = scene.Components().MeshRenderers().TryGet(entity); renderer && renderer->transient) return false;
     std::vector<EditorHierarchyRow> childRows;
     for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
         static_cast<void>(AppendFiltered(scene, child, depth + 1U, normalizedQuery, childRows));

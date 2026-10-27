@@ -11,6 +11,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
+#include "engine/assets/Map2DAsset.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -2249,6 +2250,10 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                 return false;
             }
             const std::string stageName{ FixedShaderStageName(shader.stage) };
+            // Keep the browser lighting functions intact until the driver compiles
+            // them; flattening this program can crash downstream HLSL compilers.
+            const std::string optimization = backend == asset_bake::ShaderBakeBackend::Essl &&
+                std::string_view{ shader.name } == "fs_deferred_lighting.sc" ? "0" : "3";
             const std::filesystem::path binaryPath = profileRoot / (std::string{ shader.name } + ".bin");
             planned.jobs.push_back(jobs.size());
             jobs.push_back(FixedShaderJob{
@@ -2257,7 +2262,7 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                 .diagnosticPath = profileRoot / (std::string{ shader.name } + ".log"),
                 .cachePath = cacheRoot / backendName / (std::string{ shader.name } + ".bin"),
                 .identity = toolchainKey + "/" + backendName + "/" + profileName + "/" + stageName + "/" +
-                    shader.name,
+                    shader.name + "/O" + optimization,
                 .arguments = {
                     "--type", stageName,
                     "--platform", shadercPlatform,
@@ -2267,7 +2272,7 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                     "--varyingdef", varyingDef.generic_string(),
                     "-i", sourceRoot.generic_string(),
                     "-i", bgfxInclude.generic_string(),
-                    "-O", "3",
+                    "-O", optimization,
                 },
             });
         }
@@ -2755,7 +2760,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 });
                 ++result.textureArtifactCount;
             }
-        } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension) {
+        } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension &&
+                   entry.sourceExtension != kb::assets::kMap2DAssetExtension) {
             kb::render::RenderMeshAssetLoader loader;
             const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
                 .metadata = metadata,
@@ -2781,9 +2787,12 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             });
             ++result.meshArtifactCount;
         } else {
-            // Terrain heights, holes and layer weights are its compact runtime representation.
-            if (IsMeshAsset(metadata) && !kb::assets::TerrainAssetIO::Load(fileBytes, &error)) {
+            // Preserve editable runtime data for procedural terrain and tilemap chunks.
+            if (entry.sourceExtension == kb::assets::kTerrainAssetExtension && !kb::assets::TerrainAssetIO::Load(fileBytes, &error)) {
                 return Failure("terrain could not be validated for cooking: " + virtualPath + "\n" + error);
+            }
+            if (entry.sourceExtension == kb::assets::kMap2DAssetExtension && !kb::assets::Map2DAssetIO::Load(fileBytes, &error)) {
+                return Failure("tilemap could not be validated for cooking: " + virtualPath + "\n" + error);
             }
             asset_bake::AssetBakeDigest digest{};
             const std::string sourceSettings = metadata.type + ":" + entry.sourceExtension;

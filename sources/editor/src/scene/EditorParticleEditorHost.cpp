@@ -428,9 +428,14 @@ kb::particle_editor::ParticleEmitterInspectorView EditorSceneContext::ParticleEd
     if (asset == nullptr) return {};
     const auto& registry = scene_->Assets().Manager().Registry();
     const auto* owner = registry.Find(particleEditorAssetId_);
-    return kb::particle_editor::ParticleEmitterInspectorModel::Build(
+    auto view = kb::particle_editor::ParticleEmitterInspectorModel::Build(
         *asset, particleEditorWorkspace_.SelectedEmitterId(), particleEditorWorkspace_.SelectedModuleId(),
         owner, &registry);
+    const auto* preview = ParticleEditorPreviewScene();
+    const auto snapshot = preview == nullptr ? nullptr : kb::particles::ParticlePlayback::ReadRenderSnapshot(*preview);
+    view.execution = kb::particle_editor::ParticleEmitterInspectorModel::ReadExecution(
+        snapshot.get(), particleEditorAssetId_.value, view.emitterId);
+    return view;
 }
 
 std::vector<kb::assets::AssetMetadata> EditorSceneContext::ParticleEditorRecipes() const {
@@ -479,6 +484,15 @@ bool EditorSceneContext::FinalizeParticleEditorCommand(kb::particle_editor::Part
 bool EditorSceneContext::AddParticleEditorEmitter(kb::assets::AssetId materialId) {
     if (!HasParticleEditorAsset())
         return false;
+    const auto* asset = ParticleEditorWorkingAsset();
+    if (!materialId.IsValid() && asset != nullptr && !asset->emitters.empty()) {
+        const auto selected = std::find_if(asset->emitters.begin(), asset->emitters.end(), [this](const auto& emitter) {
+            return emitter.emitterId == particleEditorWorkspace_.SelectedEmitterId();
+        });
+        return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::AddEmitter(
+            particleEditorDocument_, particleEditorWorkspace_,
+            (selected == asset->emitters.end() ? asset->emitters.front() : *selected).output.material));
+    }
     const kb::assets::AssetManager& manager = scene_->Assets().Manager();
     const kb::assets::AssetMetadata* metadata = materialId.IsValid() ? manager.Registry().Find(materialId) :
         manager.Registry().FindByPath("/21kbParticle/Materials/DefaultParticle.kbmat");
@@ -826,6 +840,16 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
         if (parsed) output.sort = static_cast<kb::scene::ParticleSortMode>(uintValue); break;
     case kb::particle_editor::ParticleEditorProperty::OutputDepthTest: parsed = setBool(output.depthTest); break;
     case kb::particle_editor::ParticleEditorProperty::OutputDepthWrite: parsed = setBool(output.depthWrite); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputScreenDepthCollision: {
+        if (!ParseBool(text, boolValue)) return false;
+        auto candidate = *asset;
+        const auto selected = std::find_if(candidate.emitters.begin(), candidate.emitters.end(), [&](const auto& value) {
+            return value.emitterId == inspector.emitterId;
+        });
+        if (selected == candidate.emitters.end()) return false;
+        selected->screenDepthCollision = boolValue;
+        return ApplyParticleEditorWorkingCopy(std::move(candidate));
+    }
     case kb::particle_editor::ParticleEditorProperty::OutputSoftParticles: parsed = setBool(output.softParticles); break;
     case kb::particle_editor::ParticleEditorProperty::OutputAntiAliasing: parsed = setBool(output.antiAliasing); break;
     case kb::particle_editor::ParticleEditorProperty::OutputAlignment:
@@ -833,6 +857,8 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
         if (parsed) output.alignment = static_cast<kb::scene::ParticleAlignment>(uintValue); break;
     case kb::particle_editor::ParticleEditorProperty::FlipbookColumns:
     case kb::particle_editor::ParticleEditorProperty::FlipbookRows:
+    case kb::particle_editor::ParticleEditorProperty::FlipbookStartFrame:
+    case kb::particle_editor::ParticleEditorProperty::FlipbookFrameCount:
     case kb::particle_editor::ParticleEditorProperty::FlipbookFramesPerSecond:
     case kb::particle_editor::ParticleEditorProperty::FlipbookLooping:
     case kb::particle_editor::ParticleEditorProperty::OutputVelocityScale:
@@ -845,6 +871,8 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
                           std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>) {
                 if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookColumns) parsed = setUInt(payload.flipbook.columns);
                 else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookRows) parsed = setUInt(payload.flipbook.rows);
+                else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookStartFrame) parsed = setUInt(payload.flipbook.startFrame);
+                else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookFrameCount) parsed = setUInt(payload.flipbook.frameCount);
                 else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookFramesPerSecond) parsed = setFloat(payload.flipbook.framesPerSecond);
                 else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookLooping) parsed = setBool(payload.flipbook.looping);
                 else if constexpr (std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput>) {
@@ -888,6 +916,7 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
                 else if (row.payloadField == 2U) parsed = setFloat(value.restitution);
                 else if (row.payloadField == 3U) parsed = setFloat(value.friction);
                 else if (row.payloadField == 4U) parsed = setUInt(value.maxEventsPerStep);
+                else if (row.payloadField == 5U) parsed = setBool(value.killOnContact);
             } else if constexpr (std::is_same_v<T, kb::scene::ParticleSubEmitterModule>) {
                 if (row.payloadField == 0U) { std::uint64_t id = 0U; parsed = ParseNumber(text, id); if (parsed) value.targetEmitterId = id; }
                 else if (row.payloadField == 1U) { parsed = ParseNumber(text, uintValue) && uintValue <= 2U; if (parsed) value.trigger = static_cast<kb::scene::ParticleEventTrigger>(uintValue); }

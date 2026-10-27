@@ -31,6 +31,8 @@ inline constexpr std::uint32_t kExtractMaterials = 2301U;
 inline constexpr std::uint32_t kFindReferences = 2302U;
 inline constexpr std::uint32_t kOpen = 2303U;
 inline constexpr std::uint32_t kDuplicate = 2304U;
+inline constexpr std::uint32_t kReimport = 2305U;
+inline constexpr std::uint32_t kUndoReimport = 2306U;
 
 } // namespace
 
@@ -58,6 +60,8 @@ std::uint32_t EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand c
     case EditorAssetContextCommand::FindReferences: return kFindReferences;
     case EditorAssetContextCommand::Open: return kOpen;
     case EditorAssetContextCommand::Duplicate: return kDuplicate;
+    case EditorAssetContextCommand::Reimport: return kReimport;
+    case EditorAssetContextCommand::UndoReimport: return kUndoReimport;
     case EditorAssetContextCommand::AddDirectionalLight: return kDirectionalLight;
     case EditorAssetContextCommand::AddPointLight: return kPointLight;
     case EditorAssetContextCommand::AddSpotLight: return kSpotLight;
@@ -94,6 +98,8 @@ EditorAssetContextCommand EditorAssetBrowserNativeCommandMap::Command(std::uint3
     case kFindReferences: return EditorAssetContextCommand::FindReferences;
     case kOpen: return EditorAssetContextCommand::Open;
     case kDuplicate: return EditorAssetContextCommand::Duplicate;
+    case kReimport: return EditorAssetContextCommand::Reimport;
+    case kUndoReimport: return EditorAssetContextCommand::UndoReimport;
     case kDirectionalLight: return EditorAssetContextCommand::AddDirectionalLight;
     case kPointLight: return EditorAssetContextCommand::AddPointLight;
     case kSpotLight: return EditorAssetContextCommand::AddSpotLight;

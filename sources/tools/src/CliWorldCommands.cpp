@@ -114,13 +114,13 @@ namespace {
         io.err << "error: " << pathError << '\n';
         return 1;
     }
-#if defined(KB_CLI_WORLD_HLOD)
     std::string error;
     const std::optional<std::filesystem::path> contentRoot = ContentRoot(project, world, error);
     if (!contentRoot.has_value()) {
         io.err << "error: " << error << '\n';
         return 1;
     }
+#if defined(KB_CLI_WORLD_HLOD)
     // The cooker's and the editor's build: cells, cell index and HLOD proxies.
     const kb::world::WorldBuildResult built = kb::render::BuildWorldFromContentRoot(*contentRoot, world);
 #else

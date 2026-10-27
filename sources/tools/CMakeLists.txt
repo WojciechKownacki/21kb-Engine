@@ -3,12 +3,17 @@ add_library(kb_cli_core STATIC
     src/CliSkeletonCommands.cpp
     src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp
+    src/CliAudioCommands.cpp
+    src/CliBatchCommand.cpp
     src/CliCommon.cpp
+    src/CliDispatch.cpp
     src/CliEntityCommands.cpp
     src/CliImportCommand.cpp
     src/CliMcpCommand.cpp
     src/CliNavMeshCommands.cpp
+    src/CliModCommands.cpp
     src/CliPackSetCommands.cpp
+    src/CliPlayerPreset.cpp
     src/CliPhysicsCommands.cpp
     src/CliQualityCommands.cpp
     src/CliRunCommand.cpp
@@ -19,6 +24,8 @@ add_library(kb_cli_core STATIC
     src/CliWorldCommands.cpp
     src/private/CliCommands.hpp
     src/private/CliCommon.hpp
+    src/private/CliPlayerPreset.hpp
+    src/private/CliProgram.hpp
 )
 
 target_include_directories(kb_cli_core PUBLIC src/private)
@@ -34,7 +41,10 @@ if(KB_BUILD_RENDERER)
         src/CliMaterialGraphCommands.cpp
         src/CliPostProcessCommands.cpp
         src/CliParticleCommands.cpp
+        src/CliParticleProfileCommand.cpp
+        src/CliMap2DCommands.cpp
         src/private/CliMaterialShared.hpp)
+    target_link_libraries(kb_cli_core PUBLIC kb_world2d_core)
 endif()
 
 kb_apply_quality_gates(kb_cli_core)
@@ -53,6 +63,27 @@ if(WIN32)
 endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(KB_BUILD_RENDERER)
+    add_custom_target(kb_cli_stage_particle_content
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content/Materials"
+            "$<TARGET_FILE_DIR:kb_cli>/Content/21kbParticle/Materials"
+        VERBATIM)
+    add_dependencies(kb_cli kb_cli_stage_particle_content)
+endif()
+if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+    add_custom_target(kb_cli_stage_particle_plugin
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "$<TARGET_FILE_DIR:kb_cli>"
+        VERBATIM
+    )
+    add_dependencies(kb_cli_stage_particle_plugin kb_21kb_particle_plugin)
+    include("${CMAKE_SOURCE_DIR}/CMake/SerializeParticleRuntimeStaging.cmake")
+    kb_serialize_particle_runtime_staging(kb_cli_stage_particle_plugin)
+    add_dependencies(kb_cli kb_cli_stage_particle_plugin)
+endif()
 if(WIN32)
     # UTF-8 process code page: Polish (any) letters in arguments and file names.
     target_sources(kb_cli PRIVATE kb_cli.manifest)
@@ -85,6 +116,24 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
+    if(KB_BUILD_RENDERER)
+        target_include_directories(kb_cli_tests PRIVATE "${PROJECT_SOURCE_DIR}/sources/renderer/tests")
+        add_custom_target(kb_cli_tests_stage_particle_content
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content/Materials"
+                "$<TARGET_FILE_DIR:kb_cli_tests>/Content/21kbParticle/Materials"
+            VERBATIM)
+        add_dependencies(kb_cli_tests kb_cli_tests_stage_particle_content)
+        if(MSVC AND TARGET kb_test_process_error_tests)
+            find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+            add_dependencies(kb_cli_tests kb_test_process_error_tests)
+            add_test(NAME kb_cli_assertion_errors
+                COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/scripts/tests/test_test_process_errors.py
+                    --probe $<TARGET_FILE:kb_test_process_error_tests> --debug-crt $<IF:$<CONFIG:Debug>,1,0>
+                    --renderer-probe $<TARGET_FILE:kb_cli_tests>)
+            set_tests_properties(kb_cli_assertion_errors PROPERTIES TIMEOUT 60)
+        endif()
+    endif()
     if(WIN32)
         # The commands run in-process here, under the same code page as kb_cli.
         target_sources(kb_cli_tests PRIVATE kb_cli.manifest)
@@ -92,6 +141,68 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_cli_tests COMMAND $<TARGET_FILE:kb_cli_tests>)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)
+    if(KB_BUILD_RENDERER)
+        find_program(KB_BLENDER_EXECUTABLE NAMES blender)
+        find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+        if(KB_BLENDER_EXECUTABLE AND Python3_Interpreter_FOUND)
+            add_test(NAME kb_blender_bridge COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/scripts/tests/blender_bridge_integration.py"
+                "--cli" "$<TARGET_FILE:kb_cli>"
+                "--blender" "${KB_BLENDER_EXECUTABLE}"
+                "--test-root" "${CMAKE_BINARY_DIR}/blender_bridge_tests")
+            set_tests_properties(kb_blender_bridge PROPERTIES LABELS "tools;import;blender" TIMEOUT 300)
+        endif()
+    endif()
+    if(WIN32 AND KB_BUILD_RENDERER AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        add_test(NAME kb_cli_particle_profile COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:kb_cli>"
+            "-DTEST_ROOT=${CMAKE_BINARY_DIR}/particle_profile_tests"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliParticleProfileTests.cmake")
+        set_tests_properties(kb_cli_particle_profile PROPERTIES LABELS "tools;gpu" TIMEOUT 180)
+        add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:kb_cli>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")
+        set_tests_properties(kb_cli_renderer_info PROPERTIES LABELS "tools;gpu" TIMEOUT 300)
+    endif()
+
+    # The committed script API baseline: a removed or changed function fails here as well as in CI, so a breaking change
+    # shows up in a local ctest run. An intentional change updates the baseline with --update-baseline in the same commit.
+    add_test(NAME kb_cli_api_check_committed_baseline COMMAND kb_cli api-check
+        --baseline "${PROJECT_SOURCE_DIR}/tests/api_baseline/script_api.json")
+    set_tests_properties(kb_cli_api_check_committed_baseline PROPERTIES LABELS "tools" TIMEOUT 120)
 
     kb_apply_quality_gates(kb_cli_tests)
+
+    if(WIN32 AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        add_test(NAME kb_cli_ai_report COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:kb_cli>"
+            "-DTEST_ROOT=${CMAKE_BINARY_DIR}/ai-report-tests"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliAiReportTests.cmake")
+        set_tests_properties(kb_cli_ai_report PROPERTIES LABELS "tools;ai" TIMEOUT 180)
+        add_dependencies(kb_cli kb_physics_jolt_plugin kb_audio_miniaudio_plugin
+            kb_basic_lighting_plugin kb_21kb_particle_plugin kb_ai_plugin kb_world2d_plugin)
+        add_test(NAME kb_native_sdk_layout COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:kb_cli>"
+            "-DENGINE_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DSDK_GENERATOR=${CMAKE_GENERATOR}"
+            "-DCOMPILER=${CMAKE_CXX_COMPILER}"
+            "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            "-DTEST_ROOT=${CMAKE_BINARY_DIR}/native-sdk-layout"
+            "-DENGINE_LIBRARY=$<TARGET_FILE:kb_engine>"
+            "-DFLECS_LIBRARY=$<TARGET_FILE:flecs_static>"
+            "-DPHYSICS_PLUGIN=$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "-DAUDIO_PLUGIN=$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "-DLIGHTING_PLUGIN=$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "-DPARTICLES_PLUGIN=$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "-DAI_PLUGIN=$<TARGET_FILE:kb_ai_plugin>"
+            "-DWORLD2D_PLUGIN=$<TARGET_FILE:kb_world2d_plugin>"
+            "-Dlua_LIBRARY=$<TARGET_FILE:kb_lua>"
+            "-Dufbx_LIBRARY=$<TARGET_FILE:kb_ufbx>"
+            "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
+            "-Dzstd_LIBRARY=$<TARGET_FILE:kb_zstd>"
+            "-Drecast_LIBRARY=$<TARGET_FILE:kb_recast>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkLayout.cmake")
+        set_tests_properties(kb_native_sdk_layout PROPERTIES
+            CONFIGURATIONS "Release;RelWithDebInfo" LABELS "tools;native-sdk" TIMEOUT 240)
+    endif()
 endif()

@@ -13,9 +13,15 @@
 - Status: `accepted`; Stages 0 through 11 are accepted.
 - Scope: Stage 11 makes the existing typed volumetric schema executable through compilation, cache, snapshot, runtime resource discovery, GPU rendering, quality selection, telemetry, and lifecycle validation under the internal particle implementation plan, section 11.
 - Canonical naming is the project's frozen naming: `Rendering.21kbParticle`, `kb_21kb_particle_*` targets, and the established `ParticleEffect`/`Particle*` class names where they already exist. Documentation terminology maps to these names; do not rename production code merely to mirror documentation.
-- Orchestration: single-agent (no 2-agent orchestrator/implementer split — `docs/archive/particle-sol-xhigh-autonomous-prompt.md`'s mechanics are archived/unused, per explicit user decision 2026-08-15).
+- Orchestration: single-agent (no 2-agent orchestrator/implementer split, per explicit user decision 2026-08-15).
 - Next gate: release conformance, outside this implementation plan. The post-Stage 11 Particle Editor authoring UX pass is closed (see its entry below).
 - Rendering direction unchanged: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
+
+### Provider query cache lifetime
+
+- The query-state reuse cache keeps at most 256 blocks while its library is active and releases cached storage when that library unloads. Late static query destruction uses the global allocator after cache teardown.
+- `kb_ecs_query_shutdown_tests` retains one query beyond cache teardown and releases another into the cache before shutdown. The test verifies actual process shutdown alongside the existing 100-reload provider regression with and without scripts.
+- Windows x64 Release verification passed the shutdown case, all 12 ECS API groups, provider lifecycle, CPU particles, source GPU motion/readback, CLI/profile and renderer regressions. The shutdown case joins the Windows ASan gate and the Linux sanitizer test graph; clean sanitizer results remain pending.
 
 ### Post-Stage 11 follow-up: Particle Editor UX package 1 (`accepted`)
 
@@ -25,7 +31,7 @@
 - `ctest --test-dir build -C Debug -R "^kb_editor_particle_authoring_tests$|^kb_editor_particle_authoring_headless$" --output-on-failure` — exit `0`, `2/2`.
 - Visual inspection of the six automation BMPs (1366x768 and 1920x1080 docked/floating; 150% DPI docked/floating) confirmed no clipping, overlap, or undersized action targets. `git diff --check` — exit `0`.
 
-- Closing audit against plan section 8 (canonical Kanku to Particle UI mapping) found three deltas, of which one was repaired and two were deliberately dropped:
+- Closing audit against plan section 8 (canonical editor to Particle UI mapping) found three deltas, of which one was repaired and two were deliberately dropped:
   - `Find References` was offered for every asset but routed unconditionally to the material search, so a `.kbvfx` could only ever answer "requires a material asset". It now dispatches on asset type and scans the scene's `ParticleEffectComponents`; both paths still reject a wrong-type asset explicitly instead of returning a misleading empty result. Reaching it needed two more repairs found while verifying: the entry was built only in the material branch of the context menu, and the right-click menu is the native Win32 popup whose builder drops every item without a native command id — `FindReferences` had none, so the entry had never rendered for any asset type. Covered by `RunParticleEffectReferenceFinderReportsComponentUsageTest` and `RunParticleEffectContextMenuExposesFindReferencesTest` (menu position, native id round trip, and absence on assets whose usage cannot be queried), each proven by a controlled break.
   - The plan's `Events` composer section is dropped. The dispatch it would author already exists and runs (`CpuParticleBackend::ProcessInternalEvents` routes each internal event to both `SubEmitter` modules and effect-level bindings), and the authoring model for it is the `SubEmitter` module, which is already complete and matches the established choice for this feature: sub-emission is authored as a per-emitter module list, and graph-based authoring expresses it as node connections, with no central event table either way. The mechanism is internal to the simulation — no event leaves the backend and no script API observes one — so its absence costs authoring convenience only, not capability. What effect-level bindings uniquely add (source-module filtering and `perStepBudget`) stays reachable through recipes.
   - Dependencies remain a flat list rather than the plan's typed effect/emitter/module tree. Navigation from a row is complete and now covered end to end; the tree is presentation only.
@@ -225,7 +231,7 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
 
 - Plugin-owned `CpuParticleBackend` registers only while its `ParticleSceneSystem` is attached and unregisters only its own backend during detach/reload.
 - Instances use generation-safe IDs over a dense 256-instance store; stale handles cannot address a reused slot.
-- Particle SoA capacity, command/event buffers, and per-instance scalar overrides derive from shared schema ceilings and are reserved by explicit `Warmup()`.
+- Command/event buffers and per-instance scalar overrides derive from shared schema ceilings and are reserved by explicit `Warmup()`. Particle SoA storage is reserved when effects are admitted or reloaded, using their combined authored capacities up to the scene ceiling.
 - Real lifecycle, validation, query, and bounded-copy behavior are present before simulation; non-zero `Emit` explicitly returns `UnsupportedOutput` until the fixed-step kernel exists.
 - Focused tests prove limits, stale handles, backend ownership/reload, caller-span bounds, and zero global allocations after warmup for the lifecycle/query path.
 
@@ -270,9 +276,9 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
 ### Stage 4A — immutable render snapshot core: `accepted checkpoint`
 
 - `kb_engine` owns the renderer-neutral 64-byte packed particle stream and the complete per-emitter batch metadata; no renderer or provider type is part of either DTO.
-- A scene-owned channel preallocates four immutable 16 MiB retained slots. Its header carries monotonic revision, scene ID, backend epoch, fixed-step index, and tombstone state.
+- A scene-owned channel retains four immutable slots with lazily allocated payloads, each capped at 16 MiB. Its header carries monotonic revision, scene ID, backend epoch, fixed-step index, and tombstone state.
 - Publication validates batch ranges, capacity, enums, finite bounds, compact particle payload, and drop diagnostics before replacing the retained revision. Exhaustion is explicit `SnapshotBackpressure` and leaves the last complete snapshot intact.
-- The channel owns all control blocks and storage in `kb_engine`, so a retained reader remains valid after provider unload and scene destruction. Focused tests prove concurrent readers, no-allocation publish after warmup, metadata retention, and lifecycle safety.
+- The channel owns all control blocks and storage in `kb_engine`, so a retained reader remains valid after provider unload and scene destruction. Focused tests prove concurrent readers, allocation-free reuse of warmed payload capacity, metadata retention, and lifecycle safety.
 
 ### Stage 4B — CPU-preview snapshot publication and tombstone: `accepted checkpoint`
 

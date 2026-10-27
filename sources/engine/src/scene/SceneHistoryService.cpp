@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <span>
 #include <thread>
@@ -117,6 +118,14 @@ template <typename T>
         && SameValue(lhs.regionShape, rhs.regionShape)
         && SameValue(lhs.guideCurve, rhs.guideCurve)
         && SameValue(lhs.contentInstance, rhs.contentInstance)
+        && SameValue(lhs.grid, rhs.grid)
+        && SameValue(lhs.tilemap, rhs.tilemap)
+        && SameValue(lhs.tilemapRenderer, rhs.tilemapRenderer)
+        && SameValue(lhs.tilemapCollider, rhs.tilemapCollider)
+        && SameValue(lhs.characterController2D, rhs.characterController2D)
+        && SameValue(lhs.collider2D, rhs.collider2D)
+        && SameValue(lhs.body2D, rhs.body2D)
+        && SameValue(lhs.sprite2D, rhs.sprite2D)
         && SameValue(lhs.streamFocus, rhs.streamFocus)
         && SameValue(lhs.worldBackdrop, rhs.worldBackdrop)
         && SameValue(lhs.ambientRadiance, rhs.ambientRadiance)
@@ -591,6 +600,63 @@ bool SceneHistoryService::Record(Scene& scene, std::string label) {
     recording->firstNewPrefabInstanceId = state.prefabInstances.NextHandleId();
     state.prefabInstances.SetJournal(recording.get());
     state.historyRecording = std::move(recording);
+    return true;
+}
+
+struct SceneHistorySnapshot::State {
+    const SceneState* owner = nullptr;
+    SceneHistoryStack undo;
+    SceneHistoryStack redo;
+    std::vector<std::pair<ScenePrefabInstanceHandle, SceneEntity>> prefabRoots;
+};
+
+SceneHistorySnapshot::SceneHistorySnapshot() = default;
+SceneHistorySnapshot::~SceneHistorySnapshot() = default;
+SceneHistorySnapshot::SceneHistorySnapshot(SceneHistorySnapshot&&) noexcept = default;
+SceneHistorySnapshot& SceneHistorySnapshot::operator=(SceneHistorySnapshot&&) noexcept = default;
+
+SceneHistorySnapshot SceneHistoryService::Suspend(Scene& scene) {
+    SceneHistorySnapshot snapshot;
+    snapshot.state_ = std::make_unique<SceneHistorySnapshot::State>();
+    Commit(scene);
+    SceneState& state = SceneAccess::State(scene);
+    snapshot.state_->owner = &state;
+    for (const auto handle : state.prefabInstances.Handles()) {
+        const auto* instance = state.prefabInstances.Find(handle);
+        if (instance != nullptr && !instance->Objects().empty()) {
+            snapshot.state_->prefabRoots.emplace_back(handle, instance->Objects().front().Entity());
+        }
+    }
+    snapshot.state_->undo = std::move(state.undoHistory);
+    snapshot.state_->redo = std::move(state.redoHistory);
+    state.undoHistory.Clear();
+    state.redoHistory.Clear();
+    state.recreatedEntities.clear();
+    return snapshot;
+}
+
+bool SceneHistoryService::Resume(Scene& scene, SceneHistorySnapshot& snapshot, std::span<const SceneEntityRemap> remap) {
+    SceneState& state = SceneAccess::State(scene);
+    if (snapshot.state_ == nullptr || snapshot.state_->owner != &state) return false;
+    // Document reloads recreate instance records as well as entities. Rebind both
+    // history directions before an Undo can remove or restore an instance record.
+    std::map<ScenePrefabInstanceHandle, ScenePrefabInstanceHandle> prefabRemap;
+    std::unordered_map<EntityId, SceneEntity> entities;
+    for (const auto& replacement : remap) entities.emplace(replacement.from.Id(), replacement.to);
+    for (const auto& [handle, root] : snapshot.state_->prefabRoots) {
+        const auto replacement = entities.find(root.Id());
+        const auto restored = replacement == entities.end() ? root : replacement->second;
+        const auto current = state.prefabInstances.FindRootInstance(SceneAccess::MakeObject(scene, restored));
+        if (current.IsValid() && current != handle) prefabRemap.emplace(handle, current);
+    }
+    snapshot.state_->undo.RemapPrefabHandles(prefabRemap);
+    snapshot.state_->redo.RemapPrefabHandles(prefabRemap);
+    Clear(scene);
+    state.undoHistory = std::move(snapshot.state_->undo);
+    state.redoHistory = std::move(snapshot.state_->redo);
+    state.recreatedEntities.clear();
+    snapshot.state_.reset();
+    RemapRecordedEntities(state, remap);
     return true;
 }
 

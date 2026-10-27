@@ -4,6 +4,7 @@
 
 #include <span>
 #include <string>
+#include <string>
 #include <string_view>
 
 namespace kb::project {
@@ -37,6 +38,14 @@ struct SceneComponentAddResult {
     const SceneComponentKind* kind = nullptr;
 };
 
+// Why an add failed, in words an author can act on: the object and the cause, and what to do about it from the
+// command line and from the editor. The editor console and kb_cli print the same cause.
+struct SceneComponentAddAdvice {
+    std::string cause;
+    std::string commandLineRemedy;
+    std::string editorRemedy;
+};
+
 class SceneComponentAuthoring {
 public:
     SceneComponentAuthoring() = delete;
@@ -54,6 +63,9 @@ public:
     // Adds the component with its authoring defaults (and any component it cannot live without).
     [[nodiscard]] static SceneComponentAddResult Add(
         Scene& scene, SceneEntity entity, std::string_view id, const kb::project::ProjectDescriptor& project);
+    // The cause and the remedies for a status other than Added. `kind` may be null for an unknown component.
+    [[nodiscard]] static SceneComponentAddAdvice AddAdvice(
+        SceneComponentAddStatus status, const SceneComponentKind* kind, std::string_view componentId, std::string_view entityName);
     // Removes only the named component; companions added with it stay.
     [[nodiscard]] static bool Remove(Scene& scene, SceneEntity entity, std::string_view id);
 };

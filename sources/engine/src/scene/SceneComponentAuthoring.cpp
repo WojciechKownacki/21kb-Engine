@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 
 namespace kb::scene {
 namespace {
@@ -82,6 +83,14 @@ const std::array kEntries{
     Entry{ { "Tags", "Object Classification", {} }, KB_COMPONENT(Tags, tags, TagsComponent{}) },
     Entry{ { "RegionShape", "Region Shape", {} }, KB_COMPONENT(RegionShapes, regionShape, RegionShapeComponent{}) },
     Entry{ { "GuideCurve", "Guide Curve", {} }, KB_COMPONENT(GuideCurves, guideCurve, GuideCurveComponent{}) },
+    Entry{ { "Grid", "Grid", "World.Map2D" }, KB_COMPONENT(Grids, grid, GridComponent{}) },
+    Entry{ { "Tilemap", "Tilemap", "World.Map2D" }, KB_COMPONENT(Tilemaps, tilemap, TilemapComponent{}) },
+    Entry{ { "TilemapRenderer", "TilemapRenderer", "World.Map2D" }, KB_COMPONENT(TilemapRenderers, tilemapRenderer, TilemapRendererComponent{}) },
+    Entry{ { "TilemapCollider", "TilemapCollider", "World.Map2D" }, KB_COMPONENT(TilemapColliders, tilemapCollider, TilemapColliderComponent{}) },
+    Entry{ { "CharacterController2D", "Character Controller 2D", "World.Map2D" }, KB_COMPONENT(CharacterControllers2D, characterController2D, CharacterController2DComponent{}) },
+    Entry{ { "Collider2D", "Collider 2D", "World.Map2D" }, KB_COMPONENT(Colliders2D, collider2D, Collider2DComponent{}) },
+    Entry{ { "Body2D", "Body 2D", "World.Map2D" }, KB_COMPONENT(Bodies2D, body2D, Body2DComponent{}) },
+    Entry{ { "Sprite2D", "Sprite 2D", "World.Map2D" }, KB_COMPONENT(Sprites2D, sprite2D, Sprite2DComponent{}) },
     Entry{ { "ContentInstance", "Content Instance", {} }, KB_COMPONENT(ContentInstances, contentInstance, ContentInstanceComponent{}) },
     Entry{ { "StreamFocus", "Stream Focus", {} }, KB_COMPONENT(StreamFocuses, streamFocus, StreamFocusComponent{}) },
     Entry{ { "WorldBackdrop", "World Backdrop", {} }, KB_COMPONENT(WorldBackdrops, worldBackdrop, WorldBackdropComponent{}) },
@@ -157,6 +166,8 @@ std::span<const SceneComponentKind> SceneComponentAuthoring::Kinds() noexcept {
 }
 
 std::string_view SceneComponentAuthoring::CanonicalName(std::string_view id) noexcept {
+    if (id == "Audio Source") return "AudioSource";
+    if (id == "Audio Listener") return "AudioListener";
     if (id == "3D Radiance Emitter") return "Light";
     if (id == "Kreska przestrzenna") return "Line Renderer";
     if (id == "Wst\xC4\x99" "ga historii") return "Trail Renderer";
@@ -205,6 +216,36 @@ SceneComponentAddResult SceneComponentAuthoring::Add(
         return { SceneComponentAddStatus::PluginDisabled, kind };
     }
     return { entry->add(scene, entity) ? SceneComponentAddStatus::Added : SceneComponentAddStatus::Rejected, kind };
+}
+
+SceneComponentAddAdvice SceneComponentAuthoring::AddAdvice(
+    SceneComponentAddStatus status, const SceneComponentKind* kind, std::string_view componentId, std::string_view entityName) {
+    const std::string name{ kind != nullptr ? std::string{ kind->displayName } : std::string{ componentId } };
+    const std::string object = "'" + std::string{ entityName } + "'";
+    switch (status) {
+    case SceneComponentAddStatus::Added:
+        return {};
+    case SceneComponentAddStatus::AlreadyPresent:
+        return { object + " already has " + name,
+            "kb_cli component set --entity " + std::string{ entityName } + " --type " + std::string{ kind != nullptr ? kind->id : componentId } +
+                " --set <name>=<value>",
+            "change its values in the Inspector, or remove it from the component's menu first" };
+    case SceneComponentAddStatus::PluginDisabled: {
+        const std::string plugin{ kind != nullptr ? kind->requiredPlugin : std::string_view{} };
+        return { name + " needs the project plugin " + plugin,
+            "enable " + plugin + " in the project's plugin list, then run the command again",
+            "enable " + plugin + " in Edit > Plugins, then add the component again" };
+    }
+    case SceneComponentAddStatus::Rejected:
+        return { name + " could not be added to " + object,
+            "run kb_cli schema to see the component's fields, then try again with explicit --set values",
+            "look at the Console for the reason, then try again" };
+    case SceneComponentAddStatus::UnknownComponent:
+    default:
+        return { "unknown component '" + std::string{ componentId } + "'",
+            "kb_cli schema lists the components",
+            "pick one from the Add Component menu" };
+    }
 }
 
 bool SceneComponentAuthoring::Remove(Scene& scene, SceneEntity entity, std::string_view id) {

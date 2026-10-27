@@ -8,9 +8,11 @@
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/hierarchy/SceneHierarchyDepthGuard.hpp"
+#include "ecs/relation/HierarchyDepthGuard.hpp"
 
 #include <array>
-#include <utility>
+#include <stdexcept>
 
 namespace kb::scene {
 namespace {
@@ -33,6 +35,19 @@ void RollBackCreatedEntity(SceneState& state, SceneEntity entity) {
     state.world.DestroyEntity(entity);
 }
 
+void ValidateCreationParents(const Scene& scene, std::span<const SceneObjectDesc> descs) {
+    const SceneState& state = SceneAccess::State(scene);
+    for (const auto& desc : descs) {
+        if (desc.parent.EntityHandle().IsValid() &&
+            (!SceneAccess::BelongsTo(scene, desc.parent) || !state.world.IsAlive(desc.parent.Entity()))) {
+            throw std::invalid_argument("Scene parent must be a live object in the target scene");
+        }
+        if (SceneChildDepth(state, desc.parent.Entity()) > kb::ecs::HierarchyDepthLimit()) {
+            throw std::invalid_argument("Scene parent exceeds the supported hierarchy depth");
+        }
+    }
+}
+
 // Names, orders and roots the entities just created with their transform and visibility, then parents them.
 void RegisterCreatedEntities(
     Scene& scene,
@@ -52,7 +67,9 @@ void RegisterCreatedEntities(
             SetSceneRenderProxyComponentMask(state, entities[index], SceneRenderProxyComponentMask::Hidden);
         }
         if (descs[index].parent.EntityHandle().IsValid()) {
-            [[maybe_unused]] const bool parentAssigned = SceneHierarchyService::SetParent(scene, entities[index], descs[index].parent.Entity());
+            if (!SceneHierarchyService::SetParent(scene, SceneAccess::MakeObject(scene, entities[index]), descs[index].parent)) {
+                throw std::invalid_argument("Scene parent could not be assigned during creation");
+            }
         }
     }
 }
@@ -63,15 +80,16 @@ SceneObject SceneEntityCreationService::CreateObject(Scene& scene) {
     return SceneAccess::MakeObject(scene, CreateEntity(scene));
 }
 
-SceneObject SceneEntityCreationService::CreateObject(Scene& scene, SceneObjectDesc desc) {
-    return SceneAccess::MakeObject(scene, CreateEntity(scene, std::move(desc)));
+SceneObject SceneEntityCreationService::CreateObject(Scene& scene, const SceneObjectDesc& desc) {
+    return SceneAccess::MakeObject(scene, CreateEntity(scene, desc));
 }
 
 SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene) {
     return CreateEntity(scene, SceneObjectDesc{});
 }
 
-SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDesc desc) {
+SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, const SceneObjectDesc& desc) {
+    ValidateCreationParents(scene, {&desc, 1U});
     SceneState& state = SceneAccess::State(scene);
     const TransformComponent transform = SceneTransformComponentStore::Written(nullptr, desc.transform);
     const VisibilityComponent visibility = NormalizedVisibility(desc.visibility);
@@ -93,6 +111,7 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDe
 
 std::vector<SceneObject> SceneEntityCreationService::CreateObjects(Scene& scene, std::span<const SceneObjectDesc> descs,
     std::span<const kb::ecs::World::BulkComponentView> components) {
+    ValidateCreationParents(scene, descs);
     SceneState& state = SceneAccess::State(scene);
     std::vector<TransformComponent> transforms(descs.size());
     std::vector<VisibilityComponent> visibilities(descs.size());

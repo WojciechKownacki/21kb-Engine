@@ -69,6 +69,7 @@ ParticleBakeResult ParticleBakeService::Bake(const ParticleBakeRequest& request)
         return result;
     }
 
+    result.diagnostics = std::move(compiled.diagnostics);
     result.key = {
         .sourceHash = kb::particles::ParticleCompiledEffectCache::HashText(*canonical),
         .dependencyHash = DependencyHash(compiled.transitiveDependencies, request.registry),

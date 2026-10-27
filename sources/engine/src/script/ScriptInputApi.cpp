@@ -446,6 +446,56 @@ bool RegisterLoadRebindProfile(ScriptRuntimeHost& host) {
 // local user - so unlike Input.* above, Pointer.* takes no player pin and
 // always reads the primary local user's device state (LIB-115's
 // kPrimaryLocalUser), which is where the platform collector writes it.
+bool RegisterTouchCount(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.TouchCount";
+    desc.signature.outputs = {ScriptFunctionPin{"count", ScriptValueType::Int, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) return NoScene();
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"count", ScriptValue{
+                static_cast<int>(context.scene->Input().DeviceState().TouchPoints().size())}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterTouchPoint(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.TouchPoint";
+    desc.signature.inputs = {ScriptFunctionPin{"index", ScriptValueType::Int, true}};
+    desc.signature.outputs = {
+        ScriptFunctionPin{"valid", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"id", ScriptValueType::UInt32, true},
+        ScriptFunctionPin{"x", ScriptValueType::Float, true},
+        ScriptFunctionPin{"y", ScriptValueType::Float, true},
+        ScriptFunctionPin{"phase", ScriptValueType::Int, true},
+        ScriptFunctionPin{"active", ScriptValueType::Bool, true},
+    };
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) return NoScene();
+        const auto points = context.scene->Input().DeviceState().TouchPoints();
+        const ScriptValue* argument = FindArg(arguments, "index");
+        const int index = argument != nullptr ? argument->AsInt(-1) : -1;
+        const bool valid = index >= 0 && static_cast<std::size_t>(index) < points.size();
+        const kb::input::InputTouchPoint point = valid ? points[static_cast<std::size_t>(index)]
+            : kb::input::InputTouchPoint{.phase = kb::input::InputTouchPhase::Cancelled};
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{"valid", ScriptValue{valid}},
+                ScriptFunctionArgument{"id", ScriptValue{point.id}},
+                ScriptFunctionArgument{"x", ScriptValue{point.x}},
+                ScriptFunctionArgument{"y", ScriptValue{point.y}},
+                ScriptFunctionArgument{"phase", ScriptValue{static_cast<int>(point.phase)}},
+                ScriptFunctionArgument{"active", ScriptValue{valid && kb::input::IsTouchActive(point.phase)}},
+            },
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 bool RegisterPointerPosition(ScriptRuntimeHost& host) {
     ScriptFunctionDesc desc;
     desc.signature.name = "Pointer.Position";
@@ -786,6 +836,8 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterActionQuery(host, "Input.Released", "released", &kb::input::InputSubsystem::WasActionReleased) && ok;
     ok = RegisterActionQuery(host, "Input.Held", "held", &kb::input::InputSubsystem::IsActionPressed) && ok;
 
+    ok = RegisterTouchCount(host) && ok;
+    ok = RegisterTouchPoint(host) && ok;
     ok = RegisterPointerPosition(host) && ok;
     ok = RegisterPointerDelta(host) && ok;
     ok = RegisterPointerButton(host) && ok;

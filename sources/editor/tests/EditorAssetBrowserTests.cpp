@@ -7,9 +7,14 @@
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "app/EditorAssetBrowserNativeCommandMap.hpp"
 #include "assets/EditorAssetOpenPolicy.hpp"
+#include "assets/EditorAssetReimport.hpp"
+#include "engine/assets/AssetImportRecord.hpp"
+#include "kb/render/resources/RenderMeshImportArtifacts.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
@@ -329,6 +334,142 @@ void RunDependencySafetyBlocksRenameAndDeleteTest() {
         "KBMAT-GRAPH-0005: Blocked dependency delete should keep the target asset registered");
 }
 
+void RunFolderRelocationPreservesDependencySourcesTest() {
+    ResetTempRoot();
+    const std::filesystem::path project = TempRoot() / "DependencyProject";
+    const std::filesystem::path content = project / "Assets";
+    WriteTextFile(content / "Group/Target.lua", "return {}\n");
+    const std::string userSource = "-- @asset /Game/Group/Target.lua\nreturn {}\n";
+    WriteTextFile(content / "Group/User.lua", userSource);
+    WriteTextFile(content / "Self.lua", "-- @asset /Game/Self.lua\nreturn {}\n");
+    std::filesystem::create_directories(content / "Destination");
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(scene.Assets().MountProject(project), "Dependency project mount failed");
+    static_cast<void>(scene.Assets().Discover());
+    auto& manager = scene.Assets().Manager();
+    const auto* target = manager.Registry().FindByPath("/Game/Group/Target.lua");
+    const auto* user = manager.Registry().FindByPath("/Game/Group/User.lua");
+    kb::editor::tests::Require(target != nullptr && user != nullptr && user->dependencies.size() == 1U &&
+        user->dependencies.front() == target->id, "Real Lua asset dependency was not discovered");
+    kb::editor::tests::Require(browser.BeginRenameFolder("/Game/Group", manager), "Folder rename did not open");
+    browser.SetTextEditValue("Renamed");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CommitTextEdit(scene, browser),
+        "Folder rename must not leave an internal absolute dependency at its old path");
+    kb::editor::tests::Require(manager.LastError().find("/Game/Group/User.lua") != std::string::npos,
+        "Folder rename must identify the affected dependent");
+    browser.CancelTextEdit();
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::MoveFolderToFolder(
+        scene, browser, "/Game/Group", "/Game/Destination"), "Folder move must protect internal dependencies");
+    kb::editor::tests::Require(std::filesystem::exists(content / "Group/Target.lua") &&
+        !std::filesystem::exists(content / "Renamed") && !std::filesystem::exists(content / "Destination/Group"),
+        "Refused relocation must preserve source files and create no destination");
+    std::ifstream input{ content / "Group/User.lua", std::ios::binary };
+    const std::string unchanged{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    input.close();
+    kb::editor::tests::Require(unchanged == userSource, "Refused relocation must preserve dependent source bytes");
+    const auto* self = manager.Registry().FindByPath("/Game/Self.lua");
+    kb::editor::tests::Require(self != nullptr, "Self-referencing script was not discovered");
+    const auto selfId = self->id;
+    kb::editor::tests::Require(browser.BeginRenameAsset(selfId, manager), "Self rename did not open");
+    browser.SetTextEditValue("RenamedSelf");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CommitTextEdit(scene, browser),
+        "Relocation must also protect an asset's own path references");
+    browser.CancelTextEdit();
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::DeleteAsset(scene, browser, selfId),
+        "Deleting a self-referencing asset must remain possible");
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::DeleteFolder(scene, browser, "/Game/Group"),
+        "Deleting a folder with only internal dependencies must remain possible");
+    kb::editor::tests::Require(!std::filesystem::exists(content / "Group") && !std::filesystem::exists(content / "Self.lua"),
+        "Allowed deletion did not remove the selected files");
+}
+
+void RunCopiedPrefabIdentityTest() {
+    ResetTempRoot();
+    const auto project = TempRoot() / "PrefabCopyProject";
+    const auto content = project / "Assets";
+    std::filesystem::create_directories(content / "Group");
+    std::filesystem::create_directories(content / "Destination");
+    kb::scene::Scene scene;
+    kb::editor::tests::Require(scene.Assets().MountProject(project), "Prefab copy project mount failed");
+    kb::scene::ScenePrefab prefab;
+    kb::scene::ScenePrefabNodeDesc root;
+    root.name = "Root";
+    root.stableId = 501U;
+    static_cast<void>(prefab.AddNode(root));
+    const auto base = scene.Prefabs().Register("Base", prefab);
+    const std::string originalGuid = scene.Prefabs().Guid(base);
+    kb::editor::tests::Require(scene.Prefabs().Save(base, content / "Group/Base.kbprefab"), "Base prefab save failed");
+    const auto variant = scene.Prefabs().RegisterVariant("Variant", base, {
+        kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = 0U, .propertyPath = "name",
+            .value = "VariantRoot", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+    });
+    kb::editor::tests::Require(scene.Prefabs().Save(variant, content / "Group/Variant.kbprefab"), "Variant prefab save failed");
+    const auto external = scene.Prefabs().Register("External", prefab);
+    const std::string externalGuid = scene.Prefabs().Guid(external);
+    kb::editor::tests::Require(scene.Prefabs().Save(external, content / "External.kbprefab"), "External prefab save failed");
+    root.nestedPrefabGuid = originalGuid;
+    kb::scene::ScenePrefab nested;
+    static_cast<void>(nested.AddNode(root));
+    root.stableId = 502U;
+    root.parentNode = 0U;
+    root.nestedPrefabGuid = externalGuid;
+    static_cast<void>(nested.AddNode(root));
+    const auto parent = scene.Prefabs().Register("Parent", nested);
+    kb::editor::tests::Require(scene.Prefabs().Save(parent, content / "Group/Parent.kbprefab"), "Nested prefab save failed");
+    kb::scene::SceneDocument document;
+    document.guid = "scene-copy-source";
+    document.worldPrefab = nested;
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(document, content / "Group/Scene.21kbscene"), "Copy scene save failed");
+    static_cast<void>(scene.Assets().Discover());
+    auto& manager = scene.Assets().Manager();
+    const auto* metadata = manager.Registry().FindByPath("/Game/Group/Base.kbprefab");
+    kb::editor::tests::Require(metadata != nullptr, "Base prefab was not discovered");
+    kb::editor::EditorAssetBrowserState browser;
+    std::string reason;
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::CopyAssetToFolder(
+        scene, browser, metadata->id, "/Game/Destination", reason), "Single prefab copy failed");
+    kb::scene::Scene reader;
+    kb::editor::tests::Require(reader.Prefabs().Load(content / "External.kbprefab").IsValid(), "External prefab load failed");
+    const auto original = reader.Prefabs().Load(content / "Group/Base.kbprefab");
+    const auto single = reader.Prefabs().Load(content / "Destination/Base.kbprefab");
+    kb::editor::tests::Require(original.IsValid() && single.IsValid() &&
+        reader.Prefabs().Guid(original) != reader.Prefabs().Guid(single), "Copied prefab must have an independent identity");
+    kb::editor::tests::Require(reader.Prefabs().Get(single).Nodes().front().stableId == 501U,
+        "Copied prefab must preserve stable node IDs");
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::CopyFolderToFolder(
+        scene, browser, "/Game/Group", "/Game/Destination"), "Prefab folder copy failed");
+    const auto copiedBase = reader.Prefabs().Load(content / "Destination/Group/Base.kbprefab");
+    const auto copiedVariant = reader.Prefabs().Load(content / "Destination/Group/Variant.kbprefab");
+    const auto copiedParent = reader.Prefabs().Load(content / "Destination/Group/Parent.kbprefab");
+    kb::editor::tests::Require(copiedBase.IsValid() && copiedVariant.IsValid() && copiedParent.IsValid(),
+        "Copied prefab graph must load without identity collisions");
+    const std::string copiedGuid = reader.Prefabs().Guid(copiedBase);
+    kb::editor::tests::Require(copiedGuid != originalGuid && copiedGuid != reader.Prefabs().Guid(single) &&
+        reader.Prefabs().Get(copiedParent).Nodes().front().nestedPrefabGuid == copiedGuid,
+        "Copied nested prefab must reference the copied base");
+    kb::editor::tests::Require(reader.Prefabs().Get(copiedParent).Nodes()[1].nestedPrefabGuid == externalGuid,
+        "Copying must preserve references to prefabs outside the copied folder");
+    kb::editor::tests::Require(reader.Prefabs().Guid(reader.Prefabs().OriginalSourcePrefab(copiedVariant)) == copiedGuid,
+        "Copied variant must retain its relationship to the copied base");
+    kb::editor::tests::Require(reader.Prefabs().Get(copiedVariant).Nodes().front().name == "VariantRoot" &&
+        reader.Prefabs().Get(copiedBase).Nodes().front().name == "Root",
+        "Copied variants must preserve overrides without changing their base");
+    const auto copiedScene = kb::scene::SceneDocumentService::Load(content / "Destination/Group/Scene.21kbscene");
+    kb::editor::tests::Require(copiedScene.succeeded && copiedScene.document.guid != document.guid &&
+        copiedScene.document.worldPrefab.Nodes().front().nestedPrefabGuid == copiedGuid,
+        "Copied scene must have an independent identity and reference copied prefabs");
+    kb::editor::tests::Require(scene.Prefabs().Guid(base) == originalGuid && manager.ValidateCompatibility(
+        manager.Registry().FindByPath("/Game/Group/Parent.kbprefab")->id).compatible,
+        "Copying must leave the original dependency graph valid");
+    WriteTextFile(content / "Bad/Broken.kbprefab", "invalid prefab\n");
+    static_cast<void>(scene.Assets().Discover());
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CopyFolderToFolder(
+        scene, browser, "/Game/Bad", "/Game/Destination"), "Malformed prefabs must refuse folder publication");
+    kb::editor::tests::Require(std::filesystem::exists(content / "Bad/Broken.kbprefab") &&
+        !std::filesystem::exists(content / "Destination/Bad"), "A failed copy must preserve its source and remove its unpublished destination");
+}
+
 void RunSearchTextShortcutStateTest() {
     kb::editor::EditorAssetBrowserState state;
     state.FocusSearch(true);
@@ -421,8 +562,28 @@ void WriteSkeletalGltfImportFixture(const std::filesystem::path& folder) {
     binary.write(reinterpret_cast<const char*>(joints.data()), sizeof(joints));
     binary.write(reinterpret_cast<const char*>(weights.data()), sizeof(weights));
     binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+    const std::uint16_t alignmentPadding = 0U;
+    binary.write(reinterpret_cast<const char*>(&alignmentPadding), sizeof(alignmentPadding));
     binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
-    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":244}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":116,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+}
+
+void AddSkeletalAnimationFixture(const std::filesystem::path& folder) {
+    const std::array<float, 8U> motion{ 0.0F, 1.0F, 0.0F, 1.0F, 0.0F, 0.0F, 2.0F, 0.0F };
+    std::ofstream binary{ folder / "Motion.bin", std::ios::binary };
+    binary.write(reinterpret_cast<const char*>(motion.data()), sizeof(motion));
+    std::ifstream input{ folder / "Robot.gltf" };
+    std::string document{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    input.close();
+    const auto replace = [&](std::string_view before, std::string_view after) {
+        const auto at = document.find(before);
+        kb::editor::tests::Require(at != std::string::npos, "Animation fixture insertion point is missing");
+        document.replace(at, before.size(), after);
+    };
+    replace(R"("byteLength":244}])", R"("byteLength":244},{"uri":"Motion.bin","byteLength":32}])");
+    replace(R"(],"accessors":[)", R"(,{"buffer":1,"byteOffset":0,"byteLength":8},{"buffer":1,"byteOffset":8,"byteLength":24}],"accessors":[)");
+    replace(R"(],"meshes":[)", R"(,{"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":6,"componentType":5126,"count":2,"type":"VEC3"}],"animations":[{"name":"Move","samplers":[{"input":5,"output":6}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}}]}],"meshes":[)");
+    WriteTextFile(folder / "Robot.gltf", document);
 }
 
 void RunImportCommandPublishesSkeletalGltfTest() {
@@ -431,6 +592,7 @@ void RunImportCommandPublishesSkeletalGltfTest() {
     const std::filesystem::path sourceRoot = TempRoot() / "SkeletalSources";
     WriteSkeletalGltfImportFixture(sourceRoot);
 
+    AddSkeletalAnimationFixture(sourceRoot);
     kb::scene::Scene scene;
     kb::editor::EditorAssetBrowserState browser;
     kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Skeletal import command test could not mount project assets");
@@ -445,6 +607,94 @@ void RunImportCommandPublishesSkeletalGltfTest() {
             mesh->type == "SkeletalMesh" && skeleton != nullptr && skeleton->type == "Skeleton" &&
             browser.SelectedAsset() == mesh->id,
         "Skeletal glTF import command did not publish and select the Skeletal Mesh and Skeleton assets");
+    const auto id = mesh->id;
+    const auto path = mesh->physicalPath;
+    const auto hash = kb::assets::HashAssetFile(path);
+    kb::editor::tests::Require(kb::editor::EditorAssetReimport::CanReimport(*mesh),
+        "Skeletal models must offer the reimport menu");
+    std::filesystem::copy_file(files[0], sourceRoot / "Replacement.gltf");
+    {
+        std::fstream binary{ sourceRoot / "Robot.bin", std::ios::in | std::ios::out | std::ios::binary };
+        binary.seekp(3U * sizeof(float));
+        const float position = 2.0F;
+        binary.write(reinterpret_cast<const char*>(&position), sizeof(position));
+    }
+    options.dryRun = true;
+    const auto planned = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(planned.Succeeded() && planned.id == id &&
+        kb::assets::HashAssetFile(path) == hash, "Skeletal reimport preview must preserve the existing model");
+    kb::editor::tests::Require(std::ranges::any_of(planned.changes, [](const auto& change) {
+        return change.assetType == "SkeletalMesh" && change.kind == kb::assets::AssetImportChangeKind::Changed;
+    }), "Reimport preview must detect changed external geometry buffers");
+    options.dryRun = false;
+    const auto updated = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(updated.Succeeded() && updated.id == id && updated.assetPhysicalPath == path &&
+        kb::assets::HashAssetFile(path) != hash && !updated.backupId.empty() &&
+        scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Replacement.kbskeletalmesh") == nullptr,
+        "Skeletal replacement source must update the selected model without changing its identity");
+    std::string restoreError;
+    kb::editor::tests::Require(kb::assets::AssetImportBackups::Restore(
+        scene.Assets().Manager(), updated.backupId, &restoreError) && kb::assets::HashAssetFile(path) == hash,
+        "Skeletal reimport undo must restore the original geometry");
+    auto editedMesh = kb::scene::SkeletalMeshAssetIO::Load(path);
+    kb::editor::tests::Require(editedMesh.has_value(), "Restored skeletal mesh must load");
+    const auto originalMesh = *editedMesh;
+    editedMesh->lods.front().minScreenCoverage = 0.25F;
+    kb::editor::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, *editedMesh), "Local mesh edit must save");
+    const auto editedHash = kb::assets::HashAssetFile(path);
+    const auto refused = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(!refused.Succeeded() && !refused.conflicts.empty() &&
+        kb::assets::HashAssetFile(path) == editedHash, "Reimport must warn before overwriting edited skeletal geometry");
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::KeepLocal;
+    const auto kept = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(kept.Succeeded() && kb::assets::HashAssetFile(path) == editedHash,
+        "Keep-local must preserve edited skeletal geometry");
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Overwrite;
+    const auto replaced = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(replaced.Succeeded() && !replaced.backupId.empty() &&
+        kb::assets::HashAssetFile(path) != editedHash && kb::assets::AssetImportBackups::Restore(
+            scene.Assets().Manager(), replaced.backupId, &restoreError) && kb::assets::HashAssetFile(path) == editedHash,
+        "Explicit overwrite must back up and restore local skeletal edits");
+    kb::editor::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, originalMesh), "Reset mesh before animation conflict test");
+    const auto clipPath = path.parent_path() / "Robot_Move.kbanim";
+    auto clip = kb::scene::AnimationAssetIO::LoadClip(clipPath);
+    kb::editor::tests::Require(clip.has_value(), "Imported animation must load");
+    clip->looping = !clip->looping;
+    kb::editor::tests::Require(kb::scene::AnimationAssetIO::SaveClip(clipPath, *clip), "Animation edit must save");
+    const auto clipHash = kb::assets::HashAssetFile(clipPath);
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Report;
+    const auto clipConflict = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(!clipConflict.Succeeded() && std::ranges::any_of(clipConflict.conflicts,
+        [](const auto& change) { return change.assetType == "AnimationClip"; }) &&
+        kb::assets::HashAssetFile(clipPath) == clipHash, "Reimport must report edited animation clips");
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Overwrite;
+    const auto clipOverwrite = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(clipOverwrite.Succeeded() && kb::assets::HashAssetFile(clipPath) != clipHash &&
+        kb::assets::AssetImportBackups::Restore(scene.Assets().Manager(), clipOverwrite.backupId, &restoreError) &&
+        kb::assets::HashAssetFile(clipPath) == clipHash, "Undo must restore locally edited animation clips");
+    {
+        std::ifstream input{ sourceRoot / "Replacement.gltf" };
+        std::string source{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        input.close();
+        const auto name = source.find("\"name\":\"Move\"");
+        kb::editor::tests::Require(name != std::string::npos, "Replacement animation fixture must have its original name");
+        source.replace(name, 13U, "\"name\":\"Jump\"");
+        WriteTextFile(sourceRoot / "Replacement.gltf", source);
+    }
+    const auto addedClip = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    const auto newClipPath = path.parent_path() / "Robot_Jump.kbanim";
+    kb::editor::tests::Require(addedClip.Succeeded() && std::filesystem::exists(newClipPath) &&
+        kb::assets::AssetImportBackups::Restore(scene.Assets().Manager(), addedClip.backupId, &restoreError) &&
+        !std::filesystem::exists(newClipPath) && kb::assets::HashAssetFile(clipPath) == clipHash,
+        "Undo must remove newly imported clips while preserving existing edited clips");
     ResetTempRoot();
 }
 
@@ -470,7 +720,7 @@ void WriteSkeletalGltfMaterialAndTextureFixture(const std::filesystem::path& fol
     static_cast<void>(std::filesystem::copy_file(
         pngFixture, folder / "Albedo.png", std::filesystem::copy_options::overwrite_existing, copyError));
     kb::editor::tests::Require(!copyError, "Skeletal material import PNG fixture could not be copied");
-    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"images":[{"name":"Albedo","uri":"Albedo.png"}],"textures":[{"source":0}],"materials":[{"name":"RobotSurface","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.25,"roughnessFactor":0.75}}],"meshes":[{"name":"RobotParts","primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"name":"Body","mesh":0,"skin":0},{"name":"Armor","mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":244}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":116,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"images":[{"name":"Albedo","uri":"Albedo.png"}],"textures":[{"source":0}],"materials":[{"name":"RobotSurface","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.25,"roughnessFactor":0.75}}],"meshes":[{"name":"RobotParts","primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"name":"Body","mesh":0,"skin":0},{"name":"Armor","mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
 }
 
 void RunImportCommandPublishesCombinedSkeletalMeshMaterialsAndTexturesTest() {
@@ -1230,6 +1480,8 @@ void RunEditorAssetBrowserTests() {
     RunMultiSelectionStateTest();
     RunTextEditStateTest();
     RunDependencySafetyBlocksRenameAndDeleteTest();
+    RunFolderRelocationPreservesDependencySourcesTest();
+    RunCopiedPrefabIdentityTest();
     RunSearchTextShortcutStateTest();
     RunImportCommandReturnsMaterialTextureReportTest();
     RunImportCommandPublishesSkeletalGltfTest();

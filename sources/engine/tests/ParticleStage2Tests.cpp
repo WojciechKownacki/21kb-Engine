@@ -1,4 +1,5 @@
 #include "engine/ecs/World.hpp"
+#include "engine/modules/EngineModuleExports.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -25,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -331,8 +333,60 @@ void TestOldEngineModuleAbiRejectedBeforeCreate() {
     Require(std::ranges::any_of(scene.ModuleDiagnostics(), [](const std::string& diagnostic) {
         return diagnostic.find("unsupported engine module ABI version") != std::string::npos;
     }), "module host did not report the rejected engine ABI before module creation");
+    Require(std::ranges::any_of(scene.ModuleDiagnostics(), [](const std::string& diagnostic) {
+        return diagnostic.find("plugin ABI " + std::to_string(kb::modules::kEngineModuleAbiVersion - 1U)) != std::string::npos &&
+            diagnostic.find("engine ABI " + std::to_string(kb::modules::kEngineModuleAbiVersion)) != std::string::npos;
+    }), "the ABI diagnostic must name both versions");
     Require(!std::filesystem::exists(markerPath),
         "module host called create before rejecting the previous engine ABI");
+}
+
+// A reload that finds a broken plugin file (here: built against the previous engine ABI) leaves nothing of the old
+// code running -- no module, no scene system, no backend -- says why, and a reload after the file is repaired recovers.
+void TestFailedReloadLeavesNothingActiveAndRecovers() {
+    const std::filesystem::path goodPlugin = KB_21KB_PARTICLE_PLUGIN_PATH;
+    const std::filesystem::path oldAbiPlugin = KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH;
+    if (goodPlugin.empty() || oldAbiPlugin.empty()) return;
+    const std::filesystem::path folder = std::filesystem::temp_directory_path() / "21kb_failed_reload_plugin";
+    std::error_code error;
+    std::filesystem::remove_all(folder, error);
+    std::filesystem::create_directories(folder, error);
+    const std::filesystem::path working = folder / goodPlugin.filename();
+    std::filesystem::copy_file(goodPlugin, working, std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "the plugin could not be copied for the failed reload test");
+
+    kb::project::ProjectDescriptor bare;
+    bare.disableEnginePluginsByDefault = true;
+    const std::size_t baseline = kb::scene::Scene{ bare }.Runtime().SceneSystemCount();
+
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({ .name = "Rendering.21kbParticle", .binaryPath = working.string(), .enabled = true });
+    kb::scene::Scene scene{ std::move(descriptor) };
+    Require(scene.IsModuleActive("Rendering.21kbParticle") && scene.Runtime().SceneSystemCount() > baseline &&
+            kb::particles::ParticlePlayback::HasBackend(scene),
+        "the copied plugin did not load");
+
+    // The loaded copy is a shadow copy, so the file on disk can be replaced while the module runs.
+    std::filesystem::copy_file(oldAbiPlugin, working, std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "the plugin file could not be replaced");
+    scene.ReloadModules();
+    Require(!scene.IsModuleActive("Rendering.21kbParticle"), "a reload with a broken plugin left the old module active");
+    Require(scene.Runtime().SceneSystemCount() == baseline, "a failed reload left a scene system of the old plugin running");
+    Require(!kb::particles::ParticlePlayback::HasBackend(scene), "a failed reload left the old plugin's backend registered");
+    Require(std::ranges::any_of(scene.ModuleDiagnostics(), [](const std::string& line) {
+        return line.find("unsupported engine module ABI version") != std::string::npos &&
+            line.find("plugin ABI " + std::to_string(kb::modules::kEngineModuleAbiVersion - 1U)) != std::string::npos &&
+            line.find("engine ABI " + std::to_string(kb::modules::kEngineModuleAbiVersion)) != std::string::npos;
+    }), "a failed reload must say which ABI the plugin has and which the engine needs");
+
+    std::filesystem::copy_file(goodPlugin, working, std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "the plugin file could not be repaired");
+    scene.ReloadModules();
+    Require(scene.IsModuleActive("Rendering.21kbParticle") && scene.Runtime().SceneSystemCount() > baseline &&
+            kb::particles::ParticlePlayback::HasBackend(scene),
+        "a reload after the plugin was repaired did not recover");
+    std::filesystem::remove_all(folder, error);
 }
 
 void TestDynamicModuleHostLifecycle() {
@@ -411,14 +465,21 @@ void TestProjectPolicy() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view{argv[1]} == "module-abi") {
+            TestOldEngineModuleAbiRejectedBeforeCreate();
+            std::cout << "Engine module ABI tests passed\n";
+            return 0;
+        }
+        if (argc != 1) return 1;
         TestComponentAndPresenceContract();
         TestPlaybackOwnershipAndBounds();
         TestSceneAndPrefabRoundTrips();
         TestModuleMetadataAndLifecycle();
         TestOldEngineModuleAbiRejectedBeforeCreate();
         TestDynamicModuleHostLifecycle();
+        TestFailedReloadLeavesNothingActiveAndRecovers();
         TestProjectPolicy();
         std::cout << "Particle stage 2 tests passed\n";
         return 0;

@@ -92,7 +92,7 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
         float distanceToLight = length(toLight);
         lightVector = distanceToLight > 0.0001 ? toLight / distanceToLight : vec3(0.0, 1.0, 0.0);
         float range = max(positionRange.w, 0.0001);
-        // Inverse square, windowed to zero at the light's range (Unity URP, Unreal, Godot 4, Verth).
+        // Inverse square, windowed to zero at the light's range.
         float rangeRatio = distanceToLight / range;
         float rangeWindow = clamp(1.0 - rangeRatio * rangeRatio * rangeRatio * rangeRatio, 0.0, 1.0);
         attenuation = rangeWindow * rangeWindow / max(distanceToLight * distanceToLight, 0.0001);

@@ -36,8 +36,15 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/shadow/ShadowMapResource.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/particles/ParticleGpuReadback.hpp"
+#include "kb/render/particles/ParticleGpuVisualSimulation.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/ShaderBinaryProvider.hpp"
+#include "kb/render/ShaderManifest.hpp"
+#include "kb/render/gi/SceneGiResolvePass.hpp"
+#include "kb/render/scene/SceneSkyReflection.hpp"
+#include "kb/render/ViewIdPolicy.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
@@ -113,6 +120,33 @@ public:
 };
 
 #if defined(_WIN32)
+struct ShaderRequestTrackingProvider final : ShaderBinaryProvider {
+    mutable std::uint32_t resolveReads = 0U;
+    mutable std::uint32_t skyCaptureReads = 0U;
+    mutable std::uint32_t skyPrefilterReads = 0U;
+    bool ReadFixedShader(bgfx::RendererType::Enum backend, std::string_view name,
+        std::vector<std::uint8_t>& bytes, std::uint64_t& revision) const override {
+        if (name == "fs_ssgi_resolve.sc") ++resolveReads;
+        if (name == "fs_sky_capture.sc") ++skyCaptureReads;
+        if (name == "fs_sky_prefilter.sc") ++skyPrefilterReads;
+        const char* directory = ShaderProfileDirectoryForRenderer(backend);
+        if (directory == nullptr) return false;
+        std::ifstream input(std::filesystem::path{directory} / (std::string{name} + ".bin"),
+            std::ios::binary | std::ios::ate);
+        if (!input.is_open()) return false;
+        const std::streamsize size = input.tellg();
+        if (size <= 0) return false;
+        input.seekg(0, std::ios::beg);
+        bytes.resize(static_cast<std::size_t>(size));
+        revision = 1U;
+        return static_cast<bool>(input.read(reinterpret_cast<char*>(bytes.data()), size));
+    }
+    bool ReadMaterialShader(std::uint64_t, std::uint64_t, std::string_view, bgfx::RendererType::Enum,
+        std::string_view, std::vector<std::uint8_t>&, std::uint64_t&) const override { return false; }
+    std::uint64_t MaterialShaderRevision(std::uint64_t, std::uint64_t, std::string_view,
+        bgfx::RendererType::Enum) const noexcept override { return 0U; }
+};
+
 class NativeTestSurface final : public RenderSurface {
 public:
     explicit NativeTestSurface(std::uint16_t width = kExtent, std::uint16_t height = kExtent)
@@ -3248,6 +3282,52 @@ void RunRendererDrawsDetachedViewportFinalCompositePixelsTest() {
         Require(
             variedPixelCount >= 32U,
             "Detached viewport final composite stayed uniform after switching from viewport index 0");
+
+        // ReadPixels advances bgfx while waiting; synchronize the host's frame counter before the sequence.
+        Require(renderer.BeginFrame(), "Temporal sequence synchronization frame must begin");
+        renderer.EndFrame();
+        auto temporalDesc = detachedDesc;
+        temporalDesc.postProcessSettings->temporalAntiAliasingEnabled = true;
+        temporalDesc.postProcessSettings->temporalJitterEnabled = true;
+        std::size_t temporalSample = 0U;
+        const auto temporalFrame = [&](const kb::scene::Scene& submittedScene, bool expectedHistory) {
+            ++temporalSample;
+            SubmitLifecycleFrame(renderer, submittedScene, temporalDesc, "Temporal continuity frame must submit");
+            const auto lines = renderer.LastAaPipelineTraceLines();
+            const std::string expected = expectedHistory ? "historyValid=true" : "historyValid=false";
+            const std::string diagnostic = "Temporal sample " + std::to_string(temporalSample) + " expected " + expected +
+                (lines.empty() ? " (no trace)" : ": " + lines.front());
+            Require(std::ranges::any_of(lines, [&](const std::string& line) { return line.find(expected) != std::string::npos; }),
+                diagnostic.c_str());
+        };
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        temporalDesc.cameraOverride->view[12] += 10.0F;
+        temporalDesc.resetTemporalHistory = true;
+        temporalFrame(scene, false);
+        temporalDesc.resetTemporalHistory = false;
+        temporalFrame(scene, true);
+        temporalDesc.postProcessSettings->temporalAntiAliasingEnabled = false;
+        temporalFrame(scene, false);
+        temporalDesc.postProcessSettings->temporalAntiAliasingEnabled = true;
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        {
+            kb::scene::Scene otherScene;
+            temporalFrame(otherScene, false);
+            renderer.ReleaseScene(otherScene);
+        }
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        SceneDepthPolicy::MakeOrthographic(temporalDesc.cameraOverride->projection.data(), 10.0F, 1.0F,
+            0.05F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        temporalDesc.cameraOverride->view[12] += 0.01F;
+        temporalFrame(scene, true);
+        renderer.OnResize(128U, 64U);
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
 
         postProcessTargets.Shutdown();
         sceneTarget.Shutdown();
@@ -7082,6 +7162,109 @@ void RunRendererRendersScreenSpaceAmbientOcclusionTest() {
     Require(farOn > farOff * 0.98, "AO test: open floor must stay unoccluded");
 }
 
+// Exponential height fog in the deferred lighting pass. A wall straight ahead is seen through the fog at a known
+// distance: the fog thins the surface toward its colour with the distance and the density, a height base below the
+// camera thins it and one above thickens it, zero density changes nothing, an enormous density leaves only the fog
+// colour, and the picture keeps its proportions when the target is resized. Volumetric fog adds the light that a
+// point light scatters in the fog.
+void RunRendererRendersFogTest() {
+    const auto wall = [](float z) {
+        return std::vector<SsBox>{ { { 0.0F, 2.0F, z + 0.5F }, { 80.0F, 80.0F, 1.0F } } };
+    };
+    const bx::Vec3 eye{ 0.0F, 2.0F, -5.0F };
+    const auto centre = [](const std::vector<std::uint8_t>& pixels, std::uint16_t size) {
+        const int half = size / 2;
+        return MeanBrightness(pixels, size, half - 4, half - 4, half + 4, half + 4);
+    };
+    const auto render = [&](float wallZ, std::uint16_t size, const std::function<void(SceneRenderLightingConfig&)>& setup,
+                            const std::vector<kb::scene::Vec3>& lights = {}) {
+        SceneRenderLightingConfig lighting{};
+        setup(lighting);
+        return centre(RenderScreenSpaceScene(wall(wallZ), lights, eye, bx::Vec3{ 0.0F, 2.0F, wallZ }, 30.0F, lighting, 8, size), size);
+    };
+    // A nearly flat fog (the falloff is clamped by the shader, so the density stays what was asked for), black so
+    // that only the light that reaches the camera through it is left.
+    const auto thin = [](float density) {
+        return [density](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = density;
+            lighting.fogHeightFalloff = 0.0001F;
+            lighting.fogBaseHeight = 0.0F;
+            lighting.fogColor = { 0.0F, 0.0F, 0.0F };
+        };
+    };
+    constexpr std::uint16_t kSize = 64U;
+    const double clear = render(10.0F, kSize, [](SceneRenderLightingConfig&) {});
+    const double nearFog = render(10.0F, kSize, thin(0.04F));
+    const double farFog = render(30.0F, kSize, thin(0.04F));
+    const double clearFar = render(30.0F, kSize, [](SceneRenderLightingConfig&) {});
+    std::fprintf(stderr, "fog_pixels clear=%.1f near=%.1f far=%.1f clear_far=%.1f%c", clear, nearFog, farFog, clearFar, 10);
+    Require(clear > 30.0 && std::abs(clear - clearFar) < 3.0, "Fog test: the lit wall must be visible and the same at both distances without fog");
+    Require(nearFog < clear * 0.9, "Fog test: a wall seen through fog must be dimmer than without it");
+    Require(farFog < nearFog * 0.8 && farFog > 0.0, "Fog test: a farther wall must be fogged more");
+    // Beer-Lambert: the wall is 15 m and 35 m from the eye, so a density of 0.04 leaves exp(-0.6) = 0.549 and
+    // exp(-1.4) = 0.247 of its light (the display encoding is linear here).
+    Require(std::abs(nearFog / clear - std::exp(-0.6)) < 0.03, "Fog test: the transmittance 15 m through the fog is wrong");
+    Require(std::abs(farFog / clear - std::exp(-1.4)) < 0.03, "Fog test: the transmittance 35 m through the fog is wrong");
+
+    const double zero = render(10.0F, kSize, thin(0.0F));
+    Require(std::abs(zero - clear) < 1.5, "Fog test: zero density must change nothing");
+
+    // An enormous density leaves only the fog colour, whatever stands behind it.
+    const auto dense = [](float colour) {
+        return [colour](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = 1000.0F;
+            lighting.fogHeightFalloff = 0.0001F;
+            lighting.fogColor = { colour, colour, colour };
+        };
+    };
+    const double denseBlackNear = render(10.0F, kSize, dense(0.0F));
+    const double denseBlackFar = render(30.0F, kSize, dense(0.0F));
+    const double denseWhiteNear = render(10.0F, kSize, dense(1.0F));
+    const double denseWhiteFar = render(30.0F, kSize, dense(1.0F));
+    std::fprintf(stderr, "fog_dense black=%.1f/%.1f white=%.1f/%.1f%c", denseBlackNear, denseBlackFar, denseWhiteNear, denseWhiteFar, 10);
+    Require(denseBlackNear < 3.0 && denseBlackFar < 3.0, "Fog test: a dense black fog must hide the wall completely");
+    Require(denseWhiteNear > clear * 1.5 && std::abs(denseWhiteNear - denseWhiteFar) < 3.0,
+        "Fog test: a dense white fog must show only its colour, at any distance, brighter than the wall");
+
+    // The height base: the fog is thinner where the camera is above the base and thicker where it is below.
+    const auto based = [](float base) {
+        return [base](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = 0.04F;
+            lighting.fogHeightFalloff = 0.2F;
+            lighting.fogBaseHeight = base;
+            lighting.fogColor = { 0.0F, 0.0F, 0.0F };
+        };
+    };
+    const double thinAbove = render(20.0F, kSize, based(-10.0F));
+    const double thickBelow = render(20.0F, kSize, based(10.0F));
+    std::fprintf(stderr, "fog_height base-10=%.1f base+10=%.1f%c", thinAbove, thickBelow, 10);
+    Require(thinAbove > thickBelow * 1.5, "Fog test: fog must be thicker near its base height than far above it");
+
+    // A different resolution sees the same fog.
+    const double clearLarge = render(10.0F, 96U, [](SceneRenderLightingConfig&) {});
+    const double fogLarge = render(10.0F, 96U, thin(0.04F));
+    Require(std::abs(fogLarge / clearLarge - nearFog / clear) < 0.08, "Fog test: the fog must not change with the resolution of the target");
+
+    // Volumetric fog: a point light in front of the wall scatters light in the fog, so the fog is not black.
+    const std::vector<kb::scene::Vec3> lamp{ { 0.0F, 4.0F, 2.0F } };
+    const auto fogWithLight = [&](bool volumetric) {
+        return render(30.0F, kSize, [volumetric](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = 0.05F;
+            lighting.fogHeightFalloff = 0.0001F;
+            lighting.fogColor = { 0.0F, 0.0F, 0.0F };
+            lighting.volumetricFogEnabled = volumetric;
+        }, lamp);
+    };
+    const double lampPlain = fogWithLight(false);
+    const double lampVolumetric = fogWithLight(true);
+    std::fprintf(stderr, "fog_volumetric plain=%.1f volumetric=%.1f%c", lampPlain, lampVolumetric, 10);
+    Require(lampVolumetric > lampPlain + 1.0, "Fog test: volumetric fog must add the light that the lamp scatters in it");
+}
+
 // A glossy floor in front of a lit red wall must show the wall's reflection once screen-space
 // reflections are on: the floor region where the mirror image of the wall appears turns red.
 void RunRendererRendersScreenSpaceReflectionsTest() {
@@ -7352,15 +7535,91 @@ void RunVoxelGridFollowsMeshGeometryTest() {
     renderer.Shutdown();
 }
 
+// A thin wall keeps its thinness, an opening stays open, and a mesh that kept no triangles is counted as the solid
+// bounding box it is filled as, instead of being filled that way without a word.
+void RunVoxelGridKeepsThinWallsAndOpeningsTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Voxel wall test could not initialize bgfx");
+    {
+        struct Rectangle { float x0, y0, x1, y1; };
+        // A 4 x 4 m wall in the XY plane (no thickness) built from rectangles, with or without a 2 x 2 m opening.
+        const auto buildWall = [](const std::vector<Rectangle>& rectangles, std::vector<RenderStaticMeshVertexP3N3UV2>& vertices,
+                                  std::vector<std::uint16_t>& indices) {
+            for (const Rectangle& rectangle : rectangles) {
+                const auto base = static_cast<std::uint16_t>(vertices.size());
+                vertices.push_back({ rectangle.x0, rectangle.y0, 0.0F, 0.0F, 0.0F, -1.0F });
+                vertices.push_back({ rectangle.x1, rectangle.y0, 0.0F, 0.0F, 0.0F, -1.0F });
+                vertices.push_back({ rectangle.x1, rectangle.y1, 0.0F, 0.0F, 0.0F, -1.0F });
+                vertices.push_back({ rectangle.x0, rectangle.y1, 0.0F, 0.0F, 0.0F, -1.0F });
+                indices.insert(indices.end(), { base, static_cast<std::uint16_t>(base + 1), static_cast<std::uint16_t>(base + 2),
+                    base, static_cast<std::uint16_t>(base + 2), static_cast<std::uint16_t>(base + 3) });
+            }
+        };
+        std::vector<RenderStaticMeshVertexP3N3UV2> solidVertices;
+        std::vector<std::uint16_t> solidIndices;
+        buildWall({ { -2.0F, -2.0F, 2.0F, 2.0F } }, solidVertices, solidIndices);
+        std::vector<RenderStaticMeshVertexP3N3UV2> holedVertices;
+        std::vector<std::uint16_t> holedIndices;
+        buildWall({ { -2.0F, -2.0F, 2.0F, -1.0F }, { -2.0F, 1.0F, 2.0F, 2.0F }, { -2.0F, -1.0F, -1.0F, 1.0F }, { 1.0F, -1.0F, 2.0F, 1.0F } },
+            holedVertices, holedIndices);
+        RenderResourceRegistry resources;
+        const auto registerMesh = [&](const std::vector<RenderStaticMeshVertexP3N3UV2>& vertices, const std::vector<std::uint16_t>& indices, bool dynamic) {
+            return resources.RegisterMesh(RenderMeshDesc{ .vertexData = vertices.data(),
+                .vertexCount = static_cast<std::uint32_t>(vertices.size()), .indices = indices.data(),
+                .indexCount = static_cast<std::uint32_t>(indices.size()), .vertexFormat = RenderVertexFormat::P3N3UV2,
+                .bounds = { .radius = 3.0F }, .boundsBox = { .center = { 0.0F, 0.0F, 0.0F }, .halfExtents = { 2.0F, 2.0F, 0.01F } },
+                .dynamicVertexBuffer = dynamic });
+        };
+        SceneRenderResourceMap bindings;
+        bindings.BindMesh(1U, registerMesh(solidVertices, solidIndices, false));
+        bindings.BindMesh(2U, registerMesh(holedVertices, holedIndices, false));
+        bindings.BindMesh(3U, registerMesh(solidVertices, solidIndices, true));
+        struct Result { std::uint32_t occupied; std::uint32_t geometry; std::uint32_t box; };
+        const auto voxelize = [&](std::uint64_t meshAssetId) {
+            RenderScene scene;
+            MeshRenderProxyDesc desc{ .entityId = 1U, .meshAssetId = meshAssetId };
+            desc.model[0] = desc.model[5] = desc.model[10] = desc.model[15] = 1.0F;
+            static_cast<void>(scene.UpsertMesh(desc));
+            SceneGiVoxelGrid grid;
+            Require(grid.Initialize(), "Voxel wall test could not create the voxel grid");
+            grid.Update(scene, resources, bindings, { 0.0F, 0.0F, 0.0F }, 0.25F);
+            return Result{ grid.OccupiedVoxelCount(), grid.GeometryMeshCount(), grid.BoundingBoxMeshCount() };
+        };
+        const Result solid = voxelize(1U);
+        const Result holed = voxelize(2U);
+        const Result dynamic = voxelize(3U);
+        std::fprintf(stderr, "voxel_thin_wall solid=%u/%u/%u holed=%u/%u/%u dynamic=%u/%u/%u%c", solid.occupied, solid.geometry, solid.box,
+            holed.occupied, holed.geometry, holed.box, dynamic.occupied, dynamic.geometry, dynamic.box, 10);
+        // 16 x 16 voxels of a quarter metre across the wall, one or two layers thick.
+        Require(solid.occupied >= 256U && solid.occupied <= 520U, "Voxel wall test: a zero-thickness wall must fill one or two voxel layers");
+        Require(holed.occupied * 10U < solid.occupied * 9U, "Voxel wall test: the opening in the wall must stay open");
+        Require(holed.occupied * 10U > solid.occupied * 5U, "Voxel wall test: the frame around the opening must stay filled");
+        Require(solid.geometry == 1U && solid.box == 0U && holed.geometry == 1U && holed.box == 0U,
+            "Voxel wall test: a mesh with triangles must be counted as filled by its geometry");
+        Require(dynamic.geometry == 0U && dynamic.box == 1U,
+            "Voxel wall test: a mesh without triangles must be counted as filled by its bounding box");
+        // The same wall as a bounding box has the voxels of the slab only, but a thick bounding box would fill many more.
+        Require(dynamic.occupied >= solid.occupied, "Voxel wall test: the bounding box fill can only be as large as the geometry fill or larger");
+    }
+    renderer.Shutdown();
+}
+
 // A GPU-simulated particle dropped from 2 m above the origin falls through the floor unless it collides.
 // Collision can come from a plane (exact) or from the surface the scene depth buffer shows; with either
 // the particle is still near the floor 1.5 s later, without it it is far below the camera's view.
-[[nodiscard]] double CollidingParticleBrightness(bool floor, bool plane, bool sceneDepth, SceneRenderLightingPath path) {
+[[nodiscard]] double CollidingParticleBrightness(bool floor, bool plane, bool sceneDepth, SceneRenderLightingPath path,
+                                               bool occluded = false) {
     constexpr std::uint16_t kSize = 64U;
     std::vector<SsBox> boxes;
     if (floor) {
         boxes.push_back({ { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } });
     }
+    // The wall lies between the camera and the particle but never intersects its vertical path.
+    if (occluded) boxes.push_back({ {0.0F, 1.0F, -2.0F}, {4.0F, 6.0F, 0.1F} });
     SceneRenderLightingConfig lighting{};
     lighting.lightingPath = path;
     const auto spawnAndStep = [&](kb::scene::Scene& scene, int frame) {
@@ -7399,10 +7658,81 @@ void RunVoxelGridFollowsMeshGeometryTest() {
     return best;
 }
 
+// A single ring slot is killed, remains dead, then is reused with the same birth timestamp.
+// Reusing a timestamp exercises state invalidation rather than just the birth-stamp comparison.
+[[nodiscard]] double GpuContactBrightness(bool kill, int frames, bool reuse, bool mesh, bool removePlane = false) {
+    constexpr std::uint16_t kSize = 64U;
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame == 0) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = {1U, 1U};
+        command.simTime = static_cast<double>(frame - 1) / 60.0;
+        if (frame == 1) {
+            command.hasParams = true;
+            command.params.capacity = 1U;
+            command.params.hasPlane = true;
+            command.params.plane = {.restitution = 0.0F, .killOnContact = kill};
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+            command.params.size.fill(0.8F);
+            if (mesh) {
+                const auto* asset = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+                Require(asset != nullptr, "GPU contact test lost its mesh");
+                command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+                command.params.meshAssetId = asset->id.value;
+                command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+            }
+            command.spawns.push_back({.position = {0.0F, removePlane ? -0.2F : 1.2F, 0.0F},
+                .velocity = {0.0F, removePlane ? 0.0F : -12.0F, 0.0F}, .lifetime = 20.0F});
+        }
+        if (reuse && frame == 20) {
+            command.spawns.push_back({.position = {0.0F, 0.6F, 0.0F}, .lifetime = 20.0F});
+        }
+        if (removePlane && frame == 10) {
+            command.hasParams = true;
+            command.params.capacity = 1U;
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+            command.params.size.fill(0.8F);
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    // The far box publishes the same mesh and material used by GPU mesh particles.
+    const std::vector<SsBox> boxes{{{0.0F, -40.0F, 0.0F}, {1.0F, 1.0F, 1.0F}, SsMaterial::Red}};
+    const auto pixels = RenderScreenSpaceScene(boxes, {{0.0F, 3.0F, -4.0F}}, {0.0F, 2.0F, -6.0F}, {0.0F, 0.2F, 0.0F},
+        30.0F, {}, frames, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    double best = 0.0;
+    for (int y = 20; y < 44; ++y) {
+        for (int x = 20; x < 44; ++x) best = std::max(best, MeanBrightness(pixels, kSize, x, y, x + 1, y + 1));
+    }
+    return best;
+}
+
+void RunRendererGpuContactStateTest() {
+    for (const bool mesh : {false, true}) {
+        const double birth = GpuContactBrightness(true, 4, false, mesh);
+        const double dead = GpuContactBrightness(true, 45, false, mesh);
+        const double bounce = GpuContactBrightness(false, 45, false, mesh);
+        const double reused = GpuContactBrightness(true, 45, true, mesh);
+        const double removed = GpuContactBrightness(true, 45, false, mesh, true);
+        std::fprintf(stderr, "gpu_contact mesh=%d birth=%.1f dead=%.1f bounce=%.1f same_time_reuse=%.1f removed_plane=%.1f\n",
+            mesh ? 1 : 0, birth, dead, bounce, reused, removed);
+        // Meshes are lit by the scene; even the dimmest red face must exceed the black target by 20.
+        const double visible = mesh ? 20.0 : 50.0;
+        Require(birth > dead + visible && bounce > dead + visible && reused > dead + visible,
+            "GPU contact death must hide both outputs persistently and allow a new birth in the same slot");
+        Require(std::abs(removed - dead) < 1.0, "Removing a GPU plane revived contact deaths");
+    }
+}
+
 // Two overlapping alpha-blended particles of one GPU emitter: the older one is blue, the younger red (the
 // colour curve turns blue at half the life). Whichever is nearer to the camera must end up on top,
 // whatever the order of their ring slots.
-[[nodiscard]] std::array<int, 3> OverlappingAlphaParticlesCentre(bool olderIsNearer) {
+[[nodiscard]] std::array<int, 3> OverlappingAlphaParticlesCentre(bool olderIsNearer,
+    kb::particles::ParticleRenderSortMode sort = kb::particles::ParticleRenderSortMode::BackToFront,
+    bool offAxis = false, bool reverseCamera = false) {
     constexpr std::uint16_t kSize = 64U;
     SceneRenderLightingConfig lighting{};
     const auto queue = [&](kb::scene::Scene& scene, int frame) {
@@ -7411,24 +7741,34 @@ void RunVoxelGridFollowsMeshGeometryTest() {
         command.key = { 1U, 1U };
         command.simTime = 10.0;
         command.hasParams = true;
-        command.params.capacity = 16U;
+        command.params.capacity = 5U; // Includes dead slots and non-power-of-two sort padding.
         command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.sort = sort;
         command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
         for (std::size_t sample = 0U; sample < command.params.color.size(); ++sample) {
             command.params.color[sample] = sample < 3U ? std::array<float, 4>{ 1.0F, 0.0F, 0.0F, 0.9F }
                                                        : std::array<float, 4>{ 0.0F, 0.0F, 1.0F, 0.9F };
         }
-        command.params.size.fill(2.0F);
+        // Match projected size at view depths 5 and 9 so the last particle's
+        // colour, rather than a larger apparent radius, determines the result.
+        for (std::size_t sample = 0U; sample < command.params.size.size(); ++sample) {
+            command.params.size[sample] = sample < 3U ? (olderIsNearer ? 3.6F : 2.0F) : (olderIsNearer ? 2.0F : 3.6F);
+        }
+        if (offAxis) {
+            for (std::size_t sample = 0U; sample < command.params.size.size(); ++sample) {
+                command.params.size[sample] = sample < 3U ? 24.0F : 6.0F;
+            }
+        }
         const float olderZ = olderIsNearer ? -1.0F : 3.0F;
         const float youngerZ = olderIsNearer ? 3.0F : -1.0F;
         // The older particle takes ring slot 0, the younger slot 1: drawn in slot order, the younger would win.
         command.spawns.push_back(kb::particles::ParticleGpuSpawn{
-            .position = { 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+            .position = { offAxis ? 2.0F : 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
         command.spawns.push_back(kb::particles::ParticleGpuSpawn{
-            .position = { 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+            .position = { offAxis ? 8.0F : 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
     };
-    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting, 4,
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, reverseCamera ? 6.0F : -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting, 4,
         kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
     // The particle core is drawn white whatever its colour; its soft edge, a few pixels out, keeps the tint.
     const std::size_t offset = (32U * kSize + 42U) * 4U;
@@ -7837,15 +8177,37 @@ void RunRendererSortsAlphaGpuParticlesTest() {
         olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
     Require(olderNearer[2] > olderNearer[0] + 20, "GPU sort test: the nearer, older (blue) particle must be drawn over the farther one");
     Require(youngerNearer[0] > youngerNearer[2] + 20, "GPU sort test: the nearer, younger (red) particle must be drawn over the farther one");
+    using Sort = kb::particles::ParticleRenderSortMode;
+    for (const Sort mode : {Sort::None, Sort::FrontToBack, Sort::Age, Sort::Distance}) {
+        const auto colour = OverlappingAlphaParticlesCentre(true, mode);
+        std::fprintf(stderr, "gpu_particle_sort mode=%u colour=%d,%d,%d\n",
+            static_cast<unsigned>(mode), colour[0], colour[1], colour[2]);
+        if (mode == Sort::Distance) {
+            Require(colour[2] > colour[0] + 20, "GPU distance sort did not draw the nearer blue particle last");
+        } else {
+            Require(colour[0] > colour[2] + 20, "GPU sort mode was ignored: the red particle must be drawn last");
+        }
+    }
+    const auto reversed = OverlappingAlphaParticlesCentre(true, Sort::BackToFront, false, true);
+    Require(reversed[0] > reversed[2] + 20, "GPU view-depth sort did not follow the changed camera");
+    // The red particle is nearer in view depth but farther in Euclidean distance:
+    // sqrt(8^2 + 5^2) > sqrt(2^2 + 9^2). Both soft edges cover the sampled pixel.
+    const auto depth = OverlappingAlphaParticlesCentre(false, Sort::BackToFront, true);
+    const auto distance = OverlappingAlphaParticlesCentre(false, Sort::Distance, true);
+    std::fprintf(stderr, "gpu_particle_sort off_axis_depth=%d,%d,%d distance=%d,%d,%d\n",
+        depth[0], depth[1], depth[2], distance[0], distance[1], distance[2]);
+    Require(depth[0] > distance[0] + 3 && distance[2] > depth[2] + 3,
+        "GPU distance sorting was substituted for authored view-depth sorting");
 }
 
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
 // The whole particle chain in one process: an effect authored as a .kbvfx file is discovered and loaded by the
 // asset manager, the real particle provider (loaded as a module) simulates it in the scene runtime and routes
-// its emitter to the GPU queue, the renderer drains the queue, simulates and draws on a hidden D3D11 device,
+// its emitter to the GPU queue, the renderer drains the queue, simulates and draws on a hidden bgfx device,
 // and the pixels are read back. Particles leave the origin along +x at 4 m/s, so after one second the
 // right half of the image holds a bright line and the left half stays dark.
-void RunRendererDrawsAuthoredParticleFileTest() {
+std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingPlane = false, bool gpuPreferred = true,
+    bool screenDepth = false, bool orderedMotion = false, bgfx::RendererType::Enum backend = bgfx::RendererType::Direct3D11) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_particle_file_to_pixel_" + std::to_string(GetCurrentProcessId()));
     std::error_code error;
@@ -7859,10 +8221,12 @@ void RunRendererDrawsAuthoredParticleFileTest() {
     effect.determinismSeed = 0x5EEDF11EULL;
     effect.durationSeconds = 5.0F;
     effect.looping = true;
-    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    effect.backendPolicy = gpuPreferred ? kb::scene::ParticleBackendPolicy::GpuVisualPreferred :
+        kb::scene::ParticleBackendPolicy::CpuDeterministic;
     kb::scene::ParticleEmitterAsset emitter;
     emitter.emitterId = 1U;
     emitter.name = "Sparks";
+    emitter.screenDepthCollision = screenDepth;
     emitter.maxParticles = 4096U;
     emitter.spawn.rateOverTime.keyframes = { { .time = 0.0F, .value = 120.0F } };
     emitter.spawn.lifetimeMin = 2.0F;
@@ -7876,6 +8240,23 @@ void RunRendererDrawsAuthoredParticleFileTest() {
     emitter.output.material.virtualPath = "/Game/Materials/Spark.21kb";
     emitter.output.blend = kb::scene::ParticleBlendMode::Add;
     emitter.output.depthTest = false;
+    if (killingPlane) {
+        emitter.modules.push_back({.moduleId = 1U, .type = kb::scene::ParticleModuleType::CollisionPlane,
+            .payload = kb::scene::ParticleCollisionPlaneModule{.normal = {-1.0F, 0.0F, 0.0F}, .distance = -1.0F,
+                .maxEventsPerStep = 256U, .killOnContact = true}});
+    }
+    if (orderedMotion) {
+        const auto add = [&](kb::scene::ParticleModuleType type, kb::scene::ParticleModulePayload payload) {
+            const auto count = static_cast<std::uint32_t>(emitter.modules.size());
+            emitter.modules.push_back({.moduleId = count + 2U, .authoringOrder = count, .type = type, .payload = std::move(payload)});
+        };
+        add(kb::scene::ParticleModuleType::Noise, kb::scene::ParticleNoiseModule{.strength = 0.7F, .frequency = 0.5F});
+        add(kb::scene::ParticleModuleType::AxisRotation, kb::scene::ParticleAxisRotationModule{.axis = {0.0F, 1.0F, 0.0F}, .degreesPerSecond = 80.0F});
+        add(kb::scene::ParticleModuleType::Attraction, kb::scene::ParticleAttractionModule{.point = {1.0F, 1.0F, 0.0F}, .strength = 3.0F, .radius = 4.0F});
+        add(kb::scene::ParticleModuleType::Noise, kb::scene::ParticleNoiseModule{.strength = 1.3F, .frequency = 2.0F});
+        add(kb::scene::ParticleModuleType::AxisRotation, kb::scene::ParticleAxisRotationModule{.axis = {1.0F, 0.0F, 0.0F}, .degreesPerSecond = 60.0F});
+        add(kb::scene::ParticleModuleType::Attraction, kb::scene::ParticleAttractionModule{.point = {-2.0F, 0.0F, 3.0F}, .strength = 2.0F});
+    }
     effect.emitters.push_back(std::move(emitter));
     Require(kb::scene::ParticleEffectAssetIO::Save(root / "spark.kbvfx", effect), "File-to-pixel test could not write its effect file");
 
@@ -7903,12 +8284,13 @@ void RunRendererDrawsAuthoredParticleFileTest() {
         .followTransform = true, .restartOnActivate = true });
 
     NativeTestSurface surface;
-    Require(surface.IsValid(), "File-to-pixel test could not create a hidden D3D11 surface");
+    Require(surface.IsValid(), "File-to-pixel test could not create a hidden surface");
     DisplayConfig config{};
     config.syncMode = DisplaySyncMode::Uncapped;
-    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(backend);
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "File-to-pixel test could not initialize the renderer");
+    Require(bgfx::getRendererType() == backend, "File-to-pixel test used an unexpected backend");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
     SceneRenderCamera camera{};
     bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 1.2F, 0.0F, 0.0F });
@@ -7916,6 +8298,7 @@ void RunRendererDrawsAuthoredParticleFileTest() {
 
     std::vector<std::uint8_t> pixels;
     bool consumer = false;
+    bool gpuRoute = false;
     std::size_t cpuParticles = 0U;
     std::uint32_t gpuDrawCalls = 0U;
     {
@@ -7932,17 +8315,33 @@ void RunRendererDrawsAuthoredParticleFileTest() {
             .selectionMaskEnabled = false,
             .selectionOutlineEnabled = false,
         };
+        SubmitLifecycleFrame(renderer, scene, desc, "File-to-pixel test could not attach its GPU consumer");
         for (int frame = 0; frame < 60; ++frame) {
             Require(scene.Runtime().Update(1.0F / 60.0F), "File-to-pixel test scene update failed");
             SubmitLifecycleFrame(renderer, scene, desc, "File-to-pixel test did not submit a frame");
         }
         pixels = target.ReadPixels();
         consumer = kb::particles::ParticlePlayback::HasGpuEmitterConsumer(scene);
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(scene);
+        Require(snapshot && snapshot->Emitters().size() == 1U, "File-to-pixel test did not publish its execution route");
+        gpuRoute = snapshot->Emitters()[0].simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu &&
+            snapshot->Emitters()[0].gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::None;
         gpuDrawCalls = renderer.LastSceneSubmitStats().submittedParticleDrawCallCount;
         const auto ids = kb::particles::ParticlePlayback::LiveInstanceIds(scene);
         for (const std::uint64_t instance : ids) {
             cpuParticles += kb::particles::ParticlePlayback::Query(scene, instance).liveParticleCount;
         }
+        if (gpuPreferred) {
+            const auto draws = renderer.GpuParticleDraws(scene);
+            Require(draws.size() == 1U && draws[0].key.instanceId == ids[0] && draws[0].key.emitterId == 1U,
+                "Renderer inspection lost the actual particle emitter identity");
+            const auto expectedBytes = 4096U * (144U + (draws[0].params->NeedsState() ? 64U : 0U));
+            Require(draws[0].requestedBufferBytes == expectedBytes && renderer.GpuEmitterAllocatedBytes() == expectedBytes,
+                "Renderer inspection changed particle requested buffer accounting");
+            ParticleGpuReadback capture;
+            Require(capture.Read(draws[0], 64U) && capture.Records().size() == 64U,
+                "Renderer inspection could not read actual GPU particle records");
+        } else Require(renderer.GpuParticleDraws(scene).empty(), "Explicit CPU particles appeared in GPU inspection");
     }
     renderer.ReleaseScene(scene);
     renderer.Shutdown();
@@ -7950,13 +8349,22 @@ void RunRendererDrawsAuthoredParticleFileTest() {
 
     const double right = MeanBrightness(pixels, NativeTestSurface::kExtent, 20, 28, 60, 36);
     const double left = MeanBrightness(pixels, NativeTestSurface::kExtent, 0, 28, 8, 36);
-    std::fprintf(stderr, "file_to_pixel right=%.1f left=%.1f gpu_consumer=%d gpu_draws=%u cpu_particles=%zu%c",
-        right, left, consumer ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
-    // Only the particles born before the renderer registered as consumer (the first frames) live on the CPU.
-    Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4U,
-        "File-to-pixel test: the effect must be simulated and drawn on the GPU, not on the CPU");
-    Require(right > 40.0, "File-to-pixel test: the particles from the authored file must be visible along +x");
+    std::fprintf(stderr, "file_to_pixel backend=%u right=%.1f left=%.1f gpu_consumer=%d gpu_route=%d draws=%u cpu_particles=%zu%c",
+        static_cast<unsigned>(backend), right, left, consumer ? 1 : 0, gpuRoute ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
+    Require(gpuRoute == gpuPreferred, "File-to-pixel test used an unexpected simulation route or fallback");
+    Require(!gpuPreferred || cpuParticles == 0U, "GPU contact test retained CPU-simulated particles");
+    if (killingPlane) {
+        Require(consumer && gpuDrawCalls >= 1U && (gpuPreferred || cpuParticles > 0U),
+            "File-to-pixel test: a killing plane must render particles before contact");
+        Require(right > 5.0, "File-to-pixel test: particles before contact must remain visible");
+    } else {
+        // The consumer was attached before the first birth.
+        Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4U,
+            "File-to-pixel test: the effect must be simulated and drawn on the GPU, not on the CPU");
+        Require(right > 40.0, "File-to-pixel test: the particles from the authored file must be visible along +x");
+    }
     Require(left < 5.0, "File-to-pixel test: nothing may be drawn to the left of the emitter");
+    return pixels;
 }
 void RunRendererMillionParticleFileTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
@@ -8144,10 +8552,11 @@ void RunRendererProjectsParticleDecalsTest() {
         command.params.size.fill(0.6F);
         // The first visit integrates a quarter second at most (born half a second ago, drawn in that one frame):
         // 720 degrees a second turn it half a turn.
-        command.params.axisRadiansPerSecond = turn ? 4.0F * 3.14159265F : 0.0F;
+        command.params.motionModuleCount = 1U;
+        command.params.motionModules[0] = {.type = kb::particles::ParticleGpuMotionType::AxisRotation,
+            .vector = {0.0F, 0.0F, 1.0F}, .strength = turn ? 4.0F * 3.14159265F : 0.0F};
         command.hasField = true;
         command.fieldOrigin = {0.0F, 0.0F, 5.0F};
-        command.fieldAxis = {0.0F, 0.0F, 1.0F};
         command.spawns.push_back(kb::particles::ParticleGpuSpawn{
             .position = {2.0F, 0.0F, 5.0F}, .birthTime = 0.5F, .velocity = {0.0F, 0.0F, 0.0F}, .lifetime = 20.0F});
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
@@ -8172,16 +8581,27 @@ void RunRendererCollidesGpuParticlesTest() {
     const double freeFall = CollidingParticleBrightness(false, false, false, forward);
     const double plane = CollidingParticleBrightness(false, true, false, forward);
     const double floorOnly = CollidingParticleBrightness(true, false, false, forward);
+    const double emptyDepth = CollidingParticleBrightness(false, false, true, forward);
     // The depth buffer is a render target of the forward path and a G-buffer texture of the deferred one.
     const double sceneDepthForward = CollidingParticleBrightness(true, false, true, forward);
     const double sceneDepthDeferred = CollidingParticleBrightness(true, false, true, deferred);
+    const double occludedForward = CollidingParticleBrightness(true, false, true, forward, true);
+    const double occludedDeferred = CollidingParticleBrightness(true, false, true, deferred, true);
+    const double occludedPlane = CollidingParticleBrightness(true, true, false, forward, true);
     std::fprintf(stderr, "gpu_particle_collision free_fall=%.1f plane=%.1f floor_only=%.1f scene_depth forward=%.1f deferred=%.1f%c",
         freeFall, plane, floorOnly, sceneDepthForward, sceneDepthDeferred, 10);
+    std::fprintf(stderr, "gpu_particle_occluded_depth forward=%.1f deferred=%.1f plane=%.1f%c",
+        occludedForward, occludedDeferred, occludedPlane, 10);
     Require(freeFall < 50.0, "GPU collision test: without collisions the particle must have fallen out of view");
     Require(plane > 400.0, "GPU collision test: a collision plane must keep the particle near the floor level");
     Require(floorOnly < 300.0, "GPU collision test: the bare floor must be darker than the particle");
+    Require(emptyDepth < 50.0, "GPU collision test: empty scene depth must not invent a collision surface");
     Require(sceneDepthForward > 400.0, "GPU collision test: the particle must bounce off the floor shown in the forward depth buffer");
     Require(sceneDepthDeferred > 400.0, "GPU collision test: the particle must bounce off the floor shown in the G-buffer depth");
+    Require(occludedForward < 300.0 && occludedDeferred < 300.0,
+        "GPU collision test: scene-depth collision must not collide with a floor hidden behind an opaque wall");
+    Require(occludedPlane > 400.0,
+        "GPU collision test: occluding scene depth must not change an explicit collision plane");
 }
 
 void RunRendererRendersScreenSpaceGiBounceTest() {
@@ -8267,6 +8687,77 @@ void RunRendererDrawsGpuSimulatedParticlesTest() {
     renderer.Shutdown();
 }
 
+
+void RunRendererReportsRejectedGpuStateUpdateTest() {
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    config.particleGpuBufferBudgetBytes = 288U;
+    Renderer renderer;
+    Require(surface.IsValid() && renderer.Initialize(surface, &config), "GPU rejection diagnostics require a real hidden renderer");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "GPU rejection diagnostic target unavailable");
+        SceneRenderCamera camera{};
+        bx::mtxLookAt(camera.view.data(), bx::Vec3{0.0F, 0.0F, -10.0F}, bx::Vec3{0.0F, 0.0F, 0.0F});
+        SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+        const RenderSceneSubmitDesc desc{.target = target.Binding(), .cameraOverride = camera,
+            .editorSceneOverlaysEnabled = false, .shadowPassEnabled = false, .postProcessEnabled = false,
+            .selectionMaskEnabled = false, .selectionOutlineEnabled = false};
+        renderer.PrepareParticleScene(scene);
+        kb::particles::ParticleGpuEmitterCommand first;
+        first.key = {11U, 7U};
+        first.hasParams = true;
+        first.params.capacity = 1U;
+        first.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+        first.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+        first.params.size.fill(1.0F);
+        first.spawns.push_back({.lifetime = 8.0F});
+        auto second = first;
+        second.key.instanceId = 12U;
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, first);
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, second);
+        SubmitLifecycleFrame(renderer, scene, desc, "GPU budget fixture did not submit");
+        Require(renderer.GpuEmitterAllocatedBytes() == 288U, "Renderer did not apply its configured particle buffer budget");
+        first.params.hasPlane = true;
+        first.params.plane.killOnContact = true;
+        first.params.motionModuleCount = 2U;
+        first.params.motionModules[0] = {.type = kb::particles::ParticleGpuMotionType::Noise, .strength = 0.7F};
+        first.params.motionModules[1] = {.type = kb::particles::ParticleGpuMotionType::Noise, .strength = 1.3F};
+        first.spawns.clear();
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, first);
+        SubmitLifecycleFrame(renderer, scene, desc, "Renderer rejected the whole frame rather than reporting the GPU update failure");
+        const auto hasRejection = [&] {
+            return std::any_of(renderer.LastSceneDiagnostics().events.begin(), renderer.LastSceneDiagnostics().events.end(), [](const auto& event) {
+                return event.severity == SceneRenderDiagnosticSeverity::Error && event.kind == SceneRenderDiagnosticKind::ParticleGpuUpdateRejected &&
+                    event.particleInstanceId == 11U && event.particleEmitterId == 7U && event.particleGpuUpdateFailure == ParticleGpuUpdateFailure::StateAllocation;
+            });
+        };
+        Require(hasRejection() && renderer.RejectedGpuParticleUpdates(scene).size() == 1U && renderer.GpuEmitterAllocatedBytes() == 288U,
+            "Renderer hid the GPU rejection reason, identity or allocation accounting");
+        SubmitLifecycleFrame(renderer, scene, desc, "Renderer did not retain a rejected update across an empty frame");
+        Require(hasRejection(), "Renderer cleared an unresolved GPU update error on the next frame");
+        second.hasParams = false;
+        second.release = true;
+        second.spawns.clear();
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, second);
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, first);
+        SubmitLifecycleFrame(renderer, scene, desc, "Renderer did not retry the complete GPU state update after release");
+        const auto draws = renderer.GpuParticleDraws(scene);
+        Require(renderer.RejectedGpuParticleUpdates(scene).empty() && !hasRejection() && renderer.GpuEmitterAllocatedBytes() == 208U &&
+            draws.size() == 1U && draws[0].params->plane.killOnContact && draws[0].params->motionModuleCount == 2U,
+            "Renderer did not clear the rejection after accepting every authored field");
+        ParticleGpuReadback capture;
+        Require(capture.Read(draws[0], 1U), "Accepted renderer retry did not expose a real GPU buffer");
+    }
+    renderer.ReleaseScene(scene);
+    Require(renderer.RejectedGpuParticleUpdates(scene).empty() && renderer.GpuEmitterAllocatedBytes() == 0U,
+        "Renderer scene release retained rejected GPU updates or buffers");
+    renderer.Shutdown();
+    std::fprintf(stderr, "particle_gpu_renderer_rejection typed=state-allocation identity=11/7 persistent=1 retry=complete release_bytes=0\n");
+}
 
 // One GPU emitter holding 1,048,576 live particles: far above the CPU pipeline cap of 262,144.
 void RunRendererDrawsMillionGpuParticlesTest() {
@@ -8382,6 +8873,171 @@ void RunRendererRendersPointLightShadowTest() {
 }
 #endif
 
+void RunRendererParticleSortModesTest() {
+#if defined(_WIN32)
+    RunRendererSortsAlphaGpuParticlesTest();
+#else
+    throw std::runtime_error("Particle sort readback requires the Windows renderer");
+#endif
+}
+
+void RunRendererParticleDepthAuthoringTest() {
+#if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    RunRendererCollidesGpuParticlesTest();
+    const auto disabled = RunRendererDrawsAuthoredParticleFileTest();
+    const auto enabledWithoutSurface = RunRendererDrawsAuthoredParticleFileTest(false, true, true);
+    Require(disabled.size() == enabledWithoutSurface.size(), "Depth authoring images have different extents");
+    std::size_t mismatches = 0U;
+    for (std::size_t index = 0U; index < disabled.size(); ++index) {
+        if (index % 4U != 3U && std::abs(int(disabled[index]) - int(enabledWithoutSurface[index])) > 2) ++mismatches;
+    }
+    std::fprintf(stderr, "particle_depth_empty_surface mismatches=%zu%c", mismatches, 10);
+    Require(mismatches <= disabled.size() / 100U,
+        "An explicitly enabled depth response without a surface changed authored particle motion");
+#else
+    throw std::runtime_error("Particle depth readback requires the Windows renderer and particle module");
+#endif
+}
+
+void RunRendererParticleMotionPixelsTest(bgfx::RendererType::Enum backend) {
+#if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    const auto cpu = RunRendererDrawsAuthoredParticleFileTest(true, false, false, true, backend);
+    const auto gpu = RunRendererDrawsAuthoredParticleFileTest(true, true, false, true, backend);
+    const auto withoutFields = RunRendererDrawsAuthoredParticleFileTest(true, true, false, false, backend);
+    Require(cpu.size() == gpu.size() && cpu.size() == withoutFields.size(), "Particle motion image extents changed");
+    std::size_t mismatches = 0U;
+    std::uint64_t difference = 0U;
+    for (std::size_t index = 0U; index < cpu.size(); ++index) {
+        if (index % 4U == 3U) continue;
+        if (std::abs(int(cpu[index]) - int(gpu[index])) > 2) ++mismatches;
+        difference += static_cast<std::uint64_t>(std::abs(int(gpu[index]) - int(withoutFields[index])));
+    }
+    std::fprintf(stderr, "particle_motion_pixels mismatches=%zu field_difference=%llu\n", mismatches,
+        static_cast<unsigned long long>(difference));
+    Require(mismatches * 100U <= cpu.size(), "Ordered GPU motion and contact deaths changed the CPU image");
+    Require(difference > 100U, "Ordered GPU fields did not change the rendered image");
+#else
+    static_cast<void>(backend);
+    Require(false, "Particle motion pixel verification requires the Windows GPU host and particle provider");
+#endif
+}
+
+void RunRendererParticleContactDeathTest() {
+#if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    RunRendererGpuContactStateTest();
+    const auto reference = RunRendererDrawsAuthoredParticleFileTest(true, false);
+    const auto preferred = RunRendererDrawsAuthoredParticleFileTest(true, true);
+    const auto freeFlight = RunRendererDrawsAuthoredParticleFileTest();
+    Require(reference.size() == preferred.size() && reference.size() == freeFlight.size(),
+        "Contact-death images have different extents");
+    // Allow two byte values of rounding error per channel on at most one percent of
+    // the image. The fixed-step CPU and GPU reference use identical births and the same draw path.
+    std::size_t mismatches = 0U;
+    std::uint64_t contactDifference = 0U;
+    for (std::size_t index = 0U; index < reference.size(); ++index) {
+        if (index % 4U == 3U) continue;
+        if (std::abs(int(reference[index]) - int(preferred[index])) > 2) ++mismatches;
+        contactDifference += static_cast<std::uint64_t>(std::abs(int(reference[index]) - int(freeFlight[index])));
+    }
+    std::fprintf(stderr, "particle_gpu_contact_death mismatches=%zu contact_difference=%llu\n",
+        mismatches, static_cast<unsigned long long>(contactDifference));
+    Require(mismatches * 100U <= reference.size(), "GPU contact deaths changed the rendered CPU result");
+    Require(contactDifference > reference.size() / 2U, "Contact deaths did not visibly remove the free-flying particles");
+#else
+    throw std::runtime_error("Particle collision readback requires the Windows renderer and particle provider module");
+#endif
+}
+
+void RunRendererSkyReflectionTests() {
+#if defined(_WIN32)
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Sky reflection test needs a hidden native surface");
+    Renderer renderer;
+    const auto provider = std::make_shared<ShaderRequestTrackingProvider>();
+    Require(renderer.SetShaderBinaryProvider(provider), "Sky reflection shader provider was not installed");
+    DisplayConfig config;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Require(renderer.Initialize(surface, &config), "Sky reflection renderer initialization failed");
+    Require(provider->skyCaptureReads == 0U && provider->skyPrefilterReads == 0U,
+        "Renderer startup must not load sky reflection shaders without a sky backdrop");
+    SceneSkyReflection sky;
+    sky.Update({}, BGFX_INVALID_HANDLE, false);
+    Require(!sky.IsInitialized() && provider->skyCaptureReads == 0U,
+        "An absent sky must not create reflection resources");
+    SceneBackdropUniformValues backdrop;
+    backdrop.horizon = {0.8F, 0.2F, 0.1F, 1.0F};
+    backdrop.zenith = {0.8F, 0.2F, 0.1F, 1.0F};
+    backdrop.params = {1.0F, 0.0F, 1.0F, 0.0F};
+    for (int frame = 0; frame < 10; ++frame) {
+        Require(renderer.BeginFrame(), "Sky capture frame could not begin");
+        sky.Update(backdrop, BGFX_INVALID_HANDLE, false);
+        renderer.EndFrame();
+        sky.EndFrame();
+    }
+    Require(sky.IsInitialized() && provider->skyCaptureReads == 1U && provider->skyPrefilterReads == 1U,
+        "The first sky backdrop must load capture and prefilter shaders once");
+    const auto reflection = sky.ReflectionFor(backdrop, BGFX_INVALID_HANDLE);
+    Require(bgfx::isValid(reflection), "Sky capture and mip prefilter must publish the reflection cube");
+    for (const std::uint8_t mip : std::array{std::uint8_t{0U}, static_cast<std::uint8_t>(SceneSkyReflection::kMipCount - 1U)}) {
+        const auto extent = static_cast<std::uint16_t>(SceneSkyReflection::kFaceSize >> mip);
+        const auto readback = bgfx::createTexture2D(extent, extent,
+            false, 1U, bgfx::TextureFormat::RGBA16F, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        Require(bgfx::isValid(readback), "Sky reflection readback texture could not be created");
+        bgfx::blit(ViewId::ScreenCapture, bgfx::TextureRegion{.handle = readback}, bgfx::TextureRegion{.handle = reflection, .mip = mip, .depth = 1U});
+        std::vector<std::uint16_t> pixels(static_cast<std::size_t>(extent) * extent * 4U);
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{.handle = readback}, pixels.data());
+        bool ready = false;
+        for (int frame = 0; frame < 16; ++frame) {
+            if (bgfx::frame() >= readyFrame) { ready = true; break; }
+        }
+        Require(ready, "Sky reflection GPU readback did not finish");
+        std::array<double, 3> mean{};
+        for (std::size_t pixel = 0U; pixel < pixels.size(); pixel += 4U) {
+            for (std::size_t channel = 0U; channel < mean.size(); ++channel) mean[channel] += bx::halfToFloat(pixels[pixel + channel]);
+        }
+        for (double& channel : mean) channel /= static_cast<double>(pixels.size() / 4U);
+        std::fprintf(stderr, "sky_reflection_pixels mip=%u rgb=%.5f,%.5f,%.5f\n", static_cast<unsigned>(mip), mean[0], mean[1], mean[2]);
+        Require(std::abs(mean[0] - 0.8) < 0.005 && std::abs(mean[1] - 0.2) < 0.005 && std::abs(mean[2] - 0.1) < 0.005,
+            "Captured and prefiltered sky pixels must preserve the authored HDR gradient color");
+        bgfx::destroy(readback);
+    }
+    sky.Shutdown();
+    renderer.Shutdown();
+#else
+    throw std::runtime_error("Sky reflection readback requires a supported native GPU test surface");
+#endif
+}
+
+void RunRendererGiResolveTests() {
+#if defined(_WIN32)
+    {
+        NativeTestSurface surface;
+        Require(surface.IsValid(), "Lazy GI test needs a hidden native surface");
+        Renderer renderer;
+        const auto provider = std::make_shared<ShaderRequestTrackingProvider>();
+        Require(renderer.SetShaderBinaryProvider(provider), "Lazy GI shader provider was not installed");
+        DisplayConfig config;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+        Require(renderer.Initialize(surface, &config), "Lazy GI renderer initialization failed");
+        Require(provider->resolveReads == 0U, "Renderer startup must not load an unused GI resolve shader");
+        SceneGiResolvePass resolve;
+        Require(resolve.Initialize() && provider->resolveReads == 1U,
+            "The deferred GI shader must remain available when requested");
+        Require(renderer.BeginFrame(), "Lazy GI test could not submit shader creation");
+        renderer.EndFrame();
+        resolve.Shutdown();
+        renderer.Shutdown();
+    }
+    RunRendererRendersScreenSpaceGiBounceTest();
+    RunRendererSmoothsScreenSpaceGiOverTimeTest();
+    RunRendererRendersScreenSpaceAmbientOcclusionTest();
+    RunRendererRendersVoxelGiFromOffscreenObjectsTest();
+    RunRendererShadowsVoxelGiBounceTest();
+#else
+    throw std::runtime_error("GI resolve readback requires a supported native GPU test surface");
+#endif
+}
+
 void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest();
 #if defined(_WIN32)
@@ -8412,10 +9068,12 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererFollowsLocalSpaceGpuParticlesTest();
     RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    RunRendererParticleContactDeathTest();
     RunRendererDrawsAuthoredParticleFileTest();
     RunRendererMillionParticleFileTest();
 #endif
     RunRendererDrawsGpuSimulatedParticlesTest();
+    RunRendererReportsRejectedGpuStateUpdateTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif
 }
@@ -8428,9 +9086,11 @@ void RunRendererScreenSpaceEffectTests() {
     RunRendererSmoothsScreenSpaceGiOverTimeTest();
     RunRendererRendersScreenSpaceAmbientOcclusionTest();
     RunRendererRendersScreenSpaceReflectionsTest();
+    RunRendererRendersFogTest();
     RunRendererRendersVoxelGiFromOffscreenObjectsTest();
     RunRendererShadowsVoxelGiBounceTest();
     RunVoxelGridFollowsMeshGeometryTest();
+    RunVoxelGridKeepsThinWallsAndOpeningsTest();
 #endif
 }
 
@@ -9435,7 +10095,88 @@ void RunRendererVisibilityFeedbackTest() {
     RunRendererPublishesSceneVisibilityFeedbackTest();
 }
 
+void RunParticleGpuVisualCounterTests(bgfx::RendererType::Enum backend) {
+#if defined(_WIN32)
+    NativeTestSurface surface;
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(backend);
+    Renderer renderer;
+    Require(surface.IsValid() && renderer.Initialize(surface, &config), "GPU counter validation needs a native device");
+    Require(bgfx::getRendererType() == backend, "GPU counter validation used another backend");
+    ParticleGpuVisualSimulation simulation;
+    Require(simulation.Initialize(), "GPU visual simulation is unavailable");
+    std::array<ParticleGpuInstance, 4U> source{};
+    for (std::size_t index = 0U; index < source.size(); ++index) {
+        const float x = static_cast<float>(index + 1U);
+        source[index].positionSize = {x, 1.0F, 2.0F, 1.0F};
+        source[index].previousPositionRotation = {x, 1.0F, 2.0F, 0.0F};
+        source[index].color.fill(1.0F);
+    }
+    std::array<std::uint32_t, 4U> mask{1U, 1U, 0U, 1U};
+    const auto readCount = [&] {
+        std::array<std::uint32_t, 4U> counters{};
+        counters.fill(UINT32_MAX);
+        Require(bgfx::isValid(simulation.CounterBuffer()), "GPU visual counter buffer was not created");
+        const auto ready = bgfx::read(bgfx::BufferRegion{.handle = simulation.CounterBuffer(),
+            .size = static_cast<std::uint32_t>(sizeof(counters))}, counters.data());
+        auto frame = bgfx::frame();
+        while (frame < ready) frame = bgfx::frame();
+        Require(counters[1] == 0U && counters[2] == 0U && counters[3] == 0U,
+            "GPU visual counter reset did not clear the complete record");
+        return counters[0];
+    };
+    const auto prepare = [&](std::uint64_t scene, std::uint64_t step, std::uint32_t expected) {
+        Require(simulation.Prepare(0U, scene, step, source, mask), "Actual GPU visual dispatch failed");
+        static_cast<void>(bgfx::frame());
+        Require(readCount() == expected, "GPU visual counters accumulated instead of resetting for the next dispatch");
+        ParticleGpuReadback capture;
+        const ParticleGpuEmitterSimulation::Draw draw{.instances = simulation.InstanceBuffer(), .capacity = 4U};
+        Require(capture.Read(draw, 4U), "GPU visual output could not be read from the native instance buffer");
+        for (std::size_t index = 0U; index < source.size(); ++index) {
+            const auto& row = capture.Records()[index];
+            Require(row[0] == source[index].positionSize[0] && row[1] == 1.0F && row[2] == 2.0F &&
+                row[3] == 1.0F && row[15] == 1.0F, "GPU visual output changed the stationary CPU reference");
+        }
+    };
+    prepare(101U, 1U, 3U);
+    mask = {1U, 0U, 0U, 0U};
+    prepare(101U, 2U, 1U);
+    mask.fill(0U);
+    Require(simulation.Prepare(0U, 101U, 2U, source, mask) && readCount() == 1U,
+        "A repeated fixed step reset or dispatched the GPU counters twice");
+    prepare(101U, 3U, 0U);
+    simulation.ReleaseScene(101U);
+    Require(!bgfx::isValid(simulation.CounterBuffer()) && !bgfx::isValid(simulation.InstanceBuffer()) &&
+        simulation.Availability() == kb::particles::ParticleGpuVisualAvailability::ResourceUnavailable,
+        "GPU visual scene release retained buffers or advertised ready resources");
+    mask.fill(1U);
+    prepare(102U, 1U, 4U);
+    simulation.Shutdown();
+    Require(!bgfx::isValid(simulation.CounterBuffer()) && !bgfx::isValid(simulation.InstanceBuffer()),
+        "GPU visual shutdown retained counter or output resources");
+    renderer.Shutdown();
+    std::fprintf(stderr, "particle_visual_counters backend=%s first=3 next=1 repeated=1 masked=0 reuse=4 native_output=equal released=1\n",
+        bgfx::getRendererName(backend));
+#else
+    static_cast<void>(backend);
+    Require(false, "GPU visual counter validation requires a native Windows host");
+#endif
+}
+
+void RunRendererScreenUiSubmitTests() {
+    RunRendererResourceGroupEnsureFallbacksTest();
+    RunEditorUIViewTransformValidationTests();
+    RunEditorCameraWireframesSubmitInHeadlessNoopTest();
+    RunRendererKeepsSceneWhenUIFrameRefusesTest();
+    RunRendererKeepsUIWhenTextCannotBePreparedTest();
+    RunRendererDetachedViewportFinalCompositePixelsTest();
+}
+
 void RunRendererRuntimeSubmitTests() {
+#if defined(_WIN32)
+    RunParticleGpuVisualCounterTests(bgfx::RendererType::Direct3D11);
+#endif
     RunGeneratedClusterMissingResourceDiagnosticsTest();
     RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
     RunRuntimeFrameSyncAppendsRootsTest();

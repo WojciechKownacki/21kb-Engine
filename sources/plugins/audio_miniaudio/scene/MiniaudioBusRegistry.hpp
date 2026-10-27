@@ -1,7 +1,13 @@
 #pragma once
 
 #include <miniaudio.h>
+#include "engine/audio/AudioDspEffect.hpp"
+#include "engine/audio/AudioDspRuntimeReport.hpp"
+#include "runtime/MiniaudioFilterChain.hpp"
+#include "runtime/MiniaudioMeterNode.hpp"
+#include "engine/audio/AudioMetering.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -15,6 +21,8 @@ class Scene;
 } // namespace kb::scene
 
 namespace kb::audio_miniaudio {
+
+class MiniaudioEngine;
 
 // LIB-147: the runtime side of kb::audio::AudioMixerAsset - one ma_sound_group per
 // authored AudioMixerBus, parented per the asset's routing graph (a bus with an empty
@@ -51,7 +59,7 @@ public:
 
     ~MiniaudioBusRegistry();
 
-    MiniaudioBusRegistry() = default;
+    explicit MiniaudioBusRegistry(MiniaudioEngine& engine) noexcept : engine_(engine) {}
     MiniaudioBusRegistry(const MiniaudioBusRegistry&) = delete;
     MiniaudioBusRegistry& operator=(const MiniaudioBusRegistry&) = delete;
     MiniaudioBusRegistry(MiniaudioBusRegistry&&) = delete;
@@ -59,9 +67,14 @@ public:
 
     // Returns true when the bus topology was rebuilt (or torn down) this sync - every
     // ma_sound attached to a previous group must be dropped by the caller.
-    [[nodiscard]] bool Sync(ma_engine& engine, kb::scene::Scene& scene, bool playbackAvailable);
+    [[nodiscard]] bool Sync(kb::scene::Scene& scene, bool playbackAvailable);
     [[nodiscard]] bool RoutingWillChange(kb::scene::Scene& scene, bool playbackAvailable) const;
     [[nodiscard]] Route Resolve(std::string_view busName) noexcept;
+    [[nodiscard]] kb::audio::AudioDspRuntimeReport DspReport() const;
+    // Caller excludes PCM reads when configuring or resetting capture.
+    void ConfigureMeters(bool enabled);
+    void ResetMeters() noexcept;
+    [[nodiscard]] kb::audio::AudioMeterReport MeterReport() const;
     // Monotonic, bumped on every topology rebuild/teardown - baked into the source
     // registry's sound signatures so live entity sounds recreate against fresh groups.
     [[nodiscard]] std::uint64_t Generation() const noexcept { return generation_; }
@@ -75,6 +88,13 @@ private:
         std::string name;
         std::string parent;
         std::unique_ptr<ma_sound_group> group;
+        std::unique_ptr<MiniaudioMeterNode> meter;
+        std::unique_ptr<MiniaudioFilterChain> effects;
+        std::vector<kb::audio::AudioDspEffect> appliedEffects;
+        std::vector<kb::audio::AudioDspEffect> attemptedEffects;
+        std::string effectError;
+        bool settingsCurrent = false;
+        std::chrono::steady_clock::time_point nextEffectAttempt{};
     };
 
     struct BusTopology {
@@ -85,14 +105,17 @@ private:
     };
 
     void DestroyGroups() noexcept;
+    void SyncEffects(BusRecord& record, const std::vector<kb::audio::AudioDspEffect>& requested, float volume);
     [[nodiscard]] bool TearDown() noexcept;
 
+    MiniaudioEngine& engine_;
     std::vector<BusRecord> buses_;
     std::vector<BusTopology> topology_;
     std::uint64_t activeMixerAssetId_ = 0U;
     std::uint64_t generation_ = 0U;
     bool mixerLoaded_ = false;
     bool groupsInitialized_ = false;
+    bool metersEnabled_ = false;
 };
 
 } // namespace kb::audio_miniaudio

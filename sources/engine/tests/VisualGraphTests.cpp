@@ -1062,6 +1062,71 @@ void RunVisualGraphCompilerRejectsInvalidDataPinsTest() {
     kb::tests::Require(compiled.diagnostics[0].pinName == "value", "Visual graph invalid data pin diagnostic did not identify the target pin");
 }
 
+// A data edge between types that do not convert implicitly is refused at the target pin, named, with a request for an
+// explicit conversion node (only a Void pin is plainly incompatible); identical types and widening conversions compile.
+void RunVisualGraphCompilerRejectsIncompatibleTypesTest() {
+    const auto compileEdge = [](kb::visual::VisualGraphValueType from, kb::visual::VisualGraphValueType to) {
+        kb::visual::VisualGraphAsset graph{};
+        graph.name = "TypedEdge";
+        graph.nodes = {
+            kb::visual::VisualGraphNode{.id = 1, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick},
+            kb::visual::VisualGraphNode{.id = 2, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Produce"},
+            kb::visual::VisualGraphNode{.id = 3, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Consume"},
+        };
+        graph.pins = {
+            kb::visual::VisualGraphPin{.nodeId = 2, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "result", .type = from},
+            kb::visual::VisualGraphPin{.nodeId = 3, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = to},
+        };
+        graph.edges = {
+            kb::visual::VisualGraphEdge{.fromNode = 2, .fromPin = "result", .toNode = 3, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        };
+        return kb::visual::VisualGraphCompiler::Compile(graph);
+    };
+    const kb::visual::VisualGraphCompileResult mismatch = compileEdge(kb::visual::VisualGraphValueType::String, kb::visual::VisualGraphValueType::Float);
+    kb::tests::Require(!mismatch.Succeeded() && !mismatch.diagnostics.empty() &&
+            mismatch.diagnostics[0].stage == kb::visual::VisualGraphDiagnosticStage::Validation && mismatch.diagnostics[0].nodeId == 3U &&
+            mismatch.diagnostics[0].pinName == "value" && mismatch.diagnostics[0].message.find("data edge from String to Float") != std::string::npos &&
+            mismatch.diagnostics[0].message.find("explicit lossy conversion node") != std::string::npos,
+        "A String to Float data edge must be refused at the target pin with a request for an explicit conversion node");
+    const kb::visual::VisualGraphCompileResult lossy = compileEdge(kb::visual::VisualGraphValueType::Int64, kb::visual::VisualGraphValueType::Int);
+    kb::tests::Require(!lossy.Succeeded() && !lossy.diagnostics.empty() && lossy.diagnostics[0].nodeId == 3U &&
+            lossy.diagnostics[0].message.find("explicit lossy conversion node") != std::string::npos,
+        "An Int64 to Int data edge must ask for an explicit conversion node");
+    kb::tests::Require(compileEdge(kb::visual::VisualGraphValueType::Float, kb::visual::VisualGraphValueType::Float).Succeeded() &&
+            compileEdge(kb::visual::VisualGraphValueType::Int, kb::visual::VisualGraphValueType::Int64).Succeeded(),
+        "Equal types and a widening conversion must compile");
+}
+
+// A graph written out and read back is the same graph: the text is a fixed point of write and load, and both
+// versions compile to modules of the same shape.
+void RunVisualGraphWriteLoadRoundTripTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "RoundTripProject" / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "Original.kbgraph", SampleGraphText());
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::visual::VisualGraphAssetLoader>()) && manager.Mounts().Mount("Game", assetsRoot) &&
+            manager.DiscoverMountedAssets() == 1U,
+        "The round trip fixture did not mount");
+    const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> original = manager.Load<kb::visual::VisualGraphAsset>("/Game/Logic/Original.kbgraph");
+    kb::tests::Require(original.IsLoaded(), "The original graph did not load");
+    const std::string written = kb::visual::VisualGraphAssetWriter::WriteToString(*original.Get());
+    WriteTextFile(assetsRoot / "Logic" / "Copy.kbgraph", written);
+    kb::tests::Require(manager.DiscoverMountedAssets() >= 1U, "The written graph was not discovered");
+    const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> copy = manager.Load<kb::visual::VisualGraphAsset>("/Game/Logic/Copy.kbgraph");
+    kb::tests::Require(copy.IsLoaded(), "The written graph did not load again");
+    kb::tests::Require(original->nodes.size() == copy->nodes.size() && original->pins.size() == copy->pins.size() &&
+            original->edges.size() == copy->edges.size() && original->variables.size() == copy->variables.size(),
+        "A graph that was written and loaded lost nodes, pins, edges or variables");
+    const std::string again = kb::visual::VisualGraphAssetWriter::WriteToString(*copy.Get());
+    kb::tests::Require(again.substr(again.find('\n')) == written.substr(written.find('\n')), "Writing a loaded graph must give the same text apart from its first line");
+    const kb::visual::VisualGraphCompileResult first = kb::visual::VisualGraphCompiler::Compile(*original.Get());
+    const kb::visual::VisualGraphCompileResult second = kb::visual::VisualGraphCompiler::Compile(*copy.Get());
+    kb::tests::Require(first.Succeeded() && second.Succeeded() && first.module.functions.size() == second.module.functions.size() && !first.module.functions.empty() &&
+            first.module.functions[0].instructions.size() == second.module.functions[0].instructions.size() &&
+            first.module.variables.size() == second.module.variables.size(),
+        "Both versions of the graph must compile to modules of the same shape");
+}
+
 void RunVisualGraphCompilerRejectsCyclesTest() {
     kb::visual::VisualGraphAsset executionGraph{};
     executionGraph.name = "ExecutionCycle";
@@ -1707,6 +1772,8 @@ void RunVisualGraphTests() {
     RunVisualGraphBehaviourLifecycleRunnerTest();
     RunVisualGraphCompilerRejectsInvalidEdgesTest();
     RunVisualGraphCompilerRejectsInvalidDataPinsTest();
+    RunVisualGraphCompilerRejectsIncompatibleTypesTest();
+    RunVisualGraphWriteLoadRoundTripTest();
     RunVisualGraphCompilerRejectsCyclesTest();
     RunVisualGraphRuntimeControlFlowLoopWatchdogTest();
     RunVisualGraphExecutionBudgetPolicyTest();

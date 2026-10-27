@@ -1,4 +1,5 @@
 #include "rendering/DockWorkspaceContentRenderer.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 
 #if defined(_WIN32)
 #include "rendering/ConsoleDetailTextOverlay.hpp"
@@ -13,6 +14,7 @@ void DockWorkspaceContentRenderer::Paint(HWND parent, HDC dc, const RECT& dirty,
     const ScopedGdiObject selectedFont(dc, bodyFont.handle);
     const RECT workspace = GdiDrawing::ToRect(layout.workspace);
     bool paintedConsole = false;
+    bool paintedTilemap = false;
 
     PanelContentRenderer contentRenderer;
     for (const DockPanelLayout& panelLayout : layout.panels) {
@@ -22,6 +24,7 @@ void DockWorkspaceContentRenderer::Paint(HWND parent, HDC dc, const RECT& dirty,
         }
 
         paintedConsole = paintedConsole || panel->kind == DockPanelKind::Console;
+        paintedTilemap = paintedTilemap || panel->kind == DockPanelKind::TilemapEditor;
 
         const RECT content = GdiDrawing::ToRect(panelLayout.content);
         const RECT panelFrame = GdiDrawing::ToRect(panelLayout.frame);
@@ -29,7 +32,7 @@ void DockWorkspaceContentRenderer::Paint(HWND parent, HDC dc, const RECT& dirty,
         // Console and Script Editor position their own child windows from inside their
         // paint, so they must run even when their pixels are untouched.
         const bool ownsChildSurface = panel->kind == DockPanelKind::Console ||
-            panel->kind == DockPanelKind::ScriptEditor;
+            panel->kind == DockPanelKind::ScriptEditor || panel->kind == DockPanelKind::TilemapEditor;
         RECT intersection{};
         if (!ownsChildSurface && IntersectRect(&intersection, &panelFrame, &dirty) == 0) {
             continue;
@@ -39,6 +42,7 @@ void DockWorkspaceContentRenderer::Paint(HWND parent, HDC dc, const RECT& dirty,
     if (!paintedConsole) {
         ConsoleDetailTextOverlay::Hide(parent);
     }
+    if (!paintedTilemap) EditorMap2DWindow::HideDocked(parent);
 }
 
 } // namespace kb::editor

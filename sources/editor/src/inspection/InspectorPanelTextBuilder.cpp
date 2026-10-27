@@ -18,6 +18,7 @@
 #include "inspection/InspectorMultiSelectionTextBuilder.hpp"
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "scene/audio/EditorAudioMixerRuntime.hpp"
 #include "inspection/InspectorSceneAudioModel.hpp"
 #include "inspection/InspectorPostProcessProfileModel.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
@@ -160,7 +161,8 @@ void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneCont
                 InspectorAudioMixerAssetView::LoadCached(mutableManager, metadata->id);
             text << '\n';
             if (mixer.IsLoaded()) {
-                text << InspectorAudioMixerAssetModel{ *mixer }.Text();
+                const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), metadata->id);
+                text << InspectorAudioMixerAssetModel{ *mixer, &runtime }.Text();
             } else {
                 text << "Audio Mixer: failed to load" << '\n';
             }

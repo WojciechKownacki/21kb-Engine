@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/DisplayConfig.hpp"
+#include "kb/render/particles/ParticleGpuEmitterSimulation.hpp"
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
@@ -273,6 +274,11 @@ public:
     // Makes the renderer the scene's GPU particle consumer before the scene's first step, so GPU emitters
     // simulate on the GPU from their first births (a burst at time 0) instead of starting on the CPU.
     void PrepareParticleScene(kb::scene::Scene& scene) noexcept;
+    // Last dispatched GPU buffers, valid until the next scene update/submit or release.
+    // Counts are buffer capacities, and bytes are requested allocations rather than physical residency.
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::Draw> GpuParticleDraws(const kb::scene::Scene& scene) const noexcept;
+    [[nodiscard]] std::uint64_t GpuEmitterAllocatedBytes() const noexcept;
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> RejectedGpuParticleUpdates(const kb::scene::Scene& scene) const noexcept;
     // When the render origin of a scene follows its viewing camera (docs/large_worlds.md).
     void SetRenderOriginPolicy(const RenderOriginPolicy& policy) noexcept;
     [[nodiscard]] const RenderOriginPolicy& CurrentRenderOriginPolicy() const noexcept;
@@ -293,6 +299,12 @@ private:
         std::array<float, 16> previousViewProjection{};
         std::array<float, 2> previousJitter{};
         bool hasHistory = false;
+        std::uint64_t sceneId = 0;
+        std::uint64_t cameraEntityId = 0;
+        std::uint64_t historyFrame = 0;
+        bool cameraOverride = false;
+        bool orthographic = false;
+        bool taaEnabled = false;
         // The render origin previousViewProjection works relative to.
         kb::math::DVec3 renderOrigin{};
     };

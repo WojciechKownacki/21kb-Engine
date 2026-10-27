@@ -13,6 +13,8 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
 
+#include <cgltf/cgltf.h>
+
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -31,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <vector>
 
 namespace kb::render::tests {
@@ -325,6 +328,44 @@ struct MeshBounds {
     return std::fabs(value - expected) < 0.001F;
 }
 
+void OversizedAccessorCountsAreRefused() {
+    const std::string document = R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"componentType":5126,"count":9223372036854775807,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}]})";
+    const auto bytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(document.data()), document.size() };
+    RequireThat(!RenderMeshAssetBuilder::LoadGltf(bytes, {}).has_value(),
+        "An accessor count must be bounded before allocating its decoded float array");
+}
+
+void DecodedAccessorBudgetIsCheckedWithoutAllocatingIt() {
+    for (const std::string_view counts : {
+            R"({"componentType":5126,"count":178956970,"type":"VEC3"})",
+            R"({"componentType":5126,"count":178956971,"type":"VEC3"})",
+            R"({"componentType":5126,"count":100000000,"type":"VEC3"},{"componentType":5126,"count":100000000,"type":"VEC3"})",
+            R"({"componentType":5126,"count":0,"type":"VEC3"})",
+            R"({"componentType":5126,"count":3,"type":"VEC3"})" }) {
+        const std::string document = "{\"asset\":{\"version\":\"2.0\"},\"accessors\":[" + std::string{ counts } + "]}";
+        cgltf_options options{};
+        cgltf_data* parsed = nullptr;
+        Require(cgltf_parse(&options, document.data(), document.size(), &parsed) == cgltf_result_success && parsed != nullptr,
+            "Accessor budget fixture must parse");
+        const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data{ parsed, &cgltf_free };
+        std::string error;
+        const bool expected = data->accessors_count == 1U &&
+            (data->accessors[0].count == 178956970U || data->accessors[0].count == 3U);
+        RequireThat(kb::assets::LoadGltfBuffers(options, *data, {}, {}, &error) == expected,
+            "Decoded accessor budget or zero-initialized accessor validation differs: " + error);
+        const auto bytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(document.data()), document.size() };
+        RequireThat(kb::assets::CollectGltfExternalBuffers(bytes, {}, &error).has_value() == expected,
+            "Import and runtime accessor budgets must agree");
+        if (data->accessors[0].count == 3U) {
+            std::array<float, 9> values;
+            values.fill(1.0F);
+            Require(cgltf_accessor_unpack_floats(&data->accessors[0], values.data(), values.size()) == values.size() &&
+                std::ranges::all_of(values, [](float value) { return value == 0.0F; }),
+                "Valid accessors without a backing buffer must retain zero initialization");
+        }
+    }
+}
+
 // The import scale and rotation (ModelImporter Scale Factor, Interchange Import Rotation) reach
 // the loaded mesh of an OBJ and a glTF source after the right- to left-handed conversion: the
 // triangle (0,0,0) (1,0,0) (0,1,0) mirrors X to (-1,0,0), turns 90 degrees about Y to (0,0,1) and
@@ -359,9 +400,76 @@ void ImportScaleAndRotationReachTheMesh() {
     }
 }
 
+void ExpandedMeshSizesAreRefusedBeforeDecoding() {
+    const auto document = [](std::string_view count, bool instanced) {
+        return std::string{R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[)"}
+            + (instanced ? "0,1" : "0") + R"(]}],"nodes":[{"mesh":0})"
+            + (instanced ? ",{\"mesh\":0}" : "")
+            + R"(],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"componentType":5126,"count":)"
+            + std::string{count} + R"(,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}]})";
+    };
+    for (const auto& [count, instances, expected] : std::array{
+        std::tuple{"3", false, true}, std::tuple{"6000000", false, true},
+        std::tuple{"6000000", true, false}, std::tuple{"92233722", false, false},
+        std::tuple{"92233720)6854775807", false, false}, std::tuple{"10000002", false, false}}) {
+        const auto text = document(count, instances);
+        cgltf_options options{};
+        cgltf_data* parsed = nullptr;
+        Require(cgltf_parse(&options, text.data(), text.size(), &parsed) == cgltf_result_success && parsed != nullptr,
+            "Expanded glTF budget fixture must parse");
+        const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data{parsed, &cgltf_free};
+        const bool accepted = kb::assets::ValidateGltfGeometrySize(*data);
+        std::cout << "glTF expanded budget count=" << count << " instanced=" << instances
+            << " accepted=" << accepted << " expected=" << expected << '\n';
+        Require(accepted == expected, "Expanded glTF output and scratch budget differs");
+        if (!expected) {
+            const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()};
+            Require(!RenderMeshAssetBuilder::LoadGltf(bytes, {}).has_value(), "Oversized glTF runtime mesh was accepted");
+            const TempRoot root;
+            const auto path = root.Path() / "Expanded.gltf";
+            WriteText(path, text);
+            std::string error;
+            Require(!RenderMeshSourceImport::Inspect(path, &error).has_value()
+                && error.find("2 GiB") != std::string::npos, "glTF import inspection missed its expanded-size diagnostic");
+            ImportProject project{root.Path()};
+            const auto result = project.Import(path);
+            Require(!result.Succeeded() && result.error.find("2 GiB") != std::string::npos,
+                "glTF source import accepted oversized geometry");
+            Require(!std::filesystem::exists(project.assets / "Meshes" / "Expanded.21kb"),
+                "Rejected glTF source import wrote an asset");
+        }
+    }
+}
+
+void ExpandedMeshHierarchiesAreBounded() {
+    for (const auto& [count, duplicate, expected] : std::array{
+        std::tuple{64U, false, true}, std::tuple{600U, false, false}, std::tuple{24U, true, false}}) {
+        std::vector<cgltf_node> nodes(count);
+        std::vector<std::array<cgltf_node*, 2>> children(count);
+        for (std::uint32_t i = 0U; i + 1U < count; ++i) {
+            children[i] = {&nodes[i + 1U], &nodes[i + 1U]};
+            nodes[i].children = children[i].data();
+            nodes[i].children_count = duplicate ? 2U : 1U;
+            nodes[i + 1U].parent = &nodes[i];
+        }
+        cgltf_node* root = nodes.data();
+        cgltf_scene scene{};
+        scene.nodes = &root;
+        scene.nodes_count = 1U;
+        cgltf_data data{};
+        data.scene = &scene;
+        Require(kb::assets::ValidateGltfGeometrySize(data) == expected,
+            "glTF hierarchy depth or repeated-node work is unbounded");
+    }
+}
+
 } // namespace
 
 void RunGltfExternalResourceTests() {
+    ExpandedMeshSizesAreRefusedBeforeDecoding();
+    ExpandedMeshHierarchiesAreBounded();
+    OversizedAccessorCountsAreRefused();
+    DecodedAccessorBudgetIsCheckedWithoutAllocatingIt();
     ImportScaleAndRotationReachTheMesh();
     RelativeResourcePathsAreTheOnlyAcceptedFileUris();
     ExternalBufferImportsAndLoadsWithoutTheSourceFolder();

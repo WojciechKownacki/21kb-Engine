@@ -70,6 +70,8 @@ enum class EditorAssetContextCommand {
     Delete,
     FindReferences,
     Refresh,
+    Reimport,
+    UndoReimport,
 };
 
 enum class EditorAssetDropAction {

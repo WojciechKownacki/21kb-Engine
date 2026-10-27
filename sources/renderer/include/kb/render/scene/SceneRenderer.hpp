@@ -47,7 +47,7 @@ public:
     SceneRenderer(const SceneRenderer&) = delete;
     SceneRenderer& operator=(const SceneRenderer&) = delete;
 
-    [[nodiscard]] bool Initialize();
+    [[nodiscard]] bool Initialize(std::uint64_t particleBufferBudgetBytes = 0U);
     void Shutdown();
     // Drains the GPU-simulated particle emitter commands of the scene once per rendered frame.
     [[nodiscard]] bool HasGpuParticleEmitters(std::uint64_t sceneId) const noexcept;
@@ -121,6 +121,9 @@ public:
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene, MeshPassType pass) const;
     [[nodiscard]] SceneRenderSubmitStats LastSubmitStats() const noexcept;
     [[nodiscard]] kb::particles::ParticleGpuVisualAvailability ParticleGpuVisualAvailability() const noexcept;
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::Draw> GpuParticleDraws(std::uint64_t sceneId) const noexcept;
+    [[nodiscard]] std::uint64_t GpuEmitterAllocatedBytes() const noexcept;
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> RejectedGpuParticleUpdates(std::uint64_t sceneId) const noexcept;
     void SetParticleVolumetricLowQuality(bool lowQuality) noexcept;
     [[nodiscard]] bool ParticleVolumetricLowQuality() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastDiagnostics() const noexcept;

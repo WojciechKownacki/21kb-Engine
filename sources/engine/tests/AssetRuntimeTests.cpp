@@ -114,6 +114,39 @@ public:
     }
 };
 
+// Reads a text file slowly and counts how many loads are inside Load() at the same moment.
+struct LoadOverlap {
+    std::atomic_uint active{ 0U };
+    std::atomic_uint peak{ 0U };
+};
+
+class SlowTextAssetLoader final : public kb::assets::IAssetLoader {
+public:
+    SlowTextAssetLoader(std::shared_ptr<LoadOverlap> overlap, bool allowConcurrent)
+        : overlap_{ std::move(overlap) }, allowConcurrent_{ allowConcurrent } {}
+
+    [[nodiscard]] std::string_view Type() const noexcept override { return "SlowText"; }
+    [[nodiscard]] std::type_index PayloadType() const noexcept override { return typeid(std::string); }
+    [[nodiscard]] std::vector<std::string> Extensions() const override { return { ".slow" }; }
+    [[nodiscard]] bool AllowsConcurrentLoad() const noexcept override { return allowConcurrent_; }
+
+    [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override {
+        const unsigned now = overlap_->active.fetch_add(1U) + 1U;
+        unsigned peak = overlap_->peak.load();
+        while (now > peak && !overlap_->peak.compare_exchange_weak(peak, now)) {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 60 });
+        std::ifstream input{ request.resolvedPath, std::ios::binary };
+        std::string content{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        overlap_->active.fetch_sub(1U);
+        return { .asset = std::make_shared<std::string>(std::move(content)), .error = {} };
+    }
+
+private:
+    std::shared_ptr<LoadOverlap> overlap_;
+    bool allowConcurrent_ = false;
+};
+
 struct AsyncLoaderGate {
     std::atomic_bool entered{ false };
     std::shared_future<void> release{};
@@ -502,6 +535,50 @@ void RunAssetManagerLoadOpaqueTest() {
     kb::tests::Require(manager.IsLoaded(textAssetId), "Reload through LoadOpaque after Unload must repopulate the cache");
 }
 
+// A loader that allows concurrent loads runs several asynchronous loads at once and returns each file's own data; a loader
+// that does not stays serialized however many loads the manager allows; the profile tells the two apart.
+void RunAssetManagerConcurrentLoaderTest() {
+    for (const bool allowConcurrent : { true, false }) {
+        ResetTestRoot();
+        const std::filesystem::path assetsRoot = TestRoot() / "ConcurrentProject" / "Assets";
+        constexpr int kFiles = 4;
+        for (int index = 0; index < kFiles; ++index) {
+            WriteTextFile(assetsRoot / "Text" / ("File" + std::to_string(index) + ".slow"), "payload " + std::to_string(index));
+        }
+        auto overlap = std::make_shared<LoadOverlap>();
+        kb::assets::AssetManager manager;
+        kb::tests::Require(manager.SetAsyncLoadConcurrency(kFiles) && !manager.SetAsyncLoadConcurrency(0U), "the concurrency must be settable once, and not to zero");
+        kb::tests::Require(manager.RegisterLoader(std::make_unique<SlowTextAssetLoader>(overlap, allowConcurrent)), "slow loader registration failed");
+        kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "concurrent project mount failed");
+        kb::tests::Require(manager.DiscoverMountedAssets() == static_cast<std::size_t>(kFiles), "concurrent asset discovery failed");
+        std::vector<kb::assets::AssetId> ids;
+        for (int index = 0; index < kFiles; ++index) {
+            const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/File" + std::to_string(index) + ".slow");
+            kb::tests::Require(metadata != nullptr && manager.RequestLoadAsync(metadata->id), "a concurrent load request was rejected");
+            ids.push_back(metadata->id);
+        }
+        kb::tests::Require(!manager.SetAsyncLoadConcurrency(2U), "the concurrency must not change after the first asynchronous request");
+        SpinUntil([&] {
+            for (const kb::assets::AssetId id : ids) {
+                if (manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending) return false;
+            }
+            return true;
+        }, [&] { manager.PumpAsyncLoads(); });
+        for (int index = 0; index < kFiles; ++index) {
+            const kb::assets::AssetHandle<std::string> payload = manager.AcquireLoaded<std::string>(ids[static_cast<std::size_t>(index)]);
+            kb::tests::Require(payload.IsLoaded() && *payload == "payload " + std::to_string(index), "a concurrent load returned the wrong data");
+        }
+        const kb::assets::AssetManager::AsyncLoadConcurrencyStats stats = manager.AsyncLoadConcurrency();
+        if (allowConcurrent) {
+            kb::tests::Require(overlap->peak.load() >= 2U && stats.peakSimultaneousLoads >= 2U, "loads of an opted-in loader must overlap");
+            kb::tests::Require(stats.concurrentLoads == static_cast<std::uint64_t>(kFiles) && stats.serializedLoads == 0U, "the profile must count the loads that ran without the mutex");
+        } else {
+            kb::tests::Require(overlap->peak.load() == 1U && stats.peakSimultaneousLoads == 1U, "a loader that does not opt in must stay serialized");
+            kb::tests::Require(stats.serializedLoads == static_cast<std::uint64_t>(kFiles) && stats.concurrentLoads == 0U, "the profile must count the serialized loads");
+        }
+    }
+}
+
 void RunAssetManagerTrueAsyncLoadTest() {
     ResetTestRoot();
     const std::filesystem::path assetsRoot = TestRoot() / "AsyncProject" / "Assets";
@@ -576,6 +653,57 @@ void RunAssetManagerTrueAsyncLoadTest() {
     kb::tests::Require(cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::NotRequested &&
             !cancelManager.IsLoaded(cancelMetadata->id),
         "Unload during an async request must invalidate the worker result before owner-thread commit");
+}
+
+// An I/O error of an asynchronous load is reported as a failure with the loader's message and does not publish
+// anything; a payload that was unloaded and requested again while the first read was still running is published
+// by the new request, not lost with the old one.
+void RunAssetManagerAsyncFailureAndRequestAfterUnloadTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "AsyncFailureProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Vanishing.gated", "will be deleted");
+    WriteTextFile(assetsRoot / "Text" / "Reloaded.gated", "second request payload");
+
+    std::promise<void> releasePromise;
+    auto gate = std::make_shared<AsyncLoaderGate>();
+    gate->release = releasePromise.get_future().share();
+    releasePromise.set_value(); // the loader never waits in the failure case
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+            manager.Mounts().Mount("Game", assetsRoot) && manager.DiscoverMountedAssets() == 2U,
+        "Async failure fixture could not be registered");
+    const kb::assets::AssetId vanishing = manager.Registry().FindByPath("/Game/Text/Vanishing.gated")->id;
+    std::error_code error;
+    std::filesystem::remove(assetsRoot / "Text" / "Vanishing.gated", error);
+    kb::tests::Require(!error, "Async failure fixture could not delete its file");
+    kb::tests::Require(manager.RequestLoadAsync(vanishing), "A request for a file that has vanished is still accepted");
+    SpinUntil([&] { return manager.AsyncLoadStatus(vanishing) != kb::assets::AsyncAssetLoadStatus::Pending; }, [&] { manager.PumpAsyncLoads(); });
+    kb::tests::Require(manager.AsyncLoadStatus(vanishing) == kb::assets::AsyncAssetLoadStatus::Failed &&
+            manager.AsyncLoadError(vanishing).find("could not be opened") != std::string::npos && !manager.IsLoaded(vanishing),
+        "An I/O error of an async load must be reported as a failure with the loader's message and publish nothing");
+
+    // Unload while the read is running, then request again: the second request must be the one that publishes.
+    std::promise<void> secondRelease;
+    auto secondGate = std::make_shared<AsyncLoaderGate>();
+    secondGate->release = secondRelease.get_future().share();
+    kb::assets::AssetManager again;
+    kb::tests::Require(again.RegisterLoader(std::make_unique<GatedTextAssetLoader>(secondGate)) &&
+            again.Mounts().Mount("Game", assetsRoot) && again.DiscoverMountedAssets() == 1U,
+        "Async re-request fixture could not be registered");
+    const kb::assets::AssetId reloaded = again.Registry().FindByPath("/Game/Text/Reloaded.gated")->id;
+    kb::tests::Require(again.RequestLoadAsync(reloaded), "The first request must be accepted");
+    SpinUntil([&] { return secondGate->entered.load(std::memory_order_acquire); });
+    const bool entered = secondGate->entered.load(std::memory_order_acquire);
+    static_cast<void>(again.Unload(reloaded));
+    const bool secondAccepted = again.RequestLoadAsync(reloaded);
+    secondRelease.set_value();
+    kb::tests::Require(entered, "The first read never started");
+    kb::tests::Require(secondAccepted, "A request made after the unload must be accepted");
+    SpinUntil([&] { return again.AsyncLoadStatus(reloaded) == kb::assets::AsyncAssetLoadStatus::Completed; }, [&] { again.PumpAsyncLoads(); });
+    kb::tests::Require(again.AsyncLoadStatus(reloaded) == kb::assets::AsyncAssetLoadStatus::Completed && again.IsLoaded(reloaded),
+        "A request made after an unload during I/O must publish its own result");
+    const kb::assets::AssetHandle<std::string> payload = again.AcquireLoaded<std::string>(reloaded);
+    kb::tests::Require(payload.IsLoaded() && *payload == "second request payload", "The re-requested payload must be the loaded text");
 }
 
 // Asynchronous loads are jobs of the engine's one background load service: a blocked loader
@@ -1320,8 +1448,8 @@ void RunSceneAudioClipAssetDiscoveryTest() {
 }
 
 void RunAudioClipFormatCatalogTest() {
-    const std::array<std::string_view, 12U> unsupported{
-        ".ogg", ".aac", ".m4a", ".wma", ".aiff", ".aif",
+    const std::array<std::string_view, 11U> unsupported{
+        ".aac", ".m4a", ".wma", ".aiff", ".aif",
         ".xm", ".mod", ".s3m", ".it", ".mid", ".midi",
     };
     const std::vector<std::string> catalog = kb::assets::AssetImportCatalog::SupportedSourceExtensions();
@@ -1337,6 +1465,7 @@ void RunAudioClipFormatCatalogTest() {
             "A supported audio clip extension was not shared by catalog and loader");
     }
     kb::tests::Require(kb::audio::IsSupportedAudioClipExtension(".WAV")
+            && kb::audio::IsSupportedAudioClipExtension(".OGG")
             && kb::assets::AssetImportCatalog::ClassifyExtension(".FLAC") == kb::assets::AssetImportCategory::Audio,
         "Audio clip format matching must be case-insensitive");
     for (const std::string_view extension : unsupported) {
@@ -1349,7 +1478,7 @@ void RunAudioClipFormatCatalogTest() {
 
     ResetTestRoot();
     const std::filesystem::path supportedPath = TestRoot() / "Format.WAV";
-    const std::filesystem::path unsupportedPath = TestRoot() / "Format.ogg";
+    const std::filesystem::path unsupportedPath = TestRoot() / "Format.aac";
     WriteTextFile(supportedPath, "format fixture");
     WriteTextFile(unsupportedPath, "format fixture");
     const kb::assets::AssetMetadata metadata{
@@ -2616,7 +2745,9 @@ void RunAssetRuntimeTests() {
     RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
+    RunAssetManagerAsyncFailureAndRequestAfterUnloadTest();
     RunAssetManagerAsyncLoadsShareBackgroundServiceTest();
+    RunAssetManagerConcurrentLoaderTest();
     RunAssetManagerAsyncDependencyValidationTest();
     RunAssetManagerAsyncLoaderReplacementTest();
     RunAssetManagerNewLoaderPreservesRetainedAssetsTest();

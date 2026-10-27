@@ -22,6 +22,7 @@ enum class PackagedRuntimeModuleKind : std::uint8_t {
     BasicLighting,
     Particle21kb,
     AI,
+    World2D,
 };
 
 struct PackagedRuntimeModuleDesc {
@@ -30,7 +31,7 @@ struct PackagedRuntimeModuleDesc {
     std::string_view windowsBinaryName;
 };
 
-inline constexpr std::array<PackagedRuntimeModuleDesc, 5U> kPackagedRuntimeModules{
+inline constexpr std::array<PackagedRuntimeModuleDesc, 6U> kPackagedRuntimeModules{
     PackagedRuntimeModuleDesc{
         PackagedRuntimeModuleKind::PhysicsJolt, "Physics.Jolt", "kb_physics_jolt_plugin.dll" },
     PackagedRuntimeModuleDesc{
@@ -41,6 +42,8 @@ inline constexpr std::array<PackagedRuntimeModuleDesc, 5U> kPackagedRuntimeModul
         PackagedRuntimeModuleKind::Particle21kb, "Rendering.21kbParticle", "kb_21kb_particle_plugin.dll" },
     PackagedRuntimeModuleDesc{
         PackagedRuntimeModuleKind::AI, "Gameplay.AI", "kb_ai_plugin.dll" },
+    PackagedRuntimeModuleDesc{
+        PackagedRuntimeModuleKind::World2D, "World.Map2D", "kb_world2d_plugin.dll" },
 };
 
 inline constexpr std::string_view kWindowsCustomRuntimeModuleDirectory = "RuntimeModules";

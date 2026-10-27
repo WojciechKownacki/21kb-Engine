@@ -1,6 +1,7 @@
 #include "PackagedGameRuntime.hpp"
 
 #include "PackagedRuntimeModules.hpp"
+#include "GameRuntimeDiagnostics.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -110,6 +111,7 @@ bool PackagedGameRuntime::Initialize(
                 << " modules=" << scene->ActiveModuleCount() << '\n';
     project_ = std::move(project);
     scene_ = std::move(scene);
+    runtimeClean_ = true;
     renderSceneSync_.Reset();
     return true;
 }
@@ -117,11 +119,12 @@ bool PackagedGameRuntime::Initialize(
 bool PackagedGameRuntime::Tick(
     kb::render::Renderer& renderer,
     float deltaSeconds,
+    std::ostream& diagnostics,
     bool* frameSubmitted) {
     if (frameSubmitted != nullptr) {
         *frameSubmitted = false;
     }
-    if (scene_ == nullptr || scene_->Runtime().ShouldQuit()) {
+    if (!runtimeClean_ || scene_ == nullptr || scene_->Runtime().ShouldQuit()) {
         return false;
     }
     static_cast<void>(scene_->UI().SetViewport(
@@ -129,13 +132,24 @@ bool PackagedGameRuntime::Tick(
         static_cast<float>(renderer.BackbufferHeight())));
     renderSceneSync_.BeforeUpdate(*scene_);
     static_cast<void>(scene_->Runtime().Update(deltaSeconds));
+    for (const std::string& error : DrainGameRuntimeErrors(*scene_, scriptActive_ ? script_ : nullptr)) {
+        diagnostics << error << '\n';
+        runtimeClean_ = false;
+    }
+    if (!runtimeClean_) {
+        return false;
+    }
     renderer.SetFrameDeltaSeconds(deltaSeconds);
     if (!renderer.BeginFrame()) {
+        diagnostics << "renderer could not begin a frame\n";
+        runtimeClean_ = false;
         return false;
     }
     const bool submitted = renderSceneSync_.Submit(*scene_, renderer);
     renderer.EndFrame();
     if (!submitted) {
+        diagnostics << "renderer could not submit the scene\n";
+        runtimeClean_ = false;
         return false;
     }
     if (frameSubmitted != nullptr) {
@@ -144,23 +158,34 @@ bool PackagedGameRuntime::Tick(
     return !scene_->Runtime().ShouldQuit();
 }
 
+void PackagedGameRuntime::ReleaseRenderResources(kb::render::Renderer& renderer) {
+    if (scene_ != nullptr && renderer.IsInitialized()) {
+        renderer.ReleaseScene(*scene_);
+    }
+    renderSceneSync_.Reset();
+}
+
 bool PackagedGameRuntime::Shutdown(
     kb::render::Renderer& renderer,
     std::ostream& diagnostics) {
-    bool clean = true;
+    bool clean = runtimeClean_;
     if (scriptActive_ && script_ != nullptr && script_->Host() != nullptr &&
         !script_->Host()->DispatchShutdownLifecycle(0.0F)) {
         diagnostics << "script shutdown lifecycle could not be dispatched\n";
         clean = false;
     }
-    if (scene_ != nullptr && renderer.IsInitialized()) {
-        renderer.ReleaseScene(*scene_);
+    if (scene_ != nullptr) {
+        for (const std::string& error : DrainGameRuntimeErrors(*scene_, scriptActive_ ? script_ : nullptr)) {
+            diagnostics << error << '\n';
+            clean = false;
+        }
     }
+    ReleaseRenderResources(renderer);
     scene_.reset();
-    renderSceneSync_.Reset();
     script_ = nullptr;
     scriptActive_ = false;
     project_ = {};
+    runtimeClean_ = clean;
     return clean;
 }
 

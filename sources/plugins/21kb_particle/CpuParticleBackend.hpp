@@ -185,6 +185,10 @@ private:
     };
 
     static constexpr std::uint32_t kInvalidDenseIndex = UINT32_MAX;
+    void ReserveParticleStorage(std::size_t capacity);
+    [[nodiscard]] std::size_t ParticleStorageRequirement(
+        const CompiledEffect* candidate = nullptr,
+        std::uint32_t replacedEffect = kInvalidDenseIndex) const noexcept;
 
     [[nodiscard]] static std::uint64_t MakeInstanceId(std::uint32_t slot, std::uint32_t generation) noexcept;
     [[nodiscard]] std::uint32_t ResolveDenseIndex(std::uint64_t instanceId) const noexcept;
@@ -204,8 +208,8 @@ private:
         const CompiledEffect& previous,
         const CompiledEffect& candidate) noexcept;
     void ProcessOwnerLifecycle(kb::scene::Scene& scene) noexcept;
-    // Copies of one effect whose emitters all loop in local space share one simulation (Verth,
-    // Niagara, VFX Graph instancing): the first copy simulates, the others draw its particles at
+    // Copies of one effect whose emitters all loop in local space share one simulation (instancing,
+    // as in other particle systems): the first copy simulates, the others draw its particles at
     // their own transform. sharedLeaders_[copy] = the simulating copy, or kInvalidDenseIndex.
     void UpdateSharedSimulations() noexcept;
     [[nodiscard]] bool FinishOwnerLifecycle(kb::scene::Scene& scene, std::uint32_t denseIndex) noexcept;
@@ -252,8 +256,10 @@ private:
         std::vector<kb::particles::ParticleGpuSpawn> spawns;
     };
     [[nodiscard]] bool GpuEligible(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept;
+    [[nodiscard]] kb::particles::ParticleGpuFallbackReason GpuFallbackReason(
+        std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept;
     void SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
-        const kb::math::Vec3* eventPosition, std::uint8_t eventDepth = 0U) noexcept;
+        const kb::math::Vec3* eventPosition, std::uint8_t eventDepth = 0U, float initialAge = 0.0F) noexcept;
     // Birth and death events of GPU particles are known when the particle is born (its motion is closed
     // form), so the backend queues them itself: births at once, deaths scheduled for birth + lifetime.
     struct ScheduledGpuEvent {
@@ -341,7 +347,8 @@ private:
     std::vector<kb::math::Vec3> particlePositions_;
     std::vector<kb::math::Vec3> particlePreviousPositions_;
     std::vector<kb::math::Vec3> particleVelocities_;
-    std::vector<float> particleAges_;
+    // Accumulate fixed steps without float drift at flipbook and lifetime boundaries.
+    std::vector<double> particleAges_;
     std::vector<float> particleLifetimes_;
     std::vector<kb::math::Color> particleColors_;
     std::vector<float> particleSizes_;

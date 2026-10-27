@@ -49,11 +49,11 @@ Priorytety pozostałej pracy:
   Production foliage: LOD, alpha mask/overdraw, wiatr, streaming GPU i cienie.
 
 Projekt i surowe dane:
-  E:\21kbProjekty\OpenWorldAfter_20260930
+  <workdir>\OpenWorldAfter_20260930
   Results\Raport_po_poprawkach.html
   Results\raw\ oraz Results\runs.json
 Raport bazowy ze szerszymi scenami:
-  E:\21kbProjekty\OpenWorldPerf_20260930\Results\Raport.html
+  <workdir>\OpenWorldPerf_20260930\Results\Raport.html
 
 Te poprawki są zweryfikowanym krokiem pod duże światy. Wyniki nie uprawniają
 do deklaracji, że silnik jest już gotowy do produkcji gry klasy Wiedźmin/GTA.

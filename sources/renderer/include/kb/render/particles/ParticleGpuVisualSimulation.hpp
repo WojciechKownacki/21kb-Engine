@@ -29,6 +29,8 @@ public:
         std::uint64_t sceneId,
         std::uint64_t fixedStepIndex) const noexcept;
     [[nodiscard]] bgfx::DynamicVertexBufferHandle InstanceBuffer() const noexcept;
+    // Explicit terminal diagnostics; normal frame submission does not read these counters back.
+    [[nodiscard]] bgfx::DynamicIndexBufferHandle CounterBuffer() const noexcept;
     [[nodiscard]] kb::particles::ParticleGpuVisualAvailability Availability() const noexcept;
     void ReleaseScene(std::uint64_t sceneId) noexcept;
     void ReleaseAllScenes() noexcept;
@@ -47,6 +49,7 @@ private:
         BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
     bgfx::DynamicIndexBufferHandle visualMask_ = BGFX_INVALID_HANDLE;
     bgfx::DynamicIndexBufferHandle aliveCounters_ = BGFX_INVALID_HANDLE;
+    bgfx::IndexBufferHandle counterZeros_ = BGFX_INVALID_HANDLE;
     bgfx::IndirectBufferHandle indirectArgs_ = BGFX_INVALID_HANDLE;
     std::uint32_t capacity_ = 0U;
     std::uint64_t preparedSceneId_ = 0U;

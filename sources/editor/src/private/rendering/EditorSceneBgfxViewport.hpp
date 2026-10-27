@@ -132,7 +132,9 @@ public:
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;
-    void EndPaintLayout();
+    // A supplied timestep keeps renderer effects on the simulation clock during fixed-step playback.
+    // Ordinary editor paints use elapsed wall time; zero redraws without advancing renderer effects.
+    void EndPaintLayout(std::optional<float> deltaSeconds = std::nullopt);
     void Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme);
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme);
     void Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
@@ -308,9 +310,10 @@ private:
     void ReleaseWindow(HWND window) noexcept;
     void ShutdownGpuResources() noexcept;
     void ShutdownSessionFramebuffers() noexcept;
-    [[nodiscard]] bool SubmitPendingPaint();
+    [[nodiscard]] bool SubmitPendingPaint(std::optional<float> deltaSeconds = std::nullopt);
     void ReportAaTrace(std::string_view message, bool force = false);
     void ReportAaRouteTrace(std::string_view message, bool force = false);
+    void ReportGpuParticleRejection();
     void SetFailureDetail(std::string detail);
     void TrackPaintHost(HWND parent) noexcept;
     void FailRender(const char* reason) noexcept;
@@ -340,6 +343,7 @@ private:
     std::function<void(std::string_view)> aaTraceReporter_{};
     std::string lastConsoleAaTrace_{};
     std::string lastConsoleAaRouteTrace_{};
+    std::string lastGpuParticleRejection_{};
     std::string failureDetail_{};
     std::string graphShaderCacheRoot_{};
     render::Renderer renderer_;

@@ -19,7 +19,7 @@ class EditorRightButtonDownRouter {
 public:
     EditorRightButtonDownRouter(
         HWND mainWindow,
-        const EditorDockModel& dockModel,
+        EditorDockModel& dockModel,
         const EditorFloatingWindowManager& floatingWindows,
         EditorSceneContext& sceneContext,
         EditorSceneBgfxViewport& sceneViewport,
@@ -32,7 +32,7 @@ public:
 
 private:
     HWND mainWindow_ = nullptr;
-    const EditorDockModel& dockModel_;
+    EditorDockModel& dockModel_;
     const EditorFloatingWindowManager& floatingWindows_;
     EditorSceneContext& sceneContext_;
     EditorSceneBgfxViewport& sceneViewport_;

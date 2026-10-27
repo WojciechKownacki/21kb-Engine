@@ -558,6 +558,11 @@ void BlocksBeyondFourGigabytesAreAddressed() {
         Purge(root);
         return;
     }
+#else
+    {
+        std::ofstream create{ path, std::ios::binary };
+        Require(create.is_open(), "The large fixture could not be created");
+    }
 #endif
     // Laid out by hand: a primary block at the front and a streamed block 5 GiB in. The bytes
     // between are a hole in a sparse file, so the test costs kilobytes of disk, not gigabytes.
@@ -608,6 +613,11 @@ void BlocksBeyondFourGigabytesAreAddressed() {
     {
         std::fstream output{ path, std::ios::binary | std::ios::in | std::ios::out };
         Require(output.is_open(), "The large fixture could not be opened");
+#if defined(_WIN32)
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        Require(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0U,
+            "Opening the large fixture removed its sparse attribute");
+#endif
         output.write(reinterpret_cast<const char*>(headerBytes.data()), static_cast<std::streamsize>(headerBytes.size()));
         output.write(reinterpret_cast<const char*>(index.data()), static_cast<std::streamsize>(index.size()));
         output.seekp(static_cast<std::streamoff>(primaryOffset));
@@ -1625,6 +1635,10 @@ void AsyncReadsFollowPriorityAndReturnExactRanges() {
     Require(order == std::vector<int>{ 1, 10, 5, 4, 3 }, "Queued reads were not served by priority");
     Require(requests[4]->State() == streaming::BackgroundRequestState::Cancelled, "A cancelled read did not stay cancelled");
     Require(io.Stats().peakInFlight >= 4U, "The worker did not keep several reads in flight");
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
+    Require(io.Stats().peakSubmittedReadBatch >= 4U && io.Stats().asynchronousReads >= 6U,
+        "The native API did not accept several reads before the worker waited");
+#endif
 
     // Exact ranges at awkward offsets, through the unbuffered path where the platform has one.
     std::vector<streaming::BackgroundRequestHandle> ranges;
@@ -2093,6 +2107,133 @@ void StreamingStaysWithinItsBudget() {
     }
 }
 
+// Red when: a critical request waits behind a long queue of lower priority work, when a queue of 200 jobs loses a job,
+// or when the order of equal priorities is not the order of submission.
+void CriticalJobsOvertakeALongQueue() {
+    const auto spinUntil = [](const std::function<bool()>& done) {
+        const Clock::time_point deadline = Clock::now() + std::chrono::seconds{ 60 };
+        while (!done() && Clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+        }
+        return done();
+    };
+    streaming::BackgroundLoadService service{ streaming::BackgroundLoadServiceOptions{ .workerCount = 1U } };
+    std::atomic<bool> gateEntered{ false };
+    std::atomic<bool> gateOpen{ false };
+    const streaming::BackgroundRequestHandle gate = service.Run([&](std::string&) {
+        gateEntered = true;
+        return spinUntil([&] { return gateOpen.load(); });
+    }, 0);
+    Require(spinUntil([&] { return gateEntered.load(); }), "The gate job never started");
+    std::mutex orderMutex;
+    std::vector<int> order;
+    std::vector<streaming::BackgroundRequestHandle> handles;
+    constexpr int kQueued = 200;
+    for (int index = 0; index < kQueued; ++index) {
+        handles.push_back(service.Run([&, index](std::string&) {
+            std::scoped_lock lock{ orderMutex };
+            order.push_back(index);
+            return true;
+        }, 0));
+    }
+    handles.push_back(service.Run([&](std::string&) {
+        std::scoped_lock lock{ orderMutex };
+        order.push_back(-1);
+        return true;
+    }, 1000));
+    gateOpen = true;
+    for (const auto& handle : handles) {
+        Require(streaming::BackgroundLoadService::WaitUntilDone(handle, Clock::now() + std::chrono::seconds{ 60 }) &&
+                handle->State() == streaming::BackgroundRequestState::Completed,
+            "A queued job did not complete");
+    }
+    Require(order.size() == static_cast<std::size_t>(kQueued) + 1U, "A job of the long queue was lost");
+    Require(order.front() == -1, "A critical job submitted last must run before 200 queued jobs of lower priority");
+    for (int index = 0; index < kQueued; ++index) {
+        Require(order[static_cast<std::size_t>(index) + 1U] == index, "Jobs of equal priority must run in the order they were submitted");
+    }
+    Require(streaming::BackgroundLoadService::WaitUntilDone(gate, Clock::now() + std::chrono::seconds{ 60 }), "The gate job did not finish");
+}
+
+// Red when: a failed load is tried again before its wait is over or never; a request nobody renews is not the first to
+// give up its levels when space is needed; a budget below the floors evicts a floor or keeps streamed levels; or a
+// completion for a resource that was unregistered changes any counter.
+void ResidencyRetryStaleAndFloorRules() {
+    namespace s = streaming;
+    const s::StreamingResourceDesc desc{ .levelBytes = { 400U, 200U, 100U, 50U }, .residentFloor = 3U };
+    const auto loadsLevel = [](const s::StreamingPlan& plan, s::StreamingResourceId id, std::uint32_t level) {
+        return std::ranges::any_of(plan.loads, [&](const s::StreamingLoad& load) { return load.resource == id && load.level == level; });
+    };
+
+    // Retry: a failed level waits exactly retryAfterFrames and is then issued again.
+    {
+        s::StreamingResidencyManager manager{ 100000U };
+        const s::StreamingPlanLimits limits{ .retryAfterFrames = 5U };
+        Require(manager.Register(1U, desc), "The retry fixture did not register");
+        manager.Request(1U, 0U, 1.0F, 10U);
+        const s::StreamingPlan first = manager.Plan(10U, limits);
+        Require(loadsLevel(first, 1U, 2U) && loadsLevel(first, 1U, 1U) && loadsLevel(first, 1U, 0U),
+            "The first plan must start every wanted level");
+        manager.CompleteLoad(1U, 2U, false, 10U);
+        Require(manager.Stats().loadsFailed == 1U && !manager.IsLoadInFlight(1U, 2U), "A failed load must be counted and released");
+        Require(!loadsLevel(manager.Plan(14U, limits), 1U, 2U), "A failed level must not be tried again before its wait is over");
+        Require(loadsLevel(manager.Plan(15U, limits), 1U, 2U), "A failed level must be tried again when its wait is over");
+    }
+
+    // Stale: with a budget that holds only one of them, the resource nobody asks for any more is the one that gives
+    // up its levels, even though it matters more than the newcomer; a fresh request of the same priority does not.
+    const auto contested = [&](std::uint64_t lastRequestOfOld) {
+        s::StreamingResidencyManager manager{ 1000U };
+        Require(manager.Register(1U, desc) && manager.Register(2U, desc), "The stale fixture did not register");
+        manager.Request(1U, 0U, 9.0F, 0U);
+        for (const s::StreamingLoad& load : manager.Plan(0U).loads) manager.CompleteLoad(load.resource, load.level, true, 0U);
+        Require(manager.ResidentLevel(1U) == 0U && manager.Stats().residentBytes == 750U + 50U, "The old resource must be fully resident");
+        manager.Request(1U, 0U, 9.0F, lastRequestOfOld);
+        manager.Request(2U, 0U, 5.0F, 200U);
+        const s::StreamingPlan plan = manager.Plan(200U);
+        Require(manager.Stats().residentBytes + manager.Stats().inFlightBytes <= 1000U, "The budget must hold");
+        return std::pair{ plan, manager.ResidentLevel(1U) };
+    };
+    const auto [staleplan, staleLevel] = contested(0U);
+    Require(staleLevel > 0U && std::ranges::any_of(staleplan.evictions, [](const s::StreamingEviction& e) { return e.resource == 1U; }),
+        "A request nobody renewed for over 120 frames must be the first to give up its levels");
+    const auto [freshPlan, freshLevel] = contested(199U);
+    Require(freshLevel == 0U && freshPlan.evictions.empty(), "A recently renewed request of higher priority must keep its levels");
+
+    // A budget below the floors keeps the floors and nothing else, and stays that way.
+    {
+        s::StreamingResidencyManager manager{ 100000U };
+        Require(manager.Register(1U, desc) && manager.Register(2U, desc), "The floor fixture did not register");
+        manager.Request(1U, 0U, 1.0F, 0U);
+        manager.Request(2U, 1U, 1.0F, 0U);
+        for (const s::StreamingLoad& load : manager.Plan(0U).loads) manager.CompleteLoad(load.resource, load.level, true, 0U);
+        Require(manager.Stats().residentBytes > manager.Stats().floorBytes, "The floor fixture must have streamed levels");
+        manager.SetBudget(manager.Stats().floorBytes - 1U);
+        const s::StreamingPlan plan = manager.Plan(1U);
+        Require(manager.Stats().residentBytes == manager.Stats().floorBytes && manager.ResidentLevel(1U) == 3U && manager.ResidentLevel(2U) == 3U &&
+                !plan.evictions.empty() && plan.loads.empty(),
+            "A budget below the floors must evict every streamed level, keep the floors and start nothing");
+        manager.Request(1U, 0U, 1.0F, 2U);
+        Require(manager.Plan(2U).loads.empty() && manager.Stats().residentBytes == manager.Stats().floorBytes,
+            "Nothing may stream while the budget cannot hold the floors");
+    }
+
+    // A completion for a resource that was unregistered while its load ran changes nothing.
+    {
+        s::StreamingResidencyManager manager{ 100000U };
+        Require(manager.Register(1U, desc), "The unregister fixture did not register");
+        manager.Request(1U, 0U, 1.0F, 0U);
+        const s::StreamingPlan plan = manager.Plan(0U);
+        Require(!plan.loads.empty() && manager.Stats().inFlightBytes > 0U, "The unregister fixture must have loads in flight");
+        manager.Unregister(1U);
+        const s::StreamingResidencyStats before = manager.Stats();
+        for (const s::StreamingLoad& load : plan.loads) manager.CompleteLoad(load.resource, load.level, true, 1U);
+        const s::StreamingResidencyStats after = manager.Stats();
+        Require(before.inFlightBytes == 0U && after.inFlightBytes == 0U && after.residentBytes == 0U && after.loadsCompleted == before.loadsCompleted,
+            "A completion for an unregistered resource must change nothing");
+    }
+}
+
 // Red when: a block of a sealed, compressed pack set read through the asynchronous pack path
 // does not arrive verified and decoded, or a tampered one is not refused there. Also reports the
 // latency of one streamed block from request to decoded bytes.
@@ -2203,7 +2344,46 @@ void PackBlocksStreamAsynchronously() {
 
 } // namespace
 
+void PackSetPathsRequireValidUtf8() {
+    const auto root = Root() / "invalid-utf8";
+    std::filesystem::create_directories(root);
+    const auto indexPath = root / bake::kAssetPackSetFileName;
+    const std::array<std::string_view, 7U> malformed{
+        "\x80", "\xC0\xAF", "\xC2", "\xE2\x82", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xFF"};
+    for (const std::string_view bytes : malformed) {
+        const std::string path = std::string{bytes} + ".kbpack";
+        Require(!bake::IsValidAssetPackSetPath(path), "A pack set accepted a path with malformed UTF-8");
+        bake::AssetPackSetIndex index;
+        bake::AssetPackSetEntry unchanged;
+        unchanged.path = "Unchanged.kbpack";
+        index.packs.push_back(unchanged);
+        const auto previous = index;
+        Require(bake::ParseAssetPackSetIndex("21kb-pack-set 1\nbase " + path + '\n', index) ==
+                bake::AssetPackSetStatus::Malformed && index == previous,
+            "A malformed pack path modified the parsed index");
+        Require(bake::ResolveAssetPackSetPath("Game.kbpackset", path).empty(),
+            "Resolving a malformed pack path did not fail safely");
+        WriteText(indexPath, "21kb-pack-set 1\nbase " + path + '\n');
+        bake::RuntimeAssetPack runtime;
+        Require(runtime.MountSetIndex(indexPath, bake::WindowsX64BakeTargetProfile()) ==
+                bake::RuntimeAssetPackStatus::PackSetInvalid && !runtime.IsMounted(),
+            "The runtime did not reject a malformed UTF-8 pack index before opening its members");
+    }
+    for (const std::string_view path : {"Data/\xC5\xBC\xC3\xB3\xC5\x82\xC4\x87.kbpack",
+                                      "Data/\xF0\x9F\x9A\x80.kbpack"}) {
+        bake::AssetPackSetIndex index;
+        Require(bake::ParseAssetPackSetIndex("21kb-pack-set 1\nbase " + std::string{path} + '\n', index) ==
+                bake::AssetPackSetStatus::Success && index.packs[0].path == path,
+            "A valid Unicode pack path did not round-trip");
+        const auto resolved = bake::ResolveAssetPackSetPath("Game.kbpackset", path).generic_u8string();
+        Require(std::string_view{reinterpret_cast<const char*>(resolved.data()), resolved.size()} == path,
+            "A valid Unicode pack path changed during resolution");
+    }
+    Purge(root);
+}
+
 void RunContentStreamingTests() {
+    PackSetPathsRequireValidUtf8();
     CompressedBlocksRoundTripWithRandomAccess();
     TamperedCompressedBlocksAreRefused();
     PreviousFormatStillMountsAndRolesAreChecked();
@@ -2219,6 +2399,8 @@ void RunContentStreamingTests() {
     BackgroundJobsShareThePoolWithReads();
     LongJobsNeverTakeLoadCapacity();
     StreamingStaysWithinItsBudget();
+    CriticalJobsOvertakeALongQueue();
+    ResidencyRetryStaleAndFloorRules();
     PackBlocksStreamAsynchronously();
     Purge(Root());
 }

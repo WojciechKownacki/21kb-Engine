@@ -4,6 +4,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::scene {
 
@@ -25,6 +26,9 @@ struct AudioMixerSnapshotTransition {
     std::string toSnapshot;
     float elapsedSeconds = 0.0F;
     float durationSeconds = 0.0F;
+    // Captured underlying bus gains when an active transition is retargeted.
+    // Runtime overrides and mute remain stronger layers, outside this blend.
+    std::vector<AudioMixerBusVolumeOverride> fromVolumes;
 
     [[nodiscard]] bool IsActive() const noexcept { return durationSeconds > 0.0F; }
     [[nodiscard]] float Progress() const noexcept {
@@ -69,8 +73,8 @@ public:
     // LIB-150: begins a timed transition from the CURRENT snapshot state to `toSnapshot`
     // ("" = back to the authored volumes). A non-positive duration applies immediately
     // (plain SetActiveSnapshot). Starting a new transition while one runs retargets from
-    // the current blended state's source snapshot (the previous transition completes
-    // instantly first - deliberate v1 simplification, documented at the script layer).
+    // the current blended bus gains, preserving continuity. The last completed snapshot
+    // remains active until the new transition completes.
     // Returns false without changing state when the snapshot token or duration is invalid.
     [[nodiscard]] static bool BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds);
     [[nodiscard]] static const AudioMixerSnapshotTransition& SnapshotTransition(const Scene& scene) noexcept;

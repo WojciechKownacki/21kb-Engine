@@ -52,6 +52,8 @@ struct FullscreenTexturePassDesc {
     // `sourceTexture`, whose texels it filters.
     bool antiAliasing = false;
     RenderExtent sourceExtent{};
+    // Display output has opaque alpha; ordinary texture copies preserve source alpha.
+    bool forceOpaqueAlpha = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

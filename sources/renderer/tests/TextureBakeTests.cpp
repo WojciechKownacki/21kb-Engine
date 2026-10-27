@@ -1110,6 +1110,7 @@ void RunBakedTextureQualityTest() {
                                 ++count;
                             }
                         }
+                        Require(count != 0U, "Reference mip filter produced no samples");
                         nextReference[(static_cast<std::size_t>(y) * nextWidth + x) * 4U + channel] =
                             static_cast<std::uint8_t>((sum + count / 2U) / count);
                     }

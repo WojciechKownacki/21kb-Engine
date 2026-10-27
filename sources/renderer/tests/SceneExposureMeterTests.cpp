@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numeric>
 
 namespace kb::render::tests {
@@ -116,6 +117,56 @@ void TemporalExposureAdaptationUsesRatesAndHistory() {
     Require(NearlyEqual(meter.CurrentLuminance(), 0.18F), "Exposure meter Reset did not restore middle-gray luminance");
 }
 
+// Brightness that is not a number, is infinite or is far outside the camera's range moves the exposure to a bound
+// at most; it never poisons the adapted luminance, and the resolved stops stay finite.
+void ExposureStaysFiniteForNonFiniteInput() {
+    constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+    constexpr float kInf = std::numeric_limits<float>::infinity();
+    SceneExposureMeter meter;
+    const SceneExposureAdaptationDesc adapt{.enabled = true, .deltaSeconds = 0.5F, .brightAdaptationRate = 2.0F, .darkAdaptationRate = 2.0F};
+    Require(NearlyEqual(meter.Update(kNaN, adapt), 0.18F), "A first measurement that is not a number must seed middle gray");
+    static_cast<void>(meter.Update(2.0F, adapt));
+    const float before = meter.CurrentLuminance();
+    const float afterNaN = meter.Update(kNaN, adapt);
+    Require(std::isfinite(afterNaN) && std::isfinite(meter.CurrentLuminance()) && NearlyEqual(afterNaN, before),
+        "A measurement that is not a number must leave the adapted luminance unchanged");
+    for (const float extreme : { kInf, -kInf, 0.0F, -3.0F, 1.0e30F, -1.0e30F, 1.0e-30F }) {
+        const float value = meter.Update(extreme, adapt);
+        Require(std::isfinite(value) && value > 0.0F && std::isfinite(meter.CurrentLuminance()),
+            "An extreme measurement must keep the adapted luminance finite and positive");
+    }
+    const SceneExposureAdaptationDesc broken{.enabled = true, .deltaSeconds = kNaN, .brightAdaptationRate = kNaN, .darkAdaptationRate = kInf};
+    Require(std::isfinite(meter.Update(1.0F, broken)) && std::isfinite(meter.CurrentLuminance()),
+        "Adaptation settings that are not numbers must not poison the adapted luminance");
+    meter.Prime(kNaN);
+    Require(NearlyEqual(meter.CurrentLuminance(), 0.18F), "Priming with a value that is not a number must give middle gray");
+
+    FullscreenTextureOutputTransform transform;
+    transform.autoExposure.enabled = true;
+    for (const float bad : { kNaN, kInf, -kInf }) {
+        transform.autoExposure.meteredAverageLuminance = bad;
+        transform.autoExposure.biasStops = 0.0F;
+        Require(std::isfinite(ResolveFullscreenTextureExposureStops(transform)), "Non-finite metered luminance must resolve to finite stops");
+        transform.autoExposure.meteredAverageLuminance = 0.18F;
+        transform.autoExposure.biasStops = bad;
+        Require(std::isfinite(ResolveFullscreenTextureExposureStops(transform)), "Non-finite bias must resolve to finite stops");
+        transform.autoExposure.biasStops = 0.0F;
+        transform.autoExposure.middleGray = bad;
+        Require(std::isfinite(ResolveFullscreenTextureExposureStops(transform)), "Non-finite middle gray must resolve to finite stops");
+        transform.autoExposure.middleGray = 0.18F;
+        transform.autoExposure.minExposureStops = bad;
+        transform.autoExposure.maxExposureStops = bad;
+        Require(std::isfinite(ResolveFullscreenTextureExposureStops(transform)), "Non-finite stop limits must resolve to finite stops");
+        transform.autoExposure.minExposureStops = -4.0F;
+        transform.autoExposure.maxExposureStops = 4.0F;
+        transform.autoExposure.enabled = false;
+        transform.exposureStops = bad;
+        Require(std::isfinite(ResolveFullscreenTextureExposureStops(transform)), "Non-finite manual exposure must resolve to finite stops");
+        transform.autoExposure.enabled = true;
+        transform.exposureStops = 0.0F;
+    }
+}
+
 void ExposureSubmissionUsesElapsedFrameTime() {
     RenderScene scene;
     static_cast<void>(scene.UpsertLight({ .entityId = 1U, .kind = RenderLightKind::Directional,
@@ -180,6 +231,7 @@ void RunSceneExposureMeterTests() {
     GpuHistogramReadbackMetersBinCenters();
     ExposureMeteringRejectsOutlierPercentiles();
     TemporalExposureAdaptationUsesRatesAndHistory();
+    ExposureStaysFiniteForNonFiniteInput();
     ExposureSubmissionUsesElapsedFrameTime();
     TonemapOffKeepsExposureAndDisplayEncoding();
     VignetteFollowsTheProfile();

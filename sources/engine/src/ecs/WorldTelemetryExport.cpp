@@ -164,6 +164,23 @@ std::string WorldTelemetrySnapshotToJson(const WorldTelemetrySnapshot& snapshot)
     WriteNumberField(output, "archetype_transition_invalidations_since_reset", snapshot.archetypeTransitionInvalidationsSinceReset, first);
     WriteNumberField(output, "total_archetype_transition_invalidations", snapshot.totalArchetypeTransitionInvalidations, first);
 
+    // How to read the numbers above. Units follow the key suffix (_bytes, _nanoseconds, _percent,
+    // _per_second; plain counts have none). The bandwidth fields are derived from component sizes
+    // and entity counts, never from a hardware counter, so they must not be read as DRAM traffic.
+    WriteFieldPrefix(output, "metric_basis", first);
+    output << "{\n"
+              "    \"measured\": \"counters and *_nanoseconds fields (steady_clock) taken while the world ran\",\n"
+              "    \"memory_scope\": \"committed_bytes counts native chunk payload reserved by the allocator, not process RSS or OS commit\",\n"
+              "    \"budget_scope\": \"maxNativeStorageCommittedPayloadBytes caps committed_bytes only; side_payload_bytes, chunk_metadata_bytes, entity_record_bytes, the mirrored backend and other subsystems are outside this cap\",\n"
+              "    \"estimated\": [\"query_bytes_touched\", \"query_average_bytes_per_entity\", "
+              "\"query_estimated_bytes_per_second\", \"query_estimated_gigabytes_per_second\", "
+              "\"query_kernel_estimated_bytes_per_second\", \"query_kernel_estimated_gigabytes_per_second\"],\n"
+              "    \"estimated_note\": \"component sizes multiplied by entities visited; not DRAM bandwidth\",\n"
+              "    \"derived\": \"*_percent and the other query_average_* fields are computed from the measured counters\",\n"
+              "    \"hardware_counters\": \"unavailable\",\n"
+              "    \"dram_bandwidth\": \"unavailable\"\n"
+              "  }";
+
     output << "\n}\n";
     return output.str();
 }

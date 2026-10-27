@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/frame/RenderPassKind.hpp"
+#include "kb/render/particles/ParticleGpuUpdateFailure.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/SceneGpuDrivenFeatureState.hpp"
@@ -192,6 +193,7 @@ struct SceneRenderMeshInstance {
     std::uint16_t depthBucket = 0;
     bool castsShadow = true;
     bool receivesShadow = true;
+    bool shadowOnly = false;
     // LIB-136: which render layer this mesh belongs to, checked against the drawing
     // camera's SceneRenderCamera::cullingMask. Bit 0 set by default, matching
     // MeshRendererComponent::layer's default ("Default" layer).
@@ -603,6 +605,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // Instances simulated on the GPU (mesh particles) keep no previous transforms: their own motion is not
     // written and their pixels keep the camera motion.
     MotionVectorGpuInstancesUnsupported,
+    ParticleGpuUpdateRejected,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -635,6 +638,8 @@ struct SceneRenderDiagnosticEvent {
     std::uint16_t materialProgramHandle = bgfx::kInvalidHandle;
     SceneRenderMaterialProgramStatus materialProgramStatus = SceneRenderMaterialProgramStatus::None;
     std::uint64_t postProcessProfileAssetId = 0U;
+    std::uint64_t particleInstanceId = 0U;
+    ParticleGpuUpdateFailure particleGpuUpdateFailure = ParticleGpuUpdateFailure::None;
 };
 
 struct SceneRenderDiagnostics {

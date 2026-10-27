@@ -311,6 +311,7 @@ void ConsiderOverlayIconPick(NearestPickContext& pick, kb::scene::SceneEntity en
 }
 
 void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
+    if (renderer.shadowOnly || renderer.previewHidden) return;
     static_cast<void>(renderer);
     auto& pick = *static_cast<NearestPickContext*>(context);
     if (pick.scene != nullptr && !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
@@ -554,7 +555,8 @@ void ConsiderRectTransform(
     }
 }
 
-void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent&, void* context) {
+void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
+    if (renderer.shadowOnly || renderer.previewHidden) return;
     auto& pick = *static_cast<RectPickContext*>(context);
     if (pick.scene != nullptr && pick.camera != nullptr &&
         kb::scene::ResolveVisibility(*pick.scene, entity).visible) {

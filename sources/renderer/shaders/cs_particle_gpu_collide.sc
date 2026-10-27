@@ -4,15 +4,15 @@
 // GPU-simulated particle emitter with collisions or force fields. Bouncing and the fields make the motion
 // depend on its history, so unlike cs_particle_gpu_emit this kernel keeps a state record per ring slot
 // (position + last time, velocity + birth stamp) and integrates the elapsed time every frame in substeps,
-// with the same order of operations as the CPU backend (acceleration, drag, the fields, move, then the
-// planes), followed by a bounce off the surface the scene depth buffer shows at the particle's screen
+// with authored CPU motion order, then movement and the plane, followed by a bounce off the
+// surface the scene depth buffer shows at the particle's screen
 // position. Records of a local-space emitter are in the owner's frame, which u_gpuParticleWorld places.
 BUFFER_RO(spawnRecords, vec4, 0);
 BUFFER_RW(stateRecords, vec4, 2);
 #include "particle_gpu_common.sh"
 
 SAMPLER2D(s_particleDepth, 3);
-uniform vec4 u_gpuParticlePlane[2];   // [0] = normal.xyz, distance; [1] = restitution, friction
+uniform vec4 u_gpuParticlePlane[2];   // [0] = normal.xyz, distance; [1] = restitution, friction, kill on contact
 uniform vec4 u_gpuParticleCollision;  // x = 1 when the plane collides, y = 1 when the depth buffer collides, z = depth thickness (m)
 uniform vec4 u_gpuParticleDepthBounce; // x = restitution, y = friction of a depth-buffer bounce
 uniform vec4 u_gpuParticleTexel;      // xy = 1 / depth texture size
@@ -20,9 +20,11 @@ uniform mat4 u_gpuParticleViewProj;
 uniform mat4 u_gpuParticleWorld;
 uniform mat4 u_gpuParticleWorldInverse;
 uniform vec4 u_gpuParticleLocal;      // x = 1 for a local-space emitter
-// [0] curl noise: strength, frequency, seed; [1] turn: axis xyz (unit), radians per second; [2] pull: point xyz,
-// strength; [3] field origin xyz, pull radius (0 = everywhere). All in the frame of the records.
-uniform vec4 u_gpuParticleForces[4];
+// Two vec4s per active motion module, in authored execution order (at most 16).
+// First: type (1 acceleration, 2 drag, 3 noise, 4 axis rotation, 5 attraction), strength, parameter, seed low16.
+// Second: world-axis vector, seed high16. parameter = noise frequency or attraction radius.
+uniform vec4 u_gpuParticleForces[32];
+uniform vec4 u_gpuParticleField; // xyz = emitter origin in render space, w = motion module count
 uniform vec4 u_gpuParticleNoiseOrigin; // xyz = the world origin the noise position is relative to
 
 // Gradient noise with a quintic fade and its derivative, and its curl, as the CPU backend's Noise module.
@@ -192,6 +194,12 @@ void main()
     float lastTime = positionState.w;
     // The stamp is offset so that a zeroed state record never matches a birth time of 0.
     float stamp = start.w + 1.0;
+    if (velocityState.w == -stamp)
+    {
+        // Death survives later dispatches until Upload invalidates this slot for a new birth.
+        WriteDeadInstance(base);
+        return;
+    }
     if (velocityState.w != stamp)
     {
         // First visit of a particle born into this slot.
@@ -201,48 +209,59 @@ void main()
     }
 
     float elapsed = clamp(now - lastTime, 0.0, 0.25);
-    int steps = int(clamp(ceil(elapsed * 60.0), 1.0, 8.0));
+    int steps = int(clamp(ceil(elapsed * 60.0 - 0.0001), 1.0, 8.0));
     float h = elapsed / float(steps);
     bool local = u_gpuParticleLocal.x > 0.5;
-    vec3 accel = u_gpuParticleMotion.xyz;
     if (local)
     {
-        accel = mul(u_gpuParticleWorldInverse, vec4(accel, 0.0)).xyz;
+        position = mul(u_gpuParticleWorld, vec4(position, 1.0)).xyz;
+        velocity = mul(u_gpuParticleWorld, vec4(velocity, 0.0)).xyz;
     }
-    float drag = exp(-u_gpuParticleMotion.w * h);
-    vec4 noise = u_gpuParticleForces[0];
-    vec4 turn = u_gpuParticleForces[1];
-    vec4 pull = u_gpuParticleForces[2];
-    vec4 field = u_gpuParticleForces[3];
-    uint noiseSeed = uint(noise.z + 0.5);
     for (int i = 0; i < 8; ++i)
     {
         if (i >= steps || elapsed <= 0.0)
         {
             break;
         }
-        velocity += accel * h;
-        velocity *= drag;
-        if (noise.x != 0.0)
+        if (u_gpuParticleField.w < 0.5)
         {
-            vec3 world = local ? mul(u_gpuParticleWorld, vec4(position, 1.0)).xyz : position;
-            vec3 curl = CurlNoise((world + u_gpuParticleNoiseOrigin.xyz) * noise.y, noiseSeed) * (noise.x * h);
-            velocity += local ? mul(u_gpuParticleWorldInverse, vec4(curl, 0.0)).xyz : curl;
+            // Direct commands without an authored stream retain constant acceleration/drag.
+            velocity = (velocity + u_gpuParticleMotion.xyz * h) * exp(-u_gpuParticleMotion.w * h);
         }
-        if (turn.w != 0.0)
+        for (int moduleIndex = 0; moduleIndex < 16; ++moduleIndex)
         {
-            float angle = turn.w * h;
-            position = field.xyz + RotateAboutAxis(position - field.xyz, turn.xyz, angle);
-            velocity = RotateAboutAxis(velocity, turn.xyz, angle);
-        }
-        if (pull.w != 0.0)
-        {
-            vec3 to = pull.xyz - position;
-            float away = length(to);
-            bool everywhere = field.w <= 0.0;
-            if (away > 0.0001 && (everywhere || away < field.w))
+            if (moduleIndex >= int(u_gpuParticleField.w)) break;
+            vec4 op = u_gpuParticleForces[moduleIndex * 2];
+            vec4 vectorSeed = u_gpuParticleForces[moduleIndex * 2 + 1];
+            if (op.x >= 1.5 && op.y == 0.0) continue;
+            if (op.x < 1.5)
             {
-                velocity += to * (pull.w * (everywhere ? 1.0 : 1.0 - away / field.w) / away * h);
+                velocity += vectorSeed.xyz * h;
+            }
+            else if (op.x < 2.5)
+            {
+                velocity *= exp(-op.y * h);
+            }
+            else if (op.x < 3.5)
+            {
+                uint seed = uint(op.w) | (uint(vectorSeed.w) << 16u);
+                velocity += CurlNoise((position + u_gpuParticleNoiseOrigin.xyz) * op.z, seed) * (op.y * h);
+            }
+            else if (op.x < 4.5)
+            {
+                float angle = op.y * h;
+                position = u_gpuParticleField.xyz + RotateAboutAxis(position - u_gpuParticleField.xyz, vectorSeed.xyz, angle);
+                velocity = RotateAboutAxis(velocity, vectorSeed.xyz, angle);
+            }
+            else
+            {
+                vec3 to = u_gpuParticleField.xyz + vectorSeed.xyz - position;
+                float away = length(to);
+                bool everywhere = op.z <= 0.0;
+                if (away > 0.0001 && (everywhere || away < op.z))
+                {
+                    velocity += to * (op.y * (everywhere ? 1.0 : 1.0 - away / op.z) / away * h);
+                }
             }
         }
         position += velocity * h;
@@ -254,6 +273,13 @@ void main()
             if (signedDistance < 0.0)
             {
                 position -= plane.xyz * signedDistance;
+                if (response.z > 0.5)
+                {
+                    stateRecords[slot * 2u] = vec4(position, now);
+                    stateRecords[slot * 2u + 1u] = vec4(velocity, -stamp);
+                    WriteDeadInstance(base);
+                    return;
+                }
                 float normalVelocity = dot(velocity, plane.xyz);
                 if (normalVelocity < 0.0)
                 {
@@ -268,12 +294,9 @@ void main()
         }
     }
 
-    stateRecords[slot * 2u] = vec4(position, now);
-    stateRecords[slot * 2u + 1u] = vec4(velocity, stamp);
-    if (local)
-    {
-        position = mul(u_gpuParticleWorld, vec4(position, 1.0)).xyz;
-        velocity = mul(u_gpuParticleWorld, vec4(velocity, 0.0)).xyz;
-    }
-    WriteLiveInstance(base, position, velocity, age / lifetime, ParticleSpin(slot, start.w, age));
+    vec3 recordPosition = local ? mul(u_gpuParticleWorldInverse, vec4(position, 1.0)).xyz : position;
+    vec3 recordVelocity = local ? mul(u_gpuParticleWorldInverse, vec4(velocity, 0.0)).xyz : velocity;
+    stateRecords[slot * 2u] = vec4(recordPosition, now);
+    stateRecords[slot * 2u + 1u] = vec4(recordVelocity, stamp);
+    WriteLiveInstance(base, position, velocity, age / lifetime, ParticleSpin(slot, start.w, age), age);
 }

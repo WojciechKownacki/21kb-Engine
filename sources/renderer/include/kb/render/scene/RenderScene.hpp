@@ -78,6 +78,7 @@ struct MeshRenderProxyDesc {
     bool visible = true;
     bool castsShadow = true;
     bool receivesShadow = true;
+    bool shadowOnly = false;
     // LIB-136: mirrors kb::scene::MeshRendererComponent::layer.
     std::uint32_t layer = 1U;
     std::uint64_t detailSwitchGroupId = 0U;

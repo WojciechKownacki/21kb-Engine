@@ -28,7 +28,8 @@ struct InputAssetFormat {
     // v2 added InputKeyMapping::bindingId and InputMappingContextAsset::composites.
     // v3 added InputKeyMapping/InputCompositeSlot::gamepadIndex (LIB-116).
     static constexpr std::uint32_t BinaryVersion = 3U;
-    static constexpr std::uint32_t RecordingBinaryVersion = 4U;
+    static constexpr std::uint32_t RecordingTextInputBinaryVersion = 4U;
+    static constexpr std::uint32_t RecordingBinaryVersion = 5U;
     static constexpr std::uint32_t MaxMappingCount = 100'000U;
     static constexpr std::uint32_t MaxCompositeCount = 100'000U;
     static constexpr std::uint32_t MaxCompositeSlotCount = 16U; // keys per composite binding

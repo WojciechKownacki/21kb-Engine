@@ -17,7 +17,7 @@ zachowanej siatki, Reset i ponowny pełny submit. Rzeczywisty renderer headless 
 Metoda
 i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74.
 Release /O2 /DNDEBUG, D3D11 1920×1080, ForwardPlus, headless.
-Projekt: E:/21kbProjekty/OpenWorldProductionStage5_20261001.
+Projekt: <workdir>/OpenWorldProductionStage5_20261001.
 54 niezależne procesy: 18 scenariuszy × 3 powtórki. Wszystkie exit 0.
 Generator i obciążenia bez zmian. Identyczne źródła geometrii/skryptów; identyfikatory
 zasobów są przypisane do osobnych katalogów projektów. Nie porównujemy binarnej

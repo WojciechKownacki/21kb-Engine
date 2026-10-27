@@ -4,6 +4,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
+#include "engine/particles/ParticleFlipbook.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectAssetMigration.hpp"
@@ -19,6 +20,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <functional>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -35,10 +37,19 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 namespace {
 
 std::atomic<bool> g_countAllocations{ false };
 std::atomic<std::size_t> g_allocationCount{ 0U };
+std::atomic<bool> g_failNextAllocation{false};
 
 void CountAllocation() noexcept {
     if (g_countAllocations.load(std::memory_order_relaxed)) {
@@ -504,11 +515,9 @@ void TestVisualModulesObservableGoldenAndDefaults() {
             std::abs(state.color.a - 0.45F) < 0.00001F &&
             std::abs(state.size - 2.0F) < 0.00001F,
         "curve, gradient, size, or composed alpha state is not publicly observable");
-#if defined(__APPLE__)
-    constexpr std::uint64_t kExpectedVisualHash = 4323008387544267842ULL;
-#else
-    constexpr std::uint64_t kExpectedVisualHash = 3957020943848305260ULL;
-#endif
+    Require(state.age == 0.5F, "Thirty fixed steps must publish the exact half-second age");
+    // At the exact midpoint both fused and separate float interpolation produce this state.
+    constexpr std::uint64_t kExpectedVisualHash = 18157631811310042286ULL;
     const std::uint64_t actualHash = HashVisualStateSpan(enabled);
     Require(actualHash == kExpectedVisualHash,
         ("visual curve and gradient deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());
@@ -2170,8 +2179,8 @@ void TestValidationAndLifecycle() {
         "create before warmup was accepted");
     backend.Warmup();
     backend.Warmup();
-    Require(backend.ParticleCapacity() == kb::scene::kParticleEffectMaxCpuParticlesPerScene,
-        "particle SoA capacity diverged from the schema ceiling");
+    Require(backend.ParticleCapacity() == 0U,
+        "empty warmed backend reserved particle SoA storage before effect admission");
     Require(backend.CommandCapacity() == kb::scene::kParticleEffectMaxCommandsPerStep &&
             backend.EventCapacity() == kb::scene::kParticleEffectMaxEventsPerStep,
         "buffer capacities diverged from schema ceilings");
@@ -2542,6 +2551,7 @@ void TestTerminalSnapshotRetentionFailurePreservesBackendOwnership() {
 } // namespace
 
 void* operator new(std::size_t size) {
+    if (g_failNextAllocation.exchange(false, std::memory_order_relaxed)) throw std::bad_alloc{};
     CountAllocation();
     if (void* memory = std::malloc(size == 0U ? 1U : size)) return memory;
     throw std::bad_alloc{};
@@ -2550,8 +2560,11 @@ void* operator new(std::size_t size) {
 void* operator new[](std::size_t size) { return ::operator new(size); }
 void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete[](void* memory) noexcept { std::free(memory); }
+// The Microsoft runtime forwards sized deletes to these unsized replacements.
+#if !defined(_MSC_VER)
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
+#endif
 
 void TestEditorStyleScenePulseFollowsOwner() {
     auto effect = Fixture::MakeEffect(60.0F, 4U);
@@ -2856,10 +2869,315 @@ void TestFieldModules() {
         "a torus swirl did not roll the particle about its ring");
 }
 
+void TestEmitterExecutionDiagnostics() {
+    using Reason = kb::particles::ParticleGpuFallbackReason;
+    using Path = kb::particles::ParticleEmitterSimulationPath;
+    const auto check = [](kb::scene::ParticleEffectAsset effect, bool consumer, const std::vector<Reason>& expected) {
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+            "execution diagnostics could not register snapshot publication");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, consumer);
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded() &&
+            backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "execution diagnostics could not simulate the effect");
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && snapshot->Emitters().size() == expected.size(), "execution diagnostics lost an emitter");
+        for (std::size_t index = 0U; index < expected.size(); ++index) {
+            const auto& emitter = snapshot->Emitters()[index];
+            Require(emitter.gpuFallbackReason == expected[index] &&
+                emitter.simulationPath == (expected[index] == Reason::None ? Path::Gpu : Path::Cpu),
+                "emitter snapshot did not report the actual simulation route and fallback reason");
+            Require(!kb::particles::ParticleGpuFallbackReasonName(expected[index]).empty(), "fallback reason has no stable name");
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        std::size_t gpuSpawns = 0U;
+        for (const auto& command : commands) gpuSpawns += command.spawns.size();
+        // Emit(instance, 1) targets the first emitter; the other records describe routing without births.
+        Require(gpuSpawns == (expected.front() == Reason::None ? 1U : 0U),
+            "the first emitter's reported route disagrees with its submitted birth");
+        Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+            "execution diagnostics could not release its backend");
+    };
+    auto effect = Fixture::MakeEffect(0.0F, 4U);
+    check(effect, false, {Reason::CpuPolicy});
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    check(effect, false, {Reason::ConsumerUnavailable});
+    check(effect, true, {Reason::None});
+    effect.emitters[0].output.alignment = kb::scene::ParticleAlignment::Local;
+    check(effect, true, {Reason::LocalAlignment});
+    effect.emitters[0].output.alignment = kb::scene::ParticleAlignment::CameraFacing;
+    AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{.killOnContact = true});
+    check(effect, true, {Reason::None});
+    effect.emitters[0].modules[0].enabled = false;
+    check(effect, true, {Reason::None});
+    auto second = effect.emitters[0];
+    second.emitterId = 2U;
+    second.authoringOrder = 1U;
+    second.modules[0].enabled = true;
+    effect.emitters.push_back(std::move(second));
+    check(effect, true, {Reason::None, Reason::None});
+    for (const auto type : {kb::scene::ParticleModuleType::Noise,
+                           kb::scene::ParticleModuleType::AxisRotation,
+                           kb::scene::ParticleModuleType::Attraction}) {
+        auto repeated = Fixture::MakeEffect(0.0F, 4U);
+        repeated.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        auto& emitter = repeated.emitters[0];
+        for (std::uint64_t id = 1U; id <= 2U; ++id) {
+            if (type == kb::scene::ParticleModuleType::Noise) {
+                AddModule(emitter, id, type, kb::scene::ParticleNoiseModule{});
+            } else if (type == kb::scene::ParticleModuleType::AxisRotation) {
+                AddModule(emitter, id, type, kb::scene::ParticleAxisRotationModule{});
+            } else {
+                AddModule(emitter, id, type, kb::scene::ParticleAttractionModule{});
+            }
+        }
+        check(repeated, true, {Reason::None});
+        emitter.modules[1].enabled = false;
+        check(repeated, true, {Reason::None});
+    }
+}
+
+// Every restriction that keeps an emitter off the GPU names itself: one authored change per reason, the snapshot
+// record reports exactly that reason, and undoing the change returns the emitter to the GPU.
+void TestGpuFallbackReasonTable() {
+    using Reason = kb::particles::ParticleGpuFallbackReason;
+    using Path = kb::particles::ParticleEmitterSimulationPath;
+    using Edit = std::function<void(kb::scene::ParticleEffectAsset&)>;
+    const auto reasonOf = [](const kb::scene::ParticleEffectAsset& authored) {
+        Fixture fixture(authored);
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+            "fallback table could not register snapshot publication");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "fallback table could not simulate the effect");
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && !snapshot->Emitters().empty(), "fallback table lost the emitter record");
+        const auto& record = snapshot->Emitters()[0];
+        Require(record.simulationPath == (record.gpuFallbackReason == Reason::None ? Path::Gpu : Path::Cpu),
+            "the reported path disagrees with the reported reason");
+        const Reason reason = record.gpuFallbackReason;
+        Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+            "fallback table could not release its backend");
+        return reason;
+    };
+    const auto base = [] {
+        auto effect = Fixture::MakeEffect(0.0F, 64U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        return effect;
+    };
+    Require(reasonOf(base()) == Reason::None, "the baseline emitter must run on the GPU");
+    const auto asTrail = [](kb::scene::ParticleEffectAsset& effect) {
+        auto& output = effect.emitters[0].output;
+        output.type = kb::scene::ParticleOutputType::Trail;
+        output.material.assetId = 72U;
+        output.payload = kb::scene::ParticleTrailOutput{ .sampleIntervalSeconds = 0.05F, .maxSamplesPerParticle = 8U, .width = 0.5F };
+    };
+    struct Case { const char* name; Edit edit; Reason expected; };
+    const std::vector<Case> cases = {
+        { "local alignment", [](auto& e) { e.emitters[0].output.alignment = kb::scene::ParticleAlignment::Local; }, Reason::LocalAlignment },
+        { "animated flipbook", [](auto& e) {
+              e.emitters[0].output.payload = kb::scene::ParticleBillboardOutput{
+                  .flipbook = {.columns = 2U, .rows = 2U, .framesPerSecond = 30.0F, .looping = true} };
+          }, Reason::None },
+        { "flipbook beyond GPU clock precision", [](auto& e) {
+              e.emitters[0].output.payload = kb::scene::ParticleBillboardOutput{
+                  .flipbook = {.columns = 2U, .rows = 2U, .framesPerSecond = 1.0e20F, .looping = true} };
+          }, Reason::Flipbook },
+        { "ribbon output", [](auto& e) {
+              e.emitters[0].output.type = kb::scene::ParticleOutputType::Ribbon;
+              e.emitters[0].output.payload = kb::scene::ParticleRibbonOutput{};
+          }, Reason::Output },
+        { "decal output", [](auto& e) {
+              e.emitters[0].output.type = kb::scene::ParticleOutputType::Decal;
+              e.emitters[0].output.payload = kb::scene::ParticleDecalOutput{.depth = 1.0F};
+          }, Reason::Output },
+        { "local trail", [&](auto& e) { asTrail(e); e.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local; }, Reason::LocalTrail },
+        { "plane in local space", [](auto& e) {
+              e.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane, kb::scene::ParticleCollisionPlaneModule{});
+          }, Reason::LocalPlane },
+        { "plane on a trail", [&](auto& e) {
+              asTrail(e);
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane, kb::scene::ParticleCollisionPlaneModule{});
+          }, Reason::TrailCollision },
+        { "noise on a trail", [&](auto& e) {
+              asTrail(e);
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::Noise, kb::scene::ParticleNoiseModule{});
+          }, Reason::TrailField },
+        { "torus swirl", [](auto& e) {
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::TorusSwirl, kb::scene::ParticleTorusSwirlModule{});
+          }, Reason::TorusSwirl },
+        { "separation", [](auto& e) {
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::Separation, kb::scene::ParticleSeparationModule{});
+          }, Reason::Separation },
+        { "collision sub-emitter", [](auto& e) {
+              auto target = e.emitters[0];
+              target.emitterId = 2U;
+              target.authoringOrder = 1U;
+              e.emitters.push_back(target);
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+                  kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U, .trigger = kb::scene::ParticleEventTrigger::Collision });
+          }, Reason::CollisionEvent },
+        { "while-alive binding", [](auto& e) {
+              auto target = e.emitters[0];
+              target.emitterId = 2U;
+              target.authoringOrder = 1U;
+              e.emitters.push_back(target);
+              e.eventBindings.push_back({.sourceEmitterId = 1U, .trigger = kb::scene::ParticleEventTrigger::WhileAlive,
+                                         .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U, .ratePerSecond = 10.0F});
+          }, Reason::WhileAliveEvent },
+        { "death event with a plane", [](auto& e) {
+              auto target = e.emitters[0];
+              target.emitterId = 2U;
+              target.authoringOrder = 1U;
+              e.emitters.push_back(target);
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane, kb::scene::ParticleCollisionPlaneModule{});
+              AddModule(e.emitters[0], 2U, kb::scene::ParticleModuleType::SubEmitter,
+                  kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U, .trigger = kb::scene::ParticleEventTrigger::Death });
+          }, Reason::EventMotion },
+        { "absolute position", [](auto& e) { e.emitters[0].absolutePosition = true; }, Reason::AbsolutePosition },
+        { "explicit CPU policy", [](auto& e) { e.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic; }, Reason::CpuPolicy },
+    };
+    for (const Case& c : cases) {
+        auto effect = base();
+        c.edit(effect);
+        const Reason actual = reasonOf(effect);
+        Require(actual == c.expected,
+            (std::string{"fallback reason for '"} + c.name + "' was '" +
+                std::string{kb::particles::ParticleGpuFallbackReasonName(actual)} + "', expected '" +
+                std::string{kb::particles::ParticleGpuFallbackReasonName(c.expected)} + "'").c_str());
+    }
+    // A parameter change moves the emitter between routes and back, the way an authoring edit does.
+    auto effect = base();
+    effect.emitters[0].output.alignment = kb::scene::ParticleAlignment::Local;
+    Require(reasonOf(effect) == Reason::LocalAlignment, "a local aligned emitter must report its reason");
+    effect.emitters[0].output.alignment = kb::scene::ParticleAlignment::CameraFacing;
+    Require(reasonOf(effect) == Reason::None, "undoing the restriction must return the emitter to the GPU");
+}
+
+// Local-space instances of one effect with the same seed share one simulation: the copy is the leader's particles
+// carried to the copy's transform, so it never diverges from the leader. A parameter, another seed or another rate
+// takes the instance out of sharing at once, and it then simulates by itself.
+void TestSharedSimulationOfIdenticalInstances() {
+    auto effect = Fixture::MakeEffect(60.0F, 128U);
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+    auto& emitter = effect.emitters[0];
+    emitter.simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+    emitter.spawn.speedMin = 1.0F;
+    emitter.spawn.speedMax = 3.0F;
+    emitter.spawn.randomization = 1.0F;
+    emitter.spawn.spreadDegrees = 40.0F;
+    Fixture fixture(effect);
+    const kb::scene::SceneEntity second = fixture.scene.Entities().CreateEntity();
+    const kb::scene::SceneEntity third = fixture.scene.Entities().CreateEntity();
+
+
+
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+        kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+        "shared simulation fixture could not register snapshot publication");
+    const auto leader = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    const auto copy = backend.Create(fixture.scene, fixture.effectAssetId, second);
+    const auto other = backend.Create(fixture.scene, fixture.effectAssetId, third);
+    Require(leader.Succeeded() && copy.Succeeded() && other.Succeeded() &&
+        backend.Play(fixture.scene, leader.instanceId).Succeeded() &&
+        backend.Play(fixture.scene, copy.instanceId).Succeeded() &&
+        backend.Play(fixture.scene, other.instanceId).Succeeded(),
+        "shared simulation fixture could not play three instances");
+    const auto place = [&](std::uint64_t instanceId, kb::math::Vec3 position) {
+        Require(backend.ConfigureComponent(fixture.scene, instanceId, 1.0F, 0U, true,
+                    kb::scene::WorldTransform{.position = position, .rotation = {0.0F, 0.0F, 0.0F, 1.0F}}).Succeeded(),
+            "shared simulation fixture could not place an instance");
+    };
+    place(leader.instanceId, {0.0F, 0.0F, 0.0F});
+    place(copy.instanceId, {10.0F, 0.0F, 0.0F});
+    place(other.instanceId, {0.0F, 0.0F, 20.0F});
+    // A parameter set on the third instance keeps it out of sharing from the start.
+    Require(backend.SetParameterScalar(fixture.scene, other.instanceId, "gain", 2.0F).Succeeded(),
+        "shared simulation fixture could not set a parameter");
+
+    struct Cloud { std::vector<kb::particles::ParticleRenderRecord> records; };
+    const auto step = [&](int steps) {
+        for (int index = 0; index < steps; ++index) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+                "shared simulation step failed");
+        }
+        Require(backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "shared simulation publication failed");
+    };
+    const auto cloudOf = [&](std::uint64_t instanceId) {
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(static_cast<bool>(snapshot), "shared simulation lost the render snapshot");
+        Cloud cloud;
+        for (const auto& record : snapshot->Emitters()) {
+            if (record.instanceId != instanceId) continue;
+            for (std::uint32_t index = 0U; index < record.particleCount; ++index) {
+                cloud.records.push_back(snapshot->Particles()[record.firstParticle + index]);
+            }
+        }
+        return cloud;
+    };
+    const auto matchesShifted = [](const Cloud& source, const Cloud& moved, kb::math::Vec3 offset) {
+        if (source.records.size() != moved.records.size()) return false;
+        for (std::size_t index = 0U; index < source.records.size(); ++index) {
+            const auto& a = source.records[index].position;
+            const auto& b = moved.records[index].position;
+            if (std::abs(a.x + offset.x - b.x) > 1.0e-4F || std::abs(a.y + offset.y - b.y) > 1.0e-4F ||
+                std::abs(a.z + offset.z - b.z) > 1.0e-4F) return false;
+        }
+        return true;
+    };
+
+    step(20);
+    const Cloud leaderCloud = cloudOf(leader.instanceId);
+    const Cloud copyCloud = cloudOf(copy.instanceId);
+    const Cloud otherCloud = cloudOf(other.instanceId);
+    Require(leaderCloud.records.size() >= 10U, "the shared leader produced too few particles");
+    Require(matchesShifted(leaderCloud, copyCloud, {10.0F, 0.0F, 0.0F}),
+        "a shared copy must be the leader's particles carried to the copy's transform");
+    Require(!matchesShifted(leaderCloud, otherCloud, {0.0F, 0.0F, 20.0F}),
+        "an instance with a parameter must simulate by itself, not copy the leader");
+    // Seeing the copy move: its transform changes, the leader's particles do not.
+    place(copy.instanceId, {-4.0F, 1.0F, 0.0F});
+    step(1);
+    Require(matchesShifted(cloudOf(leader.instanceId), cloudOf(copy.instanceId), {-4.0F, 1.0F, 0.0F}),
+        "a shared copy must follow its own transform every step");
+    // Another seed takes the copy out of sharing: it keeps what it has but simulates from now by itself.
+    Require(backend.SetSeed(fixture.scene, copy.instanceId, 12345U).Succeeded(), "shared simulation fixture could not set a seed");
+    step(20);
+    Require(!matchesShifted(cloudOf(leader.instanceId), cloudOf(copy.instanceId), {-4.0F, 1.0F, 0.0F}),
+        "an instance with its own seed must leave the shared simulation");
+    // The same seed again lets it rejoin: the next steps copy the leader once more.
+    Require(backend.SetSeed(fixture.scene, copy.instanceId, 0x123456789ABCDEF0ULL).Succeeded(),
+        "shared simulation fixture could not restore the seed");
+    step(1);
+    Require(matchesShifted(cloudOf(leader.instanceId), cloudOf(copy.instanceId), {-4.0F, 1.0F, 0.0F}),
+        "an instance with the leader's seed again must rejoin the shared simulation");
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+        "shared simulation fixture could not release its backend");
+}
+
 // A collision plane that kills on contact removes the particle where it struck.
 void TestCollisionKillOnContact() {
-    const auto liveAfterFall = [](bool kill) {
+    const auto liveAfterFall = [](bool kill, bool gpuPreferred) {
         auto effect = Fixture::MakeEffect(0.0F, 4U);
+        if (gpuPreferred) effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
         auto& emitter = effect.emitters[0];
         emitter.localPosition = {0.0F, 0.1F, 0.0F};
         emitter.spawn.direction = {0.0F, -1.0F, 0.0F};
@@ -2873,17 +3191,112 @@ void TestCollisionKillOnContact() {
         Fixture fixture(std::move(effect));
         kb::particle_plugin::CpuParticleBackend backend;
         backend.Warmup();
+        Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+                kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+            "kill on contact fixture could not register its snapshot channel");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, gpuPreferred);
         const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
         Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
                 backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
             "kill on contact fixture setup failed");
         for (int step = 0; step < 3; ++step) {
-            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "kill step failed");
+            Require(backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "kill step failed");
         }
-        return backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+        const auto live = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+        if (!gpuPreferred) {
+            const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+            Require(snapshot && snapshot->Particles().size() == live,
+                "collision survivors and the renderer snapshot disagree");
+            std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+            kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+            Require(commands.empty(), "explicit CPU collision simulation submitted GPU commands");
+        } else {
+            std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+            kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+            std::size_t births = 0U;
+            bool planeFlag = false;
+            for (const auto& command : commands) {
+                births += command.spawns.size();
+                if (command.hasParams) planeFlag = command.params.hasPlane && command.params.plane.killOnContact == kill;
+            }
+            Require(live == 0U && births == 1U && planeFlag,
+                "contact-death routing lost the GPU birth or plane flag");
+        }
+        Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+            "kill on contact fixture could not release its backend");
+        return live;
     };
-    Require(liveAfterFall(true) == 0U, "a particle striking a killing plane survived");
-    Require(liveAfterFall(false) == 1U, "a particle bouncing off a plane died");
+    Require(liveAfterFall(true, false) == 0U, "a particle striking a killing plane survived");
+    Require(liveAfterFall(false, false) == 1U, "a particle bouncing off a plane died");
+    // This checks routing only; renderer readback tests verify actual GPU contact deaths.
+    Require(liveAfterFall(true, true) == 0U, "GPU contact-death routing retained CPU particles");
+}
+
+void TestRepeatedFieldsPreserveCpuSemantics() {
+    using Type = kb::scene::ParticleModuleType;
+    for (const Type type : {Type::Noise, Type::AxisRotation, Type::Attraction}) {
+        const auto run = [type](bool gpuPreferred, bool firstEnabled, bool secondEnabled) {
+            auto effect = Fixture::MakeEffect(0.0F, 4U);
+            if (gpuPreferred) effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+            auto& emitter = effect.emitters[0];
+            emitter.spawn.randomization = 0.0F;
+            emitter.spawn.spreadDegrees = 0.0F;
+            if (type == Type::Noise) {
+                AddModule(emitter, 1U, type, kb::scene::ParticleNoiseModule{.strength = 0.7F, .frequency = 0.5F});
+                AddModule(emitter, 2U, type, kb::scene::ParticleNoiseModule{.strength = 1.3F, .frequency = 2.0F});
+            } else if (type == Type::AxisRotation) {
+                AddModule(emitter, 1U, type, kb::scene::ParticleAxisRotationModule{.axis = {0.0F, 1.0F, 0.0F}, .degreesPerSecond = 90.0F});
+                AddModule(emitter, 2U, type, kb::scene::ParticleAxisRotationModule{.axis = {1.0F, 0.0F, 0.0F}, .degreesPerSecond = 60.0F});
+            } else {
+                AddModule(emitter, 1U, type, kb::scene::ParticleAttractionModule{.point = {1.0F, 2.0F, 0.0F}, .strength = 3.0F});
+                AddModule(emitter, 2U, type, kb::scene::ParticleAttractionModule{.point = {-2.0F, 0.0F, 3.0F}, .strength = 5.0F});
+            }
+            emitter.modules[0].enabled = firstEnabled;
+            emitter.modules[1].enabled = secondEnabled;
+            Fixture fixture(std::move(effect));
+            kb::particle_plugin::CpuParticleBackend backend;
+            backend.Warmup();
+            kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, gpuPreferred);
+            const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+            Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                    backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+                    backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+                "repeated field fixture could not emit");
+            for (int step = 0; step < 12; ++step) {
+                Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+                    "repeated field step failed");
+            }
+            const auto states = CopyBackendStates(backend, fixture, created.instanceId);
+            std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+            kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+            if (gpuPreferred) {
+                std::size_t spawns = 0U;
+                bool complete = false;
+                for (const auto& command : commands) {
+                    spawns += command.spawns.size();
+                    if (command.hasParams) complete = command.params.motionModuleCount ==
+                        static_cast<std::uint32_t>(firstEnabled) + static_cast<std::uint32_t>(secondEnabled);
+                }
+                Require(complete && states.empty() && spawns == 1U, "repeated or disabled field routing lost an active GPU motion operation");
+                return kb::particles::ParticleRuntimeState{};
+            }
+            Require(states.size() == 1U, "explicit CPU repeated fields lost their particle");
+            Require(commands.empty(), "explicit CPU repeated fields submitted GPU commands");
+            return states.front();
+        };
+        const auto expected = run(false, true, true);
+        static_cast<void>(run(true, true, true));
+        const auto distance = [](const auto& a, const auto& b) {
+            return kb::math::Length(a.position - b.position) + kb::math::Length(a.velocity - b.velocity);
+        };
+        // Numerical CPU/GPU parity is verified with actual renderer float readback, not this routing fixture.
+        Require(distance(expected, run(false, false, true)) > 0.0001F &&
+                distance(expected, run(false, true, false)) > 0.0001F,
+            "repeated field fixture did not observe both authored modules");
+        static_cast<void>(run(true, false, true));
+        static_cast<void>(run(true, true, false));
+    }
 }
 
 // A WhileAlive binding gives birth at its rate at every live particle of its source emitter.
@@ -2978,13 +3391,13 @@ void TestGpuEmitterFieldsAndLargeBursts() {
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
         spawned += command.spawns.size();
         if (command.hasParams) {
-            params = command.params.noiseStrength == 3.0F && command.params.noiseFrequency == 0.4F &&
-                command.params.noiseSeed == 7U && std::abs(command.params.axisRadiansPerSecond - 1.5707963F) < 0.0001F &&
-                command.params.attractionStrength == 4.0F && command.params.NeedsState();
+            const auto& modules = command.params.motionModules;
+            params = command.params.motionModuleCount == 3U && modules[0].strength == 3.0F && modules[0].parameter == 0.4F &&
+                modules[0].seed == 7U && std::abs(modules[1].strength - 1.5707963F) < 0.0001F &&
+                modules[1].vector.y == 1.0F && modules[2].strength == 4.0F && modules[2].vector.y == 1.0F && command.params.NeedsState();
         }
         if (command.hasField) {
-            field = std::abs(command.fieldOrigin.y - 3.0F) < 0.0001F && std::abs(command.fieldAxis.y - 1.0F) < 0.0001F &&
-                std::abs(command.attractionTarget.y - 4.0F) < 0.0001F;
+            field = std::abs(command.fieldOrigin.y - 3.0F) < 0.0001F;
         }
     }
     Require(spawned == 100'000U, "a GPU burst was cut to the CPU's spawns per step");
@@ -2995,6 +3408,7 @@ void TestGpuEmitterFieldsAndLargeBursts() {
 void TestGpuEmitterRouting() {
     auto effect = Fixture::MakeEffect(600.0F, 200'000U);
     effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    effect.emitters[0].output.sort = kb::scene::ParticleSortMode::Age;
     AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
         kb::scene::ParticleGravityModule{ .acceleration = { 0.0F, -2.0F, 0.0F }, .sceneGravityScale = 0.0F });
     AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::Drag, kb::scene::ParticleDragModule{ .coefficient = 0.5F });
@@ -3021,12 +3435,20 @@ void TestGpuEmitterRouting() {
     kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
     std::size_t spawned = 0U;
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
-        Require(command.hasParams && command.params.capacity == 200'000U &&
+        Require(command.key.instanceId == created.instanceId && command.key.emitterId == 1U,
+            "GPU emitter clock carries the wrong identity");
+        if (!command.hasParams) {
+            Require(command.spawns.empty(), "A GPU birth omitted its parameters");
+            continue;
+        }
+        Require(command.params.capacity == 200'000U &&
+                command.params.sort == kb::particles::ParticleRenderSortMode::Age &&
                 command.params.acceleration.y == -2.0F && command.params.drag == 0.5F &&
                 command.key.instanceId == created.instanceId && command.key.emitterId == 1U,
             "GPU emitter command carries wrong parameters");
         for (const kb::particles::ParticleGpuSpawn& spawn : command.spawns) {
-            Require(spawn.lifetime == 2.0F && spawn.velocity.x > 0.9F && spawn.birthTime > 0.0F &&
+            Require(spawn.lifetime == 2.0F && spawn.velocity.x > 0.9F && spawn.birthTime >= 0.0F &&
+                std::abs(command.simTime - spawn.birthTime - kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds) < 0.000001 &&
                 std::abs(std::sqrt(spawn.velocity.x * spawn.velocity.x + spawn.velocity.y * spawn.velocity.y +
                     spawn.velocity.z * spawn.velocity.z) - 1.0F) < 0.001F,
                 "GPU spawn record does not match the authored emitter");
@@ -3047,14 +3469,15 @@ void TestGpuEmitterRouting() {
 }
 
 // An emitter with a collision plane is eligible for the GPU path too: the plane travels with the emitter
-// parameters (the kernel bounces particles off it and off the scene depth); a sub-emitter still needs the CPU.
+// parameters; it does not enable screen-depth collisions. A sub-emitter still needs the CPU.
 void TestGpuEmitterCollisionRouting() {
-    const auto firstCommand = [](bool withSubEmitter) {
+    const auto firstCommand = [](bool withSubEmitter, bool screenDepth = false, bool plane = true) {
         auto effect = Fixture::MakeEffect(600.0F, 200'000U);
+        effect.emitters[0].screenDepthCollision = screenDepth;
         effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
         AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
             kb::scene::ParticleGravityModule{ .acceleration = { 0.0F, -2.0F, 0.0F }, .sceneGravityScale = 0.0F });
-        AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::CollisionPlane,
+        if (plane) AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::CollisionPlane,
             kb::scene::ParticleCollisionPlaneModule{
                 .normal = { 0.0F, 1.0F, 0.0F }, .distance = 1.5F, .restitution = 0.4F, .friction = 0.1F, .maxEventsPerStep = 4U });
         if (withSubEmitter) {
@@ -3082,15 +3505,21 @@ void TestGpuEmitterCollisionRouting() {
         const std::size_t cpuLive = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
         kb::particles::ParticleGpuEmitterCommand source{};
         for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
-            if (command.key.emitterId == 1U) source = command;
+            if (command.key.emitterId == 1U && command.hasParams) source = command;
         }
         return std::pair{ source, cpuLive };
     };
     const auto [onGpu, gpuCpuLive] = firstCommand(false);
-    Require(onGpu.hasParams && onGpu.params.hasPlane && onGpu.params.sceneDepthCollision &&
+    Require(onGpu.hasParams && onGpu.params.hasPlane && !onGpu.params.sceneDepthCollision &&
             onGpu.params.plane.distance == 1.5F && onGpu.params.plane.restitution == 0.4F &&
             onGpu.params.plane.friction == 0.1F && onGpu.params.plane.normal.y == 1.0F && gpuCpuLive == 0U,
         "An emitter with a collision plane must run on the GPU with its plane");
+    const auto [depthOnly, depthCpuLive] = firstCommand(false, true, false);
+    Require(depthOnly.hasParams && depthOnly.params.sceneDepthCollision && !depthOnly.params.hasPlane && depthCpuLive == 0U,
+        "Explicit screen-depth collision did not reach GPU parameters independently of a plane");
+    const auto [both, bothCpuLive] = firstCommand(false, true);
+    Require(both.hasParams && both.params.hasPlane && both.params.sceneDepthCollision && bothCpuLive == 0U,
+        "Explicit screen-depth collision did not coexist with the authored plane");
     const auto [onCpu, cpuLive] = firstCommand(true);
     Require(!onCpu.hasParams && cpuLive > 0U,
         "An emitter with a plane and a death sub-emitter must stay on the CPU: the death position is not closed form");
@@ -3298,12 +3727,131 @@ void TestGpuSubEmitterEvents() {
             birthChildren.front().birthTime < birthParents.front().birthTime + 0.1F,
         "A birth sub-emitter of a GPU emitter must spawn its children at the parent's birth");
     const auto [collisionCommands, collisionCpuLive] = run(kb::scene::ParticleEventTrigger::Collision, 30);
-    Require(collisionCommands.empty() && collisionCpuLive > 0U,
+    Require(std::all_of(collisionCommands.begin(), collisionCommands.end(), [](const auto& command) {
+            return command.key.emitterId != 1U && command.spawns.empty();
+        }) && collisionCpuLive > 0U,
         "An emitter with a collision-triggered sub-emitter must stay on the CPU");
 }
 
-int main() {
+void TestLazyParticleStorageAdmissionAndReload() {
+    auto effect = Fixture::MakeEffect(0.0F, 4U);
+    Fixture fixture(effect);
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    Require(backend.ParticleCapacity() == 0U, "empty backend reserved a scene-sized particle pool");
+    const auto first = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(first.Succeeded() && backend.ParticleCapacity() >= 4U && backend.ParticleCapacity() <= 16U,
+        "small effect admission did not size the particle pool to its authored capacity");
+    Require(backend.Emit(fixture.scene, first.instanceId, 4U).Succeeded(), "small admitted pool did not fill");
+    bool rejectedAllocation = false;
+    g_failNextAllocation.store(true);
     try {
+        static_cast<void>(backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner));
+    } catch (const std::bad_alloc&) {
+        rejectedAllocation = true;
+    }
+    g_failNextAllocation.store(false);
+    Require(rejectedAllocation && backend.LiveInstanceCount() == 1U && backend.CompiledEffectCount() == 1U &&
+            backend.Query(fixture.scene, first.instanceId).liveParticleCount == 4U,
+        "failed admission leaked an instance or damaged the existing particle pool");
+    const auto second = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(second.Succeeded() && backend.ParticleCapacity() >= 8U && backend.ParticleCapacity() <= 16U &&
+            backend.Emit(fixture.scene, second.instanceId, 4U).Succeeded() &&
+            backend.Query(fixture.scene, first.instanceId).liveParticleCount == 4U,
+        "admitting another instance damaged live SoA data or failed to grow all columns");
+    effect.emitters[0].maxParticles = 4096U;
+    Require(fixture.scene.Assets().Manager().PublishRuntimeAsset(kb::assets::AssetId{fixture.effectAssetId},
+            std::make_shared<kb::scene::ParticleEffectAsset>(effect)), "capacity reload asset publication failed");
+    Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.ParticleCapacity() >= 8192U && backend.ParticleCapacity() <= 16384U,
+        "reload did not reserve capacity before replacing both active instances");
+    Require(backend.Emit(fixture.scene, first.instanceId, 4096U).Succeeded() &&
+            backend.Emit(fixture.scene, second.instanceId, 4096U).Succeeded(),
+        "reloaded particle pool did not grow every SoA column");
+    Require(backend.Release(fixture.scene, first.instanceId).Succeeded() &&
+            backend.Query(fixture.scene, second.instanceId).liveParticleCount == 4096U &&
+            backend.Release(fixture.scene, second.instanceId).Succeeded(),
+        "particle pool growth broke release or dense instance relocation");
+}
+
+void ReportParticleProcessMemory(std::string_view phase) {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    Require(K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) != 0,
+        "process memory counters were unavailable");
+    std::cout << "{\"phase\":\"" << phase << "\",\"rssBytes\":" << counters.WorkingSetSize
+        << ",\"commitBytes\":" << counters.PagefileUsage << ",\"peakRssBytes\":" << counters.PeakWorkingSetSize
+        << ",\"peakCommitBytes\":" << counters.PeakPagefileUsage << "}\n";
+#else
+    std::cout << "{\"phase\":\"" << phase << "\",\"processMemory\":\"unavailable\"}\n";
+#endif
+}
+
+void RunParticleSceneMemoryProbe() {
+    ReportParticleProcessMemory("process_baseline");
+    {
+        auto effect = Fixture::MakeEffect(0.0F, 4096U);
+        effect.emitters[0].spawn.lifetimeMin = effect.emitters[0].spawn.lifetimeMax = 60.0F;
+        Fixture fixture(effect);
+        ReportParticleProcessMemory("scene_without_particle_system");
+        const auto system = fixture.scene.Runtime().AddSceneSystem(
+            std::make_unique<kb::particle_plugin::ParticleSceneSystem>());
+        Require(system.IsValid(), "memory probe scene system registration failed");
+        for (std::uint32_t step = 0U; step < 4U; ++step) {
+            static_cast<void>(fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        }
+        ReportParticleProcessMemory("empty_particle_scene");
+        const auto created = kb::particles::ParticlePlayback::Create(
+            fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded(), "memory probe effect admission failed");
+        ReportParticleProcessMemory("effect_admitted");
+        Require(kb::particles::ParticlePlayback::Emit(fixture.scene, created.instanceId, 4096U).Succeeded(),
+            "memory probe emit failed");
+        std::array<std::shared_ptr<const kb::particles::ParticleRenderSnapshot>, 4U> retained;
+        for (auto& snapshot : retained) {
+            static_cast<void>(fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+            snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+            Require(snapshot && snapshot->Particles().size() == 4096U, "memory probe snapshot was incomplete");
+        }
+        ReportParticleProcessMemory("four_retained_batches");
+        retained = {};
+        for (std::uint32_t step = 0U; step < 120U; ++step) {
+            static_cast<void>(fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        }
+        Require(kb::particles::ParticlePlayback::Query(fixture.scene, created.instanceId).liveParticleCount == 4096U,
+            "memory probe soak lost live particles");
+        ReportParticleProcessMemory("soak_reuse");
+        Require(fixture.scene.Runtime().RemoveSceneSystem(system), "memory probe system unload failed");
+        ReportParticleProcessMemory("provider_unloaded");
+    }
+    ReportParticleProcessMemory("scene_unloaded");
+}
+
+int main(int argc, char** argv) {
+    try {
+        using kb::particles::ParticleFlipbookFrame;
+        Require(ParticleFlipbookFrame(0.0F, 8.0F, 2U, 5U, true) == 2U &&
+            ParticleFlipbookFrame(0.5F, 8.0F, 2U, 5U, true) == 6U &&
+            ParticleFlipbookFrame(0.625F, 8.0F, 2U, 5U, true) == 2U &&
+            ParticleFlipbookFrame(0.625F, 8.0F, 2U, 5U, false) == 6U,
+            "Partial flipbook range must loop or clamp at its own boundary");
+        // Exercise the runtime overflow guard without folding an unreachable float conversion.
+        volatile float largeClockInput = 1.0e30F;
+        const float largeClock = largeClockInput;
+        Require(ParticleFlipbookFrame(100.0F, 0.0F, 65535U, 1U, true) == 65535U &&
+            ParticleFlipbookFrame(largeClock, largeClock, 2U, 5U, false) == 6U &&
+            ParticleFlipbookFrame(largeClock, largeClock, 2U, 5U, true) >= 2U &&
+            ParticleFlipbookFrame(largeClock, largeClock, 2U, 5U, true) <= 6U,
+            "Static and extreme finite flipbook clocks must stay within the authored range");
+        if (argc == 2 && std::string_view{argv[1]} == "--memory-probe") {
+            RunParticleSceneMemoryProbe();
+            return 0;
+        }
+        TestLazyParticleStorageAdmissionAndReload();
+        TestEmitterExecutionDiagnostics();
+        TestGpuFallbackReasonTable();
+        TestSharedSimulationOfIdenticalInstances();
+        TestRepeatedFieldsPreserveCpuSemantics();
         TestGpuSubEmitterEvents();
         TestGpuMeshAndTrailRouting();
         TestCpuParticleSpin();

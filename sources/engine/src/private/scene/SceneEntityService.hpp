@@ -20,10 +20,10 @@ public:
     SceneEntityService() = delete;
 
     [[nodiscard]] static SceneObject CreateObject(Scene& scene);
-    [[nodiscard]] static SceneObject CreateObject(Scene& scene, SceneObjectDesc desc);
+    [[nodiscard]] static SceneObject CreateObject(Scene& scene, const SceneObjectDesc& desc);
     [[nodiscard]] static std::vector<SceneObject> CreateObjects(Scene& scene, std::span<const SceneObjectDesc> descs);
     [[nodiscard]] static SceneEntity CreateEntity(Scene& scene);
-    [[nodiscard]] static SceneEntity CreateEntity(Scene& scene, SceneObjectDesc desc);
+    [[nodiscard]] static SceneEntity CreateEntity(Scene& scene, const SceneObjectDesc& desc);
     [[nodiscard]] static SceneObject DuplicateObject(Scene& scene, SceneObject object);
     [[nodiscard]] static std::vector<SceneObject> DuplicateObjects(Scene& scene, std::span<const SceneObject> objects);
     static void DestroyObject(Scene& scene, SceneObject object) noexcept;

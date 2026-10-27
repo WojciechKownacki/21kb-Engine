@@ -98,6 +98,18 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool Equals(const GridComponent& lhs, const GridComponent& rhs) noexcept { return lhs == rhs; }
+
+[[nodiscard]] bool Equals(const TilemapComponent& lhs, const TilemapComponent& rhs) noexcept { return lhs == rhs; }
+
+[[nodiscard]] bool Equals(const TilemapRendererComponent& lhs, const TilemapRendererComponent& rhs) noexcept { return lhs == rhs; }
+
+[[nodiscard]] bool Equals(const TilemapColliderComponent& lhs, const TilemapColliderComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const CharacterController2DComponent& lhs, const CharacterController2DComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const Collider2DComponent& lhs, const Collider2DComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const Body2DComponent& lhs, const Body2DComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const Sprite2DComponent& lhs, const Sprite2DComponent& rhs) noexcept { return lhs == rhs; }
+
 [[nodiscard]] bool Equals(const ContentInstanceComponent& lhs, const ContentInstanceComponent& rhs) noexcept {
     return lhs.assetId == rhs.assetId && lhs.kind == rhs.kind && lhs.lifetime == rhs.lifetime && lhs.active == rhs.active;
 }
@@ -316,6 +328,15 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , regionShapes(scene.Components().RegionShapes())
     , guideCurves(scene.Components().GuideCurves())
     , contentInstances(scene.Components().ContentInstances())
+    , grids(scene.Components().Grids())
+    , tilemaps(scene.Components().Tilemaps())
+    , tilemapRenderers(scene.Components().TilemapRenderers())
+    , tilemapColliders(scene.Components().TilemapColliders())
+    , characterControllers2D(scene.Components().CharacterControllers2D())
+    , colliders2D(scene.Components().Colliders2D())
+    , bodies2D(scene.Components().Bodies2D())
+    , sprites2D(scene.Components().Sprites2D())
+
     , streamFocuses(scene.Components().StreamFocuses())
     , worldBackdrops(scene.Components().WorldBackdrops())
     , ambientRadiances(scene.Components().AmbientRadiances())
@@ -406,6 +427,15 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     WriteOptionalComponent(context.guideCurves, entity, node.components.guideCurve);
     WriteOptionalComponent(context.contentInstances, entity, node.components.contentInstance);
+    WriteOptionalComponent(context.grids, entity, node.components.grid);
+    WriteOptionalComponent(context.tilemaps, entity, node.components.tilemap);
+    WriteOptionalComponent(context.tilemapRenderers, entity, node.components.tilemapRenderer);
+    WriteOptionalComponent(context.tilemapColliders, entity, node.components.tilemapCollider);
+    WriteOptionalComponent(context.characterControllers2D, entity, node.components.characterController2D);
+    WriteOptionalComponent(context.colliders2D, entity, node.components.collider2D);
+    WriteOptionalComponent(context.bodies2D, entity, node.components.body2D);
+    WriteOptionalComponent(context.sprites2D, entity, node.components.sprite2D);
+
     WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
     WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);
     WriteOptionalComponent(context.ambientRadiances, entity, node.components.ambientRadiance);

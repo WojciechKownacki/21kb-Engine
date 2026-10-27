@@ -38,7 +38,7 @@ Snapshot i katalog ECS obejmują milion encji. Graph shaderc ON, GPU readbacks p
 Nie uruchamiano widocznego edytora ani gry; bez przejmowania wejścia.
 
 Metoda
-Projekt: E:/21kbProjekty/OpenWorldProductionStage6_20261001.
+Projekt: <workdir>/OpenWorldProductionStage6_20261001.
 i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74.
 Release /O2 /DNDEBUG, D3D11 1920x1080, ForwardPlus, headless.
 54 procesy: 18 scenariuszy x 3. Wszystkie exit 0. Kolejno po build/testach,

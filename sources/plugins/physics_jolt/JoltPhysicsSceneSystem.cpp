@@ -597,6 +597,12 @@ struct CharacterSignature {
     return SameVec3(lhs.scale, rhs.scale) && SameVec3(lhs.center, rhs.center) && lhs.radius == rhs.radius && lhs.height == rhs.height;
 }
 
+// Coyote time is asked for with CharacterJump of a speed in [-1.5, -1] (Physics.SetCharacterJumpGrace in
+// ScriptPhysicsApi.cpp): the seconds a character may still jump after leaving its ground are -speed - 1.
+// A jump needs a positive speed, so such a call was never a jump, and IPhysicsBackend and the module ABI stay as they were.
+constexpr float kCharacterJumpGraceCodeLow = -1.5F;
+constexpr float kCharacterJumpGraceCodeHigh = -1.0F;
+
 struct CharacterRecord {
     JPH::Ref<JPH::CharacterVirtual> character;
     CharacterSignature signature{};
@@ -608,6 +614,11 @@ struct CharacterRecord {
     // semantics.
     Vec3 moveInput{};
     float pendingJumpSpeed = 0.0F;
+    // Coyote time. jumpGraceLimit is what a script asked for (0, the default, means jumps from the ground only);
+    // jumpGraceSeconds is what is left of it after the character walked off its ground: refilled on every step
+    // spent standing, spent by a jump so that it never makes a second one in the air.
+    float jumpGraceLimit = 0.0F;
+    float jumpGraceSeconds = 0.0F;
     // Mirrors of CharacterControllerComponent's own fields that Jolt has no "live setter"
     // for (unlike slopeLimitDegrees, applied straight to the JPH::CharacterVirtual via
     // SetMaxSlopeAngle - see SynchronizeCharacter) - refreshed every step regardless of
@@ -735,6 +746,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
     case ColliderShape::Capsule:
         return CreateCapsuleShape(collider.radius * std::max(scaleX, scaleZ), collider.height * scaleY);
     case ColliderShape::Box:
+    case ColliderShape::OneWayBox:
         return new JPH::BoxShape(JPH::Vec3(
             ClampPositive(collider.boxSize.x * scaleX * 0.5F),
             ClampPositive(collider.boxSize.y * scaleY * 0.5F),
@@ -1050,19 +1062,47 @@ struct ActiveBodyContact {
     std::uint8_t sleeping = 0U;
 };
 
+constexpr std::uint64_t kOneWayBody = std::uint64_t{1} << 63U;
+
+// Called from Jolt workers: only immutable body data is read, never the ECS world.
+bool AcceptOneWay(const JPH::Body& platform, const JPH::AABox& otherBounds, JPH::Vec3 velocity, float stepSeconds = 0.0F) {
+    if ((platform.GetUserData() & kOneWayBody) == 0U || platform.IsSensor()) return true;
+    const auto normal = platform.GetRotation() * JPH::Vec3::sAxisY();
+    const float speed = (velocity - platform.GetLinearVelocity()).Dot(normal);
+    if (speed > 0.01F) return false;
+    const auto plane = platform.GetPosition() + normal * platform.GetShape()->GetLocalBounds().mMax.GetY();
+    const float bottom = (otherBounds.GetCenter() - JPH::Vec3(plane)).Dot(normal) - otherBounds.GetExtent().Dot(normal.Abs());
+    // Contact generation can observe the position after integration. Test the previous
+    // bottom too so a fast descending body does not miss a thin platform.
+    return bottom - std::min(0.0F, speed) * stepSeconds >= -0.08F;
+}
+
+bool AcceptOneWayPair(const JPH::Body& first, const JPH::Body& second, float stepSeconds) {
+    return AcceptOneWay(first, second.GetWorldSpaceBounds(), second.GetLinearVelocity(), stepSeconds) &&
+        AcceptOneWay(second, first.GetWorldSpaceBounds(), first.GetLinearVelocity(), stepSeconds);
+}
+
 class JoltCollisionContactListener final : public JPH::ContactListener {
+    float stepSeconds_ = 0.0F; // Set before worker dispatch; immutable until the step joins.
 public:
+    void SetStepDuration(float seconds) noexcept { stepSeconds_ = seconds; }
+    JPH::ValidateResult OnContactValidate(const JPH::Body& first, const JPH::Body& second, JPH::RVec3Arg,
+        const JPH::CollideShapeResult&) override {
+        return AcceptOneWayPair(first, second, stepSeconds_) ? JPH::ValidateResult::AcceptAllContactsForThisBodyPair : JPH::ValidateResult::RejectAllContactsForThisBodyPair;
+    }
     // Contact bookkeeping is wasted work (and an unbounded queue) while nothing consumes the events.
     void SetEnabled(bool enabled) noexcept { enabled_.store(enabled, std::memory_order_relaxed); }
     [[nodiscard]] bool Enabled() const noexcept { return enabled_.load(std::memory_order_relaxed); }
 
     void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
-        static_cast<void>(settings);
+        if (!AcceptOneWayPair(body1, body2, stepSeconds_)) { settings.mIsSensor = true; return; }
+        if (((body1.GetUserData() | body2.GetUserData()) & kOneWayBody) != 0U) settings.mIsSensor = body1.IsSensor() || body2.IsSensor();
         Record(body1, body2, manifold, RawContactPhase::Added);
     }
 
     void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
-        static_cast<void>(settings);
+        if (!AcceptOneWayPair(body1, body2, stepSeconds_)) { settings.mIsSensor = true; return; }
+        if (((body1.GetUserData() | body2.GetUserData()) & kOneWayBody) != 0U) settings.mIsSensor = body1.IsSensor() || body2.IsSensor();
         Record(body1, body2, manifold, RawContactPhase::Persisted);
     }
 
@@ -1353,6 +1393,8 @@ public:
         RemoveAllCharacters();
         RemoveAllJoints();
         RemoveAllBodies();
+        collisionMeshes_.clear();
+        collisionAssetRevision_ = 0;
     }
 
     void AttachScene(kb::scene::Scene& scene) noexcept {
@@ -1531,6 +1573,10 @@ public:
         CharacterRecord* record = FindCharacterRecord(entity);
         if (record == nullptr) {
             return false;
+        }
+        if (verticalSpeed >= kCharacterJumpGraceCodeLow && verticalSpeed <= kCharacterJumpGraceCodeHigh) {
+            record->jumpGraceLimit = -verticalSpeed - 1.0F;
+            return true;
         }
         record->pendingJumpSpeed = verticalSpeed;
         return true;
@@ -1957,9 +2003,14 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t WorkerThreadCount(const JoltPhysicsSceneSystemSettings& settings) noexcept {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        static_cast<void>(settings);
+        return 0U;
+#else
         const unsigned int hardwareThreads = std::thread::hardware_concurrency();
         const auto available = hardwareThreads <= 1U ? 0U : static_cast<std::uint32_t>(hardwareThreads - 1U);
         return std::min(available, settings.workerThreadCount == 0U ? 8U : settings.workerThreadCount);
+#endif
     }
 
     void SynchronizeBodies(SceneSystemContext& context) {
@@ -2388,7 +2439,8 @@ private:
             const bool movingTowardsGround = (currentVerticalVelocity.Dot(up) - groundVelocity.Dot(up)) < 0.1F;
 
             JPH::Vec3 newVelocity;
-            if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround && movingTowardsGround) {
+            const bool onGround = character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+            if (onGround && movingTowardsGround) {
                 // LIB-131 "platform motion": assume the velocity of whatever is stood on -
                 // zero for static/no ground, the real moving velocity for a Kinematic/Dynamic
                 // platform, so the character rides along with it automatically.
@@ -2396,11 +2448,20 @@ private:
                 // LIB-131 jump: only actually honored while grounded and not already moving
                 // away from the ground - a request made while airborne was already dropped by
                 // this same `if` not being taken, so pendingJumpSpeed is simply never added.
+                record.jumpGraceSeconds = record.jumpGraceLimit;
                 if (record.pendingJumpSpeed > 0.0F) {
                     newVelocity += up * record.pendingJumpSpeed;
+                    record.jumpGraceSeconds = 0.0F;
                 }
             } else {
                 newVelocity = currentVerticalVelocity;
+                record.jumpGraceSeconds = std::max(0.0F, record.jumpGraceSeconds - deltaSeconds);
+                // Coyote time: a jump asked for just after the ground was lost, while the character has not
+                // started to rise, is honored as if it were still standing. The ground's velocity is kept.
+                if (record.pendingJumpSpeed > 0.0F && record.jumpGraceSeconds > 0.0F && currentVerticalVelocity.Dot(up) <= 0.1F) {
+                    newVelocity = groundVelocity + up * record.pendingJumpSpeed;
+                    record.jumpGraceSeconds = 0.0F;
+                }
             }
             record.pendingJumpSpeed = 0.0F;
 
@@ -2486,6 +2547,13 @@ private:
     // Unity's CharacterController contacts, reported by ExtendedUpdate on the main thread:
     // a trigger raises OnTrigger* on both sides, a solid collider raises
     // OnControllerColliderHit on the controller for every step it moves into it.
+    bool OnContactValidate(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact) override {
+        JPH::BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), contact.mBodyB);
+        if (!lock.Succeeded()) return true;
+        const auto bounds = character->GetShape()->GetWorldSpaceBounds(character->GetCenterOfMassTransform(), JPH::Vec3::sReplicate(1.0F));
+        return AcceptOneWay(lock.GetBody(), bounds, character->GetLinearVelocity());
+    }
+
     void OnContactAdded(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) override {
         static_cast<void>(settings);
         QueueCharacterTouch(*character, contact, kb::scene::PhysicsContactPhase::Enter);
@@ -2578,10 +2646,10 @@ private:
         if (collisionAssetRevision_ == assets.Revision()) return;
         for (auto& [id, mesh] : collisionMeshes_) {
             const auto source = assets.Load<kb::assets::CollisionMeshAsset>(kb::assets::AssetId{id});
-            if (!source.IsLoaded()) {
-                throw std::runtime_error("Collision mesh reload failed: " + assets.LastError());
-            }
-            mesh.valid = source.Get() == mesh.source.get();
+            // A generated collider can be removed together with its asset before this step.
+            // Retire the old body/cache first; SynchronizeBodies still reports an error if a
+            // live collider actually needs an unavailable mesh.
+            mesh.valid = source.IsLoaded() && source.Get() == mesh.source.get();
         }
         for (auto it = bodies_.begin(); it != bodies_.end();) {
             const auto mesh = collisionMeshes_.find(it->second.signature.meshAssetId);
@@ -2676,7 +2744,7 @@ private:
         bodySettings.mIsSensor = collider.trigger;
         bodySettings.mFriction = collider.friction;
         bodySettings.mRestitution = collider.restitution;
-        bodySettings.mUserData = collider.layer;
+        bodySettings.mUserData = collider.layer | (collider.shape == ColliderShape::OneWayBox ? kOneWayBody : 0U);
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
@@ -2754,6 +2822,7 @@ private:
         if (fixedDeltaSeconds <= 0.0F) {
             return;
         }
+        contactListener_.SetStepDuration(fixedDeltaSeconds);
         ThrowOnStepError(physicsSystem_.Update(
             fixedDeltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_));
     }
@@ -2772,6 +2841,11 @@ private:
     // results before it synchronizes the world again; only the arrival of poses and contact events in
     // the scene shifts by one fixed step.
     void LaunchStep(float deltaSeconds) {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        // Keep deferred publication, but finish the work here when the host has no threads.
+        stepDriver_.error = physicsSystem_.Update(
+            deltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
+#else
         {
             std::lock_guard lock(stepDriver_.mutex);
             if (!stepDriver_.thread.joinable()) {
@@ -2782,6 +2856,7 @@ private:
             stepInFlight_.store(true, std::memory_order_release);
         }
         stepDriver_.wake.notify_one();
+#endif
     }
 
     void RunStepDriver() {
@@ -2792,6 +2867,7 @@ private:
             stepDriver_.requested = false;
             const float deltaSeconds = stepDriver_.deltaSeconds;
             lock.unlock();
+            contactListener_.SetStepDuration(deltaSeconds);
             const JPH::EPhysicsUpdateError error = physicsSystem_.Update(
                 deltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
             lock.lock();

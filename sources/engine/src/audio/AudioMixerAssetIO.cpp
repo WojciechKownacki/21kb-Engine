@@ -4,6 +4,7 @@
 
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -97,6 +98,68 @@ inline constexpr std::string_view kFormatHeader = "kbmixer 1\n";
     return parent.empty() ? std::string_view{ "-" } : std::string_view{ parent };
 }
 
+[[nodiscard]] bool ApplyEffect(std::string_view rest, AudioMixerAsset& asset) {
+    const auto tokens = Tokenize(rest);
+    if (tokens.size() < 4U) return false;
+    const auto bus = std::find_if(asset.buses.begin(), asset.buses.end(), [&](const auto& value) { return value.name == tokens[0]; });
+    const auto kind = ParseAudioDspKind(tokens[2]);
+    if (bus == asset.buses.end() || !kind.has_value()) return false;
+    AudioDspEffect effect{.id = std::string{tokens[1]}, .parameters = {.kind = *kind}};
+    auto& p = effect.parameters;
+    if (!ParseBoolToken(tokens[3], p.bypass)) return false;
+    const auto number = [&](std::size_t index, double& value) {
+        return kb::library::TryParseDouble(tokens[index], value) && std::isfinite(value);
+    };
+    bool parsed = false;
+    switch (*kind) {
+    case AudioDspKind::LowPass:
+    case AudioDspKind::HighPass: {
+        std::uint64_t order = 0U;
+        parsed = tokens.size() == 6U && number(4U, p.cutoffHz)
+            && kb::library::TryParseUInt64(tokens[5], order) && order >= 1U && order <= 8U;
+        if (parsed) p.order = static_cast<std::uint32_t>(order);
+        break;
+    }
+    case AudioDspKind::PeakingEqualizer:
+        parsed = tokens.size() == 7U && number(4U, p.cutoffHz) && number(5U, p.gainDb) && number(6U, p.quality);
+        break;
+    case AudioDspKind::Delay:
+        parsed = tokens.size() == 8U && number(4U, p.delayMs) && ParseFloatToken(tokens[5], p.feedback)
+            && ParseFloatToken(tokens[6], p.wet) && ParseFloatToken(tokens[7], p.dry);
+        break;
+    case AudioDspKind::Reverb:
+        parsed = tokens.size() == 9U && ParseFloatToken(tokens[4], p.roomSize) && ParseFloatToken(tokens[5], p.damping)
+            && ParseFloatToken(tokens[6], p.width) && ParseFloatToken(tokens[7], p.wet) && ParseFloatToken(tokens[8], p.dry);
+        break;
+    case AudioDspKind::Compressor:
+        parsed = tokens.size() == 9U && number(4U, p.thresholdDb) && number(5U, p.ratio) && number(6U, p.attackMs)
+            && number(7U, p.releaseMs) && number(8U, p.makeupDb);
+        break;
+    case AudioDspKind::Limiter:
+        parsed = tokens.size() == 6U && number(4U, p.ceilingDb) && number(5U, p.releaseMs);
+        break;
+    }
+    if (!parsed || !AudioDspParameterError(p).empty()) return false;
+    bus->effects.push_back(std::move(effect));
+    return true;
+}
+
+void WriteEffect(std::ostream& output, const std::string& bus, const AudioDspEffect& effect) {
+    const auto& p = effect.parameters;
+    output << std::setprecision(std::numeric_limits<double>::max_digits10)
+        << "effect " << bus << ' ' << effect.id << ' ' << AudioDspKindName(p.kind) << ' ' << (p.bypass ? 1 : 0);
+    switch (p.kind) {
+    case AudioDspKind::LowPass:
+    case AudioDspKind::HighPass: output << ' ' << p.cutoffHz << ' ' << p.order; break;
+    case AudioDspKind::PeakingEqualizer: output << ' ' << p.cutoffHz << ' ' << p.gainDb << ' ' << p.quality; break;
+    case AudioDspKind::Delay: output << ' ' << p.delayMs << ' ' << p.feedback << ' ' << p.wet << ' ' << p.dry; break;
+    case AudioDspKind::Reverb: output << ' ' << p.roomSize << ' ' << p.damping << ' ' << p.width << ' ' << p.wet << ' ' << p.dry; break;
+    case AudioDspKind::Compressor: output << ' ' << p.thresholdDb << ' ' << p.ratio << ' ' << p.attackMs << ' ' << p.releaseMs << ' ' << p.makeupDb; break;
+    case AudioDspKind::Limiter: output << ' ' << p.ceilingDb << ' ' << p.releaseMs; break;
+    }
+    output << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
+}
+
 [[nodiscard]] bool ApplyRecord(std::string_view keyword, std::string_view rest, AudioMixerAsset& asset) {
     if (keyword == "bus") {
         const std::vector<std::string_view> tokens = Tokenize(rest);
@@ -152,6 +215,7 @@ inline constexpr std::string_view kFormatHeader = "kbmixer 1\n";
     bool sawContent = false;
     bool sawHeader = false;
     bool sawAssetRecord = false;
+    bool effectFormat = false;
     while (std::getline(input, line)) {
         const std::string_view content = Trim(StripComment(line));
         if (content.empty()) {
@@ -161,15 +225,20 @@ inline constexpr std::string_view kFormatHeader = "kbmixer 1\n";
         const std::string_view keyword = separator == std::string_view::npos ? content : content.substr(0U, separator);
         const std::string_view rest = separator == std::string_view::npos ? std::string_view{} : Trim(content.substr(separator + 1U));
         if (keyword == kFormatKeyword) {
-            if (sawContent || rest != "1") {
+            if (sawContent || (rest != "1" && rest != "2")) {
                 return std::nullopt;
             }
             sawContent = true;
             sawHeader = true;
+            effectFormat = rest == "2";
             continue;
         }
         sawContent = true;
         sawAssetRecord = sawAssetRecord || IsAssetRecord(keyword);
+        if (keyword == "effect") {
+            if (!effectFormat || !ApplyEffect(rest, asset)) return std::nullopt;
+            continue;
+        }
         if (!ApplyRecord(keyword, rest, asset)) {
             return std::nullopt;
         }
@@ -184,10 +253,12 @@ inline constexpr std::string_view kFormatHeader = "kbmixer 1\n";
 }
 
 void WriteAsset(std::ostream& output, const AudioMixerAsset& asset) {
-    output << kFormatHeader;
+    const bool effects = std::any_of(asset.buses.begin(), asset.buses.end(), [](const auto& bus) { return !bus.effects.empty(); });
+    output << (effects ? "kbmixer 2\n" : kFormatHeader);
     output << std::setprecision(std::numeric_limits<float>::max_digits10);
     for (const AudioMixerBus& bus : asset.buses) {
         output << "bus " << bus.name << ' ' << ParentToToken(bus.parentBus) << ' ' << bus.volume << ' ' << (bus.mute ? 1 : 0) << '\n';
+        for (const auto& effect : bus.effects) WriteEffect(output, bus.name, effect);
     }
     for (const AudioMixerSnapshot& snapshot : asset.snapshots) {
         output << "snapshot " << snapshot.name << '\n';
@@ -208,6 +279,14 @@ std::string ValidateAudioMixerAsset(const AudioMixerAsset& asset) {
         }
         if (!std::isfinite(bus.volume) || bus.volume < 0.0F) {
             return "audio mixer bus volume must be finite and non-negative";
+        }
+        if (bus.effects.size() > 16U) return "audio mixer bus '" + bus.name + "' has more than 16 DSP effects";
+        std::unordered_set<std::string_view> effectIds;
+        for (const auto& effect : bus.effects) {
+            if (!IsAudioMixerNameTokenValid(effect.id)) return "audio mixer DSP effect ID must be a non-empty, whitespace-free token (and not '-')";
+            if (!effectIds.insert(effect.id).second) return "audio mixer bus '" + bus.name + "' repeats DSP effect ID '" + effect.id + "'";
+            if (const auto error = AudioDspParameterError(effect.parameters); !error.empty())
+                return "audio mixer bus '" + bus.name + "', effect '" + effect.id + "': " + std::string{error};
         }
         if (!busesByName.emplace(bus.name, &bus).second) {
             return "audio mixer bus name '" + bus.name + "' is declared more than once";

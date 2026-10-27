@@ -95,7 +95,7 @@ void CreateDecalBox(bgfx::VertexBufferHandle& vertices, bgfx::IndexBufferHandle&
 
 } // namespace
 
-bool ParticleGpuRenderer::Initialize() {
+bool ParticleGpuRenderer::Initialize(std::uint64_t particleBufferBudgetBytes) {
     if (IsInitialized()) return true;
     program_ = ShaderLoader::LoadProgram("vs_particle_instanced.sc", "fs_particle_instanced.sc");
     atlasSampler_ = bgfx::createUniform("s_particleAtlas", bgfx::UniformType::Sampler);
@@ -123,7 +123,7 @@ bool ParticleGpuRenderer::Initialize() {
         return false;
     }
     static_cast<void>(visualSimulation_.Initialize());
-    static_cast<void>(gpuEmitters_.Initialize());
+    static_cast<void>(gpuEmitters_.Initialize(particleBufferBudgetBytes));
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -421,6 +421,7 @@ void ParticleGpuRenderer::DispatchGpuEmitters(
     collision.viewProjection = RendererMatrixMath::ViewProjection(camera);
     collision.inverseViewProjection = RendererMatrixMath::Inverse(collision.viewProjection);
     collision.cameraPosition = SceneLightingPacker::CameraPosition(&camera);
+    collision.cameraDepth = {camera.view[2], camera.view[6], camera.view[10], camera.view[14]};
     collision.texelSize = { 1.0F / static_cast<float>(std::max(viewportWidth, 1U)), 1.0F / static_cast<float>(std::max(viewportHeight, 1U)) };
     collision.homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     collision.resources = &resources;
@@ -439,6 +440,16 @@ void ParticleGpuRenderer::CollectGpuMeshDraws(std::uint64_t sceneId, std::vector
             .instances = draw.instances, .count = draw.capacity, .castsShadow = params.castsShadow,
             .receivesShadow = params.receivesShadow, .origin = draw.origin });
     }
+}
+
+std::span<const ParticleGpuEmitterSimulation::Draw> ParticleGpuRenderer::GpuEmitterDraws(std::uint64_t sceneId) const noexcept {
+    return gpuEmitters_.Draws(sceneId);
+}
+
+std::uint64_t ParticleGpuRenderer::GpuEmitterAllocatedBytes() const noexcept { return gpuEmitters_.AllocatedBytes(); }
+
+std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> ParticleGpuRenderer::RejectedGpuUpdates(std::uint64_t sceneId) const noexcept {
+    return gpuEmitters_.RejectedUpdates(sceneId);
 }
 
 ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
@@ -469,7 +480,8 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
         bgfx::setIndexBuffer(quad->indexBuffer);
         // A trail segment is a quad stretched along its own direction (the velocity slot of the instance).
         const float alignment = trail ? 1.0F : static_cast<float>(params.alignment);
-        const std::array<float, 4> emitterParams{ 1.0F, 1.0F, alignment, 1.0F };
+        const std::array<float, 4> emitterParams{ static_cast<float>(params.flipbookColumns),
+            static_cast<float>(params.flipbookRows), alignment, 1.0F };
         const std::array<float, 4> localBasis{ 0.0F, 0.0F, 0.0F, 1.0F };
         const bool soft = params.softParticles && bgfx::isValid(sceneDepthTexture);
         const std::array<float, 4> depthParams{

@@ -120,6 +120,32 @@ void RunDocumentBranchIsolationTest() {
         "Material A redo branch was not isolated from Material B");
 }
 
+void RunTemporarySceneHistoryIsolationTest() {
+    EditorCommandStack stack;
+    EditorCommandStack document;
+    constexpr auto scene = EditorCommandHistoryKey::Scene();
+    constexpr auto material = EditorCommandHistoryKey::MaterialAsset(505U);
+    int authored = 0;
+    int runtime = 0;
+    int materialValue = 0;
+    Require(stack.Execute(std::make_unique<CountingCommand>(authored)) &&
+        stack.Execute(std::make_unique<CountingCommand>(authored)) && stack.Undo(scene),
+        "Could not prepare both scene history directions");
+    Require(stack.Execute(std::make_unique<CountingCommand>(materialValue, material)) && stack.Undo(material),
+        "Could not prepare material Redo");
+    stack.SwapHistory(scene, document);
+    Require(!stack.CanUndo(scene) && !stack.CanRedo(scene), "Authored commands remained reachable during Play");
+    Require(stack.Execute(std::make_unique<CountingCommand>(runtime)), "Could not record a runtime editor command");
+    Require(stack.Redo(material) && materialValue == 1, "Play removed the material Redo partition");
+    stack.Clear(scene);
+    stack.SwapHistory(scene, document);
+    Require(stack.Undo(scene) && authored == 0 && runtime == 1, "Stop restored runtime commands as document history");
+    Require(stack.Redo(scene) && stack.Redo(scene) && authored == 2, "Stop lost authored Redo commands");
+    Require(stack.Undo(material) && materialValue == 0, "Stop removed the material Undo partition");
+    stack.SwapHistory(scene, stack);
+    Require(stack.Undo(scene) && authored == 1, "Swapping history with itself changed its commands");
+}
+
 } // namespace
 
 void RunEditorCommandStackTests() {
@@ -127,6 +153,7 @@ void RunEditorCommandStackTests() {
     RunBranchClearsRedoTest();
     RunDocumentPartitionIsolationTest();
     RunDocumentBranchIsolationTest();
+    RunTemporarySceneHistoryIsolationTest();
 }
 
 } // namespace kb::editor::tests
