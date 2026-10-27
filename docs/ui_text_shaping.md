@@ -44,6 +44,17 @@ Clipboard and IME composition integration still depend on the input host. Font
 fallback and variable-font axis controls are separate capabilities; an imported
 font must cover the text.
 
+The CLI's `entity add --create` accepts the UI preset names listed by `schema`,
+including `Dropdown`, `Slider` and `Scroll View`. These call the same hierarchy
+builders as the editor and scripts, preserving template, fill and scrollbar
+references when saved and reloaded.
+
+The native development player accepts `--input-replay=<recording>` together with
+`--headless --frames=<count>`. It uses the existing input recording format and
+the recorded delta for each tick. The recording must contain every requested
+frame. Replay cannot be combined with fixed-step profiling or particle diagnostics;
+the shipped executable refuses this development override.
+
 Validation:
 
 - `kb_ui_text_shaping` checks Arabic contextual forms, Hebrew and mixed-direction
@@ -60,6 +71,11 @@ Validation:
   the hidden native host through portrait and landscape while rendering, then checks
   GPU pixels and recorded viewport dimensions. Native DPI transitions and hardware
   overdraw counters are not covered by this test.
+- `kb_game_ui_input_package` creates, reloads and removes all UI presets through
+  the CLI, then exercises cooked buttons, toggles, sliders, scrollbars, scroll
+  views, dropdowns and Unicode input. Recorded pointer, keyboard, controller and
+  touch snapshots include disabled and canceled actions. This tests normalized
+  input in the native runtime, not physical mobile or browser event delivery.
 - `kb_game_text_shaping_package` cooks a project, makes its source unavailable,
   and runs the shipped player. A separate instrumented pass reads the same
   immutable package and compares GPU pixels against explicit Unicode reference

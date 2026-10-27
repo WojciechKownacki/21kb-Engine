@@ -6,6 +6,7 @@
 #include "GameRuntimeDiagnostics.hpp"
 
 #include "engine/input/InputHaptics.hpp"
+#include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/platform/UserStorage.hpp"
@@ -74,6 +75,7 @@ struct GameOptions {
     bool particleRequireGpu = false;
     std::uint32_t particleSamples = 64U;
     std::filesystem::path profilePath;
+    std::filesystem::path inputReplayPath;
     std::optional<kb::render::SceneRenderLightingPath> profileLighting;
     // -1 lets the renderer choose; otherwise a bgfx::RendererType.
     std::int32_t rendererType = -1;
@@ -103,6 +105,7 @@ Usage: kb_game [options]
   --screenshot-file=<file.png>      write frame --screenshot-frame as PNG (the file must not exist)
   --screenshot-frame=<n>            which frame to capture (within --frames)
   --profile-file=<file>             per-frame timings (needs --frames=1..120000)
+  --input-replay=<file>             replay recorded input and time (needs --headless --frames)
   --profile-fixed-step              fixed time step while profiling (needs --headless)
   --profile-lighting=Forward|ForwardPlus|Deferred
   --renderer=d3d11|d3d12|vulkan|opengl  graphics backend (default: the platform's)
@@ -159,7 +162,7 @@ struct GameFrameProfile {
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 9U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
@@ -168,6 +171,7 @@ constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
     L"--screenshot-file=",
     L"--screenshot-frame=",
     L"--renderer=",
+    L"--input-replay=",
 };
 
 // Names the first development switch on the command line, or returns nothing.
@@ -299,6 +303,12 @@ constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
                 std::cerr << "kb_game: --profile-lighting expects Forward, ForwardPlus or Deferred\n";
                 return false;
             }
+        } else if (HasPrefix(argument, L"--input-replay=")) {
+            if (argument.size() == 15U) {
+                std::cerr << "kb_game: --input-replay requires a path\n";
+                return false;
+            }
+            options.inputReplayPath = std::filesystem::path{std::wstring{argument.substr(15U)}};
         } else if (HasPrefix(argument, L"--profile-file=")) {
             if (argument.size() == 15U) {
                 std::cerr << "kb_game: --profile-file requires a path\n";
@@ -322,6 +332,11 @@ constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
     }
     if (options.profileFixedStep && (!options.headless || options.profilePath.empty())) {
         std::cerr << "kb_game: --profile-fixed-step requires --headless and --profile-file\n";
+        return false;
+    }
+    if (!options.inputReplayPath.empty() && (!options.headless || options.frameLimit == 0U ||
+        options.profileFixedStep || options.particleDiagnostics)) {
+        std::cerr << "kb_game: input replay requires --headless --frames and uses recorded timing\n";
         return false;
     }
     if (options.fullscreen && (explicitWidth || explicitHeight)) {
@@ -383,6 +398,16 @@ constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
 }
 
 int RunGame(const GameOptions& options) {
+    kb::input::InputRecording inputReplay;
+    if (!options.inputReplayPath.empty()) {
+        auto loaded = kb::input::ReadInputRecording(options.inputReplayPath);
+        if (!loaded.succeeded || loaded.asset.empty() || options.frameLimit > loaded.asset.size()) {
+            std::cerr << "kb_game: input replay: " << (loaded.succeeded
+                ? "recording must contain every requested frame" : loaded.error) << '\n';
+            return EXIT_FAILURE;
+        }
+        inputReplay = std::move(loaded.asset);
+    }
     if (options.fullscreen &&
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 &&
         AreDpiAwarenessContextsEqual(
@@ -604,11 +629,13 @@ int RunGame(const GameOptions& options) {
         const auto profileBegin = !options.profilePath.empty()
             ? now : std::chrono::steady_clock::time_point{};
         const double wallFrameMilliseconds = std::chrono::duration<double, std::milli>(now - previousTick).count();
-        const float deltaSeconds = options.profileFixedStep || options.particleDiagnostics
-            ? 1.0F / 60.0F : kb::game::RuntimeDeltaSeconds(previousTick, now);
+        const float deltaSeconds = !inputReplay.empty() ? inputReplay[renderedFrames].deltaSeconds :
+            (options.profileFixedStep || options.particleDiagnostics
+                ? 1.0F / 60.0F : kb::game::RuntimeDeltaSeconds(previousTick, now));
         previousTick = now;
 
-        if (!options.headless) inputCollector.Collect(scene, window.Handle());
+        if (!inputReplay.empty()) kb::input::ApplyInputFrame(scene.Input().MutableDeviceState(), inputReplay[renderedFrames]);
+        else if (!options.headless) inputCollector.Collect(scene, window.Handle());
         static_cast<void>(scene.UI().SetViewport(
             static_cast<float>(window.Width()),
             static_cast<float>(window.Height())));
