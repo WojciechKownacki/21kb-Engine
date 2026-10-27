@@ -80,6 +80,8 @@ namespace {
 // (CapturePause, ChunkFromDebug) that can in principle throw (std::
 // bad_alloc). A pause suspends the coroutine with lua_yield, which from a
 // hook only marks the thread and returns here; Lua unwinds after the hook.
+void Hook(lua_State* state, lua_Debug* debug);
+
 void HookImpl(lua_State* state, lua_Debug* debug) {
     auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     if (runtime == nullptr || debug == nullptr) {
@@ -92,6 +94,10 @@ void HookImpl(lua_State* state, lua_Debug* debug) {
             static_cast<void>(lua_yieldk(state, 0, 0, nullptr));
             return;
         }
+        // A script can catch a hook error with pcall. Once exhausted, check every
+        // subsequent instruction so it cannot repeatedly catch the error inside
+        // another long-running protected call and keep the host occupied forever.
+        lua_sethook(state, &Hook, LUA_MASKCOUNT, 1);
         luaL_error(state, "lua execution budget exceeded");
     }
     // Breakpoints and steps act on line events only, and not while another script is suspended at a pause.

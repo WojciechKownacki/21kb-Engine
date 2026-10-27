@@ -1153,6 +1153,10 @@ void RunPucLuaHostileScriptsTest() {
     constexpr kb::assets::AssetId kForever{ 3602U };
     constexpr kb::assets::AssetId kHealthy{ 3603U };
     constexpr kb::assets::AssetId kCoroutine{ 3606U };
+    constexpr kb::assets::AssetId kCaught{ 3607U };
+    constexpr kb::assets::AssetId kImported{ 3610U };
+    kb::tests::Require(host.luaRuntime.RegisterModule("BudgetLoop", "while true do end", "BudgetLoop.lua").succeeded,
+        "The lazy module budget fixture must register");
     kb::tests::Require(host.luaRuntime.LoadScript(kProbe, R"(
 function Tick(self, dt)
     SetShared("sandbox.require", require == nil and 1 or 0)
@@ -1176,6 +1180,14 @@ function Tick(self, dt)
     coroutine.wrap(function() while true do end end)()
 end
 )", "CoroutineForever.lua").succeeded, "The coroutine loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kCaught, R"(
+function Tick(self, dt)
+    while true do pcall(function() while true do end end) end
+end
+)", "CaughtForever.lua").succeeded, "The protected loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kImported,
+        "function Tick(self, dt) while true do local value, diagnostic = Import('BudgetLoop') end end",
+        "ImportedForever.lua").succeeded, "The imported loop script did not load");
     kb::tests::Require(host.luaRuntime.LoadScript(kHealthy, R"(
 function Tick(self, dt)
     SetShared("healthy.ticks", (GetShared("healthy.ticks") or 0) + 1)
@@ -1184,6 +1196,8 @@ end
     host.Attach(kProbe);
     host.Attach(kForever);
     host.Attach(kCoroutine);
+    host.Attach(kCaught);
+    host.Attach(kImported);
     host.Attach(kHealthy);
     for (int tick = 0; tick < 3; ++tick) {
         const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
@@ -1191,8 +1205,8 @@ end
         for (const auto& diagnostic : result.diagnostics)
             if (diagnostic.message.find("execution budget exceeded") != std::string::npos) failed.push_back(diagnostic.assetId.value);
         std::ranges::sort(failed);
-        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value},
-            "Both direct and coroutine loops must fail with budget diagnostics on every tick");
+        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value, kCaught.value, kImported.value},
+            "Direct, coroutine, protected and imported loops must fail with budget diagnostics on every tick");
     }
     kb::tests::Require(host.Shared("healthy.ticks") == 3, "A script that loops forever must not stop the other scripts");
     for (const char* name : { "sandbox.require", "sandbox.package", "sandbox.load", "sandbox.dofile", "sandbox.loadfile", "sandbox.os",
@@ -1206,6 +1220,14 @@ end
     const kb::script::PucLuaLoadResult nested = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3605U },
         "local n = 0 for i = 1, 10000000 do n = n + i end", "LoadHeavy.lua");
     kb::tests::Require(!nested.succeeded, "Top-level work beyond the instruction budget must fail the load");
+    const auto caughtAtLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{3608U},
+        "while true do pcall(function() while true do end end) end", "CaughtLoadForever.lua");
+    kb::tests::Require(!caughtAtLoad.succeeded && caughtAtLoad.error.find("execution budget exceeded") != std::string::npos,
+        "Catching an exhausted instruction budget must not allow top-level code to loop forever");
+    const auto importedAtLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{3609U},
+        "while true do local value, diagnostic = Import('BudgetLoop') end", "ImportLoadForever.lua");
+    kb::tests::Require(!importedAtLoad.succeeded && importedAtLoad.error.find("execution budget exceeded") != std::string::npos,
+        "Ignoring a failed import must not relax an exhausted instruction hook");
 }
 
 // A script that fails reports where: the file, the line and the message, with the whole path; the rest of the scene

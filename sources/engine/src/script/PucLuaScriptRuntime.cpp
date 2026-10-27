@@ -604,7 +604,11 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
     }();
     // Import can run inside another module or a script's top-level code. Keep
     // that caller's execution budget and debugger hook active after returning.
-    lua_sethook(state_, previousHook, previousMask, previousCount);
+    // An exhausted budget switches to a one-instruction hook so protected calls
+    // cannot swallow the failure indefinitely. Do not relax that hook on import
+    // unwind: the importing script still owns the same exhausted budget.
+    if (!(HasActiveExecutionBudget() && (previousMask & LUA_MASKCOUNT) != 0 && lua_gethookcount(state_) == 1))
+        lua_sethook(state_, previousHook, previousMask, previousCount);
     if (status != LUA_OK) {
         error = PucLuaErrorReporter::ErrorFromTop(state_);
         module.loading = false;

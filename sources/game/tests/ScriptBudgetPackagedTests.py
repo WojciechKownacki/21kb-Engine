@@ -42,11 +42,15 @@ def main():
     load_loop.write_text("while true do end\n", encoding="utf-8")
     refused = run(args.cli, "validate", "--project", project, load_loop, expected=1)
     assert "execution budget exceeded" in refused
+    load_loop.write_text("while true do pcall(function() while true do end end) end\n", encoding="utf-8")
+    refused = run(args.cli, "validate", "--project", project, load_loop, expected=1)
+    assert "execution budget exceeded" in refused
     load_loop.write_text("function Tick(self, dt) end\n", encoding="utf-8")
     run(args.cli, "validate", "--project", project, load_loop)
     sources = {
         "DirectLoop": "function Tick(self, dt) while true do end end\n",
         "CoroutineLoop": "function Tick(self, dt) coroutine.wrap(function() while true do end end)() end\n",
+        "CaughtLoop": "function Tick(self, dt) while true do pcall(function() while true do end end) end end\n",
         "Healthy": "local ticks=0\nfunction Tick(self, dt) ticks=ticks+1 Log('healthy tick '..ticks) end\n",
     }
     for name, source in sources.items():
@@ -64,10 +68,11 @@ def main():
     project.rename(root / "SourceUnavailable")
     output = run(package / "Sample.exe", "--headless", "--frames=6", "--width=64", "--height=64",
         cwd=package, expected=1)
-    assert "execution budget exceeded" in output and "DirectLoop.lua" in output and "CoroutineLoop.lua" in output, output
+    assert "execution budget exceeded" in output and all(name + ".lua" in output
+        for name in ["DirectLoop", "CoroutineLoop", "CaughtLoop"]), output
     assert "healthy tick 6" in output and "rendered=6" in output and "shutdown=clean" in output, output
     report = dict(result="PASS", loadLoopRefused=True, correctedScriptAccepted=True,
-        directLoopRefused=True, coroutineLoopRefused=True, healthyTicks=6, renderedFrames=6,
+        directLoopRefused=True, coroutineLoopRefused=True, protectedLoopRefused=True, healthyTicks=6, renderedFrames=6,
         sourceUnavailable=True)
     (root / "result.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(dict(**report, artifacts=str(root))))
