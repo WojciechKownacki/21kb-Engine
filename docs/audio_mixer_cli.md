@@ -100,6 +100,16 @@ passed in MSVC Release and Debug ASan. It does not establish editor-output parit
 physical output, browser topology replacement or uninterrupted one-shot playback
 across structural graph edits.
 
+`kb_editor_audio_dsp_package` also compares the editor's actual preview PCM with
+the cooked native player's PCM. The headless Inspector runtime loads the real
+audio provider, authors an Output/Effects hierarchy, and exports the same mixer
+and imported tone used by the packaged scene. It measures the parent gain, a
+live child gain edit, and parent mute. The package must reproduce the editor's
+peak and RMS within 2%, with silence below 0.000001; the editor measurements must
+also match independently calculated sine-wave gain. Undo restores the original
+asset bytes and history after the live edit. This checks offline Windows output,
+not physical speakers or device interruption.
+
 Editor bus and snapshot edits also support Undo/Redo while the mixer is displayed
 in the Inspector. Each mixer has a separate history, apart from scene and material
 edits. Browsing folders keeps the displayed mixer's history; selecting a scene

@@ -165,6 +165,7 @@ void RunEditorAudioMixerRuntimeTests() {
         && row(Property::AudioMixerMeterPeak).meterLevel == runtime.meters.master.channel[0].peak,
         "Editor meters did not distinguish clipped child and attenuated master");
     paintMeter("Effects", 0x00C64040U); paintMeter({}, 0x00309866U);
+    const auto routingBasePcm = render(8192U);
     click(Property::AudioMixerEffectParameter, "Effects", "makeupDb"); inspector.ClearText(); inspector.InsertText("12");
     Require(InspectorAudioMixerAssetInteraction::CommitTextEdit(inspector, *mixer, authoring, id), "Live preview effect edit did not commit through its field"); ++actions;
     mixer = View::LoadCached(scene.Assets().Manager(), id);
@@ -192,7 +193,7 @@ void RunEditorAudioMixerRuntimeTests() {
     click(Property::AudioMixerResetMeters); Require(Runtime::Query(scene, id).meters.master.processedFrames == 0U && Runtime::Query(scene, id).previewPlaying,
         "Reset action did not clear capture or restarted transport");
     click(Property::AudioMixerBusMute, "Output"); mixer = View::LoadCached(scene.Assets().Manager(), id);
-    static_cast<void>(render(512U)); click(Property::AudioMixerResetMeters); static_cast<void>(render(2048U));
+    static_cast<void>(render(512U)); click(Property::AudioMixerResetMeters); const auto routingMutedPcm = render(8192U);
     runtime = Runtime::Query(scene, id);
     const auto mutedChild = std::find_if(runtime.meters.buses.begin(), runtime.meters.buses.end(), [](const auto& bus) { return bus.bus == "Effects"; });
     Require(row(Property::AudioMixerMeterPeak).meterLevel == 0.0F && mutedChild != runtime.meters.buses.end() && mutedChild->channel[0].heldPeak > 1.5F,
@@ -200,6 +201,35 @@ void RunEditorAudioMixerRuntimeTests() {
     Require(history.Undo(kb::editor::EditorCommandHistoryKey::AudioMixerAsset(id.value)), "Meter UI mute was not undoable");
     mixer = View::LoadCached(scene.Assets().Manager(), id); static_cast<void>(render(512U));
     Require(bytes() == original && history.UndoCount() == originalHistory, "Undo did not restore the exact authored mixer");
+    Require(authoring.SetBusVolume(id, "Effects", 0.5F), "Editor child routing gain did not author");
+    mixer = View::LoadCached(scene.Assets().Manager(), id);
+    static_cast<void>(render(512U)); const auto routingChildPcm = render(8192U);
+    Require(history.Undo(kb::editor::EditorCommandHistoryKey::AudioMixerAsset(id.value)), "Editor child routing gain was not undoable");
+    mixer = View::LoadCached(scene.Assets().Manager(), id); static_cast<void>(render(512U));
+    Require(bytes() == original && history.UndoCount() == originalHistory, "Routing parity capture changed the authored mixer");
+    {
+        std::ofstream asset{root / "Routing.kbmixer", std::ios::binary | std::ios::trunc};
+        asset.write(original.data(), static_cast<std::streamsize>(original.size()));
+        Require(asset.good(), "Editor routing parity asset did not export");
+        std::ofstream report{root / "routing-pcm.json", std::ios::trunc};
+        const auto measurement = [&](std::string_view name, const auto& block, bool last) {
+            double peak = 0.0, squareSum = 0.0;
+            Require(!block.samples.empty(), "Editor routing parity PCM is empty");
+            for (const float value : block.samples) {
+                Require(std::isfinite(value), "Editor routing parity PCM is non-finite");
+                peak = std::max(peak, static_cast<double>(std::abs(value)));
+                squareSum += static_cast<double>(value) * value;
+            }
+            report << '\"' << name << "\":{\"peak\":" << peak << ",\"rms\":"
+                << std::sqrt(squareSum / static_cast<double>(block.samples.size())) << '}' << (last ? "" : ",");
+        };
+        report << '{';
+        measurement("base", routingBasePcm, false);
+        measurement("child", routingChildPcm, false);
+        measurement("muted", routingMutedPcm, true);
+        report << '}';
+        Require(report.good(), "Editor routing parity measurements did not export");
+    }
     click(Property::AudioMixerCapture); const auto pcm = render(1024U);
     Require(!Runtime::Query(scene, id).meters.captureEnabled && std::any_of(pcm.samples.begin(), pcm.samples.end(), [](float value) { return std::abs(value) > 0.3F; }),
         "Disabling capture muted actual editor preview playback");
