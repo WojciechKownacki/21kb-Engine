@@ -19,6 +19,7 @@ public final class ControllerInstrumentation extends Instrumentation {
     private static native void consumeTouchFrame();
     private static native boolean touchMatches(int[] ids, int[] phases, float[] coordinates, int width, int height);
     private static native boolean surfaceState(int phase);
+    private static native boolean safeAreaMatches(int left, int top, int right, int bottom);
     private ControllerActivity activity;
     private boolean touchOnly;
 
@@ -124,8 +125,26 @@ public final class ControllerInstrumentation extends Instrumentation {
         return result;
     }
 
+    private void verifySafeArea() {
+        long until = SystemClock.uptimeMillis() + 10000;
+        do {
+            int[][] expected = new int[1][];
+            runOnMainSync(() -> expected[0] = activity.safeArea());
+            int[] edges = expected[0];
+            if (edges != null && safeAreaMatches(edges[0], edges[1], edges[2], edges[3])) {
+                Bundle phase = new Bundle();
+                phase.putString("safeArea", java.util.Arrays.toString(edges));
+                sendStatus(1, phase);
+                return;
+            }
+            SystemClock.sleep(20);
+        } while (SystemClock.uptimeMillis() < until);
+        throw new AssertionError("Edge-to-edge surface and native window insets must match: " + diagnostics());
+    }
+
     private void verifyTouches() {
         awaitSurface(0);
+        verifySafeArea();
         holdMotion(true);
         try {
             runOnMainSync(() -> {
@@ -168,6 +187,7 @@ public final class ControllerInstrumentation extends Instrumentation {
         while (SystemClock.uptimeMillis() < until);
         if (size[0] <= 0 || size[1] <= 0 || (size[0] > size[1]) != landscape)
             throw new AssertionError("Actual orientation and surface resize required");
+        verifySafeArea();
         awaitTouches(new int[]{7}, new int[]{3}, new float[]{30, 40}, size[0], size[1]);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
         float x = size[0] * 0.6f, y = size[1] * 0.4f;
@@ -177,6 +197,7 @@ public final class ControllerInstrumentation extends Instrumentation {
         awaitTouches(new int[]{7}, new int[]{3}, x, y);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
         runOnMainSync(() -> activity.attachTestSurface()); awaitSurface(3);
+        verifySafeArea();
         size = extent();
         final float restoredX = size[0] * 0.25f, restoredY = size[1] * 0.75f;
         runOnMainSync(() -> touch(MotionEvent.ACTION_DOWN, new int[]{23}, restoredX, restoredY));

@@ -47,6 +47,44 @@ extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_complete(void* host);
 extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_error(void* host, int status);
 
 // clang-format off
+EM_JS(void, ReadBrowserSafeArea, (float* output), {
+    let probe = Module['kbSafeAreaProbe'];
+    if (!probe) {
+        probe = document.createElement('div');
+        probe.setAttribute('aria-hidden', 'true');
+        probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;width:0;height:0;'
+            + 'padding-left:env(safe-area-inset-left,0px);padding-top:env(safe-area-inset-top,0px);'
+            + 'padding-right:env(safe-area-inset-right,0px);padding-bottom:env(safe-area-inset-bottom,0px)';
+        document.documentElement.append(probe);
+        Module['kbSafeAreaProbe'] = probe;
+    }
+    const style = getComputedStyle(probe);
+    const number = value => Math.max(0, parseFloat(value) || 0);
+    const canvas = Module['canvas'];
+    const rect = canvas.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const left = Math.max(number(style.paddingLeft), viewport ? viewport.offsetLeft : 0);
+    const top = Math.max(number(style.paddingTop), viewport ? viewport.offsetTop : 0);
+    const right = Math.min(innerWidth - number(style.paddingRight),
+        viewport ? viewport.offsetLeft + viewport.width : innerWidth);
+    let bottom = Math.min(innerHeight - number(style.paddingBottom),
+        viewport ? viewport.offsetTop + viewport.height : innerHeight);
+    const keyboard = navigator.virtualKeyboard?.boundingRect;
+    // A docked overlay keyboard occludes the bottom edge; a floating keyboard
+    // cannot be represented by rectangular canvas insets.
+    if (keyboard && keyboard.height > 0 && keyboard.bottom >= bottom
+        && keyboard.left < rect.right && keyboard.right > rect.left)
+        bottom = Math.min(bottom, keyboard.top);
+    const scaleX = rect.width > 0 ? canvas.width / rect.width : 0;
+    const scaleY = rect.height > 0 ? canvas.height / rect.height : 0;
+    const values = [Math.max(0, left - rect.left) * scaleX,
+        Math.max(0, top - rect.top) * scaleY,
+        Math.max(0, rect.right - right) * scaleX,
+        Math.max(0, rect.bottom - bottom) * scaleY];
+    for (let index = 0; index < 4; ++index)
+        HEAPF32[(output >> 2) + index] = values[index];
+});
+
 EM_JS(void, StartBrowserDownload, (void* host, const char* url), {
     const state = { controller: new AbortController(), cancelled: false };
     Module['kbPackDownload'] = state;
@@ -543,6 +581,9 @@ private:
         const float delta = kb::game::RuntimeDeltaSeconds(host->previousTick_, now);
         host->previousTick_ = now;
         if (kb::scene::Scene* scene = host->runtime_.Scene(); scene != nullptr) {
+            float insets[4]{};
+            ReadBrowserSafeArea(insets);
+            static_cast<void>(scene->UI().SetSafeAreaInsets({insets[0], insets[1], insets[2], insets[3]}));
             scene->Input().MutableDeviceState().SetPointerViewportExtent(
                 host->surface_.Width(), host->surface_.Height());
             kb::game::PollWebGamepads(scene->Input().MutableDeviceState());

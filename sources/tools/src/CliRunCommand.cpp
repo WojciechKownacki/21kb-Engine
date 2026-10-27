@@ -21,6 +21,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
@@ -272,6 +273,33 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         deltaSeconds = *parsed;
     }
 
+    std::optional<std::pair<int, int>> viewport;
+    if (const auto option = arguments.Option("--viewport")) {
+        const auto separator = option->find('x');
+        const auto width = ParseInt(option->substr(0, separator));
+        const auto height = separator == std::string::npos ? std::nullopt : ParseInt(option->substr(separator + 1));
+        if (!width || !height || *width <= 0 || *height <= 0) {
+            io.err << "error: --viewport expects positive integer WIDTHxHEIGHT\n";
+            return 1;
+        }
+        viewport = std::pair{*width, *height};
+    }
+    kb::scene::UIEdges safeArea{};
+    if (const auto option = arguments.Option("--safe-area")) {
+        float* edges[] = {&safeArea.left, &safeArea.top, &safeArea.right, &safeArea.bottom};
+        std::size_t start = 0;
+        for (std::size_t index = 0; index < 4; ++index) {
+            const auto end = option->find(',', start);
+            const auto value = ParseFloat(option->substr(start, end == std::string::npos ? end : end - start));
+            if (!value || !std::isfinite(*value) || *value < 0 || (index < 3) != (end != std::string::npos)) {
+                io.err << "error: --safe-area expects finite nonnegative LEFT,TOP,RIGHT,BOTTOM in viewport pixels\n";
+                return 1;
+            }
+            *edges[index] = *value;
+            if (end != std::string::npos) start = end + 1;
+        }
+    }
+
     const auto inputReplayPath = arguments.Option("--input-replay");
     const auto inputRecordPath = arguments.Option("--input-record");
     kb::input::InputRecording inputReplay;
@@ -458,6 +486,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         return 1;
     }
     kb::scene::SceneInputActivation::Apply(scene);
+    static_cast<void>(scene.UI().SetSafeAreaInsets(safeArea));
     if (inputEnabled && !inputMappingContext.empty()) {
         const auto* mapping = scene.Assets().Manager().Registry().FindByPath(inputMappingContext);
         if (mapping == nullptr || mapping->type != "InputMappingContext" ||
@@ -587,6 +616,10 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
         if (inputReplayPath)
             kb::input::ApplyInputFrame(scene.Input().MutableDeviceState(), inputReplay[static_cast<std::size_t>(frame - 1)]);
+        if (viewport) {
+            scene.Input().MutableDeviceState().SetPointerViewportExtent(
+                static_cast<std::uint32_t>(viewport->first), static_cast<std::uint32_t>(viewport->second));
+        }
         if (inputRecordPath)
             inputRecording.push_back(kb::input::CaptureInputFrame(scene.Input().DeviceState(), frameDeltaSeconds));
         const auto updateStarted = std::chrono::steady_clock::now();

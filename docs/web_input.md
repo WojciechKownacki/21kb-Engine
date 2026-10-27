@@ -1,5 +1,7 @@
 # Browser touch input
 
+See [UI safe areas](ui_safe_areas.md) for cutouts, viewport scaling and keyboard overlays.
+
 The browser player registers touch start, move, end and cancel callbacks on its
 canvas. Emscripten forwards each DOM event to the native collector, which publishes
 independent contact IDs, positions and phases in `InputDeviceState::TouchPoints()`.

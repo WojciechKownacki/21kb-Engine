@@ -1,5 +1,13 @@
 # Browser input tests
 
+`run_game_safe_area_tests.py` accepts the packaged touch runner's tool paths. It
+authors and cooks a native text field, drives real CSS cutout overrides and a
+docked virtual-keyboard geometry override, and verifies native rendering, focus,
+editing, embedded-canvas offsets and portrait DPI scaling. The result schema is
+`21kb.web-game-safe-area-tests/v1`. This scenario requires Chromium DevTools support
+for `Emulation.setSafeAreaInsetsOverride` and `setVirtualKeyboardGeometryOverride`;
+it does not replace actual mobile keyboard testing.
+
 The exported player exposes `Module.kbPresentation` to its embedding page.
 `state()` returns `pointerLock` and `fullscreen` records containing `supported`,
 `active`, `pending` and `error`. `request(mode, enabled)` returns a Promise with

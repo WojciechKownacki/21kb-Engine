@@ -1,5 +1,7 @@
 # Android input
 
+See [UI safe areas](ui_safe_areas.md) for the edge-to-edge window and native inset bridge.
+
 The Android player routes GameActivity key and motion events through Android Games
 Controller 2.0.2, linked statically from its AndroidX prefab. The host initializes
 the library on its native thread, reports activity start/stop, processes device

@@ -1,5 +1,6 @@
 #include "AndroidGamepadInput.hpp"
 #include "AndroidTouchInput.hpp"
+#include "AndroidWindowInsets.hpp"
 
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
@@ -18,6 +19,7 @@ namespace {
 using kb::input::InputDeviceState;
 using kb::input::InputKey;
 struct Observation {
+    kb::scene::UIEdges safeArea{};
     InputDeviceState state;
     std::array<int, InputDeviceState::kMaxGamepads> devices{-1, -1, -1, -1};
     std::string error;
@@ -211,6 +213,8 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_diagnostics(JNIEnv* 
          << " resized-surfaces=" << resizedSurfaces.load() << " viewport=" << observation.state.PointerViewportWidth()
          << 'x' << observation.state.PointerViewportHeight() << " touches=" << observation.state.TouchPoints().size()
          << " touch-events=" << touchEvents.load() << " touch-boundaries=" << touchBoundaries.load()
+         << " safe-area=" << observation.safeArea.left << ',' << observation.safeArea.top << ','
+         << observation.safeArea.right << ',' << observation.safeArea.bottom
          << " error=" << observation.error << " statuses=";
     for (const auto& point : observation.state.TouchPoints()) {
         text << " touch=" << point.id << ',' << static_cast<unsigned>(point.phase) << ',' << point.x << ',' << point.y;
@@ -223,6 +227,15 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_diagnostics(JNIEnv* 
                  InputKey::GamepadLeftTrigger, InputKey::GamepadRightTrigger}) text << ',' << observation.state.GetValue(key, slot);
     }
     return env->NewStringUTF(text.str().c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_safeAreaMatches(
+    JNIEnv*, jclass, jint left, jint top, jint right, jint bottom) {
+    const std::lock_guard lock{observationMutex};
+    const auto& insets = observation.safeArea;
+    return Near(insets.left, static_cast<float>(left)) && Near(insets.top, static_cast<float>(top)) &&
+        Near(insets.right, static_cast<float>(right)) && Near(insets.bottom, static_cast<float>(bottom));
 }
 
 extern "C" void android_main(android_app* app) {
@@ -276,6 +289,7 @@ extern "C" void android_main(android_app* app) {
                 android_app_clear_key_events(events);
             }
             const std::lock_guard lock{observationMutex};
+            observation.safeArea = kb::game::ReadAndroidWindowInsets(*app->activity);
             controllers.Publish(observation.state, focused.load());
             platform.touches.Publish(observation.state);
             for (int slot = 0; slot < PADDLEBOAT_MAX_CONTROLLERS; ++slot) {

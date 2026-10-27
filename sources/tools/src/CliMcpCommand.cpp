@@ -99,6 +99,8 @@ struct ToolProperty {
             ToolProperty{ "report", "string", "Use particles or input for a versioned execution report.", false },
             ToolProperty{ "inputReplay", "string", "Recording file to replay with its per-tick durations.", false },
             ToolProperty{ "inputRecord", "string", "Recording file to write with input consumed by completed ticks.", false },
+            ToolProperty{ "viewport", "string", "Viewport WIDTHxHEIGHT in pixels; overrides recorded viewport sizes.", false },
+            ToolProperty{ "safeArea", "string", "Nonnegative LEFT,TOP,RIGHT,BOTTOM safe-area insets in viewport pixels.", false },
         }));
     return tools;
 }
@@ -189,6 +191,8 @@ struct ToolCallOutcome {
     } else if (toolName == "run_scene") {
         pushOption("--input-replay", GetStringArgument(toolArguments, "inputReplay"));
         pushOption("--input-record", GetStringArgument(toolArguments, "inputRecord"));
+        pushOption("--viewport", GetStringArgument(toolArguments, "viewport"));
+        pushOption("--safe-area", GetStringArgument(toolArguments, "safeArea"));
         pushOption("--scene", GetStringArgument(toolArguments, "scene"));
         pushOption("--report", GetStringArgument(toolArguments, "report"));
         if (toolArguments != nullptr) {

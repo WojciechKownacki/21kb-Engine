@@ -5,6 +5,7 @@
 #include "GameRuntimeDiagnostics.hpp"
 #include "AndroidGamepadInput.hpp"
 #include "AndroidTouchInput.hpp"
+#include "AndroidWindowInsets.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -660,6 +661,7 @@ private:
             : 0.0F;
         previousTick_ = now;
         tickClockReady_ = true;
+        static_cast<void>(scene_->UI().SetSafeAreaInsets(kb::game::ReadAndroidWindowInsets(*app_.activity)));
         static_cast<void>(scene_->UI().SetViewport(
             static_cast<float>(surface_.Width()),
             static_cast<float>(surface_.Height())));

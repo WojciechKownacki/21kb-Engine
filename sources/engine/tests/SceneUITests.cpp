@@ -1187,6 +1187,13 @@ void TestFocusedTextAfterViewportResize() {
     requireVisible();
     resize(280.0F);
     requireVisible();
+    resize(600.0F);
+    kb::tests::Require(scene.UI().SetSafeAreaInsets({0.0F, 0.0F, 0.0F, 320.0F}), "Keyboard insets must apply");
+    resize(600.0F);
+    requireVisible();
+    kb::tests::Require(scene.UI().SetSafeAreaInsets({}), "Keyboard insets must clear");
+    resize(600.0F);
+    requireVisible();
 }
 
 // A pad player has no pointer: the left stick and the D-pad have to walk focus, a focused slider has

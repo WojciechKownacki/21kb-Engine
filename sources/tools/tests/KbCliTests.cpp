@@ -4224,6 +4224,58 @@ end
         !Contains(rejected.err + rejected.out, "replay tick"), "Unknown recording version must fail before executing scripts");
 }
 
+void RunSafeAreaCliTests() {
+    PrepareProject();
+    const auto root = TestRoot();
+    const auto project = root.string();
+    const auto run = [&](std::vector<std::string> arguments) {
+        arguments.insert(arguments.end(), {"--project", project});
+        std::istringstream in;
+        std::ostringstream out, err;
+        const int code = kb::cli::RunCli(arguments, in, {.out = out, .err = err});
+        Require(code == 0, "Safe-area authoring must succeed: " + out.str() + err.str());
+    };
+    run({"entity", "add", "--name", "CanvasRoot"});
+    run({"component", "add", "--entity", "CanvasRoot", "--type", "Rect Transform",
+        "--set", "anchorMax=1,1", "--set", "offsetMax=0,0"});
+    run({"component", "add", "--entity", "CanvasRoot", "--type", "Canvas"});
+    run({"component", "add", "--entity", "CanvasRoot", "--type", "Canvas Scaler", "--set", "scaleMode=0"});
+    for (const std::string name : {"Top", "Bottom"}) {
+        run({"entity", "add", "--name", name, "--parent", "CanvasRoot"});
+        const bool bottom = name == "Bottom";
+        run({"component", "add", "--entity", "CanvasRoot/" + name, "--type", "Rect Transform",
+            "--set", bottom ? "anchorMax=1,1" : "anchorMax=0,0",
+            "--set", bottom ? "anchorMin=1,1" : "anchorMin=0,0",
+            "--set", bottom ? "offsetMin=-80,-40" : "offsetMin=0,0",
+            "--set", bottom ? "offsetMax=0,0" : "offsetMax=80,40"});
+        run({"component", "add", "--entity", "CanvasRoot/" + name, "--type", "Selectable"});
+    }
+    WriteTextFile(root / "Assets/Logic/Player.lua", R"(
+local frames = 0
+function Tick(self, dt)
+    frames = frames + 1
+    if frames < 2 then return end
+    assert(UI.HitTest(110, 60) == World.FindByName('Top'), 'top safe-area hit test')
+    assert(UI.HitTest(700, 550) == World.FindByName('Bottom'), 'bottom safe-area hit test')
+    assert(UI.HitTest(10, 10) == 0, 'cutout must exclude controls')
+    Log('safe-area layout verified')
+end
+)");
+    run({"scene-attach", "--scene", "Assets/Scenes/Main.21kbscene", "--node", "Player", "--script", "/Game/Logic/Player.lua"});
+    const auto result = RunCliProgram({"run", "--project", project, "--frames", "3",
+        "--viewport", "800x600", "--safe-area", "100,50,30,20"});
+    Require(result.exitCode == 0 && Contains(result.out, "safe-area layout verified"),
+        "CLI must use native layout and hit testing: " + result.out + result.err);
+    for (const auto value : {"", "1,2,3", "1,2,3,4,5", "-1,0,0,0", "nan,0,0,0", "0,0,0,inf"}) {
+        const auto bad = RunCliProgram({"run", "--project", project, "--safe-area", value});
+        Require(bad.exitCode != 0 && Contains(bad.err, "--safe-area expects"), "Malformed safe area must fail before simulation");
+    }
+    for (const auto value : {"", "800", "0x600", "-1x600", "800x600x1", "800xnan", "2147483648x600"}) {
+        const auto bad = RunCliProgram({"run", "--project", project, "--viewport", value});
+        Require(bad.exitCode != 0 && Contains(bad.err, "--viewport expects"), "Malformed viewport must fail before simulation");
+    }
+}
+
 void RunPlaybackStopTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -4859,6 +4911,10 @@ int main(int argc, char** argv) {
         RunInputRecordingCliTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "safe-area") {
+        RunSafeAreaCliTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "sprite2d") {
 #if KB_CLI_RENDERER
         RunSprite2DCliTests();
@@ -4893,6 +4949,7 @@ int main(int argc, char** argv) {
     RunRunCommandTests();
     RunPlaybackStopTests();
     RunInputRecordingCliTests();
+    RunSafeAreaCliTests();
     RunParticleReportCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();

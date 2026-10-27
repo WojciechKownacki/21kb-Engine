@@ -41,6 +41,10 @@ SurfaceView exercises native window termination and initialization. Explicit fra
 consumption checks that terminal samples persist until consumed and then clear.
 Native boundary cases cover malformed counts, IDs, indices, nonfinite coordinates,
 unrelated sources, lifecycle commands, reused IDs and the contact capacity.
+The same scenario also verifies the production edge-to-edge window policy: the
+native surface must cover the decor window, and native safe-area insets must match
+actual system insets before and after orientation and surface recreation. The
+transparent, nonfocusable test window does not exercise a real software keyboard.
 The CLI requires a separate `touch=PASS` instrumentation result.
 
 An emulator run verifies the Android SDK/JNI/native event path with OS virtual
