@@ -31,8 +31,13 @@ struct FoundMessage {
 [[nodiscard]] FoundMessage FindWithFallback(const SceneState& state, std::string_view key) {
     if (!state.localizationCatalog.IsLoaded() || key.empty()) return {};
     const kb::localization::LocalizationCatalog& catalog = *state.localizationCatalog;
-    if (const auto* selected = FindMessage(catalog, state.localizationLanguage, key); selected != nullptr) {
-        return { selected, state.localizationLanguage };
+    std::string_view language = state.localizationLanguage;
+    while (!language.empty()) {
+        if (const auto* selected = FindMessage(catalog, language, key); selected != nullptr)
+            return {selected, language};
+        const auto separator = language.find_last_of("-_");
+        if (separator == std::string_view::npos) break;
+        language = language.substr(0U, separator);
     }
     return { FindMessage(catalog, catalog.fallbackLanguage, key), catalog.fallbackLanguage };
 }
@@ -80,9 +85,30 @@ std::uint64_t SceneLocalizationService::Catalog(const Scene& scene) noexcept {
 
 bool SceneLocalizationService::SetLanguage(Scene& scene, std::string_view language) {
     SceneState& state = SceneAccess::State(scene);
-    if (!state.localizationCatalog.IsLoaded() || !state.localizationCatalog->languages.contains(std::string{ language })) return false;
-    state.localizationLanguage = language;
-    return true;
+    if (!state.localizationCatalog.IsLoaded() || language.empty() || language.size() > 32U) return false;
+    bool separator = true;
+    for (const char character : language) {
+        if (character == '-' || character == '_') {
+            if (separator) return false;
+            separator = true;
+        } else {
+            if (!((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+                  (character >= '0' && character <= '9'))) return false;
+            separator = false;
+        }
+    }
+    if (separator) return false;
+    std::string_view candidate = language;
+    while (!candidate.empty()) {
+        if (state.localizationCatalog->languages.contains(std::string{candidate})) {
+            state.localizationLanguage = language;
+            return true;
+        }
+        const auto boundary = candidate.find_last_of("-_");
+        if (boundary == std::string_view::npos) break;
+        candidate = candidate.substr(0U, boundary);
+    }
+    return false;
 }
 
 std::string SceneLocalizationService::Language(const Scene& scene) {

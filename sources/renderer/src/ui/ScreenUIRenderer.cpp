@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/scene/Scene.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "renderer/RendererDebugLog.hpp"
@@ -82,6 +83,7 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
         return false;
     }
     if (desc.frame->elements.empty()) {
+        if (desc.scene != nullptr) desc.scene->UI().PublishTextLayouts({});
         return true;
     }
     resolvedTextures_.clear();
@@ -96,6 +98,21 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
     // still streaming in, or one bad markup string, used to erase every rectangle, image and
     // border in the scene's UI.
     ResolveFonts(desc, fonts.runs);
+    if (desc.scene != nullptr) {
+        std::vector<kb::scene::SceneUITextLayout> layouts;
+        for (const auto& run : drawableRuns_) {
+            const auto element = std::ranges::find_if(desc.frame->elements, [&](const auto& candidate) {
+                return candidate.entity.Id() == run.entity && candidate.inputField && candidate.text;
+            });
+            if (element == desc.frame->elements.end()) continue;
+            kb::scene::SceneUITextLayout layout{element->entity, std::string{kb::scene::UITextContent(*element->text)}, {}};
+            for (const auto& caret : run.carets) {
+                layout.carets.push_back({caret.sourceOffset, caret.x, caret.top, caret.bottom, caret.leading});
+            }
+            layouts.push_back(std::move(layout));
+        }
+        desc.scene->UI().PublishTextLayouts(std::move(layouts));
+    }
     if (lastTextFailure_.reason != nullptr) {
         WriteRendererDebugLog("screen_ui", "Submit dropped unpreparable text and kept the rest of the UI");
     }

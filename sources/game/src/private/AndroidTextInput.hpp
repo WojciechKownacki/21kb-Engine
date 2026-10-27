@@ -6,6 +6,7 @@
 #include <game-activity/GameActivity.h>
 #include <array>
 #include <algorithm>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -33,6 +34,7 @@ struct AndroidCommittedTextContext {
     std::array<char32_t, 1024U> text{};
     std::size_t count = 0U;
     std::size_t caret = 0U;
+    std::size_t selectionAnchor = 0U;
     bool valid = false;
 };
 
@@ -60,23 +62,30 @@ inline void ReadAndroidCommittedText(
     if (!result.wellFormed || result.truncated) return;
     context->count = result.codePointCount;
     // Android selection offsets count UTF-16 code units, not bytes or scalars.
-    std::size_t units = 0U;
-    context->caret = 0U;
-    while (context->caret < context->count && units < static_cast<std::size_t>(std::max(0, textState->selection.end))) {
-        units += context->text[context->caret] > 0xFFFFU ? 2U : 1U;
-        ++context->caret;
-    }
+    const auto scalarOffset = [&](int offset) {
+        std::size_t units = 0U;
+        std::size_t scalar = 0U;
+        while (scalar < context->count && units < static_cast<std::size_t>(std::max(0, offset))) {
+            units += context->text[scalar] > 0xFFFFU ? 2U : 1U;
+            ++scalar;
+        }
+        return scalar;
+    };
+    context->caret = scalarOffset(textState->selection.end);
+    context->selectionAnchor = scalarOffset(textState->selection.start);
     context->valid = true;
 }
 
 // Set only when opening a field. Resetting after each commit restarts the IME
 // asynchronously and can accidentally finish the next in-flight composition.
 inline void SetAndroidTextInputState(GameActivity* activity, std::span<const char32_t> text,
-    std::size_t caret) noexcept {
-    if (activity == nullptr || text.size() > 1024U || caret > text.size()) return;
+    std::size_t caret, std::optional<std::size_t> selectionAnchor = std::nullopt) noexcept {
+    const std::size_t anchor = selectionAnchor.value_or(caret);
+    if (activity == nullptr || text.size() > 1024U || caret > text.size() || anchor > text.size()) return;
     std::array<char, 6145U> encoded{};
     std::size_t length = 0U;
     int selection = 0;
+    int selectionStart = 0;
     const auto append = [&](char32_t unit) {
         if (unit > 0U && unit < 0x80U) encoded[length++] = static_cast<char>(unit);
         else if (unit < 0x800U) {
@@ -92,13 +101,14 @@ inline void SetAndroidTextInputState(GameActivity* activity, std::span<const cha
         const char32_t value = text[index];
         if (!input::IsUnicodeScalar(value)) return;
         if (index < caret) selection += value > 0xFFFFU ? 2 : 1;
+        if (index < anchor) selectionStart += value > 0xFFFFU ? 2 : 1;
         if (value <= 0xFFFFU) append(value);
         else { append(0xD800U + ((value - 0x10000U) >> 10U)); append(0xDC00U + ((value - 0x10000U) & 0x3FFU)); }
     }
     const GameTextInputState state{
         .text_UTF8 = encoded.data(),
         .text_length = static_cast<int>(length),
-        .selection = {.start = selection, .end = selection},
+        .selection = {.start = selectionStart, .end = selection},
         .composingRegion = {
             .start = SPAN_UNDEFINED,
             .end = SPAN_UNDEFINED,

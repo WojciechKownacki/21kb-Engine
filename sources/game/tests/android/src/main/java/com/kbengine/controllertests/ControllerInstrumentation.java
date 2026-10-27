@@ -22,6 +22,7 @@ public final class ControllerInstrumentation extends Instrumentation {
     private static native boolean safeAreaMatches(int left, int top, int right, int bottom);
     private static native void requestIme(boolean shown);
     private static native int[] imeState();
+    private static native int[] imeSelection();
     private static native int imeDismissalCount();
     private ControllerActivity activity;
     private boolean touchOnly;
@@ -247,6 +248,18 @@ public final class ControllerInstrumentation extends Instrumentation {
         runOnMainSync(() -> imeGeometry = activity.imeGeometry());
         verifySafeArea();
         awaitText("Start 😀 ", 0);
+        runOnMainSync(() -> activity.textConnection().setSelection(8, 6));
+        long selectionDeadline = SystemClock.uptimeMillis() + 10000;
+        boolean selectionMatched = false;
+        do {
+            int[] selection = imeSelection();
+            if (selection != null && selection.length == 2 && selection[0] == 7 && selection[1] == 6) {
+                selectionMatched = true;
+                break;
+            }
+            SystemClock.sleep(20);
+        } while (SystemClock.uptimeMillis() < selectionDeadline);
+        if (!selectionMatched) throw new AssertionError("Native selection must preserve reverse UTF-16 emoji endpoints");
         runOnMainSync(() -> {
             if (activity.textConnection() == null) throw new AssertionError("Active InputConnection missing");
             activity.textConnection().setSelection(0, "Start 😀 ".length());

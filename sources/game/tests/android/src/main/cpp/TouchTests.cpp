@@ -48,6 +48,12 @@ void VerifyAndroidTouchInput() {
             kb::game::ReadAndroidCommittedText(&context, &state);
             Require(context.valid && context.count == 1U && context.text[0] == 0x1F600U && context.caret == 1U,
                 "Both UTF-8 encodings must preserve supplementary characters and UTF-16 caret offsets");
+            Require(context.selectionAnchor == 0U, "Selection must preserve the anchor before a supplementary character");
+            state.selection = {.start = 2, .end = 0};
+            kb::game::ReadAndroidCommittedText(&context, &state);
+            Require(context.valid && context.caret == 0U && context.selectionAnchor == 1U,
+                "Reverse selections must preserve direction across UTF-16 surrogate pairs");
+            state.selection = {.start = 0, .end = 2};
         }
     }
     using kb::input::InputTouchPhase;

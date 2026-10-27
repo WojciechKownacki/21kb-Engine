@@ -163,6 +163,13 @@ void RunLocalizationTests() {
         "Polish plural selection must follow the CLDR rules for teens and decimals");
     Require(scene.Localization().FormatPluralNumber("hud.coins", "not-a-number") == "hud.coins",
         "A malformed plural number must leave the key visible");
+    for (const auto locale : {"pl-PL", "pl_PL", "pl-Latn-PL"}) {
+        Require(scene.Localization().SetLanguage(locale) && scene.Localization().Language() == locale &&
+                scene.Localization().Translate("menu.play") == "Graj" &&
+                scene.Localization().Translate("menu.quit") == "Quit" &&
+                scene.Localization().FormatPlural("hud.coins", 22) == "22 monety",
+            "Regional fallback must use the supplying language's text and plural rules");
+    }
     Require(scene.Localization().SetLanguage("en"), "Scene localization rejected the fallback language");
     Require(scene.Localization().FormatPluralNumber("hud.coins", "1") == "1 coin" &&
             scene.Localization().FormatPluralNumber("hud.coins", "1.0") == "1.0 coins",

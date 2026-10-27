@@ -361,6 +361,32 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         Require(narrow.failureReason == nullptr && narrow.runs.size() == 1U && narrow.runs[0].glyphs.size() == 1U &&
                 narrow.runs[0].carets.size() == 4U, "Wrapping must keep a ligature intact while retaining insertion points");
         latin.rect.width = 500.0F;
+        latin.inputField = kb::scene::UIInputField{};
+        latin.textSelectionBegin = 1U;
+        latin.textSelectionEnd = 2U;
+        frame.elements = {latin};
+        const auto selected = fonts.Prepare(1U, assets, resources, frame);
+        Require(selected.failureReason == nullptr && selected.runs.size() == 1U, "Selection layout failed");
+        ScreenUIDrawBatchBuilder builder;
+        const auto& selectedDraw = builder.Build(frame, {}, selected.runs);
+        const auto& selectedStops = selected.runs[0].carets;
+        const auto begin = std::ranges::find_if(selectedStops, [](const auto& stop) { return stop.sourceOffset == 1U; });
+        const auto finish = std::ranges::find_if(selectedStops, [](const auto& stop) { return stop.sourceOffset == 2U; });
+        Require(begin != selectedStops.end() && finish != selectedStops.end() && selectedDraw.vertices.size() >= 8U,
+                "A partially selected ligature must retain selection geometry and glyph geometry");
+        Require(NearlyEqual(selectedDraw.vertices[0].x, begin->x) &&
+                NearlyEqual(selectedDraw.vertices[1].x, finish->x),
+                "A selection inside a ligature must highlight only the selected grapheme interval");
+        latin.textSelectionBegin = latin.textSelectionEnd = 0U;
+        Require(kb::scene::SetUITextContent(*latin.text, ""), "Empty input fixture failed");
+        latin.textCaretVisible = true;
+        frame.elements = {latin};
+        const auto empty = fonts.Prepare(1U, assets, resources, frame);
+        Require(empty.failureReason == nullptr && empty.runs.size() == 1U && empty.runs[0].carets.size() == 1U,
+                "An empty input field must still provide a caret position");
+        Require(!builder.Build(frame, {}, empty.runs).vertices.empty(), "An empty focused input field must draw its caret");
+        latin.inputField.reset();
+        latin.textCaretVisible = false;
         latin.text->richText = true;
         Require(kb::scene::SetUITextContent(*latin.text, "f<color=#FF0000>fi</color>"), "Styled ligature fixture failed");
         frame.elements = {latin};

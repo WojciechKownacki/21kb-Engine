@@ -1989,6 +1989,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             const SceneDisplayOutputTransform uiOutputTransform = RendererFinalCompositeSubmitter::DisplayTransform(postProcessOutput);
             if (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
                     .sceneId = scene.Id(),
+                    .scene = &const_cast<kb::scene::Scene&>(scene),
                     .viewportIndex = desc.target.viewport.viewportIndex,
                     .frame = &screenUIFrame,
                     .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),
@@ -2032,6 +2033,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     if (!screenUIFrame.elements.empty() &&
         (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
              .sceneId = scene.Id(),
+             .scene = &const_cast<kb::scene::Scene&>(scene),
              .viewportIndex = desc.target.viewport.viewportIndex,
              .frame = &screenUIFrame,
              .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),

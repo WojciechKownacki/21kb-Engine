@@ -298,7 +298,7 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
         AppendShape(element, elementRect, borderStyle);
     }
 
-    if (element.text.has_value() && !kb::scene::UITextContent(*element.text).empty()) {
+    if (element.text.has_value() && (element.inputField || !kb::scene::UITextContent(*element.text).empty())) {
         if (const ScreenUITextRun* run = FindTextRun(textRuns, element); run != nullptr) {
             if (element.shadow.has_value() && element.shadow->color.a > 0.0F) {
                 const float scale = std::max(element.canvasScale, 0.0F);
@@ -529,6 +529,39 @@ void ScreenUIDrawBatchBuilder::AppendImage(const kb::scene::SceneUIFrameElement&
 }
 
 void ScreenUIDrawBatchBuilder::AppendText(const kb::scene::SceneUIFrameElement& element, const ScreenUITextRun& run) {
+    if (element.inputField && element.textSelectionBegin < element.textSelectionEnd) {
+        for (std::size_t index = 0U; index < run.glyphs.size();) {
+            const auto& glyph = run.glyphs[index];
+            auto next = index + 1U;
+            float left = glyph.advanceLeft;
+            float right = glyph.advanceRight;
+            while (next < run.glyphs.size() && run.glyphs[next].sourceOffset == glyph.sourceOffset &&
+                   run.glyphs[next].sourceEnd == glyph.sourceEnd && run.glyphs[next].lineTop == glyph.lineTop) {
+                left = std::min(left, run.glyphs[next].advanceLeft);
+                right = std::max(right, run.glyphs[next].advanceRight);
+                ++next;
+            }
+            const auto begin = std::max(element.textSelectionBegin, glyph.sourceOffset);
+            const auto end = std::min(element.textSelectionEnd, glyph.sourceEnd);
+            if (begin < end) {
+                float a = glyph.rightToLeft ? right : left;
+                float b = glyph.rightToLeft ? left : right;
+                for (const auto& stop : run.carets) {
+                    if (stop.top != glyph.lineTop || stop.x < left - 0.01F || stop.x > right + 0.01F) continue;
+                    if (stop.sourceOffset == begin) a = stop.x;
+                    if (stop.sourceOffset == end) b = stop.x;
+                }
+                const ScreenUIRect selection{std::min(a, b), glyph.lineTop, std::max(a, b), glyph.lineBottom};
+                if (selection.IsValid()) {
+                    ScreenUIDrawStyle style{};
+                    style.fillColor = {0.12F, 0.35F, 0.85F, 0.55F};
+                    style.opacity = std::clamp(element.effectiveOpacity, 0.0F, 1.0F);
+                    AppendShape(element, selection, style);
+                }
+            }
+            index = next;
+        }
+    }
     const float outlineWidth =
         element.outline.has_value() ? std::max(element.outline->width * element.canvasScale, 0.0F) : 0.0F;
     const kb::math::Color outlineColor = element.outline.has_value() ? element.outline->color : element.text->color;

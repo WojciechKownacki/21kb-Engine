@@ -33,6 +33,8 @@ struct Observation {
     bool ready = false;
     bool stopped = false;
     std::u32string text;
+    std::size_t caret = 0U;
+    std::size_t selectionAnchor = 0U;
     unsigned submits = 0U;
     std::string imeDiagnostic;
     std::array<unsigned, PADDLEBOAT_MAX_CONTROLLERS> statuses{};
@@ -138,6 +140,15 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_imeState(JNIEnv* env
 extern "C" JNIEXPORT jint JNICALL
 Java_com_kbengine_controllertests_ControllerInstrumentation_imeDismissalCount(JNIEnv*, jclass) {
     return static_cast<jint>(imeDismissals.load());
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_imeSelection(JNIEnv* env, jclass) {
+    const std::lock_guard lock{observationMutex};
+    const jint values[]{static_cast<jint>(observation.selectionAnchor), static_cast<jint>(observation.caret)};
+    auto result = env->NewIntArray(2);
+    if (result != nullptr) env->SetIntArrayRegion(result, 0, 2, values);
+    return result;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -338,6 +349,8 @@ extern "C" void android_main(android_app* app) {
                 if (context.valid) {
                     const std::lock_guard lock{observationMutex};
                     observation.text.assign(context.text.data(), context.count);
+                    observation.caret = context.caret;
+                    observation.selectionAnchor = context.selectionAnchor;
                 }
             }
             platform.digital.Publish(platform.textState);

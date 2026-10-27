@@ -24,6 +24,23 @@ struct SceneUITextInputState {
     SceneEntity entity;
     std::u32string text;
     std::size_t caret = 0U;
+    std::optional<std::size_t> selectionAnchor;
+};
+
+// Geometry from the last rendered text layout. Byte offsets remain logical even
+// when the visual order differs. Hosts may publish the same contract without a GPU.
+struct SceneUITextCaretStop {
+    std::uint32_t byteOffset = 0U;
+    float x = 0.0F;
+    float top = 0.0F;
+    float bottom = 0.0F;
+    bool leading = false;
+};
+
+struct SceneUITextLayout {
+    SceneEntity entity;
+    std::string source;
+    std::vector<SceneUITextCaretStop> carets;
 };
 
 enum class UIInteractionState : std::uint8_t {
@@ -59,6 +76,12 @@ struct SceneUIInput {
     bool cancelDown = false;
     bool backspaceDown = false;
     bool deleteDown = false;
+    bool extendTextSelection = false;
+    bool selectAllTextDown = false;
+    bool textUpDown = false;
+    bool textDownDown = false;
+    bool textHomeDown = false;
+    bool textEndDown = false;
     float scrollDelta = 0.0F;
     std::span<const char32_t> textInput;
     // Independent device contacts. A begin over UI owns its pointer until release;
@@ -166,6 +189,8 @@ struct SceneUIFrameElement {
     // shipped text field looked inert.
     std::uint32_t textCaretByteOffset = 0U;
     bool textCaretVisible = false;
+    std::uint32_t textSelectionBegin = 0U;
+    std::uint32_t textSelectionEnd = 0U;
 };
 
 // Why a frame build refused, and which entity caused it. The frame builder is fail-closed:
@@ -249,6 +274,8 @@ class SceneUIAccess {
     [[nodiscard]] std::optional<SceneUITextInputState> TextInputState() const;
     // Applied during the next UI update using the field's normal validation and events.
     [[nodiscard]] bool QueueTextInputState(SceneUITextInputState input);
+    // Replaces previous render feedback; stale source snapshots are ignored by editing.
+    void PublishTextLayouts(std::vector<SceneUITextLayout> layouts);
 
   private:
     Scene& scene_;

@@ -20,6 +20,7 @@ class AssetManager;
 }
 
 namespace kb::scene {
+class Scene;
 struct SceneUIFrame;
 }
 
@@ -31,6 +32,7 @@ class SceneRenderResourceMap;
 
 struct ScreenUISubmitDesc {
     std::uint64_t sceneId = 0U;
+    kb::scene::Scene* scene = nullptr;
     std::uint32_t viewportIndex = 0U;
     const kb::scene::SceneUIFrame* frame = nullptr;
     kb::assets::AssetManager* assets = nullptr;

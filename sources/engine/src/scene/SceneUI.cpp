@@ -596,11 +596,23 @@ class FrameBuilder {
             return;
         frame_.modalActive = true;
         frame_.modalSortingOrder = order;
+        bool blockedDropdown = false;
+        if (state_.uiDropdownList) {
+            for (const auto& element : frame_.elements) {
+                if (element.entity == state_.uiDropdownList->dropdown) {
+                    blockedDropdown = element.canvasSortingOrder < order;
+                    break;
+                }
+            }
+        }
         for (SceneUIFrameElement& element : frame_.elements) {
-            if (element.canvasSortingOrder < order) {
+            const bool blockedPopup = blockedDropdown &&
+                (element.canvas == state_.uiDropdownList->list || element.canvas == state_.uiDropdownList->blocker);
+            if (element.canvasSortingOrder < order || blockedPopup) {
                 element.interactionEnabled = false;
                 element.hitTestable = false;
             }
+            if (blockedPopup) element.effectiveOpacity = 0.0F;
         }
     }
 
@@ -820,6 +832,8 @@ class FrameBuilder {
             if (state_.uiFocused == entity) {
                 element.textCaretByteOffset = static_cast<std::uint32_t>(state_.uiTextCursorByteOffset);
                 element.textCaretVisible = IsUITextCaretVisible(state_.uiTextCaretPhase);
+                element.textSelectionBegin = static_cast<std::uint32_t>(std::min(state_.uiTextCursorByteOffset, state_.uiTextSelectionAnchor));
+                element.textSelectionEnd = static_cast<std::uint32_t>(std::max(state_.uiTextCursorByteOffset, state_.uiTextSelectionAnchor));
             }
             if (element.text.has_value()) {
                 const std::string content{UITextContent(*element.text)};
@@ -834,6 +848,12 @@ class FrameBuilder {
                     const std::size_t caret = SnapToUITextGraphemeBoundary(content, std::min<std::size_t>(element.textCaretByteOffset, content.size()));
                     element.textCaretByteOffset =
                         static_cast<std::uint32_t>(UITextGraphemeCount(std::string_view{content}.substr(0U, caret)));
+                    const auto visibleOffset = [&](std::uint32_t offset) {
+                        return static_cast<std::uint32_t>(UITextGraphemeCount(std::string_view{content}.substr(0U,
+                            SnapToUITextGraphemeBoundary(content, std::min<std::size_t>(offset, content.size())))));
+                    };
+                    element.textSelectionBegin = visibleOffset(element.textSelectionBegin);
+                    element.textSelectionEnd = visibleOffset(element.textSelectionEnd);
                     SetTextClipped(*element.text, std::string(UITextGraphemeCount(content), '*'));
                 }
             }
@@ -1581,109 +1601,214 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     return false;
 }
 
+[[nodiscard]] const SceneUITextLayout* TextLayout(const SceneState& state, SceneEntity entity,
+                                                   std::string_view content) {
+    const auto found = std::ranges::find_if(state.uiTextLayouts, [&](const auto& layout) {
+        return layout.entity == entity && layout.source == content && !layout.carets.empty();
+    });
+    return found == state.uiTextLayouts.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] const SceneUITextCaretStop* CaretStop(const SceneUITextLayout& layout, std::size_t offset) {
+    const SceneUITextCaretStop* found = nullptr;
+    for (const auto& stop : layout.carets) {
+        if (stop.byteOffset == offset && (found == nullptr || stop.leading)) found = &stop;
+    }
+    return found;
+}
+
+[[nodiscard]] std::size_t MoveVisualCaret(const SceneUITextLayout* layout, std::string_view content,
+                                         std::size_t offset, bool right) {
+    if (layout != nullptr) {
+        if (const auto* current = CaretStop(*layout, offset)) {
+            const SceneUITextCaretStop* best = nullptr;
+            for (const auto& stop : layout->carets) {
+                if (stop.byteOffset == offset) continue;
+                const bool after = stop.top > current->top + 0.5F ||
+                    (std::abs(stop.top - current->top) <= 0.5F && stop.x > current->x + 0.01F);
+                const bool before = stop.top < current->top - 0.5F ||
+                    (std::abs(stop.top - current->top) <= 0.5F && stop.x < current->x - 0.01F);
+                if (!(right ? after : before)) continue;
+                if (best == nullptr || (right ?
+                    (stop.top < best->top - 0.5F || (std::abs(stop.top - best->top) <= 0.5F && stop.x < best->x)) :
+                    (stop.top > best->top + 0.5F || (std::abs(stop.top - best->top) <= 0.5F && stop.x > best->x)))) best = &stop;
+            }
+            return best != nullptr ? best->byteOffset : offset;
+        }
+    }
+    return right ? NextUITextGraphemeBoundary(content, offset) : PreviousUITextGraphemeBoundary(content, offset);
+}
+
 [[nodiscard]] bool EditFocusedText(Scene& scene, SceneState& state, SceneUIInput input, bool backspaceStarted,
                                    bool deleteStarted, bool moveLeft, bool moveRight) {
     auto nativeEdit = std::move(state.uiPendingTextInput);
     state.uiPendingTextInput.reset();
-    if (!state.uiFocused.IsValid())
-        return false;
+    if (!state.uiFocused.IsValid()) return false;
     SceneUIComponents ui = scene.Components().UI();
     UIInputField* field = ui.TryGet<UIInputField>(state.uiFocused);
     UIText* text = ui.TryGet<UIText>(state.uiFocused);
-    if (field == nullptr || text == nullptr)
-        return false;
+    if (field == nullptr || text == nullptr) return false;
+    if (nativeEdit && nativeEdit->entity != state.uiFocused) nativeEdit.reset();
 
     std::string buffer{UITextContent(*text)};
-    // The caret stands between characters as the player sees them: never inside a letter with its accent, an emoji
-    // with its skin tone or a joined family, so an arrow key, Backspace or Delete moves over or removes the whole of it.
+    const std::string original = buffer;
+    const auto originalCaret = state.uiTextCursorByteOffset;
+    const auto originalAnchor = state.uiTextSelectionAnchor;
     state.uiTextCursorByteOffset = SnapToUITextGraphemeBoundary(buffer, std::min(state.uiTextCursorByteOffset, buffer.size()));
-    if (moveLeft)
-        state.uiTextCursorByteOffset = PreviousUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
-    if (moveRight)
-        state.uiTextCursorByteOffset = NextUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
-    if (field->readOnly)
-        return false;
-
-    const std::string original = nativeEdit ? buffer : std::string{};
-    const std::size_t originalCaret = state.uiTextCursorByteOffset;
-    if (nativeEdit && nativeEdit->entity != state.uiFocused) nativeEdit.reset();
+    state.uiTextSelectionAnchor = SnapToUITextGraphemeBoundary(buffer, std::min(state.uiTextSelectionAnchor, buffer.size()));
+    const auto* layout = TextLayout(state, state.uiFocused, buffer);
+    if (layout != nullptr && input.primaryDown && input.pointerAvailable && state.uiPressed == state.uiFocused &&
+        (!state.previousUIInput.primaryDown || input.pointerPosition.x != state.previousUIInput.pointerPosition.x ||
+         input.pointerPosition.y != state.previousUIInput.pointerPosition.y)) {
+        if (const auto* frame = Find(state.uiFrame, state.uiFocused)) {
+            const Vec2 horizontal{frame->corners[1].x - frame->corners[0].x, frame->corners[1].y - frame->corners[0].y};
+            const Vec2 vertical{frame->corners[3].x - frame->corners[0].x, frame->corners[3].y - frame->corners[0].y};
+            const Vec2 relative{input.pointerPosition.x - frame->corners[0].x, input.pointerPosition.y - frame->corners[0].y};
+            const float determinant = horizontal.x * vertical.y - horizontal.y * vertical.x;
+            if (std::abs(determinant) > 0.0001F) {
+                const float x = frame->rect.x + (relative.x * vertical.y - relative.y * vertical.x) / determinant * frame->rect.width;
+                const float y = frame->rect.y + (horizontal.x * relative.y - horizontal.y * relative.x) / determinant * frame->rect.height;
+                const SceneUITextCaretStop* closest = nullptr;
+                float distance = std::numeric_limits<float>::infinity();
+                float lineDistance = std::numeric_limits<float>::infinity();
+                for (const auto& stop : layout->carets) {
+                    const float dy = std::max({stop.top - y, y - stop.bottom, 0.0F});
+                    const float dx = stop.x - x;
+                    const float candidate = std::abs(dx);
+                    if (dy < lineDistance || (dy == lineDistance &&
+                        (candidate < distance || (candidate == distance && stop.leading)))) {
+                        lineDistance = dy; distance = candidate; closest = &stop;
+                    }
+                }
+                if (closest != nullptr) {
+                    state.uiTextCursorByteOffset = closest->byteOffset;
+                    if (!state.previousUIInput.primaryDown && !input.extendTextSelection)
+                        state.uiTextSelectionAnchor = state.uiTextCursorByteOffset;
+                }
+            }
+        }
+    }
+    const auto move = [&](bool right) {
+        if (!input.extendTextSelection && state.uiTextSelectionAnchor != state.uiTextCursorByteOffset) {
+            const auto* anchor = layout ? CaretStop(*layout, state.uiTextSelectionAnchor) : nullptr;
+            const auto* caret = layout ? CaretStop(*layout, state.uiTextCursorByteOffset) : nullptr;
+            if (anchor && caret && std::abs(anchor->top - caret->top) <= 0.5F) {
+                if (right ? anchor->x > caret->x : anchor->x < caret->x)
+                    state.uiTextCursorByteOffset = state.uiTextSelectionAnchor;
+            } else {
+                state.uiTextCursorByteOffset = right ? std::max(state.uiTextCursorByteOffset, state.uiTextSelectionAnchor) :
+                                                       std::min(state.uiTextCursorByteOffset, state.uiTextSelectionAnchor);
+            }
+        } else state.uiTextCursorByteOffset = MoveVisualCaret(layout, buffer, state.uiTextCursorByteOffset, right);
+        if (!input.extendTextSelection) state.uiTextSelectionAnchor = state.uiTextCursorByteOffset;
+    };
+    if (moveLeft) move(false);
+    if (moveRight) move(true);
+    const bool up = input.textUpDown && !state.previousUIInput.textUpDown;
+    const bool down = input.textDownDown && !state.previousUIInput.textDownDown;
+    const bool lineHome = input.textHomeDown && !state.previousUIInput.textHomeDown;
+    const bool lineEnd = input.textEndDown && !state.previousUIInput.textEndDown;
+    if (up || down || lineHome || lineEnd) {
+        const auto* current = layout ? CaretStop(*layout, state.uiTextCursorByteOffset) : nullptr;
+        if (current != nullptr) {
+            const SceneUITextCaretStop* best = nullptr;
+            float rowDistance = std::numeric_limits<float>::infinity();
+            float columnDistance = std::numeric_limits<float>::infinity();
+            for (const auto& stop : layout->carets) {
+                const float delta = stop.top - current->top;
+                if (lineHome || lineEnd) {
+                    if (std::abs(delta) <= 0.5F && (best == nullptr || (lineEnd ? stop.x > best->x : stop.x < best->x))) best = &stop;
+                } else if ((down && delta > 0.5F) || (up && delta < -0.5F)) {
+                    const float row = std::abs(delta);
+                    const float column = std::abs(stop.x - current->x);
+                    if (row < rowDistance || (row == rowDistance && column < columnDistance)) {
+                        rowDistance = row; columnDistance = column; best = &stop;
+                    }
+                }
+            }
+            if (best != nullptr) state.uiTextCursorByteOffset = best->byteOffset;
+        } else if (lineHome || lineEnd) {
+            const auto offset = state.uiTextCursorByteOffset;
+            const auto boundary = lineEnd ? buffer.find('\n', offset) :
+                (offset > 0U ? buffer.rfind('\n', offset - 1U) : std::string::npos);
+            state.uiTextCursorByteOffset = lineEnd ? (boundary == std::string::npos ? buffer.size() : boundary) :
+                (boundary == std::string::npos ? 0U : boundary + 1U);
+        }
+        if (!input.extendTextSelection) state.uiTextSelectionAnchor = state.uiTextCursorByteOffset;
+    }
+    if (input.selectAllTextDown && !state.previousUIInput.selectAllTextDown) {
+        state.uiTextSelectionAnchor = 0U;
+        state.uiTextCursorByteOffset = buffer.size();
+    }
+    const auto moved = [&] {
+        return originalCaret != state.uiTextCursorByteOffset || originalAnchor != state.uiTextSelectionAnchor;
+    };
+    if (field->readOnly) return moved();
     if (nativeEdit) {
         buffer.clear();
-        state.uiTextCursorByteOffset = 0U;
+        state.uiTextCursorByteOffset = state.uiTextSelectionAnchor = 0U;
         input.textInput = nativeEdit->text;
-        backspaceStarted = false;
-        deleteStarted = false;
+        backspaceStarted = deleteStarted = false;
     }
     std::size_t nativeCaret = 0U;
+    std::size_t nativeAnchor = 0U;
     std::size_t nativeIndex = 0U;
-    bool changed = false;
     bool sawBackspace = false;
     bool sawDelete = false;
+    const auto eraseSelection = [&] {
+        const auto begin = std::min(state.uiTextCursorByteOffset, state.uiTextSelectionAnchor);
+        const auto end = std::max(state.uiTextCursorByteOffset, state.uiTextSelectionAnchor);
+        if (begin == end) return false;
+        buffer.erase(begin, end - begin);
+        state.uiTextCursorByteOffset = state.uiTextSelectionAnchor = begin;
+        return true;
+    };
     const auto eraseBack = [&] {
-        if (state.uiTextCursorByteOffset == 0U)
-            return;
-        const std::size_t previous = PreviousUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
+        if (eraseSelection() || state.uiTextCursorByteOffset == 0U) return;
+        const auto previous = PreviousUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
         buffer.erase(previous, state.uiTextCursorByteOffset - previous);
-        state.uiTextCursorByteOffset = previous;
-        changed = true;
+        state.uiTextCursorByteOffset = state.uiTextSelectionAnchor = previous;
     };
     const auto eraseForward = [&] {
-        if (state.uiTextCursorByteOffset >= buffer.size())
-            return;
-        const std::size_t next = NextUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
+        if (eraseSelection() || state.uiTextCursorByteOffset >= buffer.size()) return;
+        const auto next = NextUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
         buffer.erase(state.uiTextCursorByteOffset, next - state.uiTextCursorByteOffset);
-        changed = true;
+        state.uiTextSelectionAnchor = state.uiTextCursorByteOffset;
     };
     for (const char32_t codePoint : input.textInput) {
-        if (nativeEdit && nativeIndex++ == nativeEdit->caret) nativeCaret = buffer.size();
-        if (codePoint == U'\b') {
-            sawBackspace = true;
-            eraseBack();
-            continue;
+        if (nativeEdit) {
+            if (nativeIndex == nativeEdit->caret) nativeCaret = buffer.size();
+            if (nativeIndex == nativeEdit->selectionAnchor.value_or(nativeEdit->caret)) nativeAnchor = buffer.size();
+            ++nativeIndex;
         }
-        if (codePoint == 0x7FU) {
-            sawDelete = true;
-            eraseForward();
-            continue;
-        }
+        if (codePoint == U'\b') { sawBackspace = true; eraseBack(); continue; }
+        if (codePoint == 0x7FU) { sawDelete = true; eraseForward(); continue; }
         if (codePoint == U'\n' && field->multiline && field->contentType == UIInputContentType::Standard) {
             // A line feed is the sole accepted control character for multiline fields.
-        } else if (codePoint < U' ' || codePoint == 0x7FU) {
-            continue;
-        }
-        if (codePoint != U'\n' && !AcceptsCharacter(field->contentType, buffer, state.uiTextCursorByteOffset, codePoint))
-            continue;
+        } else if (codePoint < U' ' || codePoint == 0x7FU) continue;
+        const auto begin = std::min(state.uiTextCursorByteOffset, state.uiTextSelectionAnchor);
+        const auto end = std::max(state.uiTextCursorByteOffset, state.uiTextSelectionAnchor);
+        std::string candidate = buffer;
+        candidate.erase(begin, end - begin);
+        if (codePoint != U'\n' && !AcceptsCharacter(field->contentType, candidate, begin, codePoint)) continue;
         std::array<char, 4U> encoded{};
-        const std::size_t encodedSize = EncodeUtf8(codePoint, encoded);
-        if (encodedSize == 0U || buffer.size() + encodedSize >= UIText::MaxUtf8Bytes)
-            continue;
-        if (field->characterLimit > 0U) {
-            // The limit counts characters as the player sees them: an accent or a skin tone typed after a letter or
-            // an emoji joins it and does not use up a place, while a new character at the limit is refused.
-            std::string candidate = buffer;
-            candidate.insert(state.uiTextCursorByteOffset, encoded.data(), encodedSize);
-            if (UITextGraphemeCount(candidate) > field->characterLimit)
-                continue;
-        }
-        buffer.insert(state.uiTextCursorByteOffset, encoded.data(), encodedSize);
-        state.uiTextCursorByteOffset += encodedSize;
-        changed = true;
+        const auto encodedSize = EncodeUtf8(codePoint, encoded);
+        if (encodedSize == 0U || candidate.size() + encodedSize >= UIText::MaxUtf8Bytes) continue;
+        candidate.insert(begin, encoded.data(), encodedSize);
+        if (field->characterLimit > 0U && UITextGraphemeCount(candidate) > field->characterLimit) continue;
+        buffer = std::move(candidate);
+        state.uiTextCursorByteOffset = state.uiTextSelectionAnchor = begin + encodedSize;
     }
-    if (backspaceStarted && !sawBackspace)
-        eraseBack();
-    if (deleteStarted && !sawDelete)
-        eraseForward();
+    if (backspaceStarted && !sawBackspace) eraseBack();
+    if (deleteStarted && !sawDelete) eraseForward();
     if (nativeEdit) {
         if (nativeEdit->caret == nativeEdit->text.size()) nativeCaret = buffer.size();
+        if (nativeEdit->selectionAnchor.value_or(nativeEdit->caret) == nativeEdit->text.size()) nativeAnchor = buffer.size();
         state.uiTextCursorByteOffset = SnapToUITextGraphemeBoundary(buffer, nativeCaret);
-        changed = buffer != original;
+        state.uiTextSelectionAnchor = SnapToUITextGraphemeBoundary(buffer, nativeAnchor);
     }
-    if (!changed && nativeEdit)
-        return originalCaret != state.uiTextCursorByteOffset;
-    if (!changed)
-        return false;
-    if (!SetUITextContent(*text, buffer))
-        return false;
+    if (buffer == original) return moved();
+    if (!SetUITextContent(*text, buffer)) return false;
     ui.MarkModified<UIText>(state.uiFocused);
     Queue(state, scene, SceneUIEventType::Changed, state.uiFocused, &input, 0.0F, 0.0F, buffer);
     return true;
@@ -1933,6 +2058,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     } else {
         state.uiTextCursorByteOffset = 0U;
     }
+    state.uiTextSelectionAnchor = state.uiTextCursorByteOffset;
     Queue(state, scene, SceneUIEventType::Focused, entity);
     return true;
 }
@@ -1943,6 +2069,7 @@ void ClearUIFocus(Scene& scene, SceneState& state) noexcept {
         Queue(state, scene, SceneUIEventType::Blurred, state.uiFocused);
     state.uiFocused = {};
     state.uiTextCursorByteOffset = 0U;
+    state.uiTextSelectionAnchor = 0U;
 }
 
 [[nodiscard]] std::vector<SceneEntity> PreorderSubtree(const Scene& scene, SceneEntity root) {
@@ -2044,7 +2171,9 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
         DestroyEntity(scene, state.uiDropdownList->blocker);
         state.uiDropdownList.reset();
     }
-    const std::int32_t sortingOrder = ui.TryGet<UICanvas>(rootCanvas)->sortingOrder + kUIDropdownListSortingOffset;
+    const auto baseOrder = static_cast<std::int64_t>(ui.TryGet<UICanvas>(rootCanvas)->sortingOrder);
+    const std::int32_t sortingOrder = static_cast<std::int32_t>(std::min(
+        baseOrder + kUIDropdownListSortingOffset, static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max())));
 
     std::unordered_map<std::uint64_t, SceneEntity> listCopy;
     const SceneEntity list = CloneSubtree(scene, templateEntity, dropdownEntity, listCopy);
@@ -2184,6 +2313,13 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
     if (!state.uiDropdownList.has_value())
         return false;
     SceneState::UIDropdownList& open = *state.uiDropdownList;
+    const auto* owner = Find(state.uiFrame, open.dropdown);
+    if (state.uiFrame.modalActive && (owner == nullptr || owner->canvasSortingOrder < state.uiFrame.modalSortingOrder)) {
+        DestroyEntity(scene, open.list);
+        DestroyEntity(scene, open.blocker);
+        state.uiDropdownList.reset();
+        return true;
+    }
     const UIDropdown* dropdown = scene.Entities().IsAlive(open.dropdown)
                                      ? scene.Components().UI().TryGet<UIDropdown>(open.dropdown)
                                      : nullptr;
@@ -2628,6 +2764,14 @@ bool SceneUIAccess::UpdateFromInput(float deltaSeconds) {
         device.IsKeyDown(kb::input::InputKey::Escape) || device.IsKeyDown(kb::input::InputKey::GamepadFaceRight);
     input.backspaceDown = device.IsKeyDown(kb::input::InputKey::Backspace);
     input.deleteDown = device.IsKeyDown(kb::input::InputKey::Delete);
+    input.extendTextSelection = device.IsKeyDown(kb::input::InputKey::LeftShift) ||
+                                device.IsKeyDown(kb::input::InputKey::RightShift);
+    input.selectAllTextDown = device.IsKeyDown(kb::input::InputKey::A) &&
+        (device.IsKeyDown(kb::input::InputKey::LeftControl) || device.IsKeyDown(kb::input::InputKey::RightControl));
+    input.textUpDown = device.IsKeyDown(kb::input::InputKey::ArrowUp);
+    input.textDownDown = device.IsKeyDown(kb::input::InputKey::ArrowDown);
+    input.textHomeDown = device.IsKeyDown(kb::input::InputKey::Home);
+    input.textEndDown = device.IsKeyDown(kb::input::InputKey::End);
     input.scrollDelta = device.GetValue(kb::input::InputKey::MouseWheel);
     input.textInput = device.TextInput();
     for (std::uint8_t pad = 1U; pad <= input.otherPlayers.size(); ++pad) {
@@ -2695,16 +2839,53 @@ std::optional<SceneUITextInputState> SceneUIAccess::TextInputState() const {
     SceneUITextInputState output{state.uiFocused, {decoded.data(), result.codePointCount}, 0U};
     const auto prefix = kb::input::DecodeUtf8(content.substr(0U, std::min(state.uiTextCursorByteOffset, content.size())), decoded);
     output.caret = prefix.codePointCount;
+    const auto anchor = kb::input::DecodeUtf8(content.substr(0U,
+        std::min(state.uiTextSelectionAnchor, content.size())), decoded);
+    output.selectionAnchor = anchor.codePointCount;
     return output;
 }
 
 bool SceneUIAccess::QueueTextInputState(SceneUITextInputState input) {
     if (!HasFocusedTextInput() || input.entity != Focused() || input.text.size() >= UIText::MaxUtf8Bytes ||
-        input.caret > input.text.size()) return false;
+        input.caret > input.text.size() || input.selectionAnchor.value_or(input.caret) > input.text.size()) return false;
     for (const char32_t value : input.text)
         if (!kb::input::IsUnicodeScalar(value) || value == U'\b' || value == 0x7FU) return false;
     SceneAccess::State(scene_).uiPendingTextInput = std::move(input);
     return true;
+}
+
+void SceneUIAccess::PublishTextLayouts(std::vector<SceneUITextLayout> layouts) {
+    SceneState& state = SceneAccess::State(scene_);
+    state.uiTextLayouts.clear();
+    if (layouts.size() > state.uiFrame.elements.size()) return;
+    for (auto& layout : layouts) {
+        const auto* frame = Find(state.uiFrame, layout.entity);
+        const auto* field = scene_.Components().UI().TryGet<UIInputField>(layout.entity);
+        const auto* text = scene_.Components().UI().TryGet<UIText>(layout.entity);
+        if (frame == nullptr || !frame->text || field == nullptr || text == nullptr ||
+            layout.source != UITextContent(*frame->text) || layout.carets.size() > UIText::MaxUtf8Bytes * 2U) continue;
+        const auto content = UITextContent(*text);
+        const bool masked = field->contentType == UIInputContentType::Password || field->contentType == UIInputContentType::Pin;
+        std::vector<std::size_t> boundaries{0U};
+        if (masked) {
+            while (boundaries.back() < content.size()) boundaries.push_back(NextUITextGraphemeBoundary(content, boundaries.back()));
+        } else if (layout.source != content) continue;
+        bool valid = true;
+        for (auto& stop : layout.carets) {
+            if (masked) {
+                if (stop.byteOffset >= boundaries.size()) { valid = false; break; }
+                stop.byteOffset = static_cast<std::uint32_t>(boundaries[stop.byteOffset]);
+            }
+            if (stop.byteOffset > content.size() || !std::isfinite(stop.x) || !std::isfinite(stop.top) ||
+                !std::isfinite(stop.bottom) || stop.bottom <= stop.top ||
+                SnapToUITextGraphemeBoundary(content, stop.byteOffset) != stop.byteOffset) { valid = false; break; }
+        }
+        if (!valid || std::ranges::any_of(state.uiTextLayouts, [&](const auto& previous) {
+                return previous.entity == layout.entity;
+            })) continue;
+        layout.source = content;
+        state.uiTextLayouts.push_back(std::move(layout));
+    }
 }
 
 bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& sourceInput, float deltaSeconds) {
@@ -2755,6 +2936,11 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     if (state.uiFrame.modalActive != state.uiModalActive) {
         if (state.uiFrame.modalActive) {
             state.uiModalRestoreFocus = focusBeforeModal;
+            if (state.uiDropdownList) {
+                const auto* owner = Find(state.uiFrame, state.uiDropdownList->dropdown);
+                if (owner != nullptr && owner->canvasSortingOrder < state.uiFrame.modalSortingOrder)
+                    state.uiModalRestoreFocus = state.uiDropdownList->dropdown;
+            }
             if (!state.uiFocused.IsValid()) {
                 const SceneUIFrameElement* first = nullptr;
                 for (const SceneUIFrameElement& element : state.uiFrame.elements)
@@ -2922,9 +3108,9 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     const auto navigate = [&](const SceneUIPlayerNavigation& now, const SceneUIPlayerNavigation& before, std::int32_t player,
                               bool editing) {
         Vec2 held{};
-        if (now.navigateUp)
+        if (now.navigateUp && !(editing && input.textUpDown))
             held = {0.0F, -1.0F};
-        else if (now.navigateDown)
+        else if (now.navigateDown && !(editing && input.textDownDown))
             held = {0.0F, 1.0F};
         else if (now.navigateLeft && !editing)
             held = {-1.0F, 0.0F};

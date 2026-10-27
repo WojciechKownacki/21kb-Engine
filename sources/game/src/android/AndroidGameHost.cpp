@@ -558,7 +558,7 @@ private:
             app_.textInputState = 0;
             if (context.valid && scene_ != nullptr && focused_ && imeVisibleRequested_) {
                 static_cast<void>(scene_->UI().QueueTextInputState({imeField_,
-                    {context.text.data(), context.count}, context.caret}));
+                    {context.text.data(), context.count}, context.caret, context.selectionAnchor}));
             }
         }
         android_input_buffer* const input = android_app_swap_input_buffers(&app_);
@@ -620,7 +620,7 @@ private:
         app_.textInputState = 0;
         if (visible) {
             imeField_ = field->entity;
-            kb::game::SetAndroidTextInputState(app_.activity, field->text, field->caret);
+            kb::game::SetAndroidTextInputState(app_.activity, field->text, field->caret, field->selectionAnchor);
             GameActivity_showSoftInput(
                 app_.activity, GAMEACTIVITY_SHOW_SOFT_INPUT_IMPLICIT);
         } else {

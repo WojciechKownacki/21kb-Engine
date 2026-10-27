@@ -181,7 +181,7 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
         }
     };
     for (const kb::scene::SceneUIFrameElement& element : frame.elements) {
-        if (!element.text.has_value() || kb::scene::UITextContent(*element.text).empty() ||
+        if (!element.text.has_value() || (!element.inputField && kb::scene::UITextContent(*element.text).empty()) ||
             element.text->fontAssetId == 0U || (element.mask.has_value() && !element.mask->showGraphic)) {
             continue;
         }
@@ -197,7 +197,7 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
             fail(element.entity.Id(), "Text markup is malformed");
             continue;
         }
-        if (parsed.glyphs.empty())
+        if (parsed.glyphs.empty() && !element.inputField)
             continue;
         std::vector<std::uint32_t> codepoints;
         codepoints.reserve(parsed.glyphs.size() + 1U);

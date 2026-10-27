@@ -840,6 +840,8 @@ public:
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
     std::size_t uiTextCursorByteOffset = 0U;
+    std::size_t uiTextSelectionAnchor = 0U;
+    std::vector<SceneUITextLayout> uiTextLayouts;
     std::optional<SceneUITextInputState> uiPendingTextInput;
     // The dropdown list that is open or fading out: the dropdown it belongs to, the cloned list, the
     // full-screen blocker under it, one cloned item per option in option order, and its fade.

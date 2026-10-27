@@ -643,6 +643,94 @@ void TestNativeTextSnapshots() {
         "Becoming read-only must discard a pending native edit and hide the editable snapshot");
 }
 
+void TestTextSelectionUsesVisualLayoutAndLogicalEdits() {
+    using namespace kb::scene;
+    Scene scene{SceneMode::PrefabPrivate};
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    auto components = BuildUIComponentPreset(UIComponentPreset::InputField);
+    components.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const auto field = AddUI(scene, canvas, components);
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && scene.UI().SetFocus(field.Entity()),
+        "Selection fixture must focus its field");
+    const auto update = [&](SceneUIInput input = {}) {
+        kb::tests::Require(scene.UI().Update(200.0F, 100.0F, input, 0.016F), "Selection input update failed");
+    };
+    const auto setText = [&](std::u32string text, std::size_t caret, std::optional<std::size_t> anchor = {}) {
+        kb::tests::Require(scene.UI().QueueTextInputState({field.Entity(), std::move(text), caret, anchor}),
+            "Selection snapshot must be accepted");
+        update();
+    };
+    const auto publishRtl = [&] {
+        scene.UI().PublishTextLayouts({{field.Entity(), "\xD7\x90\xD7\x91",
+            {{0U, 40.0F, 0.0F, 20.0F, true}, {2U, 20.0F, 0.0F, 20.0F, true}, {4U, 0.0F, 0.0F, 20.0F, false}}}});
+    };
+    setText(U"\u05D0\u05D1", 0U);
+    publishRtl();
+    update(SceneUIInput{.navigateLeft = true});
+    kb::tests::Require(scene.UI().TextInputState()->caret == 1U,
+        "Visual left in RTL text must advance the logical caret");
+    update();
+    update(SceneUIInput{.navigateLeft = true, .extendTextSelection = true});
+    auto snapshot = scene.UI().TextInputState();
+    const auto* rendered = FindElement(scene.UI().Frame(), field.Entity());
+    kb::tests::Require(snapshot && snapshot->caret == 2U && snapshot->selectionAnchor == 1U && rendered &&
+        rendered->textSelectionBegin == 2U && rendered->textSelectionEnd == 4U,
+        "Shift-left must preserve the anchor and publish logical UTF-8 selection bounds");
+    const std::array<char32_t, 1U> replacement{U'X'};
+    update(SceneUIInput{.textInput = replacement});
+    snapshot = scene.UI().TextInputState();
+    kb::tests::Require(snapshot && snapshot->text == U"\u05D0X" && snapshot->caret == 2U && snapshot->selectionAnchor == 2U,
+        "Typing must replace the selected logical text and collapse the selection");
+    // A layout for the previous contents cannot steer the newly edited text.
+    update(SceneUIInput{.navigateLeft = true});
+    kb::tests::Require(scene.UI().TextInputState()->caret == 1U, "Stale layout feedback must be ignored");
+    setText(U"\u05D0\u05D1", 2U);
+    publishRtl();
+    update(SceneUIInput{.pointerPosition = {39.0F, 10.0F}, .pointerAvailable = true, .primaryDown = true});
+    kb::tests::Require(scene.UI().TextInputState()->caret == 0U, "Pointer press must use visual RTL caret positions");
+    update(SceneUIInput{.pointerPosition = {1.0F, 10.0F}, .pointerAvailable = true, .primaryDown = true});
+    snapshot = scene.UI().TextInputState();
+    kb::tests::Require(snapshot && snapshot->caret == 2U && snapshot->selectionAnchor == 0U,
+        "Pointer drag must extend selection across visual RTL text");
+    update();
+    update(SceneUIInput{.backspaceDown = true});
+    kb::tests::Require(scene.UI().TextInputState()->text.empty(), "Backspace must erase the complete selected range");
+    setText(U"a\u0301b", 2U, 0U);
+    update(SceneUIInput{.textInput = replacement});
+    kb::tests::Require(scene.UI().TextInputState()->text == U"Xb", "Selection replacement must keep combining sequences intact");
+    setText(U"123", 3U);
+    auto* input = scene.Components().UI().TryGet<UIInputField>(field.Entity());
+    input->contentType = UIInputContentType::IntegerNumber;
+    input->characterLimit = 3U;
+    update(SceneUIInput{.selectAllTextDown = true});
+    update(SceneUIInput{.textInput = replacement});
+    snapshot = scene.UI().TextInputState();
+    kb::tests::Require(snapshot && snapshot->text == U"123" && snapshot->selectionAnchor == 0U,
+        "Rejected typing must preserve both selected text and its anchor");
+    const std::array<char32_t, 2U> digits{U'4', U'5'};
+    update(SceneUIInput{.textInput = digits});
+    kb::tests::Require(scene.UI().TextInputState()->text == U"45", "Selection replacement must apply limits to the resulting text");
+    kb::tests::Require(!scene.UI().QueueTextInputState({field.Entity(), U"45", 1U, 3U}),
+        "Native selection anchors outside the committed text must be rejected");
+    input->contentType = UIInputContentType::Standard;
+    input->characterLimit = 0U;
+    input->multiline = true;
+    setText(U"ab\ncd", 1U);
+    scene.UI().PublishTextLayouts({{field.Entity(), "ab\ncd",
+        {{0U, 0.0F, 0.0F, 10.0F, true}, {1U, 10.0F, 0.0F, 10.0F, true}, {2U, 20.0F, 0.0F, 10.0F, false},
+         {3U, 0.0F, 10.0F, 20.0F, true}, {4U, 10.0F, 10.0F, 20.0F, true}, {5U, 20.0F, 10.0F, 20.0F, false}}}});
+    update(SceneUIInput{.navigateDown = true, .extendTextSelection = true, .textDownDown = true});
+    snapshot = scene.UI().TextInputState();
+    kb::tests::Require(snapshot && snapshot->entity == field.Entity() && snapshot->caret == 4U && snapshot->selectionAnchor == 1U,
+        "Shift-down must select to the matching visual column without moving focus");
+    update(SceneUIInput{.textEndDown = true});
+    kb::tests::Require(scene.UI().TextInputState()->caret == 5U, "End must move to the visual line end");
+    update(SceneUIInput{.textHomeDown = true});
+    kb::tests::Require(scene.UI().TextInputState()->caret == 3U, "Home must move to the visual line start");
+    update(SceneUIInput{.navigateUp = true, .textUpDown = true});
+    kb::tests::Require(scene.UI().TextInputState()->caret == 0U, "Up must preserve the visual column");
+}
+
 // Editing text by the characters a player sees: an accent typed after a letter joins it, Backspace and Delete remove a
 // whole letter with its accents or a whole emoji with its skin tone or family, the arrow keys step over it, and the
 // character limit counts them, not code points or bytes.
@@ -1472,6 +1560,34 @@ struct DropdownFixture {
 // The dropdown opens a list cloned from its template: one item per option cloned from the template's
 // item, with the option's label, the chosen one switched on and focused; a blocker under the list closes
 // it. Choosing an item sets the value, reports it with the label, fades the list out and destroys it.
+void TestModalClosesDropdownFromLowerCanvas() {
+    constexpr std::array<std::string_view, 2U> labels{"First", "Second"};
+    DropdownFixture fixture{labels};
+    auto& scene = fixture.scene;
+    fixture.Click(Center(scene.UI().Frame(), fixture.dropdown));
+    fixture.FinishFade();
+    kb::tests::Require(fixture.List().IsValid(), "The lower canvas must have an open dropdown");
+    auto modalComponents = CanvasComponents();
+    modalComponents.canvas->modal = true;
+    modalComponents.canvas->sortingOrder = 10;
+    const auto modal = AddUI(scene, {}, modalComponents);
+    auto buttonComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    buttonComponents.rectTransform = Rect(200.0F, 0.0F, 100.0F, 30.0F);
+    const auto button = AddUI(scene, modal, buttonComponents);
+    fixture.Step();
+    kb::tests::Require(!fixture.List().IsValid() && scene.UI().Focused() == button.Entity(),
+        "A popup from a covered canvas must close and give focus to the modal");
+    kb::tests::Require(!FindNamed(scene, fixture.canvas.Entity(), "Blocker").IsValid() && fixture.Value() == 0U,
+        "Closing a covered dropdown must remove its blocker without choosing an option");
+    kb::scene::UICanvasGroup hidden;
+    hidden.visible = false;
+    hidden.transitionSeconds = 0.0F;
+    scene.Components().UI().Set(modal.Entity(), hidden);
+    fixture.Step();
+    kb::tests::Require(scene.UI().Focused() == fixture.dropdown,
+        "Closing the modal must restore the dropdown owner rather than a destroyed popup item");
+}
+
 void TestDropdownListFromTemplate() {
     constexpr std::array<std::string_view, 5U> kLabels{"Low", "Medium", "High", "Ultra", "Custom"};
     DropdownFixture fixture{kLabels};
@@ -2054,11 +2170,16 @@ void TestScrollMovementAndLocalizedText() {
     pointer.At(390.0F, 390.0F, false);
     kb::tests::Require(ShownText(scene.UI().Frame(), text.Entity()) == "Graj", "A localized text must follow a language change");
 
-    // Edges: a language that is not in the catalog (a regional variant too) is refused and changes nothing, a message
+    // Edges: a language with no supported parent is refused and changes nothing, a message
     // missing from the selected language falls back to the catalog language, a message missing everywhere shows its key,
     // and a translation longer than the text limit is cut on a character boundary instead of overflowing.
-    kb::tests::Require(!scene.Localization().SetLanguage("pl-PL") && !scene.Localization().SetLanguage("xx") && scene.Localization().Language() == "pl",
-        "A language the catalog does not have must be refused and leave the language alone");
+    kb::tests::Require(scene.Localization().SetLanguage("pl-PL") && scene.Localization().Language() == "pl-PL",
+        "A regional locale must retain its requested tag and resolve through a supported parent");
+    pointer.At(390.0F, 390.0F, false);
+    kb::tests::Require(ShownText(scene.UI().Frame(), text.Entity()) == "Graj", "Regional fallback must reach the live UI frame");
+    kb::tests::Require(!scene.Localization().SetLanguage("xx") && !scene.Localization().SetLanguage("pl--PL") &&
+        !scene.Localization().SetLanguage("pl-") && scene.Localization().Language() == "pl-PL",
+        "Unsupported or malformed locale tags must preserve the current language");
     const std::string accent = "\xE2\x82\xAC"; // the euro sign: three bytes, so a cut at 1022 would split it
     std::string tooLong;
     for (int index = 0; index < 600; ++index) tooLong += accent;
@@ -2450,6 +2571,7 @@ void RunSceneUITests() {
     TestClippingGroupsSortingAndScaling();
     TestInteractionAndEditing();
     TestDropdownListFromTemplate();
+    TestModalClosesDropdownFromLowerCanvas();
     TestDropdownScrollingAndPlacement();
     TestDropdownPersistenceAndOptionEdits();
     TestNavigationLinksSurviveHierarchyCopies();
@@ -2471,6 +2593,7 @@ void RunSceneUITests() {
     TestFrameNextToMillionRootsIsCheap();
     TestInputFieldEditsGraphemeClusters();
     TestNativeTextSnapshots();
+    TestTextSelectionUsesVisualLayoutAndLogicalEdits();
     TestResponsiveMenuKeepsEveryControlReachable();
     TestNestedMasksClipToTheirOverlap();
     TestSafeAreaMatrixKeepsCornerControlsReachable();
