@@ -576,6 +576,26 @@ void ScreenUIDrawBatchBuilder::AppendTextCaret(const kb::scene::SceneUIFrameElem
     if (!element.inputField.has_value() || !element.textCaretVisible) {
         return;
     }
+    if (!run.carets.empty()) {
+        const ScreenUITextCaret* selected = nullptr;
+        std::uint64_t distance = std::numeric_limits<std::uint64_t>::max();
+        for (const auto& stop : run.carets) {
+            const auto offset = static_cast<std::int64_t>(stop.sourceOffset) - element.textCaretByteOffset;
+            const auto candidate = static_cast<std::uint64_t>(offset < 0 ? -offset : offset);
+            if (candidate < distance || (candidate == distance && stop.leading)) {
+                selected = &stop;
+                distance = candidate;
+            }
+        }
+        const float width = std::max(1.0F, std::round(element.canvasScale));
+        const ScreenUIRect caret{selected->x, selected->top, selected->x + width, selected->bottom};
+        if (!caret.IsValid()) return;
+        ScreenUIDrawStyle style{};
+        style.fillColor = TintedColor(element, element.text.has_value() ? element.text->color : kb::math::Color{});
+        style.opacity = std::clamp(element.effectiveOpacity, 0.0F, 1.0F);
+        AppendShape(element, caret, style);
+        return;
+    }
     // Glyphs are laid out in source order, so the first one at or past the caret offset owns
     // the column the caret sits in front of. Past the last glyph the caret follows the pen.
     const ScreenUIGlyphQuad* atCaret = nullptr;

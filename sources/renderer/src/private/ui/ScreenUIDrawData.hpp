@@ -122,6 +122,18 @@ struct ScreenUIGlyphQuad {
     // Pen position after this glyph. A caret sitting past the last character belongs here, not
     // at the glyph's ink edge, which excludes the advance's right side bearing.
     float advanceRight = 0.0F;
+    std::uint32_t glyphId = 0U;
+    std::uint32_t sourceEnd = 0U;
+    float advanceLeft = 0.0F;
+    bool rightToLeft = false;
+};
+
+struct ScreenUITextCaret {
+    std::uint32_t sourceOffset = 0U;
+    float x = 0.0F;
+    float top = 0.0F;
+    float bottom = 0.0F;
+    bool leading = false;
 };
 
 struct ScreenUITextRun {
@@ -131,6 +143,7 @@ struct ScreenUITextRun {
     std::uint16_t atlasWidth = 0U;
     std::uint16_t atlasHeight = 0U;
     std::vector<ScreenUIGlyphQuad> glyphs;
+    std::vector<ScreenUITextCaret> carets;
 };
 
 } // namespace kb::render

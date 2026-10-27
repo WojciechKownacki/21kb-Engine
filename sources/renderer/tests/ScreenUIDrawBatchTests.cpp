@@ -10,6 +10,7 @@
 #include "engine/assets/AssetImportCatalog.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/ui/visual/UIText.hpp"
 
@@ -19,6 +20,8 @@
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <memory>
 #include <ranges>
 #include <span>
 #include <string>
@@ -298,6 +301,88 @@ void FontPreparationDropsOnlyTheTextItCannotPrepare() {
             "The panel behind an unpreparable label must still be drawn");
 }
 
+void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() {
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    init.swapChain.width = 640U;
+    init.swapChain.height = 360U;
+    Require(bgfx::init(init), "Text layout test could not initialize the headless renderer");
+    {
+        auto font = std::make_shared<kb::assets::ImportedAsset>();
+        font->category = kb::assets::AssetImportCategory::Font;
+        font->sourceExtension = ".ttf";
+        const auto path = std::filesystem::path{KB_RENDERER_TEST_SOURCE_ROOT} /
+            "sources/editor/content/EditorShell/Fonts/DejaVuSans.ttf";
+        std::ifstream stream(path, std::ios::binary | std::ios::ate);
+        Require(stream.good() && stream.tellg() > 0, "Text layout font fixture is unavailable");
+        font->payload.resize(static_cast<std::size_t>(stream.tellg()));
+        stream.seekg(0);
+        stream.read(reinterpret_cast<char*>(font->payload.data()), static_cast<std::streamsize>(font->payload.size()));
+        Require(stream.good(), "Text layout font fixture could not be read");
+        font->sourceSize = font->payload.size();
+        kb::assets::AssetManager assets;
+        Require(assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Font loader registration failed");
+        Require(assets.RegisterAsset({.id = kb::assets::AssetId{7U}, .type = "ImportedAsset", .name = "Text font",
+                                      .virtualPath = "/Text/Font.kbasset", .runtimeLoadable = true}) &&
+                assets.PublishRuntimeAsset(kb::assets::AssetId{7U}, font), "Font fixture publication failed");
+        RenderResourceRegistry resources;
+        ScreenUIFontAtlasCache fonts;
+        kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+        auto arabic = Element(70U, {10.0F, 10.0F, 500.0F, 50.0F});
+        arabic.text = kb::scene::UIText{.fontAssetId = 7U, .fontSize = 32.0F};
+        Require(kb::scene::SetUITextContent(*arabic.text, "\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85"), "Arabic fixture failed");
+        auto latin = Element(71U, {10.0F, 70.0F, 500.0F, 50.0F});
+        latin.text = kb::scene::UIText{.fontAssetId = 7U, .fontSize = 32.0F};
+        Require(kb::scene::SetUITextContent(*latin.text, "ABCDEFGHIJKLMNOPQRSTUVWXYZ ffi 0123456789"), "Latin fixture failed");
+        frame.elements = {arabic, latin};
+        const auto prepared = fonts.Prepare(1U, assets, resources, frame);
+        Require(prepared.failureReason == nullptr && prepared.runs.size() == 2U, "Shaped labels failed preparation");
+        const auto first = prepared.runs.front();
+        Require(first.glyphs.size() == 3U && first.glyphs.front().sourceOffset == 6U &&
+                first.glyphs.back().sourceOffset == 0U, "Arabic layout must use joined visual glyphs");
+        const auto start = std::ranges::find_if(first.carets, [](const auto& caret) { return caret.sourceOffset == 0U; });
+        const auto end = std::ranges::find_if(first.carets, [](const auto& caret) { return caret.sourceOffset == 8U; });
+        Require(start != first.carets.end() && end != first.carets.end() && start->x > end->x,
+                "Logical Arabic start must have its caret on the visual right");
+        frame.elements = {arabic};
+        const auto repeated = fonts.Prepare(1U, assets, resources, frame);
+        Require(repeated.runs.size() == 1U, "Repeated shaping lost its text run");
+        for (std::size_t i = 0; i < first.glyphs.size(); ++i) {
+            const auto& before = first.glyphs[i];
+            const auto& after = repeated.runs.front().glyphs[i];
+            Require(before.u0 == after.u0 && before.v0 == after.v0 && before.u1 == after.u1 && before.v1 == after.v1,
+                    "A later label growing the shared atlas must not invalidate earlier label UVs");
+        }
+        latin.rect.width = 1.0F;
+        latin.text->wrapMode = kb::scene::UITextWrapMode::Character;
+        Require(kb::scene::SetUITextContent(*latin.text, "ffi"), "Ligature fixture failed");
+        frame.elements = {latin};
+        const auto narrow = fonts.Prepare(1U, assets, resources, frame);
+        Require(narrow.failureReason == nullptr && narrow.runs.size() == 1U && narrow.runs[0].glyphs.size() == 1U &&
+                narrow.runs[0].carets.size() == 4U, "Wrapping must keep a ligature intact while retaining insertion points");
+        latin.rect.width = 500.0F;
+        latin.text->richText = true;
+        Require(kb::scene::SetUITextContent(*latin.text, "f<color=#FF0000>fi</color>"), "Styled ligature fixture failed");
+        frame.elements = {latin};
+        const auto styled = fonts.Prepare(1U, assets, resources, frame);
+        Require(styled.failureReason == nullptr && styled.runs.size() == 1U && styled.runs[0].glyphs.size() == 2U &&
+                styled.runs[0].glyphs[0].color[1] == 1.0F && styled.runs[0].glyphs[1].color[1] == 0.0F,
+                "A ligature must not erase the color boundary inside rich text");
+        latin.text->richText = false;
+        Require(kb::scene::SetUITextContent(*latin.text, "a\n"), "Empty final line fixture failed");
+        frame.elements = {latin};
+        const auto trailing = fonts.Prepare(1U, assets, resources, frame);
+        Require(trailing.failureReason == nullptr && trailing.runs.size() == 1U, "Trailing line break shaping failed");
+        const auto& stops = trailing.runs[0].carets;
+        const auto lastStop = std::ranges::find_if(stops, [](const auto& caret) { return caret.sourceOffset == 2U; });
+        Require(lastStop != stops.end() && lastStop->top > stops.front().top,
+                "A caret after a final newline must belong to the empty next line");
+        fonts.Shutdown(resources);
+        resources.Shutdown();
+    }
+    bgfx::shutdown();
+}
+
 void ImportCatalogOffersOnlyRasterizableFontFormats() {
     // Every font extension the editor offers to import must be one the UI can rasterize.
     // Without this, adding a format to the import catalog is a silent promise the renderer
@@ -437,6 +522,7 @@ void RunScreenUIDrawBatchTests() {
     BatchBuilderAppliesInteractionTintToEveryVisualLayer();
     FocusedInputFieldDrawsItsCaretAtTheEditedOffset();
     FontPreparationDropsOnlyTheTextItCannotPrepare();
+    FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates();
     ImportCatalogOffersOnlyRasterizableFontFormats();
     FontPayloadValidatorRejectsUnsupportedAndTruncatedData();
     RichTextParserAppliesColorAndLineBreakWithoutChangingLiteralText();

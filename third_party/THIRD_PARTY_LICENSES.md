@@ -254,3 +254,18 @@ Compiled only into the editor, the cooker and the shader compiler:
 
 The root `LICENSE` file applies to 21kb-Engine itself. Third-party dependencies
 remain under their own licenses.
+
+## HarfBuzz
+
+The portable text shaper is vendored from HarfBuzz 14.6.0, commit
+`c7a7457b7385f33178e8cf87615ca077a810bbe7`. The source subset in
+`third_party/harfbuzz` is unmodified and includes the upstream license
+`COPYING` (the upstream Old MIT wording). It is linked into the runtime;
+its complete notice is included in engine and game packages.
+
+## SheenBidi
+
+Unicode bidirectional and script analysis uses SheenBidi 3.0.0, commit
+`cfe430e7375a7845b679adae9d51dac6deaa8858`. The unmodified source and
+headers in `third_party/sheenbidi` retain their Apache-2.0 notices.
+`LICENSE` is included in engine and game packages.

@@ -5,6 +5,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/ui/visual/UITextLineBreaking.hpp"
+#include "engine/ui/visual/UITextShaping.hpp"
+#include "engine/ui/visual/UITextGraphemes.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 
@@ -37,74 +39,117 @@ constexpr std::uint16_t kMaximumAtlasExtent = 2048U;
 constexpr std::uint16_t kMinimumGlyphPadding = 2U;
 constexpr std::uint32_t kEllipsisCodepoint = 0x2026U;
 
-[[nodiscard]] const ScreenUIFontAtlasCache::Glyph* FindGlyph(const ScreenUIFontAtlasCache::FontEntry& entry,
-                                                             std::uint32_t codepoint) noexcept {
-    auto found = entry.glyphs.find(codepoint);
-    if (found == entry.glyphs.end()) {
-        found = entry.glyphs.find(kReplacementCodepoint);
-    }
-    return found == entry.glyphs.end() ? nullptr : &found->second;
-}
-
 struct TextLine {
     std::vector<ScreenUITextMarkupGlyph> glyphs;
+    std::vector<kb::scene::UITextShapedGlyph> shaped;
     float width = 0.0F;
+    std::uint32_t sourceOffset = 0U;
 };
 
-[[nodiscard]] float MeasureCodepoints(const ScreenUIFontAtlasCache::FontEntry& entry,
-                                      std::span<const ScreenUITextMarkupGlyph> glyphs, float spacing) noexcept {
+[[nodiscard]] std::uint32_t Utf8Width(std::uint32_t codepoint) noexcept {
+    return codepoint < 0x80U ? 1U : codepoint < 0x800U ? 2U : codepoint < 0x10000U ? 3U : 4U;
+}
+
+[[nodiscard]] std::vector<std::uint32_t> StyleBoundaries(std::span<const ScreenUITextMarkupGlyph> text) {
+    std::vector<std::uint32_t> boundaries;
+    for (std::size_t i = 1; i < text.size(); ++i) {
+        if (text[i].color != text[i - 1U].color) boundaries.push_back(static_cast<std::uint32_t>(i));
+    }
+    return boundaries;
+}
+
+[[nodiscard]] bool Shape(const ScreenUIFontAtlasCache::FontEntry& entry,
+                         std::span<const ScreenUITextMarkupGlyph> text,
+                         std::vector<kb::scene::UITextShapedGlyph>& result) {
+    std::vector<std::uint32_t> codepoints;
+    codepoints.reserve(text.size());
+    for (const auto& glyph : text) codepoints.push_back(glyph.codepoint);
+    return kb::scene::ShapeUIText(entry.asset->payload, codepoints, 0U, codepoints.size(), entry.scale, result,
+                                  StyleBoundaries(text));
+}
+
+[[nodiscard]] float ShapedWidth(std::span<const kb::scene::UITextShapedGlyph> glyphs, float spacing) {
     float width = 0.0F;
-    for (const ScreenUITextMarkupGlyph& styledGlyph : glyphs) {
-        if (const ScreenUIFontAtlasCache::Glyph* glyph = FindGlyph(entry, styledGlyph.codepoint); glyph != nullptr) {
-            width += glyph->advance + spacing;
-        }
+    for (std::size_t i = 0; i < glyphs.size(); ++i) {
+        width += glyphs[i].advance;
+        if (i + 1U == glyphs.size() || glyphs[i + 1U].clusterBegin != glyphs[i].clusterBegin) width += spacing;
     }
     return width;
 }
 
-// Breaks text into lines no wider than `availableWidth` with the shared UI line breaking rules: authored
-// line breaks always end a line, Word wraps after spaces and between ideographic characters, Character
-// wraps anywhere, and both keep the kinsoku rules. Glyphs the font cannot draw take no part in layout.
-// The lines of every text are broken into one list, whose lines keep their glyph capacity for the next text.
+[[nodiscard]] float MeasureCodepoints(const ScreenUIFontAtlasCache::FontEntry& entry,
+                                      std::span<const ScreenUITextMarkupGlyph> glyphs, float spacing) {
+    std::vector<kb::scene::UITextShapedGlyph> shaped;
+    return Shape(entry, glyphs, shaped) ? ShapedWidth(shaped, spacing) : std::numeric_limits<float>::infinity();
+}
+
+// Wrap logical shaping clusters, never individual combining characters or ligature components.
+// Each resulting line is reshaped with the original paragraph's direction and surrounding text.
 thread_local std::vector<TextLine> tTextLines;
-thread_local std::vector<ScreenUITextMarkupGlyph> tBreakGlyphs;
-thread_local std::vector<std::uint32_t> tBreakCodepoints;
-thread_local std::vector<float> tBreakAdvances;
-thread_local std::vector<kb::scene::UITextLineSpan> tLineSpans;
 
 [[nodiscard]] std::vector<TextLine>& BreakLines(const ScreenUIFontAtlasCache::FontEntry& entry,
                                                 std::span<const ScreenUITextMarkupGlyph> text,
                                                 kb::scene::UITextWrapMode wrapMode, float availableWidth, float spacing) {
-    tBreakGlyphs.clear();
-    tBreakCodepoints.clear();
-    tBreakAdvances.clear();
-    for (const ScreenUITextMarkupGlyph& styledGlyph : text) {
-        float advance = 0.0F;
-        if (styledGlyph.codepoint != static_cast<std::uint32_t>('\n')) {
-            const ScreenUIFontAtlasCache::Glyph* glyph = FindGlyph(entry, styledGlyph.codepoint);
-            if (glyph == nullptr) {
-                continue;
-            }
-            advance = glyph->advance;
+    tTextLines.clear();
+    std::vector<std::uint32_t> codepoints;
+    for (const auto& glyph : text) codepoints.push_back(glyph.codepoint);
+    std::vector<kb::scene::UITextShapedGlyph> shaped;
+    const auto styles = StyleBoundaries(text);
+    if (!kb::scene::ShapeUIText(entry.asset->payload, codepoints, 0U, codepoints.size(), entry.scale, shaped, styles))
+        return tTextLines;
+    std::vector<std::uint32_t> starts;
+    for (const auto& glyph : shaped) starts.push_back(glyph.clusterBegin);
+    // Paragraph separators are structural, even if the font shaper omits their glyphs.
+    for (std::size_t i = 0; i < codepoints.size(); ++i) {
+        if (codepoints[i] == '\n') {
+            starts.push_back(static_cast<std::uint32_t>(i));
+            if (i + 1U < codepoints.size()) starts.push_back(static_cast<std::uint32_t>(i + 1U));
         }
-        tBreakGlyphs.push_back(styledGlyph);
-        tBreakCodepoints.push_back(styledGlyph.codepoint);
-        tBreakAdvances.push_back(advance);
     }
-    kb::scene::BreakUITextLines(tBreakCodepoints, tBreakAdvances, wrapMode, availableWidth, spacing, tLineSpans);
-
-    std::vector<TextLine>& lines = tTextLines;
-    if (lines.size() < tLineSpans.size()) {
-        lines.resize(tLineSpans.size());
+    std::ranges::sort(starts);
+    starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
+    std::vector<std::uint32_t> clusterCodepoints;
+    std::vector<float> advances(starts.size(), 0.0F);
+    for (const auto start : starts) clusterCodepoints.push_back(codepoints[start]);
+    for (const auto& glyph : shaped) {
+        const auto index = static_cast<std::size_t>(std::lower_bound(starts.begin(), starts.end(), glyph.clusterBegin) - starts.begin());
+        if (codepoints[glyph.clusterBegin] != '\n') advances[index] += glyph.advance;
     }
-    for (std::size_t lineIndex = 0U; lineIndex < tLineSpans.size(); ++lineIndex) {
-        const kb::scene::UITextLineSpan& span = tLineSpans[lineIndex];
-        lines[lineIndex].glyphs.assign(tBreakGlyphs.begin() + static_cast<std::ptrdiff_t>(span.begin),
-                                       tBreakGlyphs.begin() + static_cast<std::ptrdiff_t>(span.end));
-        lines[lineIndex].width = span.width;
+    std::vector<kb::scene::UITextLineSpan> spans;
+    kb::scene::BreakUITextLines(clusterCodepoints, advances, wrapMode, availableWidth, spacing, spans);
+    starts.push_back(static_cast<std::uint32_t>(text.size()));
+    for (const auto& span : spans) {
+        std::uint32_t begin = starts[span.begin];
+        const std::uint32_t end = starts[span.end];
+        do {
+            TextLine line;
+            auto lineEnd = end;
+            for (;;) {
+                if (!kb::scene::ShapeUIText(entry.asset->payload, codepoints, begin, lineEnd, entry.scale, line.shaped, styles)) {
+                    tTextLines.clear();
+                    return tTextLines;
+                }
+                line.width = ShapedWidth(line.shaped, spacing);
+                if (wrapMode == kb::scene::UITextWrapMode::NoWrap || line.width <= availableWidth + 0.5F) break;
+                // Joining and kerning can change when the paragraph is split into lines.
+                // Recheck actual line metrics, allowing only an indivisible cluster to overflow.
+                auto lastCluster = begin;
+                for (const auto& glyph : line.shaped) lastCluster = std::max(lastCluster, glyph.clusterBegin);
+                if (lastCluster == begin) break;
+                lineEnd = lastCluster;
+            }
+            line.glyphs.assign(text.begin() + begin, text.begin() + lineEnd);
+            line.sourceOffset = begin < text.size() ? text[begin].sourceOffset :
+                text.empty() ? 0U : text.back().sourceOffset + Utf8Width(text.back().codepoint);
+            for (auto& glyph : line.shaped) {
+                glyph.clusterBegin -= begin;
+                glyph.clusterEnd -= begin;
+            }
+            tTextLines.push_back(std::move(line));
+            begin = lineEnd;
+        } while (begin < end);
     }
-    lines.resize(tLineSpans.size());
-    return lines;
+    return tTextLines;
 }
 
 [[nodiscard]] float LineHeight(const ScreenUIFontAtlasCache::FontEntry& entry, const kb::scene::UIText& text) noexcept {
@@ -203,8 +248,27 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
                             .pixelSize = key.pixelSize,
                             .atlasWidth = entry->atlasWidth,
                             .atlasHeight = entry->atlasHeight};
-        Layout(element, *entry, parsed.glyphs, run);
+        if (!Layout(element, key, *entry, parsed.glyphs, run, resources)) {
+            fail(element.entity.Id(), "Shaped text cannot be prepared");
+            continue;
+        }
         textRuns_.push_back(std::move(run));
+    }
+    // Later labels can grow a shared atlas. Refresh earlier UVs against its final packing.
+    for (auto& run : textRuns_) {
+        const auto found = fonts_.find(FontKey{sceneId, run.fontAssetId, run.pixelSize});
+        if (found == fonts_.end()) continue;
+        const auto& entry = found->second;
+        run.atlasWidth = entry.atlasWidth;
+        run.atlasHeight = entry.atlasHeight;
+        for (auto& quad : run.glyphs) {
+            const auto glyph = entry.glyphs.find(quad.glyphId);
+            if (glyph == entry.glyphs.end()) continue;
+            quad.u0 = glyph->second.u0;
+            quad.v0 = glyph->second.v0;
+            quad.u1 = glyph->second.u1;
+            quad.v1 = glyph->second.v1;
+        }
     }
     return ScreenUIFontPreparation{
         .runs = textRuns_, .failedEntity = failedEntity, .failureReason = failureReason};
@@ -260,6 +324,8 @@ ScreenUIFontAtlasCache::FontEntry* ScreenUIFontAtlasCache::Ensure(const FontKey&
             return nullptr;
         }
         entry.codepoints.clear();
+        entry.glyphIds.clear();
+        entry.nominalGlyphs.clear();
     }
 
     std::vector<std::uint32_t> merged = entry.codepoints;
@@ -297,6 +363,15 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
     entry.descent = static_cast<float>(descent) * entry.scale;
     entry.lineGap = static_cast<float>(lineGap) * entry.scale;
 
+    std::vector<std::uint32_t> glyphIds = entry.glyphIds;
+    std::unordered_map<std::uint32_t, std::uint32_t> nominalGlyphs;
+    for (const auto codepoint : codepoints) {
+        const auto id = static_cast<std::uint32_t>(stbtt_FindGlyphIndex(&font, static_cast<int>(codepoint)));
+        nominalGlyphs.emplace(codepoint, id);
+        glyphIds.push_back(id);
+    }
+    std::ranges::sort(glyphIds);
+    glyphIds.erase(std::unique(glyphIds.begin(), glyphIds.end()), glyphIds.end());
     std::uint32_t initialExtent = kInitialAtlasExtent;
     const std::uint64_t minimumExtent = static_cast<std::uint64_t>(glyphPadding) * 2U + key.pixelSize;
     while (initialExtent < minimumExtent && initialExtent < kMaximumAtlasExtent) {
@@ -317,12 +392,13 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
         int y = padding;
         int rowHeight = 0;
         packed = true;
-        for (const std::uint32_t codepoint : codepoints) {
+        for (const std::uint32_t codepoint : glyphIds) {
+            if (codepoint >= static_cast<std::uint32_t>(font.numGlyphs)) return false;
             int x0 = 0;
             int y0 = 0;
             int x1 = 0;
             int y1 = 0;
-            stbtt_GetCodepointBitmapBox(&font, static_cast<int>(codepoint), entry.scale, entry.scale, &x0, &y0, &x1,
+            stbtt_GetGlyphBitmapBox(&font, static_cast<int>(codepoint), entry.scale, entry.scale, &x0, &y0, &x1,
                                         &y1);
             const int width = std::max(x1 - x0, 0);
             const int height = std::max(y1 - y0, 0);
@@ -337,10 +413,10 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
             }
             int advance = 0;
             int leftBearing = 0;
-            stbtt_GetCodepointHMetrics(&font, static_cast<int>(codepoint), &advance, &leftBearing);
+            stbtt_GetGlyphHMetrics(&font, static_cast<int>(codepoint), &advance, &leftBearing);
             static_cast<void>(leftBearing);
             if (width > 0 && height > 0) {
-                stbtt_MakeCodepointBitmap(&font, alpha.data() + static_cast<std::size_t>(y) * extent + x, width, height,
+                stbtt_MakeGlyphBitmap(&font, alpha.data() + static_cast<std::size_t>(y) * extent + x, width, height,
                                           extent, entry.scale, entry.scale, static_cast<int>(codepoint));
             }
             glyphs.emplace(codepoint, Glyph{.codepoint = codepoint,
@@ -391,6 +467,8 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
     entry.glyphPadding = glyphPadding;
     entry.codepoints.assign(codepoints.begin(), codepoints.end());
     entry.glyphs = std::move(glyphs);
+    entry.glyphIds = std::move(glyphIds);
+    entry.nominalGlyphs = std::move(nominalGlyphs);
     return true;
 }
 
@@ -399,6 +477,7 @@ bool ScreenUIFontAtlasCache::Fits(const kb::scene::SceneUIFrameElement& element,
     const float spacing = element.text->characterSpacing * element.canvasScale / factor;
     const float width = element.rect.width / factor;
     const std::vector<TextLine>& lines = BreakLines(entry, text, element.text->wrapMode, width, spacing);
+    if (lines.empty()) return false;
     if (element.text->maxLines != 0U && lines.size() > element.text->maxLines)
         return false;
     if (LineHeight(entry, *element.text) * static_cast<float>(lines.size()) > element.rect.height / factor)
@@ -406,12 +485,14 @@ bool ScreenUIFontAtlasCache::Fits(const kb::scene::SceneUIFrameElement& element,
     return std::ranges::all_of(lines, [width](const TextLine& line) { return line.width <= width + 0.5F; });
 }
 
-void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& element, const FontEntry& entry,
-                                    std::span<const ScreenUITextMarkupGlyph> text, ScreenUITextRun& run) {
+bool ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& element, const FontKey& key, FontEntry& entry,
+                                    std::span<const ScreenUITextMarkupGlyph> text, ScreenUITextRun& run,
+                                    RenderResourceRegistry& resources) {
     const float availableWidth = element.rect.width;
     const float spacing = element.text->characterSpacing * element.canvasScale;
     std::vector<TextLine>& lines = BreakLines(entry, text, element.text->wrapMode, availableWidth, spacing);
 
+    if (lines.empty()) return false;
     const float lineHeight = LineHeight(entry, *element.text);
     // Lines past the limit, and with Truncate or Ellipsis the lines past the bottom of the box, are left
     // out; with Ellipsis the last line shown, and any line wider than the box, ends in an ellipsis.
@@ -423,7 +504,7 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
     const bool cut = shown < lines.size();
     lines.resize(shown);
     if (element.text->overflow == kb::scene::UITextOverflow::Ellipsis) {
-        const bool hasEllipsis = entry.glyphs.contains(kEllipsisCodepoint);
+        const bool hasEllipsis = entry.nominalGlyphs.contains(kEllipsisCodepoint) && entry.nominalGlyphs.at(kEllipsisCodepoint) != 0U;
         for (std::size_t lineIndex = 0U; lineIndex < lines.size(); ++lineIndex) {
             TextLine& line = lines[lineIndex];
             const bool last = lineIndex + 1U == lines.size();
@@ -437,7 +518,11 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
             while (!line.glyphs.empty() &&
                    (MeasureCodepoints(entry, line.glyphs, spacing) + suffixWidth > availableWidth ||
                     line.glyphs.back().codepoint == static_cast<std::uint32_t>(' '))) {
-                line.glyphs.pop_back();
+                std::vector<kb::scene::UITextShapedGlyph> tail;
+                if (!Shape(entry, line.glyphs, tail) || tail.empty()) return false;
+                std::uint32_t lastCluster = 0U;
+                for (const auto& glyph : tail) lastCluster = std::max(lastCluster, glyph.clusterBegin);
+                line.glyphs.resize(lastCluster);
             }
             if (!line.glyphs.empty()) {
                 for (ScreenUITextMarkupGlyph& glyph : suffix) {
@@ -446,7 +531,21 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
                 }
             }
             line.glyphs.insert(line.glyphs.end(), suffix.begin(), suffix.end());
-            line.width = MeasureCodepoints(entry, line.glyphs, spacing);
+            if (!Shape(entry, line.glyphs, line.shaped)) return false;
+            line.width = ShapedWidth(line.shaped, spacing);
+        }
+    }
+    std::vector<std::uint32_t> needed = entry.glyphIds;
+    for (const auto& line : lines) for (const auto& glyph : line.shaped) needed.push_back(glyph.glyphId);
+    std::ranges::sort(needed);
+    needed.erase(std::unique(needed.begin(), needed.end()), needed.end());
+    if (needed != entry.glyphIds) {
+        const auto previous = entry.glyphIds;
+        entry.glyphIds = std::move(needed);
+        const auto codepoints = entry.codepoints;
+        if (!Rebuild(key, entry, codepoints, entry.glyphPadding, resources)) {
+            entry.glyphIds = previous;
+            return false;
         }
     }
     const float textHeight = lineHeight * static_cast<float>(lines.size());
@@ -458,6 +557,7 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
     }
 
     run.glyphs.clear();
+    run.carets.clear();
     run.glyphs.reserve(text.size());
     for (std::size_t lineIndex = 0U; lineIndex < lines.size(); ++lineIndex) {
         const TextLine& line = lines[lineIndex];
@@ -468,15 +568,39 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
             x += element.rect.width - line.width;
         }
         const float baseline = top + static_cast<float>(lineIndex) * lineHeight + entry.ascent;
-        for (const ScreenUITextMarkupGlyph& styledGlyph : line.glyphs) {
-            const Glyph* glyph = FindGlyph(entry, styledGlyph.codepoint);
-            if (glyph == nullptr) {
-                continue;
+        if (line.shaped.empty()) {
+            run.carets.push_back({line.sourceOffset, x, baseline - entry.ascent, baseline - entry.descent, true});
+        }
+        for (std::size_t index = 0; index < line.shaped.size(); ++index) {
+            const auto& shaped = line.shaped[index];
+            const auto& styledGlyph = line.glyphs[shaped.clusterBegin];
+            const auto found = entry.glyphs.find(shaped.glyphId);
+            if (found == entry.glyphs.end()) return false;
+            const Glyph* glyph = &found->second;
+            const auto& finalSource = line.glyphs[shaped.clusterEnd - 1U];
+            const std::uint32_t byteCount = Utf8Width(finalSource.codepoint);
+            if (index == 0U || line.shaped[index - 1U].clusterBegin != shaped.clusterBegin) {
+                float clusterWidth = 0.0F;
+                for (std::size_t next = index; next < line.shaped.size() &&
+                     line.shaped[next].clusterBegin == shaped.clusterBegin; ++next)
+                    clusterWidth += line.shaped[next].advance;
+                std::vector<std::uint32_t> stops;
+                const auto content = kb::scene::UITextContent(*element.text);
+                for (auto source = shaped.clusterBegin; source < shaped.clusterEnd; ++source) {
+                    const auto offset = line.glyphs[source].sourceOffset;
+                    if (kb::scene::SnapToUITextGraphemeBoundary(content, offset) == offset) stops.push_back(offset);
+                }
+                stops.push_back(finalSource.sourceOffset + byteCount);
+                for (std::size_t stop = 0; stop < stops.size(); ++stop) {
+                    const float fraction = stops.size() > 1U ? static_cast<float>(stop) / static_cast<float>(stops.size() - 1U) : 0.0F;
+                    run.carets.push_back({stops[stop], x + clusterWidth * (shaped.rightToLeft ? 1.0F - fraction : fraction),
+                                          baseline - entry.ascent, baseline - entry.descent, stop + 1U < stops.size()});
+                }
             }
-            run.glyphs.push_back(ScreenUIGlyphQuad{.left = x + glyph->x0,
-                                                   .top = baseline + glyph->y0,
-                                                   .right = x + glyph->x1,
-                                                   .bottom = baseline + glyph->y1,
+            run.glyphs.push_back(ScreenUIGlyphQuad{.left = x + shaped.offsetX + glyph->x0,
+                                                   .top = baseline - shaped.offsetY + glyph->y0,
+                                                   .right = x + shaped.offsetX + glyph->x1,
+                                                   .bottom = baseline - shaped.offsetY + glyph->y1,
                                                    .u0 = glyph->u0,
                                                    .v0 = glyph->v0,
                                                    .u1 = glyph->u1,
@@ -485,10 +609,16 @@ void ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
                                                    .sourceOffset = styledGlyph.sourceOffset,
                                                    .lineTop = baseline - entry.ascent,
                                                    .lineBottom = baseline - entry.descent,
-                                                   .advanceRight = x + glyph->advance});
-            x += glyph->advance + spacing;
+                                                   .advanceRight = x + shaped.advance,
+                                                   .glyphId = shaped.glyphId,
+                                                   .sourceEnd = finalSource.sourceOffset + byteCount,
+                                                   .advanceLeft = x,
+                                                   .rightToLeft = shaped.rightToLeft});
+            x += shaped.advance;
+            if (index + 1U == line.shaped.size() || line.shaped[index + 1U].clusterBegin != shaped.clusterBegin) x += spacing;
         }
     }
+    return true;
 }
 
 } // namespace kb::render

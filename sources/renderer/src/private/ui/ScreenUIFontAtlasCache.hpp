@@ -91,6 +91,8 @@ class ScreenUIFontAtlasCache {
         float lineGap = 0.0F;
         float scale = 0.0F;
         std::vector<std::uint32_t> codepoints;
+        std::vector<std::uint32_t> glyphIds;
+        std::unordered_map<std::uint32_t, std::uint32_t> nominalGlyphs;
         std::unordered_map<std::uint32_t, Glyph> glyphs;
     };
 
@@ -100,8 +102,9 @@ class ScreenUIFontAtlasCache {
                                     RenderResourceRegistry& resources);
     [[nodiscard]] bool Rebuild(const FontKey& key, FontEntry& entry, std::span<const std::uint32_t> codepoints,
                                std::uint16_t glyphPadding, RenderResourceRegistry& resources);
-    static void Layout(const kb::scene::SceneUIFrameElement& element, const FontEntry& entry,
-                       std::span<const ScreenUITextMarkupGlyph> text, ScreenUITextRun& run);
+    [[nodiscard]] bool Layout(const kb::scene::SceneUIFrameElement& element, const FontKey& key, FontEntry& entry,
+                              std::span<const ScreenUITextMarkupGlyph> text, ScreenUITextRun& run,
+                              RenderResourceRegistry& resources);
     // Whether the text, laid out with `entry`'s metrics scaled by `factor`, fits the element's box and line
     // limit - the test auto size shrinks the font against.
     [[nodiscard]] static bool Fits(const kb::scene::SceneUIFrameElement& element, const FontEntry& entry,

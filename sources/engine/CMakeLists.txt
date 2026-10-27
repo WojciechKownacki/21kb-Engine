@@ -338,6 +338,7 @@ add_library(kb_engine STATIC
     include/engine/ui/visual/UISprite.hpp
     include/engine/ui/visual/UIText.hpp
     include/engine/ui/visual/UITextLineBreaking.hpp
+    include/engine/ui/visual/UITextShaping.hpp
     include/engine/scene/SceneLocalization.hpp
     include/engine/scene/SceneNavigation.hpp
     include/engine/scene/ScenePortalVisibility.hpp
@@ -1778,6 +1779,7 @@ target_link_libraries(kb_engine
         kb_recast
         kb_ufbx
         kb_zstd
+        kb_ui_text_shaping
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

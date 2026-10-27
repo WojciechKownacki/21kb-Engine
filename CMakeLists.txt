@@ -607,6 +607,7 @@ if(NOT TARGET kb_recast)
     kb_apply_fuzz_instrumentation(kb_recast)
 endif()
 
+include(CMake/TextShaping.cmake)
 add_subdirectory(sources/engine engine)
 add_subdirectory(sources/tools tools)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)

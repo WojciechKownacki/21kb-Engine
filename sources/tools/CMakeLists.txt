@@ -201,6 +201,9 @@ if(BUILD_TESTING)
             "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
             "-Dzstd_LIBRARY=$<TARGET_FILE:kb_zstd>"
             "-Drecast_LIBRARY=$<TARGET_FILE:kb_recast>"
+            "-Dui_text_shaping_LIBRARY=$<TARGET_FILE:kb_ui_text_shaping>"
+            "-Dharfbuzz_LIBRARY=$<TARGET_FILE:kb_harfbuzz>"
+            "-Dsheenbidi_LIBRARY=$<TARGET_FILE:kb_sheenbidi>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkLayout.cmake")
         set_tests_properties(kb_native_sdk_layout PROPERTIES
             CONFIGURATIONS "Release;RelWithDebInfo" LABELS "tools;native-sdk" TIMEOUT 240)
