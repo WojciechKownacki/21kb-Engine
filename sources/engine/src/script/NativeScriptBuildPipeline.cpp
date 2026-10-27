@@ -67,7 +67,9 @@ NativeScriptBuildResult NativeScriptBuildPipeline::Build(const NativeScriptBuild
     }
     result.exitCode = std::system(desc.command.c_str());
     if (result.exitCode != 0) {
-        result.errors.push_back("native script build command failed with exit code " + std::to_string(result.exitCode));
+        result.errors.push_back("native script build command failed with exit code " + std::to_string(result.exitCode) +
+            "; read the compiler output above. If a tool is missing, install the C++ compiler, CMake and the "
+            "configured build tool, then regenerate the build command in the .native descriptor and retry script-build.");
     }
     return result;
 }

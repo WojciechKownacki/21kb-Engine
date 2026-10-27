@@ -745,7 +745,9 @@ void RunNativeScriptBuildPipelineTest() {
     kb::tests::Require(!missingTool.Succeeded() && missingTool.exitCode != 0,
         "Native script build pipeline reported success for a build tool that does not exist");
     kb::tests::Require(std::ranges::any_of(missingTool.errors, [](const std::string& message) {
-        return message.find("native script build command failed with exit code") != std::string::npos;
+        return message.find("native script build command failed with exit code") != std::string::npos &&
+            message.find("install the C++ compiler, CMake") != std::string::npos &&
+            message.find(".native descriptor and retry script-build") != std::string::npos;
     }), "Native script build pipeline did not report the failing exit code");
     const kb::script::NativeScriptBuildResult emptyCommand = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
         .enabled = true,

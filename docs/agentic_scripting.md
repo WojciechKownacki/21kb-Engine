@@ -54,6 +54,13 @@ saves the observed position, and a fresh browser process must read the same valu
 The template starts at its authored position; restoring gameplay transforms from saved values
 remains an explicit script decision.
 
+The Windows `kb_game_native_sdk_package` test generates and builds an external C++ module,
+attaches it, cooks its DLL into `RuntimeModules`, and runs the package after moving the source
+project away. It also verifies an unavailable compiler and a compiled DLL accepting an older
+registration API version. Failed builds retain the compiler output and suggest installing the
+required toolchain, correcting the `.native` build command and retrying `script-build`;
+incompatible modules instruct the author to rebuild against the current SDK.
+
 ## Hot reload
 
 Reloading a Lua script runs the new code in a fresh environment and swaps it in only if that works: a
