@@ -234,9 +234,17 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
   on stdout still come as the object above.
 - The whole output is collected first, so a long command prints nothing until it ends.
   `mcp` ignores `--json`; it speaks JSON-RPC on stdout.
+  JSON text replaces malformed UTF-8, including surrogate encodings and overlong
+  sequences, with the Unicode replacement character.
 - Native C++ and generated graph compiler logs stream to process stderr. They do not enter
   the JSON or MCP protocol stream; the structured result retains the build exit code and
   actionable error. This also applies when scene startup builds a native behaviour.
+
+MCP validates arguments against its advertised tool schemas before dispatch. Unknown
+properties, empty required strings, wrong types, fractional frame counts and integer
+overflow are refused as tool errors. `run_scene` recording paths are confined to the
+bound project; relative paths are anchored there even when the output file is new.
+These path checks do not sandbox code executed by a trusted project.
 
 **Several changes as one transaction.** `batch` runs a list of commands so that all of them
 take effect or none does:

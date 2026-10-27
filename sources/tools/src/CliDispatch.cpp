@@ -624,6 +624,11 @@ std::string ToValidUtf8(std::string_view text) {
         for (std::size_t offset = 1U; valid && offset < length; ++offset) {
             valid = (static_cast<unsigned char>(text[index + offset]) & 0xC0U) == 0x80U;
         }
+        if (valid && length >= 3U) {
+            const auto second = static_cast<unsigned char>(text[index + 1U]);
+            valid = !(lead == 0xE0U && second < 0xA0U) && !(lead == 0xEDU && second >= 0xA0U) &&
+                !(lead == 0xF0U && second < 0x90U) && !(lead == 0xF4U && second >= 0x90U);
+        }
         if (valid) {
             result.append(text.substr(index, length));
             index += length;

@@ -3502,6 +3502,15 @@ void RunMcpCommandRefusalTests() {
     input += call(3, "scene_attach", "{}");
     input += call(4, "scene_list", R"({"scene":"../outside.21kbscene"})");
     input += call(5, "validate_script", "{}");
+    input += call(6, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":1.5})");
+    input += call(7, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":1e100})");
+    input += call(8, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":"2"})");
+    input += call(9, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","inputRecord":"../Outside.kbinput"})");
+    input += call(10, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","inputReplay":"../Outside.kbinput"})");
+    input += call(11, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","framez":2})");
+    input += call(12, "run_scene", "[]");
+    input += call(13, "scene_attach", R"({"scene":"Assets/Scenes/Main.21kbscene","node":"Player","script":"/Game/Logic/Player.lua","executionOrder":1e100})");
+    input += call(14, "run_scene", R"({"scene":"Assets/Scenes/Main.21kbscene","frames":1,"inputRecord":"McpRecord.kbinput"})");
     std::istringstream in{ input };
     std::ostringstream out;
     std::ostringstream err;
@@ -3514,11 +3523,18 @@ void RunMcpCommandRefusalTests() {
     while (std::getline(lines, line)) {
         if (!line.empty()) responses.push_back(line);
     }
-    Require(responses.size() == 5U, "mcp refusal response count is wrong");
+    Require(responses.size() == 14U, "mcp refusal response count is wrong");
     Require(Contains(responses[1], "\"isError\":true") && Contains(responses[1], "unknown tool: no_such_tool"), "mcp must refuse an unknown tool by name");
     Require(Contains(responses[2], "\"isError\":true"), "mcp must refuse scene_attach without its node and script");
     Require(Contains(responses[3], "\"isError\":true") && Contains(responses[3], "outside the project"), "mcp must refuse a scene outside the project");
     Require(Contains(responses[4], "\"isError\":true"), "mcp must refuse validate_script without its path");
+    for (std::size_t index = 5U; index < 13U; ++index)
+        Require(Contains(responses[index], "\"isError\":true"), "Invalid MCP arguments must fail before dispatch: " + responses[index]);
+    Require(Contains(responses[8], "outside the project") && Contains(responses[9], "outside the project"),
+        "MCP recording paths must not escape the bound project");
+    Require(Contains(responses[13], "\"isError\":false") &&
+        kb::input::ReadInputRecording(TestRoot() / "McpRecord.kbinput").succeeded,
+        "A new relative recording path must resolve inside the bound project");
 
     // Every tool the list offers is dispatched: calling it without arguments may fail, but never as an unknown tool.
     JsonValue listed;
@@ -4367,6 +4383,15 @@ void RunPlaybackStopTests() {
 void RunCliJsonTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
+    for (const std::string invalid : {"\xC0\xAF", "\xE0\x80\x80", "\xED\xA0\x80", "\xF0\x80\x80\x80", "\xF4\x90\x80\x80", "\xE2\x82"}) {
+        std::string replacement;
+        for (std::size_t index = 0U; index < invalid.size(); ++index) replacement += "\xEF\xBF\xBD";
+        const auto result = ParseCliResult(RunCliProgram({"--json", invalid}));
+        Require(result.Find("command")->AsString() == replacement,
+            "JSON output must replace overlong UTF-8, surrogate scalars, overflow and truncated sequences");
+    }
+    const std::string boundaries = "\xE0\xA0\x80\xED\x9F\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF";
+    Require(kb::cli::ToValidUtf8(boundaries) == boundaries, "Valid Unicode boundary scalars must remain unchanged");
 
     // Without --json nothing changes: text, the error on stderr, the usage after it, exit code 1.
     const CliRun unknownText = RunCliProgram({ "no-such-command" });

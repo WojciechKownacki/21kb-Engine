@@ -1,11 +1,15 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #include <array>
 #include <cstdio>
+#include <cmath>
+#include <limits>
 #include <initializer_list>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kb::cli {
@@ -29,12 +33,18 @@ struct ToolProperty {
     std::initializer_list<ToolProperty> properties) {
     JsonValue schema = JsonValue::MakeObject();
     schema.Set("type", JsonValue::MakeString("object"));
+    schema.Set("additionalProperties", JsonValue::MakeBool(false));
     JsonValue schemaProperties = JsonValue::MakeObject();
     JsonValue required = JsonValue::MakeArray();
     for (const ToolProperty& property : properties) {
         JsonValue descriptor = JsonValue::MakeObject();
         descriptor.Set("type", JsonValue::MakeString(std::string{ property.type }));
         descriptor.Set("description", JsonValue::MakeString(std::string{ property.description }));
+        if (property.type == "string") descriptor.Set("minLength", JsonValue::MakeNumber(1));
+        if (property.type == "integer") {
+            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "frames" ? 1 : std::numeric_limits<int>::min()));
+            descriptor.Set("maximum", JsonValue::MakeNumber(std::numeric_limits<int>::max()));
+        }
         schemaProperties.Set(std::string{ property.name }, std::move(descriptor));
         if (property.required) {
             required.Append(JsonValue::MakeString(std::string{ property.name }));
@@ -87,14 +97,14 @@ struct ToolProperty {
             ToolProperty{ "node", "string", "Name of the scene node to attach the behaviour to.", true },
             ToolProperty{ "script", "string", "Script asset path: /Game/... virtual path or a path under Assets/.", true },
             ToolProperty{ "tickGroup", "string", "Optional tick group: Input, Gameplay, Physics, Animation, Camera, Presentation.", false },
-            ToolProperty{ "executionOrder", "number", "Optional execution order within the tick group.", false },
+            ToolProperty{ "executionOrder", "integer", "Optional execution order within the tick group.", false },
         }));
     tools.Append(MakeToolDescriptor(
         "run_scene",
         "Runs a scene headless for N frames and reports script logs, events, and errors.",
         {
             ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true },
-            ToolProperty{ "frames", "number", "Frame count (default 60).", false },
+            ToolProperty{ "frames", "integer", "Frame count (default 60).", false },
             ToolProperty{ "dt", "number", "Delta seconds per frame (default 1/60).", false },
             ToolProperty{ "report", "string", "Use particles or input for a versioned execution report.", false },
             ToolProperty{ "inputReplay", "string", "Recording file to replay with its per-tick durations.", false },
@@ -106,7 +116,7 @@ struct ToolProperty {
 }
 
 void WriteMessage(std::ostream& out, const JsonValue& message) {
-    out << message.Dump() << '\n';
+    out << ToValidUtf8(message.Dump()) << '\n';
     out.flush();
 }
 
@@ -142,10 +152,52 @@ struct ToolCallOutcome {
     std::string text;
 };
 
+// Enforce the same schema that discovery advertises before translating values
+// into CLI arguments, especially before narrowing JSON numbers to native ints.
+[[nodiscard]] std::string ValidateToolArguments(std::string_view name, const JsonValue* arguments) {
+    const auto tools = MakeToolList();
+    for (std::size_t index = 0U; index < tools.Size(); ++index) {
+        const auto* tool = tools.At(index);
+        if (tool->Find("name")->AsString() != name) continue;
+        const auto* schema = tool->Find("inputSchema");
+        const auto* properties = schema->Find("properties");
+        if (arguments != nullptr && arguments->GetKind() != JsonValue::Kind::Object)
+            return "arguments must be an object";
+        if (const auto* required = schema->Find("required")) {
+            for (std::size_t item = 0U; item < required->Size(); ++item) {
+                const auto& key = required->At(item)->AsString();
+                if (arguments == nullptr || arguments->Find(key) == nullptr) return "missing required argument: " + key;
+            }
+        }
+        for (std::size_t item = 0U; arguments != nullptr && item < arguments->Size(); ++item) {
+            const auto& key = arguments->MemberName(item);
+            const auto* property = properties->Find(key);
+            if (property == nullptr) return "unknown argument: " + key;
+            const auto* value = arguments->Find(key);
+            const auto& type = property->Find("type")->AsString();
+            if (type == "string") {
+                if (value->GetKind() != JsonValue::Kind::String || value->AsString().empty())
+                    return key + " must be a nonempty string";
+            } else {
+                const double number = value->AsNumber();
+                if (value->GetKind() != JsonValue::Kind::Number || !std::isfinite(number))
+                    return key + " must be a finite number";
+                if (type == "integer" && (std::trunc(number) != number ||
+                    number < property->Find("minimum")->AsNumber() || number > property->Find("maximum")->AsNumber()))
+                    return key + " must be an integer within the advertised range";
+            }
+        }
+        return {};
+    }
+    return "unknown tool: " + std::string{name};
+}
+
 [[nodiscard]] ToolCallOutcome DispatchTool(
     std::string_view toolName,
     const JsonValue* toolArguments,
     const std::string& projectRoot) {
+    if (const auto error = ValidateToolArguments(toolName, toolArguments); !error.empty())
+        return {.isError = true, .text = error};
     std::vector<std::string> commandArguments;
     if (!projectRoot.empty()) {
         commandArguments.push_back("--project");
@@ -189,8 +241,20 @@ struct ToolCallOutcome {
         }
         command = &RunSceneAttachCommand;
     } else if (toolName == "run_scene") {
-        pushOption("--input-replay", GetStringArgument(toolArguments, "inputReplay"));
-        pushOption("--input-record", GetStringArgument(toolArguments, "inputRecord"));
+        for (const auto& [property, option] : {std::pair{"inputReplay", "--input-replay"},
+                 std::pair{"inputRecord", "--input-record"}}) {
+            const auto path = GetStringArgument(toolArguments, property);
+            if (path.empty()) continue;
+            if (projectRoot.empty()) return {.isError = true, .text = "recording paths require a bound project"};
+            std::string error;
+            std::error_code pathError;
+            const auto input = std::filesystem::path{path};
+            const auto anchored = std::filesystem::absolute(input.is_absolute() ? input : std::filesystem::path{projectRoot} / input, pathError);
+            if (pathError) return {.isError = true, .text = "cannot resolve recording path: " + pathError.message()};
+            const auto resolved = ResolveProjectFile(anchored, std::filesystem::path{projectRoot}, error);
+            if (resolved.empty()) return {.isError = true, .text = error};
+            pushOption(option, resolved.string());
+        }
         pushOption("--viewport", GetStringArgument(toolArguments, "viewport"));
         pushOption("--safe-area", GetStringArgument(toolArguments, "safeArea"));
         pushOption("--scene", GetStringArgument(toolArguments, "scene"));
