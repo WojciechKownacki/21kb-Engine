@@ -1,57 +1,11 @@
 #include "engine/visual/VisualGraphNativeBuildPipeline.hpp"
 
-#include <cstdlib>
+#include "engine/script/NativeScriptBuildPipeline.hpp"
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace kb::visual {
-namespace {
-
-class ScopedWorkingDirectory final {
-public:
-    explicit ScopedWorkingDirectory(const std::filesystem::path& workingDirectory, std::vector<std::string>& errors)
-        : errors_(errors) {
-        std::error_code error;
-        originalDirectory_ = std::filesystem::current_path(error);
-        if (error) {
-            errors_.push_back("visual graph native build could not read current working directory");
-            return;
-        }
-        active_ = true;
-        if (!workingDirectory.empty()) {
-            std::filesystem::current_path(workingDirectory, error);
-            if (error) {
-                errors_.push_back("visual graph native build working directory could not be selected");
-                active_ = false;
-            }
-        }
-    }
-
-    ~ScopedWorkingDirectory() {
-        if (!active_) {
-            return;
-        }
-        std::error_code error;
-        std::filesystem::current_path(originalDirectory_, error);
-        if (error) {
-            errors_.push_back("visual graph native build could not restore working directory");
-        }
-    }
-
-    ScopedWorkingDirectory(const ScopedWorkingDirectory&) = delete;
-    ScopedWorkingDirectory& operator=(const ScopedWorkingDirectory&) = delete;
-
-    [[nodiscard]] bool Succeeded() const noexcept {
-        return active_;
-    }
-
-private:
-    std::filesystem::path originalDirectory_;
-    std::vector<std::string>& errors_;
-    bool active_ = false;
-};
-
-} // namespace
-
 VisualGraphNativeBuildResult VisualGraphNativeBuildPipeline::Build(
     const VisualGraphGeneratedCodeFiles& generatedFiles,
     const VisualGraphNativeBuildDesc& desc) {
@@ -72,13 +26,13 @@ VisualGraphNativeBuildResult VisualGraphNativeBuildPipeline::Build(
         return result;
     }
 
-    ScopedWorkingDirectory workingDirectory{ desc.workingDirectory, result.errors };
-    if (!workingDirectory.Succeeded()) {
-        return result;
-    }
-    result.exitCode = std::system(desc.command.c_str());
-    if (result.exitCode != 0) {
-        result.errors.push_back("visual graph native build command failed with exit code " + std::to_string(result.exitCode));
+    const auto built = kb::script::NativeScriptBuildPipeline::Build({
+        .enabled = true, .command = desc.command, .workingDirectory = desc.workingDirectory});
+    result.exitCode = built.exitCode;
+    for (auto error : built.errors) {
+        constexpr std::string_view prefix = "native script build";
+        if (error.starts_with(prefix)) error.replace(0, prefix.size(), "visual graph native build");
+        result.errors.push_back(std::move(error));
     }
     return result;
 }

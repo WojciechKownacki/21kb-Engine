@@ -435,11 +435,13 @@ Global options:
                "ok" is true when the exit code is 0; "errors" lists what the command
                wrote to stderr. A command that prints its own JSON (audio-mixer,
                run --report, api --print json, batch) keeps it unchanged. mcp ignores --json.
+               Native compiler logs go to process stderr and never precede the JSON object.
   --dry-run    Only for the commands that name it (audio-mixer new/set).
 
-Exit codes: 0 on success, 1 on any failure (bad arguments, an unknown command, a
-failed check, build or run, a file that cannot be read or written). No other code is
-returned. help, --help, -h and no command at all print this text and exit 0.
+Exit codes: normally 0 on success and 1 on failure (bad arguments, an unknown
+command, a failed check or build, or inaccessible files). Commands may document
+additional codes; run returns 124 on timeout and 130 on cancellation.
+help, --help, -h and no command at all print this text and exit 0.
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).

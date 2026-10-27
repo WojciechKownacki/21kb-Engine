@@ -223,8 +223,7 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
 
 ```json
 {"schema":"21kb.cli-result/v1","ok":false,"exitCode":1,"command":"validate",
- "output":"OK   Assets/Logic/Player.lua
-","errors":["FAIL Assets/Logic/Broken.lua: ..."]}
+ "output":"OK   Assets/Logic/Player.lua\n","errors":["FAIL Assets/Logic/Broken.lua: ..."]}
 ```
 
 - `ok` is `exitCode == 0`, and `exitCode` is also the process exit code.
@@ -235,6 +234,9 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
   on stdout still come as the object above.
 - The whole output is collected first, so a long command prints nothing until it ends.
   `mcp` ignores `--json`; it speaks JSON-RPC on stdout.
+- Native C++ and generated graph compiler logs stream to process stderr. They do not enter
+  the JSON or MCP protocol stream; the structured result retains the build exit code and
+  actionable error. This also applies when scene startup builds a native behaviour.
 
 **Several changes as one transaction.** `batch` runs a list of commands so that all of them
 take effect or none does:

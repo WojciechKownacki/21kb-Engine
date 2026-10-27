@@ -23,14 +23,17 @@ def main():
     project, package = root / "Sample", root / "Package"
     history = []
 
-    def run(executable, *tail, expected=0, cwd=root):
+    def run(executable, *tail, expected=0, cwd=root, input_text=None):
         result = subprocess.run([str(executable), *map(str, tail)], cwd=cwd,
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
-            creationflags=subprocess.CREATE_NO_WINDOW)
+            creationflags=subprocess.CREATE_NO_WINDOW, input=input_text)
         history.append(dict(command=list(map(str, [executable, *tail])), exitCode=result.returncode,
             stdout=result.stdout, stderr=result.stderr))
         (root / "commands.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
         assert result.returncode == expected, history[-1]
+        if "--json" in tail:
+            response = json.loads(result.stdout)
+            assert response["schema"] == "21kb.cli-result/v1" and response["exitCode"] == expected
         return result.stdout + result.stderr
 
     run(args.cli, "new", "--parent", root, "--name", "Sample", "--template", "Empty")
@@ -44,16 +47,22 @@ def main():
     cmake.write_text(original_cmake.replace("project(NativeProbe LANGUAGES CXX)",
         'set(CMAKE_CXX_COMPILER "kb_missing_cpp_compiler" CACHE FILEPATH "" FORCE)\n'
         'project(NativeProbe LANGUAGES CXX)'), encoding="utf-8")
-    diagnostic = run(args.cli, "script-build", "--project", project,
+    diagnostic = run(args.cli, "script-build", "--json", "--project", project,
         "--script", "/Game/Scripts/NativeProbe.native", expected=1)
     assert "kb_missing_cpp_compiler" in diagnostic and "install the C++ compiler, CMake" in diagnostic
     assert "retry script-build" in diagnostic
     cmake.write_text(original_cmake, encoding="utf-8")
-    run(args.cli, "script-build", "--project", project, "--script", "/Game/Scripts/NativeProbe.native")
+    run(args.cli, "script-build", "--json", "--project", project, "--script", "/Game/Scripts/NativeProbe.native")
     run(args.cli, "scene-attach", "--project", project, "--scene", "/Game/Scenes/Main.21kbscene",
         "--node", "NativeHost", "--script", "/Game/Scripts/NativeProbe.native")
     output = run(args.cli, "run", "--project", project, "--frames", "3")
     assert "NativeProbe ready" in output and "0 diagnostics" in output
+    request = dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(name="run_scene",
+        arguments=dict(scene="/Game/Scenes/Main.21kbscene", frames=3)))
+    run(args.cli, "mcp", "--project", project, input_text=json.dumps(request) + "\n")
+    response = json.loads(history[-1]["stdout"])
+    assert response["id"] == 1 and not response["result"].get("isError", False)
+    assert "NativeProbe ready" in json.dumps(response)
     source = project / "Source/NativeScripts/NativeProbe/NativeProbe.cpp"
     current_source = source.read_text(encoding="utf-8")
     guard = "api->version == kb::script::kNativeScriptPluginApiVersion"
@@ -61,7 +70,7 @@ def main():
     # Compile a real DLL that accepts only the former registration API version.
     # This is a compatibility fixture, not a claim to build an entire old SDK.
     source.write_text(current_source.replace(guard, "api->version == 1U"), encoding="utf-8")
-    run(args.cli, "script-build", "--project", project, "--script", "/Game/Scripts/NativeProbe.native")
+    run(args.cli, "script-build", "--json", "--project", project, "--script", "/Game/Scripts/NativeProbe.native")
     refused = run(args.cli, "run", "--project", project, "--frames", "3", expected=1)
     assert "SDK API " in refused and "rebuild the plugin against the current SDK" in refused
     assert "NativeProbe ready" not in refused
@@ -81,7 +90,8 @@ def main():
     assert "NativeProbe ready" in output and "rendered=3" in output and "shutdown=clean" in output
     assert not (package / "Source").exists() and not (package / "Assets").exists()
     report = dict(result="PASS", packagedFrames=3, externalModule=True,
-        missingCompilerDiagnostic=True, compiledAbiMismatch=True, sourceUnavailable=True)
+        missingCompilerDiagnostic=True, compiledAbiMismatch=True, sourceUnavailable=True,
+        compilerJsonOutput=True, compilerMcpOutput=True)
     (root / "result.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(dict(**report, artifacts=str(root))))
     return 0
