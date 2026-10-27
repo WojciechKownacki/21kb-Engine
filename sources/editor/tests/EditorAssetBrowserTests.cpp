@@ -329,6 +329,56 @@ void RunDependencySafetyBlocksRenameAndDeleteTest() {
         "KBMAT-GRAPH-0005: Blocked dependency delete should keep the target asset registered");
 }
 
+void RunFolderRelocationPreservesDependencySourcesTest() {
+    ResetTempRoot();
+    const std::filesystem::path project = TempRoot() / "DependencyProject";
+    const std::filesystem::path content = project / "Assets";
+    WriteTextFile(content / "Group/Target.lua", "return {}\n");
+    const std::string userSource = "-- @asset /Game/Group/Target.lua\nreturn {}\n";
+    WriteTextFile(content / "Group/User.lua", userSource);
+    WriteTextFile(content / "Self.lua", "-- @asset /Game/Self.lua\nreturn {}\n");
+    std::filesystem::create_directories(content / "Destination");
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(scene.Assets().MountProject(project), "Dependency project mount failed");
+    static_cast<void>(scene.Assets().Discover());
+    auto& manager = scene.Assets().Manager();
+    const auto* target = manager.Registry().FindByPath("/Game/Group/Target.lua");
+    const auto* user = manager.Registry().FindByPath("/Game/Group/User.lua");
+    kb::editor::tests::Require(target != nullptr && user != nullptr && user->dependencies.size() == 1U &&
+        user->dependencies.front() == target->id, "Real Lua asset dependency was not discovered");
+    kb::editor::tests::Require(browser.BeginRenameFolder("/Game/Group", manager), "Folder rename did not open");
+    browser.SetTextEditValue("Renamed");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CommitTextEdit(scene, browser),
+        "Folder rename must not leave an internal absolute dependency at its old path");
+    kb::editor::tests::Require(manager.LastError().find("/Game/Group/User.lua") != std::string::npos,
+        "Folder rename must identify the affected dependent");
+    browser.CancelTextEdit();
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::MoveFolderToFolder(
+        scene, browser, "/Game/Group", "/Game/Destination"), "Folder move must protect internal dependencies");
+    kb::editor::tests::Require(std::filesystem::exists(content / "Group/Target.lua") &&
+        !std::filesystem::exists(content / "Renamed") && !std::filesystem::exists(content / "Destination/Group"),
+        "Refused relocation must preserve source files and create no destination");
+    std::ifstream input{ content / "Group/User.lua", std::ios::binary };
+    const std::string unchanged{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    input.close();
+    kb::editor::tests::Require(unchanged == userSource, "Refused relocation must preserve dependent source bytes");
+    const auto* self = manager.Registry().FindByPath("/Game/Self.lua");
+    kb::editor::tests::Require(self != nullptr, "Self-referencing script was not discovered");
+    const auto selfId = self->id;
+    kb::editor::tests::Require(browser.BeginRenameAsset(selfId, manager), "Self rename did not open");
+    browser.SetTextEditValue("RenamedSelf");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CommitTextEdit(scene, browser),
+        "Relocation must also protect an asset's own path references");
+    browser.CancelTextEdit();
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::DeleteAsset(scene, browser, selfId),
+        "Deleting a self-referencing asset must remain possible");
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::DeleteFolder(scene, browser, "/Game/Group"),
+        "Deleting a folder with only internal dependencies must remain possible");
+    kb::editor::tests::Require(!std::filesystem::exists(content / "Group") && !std::filesystem::exists(content / "Self.lua"),
+        "Allowed deletion did not remove the selected files");
+}
+
 void RunSearchTextShortcutStateTest() {
     kb::editor::EditorAssetBrowserState state;
     state.FocusSearch(true);
@@ -1232,6 +1282,7 @@ void RunEditorAssetBrowserTests() {
     RunMultiSelectionStateTest();
     RunTextEditStateTest();
     RunDependencySafetyBlocksRenameAndDeleteTest();
+    RunFolderRelocationPreservesDependencySourcesTest();
     RunSearchTextShortcutStateTest();
     RunImportCommandReturnsMaterialTextureReportTest();
     RunImportCommandPublishesSkeletalGltfTest();

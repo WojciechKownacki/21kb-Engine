@@ -40,7 +40,7 @@ namespace {
         return nullptr;
     }
     for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
-        if (metadata.id == target || sameOperationAssets.contains(metadata.id.value)) {
+        if (sameOperationAssets.contains(metadata.id.value)) {
             continue;
         }
         for (const kb::assets::AssetId dependency : metadata.dependencies) {
@@ -82,16 +82,18 @@ namespace {
     return assets;
 }
 
-// A folder's assets keep their users only if every user moves with them: anything outside that
-// refers to one of them would lose it, since an asset is known by its path.
+// Removing both ends of a reference is safe. Relocation changes paths even when
+// both files move together, so those references must still prevent relocation.
 [[nodiscard]] bool CanMutateFolderContents(
     kb::assets::AssetManager& manager,
     const std::filesystem::path& virtualFolder,
     std::string_view operation) {
     const std::vector<kb::assets::AssetId> contents = AssetsUnder(manager, virtualFolder);
     std::unordered_set<std::uint64_t> moving;
-    for (const kb::assets::AssetId asset : contents) {
-        moving.insert(asset.value);
+    if (operation == "deleted") {
+        for (const kb::assets::AssetId asset : contents) {
+            moving.insert(asset.value);
+        }
     }
     for (const kb::assets::AssetId asset : contents) {
         if (!CanMutateDependencyTarget(manager, asset, operation, moving)) {
@@ -315,7 +317,7 @@ bool EditorSceneAssetBrowserCommands::DeleteAsset(kb::scene::Scene& scene, Edito
     const EditorProtectedScenes& protectedScenes) {
     kb::assets::AssetManager& manager = AssetManager(scene);
     if (!LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, id), "delete") ||
-        !CanMutateDependencyTarget(manager, id, "deleted")) {
+        !CanMutateDependencyTarget(manager, id, "deleted", { id.value })) {
         return false;
     }
     const bool deleted = manager.DeleteAsset(id);

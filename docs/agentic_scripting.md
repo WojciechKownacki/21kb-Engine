@@ -60,6 +60,9 @@ The cooker includes these assets and their dependencies. Missing assets, noncano
 paths and editor-only assets fail validation. This also supports paths assembled at
 runtime: declare each possible target. Update declarations when moving assets.
 The declaration does not grant filesystem access or execute Lua during discovery.
+Project Files refuses a rename or move that would break registered references,
+including references between files in the same folder. Deleting a folder is allowed
+when all users of its assets are deleted with it; surviving users prevent deletion.
 
 ## What a script is allowed to do
 
