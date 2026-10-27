@@ -31,6 +31,32 @@ constexpr std::string_view kAgentsTemplate = R"md(# AGENTS.md — working in thi
 
 This is a game project for the 21kb Engine. Read this file before writing gameplay code.
 
+## Recommended first script
+
+Start with Lua. The engine uses entities and components (ECS): a behaviour is attached
+to an entity and reads or changes its components. A hierarchy parent is an entity
+relationship, not a separate kind of scene object. C++ and Visual Graph are advanced
+alternatives; the Lua starter does not require either toolchain.
+
+After `kb_cli init-agent --project .`, run this example from the project folder:
+
+```sh
+kb_cli entity add --project . --name TemplatePlayer
+kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node TemplatePlayer --script /Game/Logic/PlayerController.lua
+kb_cli validate --project . Assets/Logic/PlayerController.lua
+kb_cli run --project . --scene Assets/Scenes/Main.21kbscene --frames 2 --report input
+```
+
+The run prints a versioned execution report. The controller needs a `Move` input
+action and bindings to move; a headless run does not invent keyboard input. Use
+`--input-replay <recording>` to reproduce input. The Top Down Player and Platformer
+Player presets provision their input mappings and character controllers.
+
+Use `kb_cli commands` for this build's available operations and MCP aliases, and
+`.kb/api/script_api.json` for the current API. Export support depends on the target's
+installed SDK and player build. A successful headless run validates this host; it
+does not establish input, rendering or persistence on every export platform.
+
 ## Project layout
 
 - `<Name>.21kbproject` — binary project descriptor. Never edit by hand; use the editor or `kb_cli`.

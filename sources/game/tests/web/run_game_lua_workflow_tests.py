@@ -1,5 +1,9 @@
 """Verify the shipped Lua movement template from public authoring to a cooked game."""
 from pathlib import Path
+import json
+import re
+import shlex
+import subprocess
 
 from run_game_storage_tests import BrowserSession, StorageScenario, author_fixture as author_storage, main
 from run_game_touch_tests import require
@@ -7,6 +11,50 @@ from run_game_touch_tests import require
 
 def author_fixture(args, root):
     def configure(run, component, project):
+        workflow_project = project
+        project = root / "Starter"
+        run(args.cli, "new", "--parent", root, "--name", "Starter", "--template", "Empty")
+        run(args.cli, "init-agent", "--project", project)
+        guide = (project / "AGENTS.md").read_text(encoding="utf-8")
+        require("entities and components (ECS)" in guide and "Start with Lua" in guide,
+            "Fresh project must explain the recommended language and entity/component model")
+        require("installed SDK and player build" in guide,
+            "Fresh project must distinguish host verification from export platform support")
+        catalog = json.loads((project / ".kb/api/script_api.json").read_text(encoding="utf-8"))
+        functions = {entry["name"] for entry in catalog["functions"]}
+        require({"Input.Vector2", "Transform.Translate", "Save.Read", "Save.Write"} <= functions,
+            "Generated API must contain the starter's live input, movement and save functions")
+        discovery = subprocess.run([str(args.cli), "commands"], capture_output=True, text=True,
+            encoding="utf-8", check=True, timeout=30)
+        commands = {entry["name"] for entry in json.loads(discovery.stdout)["commands"]}
+        documented = set(re.findall(r"kb_cli ([a-z][a-z0-9-]*)", guide))
+        require(documented <= commands, "Generated guide names unregistered commands: " + str(documented - commands))
+        example = re.search(r"```sh\n(.*?)\n```", guide, re.DOTALL)
+        require(example is not None, "Fresh project must contain an executable starter example")
+        for line in example.group(1).splitlines():
+            words = shlex.split(line)
+            require(words[0] == "kb_cli", "Starter example must use the public CLI")
+            result = subprocess.run([str(args.cli), *words[1:]], cwd=project,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            require(result.returncode == 0, "Generated starter failed: " + line + "\n" + result.stdout + result.stderr)
+            if words[1] == "run":
+                execution = json.loads(result.stdout)
+                require(execution["succeeded"] and execution["completed_frames"] == 2,
+                    "Generated starter must finish its real headless simulation")
+        # Regeneration must refresh API files without replacing authored instructions or scripts.
+        script = project / "Assets/Logic/PlayerController.lua"
+        original = script.read_bytes()
+        guide_bytes = (project / "AGENTS.md").read_bytes()
+        api_before = (project / ".kb/api/script_api.json").read_bytes()
+        run(args.cli, "init-agent", "--project", project)
+        require(script.read_bytes() == original and (project / "AGENTS.md").read_bytes() == guide_bytes,
+            "Regeneration must preserve the project's starter and instructions")
+        require((project / ".kb/api/script_api.json").read_bytes() == api_before,
+            "An unchanged project must regenerate the same API catalog")
+        (root / "starter-proof.json").write_text(json.dumps(dict(result="PASS",
+            commands=len(documented), apiFunctions=len(functions), exampleExecuted=True,
+            regenerationPreserved=True), indent=2), encoding="utf-8")
+        project = workflow_project
         run(args.cli, "init-agent", "--project", project)
         # This preset writes the normal Move action and keyboard bindings.
         run(args.cli, "entity", "add", "--project", project, "--create", "Top Down Player",
