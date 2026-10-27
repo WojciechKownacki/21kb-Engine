@@ -31,6 +31,16 @@ SOFTWARE_RENDERERS = ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", 
 GRAPHICS_MARKER = "21kb-browser-graphics "
 
 
+def wait_page_focus(client, focused):
+    deadline = time.monotonic() + 10
+    while True:
+        state = client.evaluate("({focused:document.hasFocus(),visibility:document.visibilityState})")
+        if state["focused"] == focused and state["visibility"] == ("visible" if focused else "hidden"):
+            return
+        require(time.monotonic() < deadline, "Actual browser tab focus did not settle: " + str(state))
+        time.sleep(0.025)
+
+
 def graphics_contexts(events):
     contexts = []
     for event in events:
@@ -343,9 +353,9 @@ class TouchScenario:
             other = RuntimeClient(target["webSocketDebuggerUrl"])
             other.call("Page.enable")
             other.call("Page.bringToFront")
-            require(client.evaluate("!document.hasFocus() && document.visibilityState === 'hidden'"),
-                "The own second tab did not cause actual focus loss")
+            wait_page_focus(client, False)
             client.call("Page.bringToFront")
+            wait_page_focus(client, True)
         finally:
             client.call("Target.closeTarget", targetId=target_id)
             if other is not None:

@@ -623,7 +623,6 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_exposure_luminance.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
-            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_ssgi_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_capture.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_prefilter.sc
@@ -638,6 +637,36 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
         OUT_FILES_VAR KB_RENDERER_GENERATED_FRAGMENT_SHADERS
     )
+
+    # Preserve functions in the browser lighting shader. Unconditional SPIR-V
+    # inlining produces a large control-flow graph that crashes some downstream
+    # shader compilers; the graphics driver still optimizes the final program.
+    set(KB_RENDERER_DEFERRED_PROFILES spirv 430)
+    if(APPLE)
+        list(APPEND KB_RENDERER_DEFERRED_PROFILES metal)
+    elseif(WIN32 OR MINGW OR MSYS OR CYGWIN)
+        list(APPEND KB_RENDERER_DEFERRED_PROFILES s_5_0 s_6_0)
+    endif()
+    if(BGFX_CONFIG_RENDERER_WEBGPU)
+        list(APPEND KB_RENDERER_DEFERRED_PROFILES wgsl)
+    endif()
+    foreach(KB_RENDERER_DEFERRED_PROFILE IN LISTS KB_RENDERER_DEFERRED_PROFILES ITEMS 300_es)
+        set(KB_RENDERER_DEFERRED_OPTIMIZATION)
+        if(KB_RENDERER_DEFERRED_PROFILE STREQUAL "300_es")
+            set(KB_RENDERER_DEFERRED_OPTIMIZATION OPTIMIZATION 0)
+        endif()
+        bgfx_compile_shaders(
+            TYPE FRAGMENT
+            SHADERS ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
+            VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
+            OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
+            INCLUDE_DIRS ${KB_RENDERER_SHADER_INCLUDE_DIR} ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
+            PROFILES ${KB_RENDERER_DEFERRED_PROFILE}
+            ${KB_RENDERER_DEFERRED_OPTIMIZATION}
+            OUT_FILES_VAR KB_RENDERER_GENERATED_DEFERRED_SHADER
+        )
+        list(APPEND KB_RENDERER_GENERATED_FRAGMENT_SHADERS ${KB_RENDERER_GENERATED_DEFERRED_SHADER})
+    endforeach()
 
     bgfx_compile_shaders(
         TYPE COMPUTE

@@ -143,6 +143,10 @@ def main():
             initial = expect("initial", [], viewport=[800, 600])
             assert initial["asan"] == 1 and initial["ubsan"] == 1, "The native test module must have both sanitizers enabled"
             assert client.evaluate("Module._kb_gamepad_invalid()") == 1
+            transitions = client.evaluate("Module._kb_digital_transitions()")
+            assert transitions == 0, "Native digital transition check failed: " + str(transitions)
+            observations.append(dict(check="queued mouse/keyboard transitions, repeat, pointer, cancel and overflow",
+                inputSource="native production collector", result=transitions))
             client.evaluate("""
                 window.kbOriginalGetGamepads = navigator.getGamepads;
                 window.kbVirtualPads = [];

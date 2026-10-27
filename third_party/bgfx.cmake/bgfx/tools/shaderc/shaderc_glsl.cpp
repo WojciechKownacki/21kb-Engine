@@ -209,7 +209,12 @@ namespace bgfx { namespace glsl
 					bx::write(_messageWriter, &messageErr, "%s\n", _message);
 				});
 
-			opt.RegisterPerformancePasses();
+			// Keep function boundaries when explicitly disabling optimization. Large
+			// inlined shaders can overwhelm downstream browser shader compilers.
+			if (!_options.optimize || 0 != _options.optimizationLevel)
+			{
+				opt.RegisterPerformancePasses();
+			}
 
 			std::vector<uint32_t> optimized;
 
@@ -227,6 +232,10 @@ namespace bgfx { namespace glsl
 			compilerOptions.enable_420pack_extension           = false;
 			compilerOptions.emit_uniform_buffer_as_plain_uniforms = true;
 			compiler.set_common_options(compilerOptions);
+			if (_options.optimize && 0 == _options.optimizationLevel)
+			{
+				compiler.set_enabled_interface_variables(compiler.get_active_interface_variables() );
+			}
 
 			spirv_cross::ShaderResources resources = compiler.get_shader_resources();
 

@@ -9,3 +9,8 @@
   `git diff --relative=third_party/bgfx.cmake`. An edit with no patch is lost on the next update.
 - After an update: regenerate the renderer shaders (`-DKB_GENERATE_RENDERER_SHADERS=ON`), build and test.
 - Drop a patch once upstream has the same fix.
+
+The GLSL compiler honors explicit `-O 0` by preserving function boundaries.
+`bgfx_compile_shaders(OPTIMIZATION 0 ...)` exposes that choice to shader targets.
+The deferred ESSL shader uses it to avoid a downstream browser compiler crash
+with the fully inlined program; other release shaders retain their usual passes.

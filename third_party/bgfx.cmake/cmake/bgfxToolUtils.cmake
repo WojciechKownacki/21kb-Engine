@@ -521,7 +521,7 @@ if(TARGET bgfx::shaderc)
 		endif()
 
 		# -O
-		if(ARG_O)
+		if(DEFINED ARG_O)
 			list(APPEND CLI "-O" "${ARG_O}")
 		endif()
 
@@ -562,15 +562,20 @@ if(TARGET bgfx::shaderc)
 	# 	INCLUDE_DIRS directories
 	# 	DEFINES defines
 	# 	[PROFILES profiles]
+	# 	[OPTIMIZATION level]
 	# 	[AS_HEADERS]
 	# 	[NO_SOURCE_GROUP]
 	# )
 	#
 	function(bgfx_compile_shaders)
 		set(options AS_HEADERS NO_SOURCE_GROUP)
-		set(oneValueArgs TYPE VARYING_DEF OUTPUT_DIR OUT_FILES_VAR)
+		set(oneValueArgs TYPE VARYING_DEF OUTPUT_DIR OUT_FILES_VAR OPTIMIZATION)
 		set(multiValueArgs SHADERS INCLUDE_DIRS DEFINES PROFILES)
 		cmake_parse_arguments(ARGS "${options}" "${oneValueArgs}" "${multiValueArgs}" "${ARGN}")
+		set(SHADER_OPTIMIZATION "$<IF:$<CONFIG:Debug>,0,3>")
+		if(DEFINED ARGS_OPTIMIZATION)
+			set(SHADER_OPTIMIZATION "${ARGS_OPTIMIZATION}")
+		endif()
 
 		if(ARGS_PROFILES)
 			set(PROFILES ${ARGS_PROFILES})
@@ -653,7 +658,7 @@ if(TARGET bgfx::shaderc)
 					FILE ${SHADER_FILE_ABSOLUTE}
 					OUTPUT ${OUTPUT}
 					PROFILE ${PROFILE}
-					O "$<IF:$<CONFIG:Debug>,0,3>"
+					O "${SHADER_OPTIMIZATION}"
 					VARYINGDEF ${ARGS_VARYING_DEF}
 					INCLUDES ${BGFX_SHADER_INCLUDE_PATH} ${ARGS_INCLUDE_DIRS}
 					DEFINES ${ARGS_DEFINES}

@@ -29,6 +29,13 @@ restoring the canvas's previous `touch-action`. DOM observations also verify
 `isTrusted` and the ID of the released finger. Missing browsers, registration
 failure, timeouts, sanitizer diagnostics and failed checks fail the test.
 
+The native digital collector also retains keyboard and mouse press/release
+edges arriving between scene frames, ignores repeated keydown events, preserves
+click positions and clears queued input on focus or graphics loss. A bounded
+overflow cancels held keyboard/mouse input without resetting gamepads. Sanitized
+checks cover quick clicks, chords, repeat, cancellation and overflow; packaged
+input and text workflows exercise the host callbacks and scene UI together.
+
 The production player also polls the browser's standard Gamepad mapping for
 four independent controller slots. It releases inputs on disconnection or focus
 loss and samples them again on focus restoration. Stick Y is positive upward;
@@ -82,9 +89,23 @@ runtime errors and failed checks fail the run. Recovery or CPU fallback does
 not count as a passing GPU test. Each fresh output directory retains authoring
 and cook commands, package/runtime hashes, browser events, native snapshots,
 screenshots and a `21kb.web-game-touch-tests/v1` result. The verified configuration
-is desktop headless Chrome with ANGLE/OpenGL. Desktop touch emulation does not
+includes desktop headless Chrome with both default ANGLE/D3D11 and ANGLE/OpenGL,
+and Edge with default ANGLE/D3D11.
+The deferred ESSL lighting program preserves function boundaries during cooking
+and prebuilt generation, avoiding a downstream compiler crash without removing
+lighting effects. The final graphics driver still compiles and optimizes it.
+Desktop touch emulation does not
 establish physical mobile, WebGPU or long-running browser acceptance; other
 browser/backend configurations remain separate checks.
+
+Physical Android Chrome verification additionally covers trusted injected touch,
+tab focus, resizing, native PCM playback/transport/recovery, and saved values
+surviving reload and real IndexedDB transaction abortion. These observations
+are separate from physical finger input, speaker measurements and OS audio
+routing. Mobile GPU images are read from the actual default framebuffer during
+draws; oversized emulated viewports can be tiled incorrectly by the browser's
+compositor screenshot API. Quota injection and browser-profile restart remain
+separate desktop storage scenarios.
 
 `run_packaged_runtime_tests.py` also accepts `--case geometry-depth` with the same
 paths. It cooks a black opaque mesh and a partially transparent material that

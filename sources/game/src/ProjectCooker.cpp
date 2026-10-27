@@ -2250,6 +2250,10 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                 return false;
             }
             const std::string stageName{ FixedShaderStageName(shader.stage) };
+            // Keep the browser lighting functions intact until the driver compiles
+            // them; flattening this program can crash downstream HLSL compilers.
+            const std::string optimization = backend == asset_bake::ShaderBakeBackend::Essl &&
+                std::string_view{ shader.name } == "fs_deferred_lighting.sc" ? "0" : "3";
             const std::filesystem::path binaryPath = profileRoot / (std::string{ shader.name } + ".bin");
             planned.jobs.push_back(jobs.size());
             jobs.push_back(FixedShaderJob{
@@ -2258,7 +2262,7 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                 .diagnosticPath = profileRoot / (std::string{ shader.name } + ".log"),
                 .cachePath = cacheRoot / backendName / (std::string{ shader.name } + ".bin"),
                 .identity = toolchainKey + "/" + backendName + "/" + profileName + "/" + stageName + "/" +
-                    shader.name,
+                    shader.name + "/O" + optimization,
                 .arguments = {
                     "--type", stageName,
                     "--platform", shadercPlatform,
@@ -2268,7 +2272,7 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                     "--varyingdef", varyingDef.generic_string(),
                     "-i", sourceRoot.generic_string(),
                     "-i", bgfxInclude.generic_string(),
-                    "-O", "3",
+                    "-O", optimization,
                 },
             });
         }

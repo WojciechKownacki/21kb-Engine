@@ -9,7 +9,7 @@ import urllib.request
 from run_game_audio_property_tests import write_tone
 from run_game_loading_tests import LOAD_OBSERVER
 from run_game_storage_tests import BrowserSession, StorageScenario, author_fixture as author_storage, main
-from run_game_touch_tests import RuntimeClient, require
+from run_game_touch_tests import RuntimeClient, require, wait_page_focus
 
 
 # Observe standard WebAudio output after the backend's synchronous handler has
@@ -125,12 +125,12 @@ class AudioScenario(StorageScenario):
             other = RuntimeClient(target["webSocketDebuggerUrl"])
             other.call("Page.enable")
             other.call("Page.bringToFront")
-            require(client.evaluate("!document.hasFocus() && document.visibilityState === 'hidden'"),
-                "Own second tab did not hide the player")
+            wait_page_focus(client, False)
             self.output("actual PCM while player tab is hidden", self.audio()["count"], True, reference)
             require(client.evaluate("!document.hasFocus() && document.visibilityState === 'hidden'"),
                 "Player did not remain hidden during audio measurement")
             client.call("Page.bringToFront")
+            wait_page_focus(client, True)
         finally:
             try:
                 client.call("Target.closeTarget", targetId=target_id)

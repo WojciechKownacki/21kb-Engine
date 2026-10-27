@@ -1,5 +1,6 @@
 #include "WebTouchInput.hpp"
 #include "WebGamepadInput.hpp"
+#include "DigitalInputFrame.hpp"
 
 #include <emscripten/emscripten.h>
 
@@ -45,6 +46,53 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_input_snapshot() {
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE void kb_input_finish() { input.FinishFrame(); }
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_digital_transitions() {
+    using kb::input::InputKey;
+    kb::input::InputDeviceState sample;
+    kb::game::DigitalInputFrame frame;
+    if (!frame.Queue(sample, InputKey::MouseLeft, true, true, 10.0F, 20.0F) ||
+        !frame.Queue(sample, InputKey::MouseLeft, false, true, 11.0F, 21.0F)) return 1;
+    frame.SetPointerPosition(100.0F, 200.0F);
+    frame.Publish(sample);
+    if (!sample.IsKeyDown(InputKey::MouseLeft) || sample.PointerX() != 10.0F) return 2;
+    frame.Publish(sample);
+    if (sample.IsKeyDown(InputKey::MouseLeft) || sample.PointerX() != 11.0F) return 3;
+    frame.Publish(sample);
+    if (sample.PointerX() != 100.0F || sample.PointerY() != 200.0F) return 4;
+    for (int click = 0; click < 2; ++click) {
+        if (!frame.Queue(sample, InputKey::MouseLeft, true) ||
+            !frame.Queue(sample, InputKey::MouseLeft, true) ||
+            !frame.Queue(sample, InputKey::MouseLeft, false)) return 5;
+    }
+    for (int edge = 0; edge < 4; ++edge) {
+        frame.Publish(sample);
+        if (sample.IsKeyDown(InputKey::MouseLeft) != (edge % 2 == 0)) return 6;
+    }
+    if (!frame.Queue(sample, InputKey::LeftShift, true) || !frame.Queue(sample, InputKey::A, true) ||
+        !frame.Queue(sample, InputKey::A, false) || !frame.Queue(sample, InputKey::LeftShift, false)) return 7;
+    frame.Publish(sample);
+    if (!sample.IsKeyDown(InputKey::A) || !sample.IsKeyDown(InputKey::LeftShift)) return 8;
+    frame.Publish(sample);
+    if (sample.IsKeyDown(InputKey::A) || sample.IsKeyDown(InputKey::LeftShift)) return 9;
+    if (!frame.Queue(sample, InputKey::A, true)) return 10;
+    frame.Clear();
+    sample.Reset();
+    frame.Publish(sample);
+    if (sample.IsKeyDown(InputKey::A)) return 11;
+    for (std::size_t edge = 0; edge < frame.kCapacity; ++edge) {
+        if (!frame.Queue(sample, InputKey::A, edge % 2U == 0U)) return 12;
+    }
+    sample.SetKeyDown(InputKey::MouseLeft, true);
+    sample.SetKeyDown(InputKey::GamepadFaceBottom, true);
+    if (frame.Queue(sample, InputKey::A, true)) return 13;
+    frame.Publish(sample);
+    if (sample.IsKeyDown(InputKey::A) || sample.IsKeyDown(InputKey::MouseLeft) ||
+        !sample.IsKeyDown(InputKey::GamepadFaceBottom)) return 14;
+    if (frame.Queue(sample, InputKey::Count, true) || frame.Queue(sample, InputKey::None, true) ||
+        frame.Queue(sample, InputKey::GamepadFaceBottom, true)) return 15;
+    return 0;
+}
 
 extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_gamepad_snapshot() {
     kb::game::PollWebGamepads(state);

@@ -4,6 +4,7 @@
 #include "WebGamepadInput.hpp"
 #include "WebDownloadProgress.hpp"
 #include "WebDownloadBuffer.hpp"
+#include "DigitalInputFrame.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -543,6 +544,7 @@ private:
             scene->Input().MutableDeviceState().SetPointerViewportExtent(
                 host->surface_.Width(), host->surface_.Height());
             kb::game::PollWebGamepads(scene->Input().MutableDeviceState());
+            host->digital_.Publish(scene->Input().MutableDeviceState());
         }
         host->touches_.SetViewport(host->surface_.Width(), host->surface_.Height());
         bool frameSubmitted = false;
@@ -588,6 +590,7 @@ private:
             host->healthyGraphicsFrames_ = 0U;
             host->graphicsLossTime_ = std::chrono::steady_clock::now();
             host->touches_.Suspend();
+            host->digital_.Clear();
             host->SetTextInputActive(false);
             SetBrowserStartupError("graphics-context-lost");
             std::fputs("kb_game_web: graphics context lost; waiting for browser restoration\n", stderr);
@@ -649,7 +652,8 @@ private:
         if (scene == nullptr || event == nullptr || host->graphicsContextLost_) return EM_FALSE;
         const kb::input::InputKey key = WebKey(event->code);
         if (key == kb::input::InputKey::None) return EM_FALSE;
-        scene->Input().MutableDeviceState().SetKeyDown(key, eventType == EMSCRIPTEN_EVENT_KEYDOWN);
+        static_cast<void>(host->digital_.Queue(scene->Input().MutableDeviceState(),
+            key, eventType == EMSCRIPTEN_EVENT_KEYDOWN));
         return host->textInputActive_ && eventType == EMSCRIPTEN_EVENT_KEYDOWN
             ? EM_FALSE
             : EM_TRUE;
@@ -673,10 +677,11 @@ private:
         state.SetAnalog(kb::input::InputKey::MouseX, x - state.PointerX());
         state.SetAnalog(kb::input::InputKey::MouseY, y - state.PointerY());
         state.SetPointerPosition(x, y);
+        host->digital_.SetPointerPosition(x, y);
         if (eventType == EMSCRIPTEN_EVENT_MOUSEDOWN || eventType == EMSCRIPTEN_EVENT_MOUSEUP) {
             const bool down = eventType == EMSCRIPTEN_EVENT_MOUSEDOWN;
             if (event->button == 0) {
-                state.SetKeyDown(kb::input::InputKey::MouseLeft, down);
+                static_cast<void>(host->digital_.Queue(state, kb::input::InputKey::MouseLeft, down, true, x, y));
                 if (down) {
                     const kb::scene::SceneEntity target = scene->UI().HitTest({x, y});
                     if (target.IsValid() &&
@@ -685,8 +690,10 @@ private:
                     }
                 }
             }
-            if (event->button == 1) state.SetKeyDown(kb::input::InputKey::MouseMiddle, down);
-            if (event->button == 2) state.SetKeyDown(kb::input::InputKey::MouseRight, down);
+            if (event->button == 1)
+                static_cast<void>(host->digital_.Queue(state, kb::input::InputKey::MouseMiddle, down, true, x, y));
+            if (event->button == 2)
+                static_cast<void>(host->digital_.Queue(state, kb::input::InputKey::MouseRight, down, true, x, y));
         }
         return EM_TRUE;
     }
@@ -716,7 +723,10 @@ private:
 
     static void OnInputFocus(void* userData, bool focused) noexcept {
         auto* host = static_cast<WebGameHost*>(userData);
-        if (host != nullptr && !focused) host->SetTextInputActive(false);
+        if (host != nullptr && !focused) {
+            host->digital_.Clear();
+            host->SetTextInputActive(false);
+        }
     }
 
     void SetTextInputActive(bool active) noexcept {
@@ -767,6 +777,7 @@ private:
     kb::render::Renderer renderer_;
     kb::game::PackagedGameRuntime runtime_;
     kb::game::WebTouchInput touches_;
+    kb::game::DigitalInputFrame digital_;
     std::chrono::steady_clock::time_point previousTick_{};
     std::chrono::steady_clock::time_point storageStartupTime_{};
     std::chrono::steady_clock::time_point graphicsLossTime_{};

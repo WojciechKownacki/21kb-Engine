@@ -1053,7 +1053,7 @@ namespace bgfx
 		{ '\0', "verbose",                 0, NULL,             "Be verbose."                                                                     },
 		{ '\0', "debug",                   0, NULL,             "Debug information. (Vulkan, DirectX and Metal only)"                             },
 		{ '\0', "disasm",                  0, NULL,             "Disassemble compiled shader. (DirectX only)"                                     },
-		{ 'O',  NULL,                      1, "<level>",        "Set optimization level. Can be 0 to 3. (DirectX only)"                           },
+		{ 'O',  NULL,                      1, "<level>",        "Set optimization level (0-3). GLSL: 0 preserves functions."                           },
 		{ '\0', "Werror",                  0, NULL,             "Treat warnings as errors. (DirectX only)"                                        },
 		{ '\0', "avoid-flow-control",      0, NULL,             "Avoid flow control instructions. (DirectX only)"                                 },
 		{ '\0', "no-preshader",            0, NULL,             "Do not generate preshader. (DirectX only)"                                       },
