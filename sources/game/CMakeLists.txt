@@ -285,6 +285,12 @@ kb_target_copy_bgfx_runtime_shaders(kb_game)
 kb_target_stage_material_graph_shader_cache(kb_game)
 
 if(BUILD_TESTING)
+    add_executable(kb_web_text_clipboard_tests tests/WebTextClipboardTests.cpp)
+    target_include_directories(kb_web_text_clipboard_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/private")
+    target_link_libraries(kb_web_text_clipboard_tests PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_web_text_clipboard_tests)
+    add_test(NAME kb_web_text_clipboard COMMAND kb_web_text_clipboard_tests)
+    set_tests_properties(kb_web_text_clipboard PROPERTIES TIMEOUT 30 LABELS "game;ui;input;headless")
     add_library(kb_windows_runtime_module_test_plugin SHARED
         tests/WindowsRuntimeModuleTestPlugin.cpp
     )
