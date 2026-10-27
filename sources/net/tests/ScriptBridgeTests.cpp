@@ -3,6 +3,8 @@
 // an entity as replicated, reacts to connections, spawns and calls, and calls back.
 
 #include "engine/scene/Scene.hpp"
+#include "engine/gameplay/AbilityAsset.hpp"
+#include "engine/scene/SceneGameplay.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -15,6 +17,7 @@
 #include "kb/net/ScriptBridge.hpp"
 
 #include <cmath>
+#include <array>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -96,7 +99,7 @@ SessionKey KeyFor(std::uint8_t id) {
 struct Side {
     Side(const fs::path& project, ScriptNetworkRuntime::Role role, const char* entityName, float x, float y, float z) {
         scene = std::make_unique<kb::scene::Scene>();
-        Require(scene->Assets().MountProject(project) && scene->Assets().Discover() == 1U, "the project could not be mounted");
+        Require(scene->Assets().MountProject(project) && scene->Assets().Discover() >= 1U, "the project could not be mounted");
         const kb::assets::AssetMetadata* metadata = scene->Assets().Manager().Registry().FindByPath("/Game/Logic/Net.lua");
         Require(metadata != nullptr, "the script is not in the project");
         const kb::scene::SceneObject object = scene->Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = entityName });
@@ -315,6 +318,68 @@ void TestScriptsOverTheNetwork() {
         static_cast<unsigned long long>(world.replication->Stats().rpcDispatched), static_cast<unsigned long long>(world.replication->Stats().rpcRejectedPermission));
 }
 
+void TestAuthoritativeScriptAbility() {
+    const fs::path project = MakeProject();
+    {
+        std::ofstream script(project / "Assets/Logic/Net.lua", std::ios::app);
+        script << R"lua(
+function OnRpc_Move(self, event)
+    SetShared("server.attempts", (GetShared("server.attempts") or 0) + 1)
+    local cast = CallFunction("Gameplay.UseAbility", { slot = 1, entity = event.args.e1 })
+    assert(cast.used, cast.reason)
+    local again = CallFunction("Gameplay.UseAbility", { slot = 1, entity = event.args.e1 })
+    assert(not again.used and string.find(again.reason, "cooling down"))
+    SetShared("server.casts", (GetShared("server.casts") or 0) + 1)
+    local health = CallFunction("Gameplay.Health", { entity = event.args.e1 })
+    CallFunction("Net.Call", { rpc = "Score", target = event.args.sender, n1 = health.health })
+end
+)lua";
+    }
+    fs::create_directories(project / "Assets/Abilities");
+    kb::gameplay::AbilityAsset ability{ .name = "Recover", .target = kb::gameplay::AbilityTarget::Self,
+        .amount = 10.0F, .damageType = kb::gameplay::DamageType::Healing, .manaCost = 5.0F, .cooldownSeconds = 2.0F };
+    const auto assetFile = project / "Assets/Abilities/Recover.kbability";
+    Require(kb::gameplay::AbilityAssetIO::Save(assetFile, ability), "ability fixture could not be saved");
+    World world(project, BadLink());
+    auto& scene = *world.server.scene;
+    const auto abilityId = scene.Assets().Manager().Registry().FindByPath("/Game/Abilities/Recover.kbability")->id;
+    kb::scene::CombatantComponent combatant;
+    combatant.health = 50.0F;
+    combatant.maximumMana = 20.0F;
+    combatant.mana = 20.0F;
+    combatant.abilities[0] = abilityId.value;
+    Require(scene.Components().Combatants().Set(world.server.entity, combatant), "server combatant could not be authored");
+    scene.Runtime().SetPlaying(true);
+    ClientSide& owner = world.AddClient(1U, 0U);
+    auto now = world.Run(0U, 60'000U, [&] { return owner.side.Shared("client.score").has_value(); });
+    Require(Number(owner.side.Shared("client.score")) == 60.0 && Number(world.server.Shared("server.casts")) == 1.0 &&
+        scene.Components().Combatants().TryGet(world.server.entity)->mana == 15.0F,
+        "owner ability must execute once on the server and return its authoritative result through Lua RPC");
+
+    static_cast<void>(world.AddClient(2U, now));
+    now = world.Run(now, 60'000U, [&] { return world.replication->Stats().rpcRejectedPermission >= 1U; });
+    Require(world.replication->Stats().rpcRejectedPermission >= 1U && Number(world.server.Shared("server.attempts")) == 1.0,
+        "non-owner ability request must be refused before reaching gameplay code");
+    now = world.Run(now, 5000U, [&] { return scene.Gameplay().AbilityCooldown(world.server.entity, 1U) == 0.0F; });
+    ability.amount = 20.0F;
+    ability.manaCost = 2.0F;
+    Require(kb::gameplay::AbilityAssetIO::Save(assetFile, ability) && scene.Assets().Manager().RefreshAsset(abilityId),
+        "live ability parameter refresh failed");
+    const auto replica = owner.replication->Find(1U);
+    std::array<kb::network::ScriptRpcValue, 3> arguments{ replica.Id(), 0.0F, 0.0F };
+    std::string error;
+    Require(owner.side.runtime->CallRpc("Move", 0U, arguments, error), "second owner request failed: " + error);
+    now = world.Run(now, 60'000U, [&] { return Number(owner.side.Shared("client.score")) == 80.0; });
+    Require(Number(world.server.Shared("server.casts")) == 2.0 && Number(owner.side.Shared("client.score")) == 80.0 &&
+        scene.Components().Combatants().TryGet(world.server.entity)->mana == 13.0F,
+        "next network activation must use refreshed ability parameters exactly once");
+    scene.Entities().Destroy(world.server.entity);
+    static_cast<void>(scene.Runtime().Update(0.03F));
+    Require(scene.Gameplay().AbilityCooldown(world.server.entity, 1U) == 0.0F,
+        "despawn must discard scene ability cooldown state");
+    Require(world.server.host->DrainSceneSystemDiagnostics().empty(), "authoritative ability scripts reported errors");
+}
+
 void TestRuntimeGuards() {
     const fs::path project = MakeProject();
     // A runtime for a scene that has no session: offline functions answer, calls explain.
@@ -351,6 +416,7 @@ int main() {
     const std::vector<std::pair<const char*, void (*)()>> tests{
         { "runtime-guards", &TestRuntimeGuards },
         { "scripts-over-the-network", &TestScriptsOverTheNetwork },
+        { "authoritative-script-ability", &TestAuthoritativeScriptAbility },
     };
     int failures = 0;
     for (const auto& [name, run] : tests) {

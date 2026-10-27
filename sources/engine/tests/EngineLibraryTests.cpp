@@ -5291,6 +5291,51 @@ void RunGameplayAbilityDurationAndCooldownTest() {
         "Gameplay ability accepted a NaN duration");
 }
 
+void RunGameplayAbilityAtomicCostAndDespawnTest() {
+    using namespace kb::gameplay;
+    GameplayAbilities abilities;
+    GameplayModules modules;
+    const kb::scene::SceneEntity caster{31U}, other{32U}, target{33U};
+    const auto resource = GameplayTag("resource");
+    kb::tests::Require(modules.SetAttribute(caster, resource, { 10.0F, 0.0F, 10.0F }), "Ability resource setup failed");
+    GameplayAbilityDefinition ability{ .id = GameplayTag("drain"), .cooldownSeconds = 2.0F,
+        .costAttribute = resource, .cost = 6.0F, .targetRule = AbilityTargetRule::Self,
+        .effect = { resource, -5.0F }, .durationSeconds = 1.0F };
+    kb::tests::Require(!abilities.Activate(ability, caster, {}, caster, {}, modules) &&
+        modules.Attribute(caster, resource)->current == 10.0F && !abilities.IsActive(caster) &&
+        abilities.CooldownRemaining(caster, ability.id) == 0.0F,
+        "A rejected self effect must not partially debit its cost attribute");
+    ability.effect.delta = 2.0F;
+    kb::tests::Require(abilities.Activate(ability, caster, {}, caster, {}, modules) &&
+        modules.Attribute(caster, resource)->current == 6.0F,
+        "A self effect must combine with the validated cost instead of overwriting it");
+    ability.durationSeconds = 9.0F;
+    ability.cooldownSeconds = 7.0F;
+    abilities.Advance(1.0F);
+    kb::tests::Require(!abilities.IsActive(caster) && abilities.CooldownRemaining(caster, ability.id) == 2.0F,
+        "Editing a definition must not change the duration or cooldown of an existing activation");
+    kb::tests::Require(abilities.Remove(caster) && !abilities.Remove(caster) &&
+        abilities.CooldownRemaining(caster, ability.id) == 0.0F,
+        "Despawn must remove all caster cooldowns idempotently");
+    kb::tests::Require(abilities.Activate(ability, caster, {}, caster, {}, modules) &&
+        abilities.Active(caster)->remainingSeconds == 9.0F && abilities.Active(caster)->cooldownSeconds == 7.0F &&
+        abilities.Remove(caster) && !abilities.IsActive(caster),
+        "Subsequent activations must use changed parameters and allow explicit despawn cleanup");
+
+    kb::tests::Require(modules.SetAttribute(caster, resource, { 10.0F, 5.0F, 10.0F }) &&
+        !modules.SpendAttribute(caster, resource, 6.0F) && modules.Attribute(caster, resource)->current == 10.0F &&
+        !abilities.Activate(ability, caster, {}, caster, {}, modules) && modules.Attribute(caster, resource)->current == 10.0F,
+        "Resource spending and ability activation must preserve a nonzero attribute minimum");
+
+    GameplayAbilityDefinition channel{ .id = GameplayTag("channel"), .cooldownSeconds = 3.0F,
+        .durationSeconds = kGameplayAbilityUntilCompleted };
+    kb::tests::Require(abilities.Activate(channel, caster, {}, target, {}, modules) &&
+        abilities.Activate(channel, other, {}, target, {}, modules) && abilities.Remove(target) &&
+        !abilities.IsActive(caster) && !abilities.IsActive(other) && !abilities.Remove(target) &&
+        abilities.CooldownRemaining(caster, channel.id) == 3.0F && abilities.CooldownRemaining(other, channel.id) == 3.0F,
+        "Removing a shared target must cancel every dependent active ability and start caster cooldowns");
+}
+
 // Remove must clear every module store, not only the first one that held data for the entity.
 void RunGameplayModulesRemoveClearsEveryStoreTest() {
     kb::gameplay::GameplayModules modules;
@@ -5824,6 +5869,7 @@ void RunEngineLibraryTests() {
     RunMinimalGameplaySceneReplayTest();
     RunGameplayAbilityEndsAndNextActivatesTest();
     RunGameplayAbilityDurationAndCooldownTest();
+    RunGameplayAbilityAtomicCostAndDespawnTest();
     RunGameplayModulesRemoveClearsEveryStoreTest();
     RunLifecycleSoakTest();
     RunGameInstanceLifetimeTest();

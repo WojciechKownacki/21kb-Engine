@@ -246,6 +246,34 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli physics-layers` | show or edit the layer collision matrix |
 | `kb_cli lighting-quality` | show or set the shadow and global illumination quality |
 
+## Ability lifetime and live parameters
+
+`kb_cli ability new/set` authors validated `.kbability` assets. A scene's
+`Gameplay.UseAbility` commits its instantaneous damage or healing, mana cost
+and cooldown together. Repeated use during cooldown is refused with a reason.
+Refreshing an edited asset through `AssetManager::RefreshAsset` changes the
+next activation; an existing cooldown retains its original duration. Despawning
+the caster discards its scene cooldown state on the next gameplay update.
+An already applied instantaneous hit is not a cancellable ongoing effect.
+
+The separate C++ `GameplayAbilities` registry supports timed and open-ended
+activations, `Cancel`, `Complete` and `Remove`. Activation validates both cost
+and effect before changing attributes, including self effects on the cost
+attribute. Costs preserve the attribute's minimum. Duration and cooldown are
+captured at activation, so editing a definition affects subsequent activations.
+The owner must call `Remove(entity)` on despawn, alongside
+`GameplayModules::Remove(entity)`: it removes that caster's state and cancels
+other activations targeting the removed entity. Cancellation starts the other
+casters' cooldowns and does not refund committed costs or undo instantaneous
+effects. Neither registry creates periodic effects implicitly.
+
+For network play, invoke scene abilities in a server-side Lua RPC handler after
+the RPC ownership check. The network script tests exercise an owning client,
+an unauthorized client, cooldown refusal, live asset refresh and an authoritative
+result reply under simulated loss, reordering and duplication. Ability state is
+not automatically replicated; the application declares its RPCs and sends the
+result fields it needs. See [networking](networking.md).
+
 ## Inspecting AI decisions
 
 `kb_cli run --project <dir> --frames 60 --report ai` writes a clean JSON report

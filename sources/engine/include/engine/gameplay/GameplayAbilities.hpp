@@ -14,6 +14,8 @@ inline constexpr float kGameplayAbilityUntilCompleted = std::numeric_limits<floa
 struct GameplayEffect { AttributeId attribute = 0U; float delta = 0.0F; };
 // Activation commits cost and effect immediately. The ability then stays active for durationSeconds
 // (0 = it ends on the next Advance) or until Complete()/Cancel(); its cooldown starts when it ends.
+// Cost is validated and debited before the effect, including when both use the same attribute.
+// Editing a definition affects subsequent activations; active duration and cooldown are snapshots.
 struct GameplayAbilityDefinition { GameplayTagId id = 0U; float cooldownSeconds = 0.0F; AttributeId costAttribute = 0U; float cost = 0.0F; AbilityTargetRule targetRule = AbilityTargetRule::Any; GameplayEffect effect{}; float durationSeconds = 0.0F; };
 struct ActiveGameplayAbility { GameplayTagId id = 0U; kb::scene::SceneEntity caster{}; kb::scene::SceneEntity target{}; float remainingSeconds = 0.0F; float cooldownSeconds = 0.0F; };
 // Call Advance from the owning game loop; this class creates neither a thread nor a scheduler.
@@ -24,6 +26,10 @@ public:
     [[nodiscard]] bool Cancel(kb::scene::SceneEntity caster) noexcept;
     // Called by the ability's owner when its work finished before (or without) a fixed duration.
     [[nodiscard]] bool Complete(kb::scene::SceneEntity caster) noexcept;
+    // The owner calls this on despawn, alongside GameplayModules::Remove. Discards
+    // the entity's active ability and cooldowns; cancels other casters targeting it.
+    // Committed instantaneous effects and costs are not undone by cancellation.
+    [[nodiscard]] bool Remove(kb::scene::SceneEntity entity) noexcept;
     // Ticks cooldowns, then ends every active ability whose duration elapsed and starts its cooldown
     // with the time left over from this step.
     void Advance(float deltaSeconds) noexcept;
