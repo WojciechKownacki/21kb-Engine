@@ -491,3 +491,19 @@ measurement covering an empty provider, effect admission, four retained batches,
 steady updates and unload. Windows reports working set, process commit and
 their peaks; other hosts explicitly report unavailable process counters.
 These counters include allocator and runtime overhead, unlike particle capacity.
+
+Identical eligible local-space instances share the simulation of the lowest
+dense instance index. Effect, seed, rate and capacity must match; parameters,
+events, finite non-looping effects and GPU visual execution exclude sharing.
+Grouping uses fixed-capacity scratch storage: one pass over parameter ownership
+and eligible instances, followed by sorting only when multiple groups exist.
+It therefore avoids comparing every pair of instances and does not allocate.
+Pausing, releasing or compacting instances rebuilds group leadership each step.
+
+`kb_21kb_particle_cpu_backend_tests --sharing-benchmark` measures warmed fixed
+steps at 32, 64, 128 and 256 instances with identical and distinct seeds. It
+reports wall-time p50/p95/p99 across 31 batches of 64 steps and requires zero
+allocations. The zero-emission fixture isolates instance bookkeeping from
+particle integration; it is not a rendered-scene performance claim. The regular
+suite separately checks shifted particle output, changing seeds and parameters,
+paused leaders and dense-slot compaction.

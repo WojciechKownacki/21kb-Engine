@@ -26,6 +26,7 @@
 #include <cstring>
 #include <exception>
 #include <limits>
+#include <tuple>
 
 namespace kb::particle_plugin {
 namespace {
@@ -1607,28 +1608,47 @@ void CpuParticleBackend::SpawnRequested(
 
 void CpuParticleBackend::UpdateSharedSimulations() noexcept {
     sharedLeaders_.assign(denseInstanceCount_, kInvalidDenseIndex);
-    const auto shareable = [this](std::uint32_t d) noexcept {
+    std::array<bool, kb::scene::kParticleEffectMaxInstancesPerScene> parameterized{};
+    for (const auto& parameter : parameters_) {
+        const auto dense = ResolveDenseIndex(parameter.instanceId);
+        if (dense != kInvalidDenseIndex) parameterized[dense] = true;
+    }
+    const auto shareable = [this, &parameterized](std::uint32_t d) noexcept {
         const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[d].compiledEffectIndex].effect;
-        if (playbackStates_[d] != PlaybackState::Playing || (!effect.looping && effect.durationSeconds > 0.0F) ||
+        if (parameterized[d] || !std::isfinite(rateMultipliers_[d]) ||
+            playbackStates_[d] != PlaybackState::Playing || (!effect.looping && effect.durationSeconds > 0.0F) ||
             effect.eventBindingCount != 0U ||
             executionPaths_[d] == kb::particles::ParticleRuntimeExecutionPath::GpuVisual) return false;
         for (std::uint8_t e = 0U; e < effect.emitterCount; ++e) {
             if (effect.emitters[e].enabled && effect.emitters[e].simulationSpace != kb::scene::ParticleSimulationSpace::Local) return false;
         }
-        const std::uint64_t id = MakeInstanceId(denseToSlot_[d], slotGenerations_[denseToSlot_[d]]);
-        return std::none_of(parameters_.begin(), parameters_.end(), [id](const ParameterEntry& p) { return p.instanceId == id; });
+        return true;
     };
+    const auto key = [this](std::uint32_t d) noexcept {
+        return std::tuple{instanceRuntime_[d].compiledEffectIndex, seeds_[d], rateMultipliers_[d], maxParticlesOverrides_[d]};
+    };
+    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene> candidates{};
+    std::size_t count = 0U;
+    bool identical = true;
     for (std::uint32_t copy = 0U; copy < denseInstanceCount_; ++copy) {
         if (!shareable(copy)) continue;
-        for (std::uint32_t leader = 0U; leader < copy; ++leader) {
-            if (sharedLeaders_[leader] == kInvalidDenseIndex &&
-                instanceRuntime_[leader].compiledEffectIndex == instanceRuntime_[copy].compiledEffectIndex &&
-                seeds_[leader] == seeds_[copy] && rateMultipliers_[leader] == rateMultipliers_[copy] &&
-                maxParticlesOverrides_[leader] == maxParticlesOverrides_[copy] && shareable(leader)) {
-                sharedLeaders_[copy] = leader;
-                break;
-            }
-        }
+        if (count != 0U && key(candidates[0]) != key(copy)) identical = false;
+        candidates[count++] = copy;
+    }
+    if (count < 2U) return;
+    // The common single-group case stays linear. Otherwise sort bounded scratch
+    // storage, preserving the lowest dense index as each group's leader.
+    if (!identical) {
+        std::sort(candidates.begin(), candidates.begin() + count, [&](std::uint32_t a, std::uint32_t b) noexcept {
+            const auto left = key(a), right = key(b);
+            return left < right || (left == right && a < b);
+        });
+    }
+    auto leader = candidates[0];
+    for (std::size_t index = 1U; index < count; ++index) {
+        const auto copy = candidates[index];
+        if (key(leader) == key(copy)) sharedLeaders_[copy] = leader;
+        else leader = copy;
     }
 }
 

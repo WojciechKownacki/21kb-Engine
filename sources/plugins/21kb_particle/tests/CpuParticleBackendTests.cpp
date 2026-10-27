@@ -26,6 +26,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -3072,6 +3073,40 @@ void TestGpuFallbackReasonTable() {
 // Local-space instances of one effect with the same seed share one simulation: the copy is the leader's particles
 // carried to the copy's transform, so it never diverges from the leader. A parameter, another seed or another rate
 // takes the instance out of sharing at once, and it then simulates by itself.
+void RunSharedSimulationBenchmark() {
+    for (const bool distinct : {false, true}) for (const std::uint32_t count : {32U, 64U, 128U, 256U}) {
+        auto effect = Fixture::MakeEffect(0.0F, 1U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+        effect.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+        Fixture fixture(effect);
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            const auto instance = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+            Require(instance.Succeeded() && backend.SetSeed(fixture.scene, instance.instanceId, distinct ? index : 0U).Succeeded()
+                && backend.Play(fixture.scene, instance.instanceId).Succeeded(), "Sharing benchmark instance did not start");
+        }
+        const auto step = [&] { Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "Sharing benchmark step failed"); };
+        for (unsigned warmup = 0U; warmup < 64U; ++warmup) step();
+        std::array<double, 31U> samples{};
+        g_allocationCount.store(0U, std::memory_order_relaxed);
+        g_countAllocations.store(true, std::memory_order_release);
+        for (auto& sample : samples) {
+            const auto start = std::chrono::steady_clock::now();
+            for (unsigned iteration = 0U; iteration < 64U; ++iteration) step();
+            sample = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 64.0;
+        }
+        g_countAllocations.store(false, std::memory_order_release);
+        const auto allocations = g_allocationCount.load(std::memory_order_relaxed);
+        Require(allocations == 0U, "Warmed sharing search must not allocate");
+        std::sort(samples.begin(), samples.end());
+        std::cout << "sharing instances=" << count << " distinct=" << distinct
+            << " p50_us=" << samples[15] << " p95_us=" << samples[29]
+            << " p99_us=" << samples[30] << " allocations=" << allocations << '\n';
+    }
+}
+
 void TestSharedSimulationOfIdenticalInstances() {
     auto effect = Fixture::MakeEffect(60.0F, 128U);
     effect.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
@@ -3169,6 +3204,24 @@ void TestSharedSimulationOfIdenticalInstances() {
     step(1);
     Require(matchesShifted(cloudOf(leader.instanceId), cloudOf(copy.instanceId), {-4.0F, 1.0F, 0.0F}),
         "an instance with the leader's seed again must rejoin the shared simulation");
+    Require(backend.ClearParameter(fixture.scene, other.instanceId, "gain").Succeeded() &&
+        backend.SetSeed(fixture.scene, copy.instanceId, 12345U).Succeeded() &&
+        backend.SetSeed(fixture.scene, other.instanceId, 12345U).Succeeded(), "Second sharing group did not configure");
+    step(20);
+    Require(matchesShifted(cloudOf(copy.instanceId), cloudOf(other.instanceId), {4.0F, -1.0F, 20.0F}),
+        "Clearing parameters must join the matching group rather than the first effect instance");
+    Require(backend.Pause(fixture.scene, copy.instanceId).Succeeded(), "Sharing leader did not pause");
+    const auto replacement = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(replacement.Succeeded() && backend.SetSeed(fixture.scene, replacement.instanceId, 12345U).Succeeded() &&
+        backend.Play(fixture.scene, replacement.instanceId).Succeeded(), "Replacement sharing follower did not start");
+    place(replacement.instanceId, {10.0F, 0.0F, 0.0F});
+    step(20);
+    Require(matchesShifted(cloudOf(other.instanceId), cloudOf(replacement.instanceId), {10.0F, 0.0F, -20.0F}),
+        "A paused leader must not prevent remaining instances from sharing their live simulation");
+    Require(backend.Release(fixture.scene, copy.instanceId).Succeeded(), "Paused sharing instance did not release");
+    step(1);
+    Require(matchesShifted(cloudOf(replacement.instanceId), cloudOf(other.instanceId), {-10.0F, 0.0F, 20.0F}),
+        "Dense-slot compaction must rebuild groups without stale leader indices");
     Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
         "shared simulation fixture could not release its backend");
 }
@@ -3845,6 +3898,10 @@ int main(int argc, char** argv) {
             "Static and extreme finite flipbook clocks must stay within the authored range");
         if (argc == 2 && std::string_view{argv[1]} == "--memory-probe") {
             RunParticleSceneMemoryProbe();
+            return 0;
+        }
+        if (argc == 2 && std::string_view{argv[1]} == "--sharing-benchmark") {
+            RunSharedSimulationBenchmark();
             return 0;
         }
         TestLazyParticleStorageAdmissionAndReload();
