@@ -55,6 +55,11 @@ Validation:
   pointer selection, multiline navigation and stale layout rejection.
 - `kb_win32_clipboard` checks native Unicode transfers and runtime cut/copy/paste
   on an isolated, noninteractive window station with its own clipboard.
+- `kb_game_ui_visual_package` checks cooked nested masks, shadow/outline ordering,
+  long-label ellipsis and a blurred world edge at four resolutions. It also resizes
+  the hidden native host through portrait and landscape while rendering, then checks
+  GPU pixels and recorded viewport dimensions. Native DPI transitions and hardware
+  overdraw counters are not covered by this test.
 - `kb_game_text_shaping_package` cooks a project, makes its source unavailable,
   and runs the shipped player. A separate instrumented pass reads the same
   immutable package and compares GPU pixels against explicit Unicode reference
