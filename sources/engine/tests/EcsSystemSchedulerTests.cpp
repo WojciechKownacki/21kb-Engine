@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <span>
 #include <memory>
@@ -593,14 +594,22 @@ void RunSchedulerLargeSparseGraphCacheInvalidationTest() {
     scheduler.Update(world, 0.016F);
     kb::tests::Require(scheduler.LastProfilerTrace().events.size() == readerCount,
         "ECS sparse scheduler trace lost systems on the first frame");
+    const auto coldPlan = scheduler.PlanningStats();
+    kb::tests::Require(coldPlan.attempts == 1U && coldPlan.successfulRebuilds == 1U && coldPlan.lastSucceeded &&
+        coldPlan.systemCount == readerCount && coldPlan.edgeCount == 0U && coldPlan.stageCount == 1U,
+        "Scheduler must report the actual sparse planning workload");
     scheduler.Update(world, 0.016F);
+    kb::tests::Require(scheduler.PlanningStats().attempts == 1U && scheduler.PlanningStats().lastWallNanoseconds == coldPlan.lastWallNanoseconds,
+        "A cached frame must not report another plan rebuild");
     kb::tests::Require(scheduler.LastProfilerTrace().events.size() == readerCount &&
         scheduler.LastProfilerTrace().systemCounters.size() == readerCount,
         "ECS sparse scheduler trace changed after reusing the dependency graph");
 
     kb::ecs::SystemAccess writerAccess;
     writerAccess.Write(1);
-    scheduler.Add(std::make_unique<RecordingSystem>("Writer", std::move(writerAccess), executionOrder), world);
+    auto writer = std::make_unique<RecordingSystem>("Writer", std::move(writerAccess), executionOrder);
+    const auto* writerPointer = writer.get();
+    scheduler.Add(std::move(writer), world);
     scheduler.Update(world, 0.016F);
     const kb::ecs::SystemSchedulerTrace& trace = scheduler.LastProfilerTrace();
     kb::tests::Require(trace.events.size() == readerCount + 1U && trace.systemCounters.size() == readerCount + 1U,
@@ -608,11 +617,94 @@ void RunSchedulerLargeSparseGraphCacheInvalidationTest() {
     kb::tests::Require(trace.events.back().systemName == "Writer" &&
         trace.events.back().blockedDependencies.size() == readerCount,
         "ECS scheduler reused stale dependencies after adding a writer");
+    const auto writerPlan = scheduler.PlanningStats();
+    kb::tests::Require(writerPlan.attempts == 2U && writerPlan.edgeCount == readerCount && writerPlan.stageCount == 2U &&
+        scheduler.Remove(writerPointer, world) && scheduler.LastProfilerTrace().events.empty(),
+        "Removing a system must detach its old plan and trace");
+    scheduler.Update(world, 0.016F);
+    const auto removedPlan = scheduler.PlanningStats();
+    kb::tests::Require(removedPlan.attempts == 3U && removedPlan.successfulRebuilds == 3U &&
+        removedPlan.systemCount == readerCount && removedPlan.edgeCount == 0U && removedPlan.stageCount == 1U &&
+        scheduler.LastProfilerTrace().events.size() == readerCount,
+        "Removing a writer must rebuild independent stages without stale edges");
+    std::cout << "scheduler_plan systems=" << readerCount << " cold_ns=" << coldPlan.lastWallNanoseconds
+        << " add_writer_ns=" << writerPlan.lastWallNanoseconds << " remove_writer_ns=" << removedPlan.lastWallNanoseconds << '\n';
 
     scheduler.Shutdown(world);
     scheduler.Update(world, 0.016F);
     kb::tests::Require(scheduler.LastProfilerTrace().events.empty(),
         "ECS scheduler retained stale trace events after shutdown");
+}
+
+void RunSchedulerRemovalLifetimeTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler{{.parallelExecutionEnabled = false}};
+    int destroyed = 0;
+    bool rejectedReentrant = false;
+    struct Probe final : kb::ecs::System {
+        Probe(kb::ecs::SystemScheduler& owner, int& count, bool& rejected, bool throws)
+            : owner(owner), count(count), rejected(rejected), throws(throws) {}
+        kb::ecs::SystemAccess DeclareAccess(kb::ecs::World&) const override { return {}; }
+        void OnUpdate(kb::ecs::World& world, float) override {
+            try { static_cast<void>(owner.Remove(this, world)); }
+            catch (const std::logic_error&) { rejected = true; }
+        }
+        void OnDestroy(kb::ecs::World&) override {
+            ++count;
+            if (throws) throw std::runtime_error("destroy callback failure");
+        }
+        kb::ecs::SystemScheduler& owner;
+        int& count;
+        bool& rejected;
+        bool throws;
+    };
+    auto first = std::make_unique<Probe>(scheduler, destroyed, rejectedReentrant, false);
+    auto* firstPointer = first.get();
+    scheduler.Add(std::move(first), world);
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(rejectedReentrant && destroyed == 0 && !scheduler.Remove(nullptr, world),
+        "A running callback must not destroy its own system or accept a null removal");
+    kb::tests::Require(scheduler.Remove(firstPointer, world) && destroyed == 1, "Owned system must destroy exactly once on removal");
+    auto throwing = std::make_unique<Probe>(scheduler, destroyed, rejectedReentrant, true);
+    auto* throwingPointer = throwing.get();
+    scheduler.Add(std::move(throwing), world);
+    bool failed = false;
+    try { static_cast<void>(scheduler.Remove(throwingPointer, world)); }
+    catch (const std::runtime_error&) { failed = true; }
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(failed && destroyed == 2 && scheduler.ExecutionOrderSnapshot().empty(),
+        "A throwing destroy callback must not retain the removed system or lock the scheduler");
+    scheduler.Shutdown(world);
+    kb::tests::Require(destroyed == 2 && scheduler.PlanningStats().attempts == 0U,
+        "Shutdown must not destroy removed systems again and must reset planning telemetry");
+}
+
+void RunSchedulerRemovedDependencyRecoveryTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler{{.parallelExecutionEnabled = false}};
+    std::vector<std::string> order;
+    auto source = std::make_unique<RecordingSystem>("Source", kb::ecs::SystemAccess{}, order);
+    const auto* sourcePointer = source.get();
+    scheduler.Add(std::move(source), world);
+    kb::ecs::SystemAccess after;
+    after.After("Source");
+    auto dependent = std::make_unique<RecordingSystem>("Dependent", std::move(after), order);
+    const auto* dependentPointer = dependent.get();
+    scheduler.Add(std::move(dependent), world);
+    scheduler.Update(world, 0.0F);
+    order.clear();
+    kb::tests::Require(scheduler.Remove(sourcePointer, world), "Dependency source removal failed");
+    bool rejected = false;
+    try { scheduler.Update(world, 0.0F); }
+    catch (const std::invalid_argument& error) { rejected = std::string_view{error.what()}.find("unknown system") != std::string_view::npos; }
+    kb::tests::Require(rejected && order.empty() && !scheduler.PlanningStats().lastSucceeded &&
+        scheduler.PlanningStats().attempts == 2U && scheduler.PlanningStats().successfulRebuilds == 1U,
+        "A removed explicit dependency must fail before executing any stale plan and report a failed rebuild");
+    kb::tests::Require(scheduler.Remove(dependentPointer, world), "Failed graph must allow removal of the unresolved dependent");
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(scheduler.PlanningStats().lastSucceeded && scheduler.PlanningStats().systemCount == 0U,
+        "A failed planning attempt must permit repair and a subsequent empty update");
+    scheduler.Shutdown(world);
 }
 
 void RunProfilerTraceExportWritesExternalJsonFileTest() {
@@ -823,6 +915,8 @@ void RunEcsSystemSchedulerTests() {
     RunRuntimeAccessValidatorDetectsWriteWriteConflictTest();
     RunProfilerCountersCaptureFrameAndSystemWorkTest();
     RunSchedulerLargeSparseGraphCacheInvalidationTest();
+    RunSchedulerRemovalLifetimeTest();
+    RunSchedulerRemovedDependencyRecoveryTest();
     RunProfilerTraceExportWritesExternalJsonFileTest();
     RunDebugTraceCapturesSystemExecutionTest();
     RunSchedulerCriticalPathTest();

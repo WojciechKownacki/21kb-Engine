@@ -100,6 +100,25 @@ the snapshot under `telemetry`); logs stay on stderr. The number of ECS worker t
 setting of the scene yet, so there is no CLI option for it.
 Tests: `EcsInspectionTests.cpp` (`metric_basis`) and `RunParticleReportCommandTests` in `KbCliTests.cpp` (the ecs report).
 
+## Scheduler lifecycle and planning
+
+`SystemScheduler::Remove(system, world)` detaches an owned system by pointer
+between updates and invalidates its dependency plan and trace. It calls
+`OnDestroy` once; even if that callback throws, the system stays detached.
+Removing an explicit ordering target makes the next rebuild report an unknown
+dependency before any systems run. Removing the dependent or adding a replacement
+repairs the graph. Add, Remove, Update and Shutdown reject overlapping or
+reentrant calls, including attempts to remove a system from its own callback.
+Other scheduler access remains confined to its owner thread.
+
+`PlanningStats()` measures Update's cached execution-plan rebuilds separately
+from execution timing; `ExecutionOrderSnapshot()` is an unmeasured inspection. It reports
+attempts, successful rebuilds, last wall duration, system/edge/stage counts and
+whether the last attempt succeeded. Frames reusing the cached graph leave these
+values unchanged; Shutdown resets them. The scheduler suite measures a 128-reader
+graph, adding a conflicting writer and removing it, and checks cache reuse,
+failed-dependency recovery and exactly-once removal cleanup.
+
 ## ProfilerCounters
 
 `kb::core::ProfilerCounters` is a debug helper. It is on in debug builds and off in `NDEBUG`

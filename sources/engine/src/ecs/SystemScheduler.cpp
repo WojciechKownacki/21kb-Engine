@@ -15,6 +15,19 @@
 namespace kb::ecs {
 namespace {
 
+class SchedulerOperation {
+public:
+    explicit SchedulerOperation(std::atomic_bool& active) : active_(active) {
+        if (active_.exchange(true, std::memory_order_acq_rel))
+            throw std::logic_error("ECS scheduler operations cannot overlap or run inside system callbacks");
+    }
+    ~SchedulerOperation() { active_.store(false, std::memory_order_release); }
+    SchedulerOperation(const SchedulerOperation&) = delete;
+    SchedulerOperation& operator=(const SchedulerOperation&) = delete;
+private:
+    std::atomic_bool& active_;
+};
+
 [[nodiscard]] std::uint64_t ToNanoseconds(std::chrono::steady_clock::duration duration) noexcept {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
 }
@@ -60,6 +73,7 @@ SystemScheduler::SystemScheduler(SystemSchedulerConfig config) noexcept
 SystemScheduler::~SystemScheduler() = default;
 
 void SystemScheduler::Add(std::unique_ptr<System> system, World& world) {
+    const SchedulerOperation operation{operationActive_};
     if (system == nullptr) {
         throw std::invalid_argument("ECS system scheduler cannot add a null system");
     }
@@ -73,7 +87,27 @@ void SystemScheduler::Add(std::unique_ptr<System> system, World& world) {
     graphDirty_ = true;
 }
 
+bool SystemScheduler::Remove(const System* system, World& world) {
+    const SchedulerOperation operation{operationActive_};
+    const auto found = std::find_if(systems_.begin(), systems_.end(), [system](const auto& entry) {
+        return entry.system.get() == system;
+    });
+    if (found == systems_.end()) return false;
+    auto removed = std::move(found->system);
+    systems_.erase(found);
+    executionOrder_.clear();
+    executionStages_.clear();
+    reverseDependencyGraph_.clear();
+    traceCounterIndexBySystem_.clear();
+    lastTrace_ = {};
+    graphDirty_ = true;
+    removed->SetExecutionWorkerPool(nullptr);
+    removed->OnDestroy(world);
+    return true;
+}
+
 void SystemScheduler::Update(World& world, float deltaSeconds) {
+    const SchedulerOperation operation{operationActive_};
     if (graphDirty_) {
         RebuildExecutionOrder();
     }
@@ -183,6 +217,7 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
 }
 
 void SystemScheduler::Shutdown(World& world) {
+    const SchedulerOperation operation{operationActive_};
     for (auto it = systems_.rbegin(); it != systems_.rend(); ++it) {
         it->system->OnDestroy(world);
     }
@@ -195,6 +230,7 @@ void SystemScheduler::Shutdown(World& world) {
     accessValidator_.Clear();
     graphDirty_ = false;
     lastTrace_ = {};
+    planningStats_ = {};
 }
 
 void SystemScheduler::SetSchedulingMode(SystemSchedulingMode mode) noexcept {
@@ -242,6 +278,10 @@ bool SystemScheduler::ProfilerEnabled() const noexcept {
 
 const SystemSchedulerTrace& SystemScheduler::LastProfilerTrace() const noexcept {
     return lastTrace_;
+}
+
+const SystemSchedulerPlanningStats& SystemScheduler::PlanningStats() const noexcept {
+    return planningStats_;
 }
 
 std::vector<std::vector<std::size_t>> SystemScheduler::BuildDependencyGraph() const {
@@ -466,14 +506,30 @@ std::vector<SystemScheduler::ExecutionStage> SystemScheduler::BuildExecutionStag
 }
 
 void SystemScheduler::RebuildExecutionOrder() {
-    const std::vector<std::vector<std::size_t>> graph = BuildDependencyGraph();
-    std::vector<std::size_t> order = BuildExecutionOrder(graph);
-    std::vector<ExecutionStage> stages = BuildExecutionStages(order, graph);
-    std::vector<std::vector<std::size_t>> reverseGraph = BuildReverseDependencyGraph(graph);
-    executionOrder_ = std::move(order);
-    executionStages_ = std::move(stages);
-    reverseDependencyGraph_ = std::move(reverseGraph);
-    graphDirty_ = false;
+    const auto start = std::chrono::steady_clock::now();
+    ++planningStats_.attempts;
+    planningStats_.lastSucceeded = false;
+    planningStats_.systemCount = systems_.size();
+    planningStats_.edgeCount = 0U;
+    planningStats_.stageCount = 0U;
+    try {
+        const std::vector<std::vector<std::size_t>> graph = BuildDependencyGraph();
+        for (const auto& edges : graph) planningStats_.edgeCount += edges.size();
+        std::vector<std::size_t> order = BuildExecutionOrder(graph);
+        std::vector<ExecutionStage> stages = BuildExecutionStages(order, graph);
+        std::vector<std::vector<std::size_t>> reverseGraph = BuildReverseDependencyGraph(graph);
+        executionOrder_ = std::move(order);
+        executionStages_ = std::move(stages);
+        reverseDependencyGraph_ = std::move(reverseGraph);
+        graphDirty_ = false;
+        planningStats_.stageCount = executionStages_.size();
+        planningStats_.lastSucceeded = true;
+        ++planningStats_.successfulRebuilds;
+    } catch (...) {
+        planningStats_.lastWallNanoseconds = ToNanoseconds(std::chrono::steady_clock::now() - start);
+        throw;
+    }
+    planningStats_.lastWallNanoseconds = ToNanoseconds(std::chrono::steady_clock::now() - start);
 }
 
 void SystemScheduler::BeginDebugTrace() {

@@ -7,6 +7,7 @@
 #include "engine/ecs/World.hpp"
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -35,6 +36,16 @@ struct SystemSchedulerConfig {
     WorkerPoolConfig workerPool{};
 };
 
+struct SystemSchedulerPlanningStats {
+    std::uint64_t attempts = 0U;
+    std::uint64_t successfulRebuilds = 0U;
+    std::uint64_t lastWallNanoseconds = 0U;
+    std::size_t systemCount = 0U;
+    std::size_t edgeCount = 0U;
+    std::size_t stageCount = 0U;
+    bool lastSucceeded = false;
+};
+
 class SystemScheduler {
 public:
     SystemScheduler() = default;
@@ -47,6 +58,10 @@ public:
     SystemScheduler& operator=(SystemScheduler&&) noexcept = delete;
 
     void Add(std::unique_ptr<System> system, World& world);
+    // Owner-thread operation between updates. The pointer identifies an owned
+    // system, without relying on its display name. OnDestroy runs once after
+    // detachment; a throwing callback cannot leave the removed system scheduled.
+    [[nodiscard]] bool Remove(const System* system, World& world);
     void Update(World& world, float deltaSeconds);
     void Shutdown(World& world);
 
@@ -59,6 +74,10 @@ public:
     void SetProfilerEnabled(bool enabled) noexcept;
     [[nodiscard]] bool ProfilerEnabled() const noexcept;
     [[nodiscard]] const SystemSchedulerTrace& LastProfilerTrace() const noexcept;
+    // Update's cached execution-plan rebuilds only; excludes system execution.
+    // ExecutionOrderSnapshot is an unmeasured inspection. Cached frames leave
+    // these measurements unchanged. Shutdown resets the counters.
+    [[nodiscard]] const SystemSchedulerPlanningStats& PlanningStats() const noexcept;
 
 private:
     struct ScheduledSystem {
@@ -117,6 +136,8 @@ private:
     bool graphDirty_ = false;
     std::uint64_t traceFrameIndex_ = 0;
     SystemSchedulerTrace lastTrace_;
+    SystemSchedulerPlanningStats planningStats_;
+    std::atomic_bool operationActive_{false};
 };
 
 } // namespace kb::ecs
