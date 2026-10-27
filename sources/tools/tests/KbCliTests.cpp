@@ -4413,7 +4413,8 @@ void RunCliJsonTests() {
 
     // help: the exit codes are documented in it, as text and as a result.
     const CliRun help = RunCliProgram({ "help" });
-    Require(help.exitCode == 0 && Contains(help.out, "Exit codes: 0 on success, 1 on any failure") && Contains(help.out, "--json"),
+    Require(help.exitCode == 0 && Contains(help.out, "Exit codes: normally 0 on success and 1 on failure") &&
+            Contains(help.out, "124 on timeout and 130 on cancellation") && Contains(help.out, "--json"),
         "help must document --json and the exit codes");
     const CliRun helpJson = RunCliProgram({ "help", "--json" });
     Require(helpJson.exitCode == 0 && ParseCliResult(helpJson).Find("ok")->AsBool() &&

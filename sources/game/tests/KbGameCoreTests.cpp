@@ -1768,7 +1768,7 @@ void RunSceneMetaCookValidationTests() {
             "Cooker rejection did not identify the scene metadata failure");
         Require(
             Mentions(cook.error, std::string{ readerDiagnostic }),
-            "Cooker rejection did not preserve the metadata reader diagnostic");
+            ("Cooker rejection did not preserve the metadata reader diagnostic: " + cook.error).c_str());
         Require(
             !std::filesystem::exists(outputPack),
             "Cooker published a package after rejecting unreadable scene metadata");
@@ -1789,7 +1789,7 @@ void RunSceneMetaCookValidationTests() {
         WriteTextFile(
             fixture.root / "Assets" / "Scenes" / "Main.meta",
             "not a 21kb scene metadata descriptor");
-        requireRejectedCook(fixture, "no readable scene metadata sidecar", "descriptor fields are invalid");
+        requireRejectedCook(fixture, "no readable scene metadata sidecar", "header is invalid");
     }
 
     {
