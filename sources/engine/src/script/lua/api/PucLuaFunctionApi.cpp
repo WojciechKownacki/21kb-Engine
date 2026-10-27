@@ -1,4 +1,5 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
+#include "engine/assets/AssetId.hpp"
 
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/script/PucLuaSafeCall.hpp"
@@ -3385,10 +3386,21 @@ ScriptFunctionCallResult CallLocalization(ScriptExecutionContext& context, const
 int LuaLocalizationSetCatalog(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
-    const lua_Integer catalog = luaL_checkinteger(state, 1);
-    if (catalog < 0) return luaL_error(state, "Localization.SetCatalog requires a non-negative asset id");
+    std::uint64_t catalog = 0U;
+    if (lua_type(state, 1) == LUA_TSTRING) {
+        std::size_t length = 0U;
+        const char* text = lua_tolstring(state, 1, &length);
+        kb::assets::AssetId id;
+        if (!kb::assets::TryParseAssetId(std::string_view{text, length}, id))
+            return luaL_error(state, "Localization.SetCatalog requires a hexadecimal asset id string");
+        catalog = id.value;
+    } else {
+        const lua_Integer value = luaL_checkinteger(state, 1);
+        if (value < 0) return luaL_error(state, "Localization.SetCatalog requires a non-negative asset id or hexadecimal string");
+        catalog = static_cast<std::uint64_t>(value);
+    }
     const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.SetCatalog", {
-        Arg("catalog", ScriptValue{ static_cast<std::uint64_t>(catalog), ScriptValueType::Hash }),
+        Arg("catalog", ScriptValue{ catalog, ScriptValueType::Hash }),
     });
     if (!result.Succeeded()) return PushCallError(state, result, "Localization catalog was rejected");
     lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);

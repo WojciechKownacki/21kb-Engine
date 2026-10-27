@@ -2296,6 +2296,8 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
                     else if constexpr (std::is_same_v<T, float>) lane = lane == 0.0F ? 0.5F : lane * 0.5F;
                     else lane = lane == 0 ? 1 : 0;
                 }, changed);
+                if (descriptor.type == kb::scene::UIComponentType::Text && property.name == "localizationNumber")
+                    changed = std::string{"2.00"};
                 auto candidate = values;
                 if (kb::scene::WriteUIComponentProperty(candidate, descriptor.type, property.name, changed) ==
                     kb::scene::UIComponentPropertyWriteResult::Succeeded && changed != value) {

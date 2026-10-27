@@ -826,8 +826,12 @@ class FrameBuilder {
             else
                 element.image->imageAssetId = image;
         }
-        if (element.text.has_value() && !UITextLocalizationKey(*element.text).empty())
-            SetTextClipped(*element.text, scene_.Localization().Translate(UITextLocalizationKey(*element.text)));
+        if (element.text.has_value() && !UITextLocalizationKey(*element.text).empty()) {
+            const auto key = UITextLocalizationKey(*element.text);
+            const auto number = UITextLocalizationNumber(*element.text);
+            SetTextClipped(*element.text, number.empty() ? scene_.Localization().Translate(key) :
+                scene_.Localization().FormatPluralNumber(key, number));
+        }
         if (element.inputField.has_value()) {
             if (state_.uiFocused == entity) {
                 element.textCaretByteOffset = static_cast<std::uint32_t>(state_.uiTextCursorByteOffset);

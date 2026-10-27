@@ -386,6 +386,7 @@ constexpr std::array kRawImageProperties{
 constexpr std::array kTextProperties{
     StringBinding<UIText, &UITextContent, &SetUITextContent>("content"),
     StringBinding<UIText, &UITextLocalizationKey, &SetUITextLocalizationKey>("localizationKey"),
+    StringBinding<UIText, &UITextLocalizationNumber, &SetUITextLocalizationNumber>("localizationNumber"),
     KB_TYPED_ASSET(UIText, fontAssetId, Font, "ui.font"),
     KB_FLOAT(UIText, fontSize),
     KB_COLOR(UIText, color),

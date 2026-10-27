@@ -86,3 +86,26 @@ Validation:
   immutable package and compares GPU pixels against explicit Unicode reference
   forms for Arabic, mixed-direction text, a Latin ligature and an accent. The
   shipped player continues to reject development capture switches.
+
+Localized text uses `localizationKey` to select a catalog entry. Set the optional
+`localizationNumber` string to a decimal such as `"2"` or `"1.00"` to select a
+plural form and replace `{count}`. Visible fraction digits are preserved for
+plural rules. An empty number keeps ordinary translation. These properties are
+available through the inspector, CLI and component property API; invalid numbers
+are rejected without changing the component. Scene format 55 stores the number;
+older scenes load with ordinary translation. Language changes update displayed
+text without replacing the authored source text.
+
+Catalog locale matching ignores ASCII case and accepts hyphen or underscore
+separators. Regional tags fall back through their parents, then the catalog's
+fallback language. Plurals use the language supplying the message. Catalogs reject
+ambiguous equivalent locale declarations, malformed UTF-8, embedded NUL text and
+repeated fallback directives. Lua `Localization.SetCatalog` accepts a nonnegative
+integer or a hexadecimal asset ID string; use the string form for IDs above the
+signed integer range. Declare dynamically selected catalogs with a Lua
+`-- @asset /Game/Localization/Labels.kbloc` dependency so cooking includes them.
+
+`kb_game_localization_package` verifies CLI-authored plural fields, live language
+changes, regional and missing-key fallback, decimal preservation and full-width
+Lua catalog IDs in a cooked player. Its GPU captures compare localized labels
+with literal reference labels after the source project has been made unavailable.

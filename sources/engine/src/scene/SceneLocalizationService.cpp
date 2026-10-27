@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
+#include "engine/localization/LocalizationLocale.hpp"
 #include "engine/localization/PluralRules.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -16,10 +17,18 @@ namespace {
 
 [[nodiscard]] const kb::localization::LocalizationMessage* FindMessage(
     const kb::localization::LocalizationCatalog& catalog, std::string_view language, std::string_view key) {
-    const auto locale = catalog.languages.find(language);
-    if (locale == catalog.languages.end()) return nullptr;
-    const auto message = locale->second.find(key);
-    return message == locale->second.end() ? nullptr : &message->second;
+    if (const auto locale = catalog.languages.find(language); locale != catalog.languages.end()) {
+        const auto message = locale->second.find(key);
+        return message == locale->second.end() ? nullptr : &message->second;
+    }
+    const auto wanted = kb::localization::LocalizationLocaleKey(language);
+    if (!wanted) return nullptr;
+    for (const auto& [tag, entries] : catalog.languages) {
+        if (kb::localization::LocalizationLocaleKey(tag) != wanted) continue;
+        const auto message = entries.find(key);
+        return message == entries.end() ? nullptr : &message->second;
+    }
+    return nullptr;
 }
 
 struct FoundMessage {
@@ -85,24 +94,16 @@ std::uint64_t SceneLocalizationService::Catalog(const Scene& scene) noexcept {
 
 bool SceneLocalizationService::SetLanguage(Scene& scene, std::string_view language) {
     SceneState& state = SceneAccess::State(scene);
-    if (!state.localizationCatalog.IsLoaded() || language.empty() || language.size() > 32U) return false;
-    bool separator = true;
-    for (const char character : language) {
-        if (character == '-' || character == '_') {
-            if (separator) return false;
-            separator = true;
-        } else {
-            if (!((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-                  (character >= '0' && character <= '9'))) return false;
-            separator = false;
-        }
-    }
-    if (separator) return false;
+    if (!state.localizationCatalog.IsLoaded() || !kb::localization::LocalizationLocaleKey(language)) return false;
     std::string_view candidate = language;
     while (!candidate.empty()) {
-        if (state.localizationCatalog->languages.contains(std::string{candidate})) {
-            state.localizationLanguage = language;
-            return true;
+        const auto wanted = kb::localization::LocalizationLocaleKey(candidate);
+        for (const auto& [tag, entries] : state.localizationCatalog->languages) {
+            static_cast<void>(entries);
+            if (kb::localization::LocalizationLocaleKey(tag) == wanted) {
+                state.localizationLanguage = language;
+                return true;
+            }
         }
         const auto boundary = candidate.find_last_of("-_");
         if (boundary == std::string_view::npos) break;

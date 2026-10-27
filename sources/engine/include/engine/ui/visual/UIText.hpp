@@ -38,7 +38,7 @@ enum class UITextOverflow : std::uint8_t {
 
 struct UIText {
     static constexpr std::string_view StableId = "kb21.ui.text";
-    static constexpr std::uint32_t SchemaVersion = 2U;
+    static constexpr std::uint32_t SchemaVersion = 3U;
     static constexpr std::size_t MaxUtf8Bytes = 1024U;
     static constexpr std::size_t MaxLocalizationKeyBytes = 128U;
 
@@ -62,7 +62,21 @@ struct UIText {
     std::uint32_t maxLines = 0U;
     // Extra space between characters, in canvas units.
     float characterSpacing = 0.0F;
+    // Empty selects ordinary translation; a decimal selects a plural and replaces {count}.
+    // Preserve visible fraction digits (for example "1.00") when selecting the category.
+    std::array<char, 32U> localizationNumber{};
 };
+
+[[nodiscard]] inline std::string_view UITextLocalizationNumber(const UIText& value) noexcept {
+    const auto end = std::find(value.localizationNumber.begin(), value.localizationNumber.end(), '\0');
+    return {value.localizationNumber.data(), static_cast<std::size_t>(end - value.localizationNumber.begin())};
+}
+[[nodiscard]] inline bool SetUITextLocalizationNumber(UIText& value, std::string_view number) noexcept {
+    if (number.size() >= value.localizationNumber.size() || number.find('\0') != std::string_view::npos) return false;
+    value.localizationNumber.fill('\0');
+    std::copy(number.begin(), number.end(), value.localizationNumber.begin());
+    return true;
+}
 
 [[nodiscard]] inline std::string_view UITextLocalizationKey(const UIText& value) noexcept {
     const auto end = std::find(value.localizationKey.begin(), value.localizationKey.end(), '\0');

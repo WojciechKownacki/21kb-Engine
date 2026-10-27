@@ -163,7 +163,7 @@ void RunLocalizationTests() {
         "Polish plural selection must follow the CLDR rules for teens and decimals");
     Require(scene.Localization().FormatPluralNumber("hud.coins", "not-a-number") == "hud.coins",
         "A malformed plural number must leave the key visible");
-    for (const auto locale : {"pl-PL", "pl_PL", "pl-Latn-PL"}) {
+    for (const auto locale : {"pl-PL", "pl_PL", "pl-Latn-PL", "PL_pl", "pL_lAtN_pL"}) {
         Require(scene.Localization().SetLanguage(locale) && scene.Localization().Language() == locale &&
                 scene.Localization().Translate("menu.play") == "Graj" &&
                 scene.Localization().Translate("menu.quit") == "Quit" &&
@@ -193,6 +193,31 @@ void RunLocalizationTests() {
         host.Functions().Call("Localization.FormatPluralNumber", arguments, kb::script::ScriptFunctionCallContext{ .scene = &scene });
     Require(formatted.Succeeded() && formatted.Output("text").has_value() && formatted.Output("text")->AsString() == "1c6 de vies",
         "Localization.FormatPluralNumber must select the CLDR category of a compact decimal");
+    auto aliased = catalog;
+    aliased.fallbackLanguage = "EN";
+    const auto aliasPath = root / "Aliases.kbloc";
+    Require(kb::localization::LocalizationCatalogIO::Save(aliasPath, aliased) &&
+        kb::localization::LocalizationCatalogIO::Load(aliasPath).has_value(), "Fallback locale spelling must match case-insensitively");
+    aliased.languages["EN"] = aliased.languages.at("en");
+    Require(!kb::localization::LocalizationCatalogIO::Save(aliasPath, aliased), "Ambiguous locale aliases must not be saved");
+    const auto loadText = [](std::string_view text) {
+        return kb::localization::LocalizationCatalogIO::Load(std::span<const std::uint8_t>{
+            reinterpret_cast<const std::uint8_t*>(text.data()), text.size()});
+    };
+    for (const std::string_view malformed : {
+             "schema 1 fallback en fallback pl language en text key value",
+             "schema 1 fallback en language en text key value language EN text key other",
+             "schema 1 fallback en-US language en-US text key value language EN_us text key other",
+             "schema 1 fallback en--US language en--US text key value",
+             "schema 1 fallback -en language -en text key value",
+             "schema 1 fallback en language en text key \"\xFF\"",
+             "schema 1 fallback en language en plural key other \"\xED\xA0\x80\""}) {
+        Require(!loadText(malformed), "Malformed or ambiguous catalog must fail import");
+    }
+    const std::string nulMessage = std::string{"schema 1 fallback en language en text key \"a"} + '\0' + "b\"";
+    Require(!loadText(nulMessage), "Catalog messages cannot hide text after embedded nulls");
+    Require(kb::localization::LocalizationCatalogIO::Load(aliasPath)->languages.size() == catalog.languages.size(),
+        "Rejected catalog save must preserve the previous valid file");
     std::filesystem::remove_all(root);
 }
 

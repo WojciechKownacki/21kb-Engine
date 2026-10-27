@@ -2190,7 +2190,17 @@ void TestScrollMovementAndLocalizedText() {
     std::filesystem::create_directories(root / "Assets" / "Localization");
     const kb::localization::LocalizationCatalog catalog{
         .fallbackLanguage = "en",
-        .languages = {{"en", {{"menu.play", {.text = "Play"}}}}, {"pl", {{"menu.play", {.text = "Graj"}}}}},
+        .languages = {
+            {"en", {
+                {"menu.play", {.text = "Play"}},
+                {"hud.count", {.plurals = {{"one", "{count} item"}, {"other", "{count} items"}}}},
+            }},
+            {"pl", {
+                {"menu.play", {.text = "Graj"}},
+                {"hud.count", {.plurals = {{"one", "{count} element"}, {"few", "{count} elementy"},
+                    {"many", "{count} elementow"}, {"other", "{count} elementu"}}}},
+            }},
+        },
     };
     kb::tests::Require(kb::localization::LocalizationCatalogIO::Save(root / "Assets" / "Localization" / "Menu.kbloc", catalog) &&
         scene.Assets().MountProject(root) && scene.Assets().Discover() == 1U, "The menu catalog must be discovered");
@@ -2207,6 +2217,29 @@ void TestScrollMovementAndLocalizedText() {
     kb::tests::Require(scene.Localization().SetLanguage("pl"), "The menu language must switch");
     pointer.At(390.0F, 390.0F, false);
     kb::tests::Require(ShownText(scene.UI().Frame(), text.Entity()) == "Graj", "A localized text must follow a language change");
+
+    auto pluralComponents = textComponents;
+    static_cast<void>(kb::scene::SetUITextLocalizationKey(*pluralComponents.text, "hud.count"));
+    const auto pluralLabel = AddUI(scene, canvas, pluralComponents);
+    struct PluralCase { const char* language; const char* number; const char* expected; };
+    for (const auto& test : {PluralCase{"en", "1", "1 item"}, PluralCase{"EN_us", "1.00", "1.00 items"},
+             PluralCase{"PL_pl", "2", "2 elementy"}, PluralCase{"pl", "5", "5 elementow"},
+             PluralCase{"pl", "1.5", "1.5 elementu"}}) {
+        auto component = *scene.Components().UI().TryGet<kb::scene::UIText>(pluralLabel.Entity());
+        static_cast<void>(kb::scene::SetUITextLocalizationNumber(component, test.number));
+        scene.Components().UI().Set(pluralLabel.Entity(), component);
+        kb::tests::Require(scene.Localization().SetLanguage(test.language), "Plural label locale must resolve aliases and parents");
+        pointer.At(390.0F, 390.0F, false);
+        kb::tests::Require(ShownText(scene.UI().Frame(), pluralLabel.Entity()) == test.expected,
+            "Live localized labels must preserve visible decimals and refresh the selected plural category");
+        kb::tests::Require(kb::scene::UITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(pluralLabel.Entity())) == "PLAY",
+            "Frame translation must not overwrite authored source text");
+    }
+    const auto beforeNumber = kb::scene::UITextLocalizationNumber(*pluralComponents.text);
+    kb::tests::Require(kb::scene::WriteUIComponentProperty(pluralComponents, kb::scene::UIComponentType::Text,
+        "localizationNumber", std::string{"not-a-number"}) != kb::scene::UIComponentPropertyWriteResult::Succeeded &&
+        kb::scene::UITextLocalizationNumber(*pluralComponents.text) == beforeNumber,
+        "Invalid plural numbers must not mutate authored component properties");
 
     // Edges: a language with no supported parent is refused and changes nothing, a message
     // missing from the selected language falls back to the catalog language, a message missing everywhere shows its key,
@@ -2343,6 +2376,7 @@ void TestWidgetSettingsPersistence() {
     authored.image->materialAssetId = 81U;
     authored.text.emplace();
     static_cast<void>(kb::scene::SetUITextLocalizationKey(*authored.text, "hud.title"));
+    static_cast<void>(kb::scene::SetUITextLocalizationNumber(*authored.text, "1.00"));
     authored.text->overflow = kb::scene::UITextOverflow::Ellipsis;
     authored.text->autoSize = true;
     authored.text->minFontSize = 9.0F;
@@ -2385,7 +2419,7 @@ void TestWidgetSettingsPersistence() {
         decoded.image->fillMethod == kb::scene::UIImageFillMethod::Radial360 && decoded.image->fillOrigin == kb::scene::UIImageFillOrigin::End &&
         decoded.image->fillAmount == 0.4F && !decoded.image->fillClockwise && decoded.image->alphaHitThreshold == 0.2F &&
         decoded.image->materialAssetId == 81U &&
-        kb::scene::UITextLocalizationKey(*decoded.text) == "hud.title" && decoded.text->overflow == kb::scene::UITextOverflow::Ellipsis &&
+        kb::scene::UITextLocalizationKey(*decoded.text) == "hud.title" && kb::scene::UITextLocalizationNumber(*decoded.text) == "1.00" && decoded.text->overflow == kb::scene::UITextOverflow::Ellipsis &&
         decoded.text->autoSize && decoded.text->minFontSize == 9.0F && decoded.text->maxLines == 2U && decoded.text->characterSpacing == 1.5F &&
         decoded.mask->softness == 6.0F && decoded.selectable->transition == kb::scene::UISelectableTransition::SpriteSwap &&
         decoded.selectable->pressedImage == 21U && decoded.selectable->raycastPadding.bottom == 4.0F &&
@@ -2396,6 +2430,21 @@ void TestWidgetSettingsPersistence() {
         decoded.inputField->contentType == kb::scene::UIInputContentType::Pin && kb::scene::UIInputPlaceholder(*decoded.inputField) == "PIN" &&
         decoded.progressBar->direction == kb::scene::UIAxisDirection::TopToBottom && decoded.progressBar->fillRect == 71U,
         "Every v45 widget setting must round-trip");
+
+    // Text saved before v55 has no plural number; keep the authored translation key.
+    {
+        kb::scene::UIComponentSet onlyText;
+        onlyText.text.emplace();
+        static_cast<void>(kb::scene::SetUITextLocalizationKey(*onlyText.text, "hud.title"));
+        std::vector<std::uint8_t> oldBytes;
+        kb::scene::SceneAssetUIComponentCodec::Write(oldBytes, onlyText);
+        oldBytes.resize(oldBytes.size() - sizeof(std::uint32_t)); // empty trailing string length
+        kb::scene::SceneAssetBinaryIO::ByteReader oldReader{oldBytes};
+        kb::scene::UIComponentSet oldText;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(oldReader, 54U, oldText) && oldReader.Exhausted() &&
+            kb::scene::UITextLocalizationNumber(*oldText.text).empty() && kb::scene::UITextLocalizationKey(*oldText.text) == "hud.title",
+            "Legacy localized text must load without a plural number");
+    }
 
     // A canvas saved before the modal flag existed (v51) ends one byte earlier and never blocks the canvases below.
     {

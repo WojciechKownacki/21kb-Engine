@@ -67,7 +67,8 @@ struct SceneDocument {
     static constexpr std::uint32_t Body2DFileVersion = 54U;
     static constexpr std::uint32_t Collider2DFileVersion = 54U;
     static constexpr std::uint32_t CharacterController2DFileVersion = 54U;
-    static constexpr std::uint32_t CurrentFileVersion = 54U;
+    static constexpr std::uint32_t UITextPluralFileVersion = 55U;
+    static constexpr std::uint32_t CurrentFileVersion = 55U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

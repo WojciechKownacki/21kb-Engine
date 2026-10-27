@@ -1,6 +1,7 @@
 #include "engine/ui/UIComponentValidation.hpp"
 
 #include "engine/input/InputText.hpp"
+#include "engine/localization/PluralRules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -121,7 +122,9 @@ bool IsUIComponentValid(const UIText& value) noexcept {
         EnumAtMost(value.verticalAlignment, UITextVerticalAlignment::Bottom) && EnumAtMost(value.wrapMode, UITextWrapMode::Character) &&
         Finite(value.lineSpacing) && value.lineSpacing > 0.0F && Utf8Terminated(value.localizationKey) &&
         EnumAtMost(value.overflow, UITextOverflow::Ellipsis) && Finite(value.minFontSize) && value.minFontSize > 0.0F &&
-        Finite(value.characterSpacing);
+        Finite(value.characterSpacing) && Utf8Terminated(value.localizationNumber) &&
+        (UITextLocalizationNumber(value).empty() ||
+            kb::localization::ParsePluralOperands(UITextLocalizationNumber(value)).has_value());
 }
 bool IsUIComponentValid(const UIBorder& value) noexcept {
     return Normalized(value.backgroundColor) && Normalized(value.borderColor) && NonNegative(value.borderWidth) &&
