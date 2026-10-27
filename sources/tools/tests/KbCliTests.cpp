@@ -4460,6 +4460,81 @@ void RunCliJsonTests() {
         "a failing command with JSON of its own must report the failure as a result");
 }
 
+void RunCommandCatalogTests() {
+    PrepareProject();
+    const auto root = TestRoot().string();
+    const auto catalog = RunCliProgram({"commands", "--json"});
+    JsonValue described;
+    std::string error;
+    Require(catalog.exitCode == 0 && JsonValue::Parse(catalog.out, described, error) &&
+        described.Find("schema")->AsString() == "21kb.cli-commands/v1", "Command discovery must return versioned JSON");
+    Require(described.Find("commands")->Size() == kb::cli::CliCommandCatalog().size(),
+        "Discovery and dispatch must use the same complete command catalog");
+    std::vector<std::string_view> names;
+    std::vector<std::string_view> tools;
+    for (const auto& entry : kb::cli::CliCommandCatalog()) {
+        Require(std::ranges::find(names, entry.name) == names.end() && kb::cli::FindCliCommand(entry.name) == &entry,
+            "Command names must uniquely resolve to their registered handler");
+        names.push_back(entry.name);
+        if (entry.available && !entry.mcpTool.empty()) {
+            Require(std::ranges::find(tools, entry.mcpTool) == tools.end(), "MCP aliases must be unique");
+            tools.push_back(entry.mcpTool);
+        }
+    }
+    const auto mcp = [&](std::string request) {
+        std::istringstream input{std::move(request)};
+        std::ostringstream output, diagnostics;
+        const std::vector<std::string> words{"--project", root};
+        Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{words}, input, {.out = output, .err = diagnostics}) == 0,
+            "Catalog MCP session must finish cleanly");
+        JsonValue response;
+        std::string parseError;
+        Require(JsonValue::Parse(output.str(), response, parseError), "Catalog MCP response must be JSON: " + output.str());
+        return response;
+    };
+    const auto listed = mcp(R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})");
+    const auto* descriptors = listed.Find("result")->Find("tools");
+    Require(descriptors->Size() == tools.size() && tools.size() >= 11U, "MCP must discover all registered authoring tools");
+    for (std::size_t index = 0U; index < descriptors->Size(); ++index)
+        Require(std::ranges::find(tools, descriptors->At(index)->Find("name")->AsString()) != tools.end(),
+            "MCP discovery must not invent operations outside the CLI catalog");
+    const auto call = [&](std::string_view name, std::string_view arguments, bool succeeds = true) {
+        const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
+            std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
+        Require(response.Find("result") && response.Find("result")->Find("isError")->AsBool() != succeeds,
+            "Catalog tool result disagrees with its expected outcome: " + response.Dump());
+    };
+    call("component_schema", "{}");
+    call("scene_create", R"({"name":"McpScene","template":"Empty"})");
+    call("entity_edit", R"({"action":"add","name":"Probe","scene":"/Game/Scenes/McpScene.21kbscene","position":"1,2,3"})");
+    call("component_edit", R"({"action":"set","entity":"Probe","type":"Transform","scene":"/Game/Scenes/McpScene.21kbscene","set":["localPosition=3,4,5","localScale=2,2,2"]})");
+    call("script_create", R"({"name":"McpBehaviour","language":"lua"})");
+    call("validate_script", R"({"path":"Assets/Scripts/McpBehaviour.lua"})");
+    call("component_edit", R"({"action":"invalid","entity":"Probe","type":"Transform","set":["localPosition=9,9,9"]})", false);
+    call("component_edit", R"({"action":"set","entity":"Probe","type":"Transform","set":[42]})", false);
+    call("entity_edit", R"({"action":"add","name":"Outside","scene":"../Outside.21kbscene"})", false);
+    call("script_create", R"({"name":"Outside","language":"lua","folder":"../Outside"})", false);
+    call("scene_create", R"({"name":"Outside","project":"../Other"})", false);
+    Require(RunCliProgram({"scene-new", "--project", root, "--name", "CliScene", "--template", "Empty"}).exitCode == 0 &&
+        RunCliProgram({"entity", "add", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--name", "Probe", "--position", "1,2,3"}).exitCode == 0 &&
+        RunCliProgram({"component", "set", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--entity", "Probe", "--type", "Transform",
+            "--set", "localPosition=3,4,5", "--set", "localScale=2,2,2"}).exitCode == 0, "Matching CLI authoring must succeed");
+    for (const auto file : {"McpScene.21kbscene", "CliScene.21kbscene"}) {
+        kb::scene::Scene scene;
+        const auto document = kb::scene::SceneDocumentService::Load(TestRoot() / "Assets/Scenes" / file);
+        Require(document.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, document.document), "Authored scene must reload");
+        const auto roots = scene.Hierarchy().RootEntities();
+        Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "Probe", "CLI and MCP must author equivalent entities");
+        const auto transform = scene.Transforms().Get(roots.front());
+        Require(transform.localPosition.x == 3.0F && transform.localPosition.y == 4.0F && transform.localPosition.z == 5.0F &&
+            transform.localScale.x == 2.0F && transform.localScale.y == 2.0F && transform.localScale.z == 2.0F,
+            "CLI and MCP property arrays must produce equivalent transforms");
+    }
+    const auto unknown = RunCliProgram({"vfx-unregistered", "--project", root, "--module", "1", "--json"});
+    Require(unknown.exitCode != 0 && Contains(unknown.out, "unknown command"),
+        "An unregistered particle command must never fall through to module removal");
+}
+
 // Every file of a folder with its bytes: two of these are equal when nothing was touched.
 [[nodiscard]] std::map<std::string, std::string> Fingerprint(const std::filesystem::path& root) {
     std::map<std::string, std::string> files;
@@ -4978,6 +5053,7 @@ int main(int argc, char** argv) {
     if (argc != 1) return EXIT_FAILURE;
     RunAudioMixerCommandTests();
     RunCliJsonTests();
+    RunCommandCatalogTests();
     RunBatchCommandTests();
     RunMiniJsonTests();
     RunArgumentListTests();

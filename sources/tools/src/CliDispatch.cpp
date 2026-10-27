@@ -22,6 +22,7 @@ R"(kb_cli — 21kb Engine headless tooling for developers and AI coding agents
 Usage: kb_cli <command> [options]
 
 Commands:
+  commands     List registered commands, availability and MCP tool names as JSON.
   new          Create a project, the same one the Hub creates, in a new or empty
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
                a template: Basic (camera, sun, sky, floor; default) or Empty.
@@ -456,160 +457,137 @@ constexpr std::array<std::string_view, 15> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
     "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime" };
 
-// Runs the named command. Empty when no command has that name.
+#if KB_CLI_RENDERER
+constexpr bool kRendererAvailable = true;
+#else
+constexpr bool kRendererAvailable = false;
+#endif
+
+constexpr CliCommandDescriptor kCommands[]{
+    {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, ""},
+    {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, ""},
+    {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, ""},
+    {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
+    {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference"},
+    {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
+    {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
+    {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
+    {"audio-mixer", &RunAudioMixerCommand, CliCommandKind::Normal, true, ""},
+    {"schema", &RunSchemaCommand, CliCommandKind::Normal, true, "component_schema"},
+    {"new", &RunNewCommand, CliCommandKind::Normal, true, ""},
+    {"init-agent", &RunInitAgentCommand, CliCommandKind::Normal, true, ""},
+    {"import", &RunImportCommand, CliCommandKind::Normal, true, "import_asset"},
+    {"import-preset-new", &RunImportPresetNewCommand, CliCommandKind::Normal, true, ""},
+    {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script"},
+    {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list"},
+    {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach"},
+    {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
+    {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
+    {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, ""},
+    {"run", &RunRunCommand, CliCommandKind::Normal, true, "run_scene"},
+    {"keys", &RunKeysCommand, CliCommandKind::Normal, true, ""},
+    {"pack", &RunPackCommand, CliCommandKind::Normal, true, ""},
+    {"mod", &RunModCommand, CliCommandKind::Normal, true, ""},
+    {"release", &RunReleaseCommand, CliCommandKind::Normal, true, ""},
+    {"world", &RunWorldCommand, CliCommandKind::Normal, true, ""},
+    {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, ""},
+    {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, ""},
+    {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, ""},
+#if KB_CLI_RENDERER
+    {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}},
+    {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
+    {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
+    {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}},
+    {"material-graph", &RunMaterialGraphCommand, CliCommandKind::Normal, true, {}},
+    {"material-instance-new", &RunMaterialInstanceNewCommand, CliCommandKind::Normal, true, {}},
+    {"material-instance-set", &RunMaterialInstanceSetCommand, CliCommandKind::Normal, true, {}},
+    {"material-instance-show", &RunMaterialInstanceShowCommand, CliCommandKind::Normal, true, {}},
+    {"post-process-new", &RunPostProcessNewCommand, CliCommandKind::Normal, true, {}},
+    {"post-process-set", &RunPostProcessSetCommand, CliCommandKind::Normal, true, {}},
+    {"scene-post-process", &RunScenePostProcessCommand, CliCommandKind::Normal, true, {}},
+    {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}},
+    {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}},
+#else
+    {"map2d", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-new", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-set", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-show", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-graph", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-instance-new", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-instance-set", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-instance-show", nullptr, CliCommandKind::Normal, false, {}},
+    {"post-process-new", nullptr, CliCommandKind::Normal, false, {}},
+    {"post-process-set", nullptr, CliCommandKind::Normal, false, {}},
+    {"scene-post-process", nullptr, CliCommandKind::Normal, false, {}},
+    {"renderer-info", nullptr, CliCommandKind::Normal, false, {}},
+    {"vfx-profile", nullptr, CliCommandKind::Normal, false, {}},
+#endif
+    {"vfx-new", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-show", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-set", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-emitter-add", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-emitter-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-module-add", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-module-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"batch", nullptr, CliCommandKind::Batch, true, {}},
+    {"mcp", nullptr, CliCommandKind::Mcp, true, {}},
+    {"help", nullptr, CliCommandKind::Help, true, {}},
+    {"commands", nullptr, CliCommandKind::Catalog, true, {}},
+};
+
+// CLI dispatch and MCP discovery resolve operations through this same catalog.
 std::optional<int> RunNamedCommand(
     std::string_view command, const ArgumentList& arguments, std::istream& in, CommandIo io) {
-    if (command == "animator") {
-        return RunAnimatorCommand(arguments, io);
-    }
-    if (command == "skeleton") {
-        return RunSkeletonCommand(arguments, io);
-    }
-    if (command == "ability") {
-        return RunAbilityCommand(arguments, io);
-    }
-    if (command == "ai") {
-        return RunAiCommand(arguments, io);
-    }
-#if KB_CLI_RENDERER
-    if (command == "map2d") {
-        return RunMap2DCommand(arguments, io);
-    }
-#endif
-    if (command == "api") {
-        return RunApiCommand(arguments, io);
-    }
-    if (command == "api-check") {
-        return RunApiCheckCommand(arguments, io);
-    }
-    if (command == "entity") {
-        return RunEntityCommand(arguments, io);
-    }
-    if (command == "component") {
-        return RunComponentCommand(arguments, io);
-    }
-    if (command == "audio-mixer") {
-        return RunAudioMixerCommand(arguments, io);
-    }
-    if (command == "schema") {
-        return RunSchemaCommand(arguments, io);
-    }
-    if (command == "new") {
-        return RunNewCommand(arguments, io);
-    }
-    if (command == "init-agent") {
-        return RunInitAgentCommand(arguments, io);
-    }
-    if (command == "import") {
-        return RunImportCommand(arguments, io);
-    }
-    if (command == "import-preset-new") {
-        return RunImportPresetNewCommand(arguments, io);
-    }
-    if (command == "validate") {
-        return RunValidateCommand(arguments, io);
-    }
-    if (command == "scene-list") {
-        return RunSceneListCommand(arguments, io);
-    }
-    if (command == "scene-attach") {
-        return RunSceneAttachCommand(arguments, io);
-    }
-    if (command == "scene-new") {
-        return RunSceneNewCommand(arguments, io);
-    }
-    if (command == "script-new") {
-        return RunScriptNewCommand(arguments, io);
-    }
-    if (command == "material-new" || command == "material-set" || command == "material-show" ||
-        command == "material-graph" || command == "material-instance-new" || command == "material-instance-set" ||
-        command == "material-instance-show") {
-#if KB_CLI_RENDERER
-        if (command == "material-new") return RunMaterialNewCommand(arguments, io);
-        if (command == "material-set") return RunMaterialSetCommand(arguments, io);
-        if (command == "material-graph") return RunMaterialGraphCommand(arguments, io);
-        if (command == "material-instance-new") return RunMaterialInstanceNewCommand(arguments, io);
-        if (command == "material-instance-set") return RunMaterialInstanceSetCommand(arguments, io);
-        if (command == "material-instance-show") return RunMaterialInstanceShowCommand(arguments, io);
-        return RunMaterialShowCommand(arguments, io);
-#else
+    if (command == "--help" || command == "-h") command = "help";
+    const auto* operation = FindCliCommand(command);
+    if (operation == nullptr) return std::nullopt;
+    if (!operation->available) {
         io.err << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
         return 1;
-#endif
     }
-    if (command == "post-process-new" || command == "post-process-set" || command == "scene-post-process") {
+    switch (operation->kind) {
+    case CliCommandKind::Normal: return operation->run(arguments, io);
+    case CliCommandKind::Particle:
 #if KB_CLI_RENDERER
-        if (command == "post-process-new") return RunPostProcessNewCommand(arguments, io);
-        if (command == "post-process-set") return RunPostProcessSetCommand(arguments, io);
-        return RunScenePostProcessCommand(arguments, io);
-#else
-        io.err << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
-        return 1;
-#endif
-    }
-    if (command == "renderer-info") {
-#if KB_CLI_RENDERER
-        return RunRendererInfoCommand(arguments, io);
-#else
-        io.err << "error: renderer-info needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
-        return 1;
-#endif
-    }
-    if (command.starts_with("vfx-")) {
-#if KB_CLI_RENDERER
-        if (command == "vfx-profile") return RunVfxProfileCommand(arguments, io);
         return RunVfxCommand(command, arguments, io);
 #else
-        io.err << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
         return 1;
 #endif
-    }
-    if (command == "batch") {
+    case CliCommandKind::Batch:
         return RunBatchCommand(arguments, io, [&in](std::span<const std::string> words, CommandIo target) {
             return RunCli(words, in, target);
         });
-    }
-    if (command == "script-build") {
-        return RunScriptBuildCommand(arguments, io);
-    }
-    if (command == "run") {
-        return RunRunCommand(arguments, io);
-    }
-    if (command == "mcp") {
-        return RunMcpCommand(arguments, in, io);
-    }
-    if (command == "keys") {
-        return RunKeysCommand(arguments, io);
-    }
-    if (command == "pack") {
-        return RunPackCommand(arguments, io);
-    }
-    if (command == "mod") {
-        return RunModCommand(arguments, io);
-    }
-    if (command == "release") {
-        return RunReleaseCommand(arguments, io);
-    }
-    if (command == "world") {
-        return RunWorldCommand(arguments, io);
-    }
-    if (command == "navmesh") {
-        return RunNavMeshCommand(arguments, io);
-    }
-    if (command == "physics-layers") {
-        return RunPhysicsLayersCommand(arguments, io);
-    }
-    if (command == "lighting-quality") {
-        return RunLightingQualityCommand(arguments, io);
-    }
-    if (command == "help" || command == "--help" || command == "-h") {
-        PrintUsage(io.out);
+    case CliCommandKind::Mcp: return RunMcpCommand(arguments, in, io);
+    case CliCommandKind::Help: PrintUsage(io.out); return 0;
+    case CliCommandKind::Catalog: {
+        using kb::core::JsonValue;
+        auto result = JsonValue::MakeObject();
+        result.Set("schema", JsonValue::MakeString("21kb.cli-commands/v1"));
+        auto operations = JsonValue::MakeArray();
+        for (const auto& entry : CliCommandCatalog()) {
+            auto row = JsonValue::MakeObject();
+            row.Set("name", JsonValue::MakeString(std::string{entry.name}));
+            row.Set("available", JsonValue::MakeBool(entry.available));
+            row.Set("mcpTool", entry.mcpTool.empty() ? JsonValue::MakeNull() : JsonValue::MakeString(std::string{entry.mcpTool}));
+            operations.Append(std::move(row));
+        }
+        result.Set("commands", std::move(operations));
+        io.out << result.Dump() << '\n';
         return 0;
+    }
     }
     return std::nullopt;
 }
 
 } // namespace
+
+std::span<const CliCommandDescriptor> CliCommandCatalog() noexcept { return kCommands; }
+
+const CliCommandDescriptor* FindCliCommand(std::string_view name) noexcept {
+    for (const auto& command : CliCommandCatalog())
+        if (command.name == name) return &command;
+    return nullptr;
+}
 
 std::string ToValidUtf8(std::string_view text) {
     std::string result;

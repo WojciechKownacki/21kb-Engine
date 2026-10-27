@@ -187,6 +187,7 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli import` | import external source assets into the project |
 | `kb_cli import-preset-new` | create an import preset |
 | `kb_cli mcp` | serve the commands as MCP tools over stdio |
+| `kb_cli commands` | list registered commands, build availability and MCP tool names as JSON |
 | `kb_cli keys` | generate release signing keys and print public keys |
 | `kb_cli pack` | sign, verify, inspect, recompress, split and patch asset packs |
 | `kb_cli release` | sign or verify the manifest of a finished release directory |
@@ -245,6 +246,17 @@ properties, empty required strings, wrong types, fractional frame counts and int
 overflow are refused as tool errors. `run_scene` recording paths are confined to the
 bound project; relative paths are anchored there even when the output file is new.
 These path checks do not sandbox code executed by a trusted project.
+
+CLI dispatch and MCP discovery use one command catalog. `kb_cli commands` returns
+`21kb.cli-commands/v1`; a null `mcpTool` means that operation is available only
+through the CLI, and `available` reflects the current build's capabilities.
+The server retains its original tools and also exposes `component_schema`,
+`scene_create`, `script_create`, `entity_edit` and `component_edit`. Authoring tools
+use the bound project and invoke the same command handlers and save validation as
+the CLI. For example, `component_edit` takes `action: "set"`, `entity`, `type`,
+an optional `scene`, and `set: ["localPosition=3,4,5", "localScale=2,2,2"]`.
+Discovery advertises the accepted action values and property types; the server
+does not accept a project override or an arbitrary command line.
 
 **Several changes as one transaction.** `batch` runs a list of commands so that all of them
 take effect or none does:

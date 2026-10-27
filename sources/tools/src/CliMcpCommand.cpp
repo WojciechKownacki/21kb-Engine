@@ -5,9 +5,11 @@
 #include <array>
 #include <cstdio>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <initializer_list>
 #include <sstream>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,12 +21,19 @@ namespace {
 
 constexpr std::string_view kProtocolVersion = "2024-11-05";
 constexpr std::string_view kServerVersion = "0.1.0";
+constexpr std::string_view kEntityActions[]{"add", "remove", "rename", "attach", "detach"};
+constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
+constexpr std::string_view kSceneTemplates[]{"Basic", "Empty"};
+constexpr std::string_view kYesNo[]{"yes", "no"};
+constexpr std::string_view kScriptLanguages[]{"lua", "cpp"};
 
 struct ToolProperty {
     std::string_view name;
     std::string_view type;
     std::string_view description;
     bool required = false;
+    std::string_view cliOption;
+    std::span<const std::string_view> choices{};
 };
 
 [[nodiscard]] JsonValue MakeToolDescriptor(
@@ -40,9 +49,24 @@ struct ToolProperty {
         JsonValue descriptor = JsonValue::MakeObject();
         descriptor.Set("type", JsonValue::MakeString(std::string{ property.type }));
         descriptor.Set("description", JsonValue::MakeString(std::string{ property.description }));
+        descriptor.Set("x-cli-option", JsonValue::MakeString(std::string{property.cliOption}));
+        if (property.choices.size() != 0U) {
+            auto choices = JsonValue::MakeArray();
+            for (const auto choice : property.choices) choices.Append(JsonValue::MakeString(std::string{choice}));
+            descriptor.Set("enum", std::move(choices));
+        }
+        if (property.name == "format") descriptor.Set("default", JsonValue::MakeString("markdown"));
+        if (property.name == "inputReplay" || property.name == "inputRecord")
+            descriptor.Set("x-project-file", JsonValue::MakeBool(true));
+        if (property.type == "array") {
+            auto items = JsonValue::MakeObject();
+            items.Set("type", JsonValue::MakeString("string"));
+            items.Set("minLength", JsonValue::MakeNumber(1));
+            descriptor.Set("items", std::move(items));
+        }
         if (property.type == "string") descriptor.Set("minLength", JsonValue::MakeNumber(1));
         if (property.type == "integer") {
-            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "frames" ? 1 : std::numeric_limits<int>::min()));
+            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "executionOrder" ? std::numeric_limits<int>::min() : 1));
             descriptor.Set("maximum", JsonValue::MakeNumber(std::numeric_limits<int>::max()));
         }
         schemaProperties.Set(std::string{ property.name }, std::move(descriptor));
@@ -62,56 +86,94 @@ struct ToolProperty {
     return tool;
 }
 
-[[nodiscard]] JsonValue MakeToolList() {
-    JsonValue tools = JsonValue::MakeArray();
-    tools.Append(MakeToolDescriptor(
-        "api_reference",
+[[nodiscard]] JsonValue MakeCommandToolDescriptor(const CliCommandDescriptor& command) {
+    if (command.name == "api") return MakeToolDescriptor(command.mcpTool,
         "Returns the 21kb Engine script API reference (functions, components, lifecycle events).",
         {
-            ToolProperty{ "format", "string", "Output format: 'markdown' (default) or 'json'.", false },
-        }));
-    tools.Append(MakeToolDescriptor(
-        "import_asset",
+            ToolProperty{ "format", "string", "Output format: 'markdown' (default) or 'json'.", false, "--print" },
+        });
+    if (command.name == "import") return MakeToolDescriptor(command.mcpTool,
         "Imports an external source asset into a project's runtime asset format and registers it.",
         {
-            ToolProperty{ "source", "string", "Physical source file path, or a path relative to the project root.", true },
-            ToolProperty{ "destination", "string", "Destination virtual folder, for example /Game/Fonts.", true },
-        }));
-    tools.Append(MakeToolDescriptor(
-        "validate_script",
+            ToolProperty{ "source", "string", "Physical source file path, or a path relative to the project root.", true, "" },
+            ToolProperty{ "destination", "string", "Destination virtual folder, for example /Game/Fonts.", true, "--destination" },
+        });
+    if (command.name == "validate") return MakeToolDescriptor(command.mcpTool,
         "Validates a Lua behaviour script (syntax and sandbox load) and reports errors with line numbers.",
         {
-            ToolProperty{ "path", "string", "Path to the .lua file, relative to the project root.", true },
-        }));
-    tools.Append(MakeToolDescriptor(
-        "scene_list",
+            ToolProperty{ "path", "string", "Path to the .lua file, relative to the project root.", true, "" },
+        });
+    if (command.name == "scene-list") return MakeToolDescriptor(command.mcpTool,
         "Lists the nodes of a .21kbscene file with their components and attached behaviours.",
         {
-            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true },
-        }));
-    tools.Append(MakeToolDescriptor(
-        "scene_attach",
+            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true, "--scene" },
+        });
+    if (command.name == "scene-attach") return MakeToolDescriptor(command.mcpTool,
         "Attaches a behaviour script asset to a named scene node and saves the scene.",
         {
-            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true },
-            ToolProperty{ "node", "string", "Name of the scene node to attach the behaviour to.", true },
-            ToolProperty{ "script", "string", "Script asset path: /Game/... virtual path or a path under Assets/.", true },
-            ToolProperty{ "tickGroup", "string", "Optional tick group: Input, Gameplay, Physics, Animation, Camera, Presentation.", false },
-            ToolProperty{ "executionOrder", "integer", "Optional execution order within the tick group.", false },
-        }));
-    tools.Append(MakeToolDescriptor(
-        "run_scene",
+            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true, "--scene" },
+            ToolProperty{ "node", "string", "Name of the scene node to attach the behaviour to.", true, "--node" },
+            ToolProperty{ "script", "string", "Script asset path: /Game/... virtual path or a path under Assets/.", true, "--script" },
+            ToolProperty{ "tickGroup", "string", "Optional tick group: Input, Gameplay, Physics, Animation, Camera, Presentation.", false, "--tick-group" },
+            ToolProperty{ "executionOrder", "integer", "Optional execution order within the tick group.", false, "--execution-order" },
+        });
+    if (command.name == "run") return MakeToolDescriptor(command.mcpTool,
         "Runs a scene headless for N frames and reports script logs, events, and errors.",
         {
-            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true },
-            ToolProperty{ "frames", "integer", "Frame count (default 60).", false },
-            ToolProperty{ "dt", "number", "Delta seconds per frame (default 1/60).", false },
-            ToolProperty{ "report", "string", "Use particles or input for a versioned execution report.", false },
-            ToolProperty{ "inputReplay", "string", "Recording file to replay with its per-tick durations.", false },
-            ToolProperty{ "inputRecord", "string", "Recording file to write with input consumed by completed ticks.", false },
-            ToolProperty{ "viewport", "string", "Viewport WIDTHxHEIGHT in pixels; overrides recorded viewport sizes.", false },
-            ToolProperty{ "safeArea", "string", "Nonnegative LEFT,TOP,RIGHT,BOTTOM safe-area insets in viewport pixels.", false },
-        }));
+            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true, "--scene" },
+            ToolProperty{ "frames", "integer", "Frame count (default 60).", false, "--frames" },
+            ToolProperty{ "dt", "number", "Delta seconds per frame (default 1/60).", false, "--dt" },
+            ToolProperty{ "report", "string", "Use particles or input for a versioned execution report.", false, "--report" },
+            ToolProperty{ "inputReplay", "string", "Recording file to replay with its per-tick durations.", false, "--input-replay" },
+            ToolProperty{ "inputRecord", "string", "Recording file to write with input consumed by completed ticks.", false, "--input-record" },
+            ToolProperty{ "viewport", "string", "Viewport WIDTHxHEIGHT in pixels; overrides recorded viewport sizes.", false, "--viewport" },
+            ToolProperty{ "safeArea", "string", "Nonnegative LEFT,TOP,RIGHT,BOTTOM safe-area insets in viewport pixels.", false, "--safe-area" },
+        });
+    if (command.name == "schema") return MakeToolDescriptor(command.mcpTool,
+        "Lists component properties and authoring presets.", {
+        });
+    if (command.name == "entity") return MakeToolDescriptor(command.mcpTool,
+        "Creates and edits entities through the same scene authoring commands as the CLI.", {
+            ToolProperty{"action", "string", "Entity operation.", true, "", kEntityActions},
+            ToolProperty{"name", "string", "Entity name or hierarchy path.", true, "--name"},
+            ToolProperty{"scene", "string", "Scene path; defaults to the startup scene.", false, "--scene"},
+            ToolProperty{"create", "string", "Optional built-in shape or player preset.", false, "--create"},
+            ToolProperty{"parent", "string", "Optional parent entity.", false, "--parent"},
+            ToolProperty{"to", "string", "Rename target or socket attachment owner.", false, "--to"},
+            ToolProperty{"socket", "string", "Socket or bone name.", false, "--socket"},
+            ToolProperty{"position", "string", "Position x,y,z.", false, "--position"},
+            ToolProperty{"rotation", "string", "Rotation in degrees x,y,z.", false, "--rotation"},
+            ToolProperty{"scale", "string", "Scale x,y,z.", false, "--scale"},
+            ToolProperty{"occurrence", "integer", "One-based index when names are ambiguous.", false, "--occurrence"},
+        });
+    if (command.name == "component") return MakeToolDescriptor(command.mcpTool,
+        "Adds, edits or removes a component with the CLI authoring and validation rules.", {
+            ToolProperty{"action", "string", "Component operation.", true, "", kComponentActions},
+            ToolProperty{"entity", "string", "Entity name or hierarchy path.", true, "--entity"},
+            ToolProperty{"type", "string", "Component type from component_schema.", true, "--type"},
+            ToolProperty{"scene", "string", "Scene path; defaults to the startup scene.", false, "--scene"},
+            ToolProperty{"set", "array", "Repeated property=value assignments.", false, "--set"},
+        });
+    if (command.name == "scene-new") return MakeToolDescriptor(command.mcpTool,
+        "Creates a scene from an engine template.", {
+            ToolProperty{"name", "string", "New scene name.", true, "--name"},
+            ToolProperty{"folder", "string", "Project asset folder.", false, "--folder"},
+            ToolProperty{"template", "string", "Scene template.", false, "--template", kSceneTemplates},
+            ToolProperty{"default", "string", "Make this the startup scene.", false, "--default", kYesNo},
+        });
+    if (command.name == "script-new") return MakeToolDescriptor(command.mcpTool,
+        "Creates a Lua or native script using the engine templates.", {
+            ToolProperty{"name", "string", "New script name.", true, "--name"},
+            ToolProperty{"language", "string", "Script language.", true, "--language", kScriptLanguages},
+            ToolProperty{"folder", "string", "Project asset folder.", false, "--folder"},
+        });
+    return JsonValue::MakeNull();
+}
+
+[[nodiscard]] JsonValue MakeToolList() {
+    auto tools = JsonValue::MakeArray();
+    for (const auto& command : CliCommandCatalog())
+        if (command.available && !command.mcpTool.empty()) tools.Append(MakeCommandToolDescriptor(command));
     return tools;
 }
 
@@ -178,6 +240,17 @@ struct ToolCallOutcome {
             if (type == "string") {
                 if (value->GetKind() != JsonValue::Kind::String || value->AsString().empty())
                     return key + " must be a nonempty string";
+                if (const auto* choices = property->Find("enum")) {
+                    bool accepted = false;
+                    for (std::size_t choice = 0U; choice < choices->Size(); ++choice)
+                        accepted = accepted || choices->At(choice)->AsString() == value->AsString();
+                    if (!accepted) return key + " is not one of the advertised values";
+                }
+            } else if (type == "array") {
+                if (value->GetKind() != JsonValue::Kind::Array) return key + " must be an array of strings";
+                for (std::size_t element = 0U; element < value->Size(); ++element)
+                    if (value->At(element)->GetKind() != JsonValue::Kind::String || value->At(element)->AsString().empty())
+                        return key + " must contain nonempty strings";
             } else {
                 const double number = value->AsNumber();
                 if (value->GetKind() != JsonValue::Kind::Number || !std::isfinite(number))
@@ -198,89 +271,65 @@ struct ToolCallOutcome {
     const std::string& projectRoot) {
     if (const auto error = ValidateToolArguments(toolName, toolArguments); !error.empty())
         return {.isError = true, .text = error};
-    std::vector<std::string> commandArguments;
-    if (!projectRoot.empty()) {
-        commandArguments.push_back("--project");
-        commandArguments.push_back(projectRoot);
-    }
-
-    const auto pushOption = [&commandArguments](std::string_view option, std::string value) {
-        if (!value.empty()) {
-            commandArguments.emplace_back(option);
-            commandArguments.push_back(std::move(value));
+    const CliCommandDescriptor* command = nullptr;
+    for (const auto& entry : CliCommandCatalog())
+        if (entry.available && entry.mcpTool == toolName) { command = &entry; break; }
+    if (command == nullptr) return {.isError = true, .text = "unknown tool: " + std::string{toolName}};
+    if (projectRoot.empty() && command->name != "api" && command->name != "schema")
+        return {.isError = true, .text = "this tool requires a bound project"};
+    std::vector<std::string> words{std::string{command->name}};
+    if (!projectRoot.empty()) words.insert(words.end(), {"--project", projectRoot});
+    const auto descriptor = MakeCommandToolDescriptor(*command);
+    const auto* properties = descriptor.Find("inputSchema")->Find("properties");
+    for (std::size_t index = 0U; index < properties->Size(); ++index) {
+        const auto& name = properties->MemberName(index);
+        const auto* property = properties->Find(name);
+        const auto* value = toolArguments == nullptr ? nullptr : toolArguments->Find(name);
+        if (value == nullptr) value = property->Find("default");
+        if (value == nullptr) continue;
+        const auto& option = property->Find("x-cli-option")->AsString();
+        const auto append = [&](std::string text) {
+            if (!option.empty()) words.push_back(option);
+            words.push_back(std::move(text));
+        };
+        if (value->GetKind() == JsonValue::Kind::Array) {
+            for (std::size_t item = 0U; item < value->Size(); ++item) append(value->At(item)->AsString());
+            continue;
         }
-    };
-
-    int (*command)(const ArgumentList&, CommandIo) = nullptr;
-    if (toolName == "api_reference") {
-        std::string format = GetStringArgument(toolArguments, "format");
-        if (format.empty()) {
-            format = "markdown";
+        std::string text;
+        if (value->GetKind() == JsonValue::Kind::String) text = value->AsString();
+        else if (property->Find("type")->AsString() == "integer") text = std::to_string(static_cast<int>(value->AsNumber()));
+        else {
+            char buffer[32];
+            std::snprintf(buffer, sizeof(buffer), "%.9g", value->AsNumber());
+            text = buffer;
         }
-        pushOption("--print", std::move(format));
-        command = &RunApiCommand;
-    } else if (toolName == "import_asset") {
-        pushOption("--destination", GetStringArgument(toolArguments, "destination"));
-        commandArguments.push_back(GetStringArgument(toolArguments, "source"));
-        command = &RunImportCommand;
-    } else if (toolName == "validate_script") {
-        commandArguments.push_back(GetStringArgument(toolArguments, "path"));
-        command = &RunValidateCommand;
-    } else if (toolName == "scene_list") {
-        pushOption("--scene", GetStringArgument(toolArguments, "scene"));
-        command = &RunSceneListCommand;
-    } else if (toolName == "scene_attach") {
-        pushOption("--scene", GetStringArgument(toolArguments, "scene"));
-        pushOption("--node", GetStringArgument(toolArguments, "node"));
-        pushOption("--script", GetStringArgument(toolArguments, "script"));
-        pushOption("--tick-group", GetStringArgument(toolArguments, "tickGroup"));
-        if (toolArguments != nullptr) {
-            if (const JsonValue* order = toolArguments->Find("executionOrder"); order != nullptr && !order->IsNull()) {
-                pushOption("--execution-order", std::to_string(static_cast<int>(order->AsNumber())));
-            }
-        }
-        command = &RunSceneAttachCommand;
-    } else if (toolName == "run_scene") {
-        for (const auto& [property, option] : {std::pair{"inputReplay", "--input-replay"},
-                 std::pair{"inputRecord", "--input-record"}}) {
-            const auto path = GetStringArgument(toolArguments, property);
-            if (path.empty()) continue;
-            if (projectRoot.empty()) return {.isError = true, .text = "recording paths require a bound project"};
+        if (const auto* confined = property->Find("x-project-file"); confined != nullptr && confined->AsBool()) {
             std::string error;
             std::error_code pathError;
-            const auto input = std::filesystem::path{path};
+            const auto input = std::filesystem::path{text};
             const auto anchored = std::filesystem::absolute(input.is_absolute() ? input : std::filesystem::path{projectRoot} / input, pathError);
             if (pathError) return {.isError = true, .text = "cannot resolve recording path: " + pathError.message()};
             const auto resolved = ResolveProjectFile(anchored, std::filesystem::path{projectRoot}, error);
             if (resolved.empty()) return {.isError = true, .text = error};
-            pushOption(option, resolved.string());
+            text = resolved.string();
         }
-        pushOption("--viewport", GetStringArgument(toolArguments, "viewport"));
-        pushOption("--safe-area", GetStringArgument(toolArguments, "safeArea"));
-        pushOption("--scene", GetStringArgument(toolArguments, "scene"));
-        pushOption("--report", GetStringArgument(toolArguments, "report"));
-        if (toolArguments != nullptr) {
-            if (const JsonValue* frames = toolArguments->Find("frames"); frames != nullptr && !frames->IsNull()) {
-                pushOption("--frames", std::to_string(static_cast<int>(frames->AsNumber())));
-            }
-            if (const JsonValue* dt = toolArguments->Find("dt"); dt != nullptr && !dt->IsNull()) {
-                char buffer[32];
-                std::snprintf(buffer, sizeof(buffer), "%.9g", dt->AsNumber());
-                pushOption("--dt", buffer);
-            }
-        }
-        command = &RunRunCommand;
-    } else {
-        return ToolCallOutcome{ .isError = true, .text = "unknown tool: " + std::string{ toolName } };
+        append(std::move(text));
     }
-
     std::ostringstream captured;
     std::ostringstream diagnostics;
-    const ArgumentList parsedArguments{ commandArguments, std::array<std::string_view, 1>{ "--disabled" } };
-    const bool structuredReport = toolName == "run_scene" && !GetStringArgument(toolArguments, "report").empty();
-    const int exitCode = command(parsedArguments, CommandIo{ .out = captured, .err = structuredReport ? diagnostics : captured });
+    std::istringstream noInput;
+    const bool structuredReport = command->name == "run" && !GetStringArgument(toolArguments, "report").empty();
+    int exitCode = 1;
+    try {
+        exitCode = RunCli(words, noInput, {.out = captured, .err = structuredReport ? diagnostics : captured});
+    } catch (const std::exception& error) {
+        diagnostics << "error: " << error.what() << '\n';
+    } catch (...) {
+        diagnostics << "error: unexpected tool failure\n";
+    }
     if (exitCode != 0) captured << diagnostics.str();
-    return ToolCallOutcome{ .isError = exitCode != 0, .text = captured.str() };
+    return {.isError = exitCode != 0, .text = captured.str()};
 }
 
 } // namespace
