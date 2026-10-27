@@ -52,6 +52,32 @@ def main():
         "CoroutineLoop": "function Tick(self, dt) coroutine.wrap(function() while true do end end)() end\n",
         "CaughtLoop": "function Tick(self, dt) while true do pcall(function() while true do end end) end end\n",
         "Healthy": "local ticks=0\nfunction Tick(self, dt) ticks=ticks+1 Log('healthy tick '..ticks) end\n",
+        "Boundaries": r'''
+function Ready(self, dt)
+    assert(os == nil and io == nil and package == nil and debug == nil)
+    assert(require == nil and loadfile == nil and dofile == nil and load == nil)
+    local checks = 0
+    for _, domain in ipairs({"Save", "Settings"}) do
+        for _, operation in ipairs({"Read", "Write", "Delete"}) do
+            for _, slot in ipairs({"../escape", "..\\escape", "/escape", "C:escape", "CON", "NUL", "a/b", "a\\b"}) do
+                local value, diagnostic = CallFunction(domain .. "." .. operation, {slot=slot})
+                assert(value == nil and string.find(diagnostic, "not a slot name", 1, true))
+                checks = checks + 1
+            end
+        end
+    end
+    for _, path in ipairs({"Trap.lua", "../Trap.lua", "..\\Trap.lua"}) do
+        local value, diagnostic = Import(path)
+        assert(value == nil and string.find(diagnostic, "not registered", 1, true))
+        checks = checks + 1
+    end
+    local mode = CallFunction("Net.Mode", {})
+    assert(mode.mode == "offline" and not mode.connected)
+    local sent, diagnostic = CallFunction("Net.Call", {rpc="Probe"})
+    assert(sent == nil and string.find(diagnostic, "no network session", 1, true))
+    Log("script boundary checks " .. checks)
+end
+''',
     }
     for name, source in sources.items():
         run(args.cli, "entity", "add", "--project", project, "--name", name)
@@ -65,15 +91,21 @@ def main():
     shutil.copy2(args.player, package / "Sample.exe")
     for dependency in [*args.plugin, *args.runtime_dll]:
         shutil.copy2(dependency, package / dependency.name)
+    trap = 'error("unregistered filesystem module executed")\n'
+    (package / "Trap.lua").write_text(trap, encoding="utf-8")
+    (root / "Trap.lua").write_text(trap, encoding="utf-8")
     project.rename(root / "SourceUnavailable")
     output = run(package / "Sample.exe", "--headless", "--frames=6", "--width=64", "--height=64",
         cwd=package, expected=1)
     assert "execution budget exceeded" in output and all(name + ".lua" in output
         for name in ["DirectLoop", "CoroutineLoop", "CaughtLoop"]), output
     assert "healthy tick 6" in output and "rendered=6" in output and "shutdown=clean" in output, output
+    assert "script boundary checks 51" in output, output
+    assert (package / "Trap.lua").read_text(encoding="utf-8") == trap
+    assert (root / "Trap.lua").read_text(encoding="utf-8") == trap
     report = dict(result="PASS", loadLoopRefused=True, correctedScriptAccepted=True,
         directLoopRefused=True, coroutineLoopRefused=True, protectedLoopRefused=True, healthyTicks=6, renderedFrames=6,
-        sourceUnavailable=True)
+        sourceUnavailable=True, storageAndImportRefusals=51, offlineNetworkRefused=True)
     (root / "result.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(dict(**report, artifacts=str(root))))
     return 0
