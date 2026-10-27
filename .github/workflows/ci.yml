@@ -135,6 +135,18 @@ jobs:
       - name: Verify native batches, priority, cancellation and exact ranges
         run: ./background-read-tests
 
+  native-save-storage:
+    name: Linux save storage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build isolated save and storage tests
+        run: |
+          cmake -S sources/engine/tests/save_storage -B build/save-storage -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/save-storage --parallel 2
+      - name: Verify persistence, chunk commits, corruption and ENOSPC
+        run: ctest --test-dir build/save-storage --output-on-failure
+
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}

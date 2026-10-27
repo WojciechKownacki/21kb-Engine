@@ -4,6 +4,8 @@
 #include "engine/save/SaveGame.hpp"
 #include "engine/save/SaveGameMigration.hpp"
 #include "engine/save/SaveGameService.hpp"
+#include "engine/save/SaveGameChunkStore.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/library/EngineLibraryAssetRef.hpp"
 
 #include <algorithm>
@@ -218,6 +220,116 @@ void RunSaveGameInterruptedWriteTest() {
             std::span<const std::uint8_t>{ bytes->data(), length });
         kb::tests::Require(!cut.Succeeded(), "A truncated save must never load");
     }
+}
+
+void RunSaveGameChunkStoreTest() {
+    ResetSaveTestRoot();
+    kb::platform::UserStorage storage(SaveTestRoot(), 64U << 20U);
+    kb::save::SaveGameChunkStore chunks(storage, "World");
+    kb::save::SaveGame first, second;
+    for (int index = 0; index < 10; ++index) {
+        first.SetString("block" + std::to_string(index), std::string(1U << 20U, 'a'));
+        second.SetString("block" + std::to_string(index), std::string(1U << 20U, 'b'));
+    }
+    std::array updates{ kb::save::SaveGameChunkUpdate{ "West", &first }, kb::save::SaveGameChunkUpdate{ "East", &second } };
+    std::string error;
+    kb::tests::Require(chunks.Commit(updates, &error), "A chunked save larger than the single-buffer limit must commit");
+    const auto original = chunks.Open();
+    kb::tests::Require(original.succeeded && original.chunks.size() == 2U &&
+        chunks.Load(original, "West").save.Count() == 10U && chunks.Load(original, "East").save.Count() == 10U,
+        "Chunked save must load each region independently");
+    kb::save::SaveGame revised;
+    revised.SetInt("revision", 2);
+    const std::array partial{ kb::save::SaveGameChunkUpdate{ "West", &revised } };
+    kb::tests::Require(chunks.Commit(partial, &error), "Partial chunk update must commit");
+    const auto current = chunks.Open();
+    std::int64_t revision = 0;
+    kb::tests::Require(current.chunks.at("East") == original.chunks.at("East") &&
+        chunks.Load(current, "West").save.GetInt("revision", revision) && revision == 2 &&
+        chunks.Load(original, "West").save.Count() == 10U,
+        "A partial update must preserve unchanged chunks and previously opened snapshots");
+    const auto chunkPath = "World/chunks/" + current.chunks.at("West") + ".kbsave";
+    const auto validBytes = storage.Read(chunkPath);
+    kb::tests::Require(validBytes.has_value() && !storage.ReadBounded(chunkPath, validBytes->size() - 1U) &&
+        storage.Write(chunkPath, "broken") && !chunks.Load(current, "West").Succeeded() &&
+        storage.Write(chunkPath, *validBytes), "Chunk corruption and oversized bounded reads must fail safely");
+    const auto oldChunkPath = "World/chunks/" + original.chunks.at("West") + ".kbsave";
+    kb::tests::Require(chunks.Prune(&error) && !storage.Read(oldChunkPath) && chunks.Load(current, "East").Succeeded(),
+        "Explicit pruning must remove only unreferenced chunks");
+    const std::array remove{ kb::save::SaveGameChunkUpdate{ "East", nullptr } };
+    kb::tests::Require(chunks.Commit(remove, &error) && chunks.Open().chunks.size() == 1U,
+        "A partial commit must support removing a region");
+    const auto indexBefore = storage.Read("World/index.kbsave");
+    const std::array invalid{ kb::save::SaveGameChunkUpdate{ "../outside", &revised } };
+    kb::tests::Require(!chunks.Commit(invalid, &error) && storage.Read("World/index.kbsave") == indexBefore,
+        "Invalid chunk names must not change the committed index");
+    std::vector<kb::save::SaveGameChunkUpdate> tooMany;
+    for (std::size_t index = 0; index <= kb::save::SaveGameChunkStore::MaxChunks; ++index)
+        tooMany.push_back({ "Region" + std::to_string(index), &revised });
+    kb::tests::Require(!chunks.Commit(tooMany, &error) && storage.Read("World/index.kbsave") == indexBefore,
+        "An excessive chunk count must be refused before publication");
+    kb::tests::Require(storage.Write("World/index.kbsave", "broken") && !chunks.Open().succeeded &&
+        !chunks.Commit(partial, &error), "A corrupt index must not be silently replaced by a partial save");
+}
+
+void RunSaveGameChunkFailureTest() {
+    ResetSaveTestRoot();
+    kb::platform::UserStorage storage(SaveTestRoot(), 4096U);
+    kb::save::SaveGameChunkStore chunks(storage, "World");
+    kb::save::SaveGame original;
+    original.SetInt("revision", 1);
+    const std::array initial{ kb::save::SaveGameChunkUpdate{ "Base", &original } };
+    kb::tests::Require(chunks.Commit(initial), "Quota fixture initial save failed");
+    const auto indexBefore = storage.Read("World/index.kbsave");
+    const auto filesBefore = storage.List();
+    kb::save::SaveGame small, large;
+    small.SetString("payload", std::string(1000U, 's'));
+    large.SetString("payload", std::string(5000U, 'l'));
+    const std::array failing{ kb::save::SaveGameChunkUpdate{ "First", &small }, kb::save::SaveGameChunkUpdate{ "Second", &large } };
+    kb::tests::Require(!chunks.Commit(failing) && storage.Read("World/index.kbsave") == indexBefore &&
+        chunks.Open().chunks.size() == 1U && chunks.Load(chunks.Open(), "Base").Succeeded(),
+        "Exhausting host storage midway through a commit must preserve the entire previous generation");
+    kb::tests::Require(storage.List().size() > filesBefore.size() && chunks.Prune() && storage.List() == filesBefore,
+        "An interrupted commit must leave only reclaimable unreferenced chunks");
+    const auto blocked = SaveTestRoot() / "World/index.kbsave.tmp";
+    kb::tests::Require(std::filesystem::create_directory(blocked), "Index-failure fixture could not be created");
+    const std::array next{ kb::save::SaveGameChunkUpdate{ "Base", &small } };
+    kb::tests::Require(!chunks.Commit(next) && storage.Read("World/index.kbsave") == indexBefore &&
+        chunks.Load(chunks.Open(), "Base").Succeeded(), "Index publication failure must preserve the old snapshot");
+    kb::tests::Require(std::filesystem::remove(blocked) && chunks.Prune() && chunks.Commit(next),
+        "A failed partial commit must be recoverable after storage becomes available");
+}
+
+void RunSaveGameInvalidValueTest() {
+    kb::save::SaveGame invalid;
+    kb::save::SaveValue value;
+    value.type = static_cast<kb::save::SaveValueType>(255U);
+    invalid.SetEntries({ { "invalid", value } });
+    kb::tests::Require(!kb::save::SaveGameService::Serialize(invalid),
+        "Save must refuse an invalid scalar tag instead of writing an unreadable file");
+}
+
+void RunSaveGameStorageFullTest() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    // /dev/full is a real kernel ENOSPC sink. Point only our temporary file at
+    // it so a failed flush exercises preservation of an existing valid save.
+    ResetSaveTestRoot();
+    const auto path = SaveTestRoot() / "full.kbsave";
+    kb::save::SaveGame first;
+    first.SetInt("generation", 1);
+    kb::tests::Require(kb::save::SaveGameService::Save(path, first), "Disk-full fixture could not save its first generation");
+    const auto temporary = std::filesystem::path{ path }.concat(".tmp");
+    std::error_code error;
+    std::filesystem::create_symlink("/dev/full", temporary, error);
+    kb::tests::Require(!error, "Disk-full fixture could not create its temporary sink");
+    kb::save::SaveGame second;
+    second.SetString("payload", std::string(65536U, 'x'));
+    kb::tests::Require(!kb::save::SaveGameService::Save(path, second), "An ENOSPC write must fail");
+    const auto loaded = kb::save::SaveGameService::Load(path);
+    std::int64_t generation = 0;
+    kb::tests::Require(loaded.Succeeded() && loaded.save.GetInt("generation", generation) && generation == 1 &&
+        !std::filesystem::exists(temporary), "ENOSPC must preserve the previous save and discard the partial temporary file");
+#endif
 }
 
 // LIB-162: every corruption / bad-header path returns a precise status rather
@@ -600,6 +712,10 @@ void RunSaveGameTests() {
     RunSaveGameAtomicWriteTest();
     RunSaveGameExactSizeLimitTest();
     RunSaveGameInterruptedWriteTest();
+    RunSaveGameInvalidValueTest();
+    RunSaveGameStorageFullTest();
+    RunSaveGameChunkStoreTest();
+    RunSaveGameChunkFailureTest();
     RunSaveGameCorruptionTest();
     RunSaveGameMigrationTest();
     RunSaveGameDomainSeparationTest();

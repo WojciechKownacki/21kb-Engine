@@ -47,6 +47,8 @@ public:
     UserStorage& operator=(const UserStorage&) = delete;
     [[nodiscard]] bool Write(std::string_view key, std::string_view data);
     [[nodiscard]] std::optional<std::string> Read(std::string_view key) const;
+    // Rejects oversized files before allocating a buffer and detects growth while reading.
+    [[nodiscard]] std::optional<std::string> ReadBounded(std::string_view key, std::size_t maxBytes) const;
     [[nodiscard]] bool Delete(std::string_view key);
     [[nodiscard]] std::vector<std::string> List() const;
     [[nodiscard]] std::future<bool> WriteAsync(std::string key, std::string data);

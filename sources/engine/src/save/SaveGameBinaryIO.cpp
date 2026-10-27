@@ -1,14 +1,20 @@
 #include "save/SaveGameBinaryIO.hpp"
 
 #include <cstring>
+#include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <system_error>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#include <io.h>
+#elif !defined(__EMSCRIPTEN__)
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace kb::save {
@@ -145,23 +151,34 @@ bool SaveGameBinaryIO::ReadAllBytes(
 }
 
 bool SaveGameBinaryIO::WriteBytesAtomically(const std::filesystem::path& path, std::span<const std::uint8_t> bytes) {
-    if (!PrepareOutputPath(path) || bytes.empty()) {
+    // Both save files and host storage use the same temporary-name convention.
+    // Serialize writers in this process, including different storage instances.
+    static std::mutex writeMutex;
+    const std::scoped_lock lock{ writeMutex };
+    if (!PrepareOutputPath(path)) {
         return false;
     }
 
     const std::filesystem::path tempPath = TempPathFor(path);
-    {
-        std::ofstream output{ tempPath, std::ios::binary | std::ios::trunc };
-        if (!output.is_open()) {
-            return false;
-        }
-        output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-        output.close();
-        if (!output) {
-            std::error_code error;
-            std::filesystem::remove(tempPath, error);
-            return false;
-        }
+#if defined(_WIN32)
+    std::FILE* output = nullptr;
+    if (_wfopen_s(&output, tempPath.c_str(), L"wb") != 0) return false;
+#else
+    std::FILE* output = std::fopen(tempPath.c_str(), "wb");
+    if (output == nullptr) return false;
+#endif
+    bool written = bytes.empty() || std::fwrite(bytes.data(), 1U, bytes.size(), output) == bytes.size();
+    written = std::fflush(output) == 0 && written;
+#if defined(_WIN32)
+    if (written) written = _commit(_fileno(output)) == 0;
+#elif !defined(__EMSCRIPTEN__)
+    if (written) written = ::fsync(::fileno(output)) == 0;
+#endif
+    written = std::fclose(output) == 0 && written;
+    if (!written) {
+        std::error_code error;
+        std::filesystem::remove(tempPath, error);
+        return false;
     }
 
     if (!ReplaceFileAtomically(tempPath, path)) {
@@ -169,6 +186,16 @@ bool SaveGameBinaryIO::WriteBytesAtomically(const std::filesystem::path& path, s
         std::filesystem::remove(tempPath, error);
         return false;
     }
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    // The rename is already atomic; flushing its directory makes the new name
+    // durable as well. If this fails, the complete new file may already be visible.
+    const auto parent = path.has_parent_path() ? path.parent_path() : std::filesystem::path{ "." };
+    const int directory = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY);
+    if (directory < 0) return false;
+    const bool durable = ::fsync(directory) == 0;
+    const bool closed = ::close(directory) == 0;
+    if (!durable || !closed) return false;
+#endif
     return true;
 }
 

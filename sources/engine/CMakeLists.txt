@@ -102,6 +102,7 @@ add_library(kb_engine STATIC
     include/engine/save/SaveGame.hpp
     include/engine/save/SaveGameMigration.hpp
     include/engine/save/SaveGameService.hpp
+    include/engine/save/SaveGameChunkStore.hpp
     include/engine/save/SaveValue.hpp
     include/engine/ecs/ChunkSizeAutoTuner.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
@@ -842,6 +843,7 @@ add_library(kb_engine STATIC
     src/save/SaveGameCodec.cpp
     src/save/SaveGameMigration.cpp
     src/save/SaveGameService.cpp
+    src/save/SaveGameChunkStore.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
     src/scene/asset/io/SceneAssetComponentCodec.cpp
     src/scene/asset/io/components/SceneAssetAudioComponentCodec.cpp

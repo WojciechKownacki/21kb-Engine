@@ -1,10 +1,12 @@
 #include "engine/platform/UserStorage.hpp"
 
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
+#include "save/SaveGameBinaryIO.hpp"
 
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
 
@@ -27,9 +29,6 @@ EM_JS(char*, BrowserUserStorageDiagnostic, (const char* root), {
     return stringToNewUTF8(message);
 });
 // clang-format on
-#endif
-#if defined(_WIN32)
-#include <windows.h>
 #endif
 
 namespace kb::platform {
@@ -74,14 +73,8 @@ bool UserStorage::Write(std::string_view key, std::string_view data) {
     const std::uintmax_t usedBytes = Usage();
     if (error || usedBytes < oldBytes || usedBytes - oldBytes > quotaBytes_ || data.size() > quotaBytes_ - (usedBytes - oldBytes) ||
         (!std::filesystem::create_directories(path.parent_path(), error) && error)) return false;
-    const std::filesystem::path temporary = path.string() + ".tmp";
-    { std::ofstream output(temporary, std::ios::binary | std::ios::trunc); if (!output) return false; output.write(data.data(), static_cast<std::streamsize>(data.size())); if (!output) return false; }
-#if defined(_WIN32)
-    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) { std::filesystem::remove(temporary, error); return false; }
-#else
-    std::filesystem::rename(temporary, path, error);
-    if (error) { std::filesystem::remove(temporary, error); return false; }
-#endif
+    if (!kb::save::SaveGameBinaryIO::WriteBytesAtomically(path,
+            { reinterpret_cast<const std::uint8_t*>(data.data()), data.size() })) return false;
 #if defined(__EMSCRIPTEN__)
     BrowserUserStorageChanged(root_.generic_string().c_str(), path.generic_string().c_str());
 #endif
@@ -89,13 +82,22 @@ bool UserStorage::Write(std::string_view key, std::string_view data) {
 }
 
 std::optional<std::string> UserStorage::Read(std::string_view key) const {
+    return ReadBounded(key, static_cast<std::size_t>(std::min<std::uintmax_t>(quotaBytes_, std::numeric_limits<std::size_t>::max())));
+}
+
+std::optional<std::string> UserStorage::ReadBounded(std::string_view key, std::size_t maxBytes) const {
     const std::filesystem::path path = PathFor(key);
     if (path.empty()) return std::nullopt;
     std::lock_guard lock{ mutex_ };
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) return std::nullopt;
-    return std::string{ std::istreambuf_iterator<char>{ input },
-        std::istreambuf_iterator<char>{} };
+    const auto size = input.tellg();
+    if (size < 0 || static_cast<std::uintmax_t>(size) > maxBytes || static_cast<std::uintmax_t>(size) > quotaBytes_) return std::nullopt;
+    std::string bytes(static_cast<std::size_t>(size), '\0');
+    input.seekg(0);
+    if (!bytes.empty()) input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (!input || input.peek() != std::char_traits<char>::eof()) return std::nullopt;
+    return bytes;
 }
 bool UserStorage::Delete(std::string_view key) {
     const std::filesystem::path path = PathFor(key);
