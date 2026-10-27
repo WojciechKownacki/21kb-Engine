@@ -222,14 +222,38 @@ PucLuaLoadResult PucLuaScriptRuntime::RegisterModule(std::string name, std::stri
     if (name.empty()) {
         return PucLuaLoadResult{ .error = "lua module name is empty" };
     }
-    UnloadModule(name);
+    const auto existing = modules_.find(name);
+    if (existing != modules_.end() && existing->second.loading) {
+        return {.error = "lua module cannot be replaced while it is loading: " + name};
+    }
+    std::optional<ModuleRecord> previous;
+    if (existing != modules_.end()) previous = std::move(existing->second);
+    if (chunkName.empty()) chunkName = name;
+    if (chunkName.front() != '@' && chunkName.front() != '=') chunkName.insert(chunkName.begin(), '@');
     modules_[name] = ModuleRecord{
         .source = std::move(source),
-        .chunkName = chunkName.empty() ? name : std::move(chunkName),
+        .chunkName = std::move(chunkName),
         .valueRef = kNoReference,
         .contentHash = contentHash,
         .generation = generation_++,
     };
+    if (previous) {
+        // Initial registration stays lazy so dependencies can be registered in
+        // either order. A replacement must work before releasing its old value.
+        PucLuaStackGuard stack{state_};
+        const bool budgetArmedHere = !executionBudgetActive_;
+        if (budgetArmedHere) BeginExecutionBudget();
+        std::string error;
+        const bool succeeded = PushModuleForImport(name, error);
+        if (budgetArmedHere) EndExecutionBudget();
+        if (!succeeded) {
+            UnloadModule(name);
+            modules_[name] = std::move(*previous);
+            return {.error = std::move(error)};
+        }
+        if (previous->valueRef != kNoReference)
+            luaL_unref(state_, LUA_REGISTRYINDEX, previous->valueRef);
+    }
     return PucLuaLoadResult{ .succeeded = true };
 }
 
@@ -570,12 +594,17 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
     lua_pushcfunction(state_, &PucLuaErrorReporter::Traceback);
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
+    const lua_Hook previousHook = lua_gethook(state_);
+    const int previousMask = lua_gethookmask(state_);
+    const int previousCount = lua_gethookcount(state_);
     PucLuaDebugHook::Install(state_, *this);
     const int status = [&] {
         const PucLuaMemoryLimitScope memoryLimit{ state_ };
         return lua_pcall(state_, 0, 1, errorHandlerIndex);
     }();
-    PucLuaDebugHook::Clear(state_);
+    // Import can run inside another module or a script's top-level code. Keep
+    // that caller's execution budget and debugger hook active after returning.
+    lua_sethook(state_, previousHook, previousMask, previousCount);
     if (status != LUA_OK) {
         error = PucLuaErrorReporter::ErrorFromTop(state_);
         module.loading = false;

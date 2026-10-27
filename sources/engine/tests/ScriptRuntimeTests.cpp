@@ -102,6 +102,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -112,6 +113,14 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
 
 namespace {
 
@@ -639,6 +648,52 @@ void RunNativeScriptPluginManagerDispatchTest() {
     const kb::script::ScriptRuntimeExecutionResult afterFailedReload = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
     kb::tests::Require(afterFailedReload.Succeeded() && afterFailedReload.executedBehaviours == 1U,
         "Native script plugin callback did not remain callable after a failed reload rollback");
+
+#if !KB_SKIP_NATIVE_SCRIPT_SHADOW_COPY_FAILURE_LOAD_TEST
+    const auto privateBytes = []() -> std::uint64_t {
+#if defined(_WIN32)
+        PROCESS_MEMORY_COUNTERS_EX counters{};
+        kb::tests::Require(GetProcessMemoryInfo(GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)) != 0,
+            "Native reload process memory measurement must succeed");
+        return static_cast<std::uint64_t>(counters.PrivateUsage);
+#else
+        return 0U;
+#endif
+    };
+    kb::tests::Require(runtime.SharedState().Set("reload.saved", kb::script::ScriptValue{37}), "Native reload state must be seeded");
+    auto previousPath = loaded.loadedPath;
+    std::uint64_t memoryBaseline = 0U, memoryMaximum = 0U;
+    for (int iteration = 0; iteration < 80; ++iteration) {
+        const auto replacement = plugins.LoadOrReload({.key = "test-plugin", .modulePath = pluginPath,
+            .shadowCopy = true, .shadowCopyDirectory = TestRoot() / "NativePluginShadow"});
+        kb::tests::Require(replacement.Succeeded() && replacement.loadedPath != previousPath,
+            "Native reload must load a distinct replacement library");
+#if defined(_WIN32)
+        kb::tests::Require(GetModuleHandleW(previousPath.c_str()) == nullptr &&
+            GetModuleHandleW(replacement.loadedPath.c_str()) != nullptr,
+            "Native reload must unmap the previous library and retain its replacement");
+#endif
+        previousPath = replacement.loadedPath;
+        if (iteration % 8 == 0) {
+            const auto refused = plugins.LoadOrReload({.key = "test-plugin", .modulePath = pluginPath,
+                .entryPoint = "kb_missing_native_script_entrypoint", .shadowCopy = true,
+                .shadowCopyDirectory = TestRoot() / "NativePluginShadow"});
+            kb::tests::Require(!refused.Succeeded() && plugins.IsLoaded("test-plugin"), "Repeated failed reload must retain the working module");
+        }
+        const auto continued = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        const auto saved = runtime.SharedState().Get("reload.saved");
+        kb::tests::Require(continued.Succeeded() && continued.executedBehaviours == 1U && saved && saved->AsInt() == 37,
+            "Repeated native reload must preserve bindings and host-owned state");
+        const auto bytes = privateBytes();
+        if (iteration == 15) memoryBaseline = bytes;
+        if (iteration >= 15) memoryMaximum = std::max(memoryMaximum, bytes);
+    }
+    kb::tests::Require(memoryMaximum <= memoryBaseline + 8U * 1024U * 1024U,
+        "Native reload private memory must remain bounded after warmup");
+    std::printf("native_reload iterations=80 failed_reloads=10 private_bytes_baseline=%llu private_bytes_maximum=%llu memory_available=%d\n",
+        static_cast<unsigned long long>(memoryBaseline), static_cast<unsigned long long>(memoryMaximum), memoryBaseline != 0U ? 1 : 0);
+#endif
 
     plugins.Unload("test-plugin");
     kb::tests::Require(!plugins.IsLoaded("test-plugin"), "Native script plugin manager did not unload the DLL");
@@ -1169,11 +1224,16 @@ void RunPucLuaReloadKeepsTheWorkingScriptTest() {
     kb::tests::Require(!syntaxError.succeeded && host.luaRuntime.IsScriptCurrent(kAsset, 1U), "A syntax error must fail the reload and keep the old script");
     kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == 1, "After failed reloads the old version must still run");
     std::size_t atTen = 0U;
+    kb::tests::Require(host.luaRuntime.RegisterModule("Reload.Value", "return {version=1}", "Reload/Value.lua", 1U).succeeded,
+        "Reload module fixture must register");
     for (std::uint64_t version = 10U; version < 210U; ++version) {
-        const std::string source = "local padding = {} for i = 1, 50 do padding[i] = i end\nfunction Tick(self, dt) SetShared('reload.version', " +
-            std::to_string(version) + ") end";
+        kb::tests::Require(host.luaRuntime.RegisterModule("Reload.Value", "return {version=" + std::to_string(version) + "}",
+            "Reload/Value.lua", version).succeeded, "A valid module replacement must succeed");
+        const std::string source = "local module = Import('Reload.Value')\nlocal padding = {} for i = 1, 50 do padding[i] = i end\nfunction Tick(self, dt) SetShared('reload.version', " +
+            std::to_string(version) + "); SetShared('reload.module', module.version) end";
         kb::tests::Require(host.luaRuntime.ReloadScript(kAsset, source, "Reload.lua", version).succeeded, "A valid reload must succeed");
         kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == static_cast<std::int64_t>(version), "A reloaded script must run its new code");
+        kb::tests::Require(host.Shared("reload.module") == static_cast<std::int64_t>(version), "A reloaded script must import its replacement module");
         if (version == 19U) atTen = host.luaRuntime.LuaMemoryUsedBytes();
     }
     kb::tests::Require(host.luaRuntime.IsScriptCurrent(kAsset, 209U) && host.luaRuntime.SuspendedCoroutineCount() == 0U,
@@ -1322,6 +1382,7 @@ void RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest() {
     });
 
     kb::script::PucLuaScriptRuntime luaRuntime;
+    luaRuntime.SetExecutionBudgetSettings({.luaInstructionsPerBehaviour = 10'000U});
     const kb::script::PucLuaLoadResult module = luaRuntime.RegisterModule("Shared.Math", R"(
 local M = {}
 function M.add(a, b)
@@ -1349,6 +1410,21 @@ end
     kb::tests::Require(tick.Succeeded(), "PUC Lua module import execution produced diagnostics");
     std::optional<kb::script::ScriptValue> sum = runtime.SharedState().Get("lua.module.sum");
     kb::tests::Require(sum.has_value() && sum->AsInt() == 7, "PUC Lua module import did not return callable module table");
+
+    kb::tests::Require(luaRuntime.RegisterModule("Nested.First", "return {}", "Nested/First.lua").succeeded,
+        "Nested module fixture must register lazily");
+    for (const auto source : {"function Broken(", "error('module reload failed')", "while true do end",
+             "local nested = Import('Nested.First'); while true do end"}) {
+        const auto refused = luaRuntime.RegisterModule("Shared.Math", source, "Shared/Math.lua", 99U);
+        kb::tests::Require(!refused.succeeded && !refused.error.empty() && luaRuntime.IsModuleCurrent("Shared.Math", 0U) &&
+            !luaRuntime.IsModuleCurrent("Shared.Math", 99U), "Invalid module reload must preserve its previous value and hash");
+        const auto consumer = luaRuntime.ReloadScript(kLuaAsset,
+            "local Math = Import('Shared.Math')\nfunction Tick(self, dt) SetShared('lua.module.sum', Math.add(2,5)) end",
+            "Player.lua", 100U);
+        kb::tests::Require(consumer.succeeded && runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F).Succeeded() &&
+            runtime.SharedState().Get("lua.module.sum")->AsInt() == 7,
+            "A fresh import after rejected module reload must still use the working module");
+    }
 
     const kb::script::PucLuaLoadResult reloaded = luaRuntime.ReloadScript(kLuaAsset, R"(
 local Math = Import("Shared.Math")
@@ -1691,6 +1767,22 @@ end
     }
     kb::tests::Require(sawReloadedLabel && sawRetainedOverride,
         "Lua exposed variables did not refresh non-overridden defaults while preserving explicit overrides");
+
+    const auto checkRejectedSchema = [&](std::string_view source) {
+        WriteTextFile(assetsRoot / "Logic" / "Mover.lua", source);
+        kb::tests::Require(scene.Assets().Discover() == 1U, "Invalid schema edit must be discovered");
+        const auto rejected = preparer.PrepareBehaviour(*scene.Components().Behaviours().TryGet(object.Entity()));
+        kb::tests::Require(!rejected.Succeeded() && rejected.reloadedAssets.empty(), "Invalid code must not replace its working schema");
+        const auto retained = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(retained.Succeeded() && retained.emittedEvents.size() == 1U,
+            "The retained script must still run with its old variable types");
+        bool retainedLabel = false;
+        for (const auto& argument : retained.emittedEvents.front().arguments)
+            retainedLabel = retainedLabel || (argument.name == "label" && argument.value.AsString() == "Walker");
+        kb::tests::Require(retainedLabel, "A rejected edit must not change defaults of the running script");
+    };
+    checkRejectedSchema("-- @expose speed String = Invalid\n-- @expose label String = Rejected\nfunction Tick(\n");
+    checkRejectedSchema("-- @expose speed String = Invalid\n-- @expose label String = Rejected\nerror('reload rejected')\n");
 
     const kb::script::ScriptRuntimeExecutionResult destroyed = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Destroyed, 0.0F);
     kb::tests::Require(destroyed.Succeeded(), "Lua exposed variables Destroyed lifecycle produced diagnostics");

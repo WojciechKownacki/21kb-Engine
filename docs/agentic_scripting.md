@@ -49,11 +49,24 @@ checks their hash against the release manifest in a packaged game but does not i
 ## Hot reload
 
 Reloading a Lua script runs the new code in a fresh environment and swaps it in only if that works: a
-syntax error, or an error in the code at the top of the script, keeps the running version (its hash
-stays current) and reports the error with file and line. A successful reload is a restart of that
-script, not a migration: its lifecycle starts again (Created, Ready) and values kept in the old
-environment are gone; shared values (`SetShared`), saves and scene data stay. Repeated reloads release
-the old environments and coroutines (tested with 200 reloads).
+syntax error, or an error in the code at the top of the script, keeps the running version, its
+variable schema and its hash, and reports the error with file and line. Import modules register
+lazily the first time; replacing an existing module evaluates the candidate before releasing its
+previous cached value. Syntax, runtime and execution-budget failures retain the working module.
+Nested imports preserve the caller's execution budget and debugger hook.
+
+A successful behaviour reload restarts its lifecycle (Created, Ready) and discards the old Lua
+environment. Per-instance exposed-variable overrides retain their values by name and compatible
+type; untouched defaults refresh from the new schema. A conflicting type is diagnosed rather than
+silently converted. Arbitrary Lua locals are not migrated. Shared values (`SetShared`), saves and
+scene data stay. The tests replace Lua scripts and their imported modules 200 times while checking
+bounded Lua memory and released coroutines.
+
+Native reload preserves host-owned shared state and asset bindings, replaces callbacks and unloads
+the previous library. Module-local static state belongs to the replacement library. Failed loads
+retain the working callbacks. The native test repeats 80 replacements and ten failed attempts;
+on Windows it also checks that old modules are unmapped and private committed memory remains
+bounded after warmup. This memory measurement is reported as unavailable on other test platforms.
 
 ## Debugging
 
