@@ -141,6 +141,18 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_cli_tests COMMAND $<TARGET_FILE:kb_cli_tests>)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)
+    if(KB_BUILD_RENDERER)
+        find_program(KB_BLENDER_EXECUTABLE NAMES blender)
+        find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+        if(KB_BLENDER_EXECUTABLE AND Python3_Interpreter_FOUND)
+            add_test(NAME kb_blender_bridge COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/scripts/tests/blender_bridge_integration.py"
+                "--cli" "$<TARGET_FILE:kb_cli>"
+                "--blender" "${KB_BLENDER_EXECUTABLE}"
+                "--test-root" "${CMAKE_BINARY_DIR}/blender_bridge_tests")
+            set_tests_properties(kb_blender_bridge PROPERTIES LABELS "tools;import;blender" TIMEOUT 300)
+        endif()
+    endif()
     if(WIN32 AND KB_BUILD_RENDERER AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
         add_test(NAME kb_cli_particle_profile COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"

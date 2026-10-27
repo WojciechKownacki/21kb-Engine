@@ -2,6 +2,9 @@
 
 A model that was imported once can be imported again from its changed source file. The engine replaces the imported files in place, keeps the asset id and path (so scenes and materials that reference it keep working), and does not overwrite textures or materials the author edited since the import unless asked to.
 
+For saved Blender scenes, the [Blender bridge](blender_workflow.md) exports static
+models and watches for changes, using these same conflict policies and backups.
+
 ## Import record
 
 Every import of a model writes a sidecar next to the asset: `<asset>.importrecord`. It stores:
