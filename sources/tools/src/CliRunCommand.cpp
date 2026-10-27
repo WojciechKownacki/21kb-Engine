@@ -11,6 +11,7 @@
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/AIBrainDecisionSnapshot.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -27,6 +28,7 @@
 #include "engine/world/WorldPartitionRuntime.hpp"
 
 #include <filesystem>
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <chrono>
@@ -40,6 +42,39 @@
 namespace kb::cli {
 
 namespace {
+
+[[nodiscard]] kb::core::JsonValue AiDecisionsJson(kb::scene::Scene& scene) {
+    using kb::core::JsonValue;
+    using Snapshot = kb::scene::AIBrainDecisionSnapshot;
+    std::vector<std::pair<kb::scene::SceneEntity, Snapshot>> decisions;
+    scene.Runtime().EcsWorld().CreateQuery<Snapshot>().ForEach(
+        [](kb::scene::SceneEntity entity, const Snapshot& snapshot, void* output) {
+            static_cast<decltype(decisions)*>(output)->emplace_back(entity, snapshot);
+        }, &decisions);
+    std::ranges::sort(decisions, {}, [](const auto& entry) { return entry.first.Id(); });
+    auto report = JsonValue::MakeObject();
+    report.Set("schema", JsonValue::MakeString("21kb.ai-decisions/v1"));
+    report.Set("provider_active", JsonValue::MakeBool(scene.IsModuleActive("Gameplay.AI")));
+    report.Set("scope", JsonValue::MakeString("Last observed rule-list decisions; not a behavior tree or planner"));
+    constexpr std::array<std::string_view, 5U> states{ "pending", "running", "disabled", "inactive", "dead" };
+    auto entries = JsonValue::MakeArray();
+    for (const auto& [entity, decision] : decisions) {
+        auto entry = JsonValue::MakeObject();
+        entry.Set("entity", JsonValue::MakeString(std::to_string(entity.Id())));
+        entry.Set("name", JsonValue::MakeString(std::string{ scene.Entities().Name(entity) }));
+        entry.Set("state", JsonValue::MakeString(std::string{ states[static_cast<std::size_t>(decision.state)] }));
+        entry.Set("rule_index", JsonValue::MakeNumber(decision.ruleIndex));
+        entry.Set("condition", JsonValue::MakeString(std::string{ kb::scene::kAIConditionNames[static_cast<std::size_t>(decision.condition)] }));
+        entry.Set("condition_value", JsonValue::MakeNumber(decision.conditionValue));
+        entry.Set("action", JsonValue::MakeString(std::string{ kb::scene::kAIActionNames[static_cast<std::size_t>(decision.action)] }));
+        entry.Set("action_value", JsonValue::MakeNumber(decision.actionValue));
+        entry.Set("enemy", decision.enemy.IsValid() ? JsonValue::MakeString(std::to_string(decision.enemy.Id())) : JsonValue::MakeNull());
+        entry.Set("frame", JsonValue::MakeString(std::to_string(decision.frameIndex)));
+        entries.Append(std::move(entry));
+    }
+    report.Set("decisions", std::move(entries));
+    return report;
+}
 
 // The ECS scheduler of the last simulated frame. Wall time and CPU time are separate numbers: cpu_time_ns adds up the
 // durations of all systems over all workers, so it can exceed the frame's wall time.
@@ -245,7 +280,8 @@ struct DiagnosticPrinter {
 }
 
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
-    std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr, std::ostream* inputReport = nullptr) {
+    std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr, std::ostream* inputReport = nullptr,
+    std::ostream* aiReport = nullptr) {
     const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -682,6 +718,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         ? kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) : nullptr;
     const bool particleProviderAvailable = kb::particles::ParticlePlayback::HasBackend(scene);
     const auto audioSnapshot = audioReport != nullptr ? kb::audio::AudioPlayback::DspReport(scene) : kb::audio::AudioDspRuntimeReport{};
+    auto aiSnapshot = aiReport != nullptr ? AiDecisionsJson(scene) : kb::core::JsonValue::MakeObject();
     const auto meterSnapshot = requireMeters ? kb::audio::AudioMetering::Report(scene) : kb::audio::AudioMeterReport{};
     if (requireMeters) {
         bool valid = meterSnapshot.backendAvailable && meterSnapshot.supported && meterSnapshot.initialized
@@ -722,6 +759,12 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             stopCode = 1;
             stopReason = "input-recording-write-failed";
         }
+    }
+    if (aiReport != nullptr) {
+        aiSnapshot.Set("succeeded", kb::core::JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        aiSnapshot.Set("completed_frames", kb::core::JsonValue::MakeNumber(completedFrames));
+        *aiReport << aiSnapshot.Dump() << '\n';
+        if (!aiReport->good()) { io.err << "error: AI decision report could not be written\n"; return 1; }
     }
     if (inputReport != nullptr) {
         using kb::core::JsonValue;
@@ -836,14 +879,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory or input\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input or ai\n"; return 1; }
     if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
         io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input") {
-        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory or input\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai") {
+        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input or ai\n";
         return 1;
     }
+    if (report && *report == "ai") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "input") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "ecs") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, &io.out);
     if (report && *report == "world-memory") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, &io.out);

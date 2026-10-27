@@ -216,6 +216,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneDeformedGeometryComponents.hpp
     include/engine/scene/SceneAssets.hpp
     include/engine/scene/SceneAssetCopy.hpp
+    include/engine/scene/AIBrainDecisionSnapshot.hpp
     include/engine/scene/SceneAssetMeta.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
     include/engine/scene/SceneCameraComponents.hpp

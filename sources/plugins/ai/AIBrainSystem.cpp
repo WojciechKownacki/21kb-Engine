@@ -7,6 +7,7 @@
 #include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/CombatantComponent.hpp"
+#include "engine/scene/AIBrainDecisionSnapshot.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -39,6 +40,17 @@ constexpr float kPlainHitRange = 2.0F;
 constexpr float kPlainHitDamage = 10.0F;
 constexpr float kPlainHitInterval = 1.0F;
 constexpr float kArrived = 0.35F;
+
+[[nodiscard]] bool SameBrain(const kb::scene::AIBrainComponent& left, const kb::scene::AIBrainComponent& right) {
+    if (left.enabled != right.enabled || left.preset != right.preset || left.moveSpeed != right.moveSpeed ||
+        left.wanderRadius != right.wanderRadius || left.leashDistance != right.leashDistance) return false;
+    for (std::size_t index = 0U; index < left.rules.size(); ++index) {
+        const auto& a = left.rules[index];
+        const auto& b = right.rules[index];
+        if (a.when != b.when || a.whenValue != b.whenValue || a.action != b.action || a.actionValue != b.actionValue) return false;
+    }
+    return true;
+}
 
 [[nodiscard]] float Flat(Vec3 a, Vec3 b) noexcept {
     const float dx = a.x - b.x;
@@ -203,6 +215,7 @@ void AIBrainSystem::Think(kb::scene::Scene& scene, Mind& mind, const kb::scene::
     mind.enemy = enemy.has_value() ? enemy->entity : kb::scene::SceneEntity{};
     mind.ruleIndex = -1;
     mind.ruleCondition = AICondition::Never;
+    mind.ruleValue = 0.0F;
     mind.thought = true;
     for (std::size_t index = 0U; index < brain.rules.size(); ++index) {
         const kb::scene::AIRule& rule = brain.rules[index];
@@ -211,6 +224,7 @@ void AIBrainSystem::Think(kb::scene::Scene& scene, Mind& mind, const kb::scene::
             mind.actionValue = rule.actionValue;
             mind.ruleIndex = static_cast<int>(index);
             mind.ruleCondition = rule.when;
+            mind.ruleValue = rule.whenValue;
             return;
         }
     }
@@ -302,9 +316,19 @@ void AIBrainSystem::Act(kb::scene::Scene& scene, Mind& mind, const kb::scene::AI
     }
 }
 
+void AIBrainSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
+    auto& scene = context.GetScene();
+    for (const auto& [id, mind] : minds_) {
+        if (!scene.Entities().IsAlive(mind.entity)) continue;
+        Stop(scene, mind.entity);
+        context.EcsWorld().Remove<kb::scene::AIBrainDecisionSnapshot>(mind.entity);
+    }
+    minds_.clear();
+}
+
 void AIBrainSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
     kb::scene::Scene& scene = context.GetScene();
-    if (!scene.Runtime().IsPlaying()) return;
+    if (!scene.Runtime().IsPlaying()) { OnDestroy(context); return; }
     const float deltaSeconds = context.DeltaSeconds();
     if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F) return;
     std::vector<kb::scene::SceneEntity> brains;
@@ -312,30 +336,63 @@ void AIBrainSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
         [](kb::scene::SceneEntity entity, const kb::scene::AIBrainComponent&, void* list) {
             static_cast<std::vector<kb::scene::SceneEntity>*>(list)->push_back(entity);
         }, &brains);
-    std::erase_if(minds_, [&scene](const auto& entry) { return !scene.Entities().IsAlive(entry.second.entity); });
+    std::erase_if(minds_, [&](const auto& entry) {
+        if (!scene.Entities().IsAlive(entry.second.entity)) return true;
+        if (scene.Components().AIBrains().Has(entry.second.entity)) return false;
+        Stop(scene, entry.second.entity);
+        context.EcsWorld().Remove<kb::scene::AIBrainDecisionSnapshot>(entry.second.entity);
+        return true;
+    });
     for (const kb::scene::SceneEntity entity : brains) {
         const kb::scene::AIBrainComponent* found = scene.Components().AIBrains().TryGet(entity);
         if (found == nullptr) continue;
         const kb::scene::AIBrainComponent brain = *found;
         auto [it, created] = minds_.try_emplace(entity.Id());
         Mind& mind = it->second;
+        const auto publish = [&](kb::scene::AIBrainDecisionState state) {
+            context.EcsWorld().Set(entity, kb::scene::AIBrainDecisionSnapshot{
+                .state = state, .ruleIndex = mind.ruleIndex, .condition = mind.ruleCondition,
+                .conditionValue = mind.ruleValue, .action = mind.action, .actionValue = mind.actionValue,
+                .enemy = mind.enemy, .frameIndex = scene.Runtime().FrameIndex() });
+        };
         if (created) {
             mind.entity = entity;
             mind.home = WorldPosition(scene, entity);
             mind.random = static_cast<std::uint32_t>(entity.Id() * 2654435761ULL) | 1U;
             // Spread the thinking of many brains over the interval.
             mind.thinkTimer = NextRandom(mind.random) * kThinkInterval;
+            mind.authored = brain;
+            publish(kb::scene::AIBrainDecisionState::Pending);
+        } else if (!SameBrain(mind.authored, brain)) {
+            // A live edit must also interrupt a distance-keeping action whose
+            // hysteresis would otherwise retain the removed rule indefinitely.
+            mind.authored = brain;
+            if (mind.action != AIAction::Idle) Stop(scene, entity);
+            mind.action = AIAction::Idle;
+            mind.thinkTimer = 0.0F;
+            mind.hasWanderPoint = false;
         }
         const kb::scene::CombatantComponent* self = scene.Components().Combatants().TryGet(entity);
         const bool dead = self != nullptr && !kb::scene::IsCombatantAlive(*self);
         if (!brain.enabled || dead || !scene.Entities().IsActive(entity)) {
             if (mind.action != AIAction::Idle) Stop(scene, entity);
             mind.action = AIAction::Idle;
+            mind.actionValue = 0.0F;
+            mind.ruleIndex = -1;
+            mind.ruleCondition = AICondition::Never;
+            mind.ruleValue = 0.0F;
+            mind.enemy = {};
+            mind.thought = false;
+            const auto state = dead ? kb::scene::AIBrainDecisionState::Dead :
+                (!brain.enabled ? kb::scene::AIBrainDecisionState::Disabled : kb::scene::AIBrainDecisionState::Inactive);
+            const auto* previous = context.EcsWorld().TryGet<kb::scene::AIBrainDecisionSnapshot>(entity);
+            if (previous == nullptr || previous->state != state) publish(state);
             continue;
         }
         mind.thinkTimer -= deltaSeconds;
         if (mind.thinkTimer <= 0.0F) {
             Think(scene, mind, brain);
+            publish(kb::scene::AIBrainDecisionState::Running);
             mind.thinkTimer += kThinkInterval;
             if (mind.thinkTimer < 0.0F) mind.thinkTimer = kThinkInterval;
         }

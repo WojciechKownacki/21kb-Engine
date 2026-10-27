@@ -11,6 +11,7 @@
 #include "engine/scene/SocketAttachmentComponent.hpp"
 #include "engine/scene/CombatantComponent.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
+#include "engine/scene/AIBrainDecisionSnapshot.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -716,6 +717,9 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
     , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle"))
     , navLinkComponentId_(RegisterSceneComponent<NavLink>(world, "kb.scene.NavLink")) {
+    // Keep runtime diagnostic type metadata in the host, which outlives provider DLLs.
+    static_cast<void>(world.RegisterComponent<AIBrainDecisionSnapshot>(
+        "AIBrainDecisionSnapshot", { .storageClass = kb::ecs::ComponentStorageClass::SparsePayload }));
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
     RegisterLightReflection(world);

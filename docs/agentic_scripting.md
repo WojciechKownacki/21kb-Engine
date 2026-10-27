@@ -246,6 +246,28 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli physics-layers` | show or edit the layer collision matrix |
 | `kb_cli lighting-quality` | show or set the shadow and global illumination quality |
 
+## Inspecting AI decisions
+
+`kb_cli run --project <dir> --frames 60 --report ai` writes a clean JSON report
+(`21kb.ai-decisions/v1`) to stdout and runtime logs to stderr. With the
+`Gameplay.AI` provider active, each visited brain reports its last selected rule,
+condition and threshold, action and parameter, target, and decision frame.
+`rule_index` is zero-based; `-1` means no matching rule. Authoring with `ai rule`
+uses rule numbers 1–8. A missing target is JSON `null`.
+
+The brain is an ordered list of at most eight rules with presets, not a behavior
+tree or planner. Ordinary decisions run at staggered 0.2-second intervals.
+Changing authored rules or parameters interrupts the old action and evaluates
+the new rules on the next runtime update. Diagnostics distinguish pending,
+running, disabled, inactive and dead brains; removing a brain or detaching the
+provider removes its transient diagnostic data. Reports describe the last
+observed decisions, not a history of every action or continuous target tracking.
+
+The native AI tests cover live rule changes, provider removal and 100/1000 idle
+brains. Their printed frame timings measure the complete scene update for that
+idle workload, both without combatants and with friendly combatants running
+perception. They do not establish an attacking or pathfinding workload budget.
+
 ## Script API stability
 
 `kb_cli api-check --baseline tests/api_baseline/script_api.json` compares the script API (functions, pins, components) with the committed baseline.

@@ -18,6 +18,7 @@ namespace kb::ai_plugin {
 class AIBrainSystem final : public kb::scene::SceneSystem {
 public:
     static constexpr float kThinkInterval = 0.2F;
+    void OnDestroy(kb::scene::SceneSystemContext& context) override;
     void OnUpdate(kb::scene::SceneSystemContext& context) override;
 
     // Why a brain does what it does: the rule its last decision took, the condition and action of that rule, and the
@@ -46,9 +47,11 @@ private:
         std::uint32_t random = 0U;
         int ruleIndex = -1;
         kb::scene::AICondition ruleCondition = kb::scene::AICondition::Never;
+        float ruleValue = 0.0F;
         bool thought = false;
         bool hasWanderPoint = false;
         bool moving = false;
+        kb::scene::AIBrainComponent authored{};
     };
 
     void Think(kb::scene::Scene& scene, Mind& mind, const kb::scene::AIBrainComponent& brain);

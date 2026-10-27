@@ -327,7 +327,7 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on errors,
                124 on playback timeout, or 130 on cancellation.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
-                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input] [--pcm-frames <n>]
+                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai] [--pcm-frames <n>]
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
@@ -342,6 +342,7 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                Audio probes use explicit offline PCM rendering (up to 600 ticks
                and 1920000 total PCM frames). --pcm-frames overrides audio frames
                per tick; the default follows the sample rate and --dt.
+               --report ai shows the last AI rule, condition, action, target and state.
                --report world-memory states what the streamed worlds hold by kind (assets,
                instances, scripts, physics, graphics; each measured, estimated or
                unavailable) against what the streaming budget charged; see
