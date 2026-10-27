@@ -59,6 +59,8 @@ def author_fixture(args, root):
         # This preset writes the normal Move action and keyboard bindings.
         run(args.cli, "entity", "add", "--project", project, "--create", "Top Down Player",
             "--name", "MappingPlayer", "--physics", "2d", "--position", "-1000,0,0")
+        run(args.cli, "entity", "add", "--project", project, "--name", "ControllerWall", "--position", "-998,0,0")
+        component("ControllerWall", "Collider2D", "width=1", "height=10", "sideView=false")
         run(args.cli, "entity", "add", "--project", project, "--name", "TemplatePlayer")
         run(args.cli, "scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
             "--node", "TemplatePlayer", "--script", "/Game/Logic/PlayerController.lua")
@@ -85,9 +87,24 @@ def run_cases(args, root, report, origin):
             windowsVirtualKeyCode=68, nativeVirtualKeyCode=68)
         try:
             case.wait("trusted keyboard moves shipped template", lambda s: s["x"] > 0.3 and s["hit"])
+            contact = case.wait("starter character reaches authored wall",
+                lambda s: -998.95 < s["controllerX"] < -998.65)
+            blocked = case.wait("continued input keeps character behind wall",
+                lambda s: s["frames"] >= contact["frames"] + 40)
+            require(-998.95 < blocked["controllerX"] < -998.65,
+                "The shipped character controller crossed the authored solid wall: " + str(blocked))
         finally:
             case.client.call("Input.dispatchKeyEvent", type="keyUp", key="d", code="KeyD",
                 windowsVirtualKeyCode=68, nativeVirtualKeyCode=68)
+        retreat_start = len(case.states())
+        case.client.call("Input.dispatchKeyEvent", type="keyDown", key="a", code="KeyA",
+            windowsVirtualKeyCode=65, nativeVirtualKeyCode=65)
+        try:
+            case.wait("starter character can retreat after wall contact",
+                lambda s: s["controllerX"] < blocked["controllerX"] - 0.3, retreat_start)
+        finally:
+            case.client.call("Input.dispatchKeyEvent", type="keyUp", key="a", code="KeyA",
+                windowsVirtualKeyCode=65, nativeVirtualKeyCode=65)
         pixels = case.picture("movement-ui", [[60, 100]])
         require(pixels[0][0] > 180, "Template movement and collision query must update rendered UI")
         case.click_save()
@@ -98,6 +115,8 @@ def run_cases(args, root, report, origin):
         require(restored["loaded"] and abs(restored["saved"] - saved["saved"]) < 0.00001,
             "Restarted packaged game must read the exact saved position")
         require(abs(restored["x"]) < 0.001, "Template state must restart independently from saved data")
+        require(abs(restored["controllerX"] + 1000) < 0.001,
+            "Controller spawn must restart independently from its persisted position")
         case.blue_button("restart-ui")
         case.graphics()
         report["observations"].append(dict(check="save survives browser process restart", state=restored))

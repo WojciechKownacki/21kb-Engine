@@ -27,6 +27,21 @@ A first game from the template, with every step available to `kb_cli`:
 5. Export is done by the editor's Build Game command or the packaging scripts; the packaged game uses
    the same scripts and the same save files.
 
+For a first top-down character that collides with walls, use the supplied controller
+instead of the minimal translation example. In an existing empty project:
+
+```sh
+kb_cli entity add --project . --create "Top Down Player" --physics 2d --name Player --position 0,0,0
+kb_cli entity add --project . --name Wall --position 2,0,0
+kb_cli component add --project . --entity Wall --type Collider2D --set width=1 --set height=10 --set sideView=false
+```
+
+The preset writes a Lua controller and WASD/arrow/gamepad mappings. Holding right
+moves toward the wall and stops at it; left moves away again. `sideView=false`
+puts this collider in the top-down X/Z plane. The Platformer Player preset uses
+gravity and the side-view X/Y plane instead. Both controller scripts remain ordinary
+project files with editable `speed` variables.
+
 ## What a script is allowed to do
 
 Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `ipairs`, `pairs`,
@@ -51,7 +66,8 @@ checks their hash against the release manifest in a packaged game but does not i
 The packaged Lua workflow regression (`sources/game/tests/web/run_game_lua_workflow_tests.py`)
 creates a project through the public CLI, generates the unchanged `PlayerController.lua` template,
 authors input bindings and a collider, and cooks the game. Trusted keyboard input must move the
-template entity; a physics query and movement update real UI pixels. Clicking the native button
+template entity. The supplied top-down character must stop at a solid wall under continued
+input and then move away; a physics query and movement update real UI pixels. Clicking the native button
 saves the observed position, and a fresh browser process must read the same value from the save.
 The template starts at its authored position; restoring gameplay transforms from saved values
 remains an explicit script decision.
