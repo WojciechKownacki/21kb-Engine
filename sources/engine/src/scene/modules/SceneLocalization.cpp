@@ -14,4 +14,6 @@ std::string SceneLocalization::Translate(std::string_view key) const { return Sc
 std::string SceneLocalization::FormatPlural(std::string_view key, std::int64_t count) const { return SceneLocalizationService::FormatPlural(scene_, key, count); }
 std::string SceneLocalization::FormatPluralNumber(std::string_view key, std::string_view number) const { return SceneLocalizationService::FormatPluralNumber(scene_, key, number); }
 
+std::uint64_t SceneLocalization::ResolveResource(std::uint64_t sourceAssetId) const { return SceneLocalizationService::ResolveResource(scene_, sourceAssetId); }
+
 } // namespace kb::scene

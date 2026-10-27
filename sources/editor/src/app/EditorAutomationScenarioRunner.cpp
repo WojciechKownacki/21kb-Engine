@@ -12,6 +12,8 @@
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "app/EditorAssetBrowserDoubleClickHandler.hpp"
+#include "engine/scene/SceneLocalization.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "Sprite2DRuntime.hpp"
 #include "Map2DView.hpp"
@@ -1446,6 +1448,14 @@ ReadScriptValue(
     if (*operation == "assert_ui_navigation_links") {
         return {state.automation.VerifyUINavigationLinks(),
             "Selectable navigation links: hierarchy picker, names, clear, invalid and deleted targets, undo"};
+    }
+    if (*operation == "preview_locale") {
+        const auto path = StringMember(step, "catalog", error);
+        const auto language = StringMember(step, "language", error);
+        if (!path || !language) return {false, error};
+        const auto* catalog = state.context.Scene().Assets().Manager().Registry().FindByPath(*path);
+        const bool applied = catalog && EditorAssetBrowserDoubleClickHandler::PreviewLocalization(state.context, catalog->id, *language);
+        return {applied, applied ? "Editor locale preview applied" : "Editor locale preview rejected"};
     }
     if (*operation == "assert_ui_catalog") {
         const auto component = StringMember(step, "component", error, false);

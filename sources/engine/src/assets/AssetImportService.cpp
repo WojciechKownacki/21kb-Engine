@@ -6,6 +6,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/GltfExternalResources.hpp"
 #include "engine/assets/ImportedAsset.hpp"
+#include "engine/localization/LocalizationCatalogIO.hpp"
+#include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -438,6 +440,38 @@ struct ImportedAssetHeader {
     if (error || !std::filesystem::is_directory(destinationFolder, error)) {
         result.error = "Destination folder could not be prepared.";
         result.status = AssetImportItemStatus::Failed;
+        return result;
+    }
+
+    if (AssetPathUtilities::LowerExtension(sourcePath.extension()) == kb::localization::kLocalizationCatalogAssetExtension) {
+        if (!kb::localization::LocalizationCatalogIO::Load(sourcePath)) {
+            result.error = "Localization catalog could not be parsed.";
+            result.status = AssetImportItemStatus::Failed;
+            return result;
+        }
+        result.sourceHash = AssetFileSystem::HashFile(sourcePath);
+        const auto stem = SanitizeStem(sourcePath.stem().string());
+        for (int index = 0; index < 10000; ++index) {
+            const auto name = stem + (index == 0 ? std::string{} : "_" + std::to_string(index)) + ".kbloc";
+            const auto path = destinationFolder / name;
+            const bool exists = std::filesystem::exists(path, error);
+            if (error) break;
+            if (exists && AssetFileSystem::HashFile(path) != result.sourceHash) continue;
+            if (!exists && !std::filesystem::copy_file(sourcePath, path, std::filesystem::copy_options::none, error)) break;
+            result.assetPhysicalPath = path;
+            result.virtualPath = destinationVirtualFolder / name;
+            result.id = MakeAssetId(NormalizeAssetPath(result.virtualPath) + ":" + kb::localization::kLocalizationCatalogAssetType);
+            result.assetHash = AssetFileSystem::HashFile(path);
+            AssetMetadata metadata{.id = result.id, .type = kb::localization::kLocalizationCatalogAssetType,
+                .name = path.stem().string(), .virtualPath = result.virtualPath, .physicalPath = path,
+                .sourceExtension = ".kbloc", .contentHash = result.assetHash};
+            metadata.dependencies = kb::localization::LocalizationCatalogAssetLoader{}.DiscoverDependencies(metadata, manager.Registry());
+            static_cast<void>(manager.RegisterAsset(std::move(metadata)));
+            result.status = exists ? AssetImportItemStatus::Reused : AssetImportItemStatus::Created;
+            return result;
+        }
+        result.status = AssetImportItemStatus::Failed;
+        result.error = "Localization catalog destination could not be written.";
         return result;
     }
 

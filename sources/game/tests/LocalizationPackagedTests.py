@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import struct
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 from png_readback import read_png
@@ -54,7 +56,27 @@ def main():
     component("CanvasRoot", "Canvas Scaler", "scaleMode=0", "scaleFactor=1")
     component("CanvasRoot", "Border", "backgroundColor.r=0", "backgroundColor.g=0",
               "backgroundColor.b=0", "backgroundColor.a=1")
-    catalog_dir = project / "Assets/Localization"
+    def asset_id(path, kind):
+        value = 14695981039346656037
+        for byte in (path + ":" + kind).encode():
+            value = ((value ^ byte) * 1099511628211) & ((1 << 64) - 1)
+        return value
+
+    for name, rgb in [("Base", (255, 0, 0)), ("Localized", (0, 255, 0))]:
+        def chunk(kind, payload):
+            return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+        png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+        png += chunk(b"IDAT", zlib.compress((b"\0" + bytes(rgb) * 4) * 4)) + chunk(b"IEND", b"")
+        source = root / (name + ".png")
+        source.write_bytes(png)
+        run(args.cli, "import", "--project", project, "--destination", "/Game/Images", source)
+    base_image = asset_id("/Game/Images/Base.21kb", "ImportedAsset")
+    localized_image = asset_id("/Game/Images/Localized.21kb", "ImportedAsset")
+    for name, left, image in [("Mapped", 400, "Base")]:
+        run(args.cli, "entity", "add", "--project", project, "--name", name, "--parent", "CanvasRoot")
+        component("CanvasRoot/" + name, "Rect Transform", f"offsetMin={left},20", f"offsetMax={left+40},60")
+        component("CanvasRoot/" + name, "Raw Image", f"imageAssetId=/Game/Images/{image}.21kb")
+    catalog_dir = root / "CatalogSources"
     catalog_dir.mkdir()
     # Select a stable ID above INT64_MAX to exercise the full-width Lua string path.
     for suffix in range(100):
@@ -65,19 +87,21 @@ def main():
         if catalog_id > (1 << 63):
             break
     require(catalog_id > (1 << 63), "Fixture must cover a full-width catalog ID")
-    (catalog_dir / (catalog_name + '.kbloc')).write_text('''schema 1
+    (catalog_dir / (catalog_name + '.kbloc')).write_text(f'''schema 2
 fallback "EN"
 language "en"
-plural "count.fallback" "one" "{count} item"
-plural "count.fallback" "other" "{count} items"
-plural "count.local" "one" "{count} item"
-plural "count.local" "other" "{count} items"
+plural "count.fallback" "one" "{{count}} item"
+plural "count.fallback" "other" "{{count}} items"
+plural "count.local" "one" "{{count}} item"
+plural "count.local" "other" "{{count}} items"
 language "pl"
-plural "count.local" "one" "{count} element"
-plural "count.local" "few" "{count} elementy"
-plural "count.local" "many" "{count} elementow"
-plural "count.local" "other" "{count} elementu"
+resource "{base_image:016x}" "{localized_image:016x}"
+plural "count.local" "one" "{{count}} element"
+plural "count.local" "few" "{{count}} elementy"
+plural "count.local" "many" "{{count}} elementow"
+plural "count.local" "other" "{{count}} elementu"
 ''', encoding='utf-8')
+    run(args.cli, "import", "--project", project, "--destination", "/Game/Localization", catalog_dir / (catalog_name + '.kbloc'))
     pairs = [
         ("integer", "count.fallback", "1", "1 item", "1 item"),
         ("decimal", "count.fallback", "1.00", "1.00 items", "1.00 items"),
@@ -102,6 +126,7 @@ function Ready(self, dt)
     assert(Localization.SetCatalog("{catalog_id:016x}"))
     assert(Localization.SetLanguage("eN_Us"))
     assert(not Localization.SetLanguage("en--US"))
+    assert(Localization.ResolveResource("{base_image:016x}") == "{base_image:016x}")
     Log("LocaleReady")
 end
 function Tick(self, dt)
@@ -109,6 +134,7 @@ function Tick(self, dt)
     if ticks == 4 then
         assert(Localization.SetLanguage("PL_pl"))
         assert(Localization.FormatPluralNumber("count.fallback", "1.00") == "1.00 items")
+        assert(Localization.ResolveResource("{base_image:016x}") == "{localized_image:016x}")
         Log("LocaleChanged")
     end
 end
@@ -140,11 +166,14 @@ end
         require("shutdown=clean" in captured and "script: LocaleChanged" in captured, "Locale capture failed")
         rows = read_png(picture)
         require(len(rows) == 860 and len(rows[0]) == 640, "Unexpected capture dimensions")
+        expected = (255, 0, 0) if locale == "en" else (0, 255, 0)
+        observed = rows[40][420]
+        require(all(abs(a-b) < 8 for a,b in zip(observed, expected)), f"Localized resource did not render: {locale}/{observed}")
         for index, (name, _, _, _, _) in enumerate(pairs):
             top = 10 + index * 210
-            actual = [pixel for row in rows[top:top + 60] for pixel in row[20:620]]
+            actual = [pixel for row in rows[top:top + 60] for pixel in row[20:380]]
             ref_top = top + reference_lane * 70
-            reference = [pixel for row in rows[ref_top:ref_top + 60] for pixel in row[20:620]]
+            reference = [pixel for row in rows[ref_top:ref_top + 60] for pixel in row[20:380]]
             ink = sum(max(pixel) > 80 for pixel in actual)
             difference = sum(max(abs(a-b) for a,b in zip(left,right)) > 2 for left,right in zip(actual,reference))
             require(ink > 50 and difference <= 4, f"{locale}/{name}: invalid localized pixels ({ink}, {difference})")

@@ -2235,6 +2235,18 @@ void TestScrollMovementAndLocalizedText() {
         kb::tests::Require(kb::scene::UITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(pluralLabel.Entity())) == "PLAY",
             "Frame translation must not overwrite authored source text");
     }
+    auto fitted = pluralComponents;
+    fitted.rectTransform = Rect(0.0F, 0.0F, 1.0F, 20.0F);
+    fitted.contentSizeFitter = kb::scene::UIContentSizeFitter{.horizontalFit = kb::scene::UIFitMode::PreferredSize};
+    static_cast<void>(kb::scene::SetUITextLocalizationNumber(*fitted.text, "2"));
+    const auto fittedLabel = AddUI(scene, canvas, fitted);
+    kb::tests::Require(scene.Localization().SetLanguage("en"), "Fitted locale must be supported");
+    pointer.At(390.0F, 390.0F, false);
+    const auto englishWidth = FindElement(scene.UI().Frame(), fittedLabel.Entity())->rect.width;
+    kb::tests::Require(scene.Localization().SetLanguage("pl"), "Fitted locale must switch");
+    pointer.At(390.0F, 390.0F, false);
+    kb::tests::Require(FindElement(scene.UI().Frame(), fittedLabel.Entity())->rect.width > englishWidth,
+        "Content fitting must measure translated text when the locale changes");
     const auto beforeNumber = kb::scene::UITextLocalizationNumber(*pluralComponents.text);
     kb::tests::Require(kb::scene::WriteUIComponentProperty(pluralComponents, kb::scene::UIComponentType::Text,
         "localizationNumber", std::string{"not-a-number"}) != kb::scene::UIComponentPropertyWriteResult::Succeeded &&

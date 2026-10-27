@@ -9,6 +9,8 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "assets/EditorAssetOpenPolicy.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/localization/LocalizationCatalog.hpp"
+#include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
@@ -67,6 +69,20 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
     }
 }
 
+bool EditorAssetBrowserDoubleClickHandler::PreviewLocalization(EditorSceneContext& context,
+    kb::assets::AssetId catalogId, std::string_view language) {
+    if (context.HasPlayModeSceneSession()) return false;
+    const auto catalog = context.Scene().Assets().Manager().Load<kb::localization::LocalizationCatalog>(catalogId);
+    if (!catalog.IsLoaded() || !catalog->languages.contains(language)) return false;
+    if (!context.Scene().Localization().SetCatalog(catalogId.value) ||
+        !context.Scene().Localization().SetLanguage(language)) return false;
+    auto& preview = context.ViewportPreview(1U);
+    if (!preview.Is2D()) preview.Toggle2D();
+    context.MarkSceneRenderDirty();
+    context.Console().Info("Localization", "Preview language: " + std::string{language});
+    return true;
+}
+
 // The single open route. Double-click and the Project Files Open command must not
 // drift apart, so both resolve the target asset and then land here.
 EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAsset(
@@ -76,6 +92,34 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const kb::assets::AssetMetadata* const metadata = &metadataValue;
+    if (metadata->type == kb::localization::kLocalizationCatalogAssetType) {
+        if (sceneContext.HasPlayModeSceneSession()) return EditorAssetBrowserDoubleClickResult::None;
+        const auto catalog = manager.Load<kb::localization::LocalizationCatalog>(metadata->id);
+        if (!catalog.IsLoaded()) {
+            sceneContext.Console().Error("Localization", manager.LastError());
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        const HMENU menu = CreatePopupMenu();
+        if (!menu) return EditorAssetBrowserDoubleClickResult::None;
+        std::vector<std::string> languages;
+        for (const auto& [language, messages] : catalog->languages) {
+            static_cast<void>(messages);
+            languages.push_back(language);
+            const std::wstring label{language.begin(), language.end()};
+            const bool selected = sceneContext.Scene().Localization().Catalog() == metadata->id.value &&
+                sceneContext.Scene().Localization().Language() == language;
+            AppendMenuW(menu, MF_STRING | (selected ? MF_CHECKED : MF_UNCHECKED),
+                static_cast<UINT_PTR>(languages.size()), label.c_str());
+        }
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+            cursor.x, cursor.y, 0, owner, nullptr);
+        DestroyMenu(menu);
+        if (command == 0U || command > languages.size()) return EditorAssetBrowserDoubleClickResult::None;
+        return PreviewLocalization(sceneContext, metadata->id, languages[command - 1U])
+            ? EditorAssetBrowserDoubleClickResult::LocalizationPreviewChanged : EditorAssetBrowserDoubleClickResult::None;
+    }
     if (metadata->type == "LuaScript") {
         std::string error;
         if (!EditorExternalCodeLauncher::OpenProjectFile(

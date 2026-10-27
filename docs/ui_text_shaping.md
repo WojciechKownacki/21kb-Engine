@@ -109,3 +109,25 @@ signed integer range. Declare dynamically selected catalogs with a Lua
 changes, regional and missing-key fallback, decimal preservation and full-width
 Lua catalog IDs in a cooked player. Its GPU captures compare localized labels
 with literal reference labels after the source project has been made unavailable.
+
+Catalog schema 2 adds `resource "source-id" "localized-id"` entries inside each
+language block. IDs use hexadecimal asset notation. Schema 1 text catalogs remain
+readable. Resource lookup applies one replacement, using locale parents and then
+the catalog fallback; absent mappings preserve the source ID. Source and target
+must exist, have the same runtime asset type, and cannot be localization catalogs.
+Imported replacements must also have the same import category. Catalogs can be
+imported through the standard CLI or editor importer; malformed catalogs are
+rejected and unchanged imports reuse their asset ID.
+All mapped sources and targets are included in the catalog's cook dependencies.
+UI fonts, images, raw images and sprites use these replacements on the display
+frame. Authored scene references remain unchanged. Other consumers can call
+`SceneLocalization::ResolveResource` or the registered
+`Localization.ResolveResource` script function. Its Lua binding accepts a
+nonnegative integer or hexadecimal ID string and returns a hexadecimal string
+to preserve all 64 bits.
+
+Open a localization catalog from Project Files to choose a language for the
+editor scene preview in the 2D view. The menu marks the current language; cancel keeps the
+previous preview. Preview changes request rendering without modifying the scene
+document and are unavailable during play mode. The headless localization scenario
+uses the same preview operation and compares viewport captures across languages.

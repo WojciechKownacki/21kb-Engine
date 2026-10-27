@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 
 #include "engine/localization/LocalizationCatalog.hpp"
+#include "engine/assets/AssetImportService.hpp"
 #include "engine/localization/LocalizationCatalogIO.hpp"
 #include "engine/localization/PluralRules.hpp"
 #include "engine/scene/Scene.hpp"
@@ -11,6 +12,8 @@
 
 #include <array>
 #include <filesystem>
+#include <fstream>
+#include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 #include <initializer_list>
 #include <limits>
 #include <optional>
@@ -218,6 +221,81 @@ void RunLocalizationTests() {
     Require(!loadText(nulMessage), "Catalog messages cannot hide text after embedded nulls");
     Require(kb::localization::LocalizationCatalogIO::Load(aliasPath)->languages.size() == catalog.languages.size(),
         "Rejected catalog save must preserve the previous valid file");
+    std::filesystem::create_directories(root / "Assets" / "Scripts");
+    for (const auto name : {"Base", "English", "Polish"}) {
+        std::ofstream file{root / "Assets" / "Scripts" / (std::string{name} + ".lua")};
+        file << "function Ready(self, dt) end\n";
+    }
+    static_cast<void>(scene.Assets().Discover());
+    auto& registry = scene.Assets().Manager().Registry();
+    const auto source = registry.FindByPath("/Game/Scripts/Base.lua")->id;
+    const auto english = registry.FindByPath("/Game/Scripts/English.lua")->id;
+    const auto polish = registry.FindByPath("/Game/Scripts/Polish.lua")->id;
+    auto resources = catalog;
+    resources.resources = {{"en", {{source.value, english.value}}}, {"pl", {{source.value, polish.value}}}};
+    const auto resourcesPath = root / "Assets" / "Localization" / "Resources.kbloc";
+    Require(kb::localization::LocalizationCatalogIO::Save(resourcesPath, resources), "Resource mappings must save");
+    static_cast<void>(scene.Assets().Discover());
+    const auto resourceId = registry.FindByPath("/Game/Localization/Resources.kbloc")->id;
+    Require(scene.Localization().SetCatalog(resourceId.value) && scene.Localization().ResolveResource(source.value) == english.value,
+        "Resource fallback must select the catalog fallback language");
+    Require(scene.Localization().SetLanguage("PL_pl") && scene.Localization().ResolveResource(source.value) == polish.value &&
+        scene.Localization().ResolveResource(0U) == 0U && scene.Localization().ResolveResource(123U) == 123U &&
+        scene.Localization().ResolveResource(polish.value) == polish.value,
+        "Resource remapping must use locale parents, preserve absent mappings and apply only once");
+    Require(scene.Localization().SetLanguage("fr") && scene.Localization().ResolveResource(source.value) == english.value,
+        "A missing locale mapping must use the fallback resource");
+    const std::array resourceArguments{kb::script::ScriptFunctionArgument{
+        "source", kb::script::ScriptValue{source.value, kb::script::ScriptValueType::Hash}}};
+    const auto remapped = host.Functions().Call("Localization.ResolveResource", resourceArguments,
+        kb::script::ScriptFunctionCallContext{.scene = &scene});
+    Require(remapped.Succeeded() && remapped.Output("asset")->AsUInt64() == english.value,
+        "Script resource lookup must preserve the full-width asset identifier");
+    const auto* resourceMetadata = registry.Find(resourceId);
+    Require(resourceMetadata->dependencies.size() == 3U, "All source and translated resources must enter dependency discovery");
+    auto invalid = resources;
+    invalid.resources["pl"][source.value] = resourceId.value;
+    const auto invalidPath = root / "InvalidResources.kbloc";
+    Require(kb::localization::LocalizationCatalogIO::Save(invalidPath, invalid), "Invalid dependency fixture must serialize");
+    kb::localization::LocalizationCatalogAssetLoader loader;
+    auto invalidMetadata = *resourceMetadata;
+    invalidMetadata.physicalPath = invalidPath;
+    Require(loader.ValidateDependencies(invalidMetadata, registry).has_value(), "Mismatched resource types must fail validation");
+    invalid.resources["pl"][source.value] = 999999U;
+    Require(kb::localization::LocalizationCatalogIO::Save(invalidPath, invalid) &&
+        loader.ValidateDependencies(invalidMetadata, registry).has_value(), "Missing localized assets must fail validation");
+    kb::assets::AssetRegistry incompatibleImports;
+    for (const auto id : {source, english, polish}) {
+        auto entry = *registry.Find(id);
+        entry.type = "ImportedAsset";
+        entry.importCategory = id == polish ? "Font" : "Texture";
+        Require(incompatibleImports.Upsert(entry), "Imported resource fixture must register");
+    }
+    invalidMetadata.physicalPath = resourcesPath;
+    Require(loader.ValidateDependencies(invalidMetadata, incompatibleImports).has_value(),
+        "Imported assets of different categories must not replace each other");
+    for (const auto malformed : {
+        "schema 1 fallback en language en resource 1 2",
+        "schema 2 fallback en language en resource 0 2",
+        "schema 2 fallback en language en resource 1 2 resource 1 3"})
+        Require(!loadText(malformed), "Malformed or duplicate resource mappings must be rejected");
+    Require(loadText("schema 2 fallback en language en resource 1 2").has_value(),
+        "Resource-only locales must be supported");
+    const std::array importSources{resourcesPath};
+    const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), importSources, "/Game/Imported");
+    Require(imported.items.size() == 1U && imported.items.front().Succeeded() &&
+        imported.items.front().assetPhysicalPath.extension() == ".kbloc",
+        "Catalog import must retain the native format and runtime loader");
+    const auto reused = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), importSources, "/Game/Imported");
+    Require(reused.items.front().status == kb::assets::AssetImportItemStatus::Reused &&
+        reused.items.front().id == imported.items.front().id,
+        "Unchanged catalog imports must reuse their stable asset ID");
+    const auto brokenPath = root / "Broken.kbloc";
+    { std::ofstream broken{brokenPath}; broken << "schema 2 invalid"; }
+    const std::array brokenSources{brokenPath};
+    const auto rejected = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), brokenSources, "/Game/Imported");
+    Require(!rejected.items.front().Succeeded() && !std::filesystem::exists(root / "Assets" / "Imported" / "Broken.kbloc"),
+        "Malformed catalog import must not publish an asset");
     std::filesystem::remove_all(root);
 }
 

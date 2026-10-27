@@ -28,6 +28,7 @@ public:
     // select the category as CLDR defines, and the text replaces `{count}` unchanged. Malformed numbers
     // return the key.
     [[nodiscard]] std::string FormatPluralNumber(std::string_view key, std::string_view number) const;
+    [[nodiscard]] std::uint64_t ResolveResource(std::uint64_t sourceAssetId) const;
 private:
     Scene& scene_;
 };

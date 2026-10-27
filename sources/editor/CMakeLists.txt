@@ -1593,6 +1593,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-UI-Catalog")
     set_tests_properties(kb_editor_ui_component_catalog_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_localization_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLocalizationScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Localization")
+    set_tests_properties(kb_editor_localization_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui" TIMEOUT 180)
     add_test(NAME kb_editor_ui_anchors_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIAnchorsScenario.json"

@@ -221,6 +221,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Localization", "Translate", "Localization.Translate", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Localization", "FormatPlural", "Localization.FormatPlural", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Localization", "FormatPluralNumber", "Localization.FormatPluralNumber", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
+    { "Localization", "ResolveResource", "Localization.ResolveResource", ScriptApiCatalogLuaReturnKind::SingleOutput, "asset" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },

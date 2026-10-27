@@ -493,12 +493,22 @@ class FrameBuilder {
         return nullptr;
     }
 
+    void TranslateText(UIText& text) const {
+        const auto key = UITextLocalizationKey(text);
+        if (key.empty()) return;
+        const auto number = UITextLocalizationNumber(text);
+        SetTextClipped(text, number.empty() ? scene_.Localization().Translate(key) :
+            scene_.Localization().FormatPluralNumber(key, number));
+    }
+
     [[nodiscard]] DesiredSize Measure(SceneEntity entity, bool minimumOnly = false) {
         const UIRectTransform* rect = ui_.TryGet<UIRectTransform>(entity);
         DesiredSize size{rect != nullptr ? Width(*rect) : 0.0F, rect != nullptr ? Height(*rect) : 0.0F};
         if (const UIText* text = ui_.TryGet<UIText>(entity)) {
+            UIText displayed = *text;
+            TranslateText(displayed);
             size.width = std::max(size.width,
-                                  static_cast<float>(Utf8CodePointCount(UITextContent(*text))) * text->fontSize * 0.5F);
+                                  static_cast<float>(Utf8CodePointCount(UITextContent(displayed))) * text->fontSize * 0.5F);
             size.height = std::max(size.height, text->fontSize * text->lineSpacing);
         }
         const std::size_t childCount = scene_.Hierarchy().ChildCount(entity);
@@ -826,12 +836,11 @@ class FrameBuilder {
             else
                 element.image->imageAssetId = image;
         }
-        if (element.text.has_value() && !UITextLocalizationKey(*element.text).empty()) {
-            const auto key = UITextLocalizationKey(*element.text);
-            const auto number = UITextLocalizationNumber(*element.text);
-            SetTextClipped(*element.text, number.empty() ? scene_.Localization().Translate(key) :
-                scene_.Localization().FormatPluralNumber(key, number));
-        }
+        if (element.text) element.text->fontAssetId = scene_.Localization().ResolveResource(element.text->fontAssetId);
+        if (element.image) element.image->imageAssetId = scene_.Localization().ResolveResource(element.image->imageAssetId);
+        if (element.rawImage) element.rawImage->imageAssetId = scene_.Localization().ResolveResource(element.rawImage->imageAssetId);
+        if (element.sprite) element.sprite->spriteAssetId = scene_.Localization().ResolveResource(element.sprite->spriteAssetId);
+        if (element.text) TranslateText(*element.text);
         if (element.inputField.has_value()) {
             if (state_.uiFocused == entity) {
                 element.textCaretByteOffset = static_cast<std::uint32_t>(state_.uiTextCursorByteOffset);
@@ -1195,7 +1204,7 @@ class FrameBuilder {
                 const SceneEntity current = pending.back();
                 pending.pop_back();
                 if (const UIText* text = ui_.TryGet<UIText>(current); text != nullptr && text->fontAssetId != 0U)
-                    return text->fontAssetId;
+                    return scene_.Localization().ResolveResource(text->fontAssetId);
                 for (std::size_t index = 0U; index < scene_.Hierarchy().ChildCount(current); ++index)
                     pending.push_back(scene_.Hierarchy().ChildAt(current, index));
             }

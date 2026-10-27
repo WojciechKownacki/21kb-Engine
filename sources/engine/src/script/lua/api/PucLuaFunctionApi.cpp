@@ -3466,6 +3466,30 @@ int LuaLocalizationFormatPluralNumber(lua_State* state) {
     return 1;
 }
 
+int LuaLocalizationResolveResource(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    std::uint64_t source = 0U;
+    if (lua_type(state, 1) == LUA_TSTRING) {
+        std::size_t length = 0U;
+        const char* text = lua_tolstring(state, 1, &length);
+        kb::assets::AssetId id;
+        if (!kb::assets::TryParseAssetId(std::string_view{text, length}, id))
+            return luaL_error(state, "Localization.ResolveResource requires a hexadecimal asset id string");
+        source = id.value;
+    } else {
+        const lua_Integer value = luaL_checkinteger(state, 1);
+        if (value < 0) return luaL_error(state, "Localization.ResolveResource requires a non-negative asset id or hexadecimal string");
+        source = static_cast<std::uint64_t>(value);
+    }
+    const auto result = CallLocalization(*context, "Localization.ResolveResource", {
+        Arg("source", ScriptValue{source, ScriptValueType::Hash})});
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization resource lookup failed");
+    const auto output = kb::assets::ToString(kb::assets::AssetId{result.Output("asset")->AsUInt64()});
+    lua_pushlstring(state, output.data(), output.size());
+    return 1;
+}
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -3685,6 +3709,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaLocalizationTranslate,
     &LuaLocalizationFormatPlural,
     &LuaLocalizationFormatPluralNumber,
+    &LuaLocalizationResolveResource,
     &LuaPointerPosition,
     &LuaPointerDelta,
     &LuaPointerButton,

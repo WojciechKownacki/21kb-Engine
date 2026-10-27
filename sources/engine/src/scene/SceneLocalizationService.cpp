@@ -138,4 +138,27 @@ std::string SceneLocalizationService::FormatPluralNumber(const Scene& scene, std
     return FormatPluralMessage(SceneAccess::State(scene), key, *operands, number);
 }
 
+std::uint64_t SceneLocalizationService::ResolveResource(const Scene& scene, std::uint64_t sourceAssetId) {
+    const SceneState& state = SceneAccess::State(scene);
+    if (sourceAssetId == 0U || !state.localizationCatalog.IsLoaded()) return sourceAssetId;
+    const auto& catalog = *state.localizationCatalog;
+    const auto lookup = [&](std::string_view language) -> std::optional<std::uint64_t> {
+        const auto wanted = kb::localization::LocalizationLocaleKey(language);
+        for (const auto& [tag, resources] : catalog.resources) {
+            if (kb::localization::LocalizationLocaleKey(tag) != wanted) continue;
+            const auto found = resources.find(sourceAssetId);
+            if (found != resources.end()) return found->second;
+        }
+        return std::nullopt;
+    };
+    std::string_view language = state.localizationLanguage;
+    while (!language.empty()) {
+        if (const auto target = lookup(language)) return *target;
+        const auto boundary = language.find_last_of("-_");
+        if (boundary == std::string_view::npos) break;
+        language = language.substr(0U, boundary);
+    }
+    return lookup(catalog.fallbackLanguage).value_or(sourceAssetId);
+}
+
 } // namespace kb::scene
