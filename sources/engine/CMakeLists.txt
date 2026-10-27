@@ -1728,6 +1728,8 @@ if(WIN32)
         include/engine/platform/win32/Win32InputKeyMap.hpp
         include/engine/platform/win32/Win32XInputHapticsBackend.hpp
         src/platform/win32/Win32InputCollector.cpp
+        src/platform/win32/Win32ClipboardText.cpp
+        src/platform/win32/Win32UITextClipboard.cpp
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
@@ -2006,6 +2008,13 @@ if(BUILD_TESTING)
     )
 
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    if(WIN32)
+        add_executable(kb_win32_clipboard_tests tests/Win32ClipboardTests.cpp)
+        target_link_libraries(kb_win32_clipboard_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_win32_clipboard_tests)
+        add_test(NAME kb_win32_clipboard COMMAND kb_win32_clipboard_tests)
+        set_tests_properties(kb_win32_clipboard PROPERTIES TIMEOUT 30 LABELS "ui;input;headless")
+    endif()
     add_test(NAME kb_engine_scene_transform_golden COMMAND $<TARGET_FILE:kb_engine_tests> scene-transform-golden)
     set_tests_properties(kb_engine_scene_transform_golden PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
     set_tests_properties(kb_engine_scene_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 RUN_SERIAL TRUE)

@@ -20,6 +20,8 @@ struct Utf8DecodeResult {
     std::string_view text, std::span<char32_t> output) noexcept;
 [[nodiscard]] Utf8DecodeResult DecodeModifiedUtf8(
     std::string_view text, std::span<char32_t> output) noexcept;
+// Returns zero without writing for an invalid scalar; otherwise writes 1-4 bytes.
+[[nodiscard]] std::size_t EncodeUtf8(char32_t codePoint, std::span<char, 4U> output) noexcept;
 
 class Utf16InputDecoder {
 public:

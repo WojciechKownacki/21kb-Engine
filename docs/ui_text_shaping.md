@@ -8,7 +8,9 @@ packs the resulting glyph IDs rather than assuming one glyph per codepoint.
 Line wrapping keeps shaping clusters intact and reshapes each line. Direction
 comes from the original paragraph, while cursive joining stops at the line edge.
 Rich-text color boundaries prevent a ligature from consuming another style's
-characters. Combining marks use the shaper's offsets and do not acquire extra
+characters. A style boundary inside a grapheme retains the base character's
+style so an accent or joined sequence cannot be separated by markup.
+Combining marks use the shaper's offsets and do not acquire extra
 character spacing inside their cluster. Later labels growing a shared atlas
 refresh earlier labels' UV coordinates before submission.
 
@@ -25,6 +27,19 @@ logical selection without splitting grapheme clusters. Layout feedback for old
 contents is ignored. An empty focused field still draws its caret. Android text
 snapshots preserve both selection endpoints across UTF-16 conversion.
 
+Windows runtime fields and editor Play mode support Control+C/X/V through the
+native Unicode clipboard. Copying a password or PIN is refused; read-only fields
+allow copying but reject replacement. Paste uses the same validation and character
+limits as typing, preserving the suffix and retaining a selection when every
+pasted character is rejected. Editor text controls also transfer UTF-8 through
+the Unicode clipboard instead of discarding non-ASCII characters.
+
+Shaping results use an LRU cache per font asset, pixel size and load generation,
+limited to 32 entries and 64 KiB of vector payload per font instance. Container
+metadata and glyph atlas storage are separate. Text, line range, style boundaries
+and scale participate in matching. Reloading the font invalidates its entries;
+releasing the scene releases its cache.
+
 Clipboard and IME composition integration still depend on the input host. Font
 fallback and variable-font axis controls are separate capabilities; an imported
 font must cover the text.
@@ -38,6 +53,8 @@ Validation:
   input fields and shared atlas updates.
 - `kb_engine_tests scene-ui` checks logical selection edits, visual RTL movement,
   pointer selection, multiline navigation and stale layout rejection.
+- `kb_win32_clipboard` checks native Unicode transfers and runtime cut/copy/paste
+  on an isolated, noninteractive window station with its own clipboard.
 - `kb_game_text_shaping_package` cooks a project, makes its source unavailable,
   and runs the shipped player. A separate instrumented pass reads the same
   immutable package and compares GPU pixels against explicit Unicode reference

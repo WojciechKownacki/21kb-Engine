@@ -843,6 +843,7 @@ public:
     std::size_t uiTextSelectionAnchor = 0U;
     std::vector<SceneUITextLayout> uiTextLayouts;
     std::optional<SceneUITextInputState> uiPendingTextInput;
+    std::optional<SceneUITextInputState> uiPendingTextReplacement;
     // The dropdown list that is open or fading out: the dropdown it belongs to, the cloned list, the
     // full-screen blocker under it, one cloned item per option in option order, and its fade.
     struct UIDropdownList {

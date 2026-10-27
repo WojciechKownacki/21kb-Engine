@@ -712,6 +712,25 @@ void TestTextSelectionUsesVisualLayoutAndLogicalEdits() {
     kb::tests::Require(scene.UI().TextInputState()->text == U"45", "Selection replacement must apply limits to the resulting text");
     kb::tests::Require(!scene.UI().QueueTextInputState({field.Entity(), U"45", 1U, 3U}),
         "Native selection anchors outside the committed text must be rejected");
+    setText(U"123", 2U, 1U);
+    kb::tests::Require(scene.UI().SelectedText() == U"2" && scene.UI().QueueTextReplacement(U"X"),
+        "Clipboard transfer must expose exactly the selected logical text");
+    update();
+    kb::tests::Require(scene.UI().TextInputState()->text == U"123" && scene.UI().SelectedText() == U"2",
+        "Invalid paste must preserve the selected contents and selection");
+    kb::tests::Require(scene.UI().QueueTextReplacement(U"456"), "Valid paste must enter the normal edit queue");
+    update();
+    kb::tests::Require(scene.UI().TextInputState()->text == U"143",
+        "Paste at the character limit must preserve the suffix and insert only accepted characters");
+    setText(U"123", 2U, 1U);
+    input->readOnly = true;
+    kb::tests::Require(scene.UI().SelectedText() == U"2" && !scene.UI().QueueTextReplacement(U"4"),
+        "Read-only fields may be copied but must reject replacement");
+    input->readOnly = false;
+    input->contentType = UIInputContentType::Password;
+    kb::tests::Require(!scene.UI().SelectedText(), "Password selections must never be exposed to the clipboard");
+    input->contentType = UIInputContentType::Pin;
+    kb::tests::Require(!scene.UI().SelectedText(), "PIN selections must never be exposed to the clipboard");
     input->contentType = UIInputContentType::Standard;
     input->characterLimit = 0U;
     input->multiline = true;

@@ -5,6 +5,7 @@
 
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/ImportedAsset.hpp"
+#include "engine/ui/visual/UITextShaping.hpp"
 #include "kb/render/resources/RenderHandles.hpp"
 
 #include <bgfx/bgfx.h>
@@ -54,6 +55,14 @@ class ScreenUIFontAtlasCache {
     void ReleaseScene(std::uint64_t sceneId, RenderResourceRegistry& resources) noexcept;
     void Shutdown(RenderResourceRegistry& resources) noexcept;
 
+    struct TypographyCacheStats {
+        std::size_t entries = 0U;
+        std::size_t payloadBytes = 0U;
+        std::uint64_t hits = 0U;
+        std::uint64_t misses = 0U;
+    };
+    [[nodiscard]] TypographyCacheStats TextCacheStats() const noexcept;
+
     struct FontKey {
         std::uint64_t sceneId = 0U;
         std::uint64_t assetId = 0U;
@@ -80,6 +89,15 @@ class ScreenUIFontAtlasCache {
     };
 
     struct FontEntry {
+        struct ShapingEntry {
+            std::vector<std::uint32_t> text;
+            std::vector<std::uint32_t> styles;
+            std::vector<kb::scene::UITextShapedGlyph> glyphs;
+            std::size_t begin = 0U;
+            std::size_t end = 0U;
+            float scale = 0.0F;
+            std::size_t payloadBytes = 0U;
+        };
         kb::assets::AssetHandle<kb::assets::ImportedAsset> asset;
         std::uint64_t loadGeneration = 0U;
         RenderTextureHandle texture{};
@@ -94,6 +112,11 @@ class ScreenUIFontAtlasCache {
         std::vector<std::uint32_t> glyphIds;
         std::unordered_map<std::uint32_t, std::uint32_t> nominalGlyphs;
         std::unordered_map<std::uint32_t, Glyph> glyphs;
+        // Per font/size/generation: at most 32 results and 64 KiB of vector payload.
+        mutable std::vector<ShapingEntry> shapingCache;
+        mutable std::size_t shapingBytes = 0U;
+        mutable std::uint64_t shapingHits = 0U;
+        mutable std::uint64_t shapingMisses = 0U;
     };
 
   private:

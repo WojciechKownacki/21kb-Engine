@@ -17,6 +17,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace kb::scene { class Scene; }
+
 namespace kb::input {
 
 class InputDeviceState;
@@ -43,6 +45,9 @@ public:
         std::uint32_t renderHeight) noexcept;
     void ClearPointerViewport() noexcept;
     void Collect(InputDeviceState& state, HWND ownerWindow) noexcept;
+    void Collect(kb::scene::Scene& scene, HWND ownerWindow);
+    // Also used by deterministic hosts that supply the device snapshot themselves.
+    void ApplyTextClipboard(kb::scene::Scene& scene, HWND ownerWindow);
 
 private:
     void UpdateTouchPoint(
@@ -51,6 +56,9 @@ private:
 
     static constexpr std::size_t kMaxTouchPoints = 10U;
     bool hasPreviousMouse_ = false;
+    bool copyWasDown_ = false;
+    bool cutWasDown_ = false;
+    bool pasteWasDown_ = false;
     POINT previousMouse_{};
     std::array<InputTouchPoint, kMaxTouchPoints> touchPoints_{};
     std::size_t touchPointCount_ = 0U;

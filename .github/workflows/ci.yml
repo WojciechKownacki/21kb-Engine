@@ -192,9 +192,9 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "ON"
-            targets: "kb_engine_tests;kb_editor_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests;kb_background_read_tests;kb_test_process_error_tests"
+            targets: "kb_engine_tests;kb_win32_clipboard_tests;kb_editor_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests;kb_background_read_tests;kb_test_process_error_tests"
             api_compat_check: "OFF"
-            test_regex: "^(kb_engine_scene_ui|kb_engine_scene_transform_golden|kb_engine_scene_parenting|kb_engine_hierarchy_depth|kb_engine_scene_hierarchy_depth|kb_engine_prefab_hierarchy_depth|kb_engine_ecs_batch_hierarchy_depth|kb_editor_audio_mixer_runtime|kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests|kb_test_process_errors|kb_renderer_assertion_errors|kb_renderer_display_alpha|kb_renderer_graph_program_lifetime|kb_renderer_graph_shader_node_cook_[0-3])$"
+            test_regex: "^(kb_win32_clipboard|kb_engine_scene_ui|kb_engine_scene_transform_golden|kb_engine_scene_parenting|kb_engine_hierarchy_depth|kb_engine_scene_hierarchy_depth|kb_engine_prefab_hierarchy_depth|kb_engine_ecs_batch_hierarchy_depth|kb_editor_audio_mixer_runtime|kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests|kb_test_process_errors|kb_renderer_assertion_errors|kb_renderer_display_alpha|kb_renderer_graph_program_lifetime|kb_renderer_graph_shader_node_cook_[0-3])$"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"

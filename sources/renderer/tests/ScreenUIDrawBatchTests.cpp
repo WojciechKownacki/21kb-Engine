@@ -345,8 +345,12 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         Require(start != first.carets.end() && end != first.carets.end() && start->x > end->x,
                 "Logical Arabic start must have its caret on the visual right");
         frame.elements = {arabic};
+        const auto coldCache = fonts.TextCacheStats();
         const auto repeated = fonts.Prepare(1U, assets, resources, frame);
         Require(repeated.runs.size() == 1U, "Repeated shaping lost its text run");
+        const auto warmCache = fonts.TextCacheStats();
+        Require(warmCache.hits > coldCache.hits && warmCache.misses == coldCache.misses,
+                "Unchanged text must reuse shaped runs without invoking the shaper again");
         for (std::size_t i = 0; i < first.glyphs.size(); ++i) {
             const auto& before = first.glyphs[i];
             const auto& after = repeated.runs.front().glyphs[i];
@@ -394,6 +398,12 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         Require(styled.failureReason == nullptr && styled.runs.size() == 1U && styled.runs[0].glyphs.size() == 2U &&
                 styled.runs[0].glyphs[0].color[1] == 1.0F && styled.runs[0].glyphs[1].color[1] == 0.0F,
                 "A ligature must not erase the color boundary inside rich text");
+        Require(kb::scene::SetUITextContent(*latin.text, "a<color=#FF0000>\xCC\x81</color>"), "Styled accent fixture failed");
+        frame.elements = {latin};
+        const auto accent = fonts.Prepare(1U, assets, resources, frame);
+        Require(accent.failureReason == nullptr && accent.runs.size() == 1U && accent.runs[0].glyphs.size() == 1U &&
+                accent.runs[0].glyphs[0].color[1] == 1.0F,
+                "A color boundary inside a grapheme must retain base styling and composed shaping");
         latin.text->richText = false;
         Require(kb::scene::SetUITextContent(*latin.text, "a\n"), "Empty final line fixture failed");
         frame.elements = {latin};
@@ -403,6 +413,26 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         const auto lastStop = std::ranges::find_if(stops, [](const auto& caret) { return caret.sourceOffset == 2U; });
         Require(lastStop != stops.end() && lastStop->top > stops.front().top,
                 "A caret after a final newline must belong to the empty next line");
+        latin.text->wrapMode = kb::scene::UITextWrapMode::NoWrap;
+        for (unsigned variant = 0U; variant < 100U; ++variant) {
+            Require(kb::scene::SetUITextContent(*latin.text, std::string(500U, 'a') + std::to_string(variant)),
+                    "Typography cache pressure fixture failed");
+            frame.elements = {latin};
+            Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr,
+                    "Typography cache eviction must retain correct text preparation");
+            const auto pressure = fonts.TextCacheStats();
+            Require(pressure.entries <= 32U && pressure.payloadBytes <= 64U * 1024U,
+                    "Per-font typography cache must stay within its entry and payload budgets");
+        }
+        const auto beforeReload = fonts.TextCacheStats();
+        Require(assets.PublishRuntimeAsset(kb::assets::AssetId{7U}, std::make_shared<kb::assets::ImportedAsset>(*font)),
+                "Font replacement fixture failed");
+        Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr &&
+                fonts.TextCacheStats().misses > beforeReload.misses,
+                "A new font generation must invalidate cached shaping results");
+        fonts.ReleaseScene(1U, resources);
+        Require(fonts.TextCacheStats().entries == 0U && fonts.TextCacheStats().payloadBytes == 0U,
+                "Unloading a scene must release its typography cache");
         fonts.Shutdown(resources);
         resources.Shutdown();
     }

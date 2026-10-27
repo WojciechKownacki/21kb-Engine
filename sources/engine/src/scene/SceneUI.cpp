@@ -1554,31 +1554,6 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     return count;
 }
 
-[[nodiscard]] std::size_t EncodeUtf8(char32_t codePoint, std::array<char, 4U>& output) noexcept {
-    if (!kb::input::IsUnicodeScalar(codePoint))
-        return 0U;
-    if (codePoint <= 0x7FU) {
-        output[0] = static_cast<char>(codePoint);
-        return 1U;
-    }
-    if (codePoint <= 0x7FFU) {
-        output[0] = static_cast<char>(0xC0U | (codePoint >> 6U));
-        output[1] = static_cast<char>(0x80U | (codePoint & 0x3FU));
-        return 2U;
-    }
-    if (codePoint <= 0xFFFFU) {
-        output[0] = static_cast<char>(0xE0U | (codePoint >> 12U));
-        output[1] = static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU));
-        output[2] = static_cast<char>(0x80U | (codePoint & 0x3FU));
-        return 3U;
-    }
-    output[0] = static_cast<char>(0xF0U | (codePoint >> 18U));
-    output[1] = static_cast<char>(0x80U | ((codePoint >> 12U) & 0x3FU));
-    output[2] = static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU));
-    output[3] = static_cast<char>(0x80U | (codePoint & 0x3FU));
-    return 4U;
-}
-
 // Whether a typed character belongs in a field of this content type at the caret.
 [[nodiscard]] bool AcceptsCharacter(UIInputContentType type, std::string_view text, std::size_t caret, char32_t codePoint) noexcept {
     const bool digit = codePoint >= U'0' && codePoint <= U'9';
@@ -1643,12 +1618,15 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
                                    bool deleteStarted, bool moveLeft, bool moveRight) {
     auto nativeEdit = std::move(state.uiPendingTextInput);
     state.uiPendingTextInput.reset();
+    auto replacement = std::move(state.uiPendingTextReplacement);
+    state.uiPendingTextReplacement.reset();
     if (!state.uiFocused.IsValid()) return false;
     SceneUIComponents ui = scene.Components().UI();
     UIInputField* field = ui.TryGet<UIInputField>(state.uiFocused);
     UIText* text = ui.TryGet<UIText>(state.uiFocused);
     if (field == nullptr || text == nullptr) return false;
     if (nativeEdit && nativeEdit->entity != state.uiFocused) nativeEdit.reset();
+    if (replacement && replacement->entity != state.uiFocused) replacement.reset();
 
     std::string buffer{UITextContent(*text)};
     const std::string original = buffer;
@@ -1744,6 +1722,10 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         return originalCaret != state.uiTextCursorByteOffset || originalAnchor != state.uiTextSelectionAnchor;
     };
     if (field->readOnly) return moved();
+    if (replacement) {
+        input.textInput = replacement->text;
+        backspaceStarted = deleteStarted = false;
+    }
     if (nativeEdit) {
         buffer.clear();
         state.uiTextCursorByteOffset = state.uiTextSelectionAnchor = 0U;
@@ -1775,6 +1757,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         buffer.erase(state.uiTextCursorByteOffset, next - state.uiTextCursorByteOffset);
         state.uiTextSelectionAnchor = state.uiTextCursorByteOffset;
     };
+    if (replacement && replacement->text.empty()) static_cast<void>(eraseSelection());
     for (const char32_t codePoint : input.textInput) {
         if (nativeEdit) {
             if (nativeIndex == nativeEdit->caret) nativeCaret = buffer.size();
@@ -1792,7 +1775,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         candidate.erase(begin, end - begin);
         if (codePoint != U'\n' && !AcceptsCharacter(field->contentType, candidate, begin, codePoint)) continue;
         std::array<char, 4U> encoded{};
-        const auto encodedSize = EncodeUtf8(codePoint, encoded);
+        const auto encodedSize = kb::input::EncodeUtf8(codePoint, encoded);
         if (encodedSize == 0U || candidate.size() + encodedSize >= UIText::MaxUtf8Bytes) continue;
         candidate.insert(begin, encoded.data(), encodedSize);
         if (field->characterLimit > 0U && UITextGraphemeCount(candidate) > field->characterLimit) continue;
@@ -2850,7 +2833,39 @@ bool SceneUIAccess::QueueTextInputState(SceneUITextInputState input) {
         input.caret > input.text.size() || input.selectionAnchor.value_or(input.caret) > input.text.size()) return false;
     for (const char32_t value : input.text)
         if (!kb::input::IsUnicodeScalar(value) || value == U'\b' || value == 0x7FU) return false;
-    SceneAccess::State(scene_).uiPendingTextInput = std::move(input);
+    auto& state = SceneAccess::State(scene_);
+    state.uiPendingTextReplacement.reset();
+    state.uiPendingTextInput = std::move(input);
+    return true;
+}
+
+std::optional<std::u32string> SceneUIAccess::SelectedText() const {
+    const auto& state = SceneAccess::State(scene_);
+    const auto ui = scene_.Components().UI();
+    const auto* field = ui.TryGet<UIInputField>(state.uiFocused);
+    const auto* text = ui.TryGet<UIText>(state.uiFocused);
+    if (field == nullptr || text == nullptr || field->contentType == UIInputContentType::Password ||
+        field->contentType == UIInputContentType::Pin) return std::nullopt;
+    const auto content = UITextContent(*text);
+    const auto begin = SnapToUITextGraphemeBoundary(content,
+        std::min({state.uiTextCursorByteOffset, state.uiTextSelectionAnchor, content.size()}));
+    const auto end = SnapToUITextGraphemeBoundary(content,
+        std::min(std::max(state.uiTextCursorByteOffset, state.uiTextSelectionAnchor), content.size()));
+    std::array<char32_t, UIText::MaxUtf8Bytes> decoded{};
+    const auto result = kb::input::DecodeUtf8(content.substr(begin, end - begin), decoded);
+    if (!result.wellFormed || result.truncated) return std::nullopt;
+    return std::u32string{decoded.data(), result.codePointCount};
+}
+
+bool SceneUIAccess::QueueTextReplacement(std::u32string text) {
+    if (!HasFocusedTextInput() || text.size() > UIText::MaxUtf8Bytes * 4U) return false;
+    const auto* field = scene_.Components().UI().TryGet<UIInputField>(Focused());
+    if (field == nullptr || field->readOnly) return false;
+    for (const auto scalar : text)
+        if (!kb::input::IsUnicodeScalar(scalar) || scalar == U'\b' || scalar == 0x7FU) return false;
+    auto& state = SceneAccess::State(scene_);
+    state.uiPendingTextInput.reset();
+    state.uiPendingTextReplacement = SceneUITextInputState{Focused(), std::move(text), 0U};
     return true;
 }
 

@@ -4,6 +4,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/input/InputText.hpp"
 #include "engine/ui/visual/UITextLineBreaking.hpp"
 #include "engine/ui/visual/UITextShaping.hpp"
 #include "engine/ui/visual/UITextGraphemes.hpp"
@@ -52,10 +53,58 @@ struct TextLine {
 
 [[nodiscard]] std::vector<std::uint32_t> StyleBoundaries(std::span<const ScreenUITextMarkupGlyph> text) {
     std::vector<std::uint32_t> boundaries;
+    std::string plain;
+    std::vector<std::size_t> offsets;
+    for (const auto& glyph : text) {
+        offsets.push_back(plain.size());
+        std::array<char, 4U> encoded{};
+        plain.append(encoded.data(), kb::input::EncodeUtf8(glyph.codepoint, encoded));
+    }
+    auto next = kb::scene::NextUITextGraphemeBoundary(plain, 0U);
+    std::size_t clusterStart = 0U;
     for (std::size_t i = 1; i < text.size(); ++i) {
-        if (text[i].color != text[i - 1U].color) boundaries.push_back(static_cast<std::uint32_t>(i));
+        if (offsets[i] != next) continue;
+        if (text[i].color != text[clusterStart].color) boundaries.push_back(static_cast<std::uint32_t>(i));
+        clusterStart = i;
+        next = kb::scene::NextUITextGraphemeBoundary(plain, next);
     }
     return boundaries;
+}
+
+[[nodiscard]] bool ShapeCached(const ScreenUIFontAtlasCache::FontEntry& entry,
+                              std::span<const std::uint32_t> text, std::size_t begin, std::size_t end,
+                              std::span<const std::uint32_t> styles,
+                              std::vector<kb::scene::UITextShapedGlyph>& result) {
+    auto& cache = entry.shapingCache;
+    for (auto found = cache.begin(); found != cache.end(); ++found) {
+        if (found->begin == begin && found->end == end && found->scale == entry.scale &&
+            std::ranges::equal(found->text, text) && std::ranges::equal(found->styles, styles)) {
+            result = found->glyphs;
+            ++entry.shapingHits;
+            std::rotate(found, found + 1, cache.end());
+            return true;
+        }
+    }
+    ++entry.shapingMisses;
+    if (!kb::scene::ShapeUIText(entry.asset->payload, text, begin, end, entry.scale, result, styles)) return false;
+    ScreenUIFontAtlasCache::FontEntry::ShapingEntry item;
+    item.text.assign(text.begin(), text.end());
+    item.styles.assign(styles.begin(), styles.end());
+    item.glyphs = result;
+    item.begin = begin;
+    item.end = end;
+    item.scale = entry.scale;
+    item.payloadBytes = (item.text.capacity() + item.styles.capacity()) * sizeof(std::uint32_t) +
+        item.glyphs.capacity() * sizeof(kb::scene::UITextShapedGlyph);
+    constexpr std::size_t budget = 64U * 1024U;
+    if (item.payloadBytes > budget) return true;
+    while (!cache.empty() && (cache.size() >= 32U || entry.shapingBytes + item.payloadBytes > budget)) {
+        entry.shapingBytes -= cache.front().payloadBytes;
+        cache.erase(cache.begin());
+    }
+    entry.shapingBytes += item.payloadBytes;
+    cache.push_back(std::move(item));
+    return true;
 }
 
 [[nodiscard]] bool Shape(const ScreenUIFontAtlasCache::FontEntry& entry,
@@ -64,8 +113,7 @@ struct TextLine {
     std::vector<std::uint32_t> codepoints;
     codepoints.reserve(text.size());
     for (const auto& glyph : text) codepoints.push_back(glyph.codepoint);
-    return kb::scene::ShapeUIText(entry.asset->payload, codepoints, 0U, codepoints.size(), entry.scale, result,
-                                  StyleBoundaries(text));
+    return ShapeCached(entry, codepoints, 0U, codepoints.size(), StyleBoundaries(text), result);
 }
 
 [[nodiscard]] float ShapedWidth(std::span<const kb::scene::UITextShapedGlyph> glyphs, float spacing) {
@@ -95,7 +143,7 @@ thread_local std::vector<TextLine> tTextLines;
     for (const auto& glyph : text) codepoints.push_back(glyph.codepoint);
     std::vector<kb::scene::UITextShapedGlyph> shaped;
     const auto styles = StyleBoundaries(text);
-    if (!kb::scene::ShapeUIText(entry.asset->payload, codepoints, 0U, codepoints.size(), entry.scale, shaped, styles))
+    if (!ShapeCached(entry, codepoints, 0U, codepoints.size(), styles, shaped))
         return tTextLines;
     std::vector<std::uint32_t> starts;
     for (const auto& glyph : shaped) starts.push_back(glyph.clusterBegin);
@@ -125,7 +173,7 @@ thread_local std::vector<TextLine> tTextLines;
             TextLine line;
             auto lineEnd = end;
             for (;;) {
-                if (!kb::scene::ShapeUIText(entry.asset->payload, codepoints, begin, lineEnd, entry.scale, line.shaped, styles)) {
+                if (!ShapeCached(entry, codepoints, begin, lineEnd, styles, line.shaped)) {
                     tTextLines.clear();
                     return tTextLines;
                 }
@@ -305,6 +353,18 @@ void ScreenUIFontAtlasCache::Shutdown(RenderResourceRegistry& resources) noexcep
     textRuns_.clear();
 }
 
+ScreenUIFontAtlasCache::TypographyCacheStats ScreenUIFontAtlasCache::TextCacheStats() const noexcept {
+    TypographyCacheStats result;
+    for (const auto& [key, entry] : fonts_) {
+        static_cast<void>(key);
+        result.entries += entry.shapingCache.size();
+        result.payloadBytes += entry.shapingBytes;
+        result.hits += entry.shapingHits;
+        result.misses += entry.shapingMisses;
+    }
+    return result;
+}
+
 ScreenUIFontAtlasCache::FontEntry* ScreenUIFontAtlasCache::Ensure(const FontKey& key,
                                                                   std::span<const std::uint32_t> codepoints,
                                                                   std::uint16_t glyphPadding,
@@ -326,6 +386,8 @@ ScreenUIFontAtlasCache::FontEntry* ScreenUIFontAtlasCache::Ensure(const FontKey&
         entry.codepoints.clear();
         entry.glyphIds.clear();
         entry.nominalGlyphs.clear();
+        entry.shapingCache.clear();
+        entry.shapingBytes = 0U;
     }
 
     std::vector<std::uint32_t> merged = entry.codepoints;

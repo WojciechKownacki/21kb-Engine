@@ -1203,11 +1203,10 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     }
     const auto tickStart = std::chrono::steady_clock::now();
     // Feed real device input to the runtime before systems tick (Input phase).
-    kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
     const auto pointerStart = std::chrono::steady_clock::now();
     ConfigurePlayModePointerViewport(state);
     const auto collectStart = std::chrono::steady_clock::now();
-    state.inputCollector.Collect(input.MutableDeviceState(), state.window);
+    state.inputCollector.Collect(state.sceneContext.Scene(), state.window);
     const auto runtimeStart = std::chrono::steady_clock::now();
     const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);
     const auto runtimeEnd = std::chrono::steady_clock::now();

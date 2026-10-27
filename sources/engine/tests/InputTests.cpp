@@ -568,6 +568,16 @@ void TestTextInputDeviceStateAndEncoding() {
     constexpr std::string_view utf8{"A\xC5\x82\xF0\x9F\x99\x82", 7U};
     std::array<char32_t, 3U> decoded{};
     const Utf8DecodeResult decodedUtf8 = DecodeUtf8(utf8, decoded);
+    std::string encodedText;
+    for (const auto scalar : decoded) {
+        std::array<char, 4U> bytes{};
+        const auto count = EncodeUtf8(scalar, bytes);
+        encodedText.append(bytes.data(), count);
+    }
+    Require(encodedText == utf8, "UTF-8 encoding must preserve BMP and supplementary scalars");
+    std::array<char, 4U> invalidOutput{'x', 'x', 'x', 'x'};
+    Require(EncodeUtf8(0xD800U, invalidOutput) == 0U && EncodeUtf8(0x110000U, invalidOutput) == 0U &&
+            invalidOutput[0] == 'x', "Invalid scalars must not write an encoded prefix");
     Require(decodedUtf8.wellFormed && !decodedUtf8.truncated &&
             decodedUtf8.codePointCount == decoded.size() &&
             decoded[0] == U'A' && decoded[1] == U'\u0142' &&

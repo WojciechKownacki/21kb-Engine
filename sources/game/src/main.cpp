@@ -608,7 +608,7 @@ int RunGame(const GameOptions& options) {
             ? 1.0F / 60.0F : kb::game::RuntimeDeltaSeconds(previousTick, now);
         previousTick = now;
 
-        if (!options.headless) inputCollector.Collect(scene.Input().MutableDeviceState(), window.Handle());
+        if (!options.headless) inputCollector.Collect(scene, window.Handle());
         static_cast<void>(scene.UI().SetViewport(
             static_cast<float>(window.Width()),
             static_cast<float>(window.Height())));

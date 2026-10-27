@@ -274,6 +274,10 @@ class SceneUIAccess {
     [[nodiscard]] std::optional<SceneUITextInputState> TextInputState() const;
     // Applied during the next UI update using the field's normal validation and events.
     [[nodiscard]] bool QueueTextInputState(SceneUITextInputState input);
+    // Clipboard transfers use the same selection, limits and validation as typing.
+    // Password and PIN fields never expose their selected contents.
+    [[nodiscard]] std::optional<std::u32string> SelectedText() const;
+    [[nodiscard]] bool QueueTextReplacement(std::u32string text);
     // Replaces previous render feedback; stale source snapshots are ignored by editing.
     void PublishTextLayouts(std::vector<SceneUITextLayout> layouts);
 
