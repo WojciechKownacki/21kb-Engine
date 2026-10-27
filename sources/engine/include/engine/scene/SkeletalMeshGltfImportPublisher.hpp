@@ -31,6 +31,10 @@ class SkeletalMeshGltfImportPublisher final {
 public:
     SkeletalMeshGltfImportPublisher() = delete;
 
+    // Shared naming for publication, conflict previews and backup planning.
+    [[nodiscard]] static std::vector<std::filesystem::path> AnimationPaths(
+        const std::filesystem::path& meshPath, std::span<const std::string> names, std::size_t count);
+
     // Publishes the entire plan as one recoverable filesystem transaction.
     // A write/rename failure restores every pre-existing asset byte-for-byte.
     [[nodiscard]] static std::optional<SkeletalMeshGltfPublishResult> Publish(

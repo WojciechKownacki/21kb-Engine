@@ -7,6 +7,9 @@
 #include "engine/scene/SkeletalMeshFbxImportPlanner.hpp"
 #include "engine/scene/SkeletalMeshFbxImportPublisher.hpp"
 #include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
@@ -178,7 +181,7 @@ struct GuardTarget {
 
 [[nodiscard]] std::uint64_t StagedHash(const kb::scene::SkeletalMeshImportArtifact& artifact) {
     const std::filesystem::path stage = std::filesystem::temp_directory_path() / ("kb_import_stage_" + Hex8(Hash(kb::assets::NormalizeAssetPath(artifact.virtualPath))) +
-        "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".tmp");
+        "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + artifact.virtualPath.extension().string());
     std::uint64_t hash = 0U;
     if (artifact.write && artifact.write(stage)) hash = kb::assets::HashAssetFile(stage);
     Remove(stage);
@@ -250,7 +253,8 @@ enum class GuardOutcome : std::uint8_t { Proceed, Stop };
         if (listed.insert(physical.generic_string()).second) files.push_back({ virtualPath, physical });
     };
     for (const kb::assets::AssetImportChange& change : item.changes) {
-        const bool replaced = change.kind == kb::assets::AssetImportChangeKind::Changed ||
+        const bool replaced = (recorded != nullptr && change.kind == kb::assets::AssetImportChangeKind::Added) ||
+            change.kind == kb::assets::AssetImportChangeKind::Changed ||
             (change.kind == kb::assets::AssetImportChangeKind::LocalOverride && options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Overwrite);
         const bool published = std::ranges::any_of(artifacts, [&](const kb::scene::SkeletalMeshImportArtifact& artifact) {
             return kb::assets::NormalizeAssetPath(artifact.virtualPath) == change.virtualPath.generic_string();
@@ -635,7 +639,8 @@ template <typename Planner, typename Publisher, typename Options>
     const std::filesystem::path& destinationVirtualFolder,
     const kb::assets::AssetImportOptions& options,
     Options importOptions,
-    std::string_view format) {
+    std::string_view format,
+    const std::filesystem::path& targetMesh = {}) {
     kb::assets::AssetImportItemResult item{};
     item.sourcePath = sourcePath;
     item.category = kb::assets::AssetImportCategory::Model;
@@ -652,32 +657,28 @@ template <typename Planner, typename Publisher, typename Options>
         importOptions.materialResolver = &RenderMeshImportArtifacts::ResolveMaterial;
         importOptions.materialResolverUserData = &prepared->materialAssetIds;
     }
-    const auto plan = Planner::Plan(manager, sourcePath, destinationVirtualFolder, importOptions, &error);
+    auto plan = Planner::Plan(manager, sourcePath, destinationVirtualFolder, importOptions, &error);
     if (!plan) return fail(std::move(error), "import planning failed.");
+    if (!targetMesh.empty()) {
+        if (plan->imported.mesh.lods.empty()) return fail({}, "reimport source contains no mesh.");
+        plan->meshVirtualPath = targetMesh;
+    }
     const kb::assets::AssetMetadata* existingMesh = manager.Registry().FindByPath(plan->meshVirtualPath);
     const bool meshAlreadyExisted = existingMesh != nullptr;
+    if (existingMesh != nullptr) {
+        item.id = existingMesh->id;
+        item.virtualPath = existingMesh->virtualPath;
+        item.assetPhysicalPath = existingMesh->physicalPath;
+        item.status = kb::assets::AssetImportItemStatus::Reused;
+    }
     // Publishing over assets that exist is a reimport: what was edited since the last import is a local override.
     std::optional<kb::assets::AssetImportRecord> previousRecord;
     std::vector<GuardTarget> required;
     std::vector<std::filesystem::path> alwaysBackup;
     if (meshAlreadyExisted) {
         previousRecord = kb::assets::AssetImportRecordIO::Read(kb::assets::AssetImportRecordIO::PathFor(existingMesh->physicalPath));
-        // The same source with the same options republishes what it published before: the recorded hash is then what the file should still be.
-        const bool sameSource = previousRecord.has_value() && previousRecord->sourceHash == kb::assets::HashAssetFile(sourcePath) &&
-            previousRecord->optionFlags == kb::assets::AssetImportOptionFlags(options) && previousRecord->transform == options.mesh.transform;
-        const auto expectedHash = [&](const std::string& path) -> std::uint64_t {
-            const kb::assets::AssetImportRecordEntry* entry = sameSource ? previousRecord->Find(path) : nullptr;
-            return entry != nullptr ? entry->hash : 0U;
-        };
-        const std::string meshPath = kb::assets::NormalizeAssetPath(plan->meshVirtualPath);
-        required.push_back({ meshPath, "SkeletalMesh", expectedHash(meshPath) });
         alwaysBackup.push_back(existingMesh->physicalPath);
         alwaysBackup.push_back(kb::assets::AssetImportRecordIO::PathFor(existingMesh->physicalPath));
-        if (const kb::assets::AssetMetadata* skeleton = manager.Registry().FindByPath(plan->skeletonVirtualPath)) {
-            const std::string skeletonPath = kb::assets::NormalizeAssetPath(plan->skeletonVirtualPath);
-            required.push_back({ skeletonPath, "Skeleton", expectedHash(skeletonPath) });
-            alwaysBackup.push_back(skeleton->physicalPath);
-        }
         if (previousRecord.has_value()) {
             for (const kb::assets::AssetImportRecordEntry& entry : previousRecord->entries) {
                 if (entry.assetType != "AnimationClip") continue;
@@ -685,9 +686,39 @@ template <typename Planner, typename Publisher, typename Options>
             }
         }
     }
+    // Hash the bytes that will actually be published. A source document can be
+    // unchanged while its external geometry or animation buffers have changed.
+    const auto addRequired = [&](const std::filesystem::path& path, const std::string& type,
+                                 const std::function<bool(const std::filesystem::path&)>& write) {
+        const auto hash = StagedHash({ path, type, write });
+        if (hash == 0U) return false;
+        required.push_back({ kb::assets::NormalizeAssetPath(path), type, hash });
+        return true;
+    };
+    if (!plan->imported.mesh.lods.empty() && !addRequired(plan->meshVirtualPath, "SkeletalMesh",
+            [&](const auto& path) { return kb::scene::SkeletalMeshAssetIO::Save(path, plan->imported.mesh); }))
+        return fail({}, "mesh preview serialization failed.");
+    if (!plan->reusesSkeleton && !addRequired(plan->skeletonVirtualPath, "Skeleton",
+            [&](const auto& path) { return kb::scene::SkeletonAssetIO::Save(path, plan->imported.skeleton); }))
+        return fail({}, "skeleton preview serialization failed.");
+    if (plan->reusesSkeleton) {
+        const auto skeletonPath = manager.Mounts().Resolve(plan->skeletonVirtualPath);
+        required.push_back({ kb::assets::NormalizeAssetPath(plan->skeletonVirtualPath), "Skeleton",
+            skeletonPath ? kb::assets::HashAssetFile(*skeletonPath) : 0U });
+    }
+    const auto clipPaths = kb::scene::SkeletalMeshGltfImportPublisher::AnimationPaths(
+        plan->meshVirtualPath, plan->imported.clipNames, plan->imported.clips.size());
+    for (std::size_t index = 0U; index < clipPaths.size(); ++index) {
+        if (!addRequired(clipPaths[index], "AnimationClip", [&](const auto& path) {
+                return kb::scene::AnimationAssetIO::SaveClip(path, plan->imported.clips[index]); }))
+            return fail({}, "animation preview serialization failed.");
+    }
     if (Guard(manager, options, previousRecord ? &*previousRecord : nullptr, prepared->artifacts, required, alwaysBackup, item) == GuardOutcome::Stop) {
         item.id = existingMesh != nullptr ? existingMesh->id : kb::assets::AssetId{};
         item.virtualPath = plan->meshVirtualPath;
+        if (options.dryRun && existingMesh != nullptr && std::ranges::any_of(item.changes, [](const auto& change) {
+                return change.kind != kb::assets::AssetImportChangeKind::Unchanged;
+            })) item.status = kb::assets::AssetImportItemStatus::Updated;
         return item;
     }
     const auto published = Publisher::PublishWithArtifacts(manager, *plan, prepared->artifacts, &error);
@@ -710,6 +741,11 @@ template <typename Planner, typename Publisher, typename Options>
     item.assetHash = metadata->contentHash;
     item.status = (animationsOnly ? plan->reusesSkeleton : meshAlreadyExisted)
         ? kb::assets::AssetImportItemStatus::Reused : kb::assets::AssetImportItemStatus::Created;
+    if (meshAlreadyExisted && std::ranges::any_of(item.changes, [](const auto& change) {
+            return change.kind == kb::assets::AssetImportChangeKind::Changed ||
+                change.kind == kb::assets::AssetImportChangeKind::Added ||
+                change.kind == kb::assets::AssetImportChangeKind::LocalOverride;
+        })) item.status = kb::assets::AssetImportItemStatus::Updated;
     if (!animationsOnly) item.producedAssets.push_back(published->skeletonAssetId);
     item.producedAssets.insert(item.producedAssets.end(),
         published->animationClipAssetIds.begin(), published->animationClipAssetIds.end());
@@ -730,6 +766,32 @@ template <typename Planner, typename Publisher, typename Options>
 }
 
 } // namespace
+
+kb::assets::AssetImportItemResult RenderMeshImportArtifacts::Reimport(
+    kb::assets::AssetManager& manager, kb::assets::AssetId id,
+    const std::filesystem::path& sourcePath, const kb::assets::AssetImportOptions& options) {
+    const auto* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr || metadata->type != "SkeletalMesh") return ReimportStatic(manager, id, sourcePath, options);
+    if (!options.mesh.transform.IsIdentity()) {
+        return { .sourcePath = sourcePath, .status = kb::assets::AssetImportItemStatus::Failed,
+            .error = "Skeletal reimport preserves source scale and orientation; export the desired transform in the source model." };
+    }
+    const auto target = metadata->virtualPath;
+    if (IsGltfSkeletalSource(sourcePath)) {
+        return ImportSkeletalSource<kb::scene::SkeletalMeshGltfImportPlanner,
+            kb::scene::SkeletalMeshGltfImportPublisher>(manager, sourcePath, target.parent_path(), options,
+            kb::scene::SkeletalMeshGltfImportOptions{}, "glTF", target);
+    }
+    if (LowerExtension(sourcePath) == ".fbx") {
+        kb::scene::SkeletalMeshFbxImportOptions fbxOptions{};
+        fbxOptions.importMaterialSlots = options.mesh.importMaterialSlots;
+        return ImportSkeletalSource<kb::scene::SkeletalMeshFbxImportPlanner,
+            kb::scene::SkeletalMeshFbxImportPublisher>(manager, sourcePath, target.parent_path(), options,
+            fbxOptions, "FBX", target);
+    }
+    return { .sourcePath = sourcePath, .status = kb::assets::AssetImportItemStatus::Failed,
+        .error = "Skeletal Mesh reimport supports FBX, glTF and GLB sources only." };
+}
 
 kb::assets::AssetImportResult RenderMeshImportArtifacts::ImportSkeletalFiles(
     kb::assets::AssetManager& manager,

@@ -128,6 +128,59 @@
       "contains": "roughnessFactor 0.5"
     },
     {
+      "op": "write_file",
+      "path": "Source/Character.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAABAAIAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAACAPw==\",\"byteLength\":244}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},{\"buffer\":0,\"byteOffset\":60,\"byteLength\":48},{\"buffer\":0,\"byteOffset\":108,\"byteLength\":6},{\"buffer\":0,\"byteOffset\":116,\"byteLength\":128}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"},{\"bufferView\":4,\"componentType\":5126,\"count\":2,\"type\":\"MAT4\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2},\"indices\":3}]}],\"nodes\":[{\"name\":\"Root\",\"children\":[1]},{\"name\":\"Spine\",\"translation\":[0,1,0]},{\"mesh\":0,\"skin\":0}],\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4}]}"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/Character.gltf",
+      "destination": "/Game/Characters",
+      "skeletal": true
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Characters/Character.kbskeletalmesh",
+      "source": "Source/Character.gltf",
+      "expect": "reused"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Replacement.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAABAAIAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAACAPw==\",\"byteLength\":244}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},{\"buffer\":0,\"byteOffset\":60,\"byteLength\":48},{\"buffer\":0,\"byteOffset\":108,\"byteLength\":6},{\"buffer\":0,\"byteOffset\":116,\"byteLength\":128}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"},{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"},{\"bufferView\":4,\"componentType\":5126,\"count\":2,\"type\":\"MAT4\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"JOINTS_0\":1,\"WEIGHTS_0\":2},\"indices\":3}]}],\"nodes\":[{\"name\":\"Root\",\"children\":[1]},{\"name\":\"Spine\",\"translation\":[0,1,0]},{\"mesh\":0,\"skin\":0}],\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4}]}"
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Characters/Character.kbskeletalmesh",
+      "source": "Source/Replacement.gltf",
+      "dry_run": true,
+      "expect": "updated"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Characters/Character.kbskeletalmesh",
+      "contains": "vertex 0 -1 0 0 "
+    },
+    {
+      "op": "reimport_asset",
+      "asset": "/Game/Characters/Character.kbskeletalmesh",
+      "source": "Source/Replacement.gltf",
+      "expect": "updated"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Characters/Character.kbskeletalmesh",
+      "contains": "vertex 0 -2 0 0 "
+    },
+    {
+      "op": "undo_reimport"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Characters/Character.kbskeletalmesh",
+      "contains": "vertex 0 -1 0 0 "
+    },
+    {
       "op": "assert_no_errors"
     }
   ]

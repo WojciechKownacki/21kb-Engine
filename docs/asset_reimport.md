@@ -51,6 +51,12 @@ kb_cli import --undo <backup id>
 
 `--diff` plans and prints the changes without writing. Repeating the same import over existing files (static or skeletal models) goes through the same guard, so a plain re-run of an import also refuses to overwrite edited materials unless `--on-conflict` says otherwise.
 
+Explicit reimport also accepts skeletal meshes. The replacement source may have a
+different filename: the selected mesh keeps its asset path and identity. Geometry
+and animation previews compare serialized output, including changes in external
+buffers. Local mesh or animation edits are reported before publication. Keeping
+such an edit keeps the coupled model unchanged; overwriting creates an undo backup.
+
 ## Editor
 
 Project Files, context menu of an imported model:
@@ -62,7 +68,7 @@ The editor automation scenario ops `reimport_asset` (`asset`, `source`, `on_conf
 
 ## Limits
 
-- The editor menu reimports static models. Skeletal models are protected by the same guard when the import is repeated, but have no menu entry.
+- The editor menu supports static and skeletal models. A skeletal replacement must contain a mesh; animation-only sources use the animation import workflow.
 - Edits are detected per file; there is no per-property merge of materials.
 - The source path is asked for each time; it is not stored.
 - Undo Last Reimport is not part of the editor's Ctrl+Z history.

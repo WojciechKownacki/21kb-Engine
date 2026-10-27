@@ -7,6 +7,9 @@
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "app/EditorAssetBrowserNativeCommandMap.hpp"
 #include "assets/EditorAssetOpenPolicy.hpp"
+#include "assets/EditorAssetReimport.hpp"
+#include "engine/assets/AssetImportRecord.hpp"
+#include "kb/render/resources/RenderMeshImportArtifacts.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -565,12 +568,31 @@ void WriteSkeletalGltfImportFixture(const std::filesystem::path& folder) {
     WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":244}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":116,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
 }
 
+void AddSkeletalAnimationFixture(const std::filesystem::path& folder) {
+    const std::array<float, 8U> motion{ 0.0F, 1.0F, 0.0F, 1.0F, 0.0F, 0.0F, 2.0F, 0.0F };
+    std::ofstream binary{ folder / "Motion.bin", std::ios::binary };
+    binary.write(reinterpret_cast<const char*>(motion.data()), sizeof(motion));
+    std::ifstream input{ folder / "Robot.gltf" };
+    std::string document{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    input.close();
+    const auto replace = [&](std::string_view before, std::string_view after) {
+        const auto at = document.find(before);
+        kb::editor::tests::Require(at != std::string::npos, "Animation fixture insertion point is missing");
+        document.replace(at, before.size(), after);
+    };
+    replace(R"("byteLength":244}])", R"("byteLength":244},{"uri":"Motion.bin","byteLength":32}])");
+    replace(R"(],"accessors":[)", R"(,{"buffer":1,"byteOffset":0,"byteLength":8},{"buffer":1,"byteOffset":8,"byteLength":24}],"accessors":[)");
+    replace(R"(],"meshes":[)", R"(,{"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":6,"componentType":5126,"count":2,"type":"VEC3"}],"animations":[{"name":"Move","samplers":[{"input":5,"output":6}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}}]}],"meshes":[)");
+    WriteTextFile(folder / "Robot.gltf", document);
+}
+
 void RunImportCommandPublishesSkeletalGltfTest() {
     ResetTempRoot();
     const std::filesystem::path projectRoot = TempRoot() / "SkeletalProject";
     const std::filesystem::path sourceRoot = TempRoot() / "SkeletalSources";
     WriteSkeletalGltfImportFixture(sourceRoot);
 
+    AddSkeletalAnimationFixture(sourceRoot);
     kb::scene::Scene scene;
     kb::editor::EditorAssetBrowserState browser;
     kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Skeletal import command test could not mount project assets");
@@ -585,6 +607,94 @@ void RunImportCommandPublishesSkeletalGltfTest() {
             mesh->type == "SkeletalMesh" && skeleton != nullptr && skeleton->type == "Skeleton" &&
             browser.SelectedAsset() == mesh->id,
         "Skeletal glTF import command did not publish and select the Skeletal Mesh and Skeleton assets");
+    const auto id = mesh->id;
+    const auto path = mesh->physicalPath;
+    const auto hash = kb::assets::HashAssetFile(path);
+    kb::editor::tests::Require(kb::editor::EditorAssetReimport::CanReimport(*mesh),
+        "Skeletal models must offer the reimport menu");
+    std::filesystem::copy_file(files[0], sourceRoot / "Replacement.gltf");
+    {
+        std::fstream binary{ sourceRoot / "Robot.bin", std::ios::in | std::ios::out | std::ios::binary };
+        binary.seekp(3U * sizeof(float));
+        const float position = 2.0F;
+        binary.write(reinterpret_cast<const char*>(&position), sizeof(position));
+    }
+    options.dryRun = true;
+    const auto planned = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(planned.Succeeded() && planned.id == id &&
+        kb::assets::HashAssetFile(path) == hash, "Skeletal reimport preview must preserve the existing model");
+    kb::editor::tests::Require(std::ranges::any_of(planned.changes, [](const auto& change) {
+        return change.assetType == "SkeletalMesh" && change.kind == kb::assets::AssetImportChangeKind::Changed;
+    }), "Reimport preview must detect changed external geometry buffers");
+    options.dryRun = false;
+    const auto updated = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(updated.Succeeded() && updated.id == id && updated.assetPhysicalPath == path &&
+        kb::assets::HashAssetFile(path) != hash && !updated.backupId.empty() &&
+        scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Replacement.kbskeletalmesh") == nullptr,
+        "Skeletal replacement source must update the selected model without changing its identity");
+    std::string restoreError;
+    kb::editor::tests::Require(kb::assets::AssetImportBackups::Restore(
+        scene.Assets().Manager(), updated.backupId, &restoreError) && kb::assets::HashAssetFile(path) == hash,
+        "Skeletal reimport undo must restore the original geometry");
+    auto editedMesh = kb::scene::SkeletalMeshAssetIO::Load(path);
+    kb::editor::tests::Require(editedMesh.has_value(), "Restored skeletal mesh must load");
+    const auto originalMesh = *editedMesh;
+    editedMesh->lods.front().minScreenCoverage = 0.25F;
+    kb::editor::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, *editedMesh), "Local mesh edit must save");
+    const auto editedHash = kb::assets::HashAssetFile(path);
+    const auto refused = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(!refused.Succeeded() && !refused.conflicts.empty() &&
+        kb::assets::HashAssetFile(path) == editedHash, "Reimport must warn before overwriting edited skeletal geometry");
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::KeepLocal;
+    const auto kept = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(kept.Succeeded() && kb::assets::HashAssetFile(path) == editedHash,
+        "Keep-local must preserve edited skeletal geometry");
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Overwrite;
+    const auto replaced = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(replaced.Succeeded() && !replaced.backupId.empty() &&
+        kb::assets::HashAssetFile(path) != editedHash && kb::assets::AssetImportBackups::Restore(
+            scene.Assets().Manager(), replaced.backupId, &restoreError) && kb::assets::HashAssetFile(path) == editedHash,
+        "Explicit overwrite must back up and restore local skeletal edits");
+    kb::editor::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, originalMesh), "Reset mesh before animation conflict test");
+    const auto clipPath = path.parent_path() / "Robot_Move.kbanim";
+    auto clip = kb::scene::AnimationAssetIO::LoadClip(clipPath);
+    kb::editor::tests::Require(clip.has_value(), "Imported animation must load");
+    clip->looping = !clip->looping;
+    kb::editor::tests::Require(kb::scene::AnimationAssetIO::SaveClip(clipPath, *clip), "Animation edit must save");
+    const auto clipHash = kb::assets::HashAssetFile(clipPath);
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Report;
+    const auto clipConflict = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(!clipConflict.Succeeded() && std::ranges::any_of(clipConflict.conflicts,
+        [](const auto& change) { return change.assetType == "AnimationClip"; }) &&
+        kb::assets::HashAssetFile(clipPath) == clipHash, "Reimport must report edited animation clips");
+    options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Overwrite;
+    const auto clipOverwrite = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    kb::editor::tests::Require(clipOverwrite.Succeeded() && kb::assets::HashAssetFile(clipPath) != clipHash &&
+        kb::assets::AssetImportBackups::Restore(scene.Assets().Manager(), clipOverwrite.backupId, &restoreError) &&
+        kb::assets::HashAssetFile(clipPath) == clipHash, "Undo must restore locally edited animation clips");
+    {
+        std::ifstream input{ sourceRoot / "Replacement.gltf" };
+        std::string source{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        input.close();
+        const auto name = source.find("\"name\":\"Move\"");
+        kb::editor::tests::Require(name != std::string::npos, "Replacement animation fixture must have its original name");
+        source.replace(name, 13U, "\"name\":\"Jump\"");
+        WriteTextFile(sourceRoot / "Replacement.gltf", source);
+    }
+    const auto addedClip = kb::render::RenderMeshImportArtifacts::Reimport(
+        scene.Assets().Manager(), id, sourceRoot / "Replacement.gltf", options);
+    const auto newClipPath = path.parent_path() / "Robot_Jump.kbanim";
+    kb::editor::tests::Require(addedClip.Succeeded() && std::filesystem::exists(newClipPath) &&
+        kb::assets::AssetImportBackups::Restore(scene.Assets().Manager(), addedClip.backupId, &restoreError) &&
+        !std::filesystem::exists(newClipPath) && kb::assets::HashAssetFile(clipPath) == clipHash,
+        "Undo must remove newly imported clips while preserving existing edited clips");
     ResetTempRoot();
 }
 

@@ -209,7 +209,7 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
         const std::filesystem::path source = ResolveInputPath(kb::assets::Utf8Path(arguments.Positionals().front()), kb::assets::Utf8Path(*project));
         kb::assets::AssetManager& assets = scene.Assets().Manager();
 #if KB_CLI_RENDERER
-        const kb::assets::AssetImportItemResult item = kb::render::RenderMeshImportArtifacts::ReimportStatic(assets, *reimportId, source, options);
+        const kb::assets::AssetImportItemResult item = kb::render::RenderMeshImportArtifacts::Reimport(assets, *reimportId, source, options);
 #else
         if (options.mesh.importTextures || options.mesh.importMaterials) {
             io.err << "error: reimporting textures and materials needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF" << '\n';

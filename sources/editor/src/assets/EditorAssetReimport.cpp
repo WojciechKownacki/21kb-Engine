@@ -45,7 +45,7 @@ EditorAssetReimport::Outcome EditorAssetReimport::Run(EditorSceneContext& contex
     kb::assets::AssetManager& manager = context.Scene().Assets().Manager();
     EditorConsoleState& console = context.Console();
     const std::string label = source.filename().string();
-    kb::assets::AssetImportItemResult item = kb::render::RenderMeshImportArtifacts::ReimportStatic(manager, id, source, options);
+    kb::assets::AssetImportItemResult item = kb::render::RenderMeshImportArtifacts::Reimport(manager, id, source, options);
     const bool edited = item.status == kb::assets::AssetImportItemStatus::Failed && !item.conflicts.empty() && !options.dryRun &&
         options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Report;
     if (edited && prompt) {
@@ -58,7 +58,7 @@ EditorAssetReimport::Outcome EditorAssetReimport::Run(EditorSceneContext& contex
             return outcome;
         }
         options.conflictPolicy = decision == Decision::Overwrite ? kb::assets::AssetImportConflictPolicy::Overwrite : kb::assets::AssetImportConflictPolicy::KeepLocal;
-        item = kb::render::RenderMeshImportArtifacts::ReimportStatic(manager, id, source, options);
+        item = kb::render::RenderMeshImportArtifacts::Reimport(manager, id, source, options);
     }
     static_cast<void>(context.Scene().Assets().Discover());
     outcome.item = std::move(item);

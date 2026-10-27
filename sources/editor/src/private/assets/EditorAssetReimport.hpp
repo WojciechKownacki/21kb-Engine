@@ -45,8 +45,8 @@ public:
 
 // Whether the menu offers them: needs no scene, so the menu state and the tests can use them without the rest of the editor.
 inline bool EditorAssetReimport::CanReimport(const kb::assets::AssetMetadata& metadata) noexcept {
-    // An imported static model: the container made by Import, which carries the source it came from.
-    return metadata.type == "RenderMesh" && metadata.importCategory == "Mesh" && !metadata.physicalPath.empty();
+    return !metadata.physicalPath.empty() && (metadata.type == "SkeletalMesh" ||
+        (metadata.type == "RenderMesh" && metadata.importCategory == "Mesh"));
 }
 
 inline bool EditorAssetReimport::CanUndo(const kb::assets::AssetManager& manager) {

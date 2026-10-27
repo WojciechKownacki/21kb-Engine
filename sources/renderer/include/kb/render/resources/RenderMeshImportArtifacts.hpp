@@ -61,6 +61,14 @@ public:
         const std::filesystem::path& sourcePath,
         const kb::assets::AssetImportOptions& options);
 
+    // Dispatch by the existing asset type and preserve its path and identity,
+    // even when the replacement source has a different filename.
+    [[nodiscard]] static kb::assets::AssetImportItemResult Reimport(
+        kb::assets::AssetManager& manager,
+        kb::assets::AssetId id,
+        const std::filesystem::path& sourcePath,
+        const kb::assets::AssetImportOptions& options);
+
     // Skeletal import of FBX, glTF and GLB sources: a Skeleton (reused when the project already has
     // the same one), the Skeletal Mesh and one Animation Clip per source animation, with the
     // source's textures and materials when the options ask for them. Each item's id is the
