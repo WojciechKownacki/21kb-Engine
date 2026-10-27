@@ -196,6 +196,7 @@ void NavMeshCrowd::Detach(AgentRecord& record) {
     record.requested = false;
     record.onLink = false;
     record.nextLink = 0U;
+    record.activeLink.reset();
 }
 
 void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAgentInput> agents, std::span<const NavMeshCrowdObstacle> obstacles,
@@ -206,7 +207,6 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     ++step_;
     outputs.assign(agents.size(), NavMeshCrowdAgentOutput{});
     const std::uint32_t profiles = runtime.ProfileCount();
-    const std::uint64_t revision = runtime.Revision();
 
     // 1. Forget agents and obstacles that are gone.
     for (auto record = agents_.begin(); record != agents_.end();) {
@@ -331,6 +331,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         const NavMeshCrowdAgentInput& input = agents[index];
         AgentRecord& record = *records[index];
         NavMeshCrowdAgentOutput& output = outputs[index];
+        const std::uint64_t revision = runtime.Revision(record.profile);
         output.position = input.position;
         output.status = record.status;
         output.remainingDistance = record.remaining;
@@ -375,12 +376,30 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             record.arrived = false;
             return true;
         };
+        bool returnedFromLink = false;
+        if (record.onLink && record.meshRevision != revision) {
+            const auto* link = record.activeLink ? runtime.LinkById(record.activeLink->id) : nullptr;
+            const float radius = record.activeLink ? std::max(record.activeLink->radius, 0.1F) : 0.1F;
+            const Vec3 extents{ radius, std::max(input.agent.height, 1.0F), radius };
+            if (link == nullptr || !record.activeLink || !(*link == *record.activeLink) ||
+                !runtime.Nearest(record.profile, record.linkEnd, extents, filter)) {
+                // Detour's in-flight animation otherwise continues toward a removed
+                // endpoint. Return to the last supported departure and plan again.
+                const Vec3 departure = record.linkStart;
+                returnedFromLink = true;
+                if (!attach(departure)) {
+                    output.status = record.status;
+                    continue;
+                }
+                output.restorePosition = true;
+            }
+        }
         if (record.index < 0) {
             if (!attach(input.position)) {
                 output.status = record.status;
                 continue;
             }
-        } else if (!record.onLink) {
+        } else if (!record.onLink && !returnedFromLink) {
             const float moved = HorizontalDistance(input.position, record.position);
             if (moved > 1.0e-3F || std::fabs(input.position.y - record.position.y) > input.agent.height) {
                 dtCrowdAgent* member = crowd->getEditableAgent(record.index);
@@ -488,6 +507,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         if (member->state == DT_CROWDAGENT_STATE_OFFMESH) {
             if (!record.onLink) {
                 record.onLink = true;
+                record.activeLink.reset();
                 record.linkKind = kb::scene::NavLinkKind::Walk;
                 record.linkStart = record.position;
                 record.linkEnd = position;
@@ -505,6 +525,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
                     record.linkEnd = forward ? b : a;
                     if (const NavRuntimeLink* link = runtime.LinkForPolygon(record.profile, record.nextLink); link != nullptr) {
                         record.linkKind = link->kind;
+                        record.activeLink = *link;
                     }
                 }
             }

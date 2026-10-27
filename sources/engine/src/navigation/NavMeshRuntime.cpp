@@ -122,6 +122,7 @@ bool NavMeshRuntime::CreateMesh(std::uint32_t profile, int capacity) {
     }
     target.capacity = capacity;
     target.generation = nextGeneration_++;
+    ++target.revision;
     // The tiles of the previous mesh went with it.
     for (auto& [key, slot] : tiles_) {
         if (key.profile == profile) slot.placed.clear();
@@ -238,6 +239,7 @@ void NavMeshRuntime::PlaceAll(std::uint32_t profile) {
 }
 
 void NavMeshRuntime::Unplace(const TileKey& key, TileSlot& slot) {
+    if (!slot.placed.empty() && key.profile < meshes_.size()) ++meshes_[key.profile].revision;
     dtNavMesh* mesh = Mesh(key.profile);
     for (const dtTileRef reference : slot.placed) {
         if (mesh != nullptr) {
@@ -280,6 +282,7 @@ void NavMeshRuntime::Place(const TileKey& key, TileSlot& slot) {
             continue;
         }
         slot.placed.push_back(reference);
+        ++meshes_[key.profile].revision;
     }
 }
 
@@ -606,6 +609,13 @@ const NavRuntimeLink* NavMeshRuntime::LinkForPolygon(std::uint32_t profile, dtPo
     }
     const auto found = links_.find(connection->userId);
     return found == links_.end() ? nullptr : &found->second;
+}
+
+const NavRuntimeLink* NavMeshRuntime::LinkById(std::uint64_t id) const {
+    const auto user = linkUserIds_.find(id);
+    if (user == linkUserIds_.end()) return nullptr;
+    const auto link = links_.find(user->second);
+    return link == links_.end() ? nullptr : &link->second;
 }
 
 void NavMeshRuntime::SetAreaCost(kb::scene::NavAreaId area, float cost) noexcept {

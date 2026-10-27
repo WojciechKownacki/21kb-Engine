@@ -142,6 +142,8 @@ licenses.
 Recast generates the navigation meshes the engine bakes from scene geometry; Detour stores them
 as tiles, answers path queries and moves agents along path corridors. The Zlib notice is
 reproduced with the shipped licenses.
+CMake compiles a marked generated copy of `DetourCrowd.cpp` that cancels an agent's
+off-mesh animation when its crowd slot is removed. The pinned upstream archive is unchanged.
 
 ## etcpak
 

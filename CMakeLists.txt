@@ -554,6 +554,19 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(kb_recast)
 if(NOT TARGET kb_recast)
+    # A recycled crowd slot must not retain the previous agent's link animation.
+    # Keep the pinned upstream source intact and compile a marked generated copy.
+    file(READ "${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourCrowd.cpp" _kb_crowd_source)
+    set(_kb_crowd_reset "m_agents[idx].active = false;")
+    string(FIND "${_kb_crowd_source}" "${_kb_crowd_reset}" _kb_crowd_reset_offset)
+    if(_kb_crowd_reset_offset EQUAL -1)
+        message(FATAL_ERROR "The pinned crowd source no longer matches the agent reset patch")
+    endif()
+    string(REPLACE "${_kb_crowd_reset}"
+        "// Engine patch: cancel link animation before the slot can be reused.\n\t\tm_agentAnims[idx].active = false;\n\t\tm_agents[idx].active = false;"
+        _kb_crowd_source "${_kb_crowd_source}")
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.cpp"
+        CONTENT "${_kb_crowd_source}" @ONLY)
     add_library(kb_recast STATIC
         ${kb_recast_SOURCE_DIR}/Recast/Source/Recast.cpp
         ${kb_recast_SOURCE_DIR}/Recast/Source/RecastAlloc.cpp
@@ -573,7 +586,7 @@ if(NOT TARGET kb_recast)
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshBuilder.cpp
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshQuery.cpp
         ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNode.cpp
-        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourCrowd.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourLocalBoundary.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourObstacleAvoidance.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathCorridor.cpp

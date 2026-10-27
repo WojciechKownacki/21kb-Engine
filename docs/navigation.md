@@ -168,6 +168,11 @@ crowds in step:
   avoid them like other agents and are pushed out of them.
 - **Off-mesh links** are crossed by the crowd; the agent is shown arcing over a jump, climbing a
   ladder at its low end before stepping across, or walking straight.
+  Removing or changing a link, or unloading its landing tiles during a crossing,
+  cancels the crossing and returns the agent to the supported departure point. If
+  no departure surface remains, navigation stops with a failed path. Returning tiles
+  or re-enabling the link lets the agent replan. Changes to one agent profile's tiles
+  do not invalidate another profile's waiting path.
 - **Level of detail:** agents within `nearDistance` of a focus (`SetCrowdFocuses`, else every
   enabled Stream Focus; without any focus every agent is near) avoid, separate and shorten their
   paths every step; the others only follow their corridors, shortening them every
@@ -206,6 +211,9 @@ On the development machine (Release, one thread for the crowd):
 
 `kb_engine_navigation-crowd-bench` checks that 1000 agents step within 8 ms and that level of
 detail makes a large crowd cheaper.
+The same gate checks a local rebake of four 12.8 m tiles containing a floor and a wall
+against an 8 ms median budget over nine warmed samples. Larger geometry and wider
+rebake regions need their own workload measurements.
 
 ## Limits
 

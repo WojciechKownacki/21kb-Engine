@@ -270,9 +270,13 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     }
     const std::vector<Vec3> focuses = CrowdFocuses(scene, state);
     std::vector<nav::NavMeshCrowdAgentOutput> outputs;
+    std::vector<bool> restoredPositions(agents.size(), false);
     for (std::uint32_t step = 0U; step < steps; ++step) {
         navigation.crowd->Step(runtime, inputs, circles, focuses, navigation.crowdSettings, deltaSeconds, outputs);
-        for (std::size_t index = 0U; index < inputs.size(); ++index) inputs[index].position = outputs[index].position;
+        for (std::size_t index = 0U; index < inputs.size(); ++index) {
+            inputs[index].position = outputs[index].position;
+            restoredPositions[index] = restoredPositions[index] || outputs[index].restorePosition;
+        }
     }
     const float elapsed = deltaSeconds * static_cast<float>(steps);
     for (std::size_t index = 0U; index < agents.size(); ++index) {
@@ -284,10 +288,11 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
             component->pathStatus = output.status;
             state.componentStorage.Navigation().MarkNavAgentModified(agent.entity);
         }
-        if (!agent.agent.enabled || (output.status == NavPathStatus::Failed && !output.onLink && HorizontalLength(output.velocity) <= 0.0F)) {
+        if (!agent.agent.enabled || (output.status == NavPathStatus::Failed && !output.onLink &&
+            !restoredPositions[index] && HorizontalLength(output.velocity) <= 0.0F)) {
             continue;
         }
-        if (agent.character && !output.onLink && PhysicsBackend::CharacterMove(scene, agent.entity, output.velocity)) continue;
+        if (agent.character && !output.onLink && !restoredPositions[index] && PhysicsBackend::CharacterMove(scene, agent.entity, output.velocity)) continue;
         agent.position = output.position;
         const float speed = HorizontalLength(output.velocity);
         if (!agent.character && speed > kEpsilon) {

@@ -472,6 +472,51 @@ void TestOffMeshLinks() {
     }
 }
 
+void TestInterruptedLinkCrossing() {
+    for (const scene::NavLinkKind kind : { scene::NavLinkKind::Jump, scene::NavLinkKind::Ladder }) {
+        for (const bool unloadLanding : { false, true }) {
+            scene::Scene scene;
+            const double top = kind == scene::NavLinkKind::Jump ? 1.0 : 3.0;
+            auto departure = BakeNodes(TwoPlatforms(top));
+            auto landing = departure;
+            std::erase_if(departure.tiles, [](const auto& tile) { return tile.coord.x >= 0; });
+            std::erase_if(landing.tiles, [](const auto& tile) { return tile.coord.x < 0; });
+            static_cast<void>(AddMesh(scene, departure));
+            const auto landingHandle = AddMesh(scene, landing);
+            const Vec3 goal{ 8.0F, static_cast<float>(top), 0.0F };
+            const auto link = AddLink(scene, { -0.8F, 0.0F, 0.0F }, scene::NavLink{
+                .end = { 4.6F, static_cast<float>(top), 0.0F }, .radius = 0.6F, .kind = kind });
+            const auto agent = AddAgent(scene, { -6.0, 0.0, 0.0 }, goal);
+            bool crossing = false;
+            for (int frame = 0; frame < 720; ++frame) {
+                static_cast<void>(scene.Runtime().Update(kFrame));
+                const auto position = Position(scene, agent);
+                if (scene.Navigation().AgentOnLink(agent) &&
+                    (kind == scene::NavLinkKind::Jump ? position.x > 0.5F : position.y > 0.75F)) {
+                    crossing = true;
+                    break;
+                }
+            }
+            Check(crossing, "the agent must enter the link before it is interrupted");
+            if (unloadLanding) Check(scene.Navigation().RemoveNavMesh(landingHandle), "the landing region must unload");
+            else scene.Components().NavLinks().TryGet(link)->enabled = false;
+            for (int frame = 0; frame < 240; ++frame) {
+                static_cast<void>(scene.Runtime().Update(kFrame));
+                const Vec3 position = Position(scene, agent);
+                Check(std::isfinite(position.x) && std::isfinite(position.y) && position.x < 0.0F && position.y < 0.5F &&
+                    !scene.Navigation().AgentOnLink(agent), "an interrupted crossing must return to its supported departure side");
+            }
+            Check(Agent(scene, agent).pathStatus != scene::NavPathStatus::Complete,
+                "a removed link or landing region must invalidate the crossing path");
+            if (unloadLanding) static_cast<void>(AddMesh(scene, landing));
+            else scene.Components().NavLinks().TryGet(link)->enabled = true;
+            for (int frame = 0; frame < 720; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
+            Check(Horizontal(Position(scene, agent), goal) <= 0.15F,
+                "the agent must replan and arrive when the link and landing region return");
+        }
+    }
+}
+
 [[nodiscard]] DVec3 WalkFar(const DVec3& origin) {
     scene::Scene scene;
     scene.Navigation().SetOrigin(origin);
@@ -795,6 +840,30 @@ void TestAgentProfilesStayIndependent() {
         "after its radius shrank the agent uses the small profile again and walks through the doorway");
 }
 
+void TestOnlyChangedProfileReplans() {
+    auto settings = Settings();
+    settings.profiles = { nav::NavAgentProfile{ .name = "Small", .radius = 0.3F },
+        nav::NavAgentProfile{ .name = "Large", .radius = 1.0F } };
+    auto initial = BakeNodes({ Slab(-10.0, 20.0, -6.0, 6.0, 0.0) }, settings);
+    auto extension = initial;
+    std::erase_if(initial.tiles, [](const auto& tile) { return tile.coord.x >= 0; });
+    std::erase_if(extension.tiles, [](const auto& tile) { return tile.coord.x < 0 || tile.profile != 0U; });
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, initial));
+    const auto small = AddAgent(scene, { -6.0, 0.0, -2.0 }, { 15.0F, 0.0F, -2.0F }, 0.25F);
+    const auto large = AddAgent(scene, { -6.0, 0.0, 2.0 }, { 15.0F, 0.0F, 2.0F }, 0.8F);
+    for (int frame = 0; frame < 60; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(Agent(scene, small).pathStatus == scene::NavPathStatus::Failed &&
+        Agent(scene, large).pathStatus == scene::NavPathStatus::Failed, "both profiles must initially wait for their destination tiles");
+    static_cast<void>(AddMesh(scene, extension));
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(scene.Navigation().CrowdStats().pathRequests == 1U,
+        "streaming tiles for one profile must not invalidate another profile's failed path cache");
+    for (int frame = 0; frame < 600; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(Position(scene, small).x > 14.0F && Position(scene, large).x < -5.5F,
+        "only the profile with a loaded route may advance to its destination");
+}
+
 void TestTilesStreamWithCells() {
     // Four 32 m cells in a row, each with its own floor slab; the strip stays inside the first row of
     // tiles' cells (tile centres at z = 6.4 and 19.2).
@@ -815,7 +884,8 @@ void TestTilesStreamWithCells() {
         "a world's navigation settings read back exactly: " + reread.error);
     const std::filesystem::path objects = kb::world::WorldPaths::ObjectsDirectory(descriptorPath, descriptor);
     for (int cell = 0; cell < 4; ++cell) {
-        const kb::world::WorldObjectFile floor = FloorObject("floor" + std::to_string(cell), cell * 32.0, cell * 32.0 + 32.0, 2.0, 22.0);
+        const kb::world::WorldObjectFile floor = FloorObject("floor" + std::to_string(cell),
+            cell * 32.0 + (cell == 2 ? 2.0 : 0.0), cell * 32.0 + 32.0 - (cell == 1 ? 2.0 : 0.0), 2.0, 22.0);
         const std::vector<std::uint8_t> bytes = kb::world::WorldObjectFileIO::Serialize(floor, error);
         Check(!bytes.empty() && kb::world::WorldObjectFileIO::WriteBytes(objects / (floor.header.guid + ".21kbobject"), bytes, error),
             "a floor object must write: " + error);
@@ -861,6 +931,8 @@ void TestTilesStreamWithCells() {
     const scene::SceneEntity agent = AddAgent(scene, DVec3{ 4.0, 0.0, 16.0 }, Vec3{ 120.0F, 0.0F, 16.0F }, 0.4F, 8.0F);
     // A second agent stands in a streamed cell and is sent to a cell that is not streamed yet.
     const scene::SceneEntity traveller = AddAgent(scene, DVec3{ 50.0, 0.0, 16.0 }, Vec3{ 120.0F, 0.0F, 16.0F }, 0.4F, 8.0F);
+    const auto borderLink = AddLink(scene, { 61.2F, 0.0F, 16.0F }, scene::NavLink{
+        .end = { 5.6F, 0.0F, 0.0F }, .radius = 0.6F, .kind = scene::NavLinkKind::Jump, .enabled = false });
     const auto run = [&](int frames) {
         for (int frame = 0; frame < frames; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
     };
@@ -879,6 +951,10 @@ void TestTilesStreamWithCells() {
     }), "tiles follow the source: new cells stream in, cells left behind stream out");
     Check(Path(scene, { 70.0F, 0.0F, 16.0F }, { 120.0F, 0.0F, 16.0F }).status == scene::NavPathStatus::Complete,
         "paths use the newly streamed cells");
+    run(240);
+    Check(Position(scene, traveller).x < 62.0F && Agent(scene, traveller).pathStatus == scene::NavPathStatus::Partial,
+        "a traveller must wait at a disconnected cell border while its dynamic link is disabled");
+    scene.Components().NavLinks().TryGet(borderLink)->enabled = true;
     run(900);
     Check(Horizontal(Position(scene, traveller), { 120.0F, 0.0F, 16.0F }) <= 0.5F && Agent(scene, traveller).pathStatus == scene::NavPathStatus::Complete,
         "the waiting agent replans when its destination streams in and walks there across the cell border");
@@ -914,6 +990,7 @@ void RunNavigationMeshTests() {
     TestAreasAndCosts();
     TestMultipleAgentSizes();
     TestOffMeshLinks();
+    TestInterruptedLinkCrossing();
     TestFarFromTheWorldOrigin();
     TestCrowdIsDeterministic();
     TestCrowdLevelOfDetail();
@@ -923,10 +1000,30 @@ void RunNavigationMeshTests() {
     TestTilesStreamWithCells();
     TestAgentLosesItsNavigationMesh();
     TestAgentProfilesStayIndependent();
+    TestOnlyChangedProfileReplans();
 }
 
 // Crowd cost on this machine, for the performance gate: 1000 agents must step well inside a frame.
 void RunNavigationCrowdBenchmark() {
+    // A local geometry edit: four 12.8 m tiles, with a floor and one wall.
+    scene::Scene rebakeScene;
+    const std::vector<scene::ScenePrefabNodeDesc> geometry{
+        Slab(-10.0, 10.0, -3.0, 3.0, 0.0), BoxNode({ 0.0, 1.5, 0.0 }, { 0.5F, 3.0F, 6.0F }) };
+    static_cast<void>(AddMesh(rebakeScene, BakeNodes(geometry)));
+    static_cast<void>(AddCollider(rebakeScene, { 0.0, -0.25, 0.0 }, { 20.0F, 0.5F, 6.0F }));
+    static_cast<void>(AddCollider(rebakeScene, { 0.0, 1.5, 0.0 }, { 0.5F, 3.0F, 6.0F }));
+    std::vector<double> rebakeTimes;
+    std::size_t rebuiltTiles = 0U;
+    for (int sample = 0; sample < 10; ++sample) {
+        const auto begin = std::chrono::steady_clock::now();
+        rebuiltTiles = rebakeScene.Navigation().RebakeTiles({ -1.0, 0.0, -4.0 }, { 1.0, 0.0, 4.0 });
+        const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        if (sample > 0) rebakeTimes.push_back(elapsed);
+    }
+    std::ranges::sort(rebakeTimes);
+    Check(rebuiltTiles == 4U && rebakeTimes[4] < 8.0 * kSanitizerTimeScale,
+        "a four-tile local rebake must fit the 8 ms median budget: " + std::to_string(rebakeTimes[4]));
+    std::cout << "navigation: local rebake of " << rebuiltTiles << " tiles, median " << rebakeTimes[4] << " ms\n";
     constexpr double kHalf = 100.0;
     const auto arena = std::make_shared<const nav::NavMeshAsset>(CrowdArena(kHalf));
     const auto bakeStart = std::chrono::steady_clock::now();
