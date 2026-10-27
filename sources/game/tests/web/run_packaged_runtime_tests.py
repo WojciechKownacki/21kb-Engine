@@ -320,7 +320,7 @@ WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
                     client.call("Page.navigate", url=f"http://127.0.0.1:{server.server_port}/{case}/Game.html")
                     until = time.monotonic() + 60
                     while True:
-                        state = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
+                        state = client.evaluate("({hash:location.hash,data:{...document.documentElement?.dataset},"
                             "output:document.querySelector('#output')?.value})")
                         observations.append(state)
                         exceptions = [event["params"]["exceptionDetails"] for event in client.events
@@ -400,7 +400,7 @@ WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
                                 if other is not None:
                                     other.close()
                             state["focusRestoredPixel"] = capture_panel(client, directory, "focus-restored-panel")
-                            state["focusRestored"] = client.evaluate("({data:{...document.documentElement.dataset},"
+                            state["focusRestored"] = client.evaluate("({data:{...document.documentElement?.dataset},"
                                 "focused:document.hasFocus(),lost:window.kbRuntimeGraphics.context.isContextLost(),"
                                 "renderer:window.kbRuntimeGraphics.renderer,shaders:window.kbRuntimeGraphics.shaders,"
                                 "statusHidden:document.querySelector('#status')?.hidden})")
@@ -441,7 +441,7 @@ WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
                                 require(injected, "Actual WebGL context loss injection is unavailable")
                                 until = time.monotonic() + 10
                                 while True:
-                                    lost = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
+                                    lost = client.evaluate("({hash:location.hash,data:{...document.documentElement?.dataset},"
                                         "output:document.querySelector('#output')?.value})")
                                     observations.append(lost)
                                     if lost["data"].get("kbError"):
@@ -467,7 +467,7 @@ WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
                                 if case == "graphics-exhaustion" and cycle == 3:
                                     until = time.monotonic() + 15
                                     while True:
-                                        expired = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
+                                        expired = client.evaluate("({hash:location.hash,data:{...document.documentElement?.dataset},"
                                             "output:document.querySelector('#output')?.value})")
                                         observations.append(expired)
                                         if expired["data"].get("kbError") == "graphics-restore-limit" and marker + "-destroyed" in (expired.get("output") or ""):
@@ -486,7 +486,7 @@ WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
                                         "Actual WebGL restoration injection is unavailable")
                                 until = time.monotonic() + 20
                                 while True:
-                                    restored = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
+                                    restored = client.evaluate("({hash:location.hash,data:{...document.documentElement?.dataset},"
                                         "output:document.querySelector('#output')?.value,"
                                         "lost:window.kbRuntimeGraphics.context.isContextLost(),"
                                         "newCanvas:window.kbRuntimeGraphics.context.canvas !== window.kbLostCanvas,"

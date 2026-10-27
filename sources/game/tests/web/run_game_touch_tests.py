@@ -475,7 +475,7 @@ def main(*, fixture=author_fixture, scenario_type=TouchScenario,
         if client is not None:
             try:
                 report["failureState"] = client.evaluate("({hash:location.hash,"
-                    "data:{...document.documentElement.dataset},focused:document.hasFocus(),"
+                    "data:{...document.documentElement?.dataset},focused:document.hasFocus(),"
                     "visibility:document.visibilityState,lost:window.kbTouchGraphics?.context.isContextLost()})")
                 data = client.call("Page.captureScreenshot", format="png")["data"]
                 (root / "failure.png").write_bytes(base64.b64decode(data))

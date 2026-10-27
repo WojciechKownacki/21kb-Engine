@@ -121,6 +121,21 @@ jobs:
             build/web-input-results/browser.log
           if-no-files-found: ignore
 
+      - name: Verify browser text editor lifecycle and clipboard transport
+        run: |
+          browser="$(command -v google-chrome || command -v chromium)"
+          build/web-input-tools/bin/python sources/game/tests/web/run_text_bridge_tests.py \
+            --browser "$browser" --output build/web-text-results
+      - name: Keep browser text results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-text-results
+          path: |
+            build/web-text-results/result.json
+            build/web-text-results/browser.log
+          if-no-files-found: ignore
+
       - name: Build isolated browser save storage
         run: |
           cmake -S sources/engine/tests/save_storage -B build/web-save -G Ninja \

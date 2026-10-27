@@ -135,7 +135,8 @@ def main():
             client.call("Page.bringToFront")
             client.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=10)
             client.call("Emulation.setDeviceMetricsOverride", width=960, height=720, deviceScaleFactor=2, mobile=True)
-            while not client.evaluate("document.documentElement.dataset.kbInputReady === 'true'"):
+            until = time.monotonic() + 30
+            while not client.evaluate("document.documentElement?.dataset.kbInputReady === 'true'"):
                 if time.monotonic() >= until:
                     raise RuntimeError("Sanitized WebAssembly module did not initialize")
                 time.sleep(0.05)
