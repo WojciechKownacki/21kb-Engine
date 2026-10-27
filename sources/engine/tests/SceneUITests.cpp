@@ -826,6 +826,25 @@ void TestInputFieldEditsGraphemeClusters() {
     kb::tests::Require(content() == flag, "A flag must count as one character");
     type(U"q");
     kb::tests::Require(content() == flag, "A second character must be refused at a limit of one");
+    backspace();
+    type(U"\u0915\u094D\u0937");
+    kb::tests::Require(content() == "\xE0\xA4\x95\xE0\xA5\x8D\xE0\xA4\xB7",
+        "An Indic conjunct must fit a single-character limit");
+    backspace();
+    kb::tests::Require(content().empty(), "Backspace must remove a complete Indic conjunct");
+    type(U"\u0600a");
+    kb::tests::Require(content() == "\xD8\x80" "a", "A prepend character and its base must count together");
+    backspace();
+    type(U"\u0E01\u0E33");
+    kb::tests::Require(content() == "\xE0\xB8\x81\xE0\xB8\xB3", "A Thai spacing mark must stay with its base");
+    left();
+    remove();
+    kb::tests::Require(content().empty(), "Delete and caret movement must preserve spacing-mark clusters");
+    limited.characterLimit = 0U;
+    scene.Components().UI().Set(field.Entity(), limited);
+    type(U"a\u200D\U0001F600");
+    backspace();
+    kb::tests::Require(content() == "a\xE2\x80\x8D", "A joiner after ordinary text must not absorb a following emoji");
 }
 
 // A menu laid out for a reference screen keeps every control on screen, whole, apart and clickable across screens of

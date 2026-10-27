@@ -143,6 +143,11 @@ end''' for event in ('Clicked', 'Changed', 'Canceled', 'Submitted')), encoding='
     click(160, 205)
     click(100, 260)
     frames.extend([dict(text='Aż😀'), dict(keys=[132,1]), {}, dict(text='Z'), {}])
+    # Editing uses the same grapheme boundaries after cooking and package reload.
+    unicode_edits = [('क्\u0937', ''), ('\u0600a', ''), ('ก\u0e33', ''), ('a\u200d😀', 'a\u200d')]
+    for typed, remaining in unicode_edits:
+        frames.extend([dict(keys=[132,1]), {}, dict(text=typed), {}])
+        key(95)  # Backspace removes a whole extended grapheme.
     key(90)   # Escape must cancel through the normal input path.
     click(100, 315)
     key(103)
@@ -187,6 +192,10 @@ end''' for event in ('Clicked', 'Changed', 'Canceled', 'Submitted')), encoding='
     require(scroll and abs(float(scroll[1]) - 24) < .001, 'Scroll wheel did not move content by its configured sensitivity')
     require(':Aż😀' in text and ':Z' in text and 'script: Entry:Canceled:' in text,
             'Unicode typing, selection replacement or cancel did not reach the input field')
+    entry_changes = re.findall(r'script: Entry:Changed:[^:]*:(.*):[^\r\n]*', text)
+    for typed, remaining in unicode_edits:
+        require(any(a == typed and b == remaining for a, b in zip(entry_changes, entry_changes[1:])),
+                'Packaged grapheme deletion failed for ' + repr(typed))
     # The shipped executable keeps development file-loading switches disabled.
     rejected = run(player, *tail, cwd=output, expected=1)
     require('development' in rejected and '--input-replay' in rejected, 'Shipped player accepted an input override')

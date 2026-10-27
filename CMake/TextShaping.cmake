@@ -18,6 +18,14 @@ set_target_properties(kb_ui_text_shaping PROPERTIES POSITION_INDEPENDENT_CODE ON
 kb_apply_quality_gates(kb_ui_text_shaping)
 
 if(BUILD_TESTING AND NOT EMSCRIPTEN AND NOT ANDROID)
+    add_executable(kb_ui_grapheme_tests
+        "${PROJECT_SOURCE_DIR}/sources/engine/tests/UITextGraphemeConformanceTests.cpp"
+        "${PROJECT_SOURCE_DIR}/sources/engine/src/ui/UITextGraphemes.cpp")
+    target_include_directories(kb_ui_grapheme_tests PRIVATE "${PROJECT_SOURCE_DIR}/sources/engine/include")
+    target_compile_features(kb_ui_grapheme_tests PRIVATE cxx_std_20)
+    kb_apply_quality_gates(kb_ui_grapheme_tests)
+    add_test(NAME kb_ui_grapheme_conformance COMMAND kb_ui_grapheme_tests
+        "${PROJECT_SOURCE_DIR}/third_party/unicode/GraphemeBreakTest.txt")
     add_executable(kb_ui_text_shaping_tests "${PROJECT_SOURCE_DIR}/sources/engine/tests/UITextShapingTests.cpp")
     target_include_directories(kb_ui_text_shaping_tests PRIVATE "${PROJECT_SOURCE_DIR}/sources/engine/include")
     target_link_libraries(kb_ui_text_shaping_tests PRIVATE kb_ui_text_shaping)

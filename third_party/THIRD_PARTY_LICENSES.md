@@ -255,6 +255,13 @@ Compiled only into the editor, the cooker and the shader compiler:
 The root `LICENSE` file applies to 21kb-Engine itself. Third-party dependencies
 remain under their own licenses.
 
+## Unicode Character Database and Emoji Data
+
+Unicode 17.0.0 grapheme segmentation uses generated ranges from the Unicode
+Character Database and Emoji Data. The original data, conformance corpus,
+source URLs and SHA-256 hashes are retained in `third_party/unicode` under
+Unicode License V3. Its full notice is included in engine and game packages.
+
 ## HarfBuzz
 
 The portable text shaper is vendored from HarfBuzz 14.6.0, commit

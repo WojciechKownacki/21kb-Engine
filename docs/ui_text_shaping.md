@@ -57,6 +57,11 @@ the shipped executable refuses this development override.
 
 Validation:
 
+- `kb_ui_grapheme_conformance` checks Unicode 17.0.0 extended grapheme boundaries
+  against the complete upstream corpus, including every UTF-8 byte offset for
+  forward/backward movement, snapping and counts. Malformed UTF-8 bytes remain
+  independent clusters. `python scripts/generate_grapheme_tables.py --check`
+  verifies pinned source hashes and reproducible generated tables offline.
 - `kb_ui_text_shaping` checks Arabic contextual forms, Hebrew and mixed-direction
   order, paragraph/line boundaries, ligatures, combining marks and invalid inputs.
 - `kb_renderer_tests screen-ui-batch` checks actual font preparation, cluster
