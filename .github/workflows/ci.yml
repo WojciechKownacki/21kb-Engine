@@ -121,6 +121,27 @@ jobs:
             build/web-input-results/browser.log
           if-no-files-found: ignore
 
+      - name: Build isolated browser save storage
+        run: |
+          cmake -S sources/engine/tests/save_storage -B build/web-save -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/web-save --parallel 2
+      - name: Verify IndexedDB persistence across browser restarts
+        run: |
+          browser="$(command -v google-chrome || command -v chromium)"
+          build/web-input-tools/bin/python sources/engine/tests/save_storage/run_browser_tests.py \
+            --browser "$browser" --directory build/web-save --output build/web-save-results
+      - name: Keep browser save results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-save-results
+          path: |
+            build/web-save-results/result.json
+            build/web-save-results/*-browser.log
+          if-no-files-found: ignore
+
   native-read-batches:
     name: Linux native read batches
     runs-on: ubuntu-24.04
