@@ -285,6 +285,13 @@ their components that differ). `--json` prints `21kb.batch/v1` with `operations`
 The transaction covers the files of the project folder except `Binaries`, `Intermediate`,
 `Saved`, `Library`, `Build` and `.git`; files an operation writes elsewhere are not restored.
 A project over 512 MiB is refused, and `batch` and `mcp` cannot be used inside a batch.
+The snapshot must be complete: unreadable entries, symbolic links and special files
+outside the excluded folders are refused before execution. Rollback restores both
+file contents and directory structure, including file/directory replacements and
+empty directories. A failed restoration keeps the backup and reports its location;
+it does not report a successful rollback. Run batches without concurrent project
+writers. This is recovery from command failures, not isolation from other processes
+or protection against process termination during a write.
 
 ## Good to know
 

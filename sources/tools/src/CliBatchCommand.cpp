@@ -47,7 +47,7 @@ struct Listing {
 // Every file and folder of the project below the root, by path relative to it.
 bool ScanProject(const fs::path& root, Listing& listing, std::string& error) {
     std::error_code ec;
-    fs::recursive_directory_iterator it{ root, fs::directory_options::skip_permission_denied, ec };
+    fs::recursive_directory_iterator it{ root, fs::directory_options::none, ec };
     for (; !ec && it != fs::recursive_directory_iterator{}; it.increment(ec)) {
         const fs::path relative = it->path().lexically_relative(root);
         if (IsExcluded(relative)) {
@@ -55,12 +55,27 @@ bool ScanProject(const fs::path& root, Listing& listing, std::string& error) {
             continue;
         }
         std::error_code statusError;
-        if (it->is_symlink(statusError)) continue;
-        if (it->is_directory(statusError)) {
+        const auto status = it->symlink_status(statusError);
+        if (statusError) {
+            error = "cannot inspect " + relative.generic_string() + ": " + statusError.message();
+            return false;
+        }
+        if (fs::is_symlink(status)) {
+            error = "transactions cannot cover symbolic links: " + relative.generic_string();
+            return false;
+        }
+        if (fs::is_directory(status)) {
             listing.directories.insert(relative);
-        } else if (it->is_regular_file(statusError)) {
+        } else if (fs::is_regular_file(status)) {
             const std::uintmax_t size = it->file_size(statusError);
-            if (!statusError) listing.files[relative] = size;
+            if (statusError) {
+                error = "cannot read file size for " + relative.generic_string() + ": " + statusError.message();
+                return false;
+            }
+            listing.files[relative] = size;
+        } else {
+            error = "transactions require regular files and directories: " + relative.generic_string();
+            return false;
         }
     }
     if (ec) {
@@ -82,22 +97,31 @@ struct Snapshot {
     fs::path root;
     fs::path backup;
     Listing listing;
+    bool backupCreated = false;
 };
 
 bool TakeSnapshot(Snapshot& snapshot, std::string& error) {
     if (!ScanProject(snapshot.root, snapshot.listing, error)) return false;
     std::uintmax_t total = 0U;
     for (const auto& [path, size] : snapshot.listing.files) {
-        total += size;
-        if (total > kSnapshotLimitBytes) {
+        if (size > kSnapshotLimitBytes - total) {
             error = "the project is too large for a transaction (limit " + std::to_string(kSnapshotLimitBytes / (1024U * 1024U)) + " MiB)";
             return false;
         }
+        total += size;
     }
     std::error_code ec;
-    fs::create_directories(snapshot.backup, ec);
+    snapshot.backupCreated = fs::create_directory(snapshot.backup, ec);
+    if (!snapshot.backupCreated) {
+        error = "cannot create transaction backup: " + (ec ? ec.message() : std::string{"folder already exists"});
+        return false;
+    }
     for (const auto& [path, size] : snapshot.listing.files) {
         fs::create_directories((snapshot.backup / path).parent_path(), ec);
+        if (ec) {
+            error = "cannot create backup folder for " + path.generic_string() + ": " + ec.message();
+            return false;
+        }
         fs::copy_file(snapshot.root / path, snapshot.backup / path, fs::copy_options::overwrite_existing, ec);
         if (ec) {
             error = "cannot copy " + path.generic_string() + ": " + ec.message();
@@ -242,31 +266,20 @@ bool CollectChanges(const CommandRunner& run, const Snapshot& snapshot, std::vec
 }
 
 // Puts every file and folder back as the snapshot has it. Returns false with the first failure.
-bool Restore(const Snapshot& snapshot, const std::vector<Change>& changes, std::string& error) {
+bool Restore(const Snapshot& snapshot, std::string& error) {
     std::error_code ec;
-    for (const Change& change : changes) {
-        const fs::path target = snapshot.root / change.path;
-        if (change.kind == ChangeKind::Added) {
-            fs::remove(target, ec);
-        } else {
-            fs::create_directories(target.parent_path(), ec);
-            fs::copy_file(snapshot.backup / change.path, target, fs::copy_options::overwrite_existing, ec);
-        }
+    Listing current;
+    if (!ScanProject(snapshot.root, current, error)) return false;
+    // Remove new files first, including files that replaced original directories.
+    for (const auto& [path, size] : current.files) {
+        if (snapshot.listing.files.contains(path)) continue;
+        fs::remove(snapshot.root / path, ec);
         if (ec) {
-            error = "cannot restore " + change.path.generic_string() + ": " + ec.message();
+            error = "cannot remove added file " + path.generic_string() + ": " + ec.message();
             return false;
         }
     }
-    for (const fs::path& directory : snapshot.listing.directories) {
-        fs::create_directories(snapshot.root / directory, ec);
-    }
-    // Folders the operations made: deepest first, and only when they are empty now.
-    Listing current;
-    std::string scanError;
-    if (!ScanProject(snapshot.root, current, scanError)) {
-        error = scanError;
-        return false;
-    }
+    // Remove new directories deepest first, including directories replacing files.
     std::vector<fs::path> created;
     for (const fs::path& directory : current.directories) {
         if (!snapshot.listing.directories.contains(directory)) created.push_back(directory);
@@ -274,7 +287,33 @@ bool Restore(const Snapshot& snapshot, const std::vector<Change>& changes, std::
     std::ranges::sort(created, [](const fs::path& left, const fs::path& right) {
         return left.generic_string().size() > right.generic_string().size();
     });
-    for (const fs::path& directory : created) fs::remove(snapshot.root / directory, ec);
+    for (const fs::path& directory : created) {
+        fs::remove(snapshot.root / directory, ec);
+        if (ec) {
+            error = "cannot remove added directory " + directory.generic_string() + ": " + ec.message();
+            return false;
+        }
+    }
+    for (const fs::path& directory : snapshot.listing.directories) {
+        fs::create_directories(snapshot.root / directory, ec);
+        if (ec) {
+            error = "cannot restore directory " + directory.generic_string() + ": " + ec.message();
+            return false;
+        }
+    }
+    for (const auto& [path, size] : snapshot.listing.files) {
+        // Keep unchanged files untouched, including read-only files and their timestamps.
+        if (const auto found = current.files.find(path); found != current.files.end() && found->second == size) {
+            std::string before, after;
+            if (ReadFile(snapshot.backup / path, before) && ReadFile(snapshot.root / path, after) && before == after)
+                continue;
+        }
+        fs::copy_file(snapshot.backup / path, snapshot.root / path, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            error = "cannot restore file " + path.generic_string() + ": " + ec.message();
+            return false;
+        }
+    }
     return true;
 }
 
@@ -492,6 +531,10 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
             io.err << "error: " << where << "expects a kb_cli command other than batch and mcp\n";
             return 1;
         }
+        if (std::ranges::count(words, "--project") > 1) {
+            io.err << "error: " << where << "--project must appear at most once\n";
+            return 1;
+        }
         const auto given = std::ranges::find(words, "--project");
         if (given == words.end()) {
             words.emplace_back("--project");
@@ -506,19 +549,22 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
     BatchReport report;
     report.dryRun = arguments.Flag("--dry-run");
     Snapshot snapshot{ .root = root, .backup = fs::temp_directory_path(ec) / ("21kb-batch-" + std::to_string(
-        static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()))) };
+        static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()))), .listing = {} };
     bool snapshotTaken = false;
     try {
         snapshotTaken = TakeSnapshot(snapshot, error);
         if (!snapshotTaken) report.errors.push_back(error);
         for (std::size_t index = 0U; snapshotTaken && index < operations.size(); ++index) {
-            OperationResult result{ .line = Join(operations[index]) };
+            OperationResult result{ .line = Join(operations[index]), .output = {}, .errors = {} };
             std::ostringstream out;
             std::ostringstream err;
             try {
                 result.exitCode = run(operations[index], CommandIo{ .out = out, .err = err });
             } catch (const std::exception& exception) {
                 err << "error: " << exception.what() << '\n';
+                result.exitCode = 1;
+            } catch (...) {
+                err << "error: unexpected operation failure\n";
                 result.exitCode = 1;
             }
             result.output = out.str();
@@ -540,18 +586,18 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
         const bool failed = !report.errors.empty() || report.failedOperation != 0U;
         if (failed || report.dryRun) {
             std::string restoreError;
-            if (listed && Restore(snapshot, report.changes, restoreError)) {
+            if (Restore(snapshot, restoreError)) {
                 report.rolledBack = true;
             } else {
-                report.errors.push_back(listed ? restoreError : "the files could not be compared, so they were not restored");
+                report.errors.push_back(restoreError);
                 report.errors.push_back("the original files are kept in " + snapshot.backup.generic_string());
                 report.keptBackup = snapshot.backup;
             }
         } else {
             report.applied = true;
         }
-        if (report.keptBackup.empty()) fs::remove_all(snapshot.backup, ec);
     }
+    if (snapshot.backupCreated && report.keptBackup.empty()) fs::remove_all(snapshot.backup, ec);
     if (report.failedOperation != 0U && report.rolledBack) report.changes.clear();
 
     if (arguments.Flag("--json")) PrintJson(report, io);

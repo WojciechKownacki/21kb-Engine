@@ -4629,6 +4629,62 @@ void RunBatchCommandTests() {
         "an operation that starts a batch or names another project must be refused");
     Require(Fingerprint(projectPath) == afterApply, "a refused batch must not run any operation");
     Require(RunCliProgram({ "batch", "--project", project }).exitCode == 1, "batch without --file must fail");
+
+    WriteTextFile(parent / "duplicate.txt", "entity add --name Gamma --project \"" + project +
+        "\" --project \"" + project + "\"\n");
+    const auto duplicate = RunCliProgram({"batch", "--project", project, "--file", (parent / "duplicate.txt").string(), "--json"});
+    Require(duplicate.exitCode == 1 && Contains(duplicate.out, "at most once") && Fingerprint(projectPath) == afterApply,
+        "ambiguous project options must fail before any operation runs");
+
+    // Exercise failure recovery independently of an individual author's normal edit shape.
+    // Import and migration operations can replace a file with a directory, or the reverse.
+    WriteTextFile(projectPath / "original-file", "original bytes");
+    WriteTextFile(projectPath / "original-directory" / "child", "original child");
+    WriteTextFile(projectPath / "unchanged-file", "keep unchanged");
+    const auto unchangedTime = std::filesystem::last_write_time(projectPath / "unchanged-file");
+    std::filesystem::create_directories(projectPath / "empty-directory");
+    const auto original = Fingerprint(projectPath);
+    for (const int mode : {0, 1, 2}) {
+        const std::vector<std::string> words{"--project", project, "--file", good.string(), "--json", "--dry-run"};
+        const std::array<std::string_view, 2> flags{"--json", "--dry-run"};
+        std::ostringstream output, diagnostics;
+        unsigned calls = 0U;
+        const auto replaceKinds = [&](std::span<const std::string>, kb::cli::CommandIo) -> int {
+            ++calls;
+            std::filesystem::remove(projectPath / "original-file");
+            WriteTextFile(projectPath / "original-file" / "nested" / "replacement", "new bytes");
+            std::filesystem::remove_all(projectPath / "original-directory");
+            WriteTextFile(projectPath / "original-directory", "replacement file");
+            std::filesystem::remove(projectPath / "empty-directory");
+            std::filesystem::create_directories(projectPath / "new-empty-directory");
+            if (mode == 2) throw 42;
+            return mode == 0 ? 1 : 0;
+        };
+        // One operation is enough for the success/dry-run path as well.
+        const auto single = parent / "replace.txt";
+        WriteTextFile(single, "entity add --name Temporary\n");
+        auto arguments = words;
+        arguments[3] = single.string();
+        const int result = kb::cli::RunBatchCommand(kb::cli::ArgumentList{arguments, flags},
+            {.out = output, .err = diagnostics}, replaceKinds);
+        JsonValue report;
+        Require(calls == 1U && result == (mode == 1 ? 0 : 1) &&
+            JsonValue::Parse(output.str(), report, parseError) && report.Find("rolledBack")->AsBool(),
+            "file/directory replacements and unexpected exceptions must roll back: " + output.str());
+        Require(Fingerprint(projectPath) == original && std::filesystem::is_directory(projectPath / "empty-directory") &&
+            !std::filesystem::exists(projectPath / "new-empty-directory"),
+            "rollback must restore every original byte and empty directory, removing newly created directories");
+        Require(std::filesystem::last_write_time(projectPath / "unchanged-file") == unchangedTime,
+            "rollback must not rewrite unchanged files");
+    }
+    const auto link = projectPath / "linked-directory";
+    std::filesystem::create_directory_symlink(parent, link, error);
+    if (!error) {
+        const auto refused = RunCliProgram({"batch", "--project", project, "--file", good.string(), "--dry-run", "--json"});
+        std::filesystem::remove(link);
+        Require(refused.exitCode == 1 && Contains(refused.out, "symbolic links") && Fingerprint(projectPath) == original,
+            "a linked project tree must be refused before any transaction writes files");
+    }
 }
 
 #if KB_CLI_RENDERER
