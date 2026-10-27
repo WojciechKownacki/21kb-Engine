@@ -737,6 +737,22 @@ void RunNativeScriptBuildPipelineTest() {
     kb::tests::Require(built.Succeeded(), "Native script build pipeline did not execute the build command");
     kb::tests::Require(std::filesystem::is_regular_file(marker), "Native script build pipeline did not create the build marker");
 
+#if defined(_WIN32)
+    // GUI hosts may have no console handles. Their build still needs to work.
+    const HANDLE previousInput = GetStdHandle(STD_INPUT_HANDLE);
+    const HANDLE previousError = GetStdHandle(STD_ERROR_HANDLE);
+    SetStdHandle(STD_INPUT_HANDLE, nullptr);
+    SetStdHandle(STD_ERROR_HANDLE, nullptr);
+    const auto detachedMarker = projectRoot / "detached_build.marker";
+    const auto detached = kb::script::NativeScriptBuildPipeline::Build({
+        .enabled = true, .command = "cmake -E touch \"" + detachedMarker.string() + "\"",
+        .workingDirectory = projectRoot});
+    SetStdHandle(STD_INPUT_HANDLE, previousInput);
+    SetStdHandle(STD_ERROR_HANDLE, previousError);
+    kb::tests::Require(detached.Succeeded() && std::filesystem::is_regular_file(detachedMarker),
+        "Native compilation must also work in a host without console handles");
+#endif
+
     const kb::script::NativeScriptBuildResult missingTool = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
         .enabled = true,
         .command = "kb_native_build_tool_that_does_not_exist",

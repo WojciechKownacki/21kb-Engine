@@ -36,11 +36,25 @@ namespace {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    startup.hStdOutput = startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    const auto childHandle = [](DWORD standard) {
+        HANDLE copy = nullptr;
+        const HANDLE source = GetStdHandle(standard);
+        if (source != nullptr && source != INVALID_HANDLE_VALUE &&
+            DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &copy, 0, TRUE,
+                DUPLICATE_SAME_ACCESS)) return copy;
+        SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+        return CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    };
+    startup.hStdInput = childHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = startup.hStdError = childHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION process{};
-    if (!CreateProcessW(shell.c_str(), arguments.data(), nullptr, nullptr, TRUE,
-            CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) return -1;
+    const bool launched = startup.hStdInput != INVALID_HANDLE_VALUE && startup.hStdError != INVALID_HANDLE_VALUE &&
+        CreateProcessW(shell.c_str(), arguments.data(), nullptr, nullptr, TRUE,
+            CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    if (startup.hStdInput != INVALID_HANDLE_VALUE) CloseHandle(startup.hStdInput);
+    if (startup.hStdError != INVALID_HANDLE_VALUE) CloseHandle(startup.hStdError);
+    if (!launched) return -1;
     CloseHandle(process.hThread);
     DWORD exitCode = 1;
     const bool completed = WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0 &&
