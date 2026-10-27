@@ -43,7 +43,13 @@ end
 
 
 def hello(text):
-    return f'function Ready(self, dt)\n    Log("{text}")\nend\n'
+    return f'''function Ready(self, dt)
+    assert(os == nil and io == nil and package == nil and debug == nil)
+    assert(load == nil and loadfile == nil and dofile == nil and require == nil)
+    assert(collectgarbage == nil and _G._G == _G and _G.os == nil and _G.io == nil)
+    Log("{text}")
+end
+'''
 
 
 def main():
@@ -261,6 +267,16 @@ def main():
     (native / "Mod.old").unlink()
     text = mod("install", "--game", game_pack, str(native), expected=1)
     require("native code" in text, "A manifest naming a native library was not refused with the reason: " + text)
+    # Bypassing the installer must not bypass the player's native-code policy.
+    shutil.copytree(native, mods / "acme.native")
+    state = (mods / "Mods.state").read_text(encoding="utf8")
+    (mods / "Mods.state").write_text(state + "enabled acme.native\n", encoding="utf8")
+    text = play()
+    require("mod refused: acme.native 0.0.0: ManifestInvalid" in text and "native code" in text
+            and "base game: mods=2" in text and "crates mod script ran" in text
+            and "extras mod script ran" in text and "shutdown=clean" in text,
+            "The player did not refuse a manually installed native manifest while running valid mods: " + text)
+    mod("remove", "acme.native")
 
     # ---- A mod cannot replace the game: the builder leaves out the assets the game has (the runtime refusing a chunk that holds one anyway is in kb_game_core_tests --mods) ----
     require("of the game's own left out" in cli("mod", "build", "--game", base_pack, "--cook", crates_cook, "--id", "acme.again", "--version", "1.0.0",

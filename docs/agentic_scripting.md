@@ -60,8 +60,12 @@ The cap also applies to script-created coroutines. It counts Lua instructions, n
 native API calls are not preempted, and there is no wall-clock limit.
 
 **Native C++ scripts and plugins are not sandboxed.** They run inside the game process with all of its
-rights and can do anything the game can. Load them only from projects and mods you trust; the engine
+rights and can do anything the game can. Load them only from projects you trust; the engine
 checks their hash against the release manifest in a packaged game but does not isolate them.
+Mod manifests cannot introduce native plugins. The player validates this restriction again when
+loading installed mods, including folders copied into place without the installer. Mod Lua scripts
+use the same restricted standard libraries as project Lua scripts; they can still change gameplay
+through the exposed engine API and are not isolated from the game's state.
 
 The packaged Lua workflow regression (`sources/game/tests/web/run_game_lua_workflow_tests.py`)
 creates a project through the public CLI, generates the unchanged `PlayerController.lua` template,
