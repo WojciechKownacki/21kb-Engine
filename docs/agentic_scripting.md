@@ -42,6 +42,25 @@ puts this collider in the top-down X/Z plane. The Platformer Player preset uses
 gravity and the side-view X/Y plane instead. Both controller scripts remain ordinary
 project files with editable `speed` variables.
 
+Assets loaded by path from Lua must be declared for export. Put one `-- @asset`
+comment per canonical virtual path in the script's opening comment block, before
+any Lua code or long comment. For example:
+
+```lua
+-- @asset /Game/Prefabs/Crate.kbprefab
+function Ready(self, dt)
+    local entity, diagnostic = CallFunction("World.Spawn", {
+        prefab = "/Game/Prefabs/Crate.kbprefab", x = 7, y = 2, z = 3
+    })
+    assert(entity, diagnostic)
+end
+```
+
+The cooker includes these assets and their dependencies. Missing assets, noncanonical
+paths and editor-only assets fail validation. This also supports paths assembled at
+runtime: declare each possible target. Update declarations when moving assets.
+The declaration does not grant filesystem access or execute Lua during discovery.
+
 ## What a script is allowed to do
 
 Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `ipairs`, `pairs`,
