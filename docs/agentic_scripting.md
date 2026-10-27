@@ -173,6 +173,14 @@ More commands, each with its options in `kb_cli help`:
 A removed function or a changed pin is a breaking change and fails with exit code 1, in CI and in the `kb_cli_api_check_committed_baseline` test.
 An added function or component is reported as additive and passes. The baseline changes only on purpose: run the same command with `--update-baseline` and commit the file together with the change that needs it.
 
+Project descriptors, project/scene metadata and particle effects reject newer file
+versions with the stored and supported versions and an instruction to use a newer
+engine. A zero or malformed binary header remains a corruption error. Loading or
+refusing a file does not rewrite it. Older supported project descriptors retain
+their settings for migration; stored older scenes and legacy particle effects are
+checked by the native project/scene and particle asset test suites. API checks do
+not replace these format and runtime checks.
+
 ## Scripting `kb_cli` without a person at the keyboard
 
 Every command runs without prompts: all input comes from its options, and `kb_cli help`
@@ -180,7 +188,8 @@ lists them. Two things make it safe to drive from a script or an agent.
 
 **Exit codes.** `0` means success. `1` means any failure: bad or missing arguments, an
 unknown command, a check, build or run that failed, a file that could not be read or written.
-No other code is returned. `help`, `--help`, `-h` and a bare `kb_cli` print the usage and exit 0.
+The scene runner also returns `124` on timeout and `130` on cancellation.
+`help`, `--help`, `-h` and a bare `kb_cli` print the usage and exit 0.
 
 **`--json`.** Add it to any command and it prints one JSON object on stdout instead of text:
 

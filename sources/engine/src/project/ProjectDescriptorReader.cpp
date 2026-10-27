@@ -145,9 +145,13 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
     if (!input.ReadRaw(magic.data(), magic.size()) ||
         magic != ProjectDescriptorFormat::Magic ||
         !input.ReadUInt32(fileVersion) ||
-        fileVersion == 0U ||
-        fileVersion > ProjectDescriptor::CurrentFileVersion) {
+        fileVersion == 0U) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor header is invalid." };
+    }
+    if (fileVersion > ProjectDescriptor::CurrentFileVersion) {
+        return {.succeeded = false, .descriptor = {}, .error = "Project descriptor version " + std::to_string(fileVersion) +
+            " requires a newer engine; this engine supports up to version " +
+            std::to_string(ProjectDescriptor::CurrentFileVersion) + ". Open the project with a newer engine."};
     }
 
     ProjectDescriptor descriptor;

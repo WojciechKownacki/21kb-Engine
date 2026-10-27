@@ -741,7 +741,9 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
     reader.Finish();
     if (asset.formatVersion != kParticleEffectFormatVersion)
         Error(result, ParticleEffectDiagnosticCode::UnsupportedVersion, reader.ProvenanceLine("effect.formatVersion"),
-              "effect.formatVersion", "future or unsupported version");
+              "effect.formatVersion", "Particle effect version " + std::to_string(asset.formatVersion) +
+                  " is unsupported; this engine writes version " + std::to_string(kParticleEffectFormatVersion) +
+                  ". Open newer assets with a newer engine.");
     if (result.diagnostics.empty()) {
         auto validation = ParticleEffectAssetValidator::ValidateStructure(asset);
         for (ParticleEffectDiagnostic& diagnostic : validation.diagnostics)
@@ -889,7 +891,9 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                 const std::string_view versionText = content.substr(std::string_view{"21kb ParticleEffect "}.size());
                 if (ParseUInt(versionText, version) && version > kParticleEffectFormatVersion)
                     Error(result, ParticleEffectDiagnosticCode::UnsupportedVersion, lineNumber, "effect.formatVersion",
-                          "future version is unsupported");
+                          "Particle effect version " + std::to_string(version) +
+                              " requires a newer engine; this engine supports up to version " +
+                              std::to_string(kParticleEffectFormatVersion) + ". Open the effect with a newer engine.");
                 else
                     Error(result, ParticleEffectDiagnosticCode::InvalidHeader, lineNumber, "effect.formatVersion",
                           "versioned header is not canonical");

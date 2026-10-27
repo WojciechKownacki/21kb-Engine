@@ -555,7 +555,22 @@ void RunMalformedInputTest() {
     check(canonical + "effect.unknown 1\n", ParticleEffectDiagnosticCode::UnknownKey, "effect.unknown", true);
     std::string future = canonical;
     ReplaceOnce(future, "21kb ParticleEffect 2", "21kb ParticleEffect 3");
-    check(std::move(future), ParticleEffectDiagnosticCode::UnsupportedVersion, "effect.formatVersion", true);
+    check(future, ParticleEffectDiagnosticCode::UnsupportedVersion, "effect.formatVersion", true);
+    const auto futureResult = ParticleEffectAssetIO::Parse(future);
+    const auto& futureDiagnostic = futureResult.diagnostics.front();
+    Require(futureDiagnostic.message.find("version 3") != std::string::npos &&
+        futureDiagnostic.message.find("up to version 2") != std::string::npos &&
+        futureDiagnostic.message.find("newer engine") != std::string::npos && futureDiagnostic.line == 1U,
+        "Future effects must identify both versions, the header line and the required action");
+    std::string futureFields = canonical;
+    ReplaceOnce(futureFields, "effect.formatVersion 2", "effect.formatVersion 3");
+    const auto futureFieldsResult = ParticleEffectAssetIO::Parse(futureFields);
+    Require(!futureFieldsResult.Succeeded() && std::any_of(futureFieldsResult.diagnostics.begin(),
+        futureFieldsResult.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.code == ParticleEffectDiagnosticCode::UnsupportedVersion && diagnostic.line == 2U &&
+                diagnostic.message.find("version 3") != std::string::npos &&
+                diagnostic.message.find("newer engine") != std::string::npos;
+        }), "A future effect property version must preserve its source line and actionable diagnostic");
     std::string badHeader = canonical;
     ReplaceOnce(badHeader, "21kb ParticleEffect 2", "21kb ParticleEffect two");
     check(std::move(badHeader), ParticleEffectDiagnosticCode::InvalidHeader, "effect.formatVersion", true);

@@ -33,9 +33,15 @@ ProjectDescriptorMetaReadResult ProjectDescriptorMetaReader::Read(const std::fil
     if (!input.ReadRaw(magic.data(), magic.size()) ||
         magic != ProjectDescriptorFormat::MetaMagic ||
         !input.ReadUInt32(meta.fileVersion) ||
-        meta.fileVersion == 0U ||
-        meta.fileVersion > ProjectDescriptorMeta::CurrentFileVersion ||
-        (meta.fileVersion < 2U && !input.ReadString(retiredProjectName)) ||
+        meta.fileVersion == 0U) {
+        return {.succeeded = false, .meta = {}, .error = "Project meta header is invalid."};
+    }
+    if (meta.fileVersion > ProjectDescriptorMeta::CurrentFileVersion) {
+        return {.succeeded = false, .meta = {}, .error = "Project meta version " + std::to_string(meta.fileVersion) +
+            " requires a newer engine; this engine supports up to version " +
+            std::to_string(ProjectDescriptorMeta::CurrentFileVersion) + ". Open the project with a newer engine."};
+    }
+    if ((meta.fileVersion < 2U && !input.ReadString(retiredProjectName)) ||
         !input.ReadString(meta.engineAssociation) ||
         (meta.fileVersion < 2U && !input.ReadString(retiredDefaultScene)) ||
         !input.ReadString(projectFile) ||

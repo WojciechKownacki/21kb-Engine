@@ -481,9 +481,16 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         return 1;
     }
 
-    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene, scenePath)) {
-        io.err << "error: could not load scene into runtime: " << scenePath.generic_string() << '\n';
-        return 1;
+    {
+        const auto sceneDocument = kb::scene::SceneDocumentService::Load(scenePath);
+        if (!sceneDocument.succeeded) {
+            io.err << "error: could not load scene " << scenePath.generic_string() << ": " << sceneDocument.error << '\n';
+            return 1;
+        }
+        if (!kb::scene::SceneDocumentService::LoadIntoScene(scene, sceneDocument.document)) {
+            io.err << "error: could not load scene into runtime: " << scenePath.generic_string() << '\n';
+            return 1;
+        }
     }
     kb::scene::SceneInputActivation::Apply(scene);
     static_cast<void>(scene.UI().SetSafeAreaInsets(safeArea));

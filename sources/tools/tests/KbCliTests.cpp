@@ -4224,6 +4224,28 @@ end
         !Contains(rejected.err + rejected.out, "replay tick"), "Unknown recording version must fail before executing scripts");
 }
 
+void RunNewerSceneMetadataCliTest() {
+    PrepareProject();
+    const auto root = TestRoot();
+    const auto meta = root / "Assets/Scenes/Main.meta";
+    const auto read = [&] {
+        std::ifstream file{meta, std::ios::binary};
+        return std::string{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+    };
+    const auto original = read();
+    Require(original.size() >= 12U, "Scene metadata must have a versioned header");
+    auto future = original;
+    future[8] = 127;
+    future[9] = future[10] = future[11] = 0;
+    WriteTextFile(meta, future);
+    const auto result = RunCliProgram({"run", "--project", root.string(), "--frames", "1"});
+    Require(result.exitCode == 1 && Contains(result.err, "Scene meta version 127") &&
+        Contains(result.err, "newer engine") && Contains(result.err, "Main.21kbscene"),
+        "CLI must preserve scene-load diagnostics and identify the scene: " + result.out + result.err);
+    Require(read() == future, "Refusing a newer scene must not rewrite its metadata");
+    WriteTextFile(meta, original);
+}
+
 void RunSafeAreaCliTests() {
     PrepareProject();
     const auto root = TestRoot();
@@ -4915,6 +4937,10 @@ int main(int argc, char** argv) {
         RunSafeAreaCliTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "data-version") {
+        RunNewerSceneMetadataCliTest();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "sprite2d") {
 #if KB_CLI_RENDERER
         RunSprite2DCliTests();
@@ -4950,6 +4976,7 @@ int main(int argc, char** argv) {
     RunPlaybackStopTests();
     RunInputRecordingCliTests();
     RunSafeAreaCliTests();
+    RunNewerSceneMetadataCliTest();
     RunParticleReportCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();

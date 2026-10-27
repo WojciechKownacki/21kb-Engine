@@ -34,6 +34,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneDocument.hpp"
+#include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -1489,6 +1490,37 @@ void RunStoredOlderSceneFilesLoadTest() {
         "the stored version 40 scene did not load into a runtime scene");
 }
 
+void RunProjectFromNewerEngineIsExplainedTest() {
+    CleanTempRoot();
+    const auto projectFile = TempRoot() / "Newer.21kbproject";
+    const auto metaFile = TempRoot() / "Newer.meta";
+    Require(kb::project::ProjectManager::CreateProject(projectFile, {}), "Future-version fixture must be created");
+    for (const bool metadata : {false, true}) {
+        const auto& file = metadata ? metaFile : projectFile;
+        const auto original = ReadBytes(file);
+        const auto supported = metadata ? kb::project::ProjectDescriptorMeta::CurrentFileVersion :
+            kb::project::ProjectDescriptor::CurrentFileVersion;
+        const auto offset = metadata ? kProjectMetaMagic.size() : kProjectMagic.size();
+        auto newer = original;
+        WriteUInt32(newer, offset, supported + 1U);
+        Require(WriteBytes(file, newer), "Future version must be written");
+        const auto result = kb::project::ProjectManager::LoadProject(projectFile);
+        Require(!result.succeeded && result.error.find("version " + std::to_string(supported + 1U)) != std::string::npos &&
+            result.error.find("up to version " + std::to_string(supported)) != std::string::npos &&
+            result.error.find("newer engine") != std::string::npos,
+            ("Future project data must give an actionable version diagnostic: " + result.error).c_str());
+        Require(ReadBytes(file) == newer, "Refusing newer project data must not rewrite it");
+        auto zero = original;
+        WriteUInt32(zero, offset, 0U);
+        Require(WriteBytes(file, zero), "Zero version must be written");
+        const auto corrupt = kb::project::ProjectManager::LoadProject(projectFile);
+        Require(!corrupt.succeeded && corrupt.error.find("header is invalid") != std::string::npos,
+            "Version zero must remain a corruption diagnostic");
+        Require(WriteBytes(file, original) && kb::project::ProjectManager::LoadProject(projectFile).succeeded,
+            "Current project data must still load");
+    }
+}
+
 // A file from a newer engine says so, with both versions, and is told apart from a damaged header.
 void RunSceneFromNewerEngineIsExplainedTest() {
     CleanTempRoot();
@@ -1538,6 +1570,24 @@ void RunSceneFromNewerEngineIsExplainedTest() {
         ("a file without the scene magic is a damaged header: " + notAScene.error).c_str());
 
     const kb::scene::SceneDocumentLoadResult restored = rewrite(original);
+    auto newerMeta = originalMeta;
+    const auto metaVersion = kb::scene::SceneAssetMeta::CurrentFileVersion;
+    WriteUInt32(newerMeta, kSceneMagic.size(), metaVersion + 1U);
+    Require(WriteBytes(metaFile, newerMeta), "Future scene metadata must be written");
+    const auto futureMeta = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(!futureMeta.succeeded && futureMeta.error.find("Scene meta version " + std::to_string(metaVersion + 1U)) != std::string::npos &&
+        futureMeta.error.find("up to version " + std::to_string(metaVersion)) != std::string::npos &&
+        futureMeta.error.find("newer engine") != std::string::npos,
+        ("Future scene metadata must explain the required engine: " + futureMeta.error).c_str());
+    Require(ReadBytes(metaFile) == newerMeta && ReadBytes(sceneFile) == original,
+        "Refusing future scene metadata must preserve both files");
+    WriteUInt32(newerMeta, kSceneMagic.size(), 0U);
+    Require(WriteBytes(metaFile, newerMeta), "Invalid scene metadata must be written");
+    const auto corruptMeta = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(!corruptMeta.succeeded && corruptMeta.error.find("header is invalid") != std::string::npos,
+        "Zero scene metadata version must be diagnosed as corruption");
+    Require(WriteBytes(metaFile, originalMeta) && kb::scene::SceneDocumentService::Load(sceneFile).succeeded,
+        "Restored scene metadata must load");
     Require(restored.succeeded && restored.document.fileVersion == kb::scene::SceneDocument::CurrentFileVersion,
         "the untouched scene still loads");
 }
@@ -1775,6 +1825,7 @@ void RunProjectSceneTests() {
     RunIniDocumentRoundTripTest();
     RunIniDocumentToleratesAuthoredTextTest();
     RunProjectDescriptorRoundTripTest();
+    RunProjectFromNewerEngineIsExplainedTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
