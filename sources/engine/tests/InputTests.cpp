@@ -1347,6 +1347,18 @@ void TestInputRecordingRejectsInvalidState() {
     invalid = recording;
     invalid[0].touchPoints = {{.id = 1U}, {.id = 1U}};
     Require(EncodeInputRecording(invalid).empty(), "Duplicate recorded contacts must be rejected");
+    auto reused = recording;
+    reused[0].touchPoints = {{.id = 1U, .phase = InputTouchPhase::Ended},
+        {.id = 1U, .phase = InputTouchPhase::Cancelled}, {.id = 1U, .phase = InputTouchPhase::Began}};
+    const auto reusedLoaded = DecodeInputRecording(EncodeInputRecording(reused));
+    Require(reusedLoaded.succeeded, "An ID reused after terminal events must remain recordable");
+    InputDeviceState reusedDevice;
+    ApplyInputFrame(reusedDevice, reusedLoaded.asset.front());
+    Require(reusedDevice.TouchPoints().size() == 3U && reusedDevice.IsKeyDown(InputKey::TouchDown) &&
+        reusedDevice.TouchPoints()[0].phase == InputTouchPhase::Ended &&
+        reusedDevice.TouchPoints()[1].phase == InputTouchPhase::Cancelled &&
+        reusedDevice.TouchPoints()[2].phase == InputTouchPhase::Began,
+        "Replay must preserve queued terminal samples before the reused active ID");
     invalid = recording;
     invalid[0].textInput = {static_cast<char32_t>(0xD800)};
     Require(EncodeInputRecording(invalid).empty(), "Invalid recorded Unicode must be rejected");

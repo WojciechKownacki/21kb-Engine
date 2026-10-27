@@ -10,10 +10,12 @@ network or asynchronous asset execution.
 
 The `.21kbinputrecording` binary format is versioned. Version 5 preserves touch
 cancellation; versions 3 and 4 remain readable. Unknown versions, trailing or
-truncated data, invalid key kinds or slots, duplicate controls or contacts,
+truncated data, invalid key kinds or slots, duplicate controls or active contacts,
 invalid Unicode and nonfinite coordinates, values or durations fail loading.
 Durations must be nonnegative. Encoding invalid snapshots returns no bytes;
 writing them fails without replacing an existing recording.
+Terminal touch samples followed by reuse of the same ID in one tick retain
+their original order, matching the platform contact collector.
 
 The headless scene runner consumes the same recording API:
 

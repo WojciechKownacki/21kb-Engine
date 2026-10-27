@@ -40,8 +40,10 @@ namespace io = kb::scene::SceneAssetBinaryIO;
         const auto& point = frame.touchPoints[i];
         if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
             point.phase > InputTouchPhase::Cancelled) return false;
+        // A released ID can begin again before the next game frame. Retain
+        // earlier terminal samples in order, but never two active lifetimes.
         for (std::size_t j = 0; j < i; ++j)
-            if (frame.touchPoints[j].id == point.id) return false;
+            if (frame.touchPoints[j].id == point.id && IsTouchActive(frame.touchPoints[j].phase)) return false;
     }
     for (const auto codePoint : frame.textInput)
         if (!IsUnicodeScalar(codePoint)) return false;
