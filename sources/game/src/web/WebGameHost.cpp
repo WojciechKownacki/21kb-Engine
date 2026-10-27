@@ -518,6 +518,8 @@ private:
         static_cast<void>(emscripten_set_mouseup_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_mousemove_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_wheel_callback(kCanvas, this, true, &WebGameHost::OnWheel));
+        static_cast<void>(emscripten_set_pointerlockchange_callback(
+            EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebGameHost::OnPointerLock));
         if (restore) {
             if (!touches_.Resume()) return false;
         } else if (!touches_.Attach(kCanvas, this, &WebGameHost::ResolveInput,
@@ -659,6 +661,24 @@ private:
             : EM_TRUE;
     }
 
+    static EM_BOOL OnPointerLock(int, const EmscriptenPointerlockChangeEvent*, void* userData) {
+        auto* host = static_cast<WebGameHost*>(userData);
+        if (host == nullptr) return EM_FALSE;
+        host->digital_.Clear();
+        host->pointerNeedsBaseline_ = true;
+        if (auto* scene = host->runtime_.Scene()) {
+            auto& state = scene->Input().MutableDeviceState();
+            for (std::size_t i = 0; i < kb::input::InputDeviceState::kKeyCount; ++i) {
+                const auto key = static_cast<kb::input::InputKey>(i);
+                if (kb::input::DeviceKindOf(key) != kb::input::InputDeviceKind::Gamepad)
+                    state.SetKeyDown(key, false);
+            }
+            state.SetAnalog(kb::input::InputKey::MouseX, 0.0F);
+            state.SetAnalog(kb::input::InputKey::MouseY, 0.0F);
+        }
+        return EM_FALSE;
+    }
+
     static EM_BOOL OnMouse(int eventType, const EmscriptenMouseEvent* event, void* userData) {
         auto* host = static_cast<WebGameHost*>(userData);
         kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
@@ -670,12 +690,21 @@ private:
             emscripten_get_element_css_size(kCanvas, &cssWidth, &cssHeight) ==
                 EMSCRIPTEN_RESULT_SUCCESS &&
             cssWidth > 0.0 && cssHeight > 0.0;
-        const float x = static_cast<float>(event->targetX) *
-            (hasCssExtent ? static_cast<float>(host->surface_.Width() / cssWidth) : 1.0F);
-        const float y = static_cast<float>(event->targetY) *
-            (hasCssExtent ? static_cast<float>(host->surface_.Height() / cssHeight) : 1.0F);
-        state.SetAnalog(kb::input::InputKey::MouseX, x - state.PointerX());
-        state.SetAnalog(kb::input::InputKey::MouseY, y - state.PointerY());
+        const float scaleX = hasCssExtent ? static_cast<float>(host->surface_.Width() / cssWidth) : 1.0F;
+        const float scaleY = hasCssExtent ? static_cast<float>(host->surface_.Height() / cssHeight) : 1.0F;
+        EmscriptenPointerlockChangeEvent lock{};
+        const bool locked = emscripten_get_pointerlock_status(&lock) == EMSCRIPTEN_RESULT_SUCCESS && lock.isActive;
+        const float x = locked ? state.PointerX() : static_cast<float>(event->targetX) * scaleX;
+        const float y = locked ? state.PointerY() : static_cast<float>(event->targetY) * scaleY;
+        if (eventType == EMSCRIPTEN_EVENT_MOUSEMOVE) {
+            const float dx = locked ? static_cast<float>(event->movementX) * scaleX :
+                (host->pointerNeedsBaseline_ ? 0.0F : x - state.PointerX());
+            const float dy = locked ? static_cast<float>(event->movementY) * scaleY :
+                (host->pointerNeedsBaseline_ ? 0.0F : y - state.PointerY());
+            state.SetAnalog(kb::input::InputKey::MouseX, state.GetValue(kb::input::InputKey::MouseX) + dx);
+            state.SetAnalog(kb::input::InputKey::MouseY, state.GetValue(kb::input::InputKey::MouseY) + dy);
+            host->pointerNeedsBaseline_ = false;
+        }
         state.SetPointerPosition(x, y);
         host->digital_.SetPointerPosition(x, y);
         if (eventType == EMSCRIPTEN_EVENT_MOUSEDOWN || eventType == EMSCRIPTEN_EVENT_MOUSEUP) {
@@ -725,6 +754,7 @@ private:
         auto* host = static_cast<WebGameHost*>(userData);
         if (host != nullptr && !focused) {
             host->digital_.Clear();
+            host->pointerNeedsBaseline_ = true;
             host->SetTextInputActive(false);
         }
     }
@@ -784,6 +814,7 @@ private:
     bool firstFrameReported_ = false;
     bool frameInProgress_ = false;
     bool textInputActive_ = false;
+    bool pointerNeedsBaseline_ = true;
     bool graphicsContextLost_ = false;
     bool graphicsEventsRegistered_ = false;
     bool graphicsContextRestored_ = false;

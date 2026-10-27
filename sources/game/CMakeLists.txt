@@ -199,6 +199,7 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html"
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebWasmLoader.js\""
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js\""
+        "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js\""
         "-lidbfs.js"
         "-sEXPORTED_RUNTIME_METHODS=requestFullscreen"
         "-sALLOW_MEMORY_GROWTH=1"
@@ -209,7 +210,8 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
     set_property(TARGET ${KB_GAME_WEB_TARGET} APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebWasmLoader.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js")
     if(KB_WEB_RENDERER STREQUAL "WEBGPU")
         target_compile_definitions(${KB_GAME_WEB_TARGET} PRIVATE KB_WEB_RENDERER_WEBGPU=1)
         target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE "--use-port=emdawnwebgpu")

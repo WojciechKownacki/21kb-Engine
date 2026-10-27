@@ -1,5 +1,39 @@
 # Browser input tests
 
+The exported player exposes `Module.kbPresentation` to its embedding page.
+`state()` returns `pointerLock` and `fullscreen` records containing `supported`,
+`active`, `pending` and `error`. `request(mode, enabled)` returns a Promise with
+`{ok, error, active}`. Call requests to enter either mode directly from a click
+or key gesture; requests without activation fail explicitly and are never
+queued until a future click. For example, an embedding page can connect its
+own controls after the player script has loaded:
+
+```js
+playButton.onclick = () => Module.kbPresentation.request('pointerLock', true);
+fullscreenButton.onclick = () => Module.kbPresentation.request('fullscreen', true);
+exitButton.onclick = () => Module.kbPresentation.request('fullscreen', false);
+canvas.addEventListener('kb-presentation-change', event => updateControls(event.detail));
+```
+
+Both modes have independent state and browser permission checks. Escape, tab
+focus loss and graphics context loss release capture. Returning to the tab
+does not silently capture the cursor again; a new gesture is required.
+Browser denials and a bounded five-second request timeout produce errors,
+without stopping gameplay. Sandboxed frames need the browser's pointer-lock
+and fullscreen permissions. Unsupported browsers report `supported: false`.
+The legacy Emscripten `Module.requestFullscreen` is still available; use the
+managed API above for observable asynchronous outcomes and cancellation.
+Locked motion reaches the existing native `Pointer.Delta` API in canvas pixel
+units, summed across events between frames; absolute pointer position stays
+at its entry position. Unlock resets held input and the absolute-motion
+baseline, preventing stuck buttons and an artificial camera jump.
+
+`run_game_presentation_tests.py` accepts the same tool arguments as the other
+packaged runners. It authors and cooks a Lua scene, enters presentation modes
+through trusted browser input, observes relative motion through native Lua,
+and checks denial, explicit exit, Escape, real tab focus loss and recovery.
+GPU captures verify that the scene remains rendered throughout the workflow.
+
 The standalone test builds the production `WebTouchInput` collector and shared
 contact frame into a WebAssembly module with AddressSanitizer and
 UndefinedBehaviorSanitizer. The CLI starts its own headless Chromium profile and
