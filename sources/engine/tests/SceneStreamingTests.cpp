@@ -134,6 +134,7 @@ void RunSceneStreamingTests() {
     auto& manager = scene.Assets().Manager();
     Require(manager.Mounts().Mount("Game", directory) && manager.DiscoverMountedAssets() == 1U,
         "Registered streaming fixture must discover");
+    const auto cacheBaseline = manager.LoadedCount();
     const auto first = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
     const auto second = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
     Require(first != 0U && second != 0U && first != second &&
@@ -146,6 +147,39 @@ void RunSceneStreamingTests() {
     wait(second, SceneLoadStatus::Unknown);
     Require(scene.Entities().Count() == 1U, "Shared streaming instances must release all owned entities");
     const auto registeredId = manager.Registry().FindByPath("/Game/Shared.21kbscene")->id;
+    for (unsigned cycle = 0U; cycle < 16U; ++cycle) {
+        auto retained = manager.Load<SceneDocument>(registeredId);
+        Require(retained.IsLoaded(), "Repeated streaming source must load");
+        const auto weak = manager.WeakHandle<SceneDocument>(registeredId);
+        const auto left = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
+        const auto right = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
+        Require(left != 0U && right != 0U && left != right, "Repeated shared scene loads must start independently");
+        wait(left, SceneLoadStatus::Ready);
+        wait(right, SceneLoadStatus::Ready);
+        Require(manager.AcquireLoaded<SceneDocument>(registeredId).Get() == retained.Get() &&
+            manager.UnloadPolicy(registeredId) == kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced &&
+            manager.LoadedCount() == cacheBaseline + 1U,
+            "Both scene instances must reuse one weakly cached source payload");
+        Require(scene.LoadedContent().UnloadAsync(left), "First shared scene must unload");
+        wait(left, SceneLoadStatus::Unknown);
+        Require(scene.LoadedContent().Exists(right) && scene.Entities().Count() == 515U &&
+            !weak.Expired() && retained->worldPrefab.NodeCount() == 513U,
+            "Unloading one scene must preserve the other instance and external source owner");
+        retained = {};
+        const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while ((!weak.Expired() || manager.LoadedCount() != cacheBaseline) && std::chrono::steady_clock::now() < releaseDeadline) {
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            std::this_thread::yield();
+        }
+        static_cast<void>(manager.PruneUnreferenced());
+        Require(weak.Expired() && manager.LoadedCount() == cacheBaseline && manager.ReferenceCount(registeredId) == 0U,
+            "Retired scene sources must return to the payload baseline after the last external owner releases");
+        Require(scene.LoadedContent().Exists(right) && scene.Entities().Count() == 515U &&
+            scene.LoadedContent().UnloadAsync(right), "A live scene instance must survive releasing its decoded source");
+        wait(right, SceneLoadStatus::Unknown);
+        Require(scene.Entities().Count() == 1U && manager.LoadedCount() == cacheBaseline,
+            "Repeated scene transitions must not accumulate entities or cached payloads");
+    }
     scene.LoadedContent().ConfigureStreaming({.maxPendingLoads = 1U, .maxOperationsPerFrame = 7U, .maxMillisecondsPerFrame = 20.0F});
     const auto cancelledRegistered = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
     Require(cancelledRegistered != 0U && scene.LoadedContent().UnloadAsync(cancelledRegistered),
