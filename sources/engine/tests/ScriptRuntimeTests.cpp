@@ -867,7 +867,7 @@ void RunLuaScriptRuntimeDispatchTest() {
 
 void RunPucLuaScriptRuntimeDispatchTest() {
     kb::script::PucLuaScriptRuntime luaRuntime;
-    kb::tests::Require(!luaRuntime.IsExecutionBudgetEnabled(), "Default PUC Lua execution budget must remain disabled");
+    kb::tests::Require(luaRuntime.IsExecutionBudgetEnabled(), "Default PUC Lua execution must have an instruction limit");
     constexpr kb::assets::AssetId kLuaAsset{3101U};
     const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
 function Tick(self, dt)
@@ -1146,11 +1146,13 @@ struct LuaSafetyHost {
 // the code at the top of a script, which runs while it loads), and the other scripts keep running.
 void RunPucLuaHostileScriptsTest() {
     LuaSafetyHost host;
-    host.luaRuntime.SetExecutionBudgetSettings({
-        .luaInstructionsPerBehaviour = 10000U, .visualGraphStepsPerBehaviour = 1024U, .policy = kb::core::BudgetExceededPolicy::Fail });
+    kb::tests::Require(host.luaRuntime.IsExecutionBudgetEnabled() &&
+        kb::script::ScriptExecutionBudgetSettings{}.luaInstructionsPerBehaviour == 1'000'000U,
+        "A default runtime must bound Lua execution without host configuration");
     constexpr kb::assets::AssetId kProbe{ 3601U };
     constexpr kb::assets::AssetId kForever{ 3602U };
     constexpr kb::assets::AssetId kHealthy{ 3603U };
+    constexpr kb::assets::AssetId kCoroutine{ 3606U };
     kb::tests::Require(host.luaRuntime.LoadScript(kProbe, R"(
 function Tick(self, dt)
     SetShared("sandbox.require", require == nil and 1 or 0)
@@ -1169,6 +1171,11 @@ function Tick(self, dt)
     while true do end
 end
 )", "Forever.lua").succeeded, "The endless loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kCoroutine, R"(
+function Tick(self, dt)
+    coroutine.wrap(function() while true do end end)()
+end
+)", "CoroutineForever.lua").succeeded, "The coroutine loop script did not load");
     kb::tests::Require(host.luaRuntime.LoadScript(kHealthy, R"(
 function Tick(self, dt)
     SetShared("healthy.ticks", (GetShared("healthy.ticks") or 0) + 1)
@@ -1176,12 +1183,16 @@ end
 )", "Healthy.lua").succeeded, "The healthy script did not load");
     host.Attach(kProbe);
     host.Attach(kForever);
+    host.Attach(kCoroutine);
     host.Attach(kHealthy);
     for (int tick = 0; tick < 3; ++tick) {
         const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
-        bool reported = false;
-        for (const auto& diagnostic : result.diagnostics) reported = reported || diagnostic.message.find("execution budget exceeded") != std::string::npos;
-        kb::tests::Require(!result.Succeeded() && reported, "An endless loop must end with an execution budget diagnostic, every tick");
+        std::vector<std::uint64_t> failed;
+        for (const auto& diagnostic : result.diagnostics)
+            if (diagnostic.message.find("execution budget exceeded") != std::string::npos) failed.push_back(diagnostic.assetId.value);
+        std::ranges::sort(failed);
+        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value},
+            "Both direct and coroutine loops must fail with budget diagnostics on every tick");
     }
     kb::tests::Require(host.Shared("healthy.ticks") == 3, "A script that loops forever must not stop the other scripts");
     for (const char* name : { "sandbox.require", "sandbox.package", "sandbox.load", "sandbox.dofile", "sandbox.loadfile", "sandbox.os",
@@ -1193,7 +1204,7 @@ end
     kb::tests::Require(!atLoad.succeeded && atLoad.error.find("execution budget exceeded") != std::string::npos,
         "An endless loop in the code at the top of a script must fail the load with the budget diagnostic");
     const kb::script::PucLuaLoadResult nested = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3605U },
-        "local n = 0 for i = 1, 100000 do n = n + i end", "LoadHeavy.lua");
+        "local n = 0 for i = 1, 10000000 do n = n + i end", "LoadHeavy.lua");
     kb::tests::Require(!nested.succeeded, "Top-level work beyond the instruction budget must fail the load");
 }
 
@@ -1296,7 +1307,8 @@ void RunPucLuaDebuggerDisconnectTest() {
 void RunPucLuaMemoryLimitTest() {
     constexpr std::size_t kLimit = std::size_t{ 16U } << 20U;
     kb::script::PucLuaScriptRuntime luaRuntime;
-    luaRuntime.SetExecutionBudgetSettings({ .luaMemoryBytes = kLimit });
+    // Isolate allocation exhaustion from the independent default instruction cap.
+    luaRuntime.SetExecutionBudgetSettings({ .luaInstructionsPerBehaviour = 0U, .luaMemoryBytes = kLimit });
     constexpr kb::assets::AssetId kHugeString{ 3210U };
     constexpr kb::assets::AssetId kGrowingTable{ 3211U };
     constexpr kb::assets::AssetId kHealthy{ 3212U };

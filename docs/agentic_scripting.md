@@ -36,11 +36,13 @@ Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `
 own save slots (through `Save.*`, with a quota), and the only network access is the `Net.*` API. A
 script cannot start a process.
 
-Limits, per behaviour call: the instruction budget (`luaInstructionsPerBehaviour`; also applied to the
+Limits, per behaviour call: the instruction budget (`luaInstructionsPerBehaviour`, one million by default; also applied to the
 code at the top of a script while it loads, so a loop there fails the load) and a memory cap per Lua
 runtime (256 MiB by default). A script that exceeds a limit fails with a diagnostic naming the limit and
 the script; the shipped hosts then disable that behaviour (`disableFailingBehaviours`), and the other
-scripts keep running. The instruction budget is off until a host sets it; there is no wall-clock limit.
+scripts keep running. Trusted hosts can explicitly disable the instruction cap by setting it to zero.
+The cap also applies to script-created coroutines. It counts Lua instructions, not elapsed time;
+native API calls are not preempted, and there is no wall-clock limit.
 
 **Native C++ scripts and plugins are not sandboxed.** They run inside the game process with all of its
 rights and can do anything the game can. Load them only from projects and mods you trust; the engine
