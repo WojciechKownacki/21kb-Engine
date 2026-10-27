@@ -507,3 +507,12 @@ allocations. The zero-emission fixture isolates instance bookkeeping from
 particle integration; it is not a rendered-scene performance claim. The regular
 suite separately checks shifted particle output, changing seeds and parameters,
 paused leaders and dense-slot compaction.
+
+Both `vfx-profile` and the packaged player's `--particle-diagnostics` report
+CPU capacity, spawn-budget and event-budget rejections, plus their dropped total
+per emitter. These counters describe the last fixed step, not the entire run;
+GPU update rejection records remain separate. `configured_cpu_particle_limit`
+is explicitly labelled as a capacity ceiling, never measured throughput.
+The CLI and cooked-player integration tests fill a two-particle emitter with
+ten births per step and require two live render records and ten rejected births
+once full, independently of the scene's much larger configured ceiling.

@@ -413,6 +413,9 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
     report.Set("scope", JsonValue::MakeString("isolated effect, whole scene update and renderer, 64x64 offscreen target"));
     report.Set("fixed_delta_seconds", JsonValue::MakeNumber(delta));
     report.Set("admission_frames", JsonValue::MakeNumber(1.0));
+    report.Set("configured_cpu_particle_limit", JsonValue::MakeNumber(kb::scene::kParticleEffectMaxCpuParticlesPerScene));
+    report.Set("configured_limit_basis", JsonValue::MakeString("capacity ceiling, not measured throughput"));
+    report.Set("cpu_rejection_scope", JsonValue::MakeString("last fixed step; GPU update rejections are separate"));
     report.Set("warmup_frames", JsonValue::MakeNumber(options.warmup));
     report.Set("measured_frames", JsonValue::MakeNumber(options.frames));
     report.Set("gpu_buffer_budget_bytes", Integer(options.bufferBudget == 0U ? kb::scene::kParticleEffectMaxGpuResourceBytes : options.bufferBudget));
