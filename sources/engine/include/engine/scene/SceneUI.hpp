@@ -10,12 +10,21 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 namespace kb::scene {
 
 class Scene;
+
+// A committed native editor snapshot. The caret counts Unicode scalar values.
+// Composition stays in the platform editor until it is committed.
+struct SceneUITextInputState {
+    SceneEntity entity;
+    std::u32string text;
+    std::size_t caret = 0U;
+};
 
 enum class UIInteractionState : std::uint8_t {
     Normal,
@@ -237,6 +246,9 @@ class SceneUIAccess {
     [[nodiscard]] std::vector<SceneUIEvent> DrainEvents();
     [[nodiscard]] bool SetFocus(SceneEntity entity);
     void ClearFocus() noexcept;
+    [[nodiscard]] std::optional<SceneUITextInputState> TextInputState() const;
+    // Applied during the next UI update using the field's normal validation and events.
+    [[nodiscard]] bool QueueTextInputState(SceneUITextInputState input);
 
   private:
     Scene& scene_;

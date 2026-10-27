@@ -1581,8 +1581,10 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     return false;
 }
 
-[[nodiscard]] bool EditFocusedText(Scene& scene, SceneState& state, const SceneUIInput& input, bool backspaceStarted,
+[[nodiscard]] bool EditFocusedText(Scene& scene, SceneState& state, SceneUIInput input, bool backspaceStarted,
                                    bool deleteStarted, bool moveLeft, bool moveRight) {
+    auto nativeEdit = std::move(state.uiPendingTextInput);
+    state.uiPendingTextInput.reset();
     if (!state.uiFocused.IsValid())
         return false;
     SceneUIComponents ui = scene.Components().UI();
@@ -1602,6 +1604,18 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     if (field->readOnly)
         return false;
 
+    const std::string original = nativeEdit ? buffer : std::string{};
+    const std::size_t originalCaret = state.uiTextCursorByteOffset;
+    if (nativeEdit && nativeEdit->entity != state.uiFocused) nativeEdit.reset();
+    if (nativeEdit) {
+        buffer.clear();
+        state.uiTextCursorByteOffset = 0U;
+        input.textInput = nativeEdit->text;
+        backspaceStarted = false;
+        deleteStarted = false;
+    }
+    std::size_t nativeCaret = 0U;
+    std::size_t nativeIndex = 0U;
     bool changed = false;
     bool sawBackspace = false;
     bool sawDelete = false;
@@ -1621,6 +1635,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         changed = true;
     };
     for (const char32_t codePoint : input.textInput) {
+        if (nativeEdit && nativeIndex++ == nativeEdit->caret) nativeCaret = buffer.size();
         if (codePoint == U'\b') {
             sawBackspace = true;
             eraseBack();
@@ -1658,6 +1673,13 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         eraseBack();
     if (deleteStarted && !sawDelete)
         eraseForward();
+    if (nativeEdit) {
+        if (nativeEdit->caret == nativeEdit->text.size()) nativeCaret = buffer.size();
+        state.uiTextCursorByteOffset = SnapToUITextGraphemeBoundary(buffer, nativeCaret);
+        changed = buffer != original;
+    }
+    if (!changed && nativeEdit)
+        return originalCaret != state.uiTextCursorByteOffset;
     if (!changed)
         return false;
     if (!SetUITextContent(*text, buffer))
@@ -1901,6 +1923,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     const SceneUIFrameElement* target = Find(state.uiFrame, entity);
     if (target == nullptr || !target->interactionEnabled)
         return false;
+    state.uiPendingTextInput.reset();
     if (state.uiFocused.IsValid())
         Queue(state, scene, SceneUIEventType::Blurred, state.uiFocused);
     state.uiFocused = entity;
@@ -1915,6 +1938,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
 }
 
 void ClearUIFocus(Scene& scene, SceneState& state) noexcept {
+    state.uiPendingTextInput.reset();
     if (state.uiFocused.IsValid())
         Queue(state, scene, SceneUIEventType::Blurred, state.uiFocused);
     state.uiFocused = {};
@@ -2656,6 +2680,31 @@ bool SceneUIAccess::SetFocus(SceneEntity entity) {
 }
 void SceneUIAccess::ClearFocus() noexcept {
     ClearUIFocus(scene_, SceneAccess::State(scene_));
+}
+
+std::optional<SceneUITextInputState> SceneUIAccess::TextInputState() const {
+    const SceneState& state = SceneAccess::State(scene_);
+    if (!HasFocusedTextInput()) return std::nullopt;
+    const auto* field = scene_.Components().UI().TryGet<UIInputField>(state.uiFocused);
+    const auto* text = scene_.Components().UI().TryGet<UIText>(state.uiFocused);
+    if (field == nullptr || field->readOnly || text == nullptr) return std::nullopt;
+    const auto content = UITextContent(*text);
+    std::array<char32_t, UIText::MaxUtf8Bytes> decoded{};
+    const auto result = kb::input::DecodeUtf8(content, decoded);
+    if (!result.wellFormed || result.truncated) return std::nullopt;
+    SceneUITextInputState output{state.uiFocused, {decoded.data(), result.codePointCount}, 0U};
+    const auto prefix = kb::input::DecodeUtf8(content.substr(0U, std::min(state.uiTextCursorByteOffset, content.size())), decoded);
+    output.caret = prefix.codePointCount;
+    return output;
+}
+
+bool SceneUIAccess::QueueTextInputState(SceneUITextInputState input) {
+    if (!HasFocusedTextInput() || input.entity != Focused() || input.text.size() >= UIText::MaxUtf8Bytes ||
+        input.caret > input.text.size()) return false;
+    for (const char32_t value : input.text)
+        if (!kb::input::IsUnicodeScalar(value) || value == U'\b' || value == 0x7FU) return false;
+    SceneAccess::State(scene_).uiPendingTextInput = std::move(input);
+    return true;
 }
 
 bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& sourceInput, float deltaSeconds) {

@@ -590,6 +590,59 @@ void TestClippingGroupsSortingAndScaling() {
         FindElement(scene.UI().Frame(), upper.Entity())->traversalOrder, "Sibling traversal order must remain authored hierarchy order");
 }
 
+void TestNativeTextSnapshots() {
+    using namespace kb::scene;
+    Scene scene{SceneMode::PrefabPrivate};
+    const SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    auto components = BuildUIComponentPreset(UIComponentPreset::InputField);
+    components.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const auto field = AddUI(scene, canvas, components);
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && scene.UI().SetFocus(field.Entity()),
+        "Native text fixture must focus its field");
+    const auto edit = [&](std::u32string text, std::size_t caret) {
+        static_cast<void>(scene.UI().DrainEvents());
+        kb::tests::Require(scene.UI().QueueTextInputState({field.Entity(), std::move(text), caret}),
+            "A committed native snapshot must be accepted");
+        kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F), "Native snapshot update must succeed");
+        return scene.UI().TextInputState();
+    };
+    auto result = edit(U"A\U0001F600\u017c", 2U);
+    kb::tests::Require(result && result->text == U"A\U0001F600\u017c" && result->caret == 2U,
+        "Native Unicode snapshots must preserve supplementary scalars and caret");
+    kb::tests::Require(std::ranges::count_if(scene.UI().Events(), [](const auto& event) { return event.type == SceneUIEventType::Changed; }) == 1,
+        "A changed native snapshot must emit exactly one change event");
+    result = edit(U"A\U0001F600\u017c", 1U);
+    kb::tests::Require(result && result->caret == 1U, "A selection-only snapshot must update the caret");
+    kb::tests::Require(std::ranges::none_of(scene.UI().Events(), [](const auto& event) { return event.type == SceneUIEventType::Changed; }),
+        "Selection-only snapshots must not emit text changes");
+    result = edit(std::u32string(200U, U'x'), 100U);
+    kb::tests::Require(result && result->text.size() == 200U && result->caret == 100U,
+        "Native paste must not be truncated to a frame's character-event capacity");
+    result = edit(U"", 0U);
+    kb::tests::Require(result && result->text.empty(), "An empty snapshot must delete all content");
+    auto* input = scene.Components().UI().TryGet<UIInputField>(field.Entity());
+    input->characterLimit = 3U;
+    result = edit(U"a\u0301bcdef", 7U);
+    kb::tests::Require(result && result->text == U"a\u0301bc" && result->caret == 4U,
+        "Native edits must use the field's grapheme limit");
+    input->contentType = UIInputContentType::IntegerNumber;
+    result = edit(U"12x34", 3U);
+    kb::tests::Require(result && result->text == U"123" && result->caret == 2U,
+        "Native snapshots must validate content and map the caret past rejected characters");
+    kb::tests::Require(!scene.UI().QueueTextInputState({field.Entity(), {char32_t{0xD800U}}, 1U}) &&
+        !scene.UI().QueueTextInputState({field.Entity(), U"a", 2U}), "Malformed snapshots must be rejected");
+    kb::tests::Require(scene.UI().QueueTextInputState({field.Entity(), U"9", 1U}), "Queue blur fixture");
+    scene.UI().ClearFocus();
+    kb::tests::Require(scene.UI().SetFocus(field.Entity()), "Refocus blur fixture");
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && scene.UI().TextInputState()->text == U"123",
+        "A snapshot queued before blur must not edit a later focus session");
+    kb::tests::Require(scene.UI().QueueTextInputState({field.Entity(), U"9", 1U}), "Queue read-only fixture");
+    input->readOnly = true;
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && !scene.UI().TextInputState() &&
+        UITextContent(*scene.Components().UI().TryGet<UIText>(field.Entity())) == "123",
+        "Becoming read-only must discard a pending native edit and hide the editable snapshot");
+}
+
 // Editing text by the characters a player sees: an accent typed after a letter joins it, Backspace and Delete remove a
 // whole letter with its accents or a whole emoji with its skin tone or family, the arrow keys step over it, and the
 // character limit counts them, not code points or bytes.
@@ -2417,6 +2470,7 @@ void RunSceneUITests() {
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
     TestInputFieldEditsGraphemeClusters();
+    TestNativeTextSnapshots();
     TestResponsiveMenuKeepsEveryControlReachable();
     TestNestedMasksClipToTheirOverlap();
     TestSafeAreaMatrixKeepsCornerControlsReachable();

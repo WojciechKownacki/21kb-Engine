@@ -1,4 +1,5 @@
 #include "AndroidTouchInput.hpp"
+#include "AndroidTextInput.hpp"
 
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
@@ -24,6 +25,31 @@ GameActivityMotionEvent Down(int id = 7) {
 } // namespace
 
 void VerifyAndroidTouchInput() {
+    {
+        kb::game::AndroidCommittedTextContext context;
+        GameTextInputState state{.text_UTF8 = "", .text_length = 0,
+            .selection = {.start = 0, .end = 0},
+            .composingRegion = {.start = SPAN_UNDEFINED, .end = SPAN_UNDEFINED}};
+        kb::game::ReadAndroidCommittedText(&context, &state);
+        Require(context.valid && context.count == 0U, "An empty committed snapshot must delete the field contents");
+        context = {}; state.text_UTF8 = "A"; state.text_length = 1; state.selection.end = 1;
+        kb::game::ReadAndroidCommittedText(&context, &state);
+        Require(context.valid && context.count == 1U && context.text[0] == U'A' && context.caret == 1U,
+            "Committed snapshots must preserve text and caret without restarting the connection");
+        context = {}; state.composingRegion = {.start = 0, .end = 1};
+        kb::game::ReadAndroidCommittedText(&context, &state);
+        Require(!context.valid, "Composing text must stay in the IME");
+        state.composingRegion = {.start = SPAN_UNDEFINED, .end = SPAN_UNDEFINED};
+        for (const std::string_view encoded : {std::string_view{"\xF0\x9F\x98\x80"},
+                 std::string_view{"\xED\xA0\xBD\xED\xB8\x80"}}) {
+            context = {};
+            state.text_UTF8 = encoded.data(); state.text_length = static_cast<int>(encoded.size());
+            state.selection.end = 2;
+            kb::game::ReadAndroidCommittedText(&context, &state);
+            Require(context.valid && context.count == 1U && context.text[0] == 0x1F600U && context.caret == 1U,
+                "Both UTF-8 encodings must preserve supplementary characters and UTF-16 caret offsets");
+        }
+    }
     using kb::input::InputTouchPhase;
     kb::game::AndroidTouchInput input;
     kb::input::InputDeviceState state;

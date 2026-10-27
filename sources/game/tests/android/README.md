@@ -26,6 +26,15 @@ checks without registering controllers. Its report explicitly marks controllers
 as untested; it does not count as a controller-suite pass. All adb commands use the
 explicit `--serial` device, including installation and cleanup.
 
+Use `--ime-only` for the software keyboard scenario on an unlocked host with an
+installed IME. This mode uses a visible, focusable activity, opens the OS keyboard,
+and sends commits, composition, selection edits and editor actions through its
+real InputConnection. OS Back is injected into that test activity. Native checks
+cover Unicode prefill, deferred composition, repeated commits, one submit/cancel,
+reopening, long paste and deletion. The runner restores the original stay-awake
+setting and returns an originally sleeping host to sleep, including after failure.
+It does not register controllers or verify the full packaged renderer.
+
 The test checks independent sticks, triggers, buttons and hats, hardware flat
 regions, finite/range conversion, focus suppression, disconnection with held
 inputs, slot isolation, reconnection with a new device ID, and native shutdown.

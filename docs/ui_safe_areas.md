@@ -11,7 +11,9 @@ with the canvas rectangle, then converts CSS pixels to backbuffer pixels. An emb
 canvas already outside a cutout does not receive that inset twice. The supplied shell
 uses `viewport-fit=cover`. A floating keyboard is not represented by rectangular insets.
 
-The Android window uses edge-to-edge rendering and an overlay IME. Before layout,
+The Android window uses edge-to-edge rendering and requests resize-compatible
+IME inset reporting, including on older Android versions. The edge-to-edge surface
+remains full-size while its safe area excludes the keyboard. Before layout,
 the native host reads GameActivity's system-bar, display-cutout, mandatory-gesture,
 IME and waterfall insets, taking the maximum on each edge. This avoids adding
 overlapping system regions. Insets update after orientation and surface changes.
@@ -36,4 +38,5 @@ authors corner controls through the normal commands and checks their runtime hit
 browser output, cutouts, an overlay keyboard, embedded canvases and portrait DPI changes.
 The Android integration APK compares the production native insets with actual window
 insets in both orientations and after surface recreation; its transparent test window
-does not exercise a real IME or the full packaged renderer.
+does not exercise a real IME or the full packaged renderer. Its separate `--ime-only`
+mode opens a real keyboard and records surface, decor, visible-frame and IME geometry.

@@ -31,6 +31,25 @@ public final class ControllerActivity extends GameActivity {
     public int touchWidth() { return mSurfaceView.getWidth(); }
     public int touchHeight() { return mSurfaceView.getHeight(); }
 
+    public android.view.inputmethod.InputConnection textConnection() {
+        return mSurfaceView.onCreateInputConnection(new android.view.inputmethod.EditorInfo());
+    }
+
+    public boolean keyboardVisible() {
+        WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(mSurfaceView);
+        return insets != null && insets.isVisible(WindowInsetsCompat.Type.ime());
+    }
+
+    public String imeGeometry() {
+        WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(mSurfaceView);
+        android.graphics.Rect visible = new android.graphics.Rect();
+        mSurfaceView.getWindowVisibleDisplayFrame(visible);
+        return "surface=" + touchWidth() + "x" + touchHeight() + " decor=" +
+            getWindow().getDecorView().getWidth() + "x" + getWindow().getDecorView().getHeight() +
+            " ime=" + (insets == null ? "missing" : insets.getInsets(WindowInsetsCompat.Type.ime()).toString()) +
+            " visible=" + visible;
+    }
+
     public int[] safeArea() {
         WindowInsetsCompat windowInsets = ViewCompat.getRootWindowInsets(mSurfaceView);
         if (windowInsets == null) return null;
@@ -49,11 +68,13 @@ public final class ControllerActivity extends GameActivity {
     }
 
     @Override protected void onCreate(Bundle state) {
-        WindowManager.LayoutParams attributes = getWindow().getAttributes();
-        attributes.alpha = 0.0f;
-        getWindow().setAttributes(attributes);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+        if (!getIntent().getBooleanExtra("ime", false)) {
+            WindowManager.LayoutParams attributes = getWindow().getAttributes();
+            attributes.alpha = 0.0f;
+            getWindow().setAttributes(attributes);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+        }
         super.onCreate(state);
         WindowLayout.configure(this);
     }

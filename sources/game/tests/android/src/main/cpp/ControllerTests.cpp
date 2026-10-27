@@ -1,6 +1,7 @@
 #include "AndroidGamepadInput.hpp"
 #include "AndroidTouchInput.hpp"
 #include "AndroidWindowInsets.hpp"
+#include "AndroidTextInput.hpp"
 
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
@@ -12,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 void VerifyAndroidTouchInput();
 
@@ -30,6 +32,9 @@ struct Observation {
     unsigned keys = 0U;
     bool ready = false;
     bool stopped = false;
+    std::u32string text;
+    unsigned submits = 0U;
+    std::string imeDiagnostic;
     std::array<unsigned, PADDLEBOAT_MAX_CONTROLLERS> statuses{};
 };
 std::mutex observationMutex;
@@ -40,9 +45,16 @@ std::atomic<unsigned> surfaces{0U}, lostSurfaces{0U}, resizedSurfaces{0U};
 std::atomic<bool> holdMotion{false}, finishTouchFrame{false};
 std::atomic<unsigned> touchEvents{0U};
 std::atomic<bool> touchBoundaries{false};
+std::atomic<int> imeRequest{-1};
+std::atomic<unsigned> imeDismissals{0U};
 struct PlatformInput {
     kb::game::AndroidGamepadInput controllers;
     kb::game::AndroidTouchInput touches;
+    kb::game::DigitalInputFrame digital;
+    InputDeviceState textState;
+    bool imeRequested = false;
+    bool imeWasVisible = false;
+    bool imeInitialized = false;
 };
 
 void Require(bool value, const char* message) {
@@ -107,6 +119,26 @@ bool Connected(int slot) {
     return slot >= 0 && observation.state.IsGamepadConnected(static_cast<std::uint8_t>(slot));
 }
 } // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_requestIme(JNIEnv*, jclass, jboolean shown) {
+    imeRequest.store(shown ? 1 : 0);
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_imeState(JNIEnv* env, jclass) {
+    const std::lock_guard lock{observationMutex};
+    std::vector<jint> values{static_cast<jint>(observation.submits)};
+    for (const auto value : observation.text) values.push_back(static_cast<jint>(value));
+    auto result = env->NewIntArray(static_cast<jsize>(values.size()));
+    if (result != nullptr) env->SetIntArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());
+    return result;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_imeDismissalCount(JNIEnv*, jclass) {
+    return static_cast<jint>(imeDismissals.load());
+}
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_kbengine_controllertests_ControllerInstrumentation_check(JNIEnv*, jclass, jint phase, jint first, jint second) {
@@ -213,6 +245,7 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_diagnostics(JNIEnv* 
          << " resized-surfaces=" << resizedSurfaces.load() << " viewport=" << observation.state.PointerViewportWidth()
          << 'x' << observation.state.PointerViewportHeight() << " touches=" << observation.state.TouchPoints().size()
          << " touch-events=" << touchEvents.load() << " touch-boundaries=" << touchBoundaries.load()
+         << " ime=" << observation.imeDiagnostic
          << " safe-area=" << observation.safeArea.left << ',' << observation.safeArea.top << ','
          << observation.safeArea.right << ',' << observation.safeArea.bottom
          << " error=" << observation.error << " statuses=";
@@ -251,6 +284,15 @@ extern "C" void android_main(android_app* app) {
         app->onAppCmd = [](android_app* host, int32_t command) {
             auto& inputs = *static_cast<PlatformInput*>(host->userData);
             inputs.touches.HandleAppCommand(command);
+            if (command == APP_CMD_SOFTWARE_KB_VIS_CHANGED &&
+                kb::game::QueueAndroidImeDismissal(host->softwareKeyboardVisible, inputs.imeRequested,
+                    inputs.imeWasVisible, inputs.textState, inputs.digital)) {
+                ++imeDismissals;
+                inputs.imeRequested = false;
+            }
+            if (command == APP_CMD_EDITOR_ACTION) {
+                static_cast<void>(kb::game::QueueAndroidEditorAction(host->editorAction, inputs.textState, inputs.digital));
+            }
             auto& input = inputs.controllers;
             if (command == APP_CMD_START) { ++starts; input.OnStart(); }
             if (command == APP_CMD_STOP) { ++stops; input.OnStop(); }
@@ -261,11 +303,44 @@ extern "C" void android_main(android_app* app) {
         android_app_set_key_event_filter(app, nullptr);
         android_app_set_motion_event_filter(app, nullptr);
         unsigned motions = 0, motionsSeen = 0, keys = 0;
+        bool submittedBefore = false;
         while (app->destroyRequested == 0) {
             android_poll_source* source = nullptr;
             static_cast<void>(ALooper_pollOnce(10, nullptr, nullptr, reinterpret_cast<void**>(&source)));
             if (source != nullptr) source->process(app, source);
             if (app->destroyRequested != 0) break;
+            const int requested = imeRequest.exchange(-1);
+            if (requested >= 0) {
+                platform.imeRequested = requested != 0;
+                if (requested != 0 && !platform.imeInitialized) {
+                    constexpr std::u32string_view initial = U"Start \U0001F600 ";
+                    kb::game::SetAndroidTextInputState(app->activity, initial, initial.size());
+                    platform.imeInitialized = true;
+                }
+                if (requested != 0) GameActivity_showSoftInput(app->activity, GAMEACTIVITY_SHOW_SOFT_INPUT_IMPLICIT);
+                else GameActivity_hideSoftInput(app->activity, GAMEACTIVITY_HIDE_SOFT_INPUT_NOT_ALWAYS);
+            }
+            platform.textState.ClearTextInput();
+            if (app->textInputState != 0) {
+                kb::game::AndroidCommittedTextContext context;
+                GameActivity_getTextInputState(app->activity, [](void* raw, const GameTextInputState* text) {
+                    kb::game::ReadAndroidCommittedText(raw, text);
+                    if (text != nullptr && text->text_length > 0) {
+                        std::ostringstream detail;
+                        detail << "bytes=" << text->text_length << ",composition=" << text->composingRegion.start << ':' << text->composingRegion.end;
+                        for (int i = 0; i < text->text_length && i < 40; ++i)
+                            detail << ',' << static_cast<unsigned>(static_cast<unsigned char>(text->text_UTF8[i]));
+                        const std::lock_guard lock{observationMutex};
+                        observation.imeDiagnostic = detail.str();
+                    }
+                }, &context);
+                app->textInputState = 0;
+                if (context.valid) {
+                    const std::lock_guard lock{observationMutex};
+                    observation.text.assign(context.text.data(), context.count);
+                }
+            }
+            platform.digital.Publish(platform.textState);
             controllers.Update();
             const auto width = app->window == nullptr ? 0U : static_cast<unsigned>(ANativeWindow_getWidth(app->window));
             const auto height = app->window == nullptr ? 0U : static_cast<unsigned>(ANativeWindow_getHeight(app->window));
@@ -289,6 +364,9 @@ extern "C" void android_main(android_app* app) {
                 android_app_clear_key_events(events);
             }
             const std::lock_guard lock{observationMutex};
+            const bool submitted = platform.textState.IsKeyDown(InputKey::Enter);
+            if (submitted && !submittedBefore) ++observation.submits;
+            submittedBefore = submitted;
             observation.safeArea = kb::game::ReadAndroidWindowInsets(*app->activity);
             controllers.Publish(observation.state, focused.load());
             platform.touches.Publish(observation.state);

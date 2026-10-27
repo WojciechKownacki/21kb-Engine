@@ -5,6 +5,7 @@
 #include "GameRuntimeDiagnostics.hpp"
 #include "AndroidGamepadInput.hpp"
 #include "AndroidTouchInput.hpp"
+#include "AndroidTextInput.hpp"
 #include "AndroidWindowInsets.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
@@ -78,51 +79,6 @@ void LogInfo(std::string_view message) noexcept {
         "%.*s",
         static_cast<int>(length),
         message.empty() ? "" : message.data());
-}
-
-struct AndroidCommittedTextContext {
-    kb::input::InputDeviceState* input = nullptr;
-    bool resetState = false;
-};
-
-void AppendAndroidCommittedText(
-    void* rawContext,
-    const GameTextInputState* textState) noexcept {
-    auto* context = static_cast<AndroidCommittedTextContext*>(rawContext);
-    if (context == nullptr || context->input == nullptr || textState == nullptr ||
-        textState->text_length < 0 || textState->text_length > 65'536 ||
-        (textState->text_length > 0 && textState->text_UTF8 == nullptr)) {
-        return;
-    }
-    if (textState->composingRegion.start != SPAN_UNDEFINED ||
-        textState->composingRegion.end != SPAN_UNDEFINED) {
-        return;
-    }
-
-    std::array<char32_t, kb::input::InputDeviceState::kMaxTextInputCodePoints> decoded{};
-    const kb::input::Utf8DecodeResult result = kb::input::DecodeModifiedUtf8(
-        std::string_view{textState->text_UTF8 == nullptr ? "" : textState->text_UTF8,
-            static_cast<std::size_t>(textState->text_length)},
-        decoded);
-    if (!result.wellFormed) return;
-    static_cast<void>(context->input->AddTextInput(
-        std::span<const char32_t>{decoded.data(), result.codePointCount}));
-    context->resetState = true;
-}
-
-void ResetAndroidTextInputState(GameActivity* activity) noexcept {
-    if (activity == nullptr) return;
-    constexpr char emptyText[] = "";
-    const GameTextInputState empty{
-        .text_UTF8 = emptyText,
-        .text_length = 0,
-        .selection = {.start = 0, .end = 0},
-        .composingRegion = {
-            .start = SPAN_UNDEFINED,
-            .end = SPAN_UNDEFINED,
-        },
-    };
-    GameActivity_setTextInputState(activity, &empty);
 }
 
 // The trust anchor packaging stores beside the pack inside the signed APK. A development APK
@@ -492,6 +448,18 @@ private:
     void HandleAppCommand(int32_t command) noexcept {
         touches_.HandleAppCommand(command);
         switch (command) {
+        case APP_CMD_SOFTWARE_KB_VIS_CHANGED:
+            if (scene_ != nullptr) {
+                imeDismissed_ = kb::game::QueueAndroidImeDismissal(app_.softwareKeyboardVisible,
+                    imeVisibleRequested_, imeWasVisible_, scene_->Input().MutableDeviceState(), digital_) || imeDismissed_;
+            }
+            break;
+        case APP_CMD_EDITOR_ACTION:
+            if (scene_ != nullptr && focused_ && scene_->UI().HasFocusedTextInput()) {
+                static_cast<void>(kb::game::QueueAndroidEditorAction(app_.editorAction,
+                    scene_->Input().MutableDeviceState(), digital_));
+            }
+            break;
         case APP_CMD_INIT_WINDOW:
         case APP_CMD_WINDOW_RESIZED:
         case APP_CMD_CONTENT_RECT_CHANGED:
@@ -580,21 +548,25 @@ private:
                 state->Reset();
                 state->SetHasFocus(false);
                 touches_.Cancel();
+                digital_.Clear();
             }
         }
         if (app_.textInputState != 0) {
-            AndroidCommittedTextContext context{
-                .input = state != nullptr && focused_ ? state : nullptr};
+            kb::game::AndroidCommittedTextContext context;
             GameActivity_getTextInputState(
-                app_.activity, &AppendAndroidCommittedText, &context);
+                app_.activity, &kb::game::ReadAndroidCommittedText, &context);
             app_.textInputState = 0;
-            if (context.resetState) ResetAndroidTextInputState(app_.activity);
+            if (context.valid && scene_ != nullptr && focused_ && imeVisibleRequested_) {
+                static_cast<void>(scene_->UI().QueueTextInputState({imeField_,
+                    {context.text.data(), context.count}, context.caret}));
+            }
         }
         android_input_buffer* const input = android_app_swap_input_buffers(&app_);
         if (input == nullptr) {
             if (state != nullptr) {
                 gamepads_.Publish(*state, focused_);
                 touches_.Publish(*state);
+                if (CanRender()) digital_.Publish(*state);
             }
             return;
         }
@@ -608,7 +580,7 @@ private:
                 if (key != kb::input::InputKey::None &&
                     kb::input::DeviceKindOf(key) != kb::input::InputDeviceKind::Gamepad &&
                     (event.action == AKEY_EVENT_ACTION_DOWN || event.action == AKEY_EVENT_ACTION_UP)) {
-                    state->SetKeyDown(key, event.action == AKEY_EVENT_ACTION_DOWN);
+                    static_cast<void>(digital_.Queue(*state, key, event.action == AKEY_EVENT_ACTION_DOWN));
                 }
             }
             for (std::uint64_t index = 0U; index < input->motionEventsCount; ++index) {
@@ -619,7 +591,10 @@ private:
             }
             gamepads_.Publish(*state, focused_);
         }
-        if (state != nullptr) touches_.Publish(*state);
+        if (state != nullptr) {
+            touches_.Publish(*state);
+            if (CanRender()) digital_.Publish(*state);
+        }
         android_app_clear_motion_events(input);
         android_app_clear_key_events(input);
     }
@@ -637,14 +612,19 @@ private:
     }
 
     void SetImeVisible(bool visible) noexcept {
-        if (imeVisibleRequested_ == visible || app_.activity == nullptr) return;
+        if (app_.activity == nullptr) return;
+        const auto field = visible && scene_ != nullptr ? scene_->UI().TextInputState() : std::nullopt;
+        visible = field.has_value();
+        if (imeVisibleRequested_ == visible && (!visible || imeField_ == field->entity)) return;
         imeVisibleRequested_ = visible;
-        ResetAndroidTextInputState(app_.activity);
         app_.textInputState = 0;
         if (visible) {
+            imeField_ = field->entity;
+            kb::game::SetAndroidTextInputState(app_.activity, field->text, field->caret);
             GameActivity_showSoftInput(
                 app_.activity, GAMEACTIVITY_SHOW_SOFT_INPUT_IMPLICIT);
         } else {
+            imeField_ = {};
             GameActivity_hideSoftInput(
                 app_.activity, GAMEACTIVITY_HIDE_SOFT_INPUT_NOT_ALWAYS);
         }
@@ -667,6 +647,11 @@ private:
             static_cast<float>(surface_.Height())));
         renderSceneSync_.BeforeUpdate(*scene_);
         static_cast<void>(scene_->Runtime().Update(deltaSeconds));
+        if (imeDismissed_) {
+            if (scene_->UI().Focused() == imeField_) scene_->UI().ClearFocus();
+            imeDismissed_ = false;
+            SetImeVisible(false);
+        }
         for (const std::string& error : kb::game::DrainGameRuntimeErrors(*scene_, scriptModule_)) {
             LogError(error);
             failed_ = true;
@@ -770,6 +755,7 @@ private:
     android_app& app_;
     kb::game::AndroidGamepadInput gamepads_;
     kb::game::AndroidTouchInput touches_;
+    kb::game::DigitalInputFrame digital_;
     AndroidAssetMapping packMapping_;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
     std::shared_ptr<kb::render::RuntimeAssetShaderProvider> shaderProvider_;
@@ -790,6 +776,9 @@ private:
     bool scriptShutdownDispatched_ = false;
     bool firstFrameReported_ = false;
     bool imeVisibleRequested_ = false;
+    bool imeWasVisible_ = false;
+    bool imeDismissed_ = false;
+    kb::scene::SceneEntity imeField_{};
     std::chrono::steady_clock::time_point previousTick_{};
 };
 

@@ -1,4 +1,4 @@
-"""Run the real Android controller adapter through a windowless GameActivity test APK.
+"""Run the Android input adapters through a GameActivity test APK.
 
 Requires an authorized Android host with the standard shell uinput test tool.
 Virtual devices are registered without injecting input into other applications.
@@ -24,7 +24,9 @@ def main() -> None:
     parser.add_argument("--serial", required=True)
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--touch-only", action="store_true", help="Exercise touch and surface lifecycle without requiring shell uinput")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--ime-only", action="store_true", help="Exercise the visible software keyboard and native text bridge")
+    scope.add_argument("--touch-only", action="store_true", help="Exercise touch and surface lifecycle without requiring shell uinput")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
@@ -70,6 +72,9 @@ def main() -> None:
             process.wait(timeout=5)
         log.close()
 
+    input_only = args.touch_only or args.ime_only
+    original_stay_awake = None
+    originally_asleep = False
     devices = {}
     instrumentation = None
     output = []
@@ -78,15 +83,24 @@ def main() -> None:
                   host="Android with OS virtual controllers", gameActivity="4.4.2", controller="2.0.2")
     if args.touch_only:
         report.update(host="Android touch host", scope="touch-only", controllers="not tested")
+    if args.ime_only:
+        report.update(host="Android software keyboard host", scope="ime-only", controllers="not tested",
+                      renderer="not tested")
     try:
-        installed = command("install", "-r", "-t", str(args.apk.resolve()))
+        original_stay_awake = command("shell", "settings", "get", "global", "stay_on_while_plugged_in").strip()
+        power = command("shell", "dumpsys", "power")
+        originally_asleep = "mWakefulness=Asleep" in power or "mWakefulness=Dozing" in power
+        command("shell", "input", "keyevent", "KEYCODE_WAKEUP")
+        command("shell", "wm", "dismiss-keyguard")
+        command("shell", "svc", "power", "stayon", "usb")
+        installed = command("install", "--no-streaming", "-r", "-t", str(args.apk.resolve()))
         if "Success" not in installed:
             raise RuntimeError("Test APK installation did not succeed")
-        for label in ([] if args.touch_only else ["A", "B"]):
+        for label in ([] if input_only else ["A", "B"]):
             devices[label] = register(label)
         until = time.monotonic() + 15
         while True:
-            if args.touch_only:
+            if input_only:
                 break
             if any(device[0].poll() is not None for device in devices.values()):
                 raise RuntimeError("OS uinput fixture process exited; inspect uinput logs")
@@ -97,7 +111,7 @@ def main() -> None:
                 raise RuntimeError("OS controller registration failed; inspect uinput logs")
             time.sleep(0.1)
         instrumentation = subprocess.Popen(adb + ["shell", "am", "instrument", "-w", "-r"] +
-            (["-e", "touchOnly", "true"] if args.touch_only else []) + [
+            (["-e", "imeOnly" if args.ime_only else "touchOnly", "true"] if input_only else []) + [
             PACKAGE + "/.ControllerInstrumentation"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", creationflags=HIDDEN)
         lines: queue.Queue[str | None] = queue.Queue()
@@ -130,11 +144,13 @@ def main() -> None:
         (args.output / "instrumentation.log").write_text(text, encoding="utf-8")
         instrumentation.wait(timeout=10)
         if (instrumentation.returncode != 0 or "INSTRUMENTATION_RESULT: result=PASS" not in text or
-                "INSTRUMENTATION_RESULT: touch=PASS" not in text or
+                (not args.ime_only and "INSTRUMENTATION_RESULT: touch=PASS" not in text) or
                 "INSTRUMENTATION_CODE: -1" not in text):
             raise RuntimeError("Native GameActivity controller assertions failed")
         if args.touch_only and "INSTRUMENTATION_RESULT: scope=touch-only" not in text:
             raise RuntimeError("The APK did not acknowledge touch-only scope")
+        if args.ime_only and "INSTRUMENTATION_RESULT: scope=ime-only" not in text:
+            raise RuntimeError("The APK did not acknowledge IME-only scope")
         report.update(result="PASS", evidence="instrumentation.log", checks=[
             "real GameActivity key/motion queue and Paddleboat consumption",
             "two OS device IDs with independent six-axis values and buttons",
@@ -144,6 +160,13 @@ def main() -> None:
             "synthetic ACTION_CANCEL, focus cancellation, actual orientation resize and surface destruction/recreation"])
         if args.touch_only:
             report["checks"] = report["checks"][-2:]
+        if args.ime_only:
+            report["checks"] = [
+                "visible OS keyboard, prefilled Unicode and JNI/native text snapshots",
+                "composition remains uncommitted, repeated identical commits are retained",
+                "editor action submits once and OS Back reaches native cancellation once",
+                "keyboard reopens, selection replacement and deletion preserve surrounding text",
+                "paste beyond 64 scalars and deletion to an empty snapshot"]
     except Exception as error:
         report["error"] = str(error)
         raise
@@ -166,6 +189,16 @@ def main() -> None:
             command("shell", "am", "force-stop", PACKAGE)
         except Exception as error:
             cleanup_errors.append(str(error))
+        if original_stay_awake is not None:
+            try:
+                if original_stay_awake == "null":
+                    command("shell", "settings", "delete", "global", "stay_on_while_plugged_in")
+                else:
+                    command("shell", "settings", "put", "global", "stay_on_while_plugged_in", original_stay_awake)
+                if originally_asleep:
+                    command("shell", "input", "keyevent", "KEYCODE_SLEEP")
+            except Exception as error:
+                cleanup_errors.append(str(error))
         if cleanup_errors:
             report.update(result="FAIL", cleanupErrors=cleanup_errors)
         report["elapsedSeconds"] = time.monotonic() - started

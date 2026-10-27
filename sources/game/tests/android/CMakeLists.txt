@@ -7,6 +7,7 @@ find_package(games-controller REQUIRED CONFIG)
 add_library(kb_controller_tests SHARED
     src/main/cpp/ControllerTests.cpp
     src/main/cpp/TouchTests.cpp
+    ../../../engine/src/input/InputText.cpp
     ../../src/android/AndroidGamepadInput.cpp
     ../../src/android/AndroidTouchInput.cpp)
 target_include_directories(kb_controller_tests PRIVATE

@@ -60,3 +60,27 @@ unverified; synthesizing `ACTION_CANCEL` does not verify an OS navigation gestur
 
 Android Games Controller is licensed under Apache 2.0. Its attribution and license
 are included by the Android package's third-party notices and SBOM.
+
+## Software keyboard
+
+Focusing an editable native UI field opens the system keyboard with its existing
+text and caret. GameActivity supplies committed text snapshots; composition stays
+inside the IME until committed. The host accepts standard and modified UTF-8,
+converts Android's UTF-16 selection offset to a scalar caret, and queues the whole
+snapshot through `SceneUIAccess::QueueTextInputState`. The UI applies its usual
+content rules, grapheme limit, read-only handling and change events. This also
+supports selection replacement, deletion and pastes beyond the per-frame character
+event capacity. Native UI text remains bounded by `UIText::MaxUtf8Bytes`.
+
+The connection is not reset after each commit: restarting it can accidentally
+commit a composition that has already started on the UI thread. Editor actions
+produce buffered Enter edges. Dismissing the visible IME with Back produces a
+cancel edge and clears field focus, allowing a later focus to reopen the keyboard.
+Keyboard down/up events in one native batch remain observable on separate frames.
+
+The test runner's `--ime-only` mode uses a visible OS keyboard and the real
+GameActivity InputConnection/JNI path on a physical Android host. It verifies
+prefilled Unicode, composition, repeated commits, submit, OS Back, reopening,
+selection replacement, deletion and long paste. Native scene UI tests separately
+verify validation, caret placement, change events and blur. This isolated APK
+does not render a packaged game scene.

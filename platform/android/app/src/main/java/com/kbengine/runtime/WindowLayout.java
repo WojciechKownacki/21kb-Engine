@@ -13,7 +13,7 @@ public final class WindowLayout {
     public static void configure(Activity activity) {
         Window window = activity.getWindow();
         WindowCompat.setDecorFitsSystemWindows(window, false);
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         if (Build.VERSION.SDK_INT >= 28) {
             WindowManager.LayoutParams attributes = window.getAttributes();
             attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;

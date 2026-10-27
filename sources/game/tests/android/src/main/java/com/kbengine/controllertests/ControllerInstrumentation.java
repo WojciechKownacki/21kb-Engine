@@ -20,12 +20,18 @@ public final class ControllerInstrumentation extends Instrumentation {
     private static native boolean touchMatches(int[] ids, int[] phases, float[] coordinates, int width, int height);
     private static native boolean surfaceState(int phase);
     private static native boolean safeAreaMatches(int left, int top, int right, int bottom);
+    private static native void requestIme(boolean shown);
+    private static native int[] imeState();
+    private static native int imeDismissalCount();
     private ControllerActivity activity;
     private boolean touchOnly;
+    private boolean imeOnly;
+    private String imeGeometry = "";
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
         touchOnly = arguments != null && "true".equals(arguments.getString("touchOnly"));
+        imeOnly = arguments != null && "true".equals(arguments.getString("imeOnly"));
         start();
     }
 
@@ -207,10 +213,107 @@ public final class ControllerInstrumentation extends Instrumentation {
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
     }
 
+    private void awaitKeyboard(boolean visible) {
+        long deadline = SystemClock.uptimeMillis() + 10000;
+        do {
+            boolean[] actual = new boolean[1];
+            runOnMainSync(() -> actual[0] = activity.keyboardVisible());
+            if (actual[0] == visible) return;
+            SystemClock.sleep(20);
+        } while (SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError("Software keyboard visibility: " + visible);
+    }
+
+    private void awaitText(String expected, int submits) {
+        long deadline = SystemClock.uptimeMillis() + 10000;
+        do {
+            int[] actual = imeState();
+            boolean equal = actual != null && actual.length == expected.codePointCount(0, expected.length()) + 1 && actual[0] == submits;
+            int item = 1;
+            for (int offset = 0; equal && offset < expected.length(); ++item) {
+                int character = expected.codePointAt(offset);
+                equal = actual[item] == character;
+                offset += Character.charCount(character);
+            }
+            if (equal) return;
+            SystemClock.sleep(20);
+        } while (SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError("Native IME text/submit mismatch: " + java.util.Arrays.toString(imeState()));
+    }
+
+    private void verifyIme() {
+        requestIme(true);
+        awaitKeyboard(true);
+        runOnMainSync(() -> imeGeometry = activity.imeGeometry());
+        verifySafeArea();
+        awaitText("Start 😀 ", 0);
+        runOnMainSync(() -> {
+            if (activity.textConnection() == null) throw new AssertionError("Active InputConnection missing");
+            activity.textConnection().setSelection(0, "Start 😀 ".length());
+            activity.textConnection().commitText("Test żółw 😀", 1);
+        });
+        awaitText("Test żółw 😀", 0);
+        runOnMainSync(() -> activity.textConnection().setComposingText("仮", 1));
+        SystemClock.sleep(150);
+        awaitText("Test żółw 😀", 0);
+        runOnMainSync(() -> activity.textConnection().commitText("確定", 1));
+        awaitText("Test żółw 😀確定", 0);
+        runOnMainSync(() -> activity.textConnection().commitText("確定", 1));
+        awaitText("Test żółw 😀確定確定", 0);
+        runOnMainSync(() -> activity.textConnection().performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE));
+        awaitText("Test żółw 😀確定確定", 1);
+        sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);
+        awaitKeyboard(false);
+        long dismissedDeadline = SystemClock.uptimeMillis() + 10000;
+        while (imeDismissalCount() == 0 && SystemClock.uptimeMillis() < dismissedDeadline) SystemClock.sleep(20);
+        if (imeDismissalCount() != 1) throw new AssertionError("OS Back must reach the native cancellation bridge once");
+        verifySafeArea();
+        requestIme(true);
+        awaitKeyboard(true);
+        runOnMainSync(() -> activity.textConnection().commitText("!", 1));
+        awaitText("Test żółw 😀確定確定!", 1);
+        runOnMainSync(() -> {
+            activity.textConnection().setSelection(0, 4);
+            activity.textConnection().commitText("Edit", 1);
+        });
+        awaitText("Edit żółw 😀確定確定!", 1);
+        runOnMainSync(() -> activity.textConnection().deleteSurroundingText(4, 0));
+        awaitText(" żółw 😀確定確定!", 1);
+        StringBuilder pasted = new StringBuilder();
+        for (int index = 0; index < 12; ++index) pasted.append("Long paste ");
+        String paste = pasted.append("😀").toString();
+        runOnMainSync(() -> {
+            activity.textConnection().setSelection(0, " żółw 😀確定確定!".length());
+            activity.textConnection().commitText(paste, 1);
+        });
+        awaitText(paste, 1);
+        runOnMainSync(() -> {
+            activity.textConnection().setSelection(0, paste.length());
+            activity.textConnection().commitText("", 1);
+        });
+        awaitText("", 1);
+        requestIme(false);
+        awaitKeyboard(false);
+    }
+
     @Override public void onStart() {
         Bundle report = new Bundle();
         int resultCode = Activity.RESULT_CANCELED;
         try {
+            if (imeOnly) {
+                Intent intent = new Intent(getTargetContext(), ControllerActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                intent.putExtra("ime", true);
+                activity = (ControllerActivity) startActivitySync(intent);
+                await(9, 0, 0);
+                verifyIme();
+                report.putString("scope", "ime-only");
+                report.putString("result", "PASS");
+                report.putString("input", "InputConnection commits/composition and editor action with visible OS keyboard; OS Back injection");
+                report.putString("geometry", imeGeometry);
+                resultCode = Activity.RESULT_OK;
+                return;
+            }
             if (touchOnly) {
                 Intent intent = new Intent(getTargetContext(), ControllerActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
