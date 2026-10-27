@@ -46,6 +46,14 @@ scripts keep running. The instruction budget is off until a host sets it; there 
 rights and can do anything the game can. Load them only from projects and mods you trust; the engine
 checks their hash against the release manifest in a packaged game but does not isolate them.
 
+The packaged Lua workflow regression (`sources/game/tests/web/run_game_lua_workflow_tests.py`)
+creates a project through the public CLI, generates the unchanged `PlayerController.lua` template,
+authors input bindings and a collider, and cooks the game. Trusted keyboard input must move the
+template entity; a physics query and movement update real UI pixels. Clicking the native button
+saves the observed position, and a fresh browser process must read the same value from the save.
+The template starts at its authored position; restoring gameplay transforms from saved values
+remains an explicit script decision.
+
 ## Hot reload
 
 Reloading a Lua script runs the new code in a fresh environment and swaps it in only if that works: a

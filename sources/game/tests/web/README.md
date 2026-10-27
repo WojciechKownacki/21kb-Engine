@@ -391,6 +391,15 @@ and implicit master. An undeclared bus must explicitly refuse playback with
 silence; restoring the valid child route must restore autoplay. These source
 route changes do not qualify replacement of the mixer's graph topology.
 
+`run_game_lua_workflow_tests.py` reports `21kb.web-game-lua-workflow/v1` and uses
+the same arguments as the storage scenarios. It generates the actual starter
+Lua template with `init-agent`, attaches it through CLI, authors keyboard
+bindings and a collider, and cooks a standalone player. Trusted keyboard input,
+entity movement, a physics raycast, native UI pixels and a clicked save must
+work together. A new browser process must recover the exact saved position.
+This verifies collision queries; it does not claim the simple translation
+template provides a collision-constrained character controller.
+
 `run_game_audio_snapshot_tests.py` reports `21kb.web-game-audio-snapshots/v1`.
 It creates and selects snapshots through CLI, cooks the scene, and requires
 actual PCM for snapshot gains, runtime override precedence, clearing overrides,
