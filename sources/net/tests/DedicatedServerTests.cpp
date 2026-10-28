@@ -365,7 +365,8 @@ double Number(const kb::core::JsonValue& root, const char* a, const char* b = nu
 
 // A client of the server: its own UDP socket, session and replica world.
 struct RemoteClient {
-    RemoteClient(std::uint16_t serverPort, std::uint64_t id, std::uint8_t keySeed, const kb::net::ClientConfig& config = {}) : started(std::chrono::steady_clock::now()) {
+    RemoteClient(std::uint16_t serverPort, std::uint64_t id, std::uint8_t keySeed, const kb::net::ClientConfig& config = {},
+        const SessionKey* sessionKey = nullptr) : started(std::chrono::steady_clock::now()), authorizationRequired(config.authorizationRequired) {
         std::string error;
         transport = CreateUdpTransport(Endpoint::Loopback(0U), error);
         Require(transport != nullptr, "the client socket could not be opened: " + error);
@@ -374,7 +375,7 @@ struct RemoteClient {
         DefineStandardRpcs(*rpcs);
         DefineScriptRpcs(*rpcs);
         world = std::make_unique<kb::ecs::World>();
-        client = std::make_unique<Client>(*transport, config, id, KeyFrom(keySeed), Endpoint::Loopback(serverPort), Now());
+        client = std::make_unique<Client>(*transport, config, id, sessionKey != nullptr ? *sessionKey : KeyFrom(keySeed), Endpoint::Loopback(serverPort), Now());
         replication = std::make_unique<ReplicationClient>(*client, *world, *components, *rpcs);
         replication->SetRpcHandler("Pong", [this](std::span<const RpcValue> args) { pongs.push_back(std::get<std::uint32_t>(args[0])); });
         replication->SetRpcHandler("Welcome", [this](std::span<const RpcValue> args) { welcomes.push_back(std::get<std::uint32_t>(args[0])); });
@@ -393,6 +394,16 @@ struct RemoteClient {
             client->Update(Now());
             NetEvent event;
             while (client->PollEvent(event)) {
+                if (authorizationRequired && event.type == NetEventType::Connected) continue;
+                if (authorizationRequired && event.type == NetEventType::Message && !event.message.data.empty() &&
+                    event.message.data[0] >= kAuthMessageAccepted && event.message.data[0] <= kAuthMessageKicked) {
+                    authReplies.push_back(event.message.data[0]);
+                    if (event.message.data[0] == kAuthMessageAccepted && event.message.data.size() == 5U &&
+                        (event.message.data[1] & kScopePlay) != 0U) {
+                        replication->HandleEvent(NetEvent{ .type = NetEventType::Connected });
+                    }
+                    continue;
+                }
                 if (event.type == NetEventType::Disconnected) {
                     lastReason = event.reason;
                     disconnected = true;
@@ -423,6 +434,8 @@ struct RemoteClient {
     std::vector<std::pair<std::uint32_t, std::string>> said;
     DisconnectReason lastReason = DisconnectReason::None;
     bool disconnected = false;
+    bool authorizationRequired = false;
+    std::vector<std::uint8_t> authReplies;
 };
 
 bool HasReplica(RemoteClient& client, float x, float y, float z) {
@@ -437,6 +450,80 @@ bool HasReplica(RemoteClient& client, float x, float y, float z) {
 }
 
 // ------------------------------------------------------------------ tests
+
+void TestAuthorizedServer() {
+    const TestProject project = MakeProject("authorization");
+    kb::security::Ed25519Seed seed{};
+    for (auto& byte : seed.Span()) byte = 31U;
+    LocalAuthConfig providerConfig;
+    providerConfig.tokenLifetimeSeconds = 8;
+    LocalAuthProvider provider(seed, providerConfig);
+    Require(provider.AddAccount("first", "sample password", kScopePlay) &&
+        provider.AddAccount("second", "sample password", kScopePlay) &&
+        provider.AddAccount("denied", "sample password", kScopeChat), "provider accounts");
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto firstLogin = provider.Login("first", "sample password", now);
+    const auto secondLogin = provider.Login("second", "sample password", now);
+    const auto deniedLogin = provider.Login("denied", "sample password", now);
+    Require(firstLogin.ok && secondLogin.ok && deniedLogin.ok, "provider login");
+    std::string keys;
+    for (const auto* login : {&firstLogin, &secondLogin, &deniedLogin})
+        keys += std::to_string(login->clientId) + " " + kb::security::ToHex(login->sessionKey) + "\n";
+    WriteFile(project.keys, keys);
+    const auto publicKey = project.root / "provider.pub";
+    const auto revocations = project.root / "revocations.bin";
+    WriteFile(publicKey, kb::security::ToHex(provider.PublicKey()));
+    const auto publish = [&](std::int64_t timestamp) {
+        const auto bytes = provider.PublishRevocations(timestamp);
+        WriteFile(revocations, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    };
+    publish(now);
+    Server server(project, {"--auth-provider-key", publicKey.string(), "--auth-revocations", revocations.string()});
+    const auto port = server.WaitForPort();
+    Require(server.started && port != 0U, "authorized server startup: " + ReadFile(server.err));
+    ClientConfig config;
+    config.authorizationRequired = true;
+    RemoteClient first(port, firstLogin.clientId, 0U, config, &firstLogin.sessionKey);
+    RemoteClient second(port, secondLogin.clientId, 0U, config, &secondLogin.sessionKey);
+    RemoteClient denied(port, deniedLogin.clientId, 0U, config, &deniedLogin.sessionKey);
+    Require(WaitFor([&] {
+        first.Pump(); second.Pump(); denied.Pump();
+        return first.client->State() == ClientState::Connected && second.client->State() == ClientState::Connected &&
+            denied.client->State() == ClientState::Connected;
+    }, 3000), "authorized transport handshake");
+    Require(first.replication->ReplicaCount() == 0U && first.welcomes.empty(), "replication or script event escaped before login");
+    Require(first.client->Send(0U, std::vector<std::uint8_t>{255U}) == SendResult::Queued, "unauthorized command");
+    Require(first.Until([&] { return !first.authReplies.empty(); }, 1000) &&
+        first.authReplies.back() == kAuthMessageDenied, "command before login was not denied");
+    Require(first.client->Authenticate(firstLogin.token) == SendResult::Queued &&
+        second.client->Authenticate(secondLogin.token) == SendResult::Queued &&
+        denied.client->Authenticate(deniedLogin.token) == SendResult::Queued, "send provider tokens");
+    Require(WaitFor([&] {
+        first.Pump(); second.Pump(); denied.Pump();
+        return first.replication->ReplicaCount() == 3U && second.replication->ReplicaCount() == 3U &&
+            !denied.authReplies.empty();
+    }, 3000), "authorized replication did not arrive");
+    Require(denied.replication->ReplicaCount() == 0U && denied.welcomes.empty(), "missing play scope received scene state");
+    Require(first.replication->CallRpc("Echo", std::vector<RpcValue>{std::string("authorized")}) == RpcStatus::Ok, "authorized script RPC");
+    Require(first.Until([&] { return !first.echoes.empty(); }, 1000) && first.echoes.front() == "authorized", "authorized script reply");
+    Require(first.client->Send(0U, std::vector<std::uint8_t>{255U, 1U}) == SendResult::Queued, "malformed command");
+    Require(WaitFor([&] {
+        first.Pump(); second.Pump();
+        return Number(server.Status(), "replication", "rejected_malformed") >= 1;
+    }, 2000), "malformed authenticated command bypassed validation");
+    provider.RevokeToken(firstLogin.claims.tokenId);
+    publish(now + 1);
+    Require(WaitFor([&] { first.Pump(); second.Pump(); return first.disconnected; }, 3000), "revoked session remained connected");
+    Require(!second.disconnected, "revocation disconnected another session");
+    Require(second.Until([&] { return second.disconnected; }, 10'000), "expired session remained connected");
+    server.RequestStop();
+    Require(server.process.Wait(5000) == 0, "authorized server did not stop cleanly");
+    const auto status = server.Status();
+    Require(Number(status, "authorization", "accepted") == 3 && Number(status, "authorization", "kicked") >= 2 &&
+        Number(status, "authorization", "commands_refused") >= 2, "authorization metrics missing");
+    Require(Number(status, "replication", "rejected_malformed") >= 1, "malformed authenticated command bypassed validation");
+}
 
 void TestMainRun() {
     const TestProject project = MakeProject("main");
@@ -678,6 +765,7 @@ int main() {
         { "scene-checkpoint", &TestSceneCheckpoint },
         { "command-line", &TestCommandLine },
         { "main-run", &TestMainRun },
+        { "authorized-server", &TestAuthorizedServer },
         { "lifetime-options", &TestLifetimeOptions },
     };
     int failures = 0;

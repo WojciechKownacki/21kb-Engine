@@ -137,6 +137,14 @@ std::string SummaryJson(const ServerOptions& options, const ServerSummary& summa
     root.Set("clients_now", number(summary.clientsNow));
     root.Set("clients_peak", number(summary.clientsPeak));
     root.Set("replicated_entities", number(summary.replicatedEntities));
+    auto authorization = JsonValue::MakeObject();
+    authorization.Set("enabled", JsonValue::MakeBool(!options.authProviderKeyFile.empty()));
+    authorization.Set("clients", number(summary.authenticatedClients));
+    authorization.Set("accepted", number(summary.authorization.loginsAccepted));
+    authorization.Set("refused", number(summary.authorization.loginsRefused));
+    authorization.Set("commands_refused", number(summary.authorization.commandsRefused));
+    authorization.Set("kicked", number(summary.authorization.kicked));
+    root.Set("authorization", std::move(authorization));
     auto host = JsonValue::MakeObject();
     host.Set("datagrams_received", number(summary.host.datagramsReceived));
     host.Set("oversized", number(summary.host.oversized));
@@ -194,6 +202,10 @@ struct DedicatedServer::Impl {
         if (replication != nullptr) {
             summary.replication = replication->Stats();
         }
+        if (auth != nullptr) {
+            summary.authenticatedClients = authorizedPeers.size();
+            summary.authorization = auth->GetStats();
+        }
     }
 
     void SyncReplicatedEntities() {
@@ -240,8 +252,41 @@ struct DedicatedServer::Impl {
         replication->HandleEvent(event, now);
     }
 
+    void RemoveAuthorizedPeer(std::uint64_t peer, DisconnectReason reason) {
+        if (authorizedPeers.erase(peer) != 0U) {
+            HandleHostEvent(NetEvent{ .type = NetEventType::Disconnected, .peer = peer, .reason = reason }, NowMilliseconds());
+        }
+    }
+
+    bool ReloadRevocations() {
+        if (options.authRevocationsFile.empty()) return true;
+        constexpr std::size_t limit = 1024U * 1024U;
+        std::ifstream input(options.authRevocationsFile, std::ios::binary);
+        std::vector<std::uint8_t> bytes(limit + 1U);
+        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        bytes.resize(static_cast<std::size_t>(input.gcount()));
+        const bool valid = !input.bad() && bytes.size() <= limit && auth->UpdateRevocations(bytes);
+        if (!valid && !revocationErrorReported) Log("authorization: revocation snapshot rejected; retaining the last valid snapshot");
+        revocationErrorReported = !valid;
+        return valid;
+    }
+
     void PumpHost(std::uint64_t now) {
         host->Update(now);
+        if (auth != nullptr) {
+            if (now >= nextRevocationReload) {
+                static_cast<void>(ReloadRevocations());
+                nextRevocationReload = now + 1000U;
+            }
+            std::vector<NetEvent> commands;
+            const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            auth->Update(now, seconds, commands);
+            for (const NetEvent& command : commands) {
+                if (auth->Authorize(command.peer, kScopePlay)) HandleHostEvent(command, now);
+            }
+            return;
+        }
         NetEvent event;
         while (host->PollEvent(event)) {
             HandleHostEvent(event, now);
@@ -268,6 +313,10 @@ struct DedicatedServer::Impl {
     std::unique_ptr<RpcRegistry> rpcs;
     std::unique_ptr<IDatagramTransport> transport;
     std::unique_ptr<Host> host;
+    std::unique_ptr<AuthGate> auth;
+    std::unordered_set<std::uint64_t> authorizedPeers;
+    std::uint64_t nextRevocationReload = 0U;
+    bool revocationErrorReported = false;
     std::unique_ptr<ReplicationServer> replication;
     std::vector<kb::ecs::Entity> candidates;
     std::unordered_set<kb::ecs::Entity::IdType> considered;
@@ -288,6 +337,10 @@ bool DedicatedServer::Start(std::string& error) {
 
     if (!options.stateFile.empty() && options.stateFile.extension() != ".21kbscene") {
         error = "--state-file must name a .21kbscene checkpoint";
+        return false;
+    }
+    if (!options.authRevocationsFile.empty() && options.authProviderKeyFile.empty()) {
+        error = "--auth-revocations requires --auth-provider-key";
         return false;
     }
 
@@ -457,6 +510,37 @@ bool DedicatedServer::Start(std::string& error) {
         RpcStatus status = RpcStatus::Ok;
         s.replication->CallRpcAll("Said", message, status);
     });
+
+    if (!options.authProviderKeyFile.empty()) {
+        AuthGateConfig config;
+        config.maxCommandBytes = hostConfig.session.maxMessageBytes - 1U;
+        std::ifstream keyFile(options.authProviderKeyFile);
+        std::string hex, trailing;
+        if (!(keyFile >> hex) || (keyFile >> trailing) || !kb::security::TryParseHex(hex, config.providerKey)) {
+            error = "the authorization provider key must contain exactly 64 hex digits";
+            return false;
+        }
+        AuthGateHooks hooks;
+        hooks.onAuthenticated = [&s](std::uint64_t peer, const AuthClaims& claims) {
+            if ((claims.scopes & kScopePlay) == 0U) {
+                s.RemoveAuthorizedPeer(peer, DisconnectReason::Requested);
+                static_cast<void>(s.auth->Authorize(peer, kScopePlay));
+            } else if (s.authorizedPeers.insert(peer).second) {
+                s.HandleHostEvent(NetEvent{ .type = NetEventType::Connected, .peer = peer }, s.NowMilliseconds());
+            }
+        };
+        hooks.onKicked = [&s](std::uint64_t peer, AuthKickReason) {
+            s.RemoveAuthorizedPeer(peer, DisconnectReason::Requested);
+        };
+        hooks.onDisconnected = [&s](std::uint64_t peer, DisconnectReason reason) {
+            s.RemoveAuthorizedPeer(peer, reason);
+        };
+        s.auth = std::make_unique<AuthGate>(*s.host, config, std::move(hooks));
+        if (!s.ReloadRevocations()) {
+            error = "the initial authorization revocation snapshot is invalid";
+            return false;
+        }
+    }
 
     if (!options.portFile.empty()) {
         WriteFileAtomically(options.portFile, std::to_string(s.summary.port));

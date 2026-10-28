@@ -376,7 +376,8 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
     bgfx::setViewRect(desc.viewId, 0, 0, ClampToViewExtent(desc.extent.width), ClampToViewExtent(desc.extent.height));
     bgfx::setViewTransform(desc.viewId, identity.data(), identity.data());
-    SetSceneViewClear(desc.viewId, BGFX_CLEAR_COLOR, desc.clearColor, 1.0F, 0U, desc.clearPaletteViewport);
+    SetSceneViewClear(desc.viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, desc.clearColor,
+        SceneDepthPolicy::ClearDepth(), 0U, desc.clearPaletteViewport);
     bgfx::touch(desc.viewId);
 
     if (desc.lightingConfig.debugView == SceneRenderDebugView::GBufferNormal) {
@@ -525,7 +526,10 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         bgfx::setUniform(fogSkyUniform_, fogSky.data());
     }
     lightGrid_.Bind(lighting.lightGrid, 7U);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    // Preserve opaque depth for the transparent pass on the resolved target.
+    constexpr std::uint64_t resolveState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS;
+    bgfx::setState(resolveState);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
 
@@ -534,7 +538,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     {
         std::ostringstream message;
         message << "Submit end ok drawCalls=" << stats.submittedDrawCallCount
-                << " state=0x" << std::hex << (BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) << std::dec;
+                << " state=0x" << std::hex << resolveState << std::dec;
         WriteRendererDebugLog("deferred_lighting", message.str());
         WriteRendererMaterialGraphDebugLog("deferred", message.str());
     }

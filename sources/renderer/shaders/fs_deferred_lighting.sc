@@ -449,6 +449,7 @@ void main()
     vec4 albedo = texture2D(s_gbufferAlbedo, v_texcoord0);
     vec4 encodedNormal = texture2D(s_gbufferNormal, v_texcoord0);
     float depth = texture2D(s_gbufferDepth, v_texcoord0).x;
+    gl_FragDepth = depth;
     // The normal attachment reserves alpha 0 for its clear value, while every
     // opaque G-buffer write stores 1. This is independent from both depth
     // conventions and authored material opacity.

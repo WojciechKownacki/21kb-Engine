@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/net/Replication.hpp"
+#include "kb/net/Auth.hpp"
 #include "kb/net/Rpc.hpp"
 
 #include <atomic>
@@ -40,6 +41,8 @@ struct ServerOptions {
     std::filesystem::path portFile;   // the bound port, written once the socket is open
     std::filesystem::path statusFile; // the status JSON, rewritten about once a second
     std::filesystem::path stateFile;  // optional scene checkpoint, loaded on startup and saved on clean shutdown
+    std::filesystem::path authProviderKeyFile; // optional Ed25519 public key, 64 hex digits
+    std::filesystem::path authRevocationsFile; // optional signed snapshot, reloaded once per second
     bool quiet = false;
 };
 
@@ -53,6 +56,8 @@ struct ServerSummary {
     std::uint16_t port = 0U;
     bool stateLoaded = false;
     bool stateSaved = false;
+    std::size_t authenticatedClients = 0U;
+    AuthGate::Stats authorization;
     HostStats host;
     ReplicationServerStats replication;
 };
