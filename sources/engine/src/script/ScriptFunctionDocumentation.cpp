@@ -81,6 +81,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Audio.DspState", "Returns the installed effect count, parameter status and audio format of an authored mixer bus." },
     { "Audio.ConfigureMeters", "Enables or disables real signal capture and clears meter history without restarting voices or effects." },
     { "Audio.ResetMeters", "Clears signal meter history while preserving capture, voices and effects." },
+    { "Audio.Diagnostics", "Reads device callback timing and engine allocation counters for this engine generation. Counters are decimal strings; callback overruns are not OS underruns, and allocated bytes exclude assets, STL and driver memory." },
     { "Audio.Meter", "Reads one channel of an installed signal meter; empty bus selects master, channels start at zero, and cumulative counters are exact decimal strings." },
     { "Audio.SetListenerLocalUser", "Selects which local user's audio listeners participate in runtime playback." },
     { "Audio.ListenerLocalUser", "Returns the local user currently selected for audio listener playback." },

@@ -55,6 +55,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Audio", "DspState", "Audio.DspState", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "ConfigureMeters", "Audio.ConfigureMeters", ScriptApiCatalogLuaReturnKind::SingleOutput, "configured" },
     { "Audio", "ResetMeters", "Audio.ResetMeters", ScriptApiCatalogLuaReturnKind::SingleOutput, "reset" },
+    { "Audio", "Diagnostics", "Audio.Diagnostics", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "Meter", "Audio.Meter", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "SetListenerLocalUser", "Audio.SetListenerLocalUser", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "Audio", "ListenerLocalUser", "Audio.ListenerLocalUser", ScriptApiCatalogLuaReturnKind::Default, "" },

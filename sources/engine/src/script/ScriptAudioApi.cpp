@@ -3,6 +3,7 @@
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/audio/AudioMetering.hpp"
+#include "engine/audio/AudioDiagnostics.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -435,6 +436,25 @@ ScriptFunctionCallResult AudioMeter(const ScriptFunctionCallContext& context, st
         {"peak", ScriptValue{static_cast<double>(value.peak)}}, {"rms", ScriptValue{static_cast<double>(value.rms)}},
         {"heldPeak", ScriptValue{static_cast<double>(value.heldPeak)}}, {"clippedSamples", ScriptValue{std::to_string(value.clippedSamples)}},
         {"nonFiniteSamples", ScriptValue{std::to_string(value.nonFiniteSamples)}}, {"mixerAssetId", ScriptValue{std::to_string(report.mixerAssetId)}}}};
+}
+
+ScriptFunctionCallResult AudioDiagnostics(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) return Error("audio api requires an active scene");
+    const auto report = kb::audio::AudioDiagnostics::Report(*context.scene);
+    if (!report.supported) return Error("audio provider does not support runtime diagnostics");
+    return {.executed = true, .outputs = {{"offline", ScriptValue{report.offline}},
+        {"playbackAvailable", ScriptValue{report.playbackAvailable}}, {"backend", ScriptValue{report.backend}},
+        {"sampleRate", ScriptValue{report.sampleRate}}, {"periodFrames", ScriptValue{report.periodFrames}},
+        {"generation", ScriptValue{std::to_string(report.generation)}},
+        {"deviceBlocks", ScriptValue{std::to_string(report.deviceBlocks)}},
+        {"deviceFrames", ScriptValue{std::to_string(report.deviceFrames)}},
+        {"shortBlocks", ScriptValue{std::to_string(report.shortBlocks)}},
+        {"callbackDeadlineMisses", ScriptValue{std::to_string(report.callbackDeadlineMisses)}},
+        {"worstCallbackNanoseconds", ScriptValue{std::to_string(report.worstCallbackNanoseconds)}},
+        {"allocatedBytes", ScriptValue{std::to_string(report.allocatedBytes)}},
+        {"peakAllocatedBytes", ScriptValue{std::to_string(report.peakAllocatedBytes)}},
+        {"allocationCount", ScriptValue{std::to_string(report.allocationCount)}}}};
 }
 
 ScriptFunctionCallResult AudioSetListenerLocalUser(
@@ -907,6 +927,14 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         {"mixerAssetId", ScriptValueType::String, true}};
     meter.callback = &AudioMeter;
     if (!host.RegisterFunction(std::move(meter))) return false;
+
+    ScriptFunctionDesc diagnostics;
+    diagnostics.signature.name = "Audio.Diagnostics";
+    diagnostics.signature.outputs = {{"offline", ScriptValueType::Bool, true}, {"playbackAvailable", ScriptValueType::Bool, true},
+        {"backend", ScriptValueType::String, true}, {"sampleRate", ScriptValueType::UInt32, true}, {"periodFrames", ScriptValueType::UInt32, true},
+        {"generation", ScriptValueType::String, true}, {"deviceBlocks", ScriptValueType::String, true}, {"deviceFrames", ScriptValueType::String, true}, {"shortBlocks", ScriptValueType::String, true}, {"callbackDeadlineMisses", ScriptValueType::String, true}, {"worstCallbackNanoseconds", ScriptValueType::String, true}, {"allocatedBytes", ScriptValueType::String, true}, {"peakAllocatedBytes", ScriptValueType::String, true}, {"allocationCount", ScriptValueType::String, true}};
+    diagnostics.callback = &AudioDiagnostics;
+    if (!host.RegisterFunction(std::move(diagnostics))) return false;
 
     ScriptFunctionDesc setListenerLocalUser;
     setListenerLocalUser.signature.name = "Audio.SetListenerLocalUser";

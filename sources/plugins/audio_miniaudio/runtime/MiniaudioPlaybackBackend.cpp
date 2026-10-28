@@ -218,6 +218,11 @@ kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::IsSourcePlaying(kb
     return sourceRegistry_.IsSourcePlaying(scene, entity, PlaybackAvailable());
 }
 
+kb::audio::AudioRuntimeDiagnostics MiniaudioPlaybackBackend::RuntimeDiagnostics() const {
+    AssertOwnerThread();
+    auto report = engine_.Diagnostics(); report.offline = offline_; return report;
+}
+
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::DeviceStatus() const noexcept {
     AssertOwnerThread();
     return engine_.Status();

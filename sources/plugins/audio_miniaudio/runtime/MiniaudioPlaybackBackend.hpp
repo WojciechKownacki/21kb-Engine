@@ -26,7 +26,7 @@ class SceneSystemContext;
 namespace kb::audio_miniaudio {
 
 class MiniaudioPlaybackBackend final : public kb::audio::IAudioPlaybackBackend, public kb::audio::IAudioMeteringBackend,
-    public kb::audio::IAudioMixerPreviewBackend {
+    public kb::audio::IAudioMixerPreviewBackend, public kb::audio::IAudioDiagnosticsBackend {
 public:
     MiniaudioPlaybackBackend();
     ~MiniaudioPlaybackBackend() override;
@@ -42,6 +42,7 @@ public:
     [[nodiscard]] kb::audio::AudioSourceControlResult ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) override;
     [[nodiscard]] kb::audio::AudioSourceControlResult StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) override;
     [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity) override;
+    [[nodiscard]] kb::audio::AudioRuntimeDiagnostics RuntimeDiagnostics() const override;
     [[nodiscard]] kb::audio::AudioDeviceStatus DeviceStatus() const noexcept override;
     [[nodiscard]] kb::audio::AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept override;
     [[nodiscard]] bool ConfigureOffline(kb::scene::Scene& scene) noexcept override;

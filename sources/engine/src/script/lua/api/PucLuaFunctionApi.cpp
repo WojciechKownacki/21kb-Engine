@@ -385,6 +385,7 @@ int LuaAudioMeterCall(lua_State* state, const char* function, const char* output
 
 int LuaAudioConfigureMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ConfigureMeters", "configured"); }
 int LuaAudioResetMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ResetMeters", "reset"); }
+int LuaAudioDiagnostics(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Diagnostics"); }
 int LuaAudioMeter(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Meter"); }
 
 int LuaAudioSetListenerLocalUser(lua_State* state) {
@@ -3543,6 +3544,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioDspState,
     &LuaAudioConfigureMeters,
     &LuaAudioResetMeters,
+    &LuaAudioDiagnostics,
     &LuaAudioMeter,
     &LuaAudioSetListenerLocalUser,
     &LuaAudioListenerLocalUser,

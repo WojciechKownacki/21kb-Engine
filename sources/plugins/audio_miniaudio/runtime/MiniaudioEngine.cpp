@@ -1,6 +1,7 @@
 #include "runtime/MiniaudioEngine.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 
 #if defined(__EMSCRIPTEN__)
@@ -14,12 +15,32 @@ void MiniaudioEngine::ProcessDevice(ma_device* device, void* output, const void*
     if (output == nullptr) return;
     auto& engine = *static_cast<ma_engine*>(device->pUserData);
     auto& self = *static_cast<MiniaudioEngine*>(engine.pProcessUserData);
+    // Device initialization can prime buffers before ma_engine_init has built
+    // its node graph. Do not enter that graph until owner-thread setup finishes.
+    if (!self.graphReady_.load(std::memory_order_acquire)) {
+        ma_silence_pcm_frames(output, frames, device->playback.format, device->playback.channels);
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
     ma_uint64 read = 0U;
-    static_cast<void>(self.ReadPcm(static_cast<float*>(output), frames, &read));
+    const auto result = self.ReadPcm(static_cast<float*>(output), frames, &read);
     if (read < frames) {
+        // The miniaudio endpoint reports a successful zero-frame read when it
+        // has no attachments. Attached inputs always fill the endpoint block,
+        // including stopped sounds. Idle silence is therefore not a dropout.
+        if (read != 0U || result != MA_SUCCESS) self.shortBlocks_.fetch_add(1U, std::memory_order_relaxed);
         const auto channels = ma_engine_get_channels(&engine);
         ma_silence_pcm_frames(static_cast<float*>(output) + read * channels, frames - read, ma_format_f32, channels);
     }
+    const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count());
+    const auto rate = ma_engine_get_sample_rate(&engine);
+    self.deviceBlocks_.fetch_add(1U, std::memory_order_relaxed);
+    self.deviceFrames_.fetch_add(frames, std::memory_order_relaxed);
+    self.periodFrames_.store(frames, std::memory_order_relaxed);
+    if (rate != 0U && elapsed > 1000000000ULL * frames / rate) self.deadlineMisses_.fetch_add(1U, std::memory_order_relaxed);
+    auto worst = self.worstCallbackNs_.load(std::memory_order_relaxed);
+    while (worst < elapsed && !self.worstCallbackNs_.compare_exchange_weak(worst, elapsed, std::memory_order_relaxed)) {}
 }
 
 ma_result MiniaudioEngine::ReadPcm(float* output, ma_uint64 frames, ma_uint64* framesRead) {
@@ -63,8 +84,13 @@ void MiniaudioEngine::Initialize(bool forceNoDevice, ma_context* context) {
         return;
     }
 
+    ++generation_;
+    allocations_.ResetPeak();
+    deviceBlocks_.store(0U); deviceFrames_.store(0U); shortBlocks_.store(0U);
+    deadlineMisses_.store(0U); worstCallbackNs_.store(0U); periodFrames_.store(0U);
     renderedFrames_.store(0U, std::memory_order_relaxed);
     ma_engine_config config = ma_engine_config_init();
+    config.allocationCallbacks = allocations_.Callbacks();
     config.pContext = context;
     config.dataCallback = &MiniaudioEngine::ProcessDevice;
     config.pProcessUserData = this;
@@ -79,6 +105,7 @@ void MiniaudioEngine::Initialize(bool forceNoDevice, ma_context* context) {
     }
     if (forceNoDevice || result != MA_SUCCESS) {
         config = ma_engine_config_init();
+        config.allocationCallbacks = allocations_.Callbacks();
         config.pProcessUserData = this;
         config.noDevice = MA_TRUE;
         config.channels = 2U;
@@ -99,10 +126,12 @@ void MiniaudioEngine::Initialize(bool forceNoDevice, ma_context* context) {
         for (ma_uint32 listener = 0U; listener < ma_engine_get_listener_count(&engine_); ++listener) {
             engine_.listeners[listener].config.handedness = ma_handedness_left;
         }
+        graphReady_.store(true, std::memory_order_release);
     }
 }
 
 void MiniaudioEngine::Shutdown() noexcept {
+    graphReady_.store(false, std::memory_order_release);
     if (initialized_) {
         ma_engine_uninit(&engine_);
         initialized_ = false;
@@ -151,6 +180,22 @@ kb::audio::AudioDeviceStatus MiniaudioEngine::Status() const noexcept {
     }
 #endif
     return kb::audio::AudioDeviceStatus::PlaybackAvailable;
+}
+
+kb::audio::AudioRuntimeDiagnostics MiniaudioEngine::Diagnostics() const {
+    kb::audio::AudioRuntimeDiagnostics report;
+    report.supported = true; report.playbackAvailable = IsPlaybackAvailable(); report.generation = generation_;
+    report.deviceBlocks = deviceBlocks_.load(); report.deviceFrames = deviceFrames_.load();
+    report.shortBlocks = shortBlocks_.load(); report.callbackDeadlineMisses = deadlineMisses_.load();
+    report.worstCallbackNanoseconds = worstCallbackNs_.load(); report.periodFrames = periodFrames_.load();
+    report.allocatedBytes = allocations_.current.load(); report.peakAllocatedBytes = std::max(allocations_.peak.load(), report.allocatedBytes);
+    report.allocationCount = allocations_.count.load();
+    if (initialized_) {
+        report.sampleRate = ma_engine_get_sample_rate(&engine_);
+        const auto* device = ma_engine_get_device(const_cast<ma_engine*>(&engine_));
+        if (device != nullptr && device->pContext != nullptr) report.backend = ma_get_backend_name(device->pContext->backend);
+    }
+    return report;
 }
 
 ma_engine& MiniaudioEngine::Native() noexcept {
