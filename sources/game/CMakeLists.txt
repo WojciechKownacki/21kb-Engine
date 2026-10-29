@@ -178,12 +178,19 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND KB_BUILD_PACKAGED_GAME_HOST)
     find_package(X11 REQUIRED)
-    add_executable(kb_game_linux src/linux/LinuxGameHost.cpp)
+    add_executable(kb_game_linux src/linux/LinuxGameHost.cpp src/linux/LinuxGamepadInput.cpp)
     target_link_libraries(kb_game_linux PRIVATE kb_packaged_game_host_core X11::X11)
     set_target_properties(kb_game_linux PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
     kb_apply_quality_gates(kb_game_linux)
+    if(BUILD_TESTING)
+        add_executable(kb_linux_gamepad_tests
+            tests/LinuxGamepadInputTests.cpp src/linux/LinuxGamepadInput.cpp)
+        target_include_directories(kb_linux_gamepad_tests PRIVATE src/private)
+        target_link_libraries(kb_linux_gamepad_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_linux_gamepad_tests)
+    endif()
 endif()
 
 if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
