@@ -22,6 +22,7 @@ inline constexpr std::uint32_t kNewNativeScript = 2016U;
 inline constexpr std::uint32_t kNewPostProcessProfile = 2017U;
 inline constexpr std::uint32_t kNewImportPreset = 2018U;
 inline constexpr std::uint32_t kNewBlendSpace2D = 2020U;
+inline constexpr std::uint32_t kNewGameplayGraph = 2021U;
 inline constexpr std::uint32_t kDirectionalLight = 2101U;
 inline constexpr std::uint32_t kPointLight = 2102U;
 inline constexpr std::uint32_t kSpotLight = 2103U;
@@ -57,6 +58,7 @@ std::uint32_t EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand c
     case EditorAssetContextCommand::NewParticleEffect: return kNewParticleEffect;
     case EditorAssetContextCommand::NewPostProcessProfile: return kNewPostProcessProfile;
     case EditorAssetContextCommand::NewBlendSpace2D: return kNewBlendSpace2D;
+    case EditorAssetContextCommand::NewGameplayGraph: return kNewGameplayGraph;
     case EditorAssetContextCommand::NewImportPreset: return kNewImportPreset;
     case EditorAssetContextCommand::ExtractMaterials: return kExtractMaterials;
     case EditorAssetContextCommand::FindReferences: return kFindReferences;
@@ -96,6 +98,7 @@ EditorAssetContextCommand EditorAssetBrowserNativeCommandMap::Command(std::uint3
     case kNewParticleEffect: return EditorAssetContextCommand::NewParticleEffect;
     case kNewPostProcessProfile: return EditorAssetContextCommand::NewPostProcessProfile;
     case kNewBlendSpace2D: return EditorAssetContextCommand::NewBlendSpace2D;
+    case kNewGameplayGraph: return EditorAssetContextCommand::NewGameplayGraph;
     case kNewImportPreset: return EditorAssetContextCommand::NewImportPreset;
     case kExtractMaterials: return EditorAssetContextCommand::ExtractMaterials;
     case kFindReferences: return EditorAssetContextCommand::FindReferences;

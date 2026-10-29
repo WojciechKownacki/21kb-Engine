@@ -1,5 +1,6 @@
 #include <array>
 #include "app/EditorApplicationMessageLoop.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
 #include "app/EditorAudioAssetPreview.hpp"
 #include "scene/audio/EditorAudioMixerRuntime.hpp"
 
@@ -1327,6 +1328,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
+    if (state.sceneContext.ConsumeGameplayGraphOpenRequest()) {
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::GameplayGraphEditor,DockArea::Center));
+        InvalidateRect(state.window,nullptr,FALSE);
+    }
+    if (auto* graph=state.sceneContext.GameplayGraphEditor(); graph && !graph->manualPreview && graph->Execute(std::min(deltaSeconds,0.25F))) {
+        EditorWindowInvalidator::InvalidateDockPanel(state.window,state.dockModel,state.floatingWindows,state.metrics,DockPanelKind::GameplayGraphEditor);
+    }
     if (state.sceneContext.ConsumeBlendSpace2DEditorOpenRequest()) {
         static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::BlendSpace2DEditor,DockArea::Center));
         InvalidateRect(state.window,nullptr,FALSE);

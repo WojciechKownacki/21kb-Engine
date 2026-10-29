@@ -186,6 +186,7 @@ void EditorSceneContext::SetRenderSceneReleaseHandler(
 }
 
 void EditorSceneContext::ReleaseRenderedSceneResources() {
+    ClearGameplayGraphPreview();
     ClearBlendSpace2DPreview();
     ClearTimelineEditorPreview();
     if (renderSceneReleaseHandler_) {

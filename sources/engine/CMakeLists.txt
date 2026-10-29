@@ -1618,6 +1618,8 @@ add_library(kb_engine STATIC
     src/visual/VisualGraphCompiler.cpp
     src/visual/VisualGraphDiagnostic.cpp
     src/visual/VisualGraphDocument.cpp
+    src/visual/VisualGraphAuthoringDocument.cpp
+    src/visual/VisualGraphLiteral.cpp
     src/visual/VisualGraphGeneratedCodeWriter.cpp
     src/visual/VisualGraphNativeBindingRegistry.cpp
     src/visual/VisualGraphNativeBuildPipeline.cpp

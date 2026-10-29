@@ -1,5 +1,6 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/BlendSpace2DEditorState.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
@@ -463,6 +464,7 @@ void EditorSceneContext::StartUntitledBasicScene() {
 EditorSceneContext::~EditorSceneContext() {
     ClearBlendSpace2DPreview();
     timelineEditorPreview_.Clear();
+    ClearGameplayGraphPreview();
     if (scene_) EditorMap2DService::ClearPreviews(*scene_);
     if (documentScene_ && scene_ != documentScene_.get()) EditorMap2DService::ClearPreviews(*documentScene_);
     ClearBuildGameSigningPasswords();
@@ -1117,6 +1119,7 @@ void EditorSceneContext::MarkSceneDocumentDirty() noexcept {
 bool EditorSceneContext::SaveOpenDocuments() {
     if (timelineEditorDocument_.Dirty() && !SaveTimelineEditorAsset()) return false;
     if (blendSpaceEditor_ && blendSpaceEditor_->document.Dirty() && !SaveBlendSpace2DEditorAsset()) return false;
+    if (gameplayGraphEditor_ && gameplayGraphEditor_->document.Dirty() && !gameplayGraphEditor_->Save(*scene_)) return false;
     LogMaterialGraphDebug(console_, "save-open-documents-request materialOpen=" +
         std::to_string(materialEditor_.OpenAssetId().value) +
         " materialDirty=" + std::string{ materialEditor_.Dirty() ? "true" : "false" } +

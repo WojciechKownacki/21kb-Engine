@@ -190,6 +190,9 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
             return sceneContext.OpenBlendSpace2DEditorAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::BlendSpace2DEditorOpened : EditorAssetBrowserDoubleClickResult::None;
         }
+    if (metadata->type == "VisualGraph") {
+        return sceneContext.OpenGameplayGraphAsset(metadata->id) ? EditorAssetBrowserDoubleClickResult::GameplayGraphEditorOpened : EditorAssetBrowserDoubleClickResult::None;
+    }
     if (metadata->type == "ScenePrefab") {
         return sceneContext.OpenPrefabEditMode(ResolveAssetPath(*metadata, manager))
             ? EditorAssetBrowserDoubleClickResult::PrefabEditorOpened

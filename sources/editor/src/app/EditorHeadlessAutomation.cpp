@@ -359,6 +359,7 @@ FindInspectorHit(
     if (panel == "console") return DockPanelKind::Console;
     if (panel == "timeline") return DockPanelKind::TimelineEditor;
     if (panel == "blend-space-2d") return DockPanelKind::BlendSpace2DEditor;
+    if (panel == "gameplay-graph") return DockPanelKind::GameplayGraphEditor;
     if (panel == "project_settings") {
         return DockPanelKind::ProjectSettings;
     }

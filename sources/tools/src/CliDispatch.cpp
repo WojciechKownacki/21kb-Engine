@@ -122,6 +122,7 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                      [--set-effect Id.parameter=value ...]  (indexes start at 0)
                new/set accept --dry-run; new/set/show accept --json.
   blend-space  Author a 2D animation blend asset; every edit is validated and atomic.
+  graph        Author gameplay nodes, typed values and connections; validate and save atomically.
                  new|show --project <dir> --space /Game/Animation/Motion.kbblend2d
                  add --project <dir> --space <path> --at x,y --clip <path>
                  set --project <dir> --space <path> --index <0..255> [--at x,y] [--clip <path>]
@@ -487,6 +488,7 @@ constexpr bool kRendererAvailable = false;
 constexpr CliCommandDescriptor kCommands[]{
     {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, ""},
     {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space"},
+    {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph"},
     {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, ""},
     {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, ""},
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},

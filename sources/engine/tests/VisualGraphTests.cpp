@@ -21,6 +21,8 @@
 #include "engine/visual/VisualGraphCompiler.hpp"
 #include "engine/visual/VisualGraphCompileCoordinator.hpp"
 #include "engine/visual/VisualGraphDocument.hpp"
+#include "engine/visual/VisualGraphAuthoringDocument.hpp"
+#include "engine/visual/VisualGraphLiteral.hpp"
 #include "engine/visual/VisualGraphNativeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphNativeCodeGenerator.hpp"
 #include "engine/visual/VisualGraphNodeCatalog.hpp"
@@ -1510,7 +1512,7 @@ void RunVisualGraphNodeCatalogTest() {
         "Visual graph node catalog property binding registration failed");
 
     const kb::visual::VisualGraphNodeCatalog catalog = kb::visual::VisualGraphNodeCatalog::FromNativeBindings(nativeBindings);
-    kb::tests::Require(catalog.Entries().size() == 13U, "Visual graph node catalog did not include built-in and native nodes");
+    kb::tests::Require(catalog.Entries().size() == 25U, "Visual graph node catalog did not include built-in values and native nodes");
     kb::tests::Require(catalog.Find("BuiltIn:Wait") != nullptr, "Visual graph node catalog did not expose the Wait state-machine node");
 
     const kb::visual::VisualGraphNodeCatalogEntry* movePlayer = catalog.Find("NativeBinding:CallNative:MovePlayer");
@@ -1716,6 +1718,86 @@ void RunVisualGraphExecutionBudgetPolicyTest() {
         "Visual graph Fail execution budget policy did not return a structured runtime error");
 }
 
+void RunVisualGraphAuthoringAndLiteralTest() {
+    using namespace kb::visual;
+    const auto require = kb::tests::Require;
+    ResetTestRoot();
+    const auto catalog = VisualGraphNodeCatalog::CreateDefault();
+    VisualGraphAuthoringDocument document;
+    document.Create("AuthoredWorkflow");
+    std::string error;
+    const auto value = document.AddNode(*catalog.Find("Literal:Float"), 32, 200, error);
+    const auto text = document.AddNode(*catalog.Find("Literal:String"), 32, 400, error);
+    const std::string message = "line one # value\n\"line two\" \\ end";
+    require(value != 0 && text != 0 && document.SetLiteral(value, "2.5", error) && document.SetLiteral(text, message, error), "Typed literal authoring failed");
+    auto emit = *catalog.Find("BuiltIn:EmitEvent");
+    emit.symbol = "AuthoredValue";
+    emit.pins.push_back({.direction = VisualGraphPinDirection::Input, .name = "amount", .type = VisualGraphValueType::Float});
+    emit.pins.push_back({.direction = VisualGraphPinDirection::Input, .name = "label", .type = VisualGraphValueType::String});
+    const auto target = document.AddNode(emit, 320, 32, error);
+    require(target && document.Connect(1, "then", target, "exec", error) && document.Connect(value, "value", target, "amount", error) &&
+        document.Connect(text, "value", target, "label", error), "Graph authoring did not connect execution and data pins");
+    const auto good = VisualGraphAssetWriter::WriteToString(document.Snapshot().graph);
+    require(!document.SetLiteral(value, "nan", error) && !document.SetLiteral(value, "1e1000", error) &&
+        !document.Connect(text, "value", target, "amount", error) && good == VisualGraphAssetWriter::WriteToString(document.Snapshot().graph),
+        "Rejected typed edits mutated the graph");
+    require(!document.Connect(target, "then", target, "exec", error) && good == VisualGraphAssetWriter::WriteToString(document.Snapshot().graph),
+        "A cyclic execution edit changed the document");
+    const auto path = TestRoot() / "Authored.kbgraph";
+    require(document.Save(path, error) && !document.Dirty(), "Authored graph could not be saved atomically");
+    document.BeginGroup();
+    require(document.MoveNode(value, 40, 200, error) && document.MoveNode(value, 80, 220, error), "Grouped graph node move failed");
+    document.EndGroup();
+    require(document.Undo() && !document.Dirty() && document.Snapshot().positions[1].x == 32, "Undo did not restore an entire grouped move");
+    require(document.Redo() && document.Dirty() && document.Save(path, error), "Redo/save of graph layout failed");
+    VisualGraphAuthoringDocument loaded;
+    require(loaded.Load(path, error) && !loaded.Dirty() && loaded.Snapshot().positions[1].x == 80 &&
+        VisualGraphAssetWriter::WriteToString(loaded.Snapshot().graph) == good, "Graph semantic/layout round-trip failed");
+    const auto compiled = VisualGraphCompiler::Compile(loaded.Snapshot().graph);
+    require(compiled.Succeeded(), "Authored graph did not compile");
+    VisualGraphRuntimeArtifact artifact{.assetId = kb::assets::AssetId{771}, .module = compiled.module};
+    VisualGraphRuntimeBindingRegistry bindings;
+    VisualGraphDebugSession debugger;
+    debugger.SetBreakpoints({{artifact.assetId, target, true}});
+    VisualGraphRuntimeExecutionContext context;
+    const VisualGraphRuntimeExecutor executor{bindings, &debugger};
+    const auto paused = executor.Execute(artifact, VisualGraphLifecycleEvent::Tick, context);
+    require(paused.Succeeded() && paused.suspended && debugger.LastPause().nodeId == target && context.EmittedEvents().empty(),
+        "Authored graph breakpoint did not stop before its event");
+    debugger.Resume();
+    const auto executed = executor.Execute(artifact, VisualGraphLifecycleEvent::Tick, context);
+    require(executed.Succeeded() && !executed.suspended && context.EmittedEventRecords().size() == 1 &&
+        context.ReadFloat(value, "value") == 2.5F && context.ReadString(text, "value") == message,
+        "Authored graph did not execute typed literals or retain inspectable pin values");
+    const auto native = VisualGraphNativeCodeGenerator::Generate(compiled.module, {.requireNativeBindings = true});
+    require(native.Succeeded() && native.source.find("2.5F") != std::string::npos && native.source.find("line one # value\\n") != std::string::npos,
+        "Native graph generation lost typed literal semantics");
+    VisualGraphRuntimeBindingRegistry failingBindings;
+    require(failingBindings.Register({.opcode=VisualGraphIrOpcode::CallNative,.symbol="ExpectedFailure",
+        .callback=[](auto& execution,const auto&) { execution.ReportError("expected failure"); }}),"Failure fixture binding was not registered");
+    VisualGraphRuntimeArtifact failureArtifact{.assetId=kb::assets::AssetId{772}};
+    failureArtifact.module.functions.push_back({.event=VisualGraphLifecycleEvent::Tick,.eventNodeId=1,.entryNodeId=1,.instructions={
+        {.opcode=VisualGraphIrOpcode::CallNative,.sourceNodeId=1,.symbol="ExpectedFailure",.falseNodeId=2},
+        {.opcode=VisualGraphIrOpcode::EmitEvent,.sourceNodeId=2,.symbol="Recovered",.inputs={{"amount",VisualGraphValueType::Float,3,"value"}}},
+        {.opcode=VisualGraphIrOpcode::GetProperty,.sourceNodeId=3,.symbol=VisualGraphLiteral::Symbol("2.5"),.outputs={{"value",VisualGraphValueType::Float}}}}});
+    VisualGraphRuntimeExecutionContext failureContext;
+    const auto failure=VisualGraphRuntimeExecutor{failingBindings}.Execute(failureArtifact,VisualGraphLifecycleEvent::Tick,failureContext);
+    require(!failure.Succeeded() && failureContext.EmittedEventRecords().size()==1 && failureContext.ReadFloat(3,"value")==2.5F,
+        "A literal dependency re-reported an earlier handled failure and skipped the recovery path");
+    for (const auto& sample : std::vector<std::pair<VisualGraphValueType, std::string>>{
+        {VisualGraphValueType::Bool,"true"}, {VisualGraphValueType::Int,"-2147483648"},
+        {VisualGraphValueType::Int64,"-9223372036854775808"}, {VisualGraphValueType::UInt32,"4294967295"},
+        {VisualGraphValueType::Hash,"18446744073709551615"}, {VisualGraphValueType::Double,"1.2345678901234567"},
+        {VisualGraphValueType::Name,"A # B"}, {VisualGraphValueType::Guid,"01234567-89ab-cdef-0123-456789abcdef"}}) {
+        const auto literal = VisualGraphLiteral::Read(sample.first, VisualGraphLiteral::Symbol(sample.second));
+        require(literal && literal->Type() == sample.first && VisualGraphLiteral::Read(sample.first, VisualGraphLiteral::Symbol(VisualGraphLiteral::Display(*literal))),
+            "Literal boundary did not round-trip");
+    }
+    require(!VisualGraphLiteral::Parse(VisualGraphValueType::UInt32,"4294967296") && !VisualGraphLiteral::Parse(VisualGraphValueType::Float,"inf") &&
+        !VisualGraphLiteral::Read(VisualGraphValueType::String,"Literal:0z") && !VisualGraphLiteral::Parse(VisualGraphValueType::Entity,"42"),
+        "Invalid or persisted runtime-handle literal was accepted");
+}
+
 void RunVisualGraphDebuggerTest() {
     kb::visual::VisualGraphRuntimeArtifact artifact{};
     artifact.assetId = kb::assets::AssetId{ 229U };
@@ -1786,6 +1868,7 @@ void RunVisualGraphTests() {
     RunVisualGraphDocumentEditingTest();
     RunVisualGraphWaitContinuationTest();
     RunVisualGraphDebuggerTest();
+    RunVisualGraphAuthoringAndLiteralTest();
     RunBehaviourComponentSceneApiTest();
 }
 

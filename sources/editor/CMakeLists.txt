@@ -807,6 +807,7 @@ add_executable(kb_editor WIN32
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/TimelineEditorPanel.cpp
     src/rendering/BlendSpace2DEditorPanel.cpp
+    src/rendering/GameplayGraphEditorPanel.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
     src/assets/EditorAssetOpenPolicy.cpp
@@ -891,6 +892,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorTimelinePreviewSession.cpp
     src/scene/EditorBlendSpace2DPreviewSession.cpp
     src/scene/EditorSceneContextBlendSpace2D.cpp
+    src/scene/GameplayGraphEditorState.cpp
+    src/scene/EditorSceneContextGameplayGraph.cpp
     src/scene/EditorSceneContextTimeline.cpp
     src/scene/TimelineEditorModel.cpp
     src/scene/EditorHierarchyContentResolver.cpp
@@ -1453,6 +1456,8 @@ if(BUILD_TESTING)
           src/scene/TimelineEditorModel.cpp
           tests/EditorTimelineTests.cpp
           tests/EditorBlendSpace2DTests.cpp
+          src/scene/GameplayGraphEditorState.cpp
+          tests/EditorGameplayGraphTests.cpp
           src/app/scene_viewport/EditorSceneViewportMath.cpp
           src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
       src/scene/material/EditorMaterialAssetAuthoring.cpp
@@ -1550,6 +1555,8 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
     add_test(NAME kb_editor_timeline_tests COMMAND $<TARGET_FILE:kb_editor_tests> timeline)
+    add_test(NAME kb_editor_gameplay_graph_tests COMMAND $<TARGET_FILE:kb_editor_tests> gameplay-graph)
+    set_tests_properties(kb_editor_gameplay_graph_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;gameplay;graph" TIMEOUT 60)
     set_tests_properties(kb_editor_timeline_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;timeline" TIMEOUT 60)
     if(TARGET kb_cooker AND TARGET kb_game AND TARGET kb_engine_tests
         AND TARGET kb_physics_jolt_plugin AND TARGET kb_audio_miniaudio_plugin
@@ -1586,6 +1593,17 @@ if(BUILD_TESTING)
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
             set_tests_properties(kb_editor_blend_space_2d_workflow_package PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;animation;packaging" TIMEOUT 1200)
+            add_test(NAME kb_editor_gameplay_graph_workflow_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/GameplayGraphWorkflowTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
+                    --test-root "${CMAKE_BINARY_DIR}/gameplay_graph_workflow_tests"
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
+            set_tests_properties(kb_editor_gameplay_graph_workflow_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;gameplay;graph;packaging" TIMEOUT 1200)
         endif()
     endif()
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

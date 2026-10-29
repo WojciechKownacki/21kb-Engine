@@ -27,6 +27,7 @@ constexpr std::string_view kSceneTemplates[]{"Basic", "Empty"};
 constexpr std::string_view kYesNo[]{"yes", "no"};
 constexpr std::string_view kScriptLanguages[]{"lua", "cpp"};
 constexpr std::string_view kBlendSpaceActions[]{"new", "show", "add", "set", "remove", "sample", "assign"};
+constexpr std::string_view kGraphActions[]{"new","show","catalog","add","remove","move","literal","event","symbol","connect","disconnect","check"};
 
 struct ToolProperty {
     std::string_view name;
@@ -65,9 +66,9 @@ struct ToolProperty {
             items.Set("minLength", JsonValue::MakeNumber(1));
             descriptor.Set("items", std::move(items));
         }
-        if (property.type == "string") descriptor.Set("minLength", JsonValue::MakeNumber(1));
+        if (property.type == "string") descriptor.Set("minLength", JsonValue::MakeNumber(property.name == "value" ? 0 : 1));
         if (property.type == "integer") {
-            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "executionOrder" ? std::numeric_limits<int>::min() : property.name == "index" ? 0 : 1));
+            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "executionOrder" ? std::numeric_limits<int>::min() : property.name == "index" || property.name == "edge" ? 0 : 1));
             descriptor.Set("maximum", JsonValue::MakeNumber(property.name == "index" ? 255 : std::numeric_limits<int>::max()));
         }
         schemaProperties.Set(std::string{ property.name }, std::move(descriptor));
@@ -88,6 +89,23 @@ struct ToolProperty {
 }
 
 [[nodiscard]] JsonValue MakeCommandToolDescriptor(const CliCommandDescriptor& command) {
+    if (command.name == "graph") return MakeToolDescriptor(command.mcpTool,
+        "Authors gameplay graphs through the shared validated document model and atomic saves; checks provider signatures.", {
+            ToolProperty{"action","string","Graph operation; catalog enumerates node IDs and typed pins.",true,"",kGraphActions},
+            ToolProperty{"graph","string","A .kbgraph path inside the project Assets directory, required except for catalog.",false,"--graph"},
+            ToolProperty{"filter","string","Catalog search text.",false,"--filter"},
+            ToolProperty{"name","string","Name for a new graph.",false,"--name"},
+            ToolProperty{"entry","string","Catalog ID to add.",false,"--entry"},
+            ToolProperty{"node","integer","Node to remove, move or edit.",false,"--node"},
+            ToolProperty{"x","number","Finite node canvas coordinate.",false,"--x"},
+            ToolProperty{"y","number","Finite node canvas coordinate.",false,"--y"},
+            ToolProperty{"value","string","Literal text, lifecycle event or custom node name.",false,"--value"},
+            ToolProperty{"from","integer","Source node ID.",false,"--from"},
+            ToolProperty{"out","string","Source output pin name.",false,"--out"},
+            ToolProperty{"to","integer","Target node ID.",false,"--to"},
+            ToolProperty{"in","string","Target input pin name.",false,"--in"},
+            ToolProperty{"edge","integer","Zero-based edge index to disconnect.",false,"--edge"},
+        });
     if (command.name == "blend-space") return MakeToolDescriptor(command.mcpTool,
         "Authors and samples a BlendSpace2D asset with atomic validated edits, or assigns it to a controller state.", {
             ToolProperty{"action","string","Operation; add requires at/clip; set/remove require index; assign requires controller/state/axis names.",true,"",kBlendSpaceActions},
@@ -252,7 +270,8 @@ struct ToolCallOutcome {
             const auto* value = arguments->Find(key);
             const auto& type = property->Find("type")->AsString();
             if (type == "string") {
-                if (value->GetKind() != JsonValue::Kind::String || value->AsString().empty())
+                if (value->GetKind() != JsonValue::Kind::String ||
+                    (value->AsString().empty() && property->Find("minLength")->AsNumber() > 0))
                     return key + " must be a nonempty string";
                 if (const auto* choices = property->Find("enum")) {
                     bool accepted = false;

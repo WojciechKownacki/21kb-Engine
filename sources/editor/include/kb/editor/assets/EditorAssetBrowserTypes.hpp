@@ -73,6 +73,7 @@ enum class EditorAssetContextCommand {
     Reimport,
     UndoReimport,
     NewBlendSpace2D,
+    NewGameplayGraph,
 };
 
 enum class EditorAssetDropAction {

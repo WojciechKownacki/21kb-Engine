@@ -1,4 +1,5 @@
 #include "engine/visual/VisualGraphNodeCatalog.hpp"
+#include "engine/visual/VisualGraphLiteral.hpp"
 
 #include <ranges>
 #include <utility>
@@ -109,6 +110,20 @@ void AppendBindingPins(
 VisualGraphNodeCatalog VisualGraphNodeCatalog::CreateDefault() {
     VisualGraphNodeCatalog catalog;
     catalog.RegisterBuiltInDefinitions(VisualGraphNodeDefinitionRegistry::CreateDefault());
+    const auto producer = [&](std::string id, std::string name, std::string symbol, VisualGraphValueType type) {
+        static_cast<void>(catalog.Register({.id = std::move(id), .displayName = std::move(name), .category = "Values",
+            .kind = VisualGraphNodeKind::GetProperty, .symbol = std::move(symbol),
+            .pins = {{.direction = VisualGraphPinDirection::Output, .name = "value", .type = type}}}));
+    };
+    producer("Value:Self", "Self entity", "Self", VisualGraphValueType::Entity);
+    producer("Value:DeltaSeconds", "Delta seconds", "DeltaSeconds", VisualGraphValueType::Float);
+    for (const auto type : {VisualGraphValueType::Bool, VisualGraphValueType::Int, VisualGraphValueType::Float,
+            VisualGraphValueType::String, VisualGraphValueType::Int64, VisualGraphValueType::UInt32,
+            VisualGraphValueType::Double, VisualGraphValueType::Name, VisualGraphValueType::Guid, VisualGraphValueType::Hash}) {
+        const std::string name = ToString(type);
+        const bool text = type == VisualGraphValueType::String || type == VisualGraphValueType::Name || type == VisualGraphValueType::Guid;
+        producer("Literal:" + name, name + " literal", VisualGraphLiteral::Symbol(text ? "" : type == VisualGraphValueType::Bool ? "false" : "0"), type);
+    }
     return catalog;
 }
 

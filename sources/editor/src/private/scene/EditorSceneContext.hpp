@@ -128,6 +128,7 @@ struct TerrainLayerPaintSettings;
 
 namespace kb::editor {
 struct BlendSpace2DEditorState;
+struct GameplayGraphEditorState;
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
@@ -590,6 +591,12 @@ public:
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenTimelineEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenBlendSpace2DEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenGameplayGraphAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool CreateGameplayGraphAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] GameplayGraphEditorState* GameplayGraphEditor() noexcept { return gameplayGraphEditor_.get(); }
+    [[nodiscard]] const GameplayGraphEditorState* GameplayGraphEditor() const noexcept { return gameplayGraphEditor_.get(); }
+    [[nodiscard]] bool ConsumeGameplayGraphOpenRequest() noexcept;
+    void ClearGameplayGraphPreview() noexcept;
     [[nodiscard]] bool CreateBlendSpace2DAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool ConsumeBlendSpace2DEditorOpenRequest() noexcept;
     [[nodiscard]] bool EditBlendSpace2DAsset(const std::function<bool(kb::scene::BlendSpace2DAsset&)>& edit);
@@ -1571,6 +1578,7 @@ private:
     AnimationClipEditorDocumentState animationClipEditorDocument_;
     TimelineEditorDocumentState timelineEditorDocument_;
     std::unique_ptr<BlendSpace2DEditorState> blendSpaceEditor_;
+    std::unique_ptr<GameplayGraphEditorState> gameplayGraphEditor_;
     std::size_t timelineEditorFirstRow_ = 0, timelineEditorSelectedRow_ = 0;
     bool timelineEditorLoop_ = false;
     EditorTimelinePreviewSession timelineEditorPreview_;

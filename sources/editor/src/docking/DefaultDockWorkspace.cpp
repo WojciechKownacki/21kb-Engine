@@ -27,6 +27,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     case DockPanelKind::TilemapEditor: return std::string{ EditorText("panel.tilemap", "2D Map") };
     case DockPanelKind::TimelineEditor: return "Timeline";
     case DockPanelKind::BlendSpace2DEditor: return "BlendSpace2D";
+    case DockPanelKind::GameplayGraphEditor: return "Gameplay Graph";
     case DockPanelKind::Generic: break;
     }
     return {};
@@ -35,6 +36,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
 // Each panel starts with its own title; Editor Settings gives them the new one when the language changes.
 std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
     return {
+        DockPanel{ .id = 22, .kind = DockPanelKind::GameplayGraphEditor, .title = PanelTitle(DockPanelKind::GameplayGraphEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 760 } },
         DockPanel{ .id = 21, .kind = DockPanelKind::BlendSpace2DEditor, .title = PanelTitle(DockPanelKind::BlendSpace2DEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
         DockPanel{ .id = 20, .kind = DockPanelKind::TimelineEditor, .title = PanelTitle(DockPanelKind::TimelineEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
         DockPanel{ .id = 17, .kind = DockPanelKind::TilemapEditor, .title = PanelTitle(DockPanelKind::TilemapEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 720 } },

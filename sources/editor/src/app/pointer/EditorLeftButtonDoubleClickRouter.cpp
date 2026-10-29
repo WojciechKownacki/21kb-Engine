@@ -207,6 +207,9 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
             static_cast<void>(dockModel_.Commands().SetPanelTitle(DockPanelKind::TimelineEditor,metadata->virtualPath.filename().string()));
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::TimelineEditor, DockArea::Center));
     }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::GameplayGraphEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::GameplayGraphEditor,DockArea::Center));
+    }
     if (assetResult == EditorAssetBrowserDoubleClickResult::BlendSpace2DEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::BlendSpace2DEditor,DockArea::Center));
     }

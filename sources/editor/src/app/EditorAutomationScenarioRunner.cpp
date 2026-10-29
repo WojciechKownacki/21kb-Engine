@@ -1,4 +1,6 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
 #include "engine/assets/AssetImportPreset.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -3669,6 +3671,8 @@ ReadScriptValue(
             created = state.context.CreateParticleEffectAsset(virtualFolder);
         } else if (*type == "blend_space_2d") {
             created = state.context.CreateBlendSpace2DAsset(virtualFolder);
+        } else if (*type == "gameplay_graph") {
+            created = state.context.CreateGameplayGraphAsset(virtualFolder);
         } else if (*type == "post_process_profile") {
             created = state.context.CreatePostProcessProfileAsset(virtualFolder);
         } else if (*type == "import_preset") {
@@ -5233,6 +5237,66 @@ ReadScriptValue(
             *key };
     }
 
+    if (operation->starts_with("graph_") || *operation=="assert_graph") {
+        auto* graph=state.context.GameplayGraphEditor();if (!graph) return {false,"Gameplay graph is not open"};
+        const auto node=UInt32Member(step,"node",error,false).value_or(0);
+        const auto accepted=BoolMember(step,"accepted",error,false).value_or(true);
+        bool changed=false;
+        if (*operation=="graph_add") {
+            const auto entry=StringMember(step,"entry",error);
+            const auto x=NumberMember(step,"x",error,false).value_or(32),y=NumberMember(step,"y",error,false).value_or(32);
+            const auto* found=entry?graph->catalog.Find(*entry):nullptr;
+            if (!found && entry) for (const auto& candidate:graph->catalog.Entries()) if (candidate.symbol==*entry) { found=&candidate;break; }
+            if (!found || !error.empty()) return {false,"Invalid graph catalog entry"};
+            graph->selected=graph->document.AddNode(*found,static_cast<float>(x),static_cast<float>(y),graph->error);changed=graph->selected!=0;
+        } else if (*operation=="graph_literal") {
+            const auto value=StringMember(step,"value",error);if (!value) return {false,error};
+            changed=graph->document.SetLiteral(node,*value,graph->error);
+        } else if (*operation=="graph_connect") {
+            const auto from=UInt32Member(step,"from",error),to=UInt32Member(step,"to",error);
+            const auto output=StringMember(step,"out",error),input=StringMember(step,"in",error);
+            if (!from || !to || !output || !input) return {false,error};
+            changed=graph->document.Connect(*from,*output,*to,*input,graph->error);
+        } else if (*operation=="graph_pointer") {
+            const auto phase=StringMember(step,"phase",error);if (!phase) return {false,error};
+            const DockRect bounds{0,0,1180,760};
+            const auto button=StringMember(step,"button",error,false),pin=StringMember(step,"pin",error,false);
+            auto point=button?GameplayGraphEditorPanel::ButtonPoint(bounds,*button):node?GameplayGraphEditorPanel::NodePoint(bounds,state.context,node,pin.value_or(""),BoolMember(step,"output",error,false).value_or(false)):std::nullopt;
+            if (!point) point=POINT{static_cast<LONG>(NumberMember(step,"x",error,false).value_or(0)),static_cast<LONG>(NumberMember(step,"y",error,false).value_or(0))};
+            point->x+=static_cast<LONG>(NumberMember(step,"dx",error,false).value_or(0));point->y+=static_cast<LONG>(NumberMember(step,"dy",error,false).value_or(0));
+            if (*phase=="down") changed=GameplayGraphEditorPanel::PointerDown(nullptr,bounds,point->x,point->y,state.context);
+            else if (*phase=="move") changed=GameplayGraphEditorPanel::PointerMove(bounds,point->x,point->y,state.context);
+            else if (*phase=="up") { GameplayGraphEditorPanel::PointerUp(nullptr,state.context);changed=true; }
+            return {error.empty() && changed==accepted,graph->error};
+        } else if (*operation=="graph_preview") {
+            const auto alias=StringMember(step,"entity",error);if (!alias) return {false,error};
+            const bool built=graph->BuildPreview(state.context.Scene(),state.context.Project(),ResolveEntity(state,*alias));
+            if (built) graph->manualPreview=true;
+            return {built==accepted,graph->error};
+        } else if (*operation=="graph_tick") {
+            const auto dt=NumberMember(step,"dt",error);if (!dt) return {false,error};
+            return {graph->Execute(static_cast<float>(*dt))==accepted,graph->error};
+        } else if (*operation=="assert_graph") {
+            const auto nodes=UInt32Member(step,"nodes",error,false),edges=UInt32Member(step,"edges",error,false),pausedNode=UInt32Member(step,"paused_node",error,false);
+            const auto dirty=BoolMember(step,"dirty",error,false),paused=BoolMember(step,"paused",error,false);
+            const auto value=StringMember(step,"value",error,false),pin=StringMember(step,"pin",error,false);
+            const auto position=NumberMember(step,"preview_x",error,false);
+            const auto source=StringMember(step,"source_entity",error,false);
+            const auto sourceX=NumberMember(step,"source_x",error,false),nodeX=NumberMember(step,"node_x",error,false),nodeY=NumberMember(step,"node_y",error,false);
+            bool valid=error.empty() && (!nodes || graph->document.Snapshot().graph.nodes.size()==*nodes) && (!edges || graph->document.Snapshot().graph.edges.size()==*edges) &&
+                (!dirty || graph->document.Dirty()==*dirty) && (!paused || graph->paused==*paused) && (!pausedNode || (graph->PauseLocation().valid && graph->PauseLocation().nodeId==*pausedNode));
+            if (value && pin) valid=valid && graph->PinValue(node,*pin,BoolMember(step,"output",error,false).value_or(true))==*value;
+            if (position) valid=valid && graph->PreviewScene() && std::abs(graph->PreviewScene()->Transforms().Get(graph->PreviewOwner()).localPosition.x-*position)<0.0001;
+            if (source && sourceX) { const auto* transform=state.context.Scene().Transforms().TryGet(ResolveEntity(state,*source));valid=valid && transform && std::abs(transform->localPosition.x-*sourceX)<0.0001; }
+            if (nodeX || nodeY) {
+                const auto point=std::ranges::find(graph->document.Snapshot().positions,node,&kb::visual::VisualGraphNodePosition::nodeId);
+                valid=valid && point!=graph->document.Snapshot().positions.end() && (!nodeX || std::abs(point->x-*nodeX)<0.0001) && (!nodeY || std::abs(point->y-*nodeY)<0.0001);
+            }
+            return {valid,"Gameplay graph document/runtime assertion"};
+        } else return {false,"Unknown gameplay graph operation"};
+        if (changed) graph->Edited();
+        return {changed==accepted,graph->error};
+    }
     if (*operation == "capture_timeline_preview") {
         const auto checkpoint = StringMember(step,"checkpoint",error);
         return {checkpoint && state.automation.CaptureTimelinePreview(*checkpoint), "Timeline GPU preview"};
