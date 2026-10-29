@@ -2,6 +2,7 @@
 #include "TestSuites.hpp"
 
 #include "engine/ecs/System.hpp"
+#include "engine/ecs/Query.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputKey.hpp"
@@ -387,6 +388,80 @@ void RunSceneModuleReloadLifecycleTest() {
     kb::tests::Require(probe.loadOrder.size() == 2, "Reload should load active modules again");
     kb::tests::Require(probe.enableCount == 2, "Reload should enable active modules again");
     kb::tests::Require(probe.attachCount == 2, "Reload should attach active modules again");
+}
+
+struct ReloadCacheValue { int value = 0; };
+
+class QueryCacheModule final : public kb::modules::IEngineModule {
+public:
+    std::vector<kb::scene::Scene*> scenes;
+    bool releasedBeforeUnload = false;
+    kb::modules::EngineModuleMetadata Metadata() const override {
+        return { "Tests.QueryCache", 1U, {}, Phase::Default };
+    }
+    void OnSceneAttach(kb::scene::Scene& scene) override {
+        [[maybe_unused]] auto query = scene.Runtime().EcsWorld().CreateQuery<ReloadCacheValue>();
+    }
+    void OnUnload() override {
+        releasedBeforeUnload = true;
+        for (auto* scene : scenes) {
+            auto& world = scene->Runtime().EcsWorld();
+            const auto before = world.TelemetrySnapshot().queryCacheMisses;
+            [[maybe_unused]] auto query = world.CreateQuery<ReloadCacheValue>();
+            releasedBeforeUnload &= world.TelemetrySnapshot().queryCacheMisses == before + 1U;
+        }
+    }
+};
+
+void RunMultiSceneQueryCacheReloadTest() {
+    kb::scene::Scene first;
+    kb::scene::Scene second;
+    EngineModuleHost host{ kb::project::ProjectDescriptor{} };
+    auto module = std::make_unique<QueryCacheModule>();
+    auto* probe = module.get();
+    probe->scenes = { &first, &second };
+    host.Add(std::move(module));
+    host.Load(first.Runtime().EcsWorld());
+    host.AttachScene(first);
+    host.AttachScene(second);
+    std::array<kb::scene::Scene*, 3U> scenes{ &first, nullptr, &second };
+    host.Reload(first.Runtime().EcsWorld(), scenes);
+    kb::tests::Require(probe->releasedBeforeUnload,
+        "Reload must release unused query plans in every attached scene before module unload");
+    host.DetachScene(second);
+    host.DetachScene(first);
+}
+
+void RunDynamicModuleConstructionFailureTest() {
+#if !KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS && defined(KB_MODULE_FAULT_1_PATH)
+    const std::array<const char*, 3U> paths{
+        KB_MODULE_FAULT_1_PATH, KB_MODULE_FAULT_2_PATH, KB_MODULE_FAULT_3_PATH };
+    const std::array<const char*, 3U> traces{
+        KB_MODULE_FAULT_1_TRACE, KB_MODULE_FAULT_2_TRACE, KB_MODULE_FAULT_3_TRACE };
+    const std::array<const char*, 3U> expected{
+        "failed during creation", "failed during metadata", "metadata name does not match" };
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        std::filesystem::remove(traces[index]);
+        kb::project::ProjectDescriptor project;
+        project.disableEnginePluginsByDefault = true;
+        project.plugins.push_back({ .name = "Tests.ModuleFault", .binaryPath = paths[index], .enabled = true });
+        kb::scene::Scene scene;
+        EngineModuleHost host{ project };
+        host.Load(scene.Runtime().EcsWorld());
+        kb::tests::Require(host.ActiveCount() == 0U &&
+                std::ranges::any_of(host.Diagnostics(), [&](const std::string& diagnostic) {
+                    return diagnostic.find(expected[index]) != std::string::npos;
+                }), "A rejected plugin factory or metadata must leave no active module and report its cause");
+        std::ifstream input{ traces[index] };
+        const std::string trace{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        const std::array<std::string, 3U> expectedTraces{
+            "factory entered\nexception destroyed\n",
+            "factory entered\nmetadata entered\nmodule destroyed\nexception destroyed\n",
+            "factory entered\nmetadata entered\nmodule destroyed\n" };
+        kb::tests::Require(trace == expectedTraces[index],
+            "Plugin objects and plugin-defined exception destructors must run before unloading the rejected DLL");
+    }
+#endif
 }
 
 // Dependencies load before dependents regardless of registration order.
@@ -791,6 +866,8 @@ void RunEngineModuleTests() {
     RunSceneInputActivationPerLocalUserTest();
     RunBasicLightingPluginTogglesSceneLightingTest();
     RunPhysicsModuleReloadTest();
+    RunMultiSceneQueryCacheReloadTest();
+    RunDynamicModuleConstructionFailureTest();
 }
 
 } // namespace kb::tests

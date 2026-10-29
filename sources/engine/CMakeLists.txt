@@ -1868,6 +1868,22 @@ if(BUILD_TESTING)
     set_tests_properties(kb_background_read_tests PROPERTIES TIMEOUT 60)
     kb_apply_quality_gates(kb_background_read_tests)
 
+    foreach(fault RANGE 1 3)
+        add_library(kb_engine_module_fault_${fault} SHARED tests/EngineModuleFaultPlugin.cpp)
+        target_include_directories(kb_engine_module_fault_${fault} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_definitions(kb_engine_module_fault_${fault} PRIVATE
+            KB_MODULE_FAULT=${fault}
+            "KB_MODULE_FAULT_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_fault_${fault}.events\"")
+        kb_apply_quality_gates(kb_engine_module_fault_${fault})
+        if(MSVC)
+            # These fixtures deliberately throw from an exported C entry point.
+            target_compile_options(kb_engine_module_fault_${fault} PRIVATE /EHsc-)
+        endif()
+        set_property(SOURCE tests/EngineModuleTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+            "KB_MODULE_FAULT_${fault}_PATH=\"$<TARGET_FILE:kb_engine_module_fault_${fault}>\""
+            "KB_MODULE_FAULT_${fault}_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_fault_${fault}.events\"")
+    endforeach()
+
     add_library(kb_engine_old_abi_test_plugin SHARED
         tests/OldEngineModuleAbiPlugin.cpp
     )
@@ -1994,6 +2010,8 @@ if(BUILD_TESTING)
         tests/SecurityTests.cpp
     )
 
+    add_dependencies(kb_engine_tests
+        kb_engine_module_fault_1 kb_engine_module_fault_2 kb_engine_module_fault_3)
     target_link_libraries(kb_engine_tests
         PRIVATE
             kb_engine

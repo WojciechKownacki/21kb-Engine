@@ -3,6 +3,8 @@
 #include "engine/ecs/World.hpp"
 #include "engine/modules/EngineModuleContext.hpp"
 #include "engine/modules/EngineModuleExports.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 
 #include <exception>
 #include <algorithm>
@@ -29,19 +31,19 @@ public:
         EngineModuleLibrary library,
         IEngineModule* module,
         DestroyEngineModuleFn destroy,
-        bool unloadLibraryOnShutdown) noexcept
+        EngineModuleMetadata metadata) noexcept
         : path_(std::move(path))
         , library_(std::move(library))
         , module_(module)
         , destroy_(destroy)
-        , unloadLibraryOnShutdown_(unloadLibraryOnShutdown) {}
+        , metadata_(std::move(metadata)) {}
 
     ~DynamicEngineModule() override {
         if (module_ != nullptr && destroy_ != nullptr) {
             destroy_(module_);
             module_ = nullptr;
         }
-        if (unloadLibraryOnShutdown_) {
+        if (metadata_.unloadLibraryOnShutdown) {
             library_.Reset();
         } else {
             library_.ReleaseWithoutUnload();
@@ -49,7 +51,7 @@ public:
     }
 
     [[nodiscard]] EngineModuleMetadata Metadata() const override {
-        return module_->Metadata();
+        return metadata_;
     }
 
     void OnLoad(EngineModuleContext& context) override {
@@ -81,7 +83,7 @@ private:
     EngineModuleLibrary library_;
     IEngineModule* module_ = nullptr;
     DestroyEngineModuleFn destroy_ = nullptr;
-    bool unloadLibraryOnShutdown_ = true;
+    EngineModuleMetadata metadata_;
 };
 
 [[nodiscard]] std::unique_ptr<IEngineModule> LoadDynamicModule(
@@ -130,15 +132,31 @@ private:
         loaded.library.Reset();
         return nullptr;
     }
-    IEngineModule* module = create();
-    if (module == nullptr) {
-        diagnostics.push_back("plugin '" + path.string() + "' did not create a module");
-        loaded.library.Reset();
-        return nullptr;
+    // Destroy plugin-owned objects and exceptions while their library is still
+    // mapped, including failures before ownership reaches the host wrapper.
+    const char* step = "creation";
+    try {
+        std::unique_ptr<IEngineModule, DestroyEngineModuleFn> module{ create(), destroy };
+        if (module == nullptr) {
+            diagnostics.push_back("plugin '" + path.string() + "' did not create a module");
+            return nullptr;
+        }
+        step = "metadata";
+        EngineModuleMetadata metadata = module->Metadata();
+        if (metadata.name != exportedName) {
+            diagnostics.push_back("plugin '" + path.string() + "' metadata name does not match its exported name");
+            return nullptr;
+        }
+        auto wrapper = std::make_unique<DynamicEngineModule>(loaded.loadedPath,
+            std::move(loaded.library), module.get(), destroy, std::move(metadata));
+        static_cast<void>(module.release());
+        return wrapper;
+    } catch (const std::exception& error) {
+        diagnostics.push_back("plugin '" + path.string() + "' failed during " + step + ": " + error.what());
+    } catch (...) {
+        diagnostics.push_back("plugin '" + path.string() + "' failed during " + step + " with an unknown error");
     }
-
-    const EngineModuleMetadata metadata = module->Metadata();
-    return std::make_unique<DynamicEngineModule>(loaded.loadedPath, std::move(loaded.library), module, destroy, metadata.unloadLibraryOnShutdown);
+    return nullptr;
 }
 
 // Topologically order the active modules: a module never loads before a
@@ -420,6 +438,13 @@ void EngineModuleHost::Reload(kb::ecs::World& world, std::span<kb::scene::Scene*
         for (auto it = attachedScenes.rbegin(); it != attachedScenes.rend(); ++it) {
             if (*it != nullptr) {
                 DetachScene(**it);
+            }
+        }
+        // Each attached scene has its own cache, potentially retaining query
+        // deleters from the module that is about to be unmapped.
+        for (kb::scene::Scene* scene : attachedScenes) {
+            if (scene != nullptr) {
+                scene->Runtime().EcsWorld().ReleaseUnusedQueryPlans();
             }
         }
         world.ReleaseUnusedQueryPlans();

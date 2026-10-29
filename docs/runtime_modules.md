@@ -26,6 +26,16 @@ reattaches the scenes. Provider runtime state is recreated by those lifecycle
 callbacks. Initialization failure after this point uses load rollback; it does
 not restore the previous instance.
 
+Before unloading, the host releases unused query plans from every attached
+scene's world. A plan still owned by a live query is not discarded by this cache
+cleanup; modules must release those queries during detach.
+
+The host takes ownership of a factory result immediately through the plugin's
+exported destroy function. A metadata error or inconsistent module name destroys
+the object before closing the library. Plugin-defined exceptions are also
+destroyed while the library is mapped. Validated metadata is copied into the
+host wrapper and is not requested repeatedly from the plugin.
+
 The physics provider removes its scene system and backend on detach. Repeated
 attachment is idempotent; reload constructs one replacement system rather than
 leaving earlier simulations attached.
