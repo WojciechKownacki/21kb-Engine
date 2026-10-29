@@ -4,6 +4,8 @@
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "scene/SceneGameplayService.hpp"
+#include "scene/TimelineAudioPlayback.hpp"
+#include "engine/scene/TimelineSequencePlan.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
@@ -221,9 +223,32 @@ struct AnimatorInstance {
 
 using AnimatorRuntimeRecord = AnimatorInstance;
 
+struct TimelineAnimatorControl {
+    std::uint64_t owner = 0;
+    std::optional<AnimatorInstance> previous;
+};
+
 struct TimelineRuntimeBinding {
     SceneEntity target{};
     bool explicitlyBound = false;
+};
+
+struct TimelineRuntimeAnimation {
+    kb::assets::AssetHandle<AnimationClip> asset;
+    std::uint64_t assetLoadGeneration = 0;
+    std::string binding;
+    double startSeconds = 0.0;
+    double endSeconds = 0.0;
+    double sourceOffsetSeconds = 0.0;
+    double rate = 1.0;
+};
+
+struct TimelineRuntimeSegment {
+    TimelineSequenceSegment source;
+    std::uint64_t assetLoadGeneration = 0;
+    std::map<std::string, TimelineRuntimeBinding, std::less<>> bindings;
+    std::vector<TimelineAudioVoice> audioVoices;
+    std::vector<TimelineRuntimeAnimation> animations;
 };
 
 struct TimelineRuntimeRecord {
@@ -235,6 +260,11 @@ struct TimelineRuntimeRecord {
     std::map<std::string, TimelineRuntimeBinding, std::less<>> bindings;
     float timeSeconds = 0.0F;
     bool playing = false;
+    float playbackRate = 1.0F;
+    bool looping = false;
+    std::vector<TimelineRuntimeSegment> segments;
+    std::size_t signalCount = 0;
+    bool audioDiscontinuity = true;
 };
 
 // Derived execution state for ContentInstanceComponent. It deliberately keeps
@@ -298,6 +328,7 @@ public:
     std::uint64_t localizationCatalogGeneration = 0U;
     std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorInstance> animators;
+    std::map<std::uint64_t, TimelineAnimatorControl> timelineAnimatorControls;
     SceneNavigationState navigation;
     std::map<std::uint64_t, SkeletonBindingRuntimePose> skeletonBindingPoses;
     // Clips made for another skeleton, played on a character's own (AnimationRetargeting), keyed by

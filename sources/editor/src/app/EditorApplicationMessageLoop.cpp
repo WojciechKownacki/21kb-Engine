@@ -1327,6 +1327,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
+    const bool timelinePreviewChanged = state.sceneContext.TickTimelineEditorPreview(deltaSeconds);
+    if (timelinePreviewChanged) {
+        state.sceneViewport.RequestPresent();
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::TimelineEditor);
+    }
     const bool audioMetersChanged = EditorAudioMixerRuntime::ShouldRefresh(state.sceneContext.Scene());
     if (audioMetersChanged) EditorWindowInvalidator::InvalidateDockPanel(
         state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Inspector);
@@ -1378,7 +1384,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const bool viewportsPresented = PresentVisibleViewports(state);
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
-        sceneParticlesChanged || scriptSaved ||
+        sceneParticlesChanged || scriptSaved || timelinePreviewChanged ||
         audioPreviewChanged || audioMetersChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }

@@ -5,6 +5,7 @@
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorSceneDirtyPrompt.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
 
 #include <string>
 
@@ -15,6 +16,8 @@ std::optional<EditorDirtySceneResolution> EditorSceneLifecycleGuard::ConfirmDirt
     EditorSceneContext& sceneContext,
     EditorSceneTransition transition) {
     if (!EditorMap2DWindow::CloseAll(owner)) return std::nullopt;
+    if (!TimelineEditorPanel::ResolveClose(owner, sceneContext)) return std::nullopt;
+    sceneContext.ClearTimelineEditorPreview();
     if (!sceneContext.SceneDocumentDirty()) {
         return EditorDirtySceneResolution::Save;
     }

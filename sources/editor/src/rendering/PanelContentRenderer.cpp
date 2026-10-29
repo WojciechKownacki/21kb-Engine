@@ -12,6 +12,7 @@
 #include "rendering/EditorScriptEditorOverlay.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
@@ -355,6 +356,11 @@ void PanelContentRenderer::Paint(
         AnimationClipEditorPanelRenderer{}.Paint(
             dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
             renderBackendSettings, sceneViewport);
+        break;
+    case DockPanelKind::TimelineEditor:
+        TimelineEditorPanel::Paint(dc, sceneViewportHost,
+            {visibleContent.left, visibleContent.top, visibleContent.right-visibleContent.left, visibleContent.bottom-visibleContent.top},
+            panel, theme, sceneContext, sceneViewport);
         break;
     case DockPanelKind::AnimatorEditor:
         AnimatorEditorPanelRenderer{}.Paint(

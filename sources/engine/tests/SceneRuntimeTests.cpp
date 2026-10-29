@@ -26,6 +26,7 @@ void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
 void RunSceneUIBuildFrameProfile();
 void RunSceneTransformGoldenTests();
+void VerifyTimelineAudioProject(const char* filename);
 }
 
 namespace {
@@ -276,6 +277,9 @@ void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 #endif
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string_view{argv[1]} == "timeline-project") {
+        kb::tests::VerifyTimelineAudioProject(argv[2]); return 0;
+    }
     if (argc <= 1) {
         RunAllSuites();
         return EXIT_SUCCESS;

@@ -459,6 +459,7 @@ void EditorSceneContext::StartUntitledBasicScene() {
 }
 
 EditorSceneContext::~EditorSceneContext() {
+    timelineEditorPreview_.Clear();
     if (scene_) EditorMap2DService::ClearPreviews(*scene_);
     if (documentScene_ && scene_ != documentScene_.get()) EditorMap2DService::ClearPreviews(*documentScene_);
     ClearBuildGameSigningPasswords();
@@ -1111,6 +1112,7 @@ void EditorSceneContext::MarkSceneDocumentDirty() noexcept {
 }
 
 bool EditorSceneContext::SaveOpenDocuments() {
+    if (timelineEditorDocument_.Dirty() && !SaveTimelineEditorAsset()) return false;
     LogMaterialGraphDebug(console_, "save-open-documents-request materialOpen=" +
         std::to_string(materialEditor_.OpenAssetId().value) +
         " materialDirty=" + std::string{ materialEditor_.Dirty() ? "true" : "false" } +
@@ -4555,18 +4557,9 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
         return false;
     }
     if (metadata->type == kb::scene::kAnimatorControllerAssetType) return OpenAnimatorEditorAsset(id);
-    if (metadata->type != kb::scene::kTimelineAssetType) {
-        console_.Error("Asset Editor", "Only Timeline assets use the Script Editor.");
-        return false;
-    }
-    std::filesystem::path path = metadata->physicalPath;
-    if (const std::optional<std::filesystem::path> mounted =
-            scene_->Assets().Manager().Mounts().Resolve(metadata->virtualPath)) {
-        path = *mounted;
-    }
-    scriptEditor_.Open(path, id, metadata->virtualPath.filename().string());
-    console_.Info("Asset Editor", "Opened typed animation/timeline asset: " + metadata->virtualPath.generic_string());
-    return true;
+    if (metadata->type == kb::scene::kTimelineAssetType) return OpenTimelineEditorAsset(id);
+    console_.Error("Asset Editor", "Select a Timeline or Animator Controller asset.");
+    return false;
 }
 
 bool EditorSceneContext::OpenAnimatorEditorAsset(kb::assets::AssetId id) {

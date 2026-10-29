@@ -32,6 +32,8 @@
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/core/JsonValue.hpp"
+#include "scene/TimelineEditorModel.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -5222,6 +5224,83 @@ ReadScriptValue(
             virtualKey.has_value() &&
                 state.automation.InspectorKey(*virtualKey),
             *key };
+    }
+
+    if (*operation == "capture_timeline_preview") {
+        const auto checkpoint = StringMember(step,"checkpoint",error);
+        return {checkpoint && state.automation.CaptureTimelinePreview(*checkpoint), "Timeline GPU preview"};
+    }
+    if (*operation == "timeline_edit") {
+        const auto label = StringMember(step, "label", error);
+        const auto text = StringMember(step, "text", error);
+        const auto occurrence = UInt32Member(step, "occurrence", error, false).value_or(0);
+        const auto* asset = state.context.TimelineEditorDocument().WorkingCopy();
+        if (!label || !text || !asset || !error.empty()) return {false, "invalid Timeline edit"};
+        std::size_t found = 0;
+        for (const auto& row : TimelineEditorModel::Rows(*asset)) if (row.label == *label && row.edit) {
+            if (found++ != occurrence) continue;
+            const bool result = state.context.EditTimelineAsset([&](auto& candidate) { return row.edit(candidate, *text); });
+            const bool expected = BoolMember(step, "accepted", error, false).value_or(true);
+            return {error.empty() && result == expected, "Timeline row " + *label};
+        }
+        return {false, "Timeline row was not found"};
+    }
+    if (*operation == "timeline_add") {
+        const auto kind = StringMember(step, "kind", error);
+        const auto binding = StringMember(step, "binding", error);
+        const auto reference = StringMember(step, "reference", error, false).value_or("");
+        if (!kind || !binding || !error.empty()) return {false, error};
+        const std::array<std::string_view,8> names{"binding","transform","property","audio","event","sequence","animation","marker"};
+        const auto entry = std::find(names.begin(), names.end(), *kind);
+        if (entry == names.end()) return {false, "unknown Timeline track kind"};
+        std::optional<kb::scene::TimelineAsset> child;
+        if (*kind == "sequence") {
+            const auto id = ResolveAsset(state, reference);
+            const auto handle = state.context.Scene().Assets().Manager().Load<kb::scene::TimelineAsset>(id);
+            if (handle.IsLoaded()) child = *handle;
+        }
+        const bool added = state.context.EditTimelineAsset([&](auto& asset) {
+            return TimelineEditorModel::Add(asset,static_cast<TimelineEditorTrackKind>(entry-names.begin()),*binding,reference,
+                state.context.Scene().Runtime().EcsWorld(), child ? &*child : nullptr);
+        });
+        return {added, "Timeline " + *kind};
+    }
+    if (*operation == "timeline_owner") {
+        const auto alias = StringMember(step, "entity", error);
+        return {alias && state.context.SetTimelineEditorPreviewOwner(ResolveEntity(state, *alias)), "Timeline preview owner"};
+    }
+    if (*operation == "timeline_seek" || *operation == "timeline_tick") {
+        const auto time = NumberMember(step, "time", error);
+        if (!time || *time < 0) return {false, "invalid Timeline time"};
+        return {*operation == "timeline_seek" ? state.context.SeekTimelineEditorPreview(static_cast<float>(*time)) :
+            state.context.TickTimelineEditorPreview(static_cast<float>(*time)), *operation};
+    }
+    if (*operation == "timeline_pointer") {
+        const auto x = UInt32Member(step,"x",error), y = UInt32Member(step,"y",error);
+        if (!x || !y) return {false,error};
+        return {TimelineEditorPanel::Pointer(nullptr,{0,0,1100,720},static_cast<int>(*x),static_cast<int>(*y),state.context), "Timeline panel pointer"};
+    }
+    if (*operation == "assert_timeline") {
+        const auto time = NumberMember(step,"time",error,false);
+        const auto position = NumberMember(step,"position_x",error,false);
+        const auto sourcePosition = NumberMember(step,"source_position_x",error,false);
+        const auto dirty = BoolMember(step,"dirty",error,false);
+        const auto playing = BoolMember(step,"playing",error,false);
+        const auto count = NumberMember(step,"events",error,false);
+        const auto last = StringMember(step,"last",error,false);
+        const auto& preview = state.context.TimelineEditorPreview();
+        bool valid = error.empty() && (!time || std::abs(preview.Time()-*time) < 0.0001) &&
+            (!dirty || state.context.TimelineEditorDocument().Dirty() == *dirty) && (!playing || preview.Playing() == *playing);
+        if (position) valid = valid && preview.Scene() && std::abs(preview.Scene()->Transforms().Get(preview.Owner()).localPosition.x-*position) < 0.0001;
+        if (sourcePosition) valid = valid && std::abs(state.context.Scene().Transforms().Get(state.context.SelectedEntity()).localPosition.x-*sourcePosition) < 0.0001;
+        if (count || last) {
+            const auto* scripts = preview.Scripts();
+            const auto counted = scripts ? scripts->SharedState().Get("count") : std::nullopt;
+            const auto named = scripts ? scripts->SharedState().Get("last") : std::nullopt;
+            valid = valid && (!count || (counted && counted->AsInt() == static_cast<std::int64_t>(*count))) &&
+                (!last || (named && named->AsString() == *last));
+        }
+        return {valid,"Timeline authored document and isolated runtime"};
     }
 
     if (*operation == "capture") {

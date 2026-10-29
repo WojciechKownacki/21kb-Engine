@@ -2469,14 +2469,14 @@ void EvaluateControllerTransitions(AnimatorRuntimeRecord& record) {
 
 } // namespace
 
-bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_t controllerAssetId) {
+static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::AssetHandle<AnimatorController> controller) {
     if (!scene.Entities().IsAlive(entity)) return false;
     // Installing the record below can replace an existing animator runtime;
     // an in-flight debug snapshot build must finish reading it first.
     JoinAnimatorDebugSnapshotJob(SceneAccess::State(scene));
     auto& manager = scene.Assets().Manager();
-    auto controller = manager.Load<AnimatorController>(kb::assets::AssetId{ controllerAssetId });
     if (!controller.IsLoaded()) return false;
+    const auto controllerAssetId = controller.Id().value;
 
     AnimatorRuntimeRecord candidate{};
     candidate.entity = entity;
@@ -2659,6 +2659,85 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
     }
     SceneAccess::State(scene).animators[entity.Id()] = std::move(candidate);
     return true;
+}
+
+bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_t controllerAssetId) {
+    if (SceneAccess::State(scene).timelineAnimatorControls.contains(entity.Id())) return false;
+    return AttachController(scene, entity, scene.Assets().Manager().Load<AnimatorController>(kb::assets::AssetId{controllerAssetId}));
+}
+
+bool SceneAnimatorService::SampleTimelineClip(Scene& scene, SceneEntity entity,
+    std::uint64_t clipAssetId, float sourceTimeSeconds, std::uint64_t timelineOwner) {
+    if (timelineOwner == 0 || !scene.Entities().IsAlive(entity) || !std::isfinite(sourceTimeSeconds) || sourceTimeSeconds < 0.0F)
+        return false;
+    auto& state = SceneAccess::State(scene);
+    JoinAnimatorDebugSnapshotJob(state);
+    auto control = state.timelineAnimatorControls.find(entity.Id());
+    if (control != state.timelineAnimatorControls.end() && control->second.owner != timelineOwner)
+        throw std::runtime_error("Timeline animation target is already controlled by another sequence");
+    const auto* authored = scene.Components().Animators().TryGet(entity);
+    if (authored && authored->rootMotionOwner != AnimatorRootMotionOwner::None)
+        throw std::runtime_error("Timeline animation requires exclusive pose ownership without physics root motion");
+    auto& manager = scene.Assets().Manager();
+    auto clip = manager.Load<AnimationClip>(kb::assets::AssetId{clipAssetId});
+    if (!clip.IsLoaded() || sourceTimeSeconds > clip->durationSeconds) return false;
+    auto* record = Find(state, entity);
+    const bool acquiring = control == state.timelineAnimatorControls.end();
+    if (acquiring || record == nullptr || record->controller.Id().value != clipAssetId ||
+        !RuntimeAssetsAreCurrent(manager, *record) || !RuntimeSkeletalBindingIsCurrent(scene, *record) ||
+        record->observedHierarchyTopologyVersion != state.hierarchyTopologyVersion) {
+        TimelineAnimatorControl saved{.owner = timelineOwner};
+        if (acquiring && record != nullptr) saved.previous = *record;
+        auto controller = std::make_shared<AnimatorController>();
+        AnimatorControllerLayer layer;
+        layer.name = "Timeline";
+        layer.defaultState = "Clip";
+        layer.states.push_back({.id = 1, .name = "Clip", .clipReference = kb::assets::ToString(clip.Id())});
+        controller->layers.push_back(std::move(layer));
+        if (!AttachController(scene, entity, {clip.Id(), std::move(controller)})) return false;
+        if (acquiring) state.timelineAnimatorControls.emplace(entity.Id(), std::move(saved));
+        record = Find(state, entity);
+    }
+    auto& layer = record->layers.front();
+    layer.currentTimeSeconds = sourceTimeSeconds;
+    layer.previousTimeSeconds = sourceTimeSeconds;
+    layer.transitioning = false;
+    record->hasExtractedRootMotion = false;
+    for (auto& binding : record->bindings) binding.toTouched = false;
+    EvaluateState(*record, layer.states.front(), record->controller->layers.front().states.front(),
+        sourceTimeSeconds, record->controller->layers.front().mask, false);
+    for (auto& binding : record->bindings) {
+        if (!binding.toTouched || !scene.Entities().IsAlive(binding.target)) continue;
+        auto* transform = scene.Transforms().TryGet(binding.target);
+        if (transform == nullptr) return false;
+        transform->localPosition = binding.toPose.position;
+        transform->localRotation = binding.toPose.rotation;
+        transform->localScale = binding.toPose.scale;
+        scene.Transforms().MarkModified(binding.target);
+    }
+    if (record->skeleton) EvaluateIndexedSkeletalPose(scene, *record, std::nullopt);
+    ApplySocketAttachments(scene);
+    return true;
+}
+
+void SceneAnimatorService::ReleaseTimelineClips(Scene& scene, std::uint64_t timelineOwner,
+    std::span<const SceneEntity> retained) noexcept {
+    auto& state = SceneAccess::State(scene);
+    // Snapshot failures are already complete; cleanup must still release ownership.
+    try { JoinAnimatorDebugSnapshotJob(state); } catch (...) {}
+    for (auto it = state.timelineAnimatorControls.begin(); it != state.timelineAnimatorControls.end();) {
+        const auto current = state.animators.find(it->first);
+        if (it->second.owner != timelineOwner || (current != state.animators.end() &&
+            std::find(retained.begin(), retained.end(), current->second.entity) != retained.end())) { ++it; continue; }
+        if (current != state.animators.end()) {
+            if (it->second.previous && scene.Entities().IsAlive(current->second.entity) &&
+                state.nextAnimatorRuntimeBindingGeneration != std::numeric_limits<std::uint64_t>::max()) {
+                it->second.previous->runtimeBindingGeneration = state.nextAnimatorRuntimeBindingGeneration++;
+                current->second = std::move(*it->second.previous);
+            } else state.animators.erase(current);
+        }
+        it = state.timelineAnimatorControls.erase(it);
+    }
 }
 
 bool SceneAnimatorService::Exists(const Scene& scene, SceneEntity entity) noexcept {
@@ -3169,6 +3248,49 @@ bool SceneAnimatorService::ClearIkTarget(
     return true;
 }
 
+std::optional<float> SceneAnimatorService::Curve(const Scene& scene, SceneEntity entity, std::string_view name) {
+    const AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr || name.empty()) return std::nullopt;
+    bool found = false;
+    const auto sampleState = [&](const AnimatorRuntimeState& state, const AnimatorControllerState& definition, double time) {
+        const BlendSelection blend = SelectBlend(*record, state, definition);
+        const auto sampleMotion = [&](std::size_t index) {
+            const auto& motion = state.motions[index];
+            const auto track = std::ranges::find(motion.clip->curves, name, &AnimationCurveTrack::name);
+            if (track == motion.clip->curves.end()) return 0.0F;
+            found = true;
+            const float sampleTime = static_cast<float>(time * MotionPhaseScale(state, motion));
+            const auto& keys = track->keyframes;
+            if (sampleTime <= keys.front().timeSeconds) return keys.front().value;
+            if (sampleTime >= keys.back().timeSeconds) return keys.back().value;
+            const auto upper = std::upper_bound(keys.begin(), keys.end(), sampleTime,
+                [](float value, const AnimationCurveKeyframe& key) { return value < key.timeSeconds; });
+            const auto& before = *(upper - 1);
+            return std::lerp(before.value, upper->value,
+                (sampleTime - before.timeSeconds) / (upper->timeSeconds - before.timeSeconds));
+        };
+        const float lower = sampleMotion(blend.lower);
+        return blend.lower == blend.upper ? lower : std::lerp(lower, sampleMotion(blend.upper), blend.alpha);
+    };
+    float value = 0.0F;
+    for (std::size_t index = 0; index < record->layers.size(); ++index) {
+        const auto& layer = record->layers[index];
+        const auto& definition = record->controller->layers[index];
+        if (definition.weight <= 0.0F) continue;
+        const bool previouslyFound = found;
+        found = false;
+        float sampled = sampleState(layer.states[layer.currentState], definition.states[layer.currentState], layer.currentTimeSeconds);
+        if (layer.transitioning) {
+            const float previous = sampleState(layer.states[layer.previousState], definition.states[layer.previousState], layer.previousTimeSeconds);
+            const float alpha = static_cast<float>(std::clamp(layer.transitionElapsedSeconds / layer.transitionDurationSeconds, 0.0, 1.0));
+            sampled = std::lerp(previous, sampled, alpha);
+        }
+        if (found) value = std::lerp(value, sampled, definition.weight);
+        found = found || previouslyFound;
+    }
+    return found ? std::optional<float>{value} : std::nullopt;
+}
+
 std::optional<AnimatorStateInfo> SceneAnimatorService::State(const Scene& scene, SceneEntity entity, std::string_view layerName) {
     const AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
     if (record == nullptr) return std::nullopt;
@@ -3291,6 +3413,7 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
 
     std::map<std::uint64_t, bool> retained;
     for (const AuthoredAnimator& value : authored) {
+        if (sceneState.timelineAnimatorControls.contains(value.entity.Id())) continue;
         if (!value.animator.enabled) continue;
         if (value.animator.controllerAssetId == 0U || !std::isfinite(value.animator.speed) || value.animator.speed < 0.0F ||
             !std::isfinite(value.animator.poseUpdateRateHz) || value.animator.poseUpdateRateHz < 0.0F) {
@@ -3379,7 +3502,7 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     }
     SceneState& state = SceneAccess::State(scene);
     for (auto it = state.animators.begin(); it != state.animators.end();) {
-        if (!retained.contains(it->first)) {
+        if (!retained.contains(it->first) && !state.timelineAnimatorControls.contains(it->first)) {
             it = state.animators.erase(it);
         } else {
             ++it;
@@ -3445,7 +3568,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
 
     for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
-        if (scene.Entities().IsActive(record.entity)) EvaluateControllerTransitions(record);
+        if (scene.Entities().IsActive(record.entity) && !state.timelineAnimatorControls.contains(id)) EvaluateControllerTransitions(record);
     }
 
     if (state.pendingAnimationEvents.size() > SceneAnimators::kMaxPendingEvents) {
@@ -3454,7 +3577,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
     std::size_t eventCount = state.pendingAnimationEvents.size();
     for (const auto& [id, record] : state.animators) {
         static_cast<void>(id);
-        if (!scene.Entities().IsActive(record.entity)) continue;
+        if (!scene.Entities().IsActive(record.entity) || state.timelineAnimatorControls.contains(id)) continue;
         const double scaledDelta = static_cast<double>(deltaSeconds) * static_cast<double>(record.speed);
         for (const AnimatorRuntimeLayer& layer : record.layers) {
             const std::size_t available = SceneAnimators::kMaxPendingEvents - eventCount;
@@ -3486,7 +3609,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
 
     for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
-        if (!scene.Entities().IsActive(record.entity)) continue;
+        if (!scene.Entities().IsActive(record.entity) || state.timelineAnimatorControls.contains(id)) continue;
         record.hasExtractedRootMotion = false;
         record.extractedRootMotionTranslation = {};
         record.extractedRootMotionRotation = {};
@@ -3547,7 +3670,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
 
     for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
-        if (!scene.Entities().IsActive(record.entity)) continue;
+        if (!scene.Entities().IsActive(record.entity) || state.timelineAnimatorControls.contains(id)) continue;
         const Animator* component = scene.Components().Animators().TryGet(record.entity);
         const AnimatorRootMotionOwner rootMotionOwner = component == nullptr
             ? AnimatorRootMotionOwner::None
@@ -3719,7 +3842,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
     }
     for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
-        if (scene.Entities().IsActive(record.entity)) {
+        if (scene.Entities().IsActive(record.entity) && !state.timelineAnimatorControls.contains(id)) {
             const Animator* component =
                 scene.Components().Animators().TryGet(record.entity);
             if (component != nullptr &&

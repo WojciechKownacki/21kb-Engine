@@ -47,6 +47,8 @@
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
+#include "scene/TimelineEditorDocumentState.hpp"
+#include "scene/EditorTimelinePreviewSession.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
@@ -584,6 +586,26 @@ public:
     [[nodiscard]] bool CreateNativeScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenTimelineEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] const TimelineEditorDocumentState& TimelineEditorDocument() const noexcept { return timelineEditorDocument_; }
+    [[nodiscard]] bool EditTimelineAsset(const std::function<bool(kb::scene::TimelineAsset&)>& edit);
+    [[nodiscard]] bool UndoTimelineEditorEdit();
+    [[nodiscard]] bool RedoTimelineEditorEdit();
+    [[nodiscard]] bool SaveTimelineEditorAsset();
+    [[nodiscard]] bool RevertTimelineEditorAsset();
+    [[nodiscard]] std::size_t TimelineEditorFirstRow() const noexcept { return timelineEditorFirstRow_; }
+    [[nodiscard]] std::size_t TimelineEditorSelectedRow() const noexcept { return timelineEditorSelectedRow_; }
+    void SetTimelineEditorFirstRow(std::size_t row) noexcept { timelineEditorFirstRow_ = row; }
+    void SetTimelineEditorSelectedRow(std::size_t row) noexcept { timelineEditorSelectedRow_ = row; }
+    [[nodiscard]] bool TimelineEditorLoop() const noexcept { return timelineEditorLoop_; }
+    void SetTimelineEditorLoop(bool loop) noexcept { timelineEditorLoop_ = loop; }
+    void ClearTimelineEditorPreview() noexcept { timelineEditorPreview_.Clear(); timelineEditorOwner_ = {}; }
+    [[nodiscard]] bool SetTimelineEditorPreviewOwner(kb::scene::SceneEntity owner);
+    [[nodiscard]] bool SeekTimelineEditorPreview(float time);
+    [[nodiscard]] bool PlayTimelineEditorPreview(float rate, bool loop);
+    void PauseTimelineEditorPreview() noexcept;
+    [[nodiscard]] bool TickTimelineEditorPreview(float deltaSeconds);
+    [[nodiscard]] const EditorTimelinePreviewSession& TimelineEditorPreview() const noexcept { return timelineEditorPreview_; }
     [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool HasParticleEditorAsset() const noexcept;
     [[nodiscard]] kb::assets::AssetId ParticleEditorAssetId() const noexcept;
@@ -1523,6 +1545,11 @@ private:
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
+    TimelineEditorDocumentState timelineEditorDocument_;
+    std::size_t timelineEditorFirstRow_ = 0, timelineEditorSelectedRow_ = 0;
+    bool timelineEditorLoop_ = false;
+    EditorTimelinePreviewSession timelineEditorPreview_;
+    kb::scene::SceneEntity timelineEditorOwner_{};
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     kb::assets::AssetId skeletalMeshEditorPrimarySkeletonId_{};
     kb::assets::AssetId pendingSkeletalMeshEditorAssetId_{};

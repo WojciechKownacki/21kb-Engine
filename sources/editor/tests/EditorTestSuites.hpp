@@ -1,5 +1,7 @@
 #pragma once
 
+namespace kb::editor::tests { void RunEditorTimelineTests(); }
+
 namespace kb::editor::tests {
 void RunEditorAudioMixerRuntimeTests();
 

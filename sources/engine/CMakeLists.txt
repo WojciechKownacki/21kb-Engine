@@ -812,6 +812,9 @@ add_library(kb_engine STATIC
     src/scene/SkeletalMeshAssetIO.cpp
     src/scene/SkeletalMeshAssetLoader.cpp
     src/scene/TimelineAssetIO.cpp
+    src/scene/TimelinePropertyTrack.cpp
+    src/scene/TimelineAudioPlayback.cpp
+    src/scene/TimelineSequencePlan.cpp
     src/scene/TimelineAssetLoader.cpp
     src/scene/SceneTimelineService.cpp
     src/scene/AnimationRetargeting.cpp
@@ -2040,6 +2043,7 @@ if(BUILD_TESTING)
         tests/SkeletonAssetTests.cpp
         tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
+    tests/TimelineAudioTests.cpp
         tests/LocalizationTests.cpp
         tests/LargeWorldTests.cpp
         tests/SceneHierarchyTests.cpp

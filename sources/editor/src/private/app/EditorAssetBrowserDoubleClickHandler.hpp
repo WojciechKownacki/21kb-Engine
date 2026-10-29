@@ -26,6 +26,7 @@ enum class EditorAssetBrowserDoubleClickResult {
     SkeletalMeshEditorOpened,
     AnimationClipEditorOpened,
     AnimatorEditorOpened,
+    TimelineEditorOpened,
     ParticleEditorOpened,
     PrefabEditorOpened,
     LocalizationPreviewChanged,

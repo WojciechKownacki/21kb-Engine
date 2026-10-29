@@ -3,6 +3,12 @@
 #include <string_view>
 
 int main(int argumentCount, char** arguments) {
+    if (argumentCount == 2 && std::string_view{arguments[1]} == "timeline") {
+        kb::editor::tests::RunEditorTimelineTests(); return 0;
+    }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "docking") {
+        kb::editor::tests::RunEditorDockingTests(); return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "asset-browser") {
         kb::editor::tests::RunEditorAssetBrowserTests();
         return 0;
@@ -38,6 +44,7 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorInspectorTests();
         return 0;
     }
+    kb::editor::tests::RunEditorTimelineTests();
     kb::editor::tests::RunEditorCommandStackTests();
     kb::editor::tests::RunEditorPlayModeSceneSessionTests();
     kb::editor::tests::RunEditorHierarchyTests();

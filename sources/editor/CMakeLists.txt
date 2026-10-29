@@ -805,6 +805,7 @@ add_executable(kb_editor WIN32
     src/rendering/ParticleEditorPanelLayout.cpp
     src/rendering/AnimationClipEditorPanelRenderer.cpp
     src/rendering/AnimatorEditorPanelRenderer.cpp
+    src/rendering/TimelineEditorPanel.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
     src/assets/EditorAssetOpenPolicy.cpp
@@ -886,6 +887,9 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorPanelTextBuilder.cpp
     src/inspection/InspectorRigidbodyTextBuilder.cpp
     src/scene/EditorAnimationPreviewScene.cpp
+    src/scene/EditorTimelinePreviewSession.cpp
+    src/scene/EditorSceneContextTimeline.cpp
+    src/scene/TimelineEditorModel.cpp
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
     src/scene/EditorHierarchyMainContentResolver.cpp
@@ -1441,6 +1445,9 @@ if(BUILD_TESTING)
           src/scene/EditorViewportCameraState.cpp
           src/scene/EditorViewportPreviewState.cpp
           src/scene/EditorAnimationPreviewScene.cpp
+          src/scene/EditorTimelinePreviewSession.cpp
+          src/scene/TimelineEditorModel.cpp
+          tests/EditorTimelineTests.cpp
           src/app/scene_viewport/EditorSceneViewportMath.cpp
           src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
       src/scene/material/EditorMaterialAssetAuthoring.cpp
@@ -1537,6 +1544,32 @@ if(BUILD_TESTING)
     )
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
+    add_test(NAME kb_editor_timeline_tests COMMAND $<TARGET_FILE:kb_editor_tests> timeline)
+    set_tests_properties(kb_editor_timeline_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;timeline" TIMEOUT 60)
+    if(TARGET kb_cooker AND TARGET kb_game AND TARGET kb_engine_tests
+        AND TARGET kb_physics_jolt_plugin AND TARGET kb_audio_miniaudio_plugin
+        AND TARGET kb_basic_lighting_plugin AND TARGET kb_ai_plugin AND TARGET kb_21kb_particle_plugin AND TARGET kb_world2d_plugin)
+        find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+        set(_kb_timeline_shaderc "${KB_COOKER_SHADERC}")
+        if(TARGET bgfx::shaderc)
+            set(_kb_timeline_shaderc "$<TARGET_FILE:bgfx::shaderc>")
+        endif()
+        set(_kb_timeline_runtime_args)
+        if(MSVC AND KB_ENABLE_SANITIZERS)
+            list(APPEND _kb_timeline_runtime_args --runtime-dll "${KB_MSVC_ASAN_DYNAMIC_RUNTIME}")
+        endif()
+        add_test(NAME kb_editor_timeline_workflow_package
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/TimelineWorkflowTests.py"
+                --editor $<TARGET_FILE:kb_editor> --engine-tests $<TARGET_FILE:kb_engine_tests>
+                --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
+                --test-root "${CMAKE_BINARY_DIR}/timeline_workflow_tests"
+                --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
+        set_tests_properties(kb_editor_timeline_workflow_package PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;timeline;packaging" TIMEOUT 1200)
+    endif()
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     if(TARGET kb_cli AND TARGET kb_cooker AND TARGET kb_game AND KB_BUILD_PROVIDER_MODULES_AS_DLL

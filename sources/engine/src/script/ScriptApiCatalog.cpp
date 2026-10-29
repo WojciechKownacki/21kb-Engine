@@ -210,6 +210,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Timeline", "Create", "Timeline.Create", ScriptApiCatalogLuaReturnKind::SingleOutput, "instance" },
     { "Timeline", "Release", "Timeline.Release", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Play", "Timeline.Play", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "SetPlayback", "Timeline.SetPlayback", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Pause", "Timeline.Pause", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Seek", "Timeline.Seek", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Skip", "Timeline.Skip", ScriptApiCatalogLuaReturnKind::Default, "" },

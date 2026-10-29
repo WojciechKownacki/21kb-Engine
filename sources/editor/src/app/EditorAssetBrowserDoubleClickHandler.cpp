@@ -182,7 +182,7 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
         }
         if (metadata->type == kb::scene::kTimelineAssetType) {
         return sceneContext.OpenAnimationAsset(metadata->id)
-            ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
+            ? EditorAssetBrowserDoubleClickResult::TimelineEditorOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }
     if (metadata->type == "ScenePrefab") {

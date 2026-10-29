@@ -3301,6 +3301,16 @@ int LuaTimelinePause(lua_State* state) {
     });
 }
 
+int LuaTimelineSetPlayback(lua_State* state) {
+    luaL_checktype(state, 3, LUA_TBOOLEAN);
+    return LuaTimelineAppliedCall(state, "Timeline.SetPlayback", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+        Arg("rate", ScriptValue{static_cast<float>(luaL_checknumber(state, 2))}),
+        Arg("loop", ScriptValue{lua_toboolean(state, 3) != 0}),
+    });
+}
+
 int LuaTimelineSeek(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Seek", {
         Arg("instance", ScriptValue{
@@ -3699,6 +3709,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaTimelineCreate,
     &LuaTimelineRelease,
     &LuaTimelinePlay,
+    &LuaTimelineSetPlayback,
     &LuaTimelinePause,
     &LuaTimelineSeek,
     &LuaTimelineSkip,

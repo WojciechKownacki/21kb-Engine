@@ -356,6 +356,7 @@ FindInspectorHit(
     if (panel == "inspector") return DockPanelKind::Inspector;
     if (panel == "assets") return DockPanelKind::Assets;
     if (panel == "console") return DockPanelKind::Console;
+    if (panel == "timeline") return DockPanelKind::TimelineEditor;
     if (panel == "project_settings") {
         return DockPanelKind::ProjectSettings;
     }
@@ -3638,6 +3639,33 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     return CaptureScene("capture_scene_viewport", checkpoint, [this] {
         return impl_->RenderSceneViewport(context_, sceneViewportKey);
     });
+}
+
+bool EditorHeadlessAutomation::CaptureTimelinePreview(std::string_view checkpoint) {
+    // Capture feedback is renderer bookkeeping; the preview simulation remains paused.
+    auto* scene = const_cast<kb::scene::Scene*>(context_.TimelineEditorPreview().Scene());
+    if (!scene) return false;
+    const auto output = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".png");
+    const auto request = kb::scene::SceneRenderFeedback::RequestScreenCapture(*scene,output.string());
+    if (!request) return false;
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
+        EditorSceneBgfxViewport::PresentSettings settings{};
+        settings.viewportKey = 20; settings.sceneFullSyncRequired = true;
+        settings.selectionMaskEnabled = false; settings.selectionOutlineEnabled = false;
+        impl_->viewport.BeginPaintLayout(impl_->window);
+        impl_->viewport.Present(impl_->window,RECT{0,0,960,540},*scene,settings);
+        impl_->viewport.EndPaintLayout(0.0F);
+        if (!impl_->viewport.AdvanceAsyncReadbacks()) return false;
+        const auto status = kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*scene,request);
+        if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool valid = ValidateCapturedImage(output,true);
+            Trace("capture_timeline_preview",valid,output.filename().string()); return valid;
+        }
+        if (status == kb::scene::SceneScreenCaptureStatus::Failed) return false;
+        Sleep(5);
+    }
+    return false;
 }
 
 bool EditorHeadlessAutomation::CaptureMaterialPreview(std::string_view checkpoint, int width, int height) {

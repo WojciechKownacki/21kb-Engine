@@ -52,6 +52,7 @@
 #include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
@@ -545,6 +546,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor && !ResolveDirtySkeletalMeshEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
+            if (panel != nullptr && panel->kind == DockPanelKind::TimelineEditor && !TimelineEditorPanel::ResolveClose(messageWindow, sceneContext_)) return;
+            if (panel != nullptr && panel->kind == DockPanelKind::TimelineEditor) sceneContext_.PauseTimelineEditorPreview();
             if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor && !ResolveDirtyAnimatorEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
@@ -578,6 +581,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
+
+    if (const auto content = EditorPanelContentResolver::Resolve(
+            DockPanelKind::TimelineEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        content && PointInRect(*content, x, y)) {
+        static_cast<void>(TimelineEditorPanel::Pointer(messageWindow,
+            {content->left,content->top,content->right-content->left,content->bottom-content->top}, x, y, sceneContext_));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
 
     if (const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::ParticleEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);

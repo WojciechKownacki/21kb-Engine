@@ -550,24 +550,37 @@ void ScriptRuntimeSceneSystem::DispatchPendingTimelineMarkerEvents(
     for (const kb::scene::TimelineMarkerEvent& pending :
          scene.Timelines().DrainMarkerEvents()) {
         ScriptEvent event;
-        event.name = "OnTimelineMarker";
+        event.name = pending.animationEvent ? "OnAnimationEvent" :
+            (pending.eventName.empty() ? "OnTimelineMarker" : "OnTimelineEvent");
         event.target = pending.target;
         event.arguments.push_back(
             { "schemaMajor", ScriptValue{ pending.schemaMajor } });
         event.arguments.push_back(
             { "schemaMinor", ScriptValue{ pending.schemaMinor } });
-        event.arguments.push_back(
-            { "instance",
-              ScriptValue{
-                  pending.instanceId, ScriptValueType::Hash } });
-        event.arguments.push_back(
-            { "asset",
-              ScriptValue{ pending.assetId, ScriptValueType::Hash } });
-        event.arguments.push_back(
-            { "marker",
-              ScriptValue{ pending.markerId, ScriptValueType::Hash } });
-        event.arguments.push_back(
-            { "time", ScriptValue{ pending.timeSeconds } });
+        if (pending.animationEvent) {
+            event.arguments.push_back({"event", ScriptValue{pending.markerId, ScriptValueType::Hash}});
+            event.arguments.push_back({"clip", ScriptValue{pending.assetId, ScriptValueType::Hash}});
+            event.arguments.push_back({"layer", ScriptValue{std::string{"Timeline"}}});
+            event.arguments.push_back({"state", ScriptValue{std::string{"Clip"}}});
+            event.arguments.push_back({"normalizedTime", ScriptValue{pending.normalizedTime}});
+        } else {
+            event.arguments.push_back(
+                { "instance",
+                  ScriptValue{
+                      pending.instanceId, ScriptValueType::Hash } });
+            event.arguments.push_back(
+                { "asset",
+                  ScriptValue{ pending.assetId, ScriptValueType::Hash } });
+            event.arguments.push_back(
+                { "marker",
+                  ScriptValue{ pending.markerId, ScriptValueType::Hash } });
+            event.arguments.push_back(
+                { "time", ScriptValue{ pending.timeSeconds } });
+            if (!pending.eventName.empty()) {
+                event.arguments.push_back({ "name", ScriptValue{ pending.eventName } });
+                event.arguments.push_back({ "payload", ScriptValue{ pending.payload } });
+            }
+        }
         const ScriptEventDeliveryResult delivery =
             runtime_.Events().Emit(scene, event, pending.target);
         for (const std::string& error : delivery.errors) {
