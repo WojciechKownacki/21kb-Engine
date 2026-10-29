@@ -23,7 +23,7 @@ namespace kb::input {
 
 class InputDeviceState;
 
-// Fills an engine InputDeviceState from the Win32 keyboard/mouse and XInput
+// Fills an engine InputDeviceState from the Win32 keyboard/mouse and gamepad
 // devices owned by the foreground process. The collector is shared by every
 // Win32 host (editor and standalone player), so platform polling has one
 // production implementation.

@@ -1734,12 +1734,20 @@ if(WIN32)
         include/engine/platform/win32/Win32InputKeyMap.hpp
         include/engine/platform/win32/Win32XInputHapticsBackend.hpp
         src/platform/win32/Win32InputCollector.cpp
+        src/platform/win32/Win32GamepadInput.cpp
         src/platform/win32/Win32ClipboardText.cpp
         src/platform/win32/Win32UITextClipboard.cpp
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
-    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt shell32)
+    target_link_libraries(kb_engine PRIVATE user32 xinput dinput8 dxguid bcrypt shell32)
+    if(BUILD_TESTING)
+        add_executable(kb_win32_gamepad_host_tests tests/Win32GamepadHostTests.cpp)
+        target_link_libraries(kb_win32_gamepad_host_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_win32_gamepad_host_tests)
+        add_test(NAME kb_win32_gamepad_host COMMAND kb_win32_gamepad_host_tests)
+        set_tests_properties(kb_win32_gamepad_host PROPERTIES TIMEOUT 30 LABELS "input;platform")
+    endif()
 
     # Crash capture shared by the game and the editor. dbghelp and version are
     # loaded from System32 by the reporter's own thread, and WinHTTP is delay-loaded,

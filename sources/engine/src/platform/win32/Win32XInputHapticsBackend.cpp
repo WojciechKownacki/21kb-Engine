@@ -1,6 +1,7 @@
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
+#include "engine/platform/win32/Win32GamepadInput.hpp"
 
 #include <windows.h>
 
@@ -37,12 +38,14 @@ InputHapticsCapability Win32XInputHapticsBackend::Capability(
             .disabledReason = "gamepad index is outside XInput's slot range",
         };
     }
+    const auto user = Win32GamepadXInputIndex(gamepadIndex);
+    const bool supported = user < XUSER_MAX_COUNT;
     return InputHapticsCapability{
-        .supported = true,
-        .connected = IsConnected(gamepadIndex),
-        .dualMotor = true,
+        .supported = supported,
+        .connected = supported && IsConnected(user),
+        .dualMotor = supported,
         .maxGamepads = InputDeviceState::kMaxGamepads,
-        .disabledReason = {},
+        .disabledReason = supported ? "" : "controller has no XInput actuator",
     };
 }
 
@@ -57,7 +60,8 @@ bool Win32XInputHapticsBackend::SetVibration(
         .wLeftMotorSpeed = ToMotorMagnitude(lowFrequency),
         .wRightMotorSpeed = ToMotorMagnitude(highFrequency),
     };
-    return XInputSetState(gamepadIndex, &vibration) == ERROR_SUCCESS;
+    const auto user = Win32GamepadXInputIndex(gamepadIndex);
+    return user < XUSER_MAX_COUNT && XInputSetState(user, &vibration) == ERROR_SUCCESS;
 }
 
 void Win32XInputHapticsBackend::StopAll() noexcept {
