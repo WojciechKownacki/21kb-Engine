@@ -2364,6 +2364,7 @@ def _source_state(engine_root: Path) -> dict[str, str]:
     """Which engine commit the package was built from and whether the tree had changes the commit does not hold.
 
     "unknown" means git could not answer (no git, not a work tree); it is recorded, never guessed.
+    Untracked sources count as changes; ignored build outputs do not.
     """
     def git(*arguments: str) -> str | None:
         try:
@@ -2376,7 +2377,7 @@ def _source_state(engine_root: Path) -> dict[str, str]:
         return completed.stdout.strip() if completed.returncode == 0 else None
 
     commit = git("rev-parse", "--verify", "HEAD")
-    status = git("status", "--porcelain", "--untracked-files=no")
+    status = git("status", "--porcelain", "--untracked-files=all")
     if commit is None or status is None:
         return {"gitCommit": "unknown", "treeState": "unknown"}
     return {"gitCommit": commit, "treeState": "dirty" if status else "clean"}

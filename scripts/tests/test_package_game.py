@@ -2230,6 +2230,28 @@ class SourceStateTests(unittest.TestCase):
             receipt = package_game._receipt(arguments, "0" * 64, "1" * 64, ())
         self.assertEqual({"gitCommit": "a" * 40, "treeState": "clean"}, receipt["source"])
 
+    def test_untracked_sources_mark_receipt_dirty_but_ignored_outputs_do_not(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._git(root, "init", "-q")
+            (root / ".gitignore").write_text("build/\n", encoding="utf-8")
+            self._git(root, "add", ".gitignore")
+            self._git(root, "commit", "-q", "-m", "Initialize source tree")
+            (root / "build").mkdir()
+            (root / "build" / "output.txt").write_text("generated", encoding="utf-8")
+            clean = package_game._source_state(root)
+            self.assertEqual("clean", clean["treeState"])
+            sources = root / "sources"
+            sources.mkdir()
+            untracked = sources / "Additional.cpp"
+            untracked.write_text("int Additional() { return 1; }\n", encoding="utf-8")
+            self.assertEqual({"gitCommit": clean["gitCommit"], "treeState": "dirty"},
+                             package_game._source_state(root))
+            untracked.unlink()
+            self.assertEqual(clean, package_game._source_state(root))
+
 
 if __name__ == "__main__":
     unittest.main()
