@@ -581,6 +581,16 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_audio_dsp_package PROPERTIES
             LABELS "game;runtime;packaging;audio" TIMEOUT 180)
+        add_test(NAME kb_game_reference_3d_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/Reference3DWorkflowTests.py"
+            --cli $<TARGET_FILE:kb_cli> --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+            --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/reference_3d_workflow_tests"
+            --shaderc "${_kb_particle_test_shaderc}" ${_kb_touch_test_runtime_args}
+            --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+            --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_21kb_particle_plugin>
+            --plugin $<TARGET_FILE:kb_ai_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
+        set_tests_properties(kb_game_reference_3d_package PROPERTIES
+            LABELS "game;runtime;animation;streaming;packaging" TIMEOUT 1200)
         add_test(NAME kb_game_audio_reference_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/AudioReferenceProjectTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"

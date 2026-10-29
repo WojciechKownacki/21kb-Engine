@@ -406,11 +406,21 @@ void ListProperties(std::string_view component, std::ostream& out) {
     const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(component);
     const auto* uiProperty = ui != nullptr ? kb::scene::FindUIComponentProperty(ui->type, name) : nullptr;
     if (((component == "AudioSource" && name == "clipAssetId") ||
+        (component == "ContentInstance" && name == "assetId") ||
         (uiProperty != nullptr && uiProperty->type == kb::scene::UIComponentPropertyType::Asset)) && value.starts_with('/')) {
         const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
         if (metadata == nullptr) {
             io.err << "error: " << component << '.' << name << " '" << value << "' is not an asset of the project\n";
             return false;
+        }
+        if (component == "ContentInstance") {
+            constexpr std::array<std::string_view,5> types{"ScenePrefab","Scene","WorldFragment","World","NavMesh"};
+            const auto* instance=scene.Components().ContentInstances().TryGet(entity);
+            const auto kind=instance?static_cast<std::size_t>(instance->kind):types.size();
+            if (kind>=types.size() || metadata->type!=types[kind]) {
+                io.err << "error: ContentInstance.assetId must match its source kind; set kind before assetId\n";
+                return false;
+            }
         }
         const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, component, name,
             kb::script::ScriptValue{ metadata->id.value, kb::script::ScriptValueType::Hash });
@@ -1452,6 +1462,7 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     io.out << "Transform: rotation (degrees x,y,z)";
     ListProperties("Transform", io.out);
     io.out << "\nMeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+    io.out << "ContentInstance references: assetId=<asset path>; set kind first (0 prefab, 1 scene, 2 fragment, 3 world, 4 navigation).\n";
     io.out << "Engine shapes:";
     for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) io.out << ' ' << shape.virtualPath;
     io.out << "\nentity add --create items:";
