@@ -182,11 +182,14 @@ class TouchScenario:
         self.report = report
         self.layout = {}
 
+    def exception_events(self):
+        return self.client.events
+
     def states(self):
         state = self.client.evaluate("({data:{...document.documentElement?.dataset},"
             "output:document.querySelector('#output')?.value})")
         require(not state["data"].get("kbError"), "The actual player failed: " + str(state))
-        errors = [event["params"]["exceptionDetails"] for event in self.client.events
+        errors = [event["params"]["exceptionDetails"] for event in self.exception_events()
             if event.get("method") == "Runtime.exceptionThrown"]
         require(not errors, "Unhandled browser/runtime exception: " + str(errors))
         require(not self.client.evaluate("window.kbTouchGraphicsLost || []"),

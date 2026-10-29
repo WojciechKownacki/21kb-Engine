@@ -232,6 +232,8 @@ def _validate_package_work_roots(
 
 
 def _validate_arguments(args: argparse.Namespace) -> None:
+    if getattr(args, "webgl_fallback", None) is not None and args.target != "WebGPU.wasm32":
+        raise PackagingError("WebGL fallback requires a WebGPU package")
     args.project = _find_project_file(args.project)
     args.engine_root = args.engine_root.expanduser().resolve(strict=True)
     if not (args.engine_root / "CMakeLists.txt").is_file() or not (args.engine_root / "sources").is_dir():
@@ -1622,6 +1624,13 @@ def _verify_web_first_frame(stage: Path, html_name: str, backend: str, job: Path
         thread.join(timeout=5)
 
 
+def _configure_web_fallback(html_text: str, fallback_url: str) -> str:
+    if "</head>" not in html_text:
+        raise PackagingError("Web HTML shell has no head element for fallback configuration")
+    return html_text.replace("</head>",
+        '<meta name="kb-webgl-fallback" content="' + html.escape(fallback_url, quote=True) + '"></head>', 1)
+
+
 def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     emsdk = _emsdk_root(args)
     ninja = _ninja_for_cmake(cmake)
@@ -1693,6 +1702,7 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
     runtime_error_hook = (
         "<script>"
         "function kbReportRuntimeError(kind,value){"
+        "if(document.documentElement.dataset.kbFallback)return;"
         "const stage=location.hash.slice(1);"
         "const detail=value&&value.stack?value.stack:String(value);"
         "location.hash='kb-error-'+kind+'-'+encodeURIComponent(detail.slice(0,1536))"
@@ -1707,16 +1717,10 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
         "</script>"
     )
     html_text = html_text.replace("</head>", runtime_error_hook + "</head>", 1)
-    module_ready = "      };\n      setStatus('Downloading...');"
-    if module_ready not in html_text:
-        raise PackagingError("Web HTML shell has no supported runtime module definition")
-    html_text = html_text.replace(
-        module_ready,
-        "      };\n"
-        "      Module.onAbort = (reason) => kbReportRuntimeError('abort', new Error(reason));\n"
-        "      setStatus('Downloading...');",
-        1,
-    )
+    fallback = getattr(args, "webgl_fallback", None)
+    if fallback is not None:
+        fallback_url = _stage_web_fallback(args, stage, fallback)
+        html_text = _configure_web_fallback(html_text, fallback_url)
     if args.application_icon is not None:
         icon_suffix = args.application_icon.suffix.casefold()
         if icon_suffix not in (".png", ".ico", ".svg"):
@@ -1740,6 +1744,34 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
         (ninja, emsdk / "upstream/emscripten/emcc.py", chrome),
         _first_frame_result(args.target, stage),
     )
+
+
+def _stage_web_fallback(args: argparse.Namespace, stage: Path, source: Path) -> str:
+    if args.target != "WebGPU.wasm32":
+        raise PackagingError("WebGL fallback requires a WebGPU package")
+    source = source.expanduser().resolve(strict=True)
+    receipt = verify_unit(source)
+    if receipt.get("target") != "WebGL.wasm32":
+        raise PackagingError("WebGL fallback must be a verified WebGL package")
+    inputs = receipt.get("inputs", {})
+    if not isinstance(inputs, dict) or inputs.get("projectSha256") != _project_source_fingerprint(args.project):
+        raise PackagingError("WebGL fallback was built from different project content")
+    product = receipt.get("product", {})
+    name = product.get("executableName") if isinstance(product, dict) else None
+    if not isinstance(name, str) or not _is_safe_executable_name(name, "WebGL.wasm32"):
+        raise PackagingError("WebGL fallback entry point is invalid")
+    if not (source / f"{name}.html").is_file():
+        raise PackagingError("WebGL fallback entry point is missing")
+    destination = stage / "webgl"
+    destination.mkdir()
+    for relative, path in regular_files(source):
+        output = destination.joinpath(*PurePosixPath(relative).parts)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, output)
+    # Reverify the copied bytes so a changing source cannot enter the final package.
+    if verify_unit(destination) != receipt:
+        raise PackagingError("WebGL fallback changed while being staged")
+    return "webgl/" + urllib.parse.quote(f"{name}.html", safe="")
 
 
 def _create_deterministic_tar(
@@ -2359,6 +2391,8 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--android-key-alias", default="")
     parser.add_argument("--android-signing-broker", type=Path)
     parser.add_argument("--emsdk", type=Path)
+    parser.add_argument("--webgl-fallback", type=Path,
+        help="Verified WebGL package of the same project to include with a WebGPU package")
     parser.add_argument("--linux-host")
     parser.add_argument("--linux-user")
     parser.add_argument("--linux-host-key")

@@ -348,7 +348,8 @@ void SetBrowserStartupError(const char* code) noexcept {
     EM_ASM({
         const error = UTF8ToString($0);
         document.documentElement.dataset.kbError = error;
-        location.hash = 'kb-error-' + encodeURIComponent(error);
+        if (!document.documentElement.dataset.kbFallback)
+            location.hash = 'kb-error-' + encodeURIComponent(error);
     }, code);
 }
 
@@ -569,6 +570,7 @@ private:
         if (auto* scene = runtime_.Scene()) kb::input::InputHaptics::RegisterBackend(*scene, haptics_);
 
         if (!InitializeRenderer()) {
+            EM_ASM({ Module['kbGraphicsFailure']?.('renderer-init', 'Browser renderer initialization failed'); });
             Fail("renderer-init", "required browser renderer could not be initialized");
             return;
         }

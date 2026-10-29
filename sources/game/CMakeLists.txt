@@ -215,6 +215,10 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGamepadHaptics.js")
     if(KB_WEB_RENDERER STREQUAL "WEBGPU")
+        target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
+            "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGpuSupport.js\"")
+        set_property(TARGET ${KB_GAME_WEB_TARGET} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGpuSupport.js")
         target_compile_definitions(${KB_GAME_WEB_TARGET} PRIVATE KB_WEB_RENDERER_WEBGPU=1)
         target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE "--use-port=emdawnwebgpu")
         target_link_options(${KB_GAME_WEB_TARGET} PRIVATE

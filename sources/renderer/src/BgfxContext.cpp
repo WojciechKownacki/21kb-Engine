@@ -187,8 +187,12 @@ public:
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdollar-in-identifier-extension"
         EM_ASM({
-            location.hash = 'kb-error-renderer-' + encodeURIComponent(UTF8ToString($0));
-        }, message != nullptr ? message : "unknown renderer failure");
+            const code = $1 ? 'graphics-device-lost' : 'renderer-fatal';
+            document.documentElement.dataset.kbError = code;
+            Module['kbGraphicsFailure']?.(code, UTF8ToString($0));
+            if (!document.documentElement.dataset.kbFallback)
+                location.hash = 'kb-error-renderer-' + encodeURIComponent(UTF8ToString($0));
+        }, message != nullptr ? message : "unknown renderer failure", code == bgfx::Fatal::DeviceLost);
 #pragma clang diagnostic pop
 #endif
 #if defined(_WIN32)
