@@ -409,6 +409,7 @@ public:
             LogError("Android game controller initialization failed");
             return false;
         }
+        kb::input::InputHaptics::RegisterBackend(*scene_, gamepads_);
         audioEnabled_ = kb::audio::AudioPlayback::HasBackend(*scene_);
         if (audioEnabled_) {
             ApplyAudioState();
@@ -504,6 +505,7 @@ private:
             break;
         case APP_CMD_LOST_FOCUS:
             focused_ = false;
+            gamepads_.StopAll();
             ApplyAudioState();
             tickClockReady_ = false;
             SetImeVisible(false);
@@ -815,6 +817,7 @@ private:
     }
 
     void Shutdown() noexcept {
+        if (scene_) kb::input::InputHaptics::UnregisterBackend(*scene_, gamepads_);
         SetImeVisible(false);
         gamepads_.Shutdown();
         if (!scriptShutdownDispatched_ && scene_ != nullptr &&

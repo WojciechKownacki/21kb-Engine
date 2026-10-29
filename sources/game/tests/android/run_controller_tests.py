@@ -151,6 +151,8 @@ def main() -> None:
             raise RuntimeError("The APK did not acknowledge touch-only scope")
         if args.ime_only and "INSTRUMENTATION_RESULT: scope=ime-only" not in text:
             raise RuntimeError("The APK did not acknowledge IME-only scope")
+        if "haptics-verified=1" not in text:
+            raise RuntimeError("Android haptics provider assertions were not acknowledged")
         report.update(result="PASS", evidence="instrumentation.log", checks=[
             "real GameActivity key/motion queue and Paddleboat consumption",
             "two OS device IDs with independent six-axis values and buttons",

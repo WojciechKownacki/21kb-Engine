@@ -2,6 +2,7 @@
 #include "PackagedGameRuntime.hpp"
 #include "WebTouchInput.hpp"
 #include "WebGamepadInput.hpp"
+#include "WebGamepadHaptics.hpp"
 #include "WebDownloadProgress.hpp"
 #include "WebDownloadBuffer.hpp"
 #include "DigitalInputFrame.hpp"
@@ -565,6 +566,7 @@ private:
             }
         }
         EM_ASM({ location.hash = 'kb-runtime-ready'; });
+        if (auto* scene = runtime_.Scene()) kb::input::InputHaptics::RegisterBackend(*scene, haptics_);
 
         if (!InitializeRenderer()) {
             Fail("renderer-init", "required browser renderer could not be initialized");
@@ -653,6 +655,7 @@ private:
             scene->Input().MutableDeviceState().SetPointerViewportExtent(
                 host->surface_.Width(), host->surface_.Height());
             kb::game::PollWebGamepads(scene->Input().MutableDeviceState());
+            host->haptics_.Update();
             host->digital_.Publish(scene->Input().MutableDeviceState());
         }
         host->touches_.SetViewport(host->surface_.Width(), host->surface_.Height());
@@ -860,6 +863,7 @@ private:
     static void OnInputFocus(void* userData, bool focused) noexcept {
         auto* host = static_cast<WebGameHost*>(userData);
         if (host != nullptr && !focused) {
+            host->haptics_.StopAll();
             host->digital_.Clear();
             host->pointerNeedsBaseline_ = true;
             host->SetTextInputActive(false);
@@ -915,6 +919,8 @@ private:
 
     void Shutdown() noexcept {
         shuttingDown_ = true;
+        haptics_.StopAll();
+        if (auto* scene = runtime_.Scene()) kb::input::InputHaptics::UnregisterBackend(*scene, haptics_);
         downloadActive_ = false;
         CancelFetchWatchdog();
         CancelBrowserDownload();
@@ -943,6 +949,7 @@ private:
     kb::render::Renderer renderer_;
     kb::game::PackagedGameRuntime runtime_;
     kb::game::WebTouchInput touches_;
+    kb::game::WebGamepadHaptics haptics_;
     kb::game::DigitalInputFrame digital_;
     std::chrono::steady_clock::time_point previousTick_{};
     std::chrono::steady_clock::time_point storageStartupTime_{};

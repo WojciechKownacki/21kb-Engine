@@ -16,6 +16,7 @@
 #include <vector>
 
 void VerifyAndroidTouchInput();
+void VerifyAndroidHaptics(kb::game::AndroidGamepadInput& provider);
 
 namespace {
 using kb::input::InputDeviceState;
@@ -47,6 +48,7 @@ std::atomic<unsigned> surfaces{0U}, lostSurfaces{0U}, resizedSurfaces{0U};
 std::atomic<bool> holdMotion{false}, finishTouchFrame{false};
 std::atomic<unsigned> touchEvents{0U};
 std::atomic<bool> touchBoundaries{false};
+std::atomic<bool> hapticsVerified{false};
 std::atomic<int> imeRequest{-1};
 std::atomic<unsigned> imeDismissals{0U};
 struct PlatformInput {
@@ -256,6 +258,7 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_diagnostics(JNIEnv* 
          << " resized-surfaces=" << resizedSurfaces.load() << " viewport=" << observation.state.PointerViewportWidth()
          << 'x' << observation.state.PointerViewportHeight() << " touches=" << observation.state.TouchPoints().size()
          << " touch-events=" << touchEvents.load() << " touch-boundaries=" << touchBoundaries.load()
+         << " haptics-verified=" << hapticsVerified.load()
          << " ime=" << observation.imeDiagnostic
          << " safe-area=" << observation.safeArea.left << ',' << observation.safeArea.top << ','
          << observation.safeArea.right << ',' << observation.safeArea.bottom
@@ -291,6 +294,8 @@ extern "C" void android_main(android_app* app) {
         PlatformInput platform;
         auto& controllers = platform.controllers;
         Require(controllers.Initialize(*app->activity), "Controller library initialization failed");
+        VerifyAndroidHaptics(controllers);
+        hapticsVerified.store(true);
         app->userData = &platform;
         app->onAppCmd = [](android_app* host, int32_t command) {
             auto& inputs = *static_cast<PlatformInput*>(host->userData);

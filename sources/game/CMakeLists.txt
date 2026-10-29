@@ -193,13 +193,14 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         set(KB_GAME_WEB_TARGET kb_game_webgl)
     endif()
     add_executable(${KB_GAME_WEB_TARGET} src/web/WebGameHost.cpp src/web/WebTouchInput.cpp
-        src/web/WebGamepadInput.cpp)
+        src/web/WebGamepadInput.cpp src/web/WebGamepadHaptics.cpp)
     target_link_libraries(${KB_GAME_WEB_TARGET} PRIVATE kb_packaged_game_host_core)
     target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
         "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html"
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebWasmLoader.js\""
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js\""
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js\""
+        "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGamepadHaptics.js\""
         "-lidbfs.js"
         "-sEXPORTED_RUNTIME_METHODS=requestFullscreen"
         "-sALLOW_MEMORY_GROWTH=1"
@@ -211,7 +212,8 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebWasmLoader.js"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGamepadHaptics.js")
     if(KB_WEB_RENDERER STREQUAL "WEBGPU")
         target_compile_definitions(${KB_GAME_WEB_TARGET} PRIVATE KB_WEB_RENDERER_WEBGPU=1)
         target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE "--use-port=emdawnwebgpu")
