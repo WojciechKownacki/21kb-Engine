@@ -231,7 +231,8 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
     y += 21;
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerState& state : layer.states) {
-            const std::string reference = state.clipReference.empty() ? state.blendParameter : state.clipReference;
+            const std::string reference = !state.blendSpaceReference.empty() ? state.blendSpaceReference :
+                state.clipReference.empty() ? state.blendParameter : state.clipReference;
             if (!reference.empty()) row(reference);
             for (const kb::scene::AnimatorControllerState::BlendChild& child : state.blendChildren) {
                 if (!child.clipReference.empty()) row(child.clipReference);
@@ -292,6 +293,12 @@ void AnimatorEditorPanelRenderer::Paint(
         DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, EditorText("animatorEditor.motionDocument", "Motion / Blend Document"), ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
         if (!motion->clipReference.empty()) {
             DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.c_str(), ThemeColor(theme.textSecondary), 12);
+        } else if (!motion->blendSpaceReference.empty()) {
+            const std::string axes = "BlendSpace2D | " + motion->blendParameter + " / " + motion->blendParameterY;
+            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
+                axes.c_str(), ThemeColor(theme.accent), 12, FW_SEMIBOLD);
+            DrawText(dc, RECT{ layout.graph.left + 20, layout.graph.top + 70, layout.graph.right - 12, layout.graph.top + 90 },
+                motion->blendSpaceReference.c_str(), ThemeColor(theme.textSecondary), 11);
         } else {
             DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
                 EditorLocalization::Format("animatorEditor.blendTree1D", "1D Blend Tree | {parameter}", { { "parameter", motion->blendParameter } }), ThemeColor(theme.accent), 12, FW_SEMIBOLD);

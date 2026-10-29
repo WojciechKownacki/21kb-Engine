@@ -23,6 +23,7 @@
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/TimelineAssetLoader.hpp"
 #include "engine/scene/AnimationAssetLoaders.hpp"
+#include "engine/scene/BlendSpace2DAssetLoader.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAudioListenerAccess.hpp"
@@ -117,6 +118,7 @@ Scene::Scene(
     const bool registeredCollisionMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::CollisionMeshAssetLoader>());
     const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
+    const bool registeredBlendSpace2DLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::BlendSpace2DAssetLoader>());
     const bool registeredAbilityLoader = state_->assets.RegisterLoader(std::make_unique<kb::gameplay::AbilityAssetLoader>());
     static_cast<void>(registeredAbilityLoader);
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
@@ -142,6 +144,7 @@ Scene::Scene(
     static_cast<void>(registeredCollisionMeshLoader);
     static_cast<void>(registeredAnimationClipLoader);
     static_cast<void>(registeredAnimatorControllerLoader);
+    static_cast<void>(registeredBlendSpace2DLoader);
     static_cast<void>(registeredTimelineLoader);
     static_cast<void>(registeredLocalizationLoader);
     static_cast<void>(registeredWorldLoader);

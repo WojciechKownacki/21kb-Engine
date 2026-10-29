@@ -1,4 +1,6 @@
 #include "scene/EditorSceneContext.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
+#include "engine/assets/AssetFileName.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
@@ -459,6 +461,7 @@ void EditorSceneContext::StartUntitledBasicScene() {
 }
 
 EditorSceneContext::~EditorSceneContext() {
+    ClearBlendSpace2DPreview();
     timelineEditorPreview_.Clear();
     if (scene_) EditorMap2DService::ClearPreviews(*scene_);
     if (documentScene_ && scene_ != documentScene_.get()) EditorMap2DService::ClearPreviews(*documentScene_);
@@ -1113,6 +1116,7 @@ void EditorSceneContext::MarkSceneDocumentDirty() noexcept {
 
 bool EditorSceneContext::SaveOpenDocuments() {
     if (timelineEditorDocument_.Dirty() && !SaveTimelineEditorAsset()) return false;
+    if (blendSpaceEditor_ && blendSpaceEditor_->document.Dirty() && !SaveBlendSpace2DEditorAsset()) return false;
     LogMaterialGraphDebug(console_, "save-open-documents-request materialOpen=" +
         std::to_string(materialEditor_.OpenAssetId().value) +
         " materialDirty=" + std::string{ materialEditor_.Dirty() ? "true" : "false" } +
@@ -4558,6 +4562,7 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
     }
     if (metadata->type == kb::scene::kAnimatorControllerAssetType) return OpenAnimatorEditorAsset(id);
     if (metadata->type == kb::scene::kTimelineAssetType) return OpenTimelineEditorAsset(id);
+    if (metadata->type == kb::scene::kBlendSpace2DAssetType) return OpenBlendSpace2DEditorAsset(id);
     console_.Error("Asset Editor", "Select a Timeline or Animator Controller asset.");
     return false;
 }
@@ -4608,6 +4613,15 @@ bool EditorSceneContext::OpenAnimatorEditorAsset(kb::assets::AssetId id) {
 
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerState& state : layer.states) {
+            if (!state.blendSpaceReference.empty()) {
+                kb::assets::AssetId spaceId;
+                const auto* spaceMetadata=kb::assets::TryParseAssetId(state.blendSpaceReference,spaceId) && spaceId.IsValid()
+                    ? manager.Registry().Find(spaceId) : manager.Registry().FindByPath(kb::assets::Utf8Path(state.blendSpaceReference));
+                const auto space=spaceMetadata?manager.Load<kb::scene::BlendSpace2DAsset>(spaceMetadata->id):kb::assets::AssetHandle<kb::scene::BlendSpace2DAsset>{};
+                if (!space.IsLoaded() || space->samples.empty() || std::ranges::any_of(space->samples,[&](const auto& sample) { return !validateClip(sample.clipReference); })) {
+                    console_.Error("Animator Editor","BlendSpace2D references a missing or incompatible Animation Clip.");return false;
+                }
+            }
             if (!state.clipReference.empty() && !validateClip(state.clipReference)) {
                 console_.Error("Animator Editor", "Animator Controller references a missing or incompatible Animation Clip.");
                 return false;

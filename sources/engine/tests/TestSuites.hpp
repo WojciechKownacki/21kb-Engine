@@ -30,6 +30,7 @@ void RunAnimationRuntimeTests();
 void RunSkeletonAssetTests();
 void RunSkeletalMeshAssetTests();
 void RunTimelineRuntimeTests();
+void RunBlendSpace2DRuntimeTests();
 void RunLocalizationTests();
 void RunUITextLineBreakingTests();
 void RunCrashReportConsentTests();

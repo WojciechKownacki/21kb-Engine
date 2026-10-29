@@ -39,6 +39,7 @@
 #include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/TimelineAsset.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/transform/SceneTransformResiduals.hpp"
@@ -110,6 +111,10 @@ struct AnimatorRuntimeState {
     };
     std::vector<Motion> motions;
     std::size_t blendParameterIndex = std::numeric_limits<std::size_t>::max();
+    std::size_t blendParameterYIndex = std::numeric_limits<std::size_t>::max();
+    kb::assets::AssetHandle<BlendSpace2DAsset> blendSpace;
+    std::uint64_t blendSpaceLoadGeneration = 0U;
+    std::optional<BlendSpace2DPlan> blendSpacePlan;
 };
 
 struct AnimatorRuntimeBinding {
@@ -166,11 +171,13 @@ struct AnimatorInstanceSkeleton {
     std::unordered_map<SkeletonBoneId, std::uint32_t> boneIndices;
     std::array<PoseBuffer, 2U> poses;
     std::array<PoseSoa, 2U> stateScratch;
+    PoseSoa motionScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateTouched;
     std::array<std::vector<std::uint8_t>, 2U> motionTouched;
     std::vector<std::string> morphTargetNames;
     std::array<std::vector<float>, 2U> morphWeights;
     std::array<std::vector<float>, 2U> stateMorphScratch;
+    std::vector<float> motionMorphScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateMorphTouched;
     std::uint32_t currentPose = 0U;
     std::uint64_t evaluationCount = 0U;

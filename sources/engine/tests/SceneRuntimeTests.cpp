@@ -163,6 +163,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSkeletalMeshAssetTests();
     } else if (suite == "timeline-runtime") {
         kb::tests::RunTimelineRuntimeTests();
+    } else if (suite == "blend-space-2d-runtime") {
+        kb::tests::RunBlendSpace2DRuntimeTests();
     } else if (suite == "localization") {
         kb::tests::RunLocalizationTests();
     } else if (suite == "ui-text-layout") {
@@ -219,6 +221,7 @@ void RunAllSuites() {
     kb::tests::RunSkeletonAssetTests();
     kb::tests::RunSkeletalMeshAssetTests();
     kb::tests::RunTimelineRuntimeTests();
+    kb::tests::RunBlendSpace2DRuntimeTests();
     kb::tests::RunLocalizationTests();
     kb::tests::RunCrashReportConsentTests();
     kb::tests::RunNavigationRuntimeTests();

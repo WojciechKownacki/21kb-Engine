@@ -48,6 +48,7 @@
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/TimelineEditorDocumentState.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
 #include "scene/EditorTimelinePreviewSession.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
@@ -126,6 +127,7 @@ struct TerrainLayerPaintSettings;
 } // namespace kb::terrain_editor
 
 namespace kb::editor {
+struct BlendSpace2DEditorState;
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
@@ -587,6 +589,28 @@ public:
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenTimelineEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenBlendSpace2DEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool CreateBlendSpace2DAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool ConsumeBlendSpace2DEditorOpenRequest() noexcept;
+    [[nodiscard]] bool EditBlendSpace2DAsset(const std::function<bool(kb::scene::BlendSpace2DAsset&)>& edit);
+    [[nodiscard]] const BlendSpace2DEditorState* BlendSpace2DEditor() const noexcept { return blendSpaceEditor_.get(); }
+    [[nodiscard]] bool UndoBlendSpace2DEditorEdit();
+    [[nodiscard]] bool RedoBlendSpace2DEditorEdit();
+    [[nodiscard]] bool SaveBlendSpace2DEditorAsset();
+    [[nodiscard]] bool RevertBlendSpace2DEditorAsset();
+    [[nodiscard]] bool SetBlendSpace2DPreviewOwner(kb::scene::SceneEntity owner);
+    [[nodiscard]] bool SetBlendSpace2DPreviewCoordinates(float x, float y);
+    [[nodiscard]] bool SeekBlendSpace2DPreview(float phase);
+    [[nodiscard]] bool PlayBlendSpace2DPreview(bool playing);
+    [[nodiscard]] bool TickBlendSpace2DPreview(float delta);
+    void ClearBlendSpace2DPreview() noexcept;
+    void SynchronizeBlendSpace2DReleaseHandler();
+    void FitBlendSpace2DEditorView();
+    void SelectBlendSpace2DSample(std::size_t index);
+    void SetBlendSpace2DEditorFirstRow(std::size_t row);
+    [[nodiscard]] bool BeginBlendSpace2DSampleDrag(std::size_t index);
+    [[nodiscard]] bool MoveBlendSpace2DSample(float x, float y);
+    [[nodiscard]] bool EndBlendSpace2DSampleDrag();
     [[nodiscard]] const TimelineEditorDocumentState& TimelineEditorDocument() const noexcept { return timelineEditorDocument_; }
     [[nodiscard]] bool EditTimelineAsset(const std::function<bool(kb::scene::TimelineAsset&)>& edit);
     [[nodiscard]] bool UndoTimelineEditorEdit();
@@ -1546,6 +1570,7 @@ private:
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
     TimelineEditorDocumentState timelineEditorDocument_;
+    std::unique_ptr<BlendSpace2DEditorState> blendSpaceEditor_;
     std::size_t timelineEditorFirstRow_ = 0, timelineEditorSelectedRow_ = 0;
     bool timelineEditorLoop_ = false;
     EditorTimelinePreviewSession timelineEditorPreview_;

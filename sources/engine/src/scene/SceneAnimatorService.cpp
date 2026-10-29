@@ -4,6 +4,7 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/scene/AnimationRetargeting.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
@@ -93,6 +94,8 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
     }
     for (const AnimatorRuntimeLayer& runtimeLayer : record.layers) {
         for (const AnimatorRuntimeState& runtimeState : runtimeLayer.states) {
+            if (runtimeState.blendSpace.IsLoaded() && runtimeState.blendSpaceLoadGeneration !=
+                manager.LoadGeneration(runtimeState.blendSpace.Id())) return false;
             for (const AnimatorRuntimeState::Motion& motion :
                  runtimeState.motions) {
                 if (motion.clipLoadGeneration !=
@@ -494,6 +497,9 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     for (std::vector<std::uint8_t>& touched : derived.stateTouched) {
         touched.resize(boneCount);
     }
+    derived.motionScratch.positions.resize(boneCount);
+    derived.motionScratch.rotations.resize(boneCount);
+    derived.motionScratch.scales.resize(boneCount);
     for (std::vector<std::uint8_t>& touched : derived.motionTouched) {
         touched.resize(boneCount);
     }
@@ -656,6 +662,7 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     for (std::vector<float>& weights : skeleton.stateMorphScratch) {
         weights.assign(skeleton.morphTargetNames.size(), 0.0F);
     }
+    skeleton.motionMorphScratch.assign(skeleton.morphTargetNames.size(), 0.0F);
     for (std::vector<std::uint8_t>& touched : skeleton.stateMorphTouched) {
         touched.assign(skeleton.morphTargetNames.size(), 0U);
     }
@@ -1002,47 +1009,50 @@ struct RootMotionDelta {
     return *state.motions.front().clip;
 }
 
-struct BlendSelection {
-    std::size_t lower = 0U;
-    std::size_t upper = 0U;
-    float alpha = 0.0F;
-};
+using BlendSelection = BlendSpace2DWeights;
 
 [[nodiscard]] BlendSelection SelectBlend(
     const AnimatorRuntimeRecord& record,
     const AnimatorRuntimeState& state,
     const AnimatorControllerState& definition) {
-    if (state.motions.size() == 1U) return {};
+    const auto single = [](std::size_t index) {
+        BlendSelection result;
+        result.values[0] = {index,1.0F}; result.count = 1;
+        return result;
+    };
+    if (state.blendSpacePlan) {
+        std::string error;
+        const auto weights = state.blendSpacePlan->Sample(record.parameters[state.blendParameterIndex].floatValue,
+            record.parameters[state.blendParameterYIndex].floatValue,error);
+        if (!weights || weights->count == 0) throw std::runtime_error("BlendSpace2D has no usable sample: " + error);
+        return *weights;
+    }
+    if (state.motions.size() == 1U) return single(0);
     const float value = record.parameters[state.blendParameterIndex].floatValue;
     const auto upper = std::upper_bound(
         definition.blendChildren.begin(), definition.blendChildren.end(), value,
         [](float needle, const AnimatorControllerState::BlendChild& child) {
             return needle < child.threshold;
         });
-    if (upper == definition.blendChildren.begin()) return {};
+    if (upper == definition.blendChildren.begin()) return single(0);
     if (upper == definition.blendChildren.end()) {
         const std::size_t last = definition.blendChildren.size() - 1U;
-        return BlendSelection{ .lower = last, .upper = last };
+        return single(last);
     }
     const std::size_t upperIndex =
         static_cast<std::size_t>(upper - definition.blendChildren.begin());
     const std::size_t lowerIndex = upperIndex - 1U;
-    const float range =
-        definition.blendChildren[upperIndex].threshold -
+    const double range = static_cast<double>(definition.blendChildren[upperIndex].threshold) -
         definition.blendChildren[lowerIndex].threshold;
-    return BlendSelection{
-        .lower = lowerIndex,
-        .upper = upperIndex,
-        .alpha = std::clamp(
-            (value - definition.blendChildren[lowerIndex].threshold) / range,
-            0.0F, 1.0F),
-    };
+    const float alpha = static_cast<float>(std::clamp((static_cast<double>(value) -
+        definition.blendChildren[lowerIndex].threshold) / range,0.0,1.0));
+    BlendSelection result;
+    result.values[0] = {lowerIndex,1.0F-alpha}; result.values[1] = {upperIndex,alpha}; result.count = 2;
+    return result;
 }
 
-// A blend state's clips may differ in length (a walk of 1 s, a run of 0.6 s). They play at one
-// phase: the state's playhead runs on its first clip's seconds, each clip is sampled at the same
-// fraction of its own length, and the playhead advances at the blend-weighted length of the
-// two clips in play - the normalized-time sync of Unity's and Unreal's blend spaces.
+// Clips share a normalized phase even when their lengths differ. The state
+// clock uses the first clip's seconds and advances at the weighted duration.
 [[nodiscard]] double MotionPhaseScale(
     const AnimatorRuntimeState& state,
     const AnimatorRuntimeState::Motion& motion) {
@@ -1056,9 +1066,11 @@ struct BlendSelection {
     const AnimatorControllerState& definition) {
     if (state.motions.size() < 2U) return 1.0;
     const BlendSelection selection = SelectBlend(record, state, definition);
-    const double lower = static_cast<double>(state.motions[selection.lower].clip->durationSeconds);
-    const double upper = static_cast<double>(state.motions[selection.upper].clip->durationSeconds);
-    const double length = lower + (upper - lower) * static_cast<double>(selection.alpha);
+    double length = 0.0;
+    for (std::size_t i = 0; i < selection.count; ++i) {
+        const auto& contribution = selection.values[i];
+        length += state.motions[contribution.sample].clip->durationSeconds * static_cast<double>(contribution.weight);
+    }
     return length > 0.0 ? static_cast<double>(ReferenceClip(state).durationSeconds) / length : 1.0;
 }
 
@@ -1147,13 +1159,18 @@ struct BlendSelection {
         const double scale = MotionPhaseScale(state, motion);
         return MotionRootMotion(motion, layer, startSeconds * scale, deltaSeconds * rate * scale);
     };
-    RootMotionDelta lower = motionRootMotion(selection.lower);
-    if (selection.lower == selection.upper) return lower;
-    const RootMotionDelta upper = motionRootMotion(selection.upper);
-    lower.translation = lower.translation +
-        (upper.translation - lower.translation) * selection.alpha;
-    lower.rotation = kb::math::Slerp(lower.rotation, upper.rotation, selection.alpha);
-    return lower;
+    RootMotionDelta result{};
+    float total = 0.0F;
+    for (std::size_t i = 0; i < selection.count; ++i) {
+        const auto& contribution = selection.values[i];
+        if (contribution.weight <= 0.0F) continue;
+        const auto sampled = motionRootMotion(contribution.sample);
+        const float alpha = contribution.weight / (total + contribution.weight);
+        result.translation = result.translation + (sampled.translation-result.translation)*alpha;
+        result.rotation = kb::math::Slerp(result.rotation,sampled.rotation,alpha);
+        total += contribution.weight;
+    }
+    return result;
 }
 
 [[nodiscard]] RootMotionDelta ExtractRootMotion(
@@ -1227,8 +1244,10 @@ void AdvanceTime(double& time, double delta, const AnimationClip& clip) {
     // child (ties select the upper child). This avoids duplicate gameplay
     // events while both clips contribute to the pose.
     const BlendSelection selection = SelectBlend(record, state, definition);
-    return state.motions[
-        selection.alpha < 0.5F ? selection.lower : selection.upper];
+    auto dominant = selection.values[0];
+    for (std::size_t i = 1; i < selection.count; ++i)
+        if (selection.values[i].weight >= dominant.weight) dominant = selection.values[i];
+    return state.motions[dominant.sample];
 }
 
 std::size_t EventCrossingCount(
@@ -1349,18 +1368,31 @@ void EvaluateState(
             }
             return std::nullopt;
         };
-        const std::optional<LocalTransform> lower = sampleMotion(selection.lower);
-        const std::optional<LocalTransform> upper =
-            selection.upper == selection.lower
-                ? lower
-                : sampleMotion(selection.upper);
-        if (!lower && !upper) continue;
-        const LocalTransform pose = selection.lower == selection.upper
-            ? lower.value_or(record.bindings[bindingIndex].bindTransform)
-            : Blend(
-                  lower.value_or(record.bindings[bindingIndex].bindTransform),
-                  upper.value_or(record.bindings[bindingIndex].bindTransform),
-                  selection.alpha);
+        bool touched = false;
+        float total = 0.0F;
+        LocalTransform pose = record.bindings[bindingIndex].bindTransform;
+        for (std::size_t i = 0; i < selection.count; ++i) {
+            const auto& contribution = selection.values[i];
+            const auto sample = sampleMotion(contribution.sample);
+            touched = touched || sample.has_value();
+            if (contribution.weight <= 0.0F) continue;
+            const auto value = sample.value_or(record.bindings[bindingIndex].bindTransform);
+            pose = total == 0.0F ? value : Blend(pose,value,contribution.weight/(total+contribution.weight));
+            total += contribution.weight;
+        }
+        if (!touched && state.blendSpacePlan) {
+            // A channel authored by another sample still belongs to this
+            // motion domain and returns to its bind pose at inactive vertices.
+            for (const auto& motion : state.motions) {
+                for (std::size_t track = 0; track < motion.clip->tracks.size(); ++track) {
+                    if (motion.targetIndices[track] == bindingIndex && (motion.clip->tracks[track].bindingMask & mask) != 0U) {
+                        touched = true;break;
+                    }
+                }
+                if (touched) break;
+            }
+        }
+        if (!touched) continue;
         AnimatorRuntimeBinding& binding = record.bindings[bindingIndex];
         if (from) {
             binding.fromPose = pose;
@@ -1395,93 +1427,51 @@ void EvaluateIndexedSkeletalState(
     const AnimatorRuntimeState& state,
     const AnimatorControllerState& definition,
     double time, std::uint64_t mask, std::size_t scratchIndex) {
-    AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
-    AnimatorInstanceSkeleton::PoseSoa& output =
-        skeleton.stateScratch[scratchIndex];
-    std::vector<std::uint8_t>& outputTouched =
-        skeleton.stateTouched[scratchIndex];
-    std::vector<std::uint8_t>& lowerTouched =
-        skeleton.motionTouched[0U];
-    std::vector<std::uint8_t>& upperTouched =
-        skeleton.motionTouched[1U];
-    std::vector<float>& outputMorphWeights =
-        skeleton.stateMorphScratch[scratchIndex];
-    std::vector<std::uint8_t>& outputMorphTouched =
-        skeleton.stateMorphTouched[scratchIndex];
-    std::fill(outputTouched.begin(), outputTouched.end(), std::uint8_t{ 0U });
-    std::fill(lowerTouched.begin(), lowerTouched.end(), std::uint8_t{ 0U });
-    std::fill(upperTouched.begin(), upperTouched.end(), std::uint8_t{ 0U });
-    std::fill(outputMorphWeights.begin(), outputMorphWeights.end(), 0.0F);
-    std::fill(outputMorphTouched.begin(), outputMorphTouched.end(), std::uint8_t{ 0U });
-
-    const BlendSelection selection = SelectBlend(instance, state, definition);
-    const auto sampleMotion = [&](std::size_t motionIndex,
-                                  std::vector<std::uint8_t>& touched,
-                                  bool blendUpper) {
-        const AnimatorRuntimeState::Motion& motion =
-            state.motions[motionIndex];
-        const float sampleTime = static_cast<float>(time * MotionPhaseScale(state, motion));
-        if (motion.boneIndices.size() !=
-            motion.clip->skeletalTracks.size()) {
-            throw std::runtime_error(
-                "AnimatorInstance lost its prebound skeletal track indices");
+    auto& skeleton = *instance.skeleton;
+    auto& output = skeleton.stateScratch[scratchIndex];
+    auto& touched = skeleton.stateTouched[scratchIndex];
+    auto& morph = skeleton.stateMorphScratch[scratchIndex];
+    auto& morphTouched = skeleton.stateMorphTouched[scratchIndex];
+    auto& scratch = skeleton.motionScratch;
+    auto& scratchMorph = skeleton.motionMorphScratch;
+    std::fill(touched.begin(),touched.end(),std::uint8_t{0});
+    std::fill(morphTouched.begin(),morphTouched.end(),std::uint8_t{0});
+    std::fill(morph.begin(),morph.end(),0.0F);
+    const auto selection = SelectBlend(instance,state,definition);
+    float total = 0.0F;
+    for (std::size_t i = 0; i < selection.count; ++i) {
+        const auto& contribution = selection.values[i];
+        const auto& motion = state.motions[contribution.sample];
+        const float sampleTime = static_cast<float>(time*MotionPhaseScale(state,motion));
+        for (std::size_t bone = 0; bone < skeleton.asset->bones.size(); ++bone)
+            WritePose(scratch,bone,skeleton.asset->bones[bone].referencePose);
+        std::fill(scratchMorph.begin(),scratchMorph.end(),0.0F);
+        if (motion.boneIndices.size() != motion.clip->skeletalTracks.size() ||
+            motion.morphIndices.size() != motion.clip->morphTracks.size())
+            throw std::runtime_error("AnimatorInstance lost its prebound motion indices");
+        for (std::size_t trackIndex = 0; trackIndex < motion.clip->skeletalTracks.size(); ++trackIndex) {
+            const auto& track = motion.clip->skeletalTracks[trackIndex];
+            if ((track.bindingMask&mask) == 0) continue;
+            const auto bone = motion.boneIndices[trackIndex];
+            if (bone >= output.positions.size()) throw std::runtime_error("AnimatorInstance contains an out-of-range bone index");
+            WritePose(scratch,bone,Sample(track,sampleTime));
+            touched[bone] = 1;
         }
-        for (std::size_t trackIndex = 0U;
-             trackIndex < motion.clip->skeletalTracks.size(); ++trackIndex) {
-            const AnimationBoneTrack& track =
-                motion.clip->skeletalTracks[trackIndex];
-            if ((track.bindingMask & mask) == 0U) continue;
-            const std::uint32_t boneIndex =
-                motion.boneIndices[trackIndex];
-            if (boneIndex >= output.positions.size()) {
-                throw std::runtime_error(
-                    "AnimatorInstance contains an out-of-range bone index");
-            }
-            LocalTransform sampled = Sample(track, sampleTime);
-            if (blendUpper) {
-                const LocalTransform lower = lowerTouched[boneIndex] != 0U
-                    ? ReadPose(output, boneIndex)
-                    : skeleton.asset->bones[boneIndex].referencePose;
-                sampled = Blend(lower, sampled, selection.alpha);
-            }
-            WritePose(output, boneIndex, sampled);
-            touched[boneIndex] = 1U;
-            outputTouched[boneIndex] = 1U;
+        for (std::size_t trackIndex = 0; trackIndex < motion.clip->morphTracks.size(); ++trackIndex) {
+            const auto index = motion.morphIndices[trackIndex];
+            if (index >= morph.size()) throw std::runtime_error("AnimatorInstance contains an out-of-range morph index");
+            scratchMorph[index] = Sample(motion.clip->morphTracks[trackIndex],sampleTime);
+            morphTouched[index] = 1;
         }
-        if (motion.morphIndices.size() != motion.clip->morphTracks.size()) {
-            throw std::runtime_error("AnimatorInstance lost its prebound morph track indices");
+        if (contribution.weight <= 0.0F) continue;
+        const float alpha = contribution.weight/(total+contribution.weight);
+        for (std::size_t bone = 0; bone < output.positions.size(); ++bone) {
+            const auto value = ReadPose(scratch,bone);
+            WritePose(output,bone,total == 0.0F ? value : Blend(ReadPose(output,bone),value,alpha));
         }
-        for (std::size_t trackIndex = 0U;
-             trackIndex < motion.clip->morphTracks.size(); ++trackIndex) {
-            const AnimationMorphTrack& track = motion.clip->morphTracks[trackIndex];
-            const std::uint32_t morphIndex = motion.morphIndices[trackIndex];
-            if (morphIndex >= outputMorphWeights.size()) {
-                throw std::runtime_error("AnimatorInstance contains an out-of-range morph index");
-            }
-            const float sampled = Sample(track, sampleTime);
-            const float lower = outputMorphTouched[morphIndex] != 0U
-                ? outputMorphWeights[morphIndex] : 0.0F;
-            outputMorphWeights[morphIndex] = blendUpper
-                ? kb::math::Lerp(lower, sampled, selection.alpha) : sampled;
-            outputMorphTouched[morphIndex] = 1U;
-        }
-    };
-
-    sampleMotion(selection.lower, lowerTouched, false);
-    if (selection.lower == selection.upper) return;
-    sampleMotion(selection.upper, upperTouched, true);
-    for (std::size_t boneIndex = 0U;
-         boneIndex < lowerTouched.size(); ++boneIndex) {
-        if (lowerTouched[boneIndex] == 0U ||
-            upperTouched[boneIndex] != 0U) {
-            continue;
-        }
-        WritePose(
-            output, boneIndex,
-            Blend(
-                ReadPose(output, boneIndex),
-                skeleton.asset->bones[boneIndex].referencePose,
-                selection.alpha));
+        for (std::size_t index = 0; index < morph.size(); ++index)
+            morph[index] = std::lerp(morph[index],scratchMorph[index],alpha);
+        total += contribution.weight;
     }
 }
 
@@ -2511,6 +2501,18 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
             std::vector<std::string_view> references;
             if (!stateDefinition.clipReference.empty()) {
                 references.push_back(stateDefinition.clipReference);
+            } else if (!stateDefinition.blendSpaceReference.empty()) {
+                kb::assets::AssetId id;
+                const auto* metadata = kb::assets::TryParseAssetId(stateDefinition.blendSpaceReference,id) && id.IsValid()
+                    ? manager.Registry().Find(id) : manager.Registry().FindByPath(kb::assets::Utf8Path(stateDefinition.blendSpaceReference));
+                if (metadata == nullptr || metadata->type != kBlendSpace2DAssetType) return false;
+                state.blendSpace = manager.Load<BlendSpace2DAsset>(metadata->id);
+                if (!state.blendSpace.IsLoaded() || state.blendSpace->samples.empty()) return false;
+                std::string error;
+                state.blendSpacePlan = BlendSpace2DPlan::Build(*state.blendSpace,error);
+                if (!state.blendSpacePlan) throw std::runtime_error(error);
+                state.blendSpaceLoadGeneration = manager.LoadGeneration(metadata->id);
+                for (const auto& sample : state.blendSpace->samples) references.push_back(sample.clipReference);
             } else {
                 for (const AnimatorControllerState::BlendChild& child :
                      stateDefinition.blendChildren) {
@@ -2521,6 +2523,9 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
                 auto clip =
                     manager.Load<AnimationClip>(ResolveClip(manager, reference));
                 if (!clip.IsLoaded()) return false;
+                if (state.blendSpace.IsLoaded() && !state.motions.empty() &&
+                    ((clip->targetSkeletonAssetId==0U)!=(state.motions.front().clip->targetSkeletonAssetId==0U)))
+                    throw std::runtime_error("BlendSpace2D cannot mix generic and skeletal clip bindings");
                 // Lengths may differ (they play at one phase); a blend of a loop and a
                 // one-shot has no single end, so looping has to agree.
                 if (!state.motions.empty() &&
@@ -2572,7 +2577,7 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
                 state.motions.push_back(std::move(motion));
             }
             if (state.motions.empty()) return false;
-            if (!stateDefinition.blendChildren.empty()) {
+            if (!stateDefinition.blendChildren.empty() || !stateDefinition.blendSpaceReference.empty()) {
                 const auto parameter = std::find_if(
                     controller->parameters.begin(), controller->parameters.end(),
                     [&](const AnimatorParameterDefinition& value) {
@@ -2582,6 +2587,13 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
                 if (parameter == controller->parameters.end()) return false;
                 state.blendParameterIndex = static_cast<std::size_t>(
                     parameter - controller->parameters.begin());
+                if (!stateDefinition.blendSpaceReference.empty()) {
+                    const auto y = std::ranges::find_if(controller->parameters,[&](const auto& value) {
+                        return value.name == stateDefinition.blendParameterY && value.type == AnimatorParameterType::Float;
+                    });
+                    if (y == controller->parameters.end()) return false;
+                    state.blendParameterYIndex = static_cast<std::size_t>(y-controller->parameters.begin());
+                }
             }
             layer.states.push_back(std::move(state));
         }
@@ -3269,8 +3281,9 @@ std::optional<float> SceneAnimatorService::Curve(const Scene& scene, SceneEntity
             return std::lerp(before.value, upper->value,
                 (sampleTime - before.timeSeconds) / (upper->timeSeconds - before.timeSeconds));
         };
-        const float lower = sampleMotion(blend.lower);
-        return blend.lower == blend.upper ? lower : std::lerp(lower, sampleMotion(blend.upper), blend.alpha);
+        float result = 0.0F;
+        for (std::size_t i = 0; i < blend.count; ++i) result += sampleMotion(blend.values[i].sample)*blend.values[i].weight;
+        return result;
     };
     float value = 0.0F;
     for (std::size_t index = 0; index < record->layers.size(); ++index) {

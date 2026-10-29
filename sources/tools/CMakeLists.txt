@@ -1,5 +1,6 @@
 add_library(kb_cli_core STATIC
     src/CliAnimatorCommands.cpp
+    src/CliBlendSpace2DCommands.cpp
     src/CliSkeletonCommands.cpp
     src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp

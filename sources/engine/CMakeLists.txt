@@ -815,6 +815,9 @@ add_library(kb_engine STATIC
     src/scene/TimelinePropertyTrack.cpp
     src/scene/TimelineAudioPlayback.cpp
     src/scene/TimelineSequencePlan.cpp
+    src/scene/BlendSpace2D.cpp
+    src/scene/BlendSpace2DAssetIO.cpp
+    src/scene/BlendSpace2DAssetLoader.cpp
     src/scene/TimelineAssetLoader.cpp
     src/scene/SceneTimelineService.cpp
     src/scene/AnimationRetargeting.cpp
@@ -1862,6 +1865,11 @@ if(NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(kb_blend_space_2d_tests tests/BlendSpace2DTests.cpp src/scene/BlendSpace2D.cpp)
+    target_include_directories(kb_blend_space_2d_tests PRIVATE include)
+    kb_apply_quality_gates(kb_blend_space_2d_tests)
+    add_test(NAME kb_blend_space_2d_tests COMMAND kb_blend_space_2d_tests)
+    set_tests_properties(kb_blend_space_2d_tests PROPERTIES LABELS "animation;geometry" TIMEOUT 30)
     if(MSVC)
         find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
         add_executable(kb_test_process_error_tests tests/TestProcessErrorsProbe.cpp)
@@ -2043,6 +2051,7 @@ if(BUILD_TESTING)
         tests/SkeletonAssetTests.cpp
         tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
+        tests/BlendSpace2DRuntimeTests.cpp
     tests/TimelineAudioTests.cpp
         tests/LocalizationTests.cpp
         tests/LargeWorldTests.cpp

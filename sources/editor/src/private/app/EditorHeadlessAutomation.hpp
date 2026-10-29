@@ -191,6 +191,7 @@ public:
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
     [[nodiscard]] bool CaptureTimelinePreview(std::string_view checkpoint);
+    [[nodiscard]] bool CaptureBlendSpace2DPreview(std::string_view checkpoint);
     // The Material Editor's preview of the open material, presented as the panel presents it.
     [[nodiscard]] bool CaptureMaterialPreview(std::string_view checkpoint, int width, int height);
     // The post-process settings the Scene panel's viewport renders with now (its own present

@@ -1327,7 +1327,15 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
+    if (state.sceneContext.ConsumeBlendSpace2DEditorOpenRequest()) {
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::BlendSpace2DEditor,DockArea::Center));
+        InvalidateRect(state.window,nullptr,FALSE);
+    }
     const bool timelinePreviewChanged = state.sceneContext.TickTimelineEditorPreview(deltaSeconds);
+    if (state.sceneContext.TickBlendSpace2DPreview(deltaSeconds)) {
+        state.sceneViewport.RequestPresent();
+        EditorWindowInvalidator::InvalidateDockPanel(state.window,state.dockModel,state.floatingWindows,state.metrics,DockPanelKind::BlendSpace2DEditor);
+    }
     if (timelinePreviewChanged) {
         state.sceneViewport.RequestPresent();
         EditorWindowInvalidator::InvalidateDockPanel(

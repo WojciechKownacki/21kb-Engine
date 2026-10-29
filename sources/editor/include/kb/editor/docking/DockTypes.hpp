@@ -33,6 +33,7 @@ enum class DockPanelKind : std::uint8_t {
     BuildGame,
     TilemapEditor,
     TimelineEditor,
+    BlendSpace2DEditor,
 };
 
 enum class DockSplitAxis : std::uint8_t {

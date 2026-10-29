@@ -26,6 +26,7 @@ constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
 constexpr std::string_view kSceneTemplates[]{"Basic", "Empty"};
 constexpr std::string_view kYesNo[]{"yes", "no"};
 constexpr std::string_view kScriptLanguages[]{"lua", "cpp"};
+constexpr std::string_view kBlendSpaceActions[]{"new", "show", "add", "set", "remove", "sample", "assign"};
 
 struct ToolProperty {
     std::string_view name;
@@ -66,8 +67,8 @@ struct ToolProperty {
         }
         if (property.type == "string") descriptor.Set("minLength", JsonValue::MakeNumber(1));
         if (property.type == "integer") {
-            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "executionOrder" ? std::numeric_limits<int>::min() : 1));
-            descriptor.Set("maximum", JsonValue::MakeNumber(std::numeric_limits<int>::max()));
+            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "executionOrder" ? std::numeric_limits<int>::min() : property.name == "index" ? 0 : 1));
+            descriptor.Set("maximum", JsonValue::MakeNumber(property.name == "index" ? 255 : std::numeric_limits<int>::max()));
         }
         schemaProperties.Set(std::string{ property.name }, std::move(descriptor));
         if (property.required) {
@@ -87,6 +88,19 @@ struct ToolProperty {
 }
 
 [[nodiscard]] JsonValue MakeCommandToolDescriptor(const CliCommandDescriptor& command) {
+    if (command.name == "blend-space") return MakeToolDescriptor(command.mcpTool,
+        "Authors and samples a BlendSpace2D asset with atomic validated edits, or assigns it to a controller state.", {
+            ToolProperty{"action","string","Operation; add requires at/clip; set/remove require index; assign requires controller/state/axis names.",true,"",kBlendSpaceActions},
+            ToolProperty{"space","string","BlendSpace2D asset path inside the project Assets directory.",true,"--space"},
+            ToolProperty{"at","string","Two finite coordinates x,y for add/set/sample.",false,"--at"},
+            ToolProperty{"clip","string","AnimationClip virtual path, physical asset path or stable identity.",false,"--clip"},
+            ToolProperty{"index","integer","Zero-based sample index for set/remove.",false,"--index"},
+            ToolProperty{"controller","string","Animator Controller to edit for assign.",false,"--controller"},
+            ToolProperty{"state","string","Existing controller state to replace for assign.",false,"--state"},
+            ToolProperty{"layer","string","Controller layer, defaulting to its first layer.",false,"--layer"},
+            ToolProperty{"xParameter","string","Float parameter bound to the X axis; created if missing.",false,"--x-param"},
+            ToolProperty{"yParameter","string","Distinct Float parameter bound to the Y axis; created if missing.",false,"--y-param"},
+        });
     if (command.name == "api") return MakeToolDescriptor(command.mcpTool,
         "Returns the 21kb Engine script API reference (functions, components, lifecycle events).",
         {

@@ -37,6 +37,7 @@
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/scene_viewport/EditorUIRectInteraction.hpp"
@@ -357,6 +358,7 @@ FindInspectorHit(
     if (panel == "assets") return DockPanelKind::Assets;
     if (panel == "console") return DockPanelKind::Console;
     if (panel == "timeline") return DockPanelKind::TimelineEditor;
+    if (panel == "blend-space-2d") return DockPanelKind::BlendSpace2DEditor;
     if (panel == "project_settings") {
         return DockPanelKind::ProjectSettings;
     }
@@ -3663,6 +3665,29 @@ bool EditorHeadlessAutomation::CaptureTimelinePreview(std::string_view checkpoin
             Trace("capture_timeline_preview",valid,output.filename().string()); return valid;
         }
         if (status == kb::scene::SceneScreenCaptureStatus::Failed) return false;
+        Sleep(5);
+    }
+    return false;
+}
+
+bool EditorHeadlessAutomation::CaptureBlendSpace2DPreview(std::string_view checkpoint) {
+    const auto* state=context_.BlendSpace2DEditor();
+    auto* scene=state?const_cast<kb::scene::Scene*>(state->preview.Scene()):nullptr;
+    if (!scene) return false;
+    const auto output=artifactRoot_/"screenshots"/(SafeCheckpoint(checkpoint)+".png");
+    const auto request=kb::scene::SceneRenderFeedback::RequestScreenCapture(*scene,output.string());
+    if (!request) return false;
+    for (const auto deadline=std::chrono::steady_clock::now()+kCaptureDeadline;std::chrono::steady_clock::now()<deadline;) {
+        EditorSceneBgfxViewport::PresentSettings settings{};settings.viewportKey=21;settings.sceneFullSyncRequired=true;
+        settings.selectionMaskEnabled=false;settings.selectionOutlineEnabled=false;
+        impl_->viewport.BeginPaintLayout(impl_->window);
+        impl_->viewport.Present(impl_->window,RECT{0,0,960,540},*scene,settings);
+        impl_->viewport.EndPaintLayout(0.0F);if (!impl_->viewport.AdvanceAsyncReadbacks()) return false;
+        const auto status=kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*scene,request);
+        if (status==kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool valid=ValidateCapturedImage(output,true);Trace("capture_blend_space_preview",valid,output.filename().string());return valid;
+        }
+        if (status==kb::scene::SceneScreenCaptureStatus::Failed) return false;
         Sleep(5);
     }
     return false;

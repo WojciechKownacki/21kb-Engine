@@ -202,6 +202,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateParticleEffectAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewBlendSpace2D: {
+        const auto destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateBlendSpace2DAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::ExtractMaterials:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.ExtractEmbeddedMaterials(targetAsset);

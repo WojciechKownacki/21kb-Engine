@@ -34,6 +34,9 @@
 #include "engine/core/JsonValue.hpp"
 #include "scene/TimelineEditorModel.hpp"
 #include "rendering/TimelineEditorPanel.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -3664,6 +3667,8 @@ ReadScriptValue(
                 state.context.CreateMaterialTypeAsset(virtualFolder);
         } else if (*type == "particle_effect") {
             created = state.context.CreateParticleEffectAsset(virtualFolder);
+        } else if (*type == "blend_space_2d") {
+            created = state.context.CreateBlendSpace2DAsset(virtualFolder);
         } else if (*type == "post_process_profile") {
             created = state.context.CreatePostProcessProfileAsset(virtualFolder);
         } else if (*type == "import_preset") {
@@ -4433,6 +4438,8 @@ ReadScriptValue(
             opened = state.context.OpenAnimatorEditorAsset(id);
         } else if (metadata->type == "Timeline") {
             opened = state.context.OpenAnimationAsset(id);
+        } else if (metadata->type == "BlendSpace2D") {
+            opened = state.context.OpenBlendSpace2DEditorAsset(id);
         } else if (
             metadata->type == "RenderMaterial" ||
             metadata->type == "RenderMaterialInstance" ||
@@ -5229,6 +5236,82 @@ ReadScriptValue(
     if (*operation == "capture_timeline_preview") {
         const auto checkpoint = StringMember(step,"checkpoint",error);
         return {checkpoint && state.automation.CaptureTimelinePreview(*checkpoint), "Timeline GPU preview"};
+    }
+    if (*operation == "capture_blend_space_preview") {
+        const auto checkpoint=StringMember(step,"checkpoint",error);
+        return {checkpoint && state.automation.CaptureBlendSpace2DPreview(*checkpoint),"BlendSpace2D GPU preview"};
+    }
+    if (*operation == "blend_space_edit" || *operation == "blend_space_add" || *operation == "blend_space_remove") {
+        const auto index=UInt32Member(step,"index",error,false).value_or(0);
+        const auto x=NumberMember(step,"x",error,false),y=NumberMember(step,"y",error,false);
+        const auto clip=StringMember(step,"clip",error,false);
+        const auto accepted=BoolMember(step,"accepted",error,false).value_or(true);
+        if (!error.empty()) return {false,error};
+        const bool changed=state.context.EditBlendSpace2DAsset([&](auto& asset) {
+            if (*operation=="blend_space_add") {
+                if (!x || !y || !clip) return false;
+                asset.samples.push_back({static_cast<float>(*x),static_cast<float>(*y),*clip});return true;
+            }
+            if (index>=asset.samples.size()) return false;
+            if (*operation=="blend_space_remove") { asset.samples.erase(asset.samples.begin()+index);return true; }
+            if (x) asset.samples[index].x=static_cast<float>(*x);
+            if (y) asset.samples[index].y=static_cast<float>(*y);
+            if (clip) asset.samples[index].clipReference=*clip;
+            return x || y || clip;
+        });
+        return {changed==accepted,"BlendSpace2D validated sample edit"};
+    }
+    if (*operation == "blend_space_owner") {
+        const auto entity=StringMember(step,"entity",error);
+        return {entity && state.context.SetBlendSpace2DPreviewOwner(ResolveEntity(state,*entity)),"BlendSpace2D preview owner"};
+    }
+    if (*operation == "blend_space_query") {
+        const auto x=NumberMember(step,"x",error),y=NumberMember(step,"y",error);
+        return {x && y && state.context.SetBlendSpace2DPreviewCoordinates(static_cast<float>(*x),static_cast<float>(*y)),"BlendSpace2D preview coordinates"};
+    }
+    if (*operation == "blend_space_seek" || *operation == "blend_space_tick") {
+        const auto time=NumberMember(step,"time",error);
+        if (!time || *time<0) return {false,"Invalid blend preview time"};
+        return {*operation=="blend_space_seek"?state.context.SeekBlendSpace2DPreview(static_cast<float>(*time)):
+            state.context.TickBlendSpace2DPreview(static_cast<float>(*time)),*operation};
+    }
+    if (*operation == "blend_space_pointer") {
+        const auto phase=StringMember(step,"phase",error);
+        const auto x=UInt32Member(step,"x",error,false).value_or(0),y=UInt32Member(step,"y",error,false).value_or(0);
+        if (!phase || !error.empty()) return {false,error};
+        bool changed=false;
+        if (*phase=="down") changed=BlendSpace2DEditorPanel::PointerDown(nullptr,{0,0,1100,720},static_cast<int>(x),static_cast<int>(y),state.context);
+        else if (*phase=="move") changed=BlendSpace2DEditorPanel::PointerMove({0,0,1100,720},static_cast<int>(x),static_cast<int>(y),state.context);
+        else if (*phase=="up") changed=BlendSpace2DEditorPanel::PointerUp(nullptr,state.context);
+        return {changed,"BlendSpace2D panel pointer "+*phase};
+    }
+    if (*operation == "assert_blend_space") {
+        const auto* document=state.context.BlendSpace2DEditor();if (!document || !document->document.WorkingCopy()) return {false,"BlendSpace2D document is not open"};
+        const auto count=UInt32Member(step,"samples",error,false),index=UInt32Member(step,"index",error,false);
+        const auto x=NumberMember(step,"x",error,false),y=NumberMember(step,"y",error,false),phase=NumberMember(step,"phase",error,false);
+        const auto px=NumberMember(step,"position_x",error,false),py=NumberMember(step,"position_y",error,false),sourceX=NumberMember(step,"source_position_x",error,false);
+        const auto dirty=BoolMember(step,"dirty",error,false),playing=BoolMember(step,"playing",error,false);
+        const auto events=UInt32Member(step,"events",error,false),eventId=UInt32Member(step,"event_id",error,false);
+        bool valid=error.empty() && (!count || document->document.WorkingCopy()->samples.size()==*count) &&
+            (!dirty || document->document.Dirty()==*dirty) && (!playing || document->preview.Playing()==*playing) &&
+            (!phase || std::abs(document->phase-*phase)<0.0001);
+        if (index) {
+            if (*index>=document->document.WorkingCopy()->samples.size()) valid=false;
+            else { const auto& sample=document->document.WorkingCopy()->samples[*index];valid=valid && (!x || std::abs(sample.x-*x)<0.0001) && (!y || std::abs(sample.y-*y)<0.0001); }
+        }
+        if (px || py) {
+            const auto* scene=document->preview.Scene();valid=valid && scene;
+            if (scene) { const auto position=scene->Transforms().Get(document->preview.Owner()).localPosition;
+                valid=valid && (!px || std::abs(position.x-*px)<0.0001) && (!py || std::abs(position.y-*py)<0.0001); }
+        }
+        if (sourceX) { const auto* transform=state.context.Scene().Transforms().TryGet(document->owner);valid=valid && transform && std::abs(transform->localPosition.x-*sourceX)<0.0001; }
+        if (events || eventId) {
+            auto* scene=const_cast<kb::scene::Scene*>(document->preview.Scene());
+            if (!scene) valid=false;
+            else { const auto records=scene->Animators().DrainEvents();valid=valid && (!events || records.size()==*events) &&
+                (!eventId || (!records.empty() && records.back().eventId==*eventId)); }
+        }
+        return {valid,"BlendSpace2D document and isolated runtime"};
     }
     if (*operation == "timeline_edit") {
         const auto label = StringMember(step, "label", error);

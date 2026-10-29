@@ -72,6 +72,7 @@ enum class EditorAssetContextCommand {
     Refresh,
     Reimport,
     UndoReimport,
+    NewBlendSpace2D,
 };
 
 enum class EditorAssetDropAction {

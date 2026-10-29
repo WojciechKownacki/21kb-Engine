@@ -17,6 +17,7 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
@@ -185,6 +186,10 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
             ? EditorAssetBrowserDoubleClickResult::TimelineEditorOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }
+        if (metadata->type == kb::scene::kBlendSpace2DAssetType) {
+            return sceneContext.OpenBlendSpace2DEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::BlendSpace2DEditorOpened : EditorAssetBrowserDoubleClickResult::None;
+        }
     if (metadata->type == "ScenePrefab") {
         return sceneContext.OpenPrefabEditMode(ResolveAssetPath(*metadata, manager))
             ? EditorAssetBrowserDoubleClickResult::PrefabEditorOpened

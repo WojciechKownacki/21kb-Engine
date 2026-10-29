@@ -806,6 +806,7 @@ add_executable(kb_editor WIN32
     src/rendering/AnimationClipEditorPanelRenderer.cpp
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/TimelineEditorPanel.cpp
+    src/rendering/BlendSpace2DEditorPanel.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
     src/assets/EditorAssetOpenPolicy.cpp
@@ -888,6 +889,8 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorRigidbodyTextBuilder.cpp
     src/scene/EditorAnimationPreviewScene.cpp
     src/scene/EditorTimelinePreviewSession.cpp
+    src/scene/EditorBlendSpace2DPreviewSession.cpp
+    src/scene/EditorSceneContextBlendSpace2D.cpp
     src/scene/EditorSceneContextTimeline.cpp
     src/scene/TimelineEditorModel.cpp
     src/scene/EditorHierarchyContentResolver.cpp
@@ -1446,8 +1449,10 @@ if(BUILD_TESTING)
           src/scene/EditorViewportPreviewState.cpp
           src/scene/EditorAnimationPreviewScene.cpp
           src/scene/EditorTimelinePreviewSession.cpp
+          src/scene/EditorBlendSpace2DPreviewSession.cpp
           src/scene/TimelineEditorModel.cpp
           tests/EditorTimelineTests.cpp
+          tests/EditorBlendSpace2DTests.cpp
           src/app/scene_viewport/EditorSceneViewportMath.cpp
           src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
       src/scene/material/EditorMaterialAssetAuthoring.cpp
@@ -1569,6 +1574,19 @@ if(BUILD_TESTING)
                 --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
         set_tests_properties(kb_editor_timeline_workflow_package PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;timeline;packaging" TIMEOUT 1200)
+        if(TARGET kb_cli)
+            add_test(NAME kb_editor_blend_space_2d_workflow_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/BlendSpace2DWorkflowTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
+                    --test-root "${CMAKE_BINARY_DIR}/blend_space_workflow_tests"
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
+            set_tests_properties(kb_editor_blend_space_2d_workflow_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;animation;packaging" TIMEOUT 1200)
+        endif()
     endif()
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
