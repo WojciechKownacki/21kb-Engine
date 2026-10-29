@@ -52,6 +52,7 @@ namespace {
 
 using namespace kb::net;
 namespace fs = std::filesystem;
+fs::path serverExecutable = KB_DEDICATED_SERVER_PATH;
 
 void Require(bool condition, const std::string& message) {
     if (!condition) {
@@ -104,7 +105,7 @@ public:
         };
         HANDLE out = open(stdoutFile);
         HANDLE err = open(stderrFile);
-        std::wstring command = L"\"" + fs::path(KB_DEDICATED_SERVER_PATH).wstring() + L"\"";
+        std::wstring command = L"\"" + serverExecutable.wstring() + L"\"";
         for (const std::string& argument : arguments) {
             command += L" \"" + fs::path(argument).wstring() + L"\"";
         }
@@ -135,7 +136,7 @@ public:
             dup2(out, 1);
             dup2(err, 2);
             std::vector<char*> argv;
-            std::string exe = KB_DEDICATED_SERVER_PATH;
+            std::string exe = serverExecutable.string();
             argv.push_back(exe.data());
             std::vector<std::string> copy = arguments;
             for (std::string& argument : copy) {
@@ -759,7 +760,13 @@ void TestKeysFile() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--server") {
+        serverExecutable = fs::absolute(argv[2]);
+        if (!fs::is_regular_file(serverExecutable)) return 2;
+    } else if (argc != 1) {
+        return 2;
+    }
     const std::vector<std::pair<const char*, void (*)()>> tests{
         { "keys-file", &TestKeysFile },
         { "scene-checkpoint", &TestSceneCheckpoint },

@@ -227,7 +227,7 @@ Linux.
 * Forward secrecy and key distribution. The client key is long lived and must reach both sides over
   a channel the application already trusts. A leaked key lets its holder impersonate that client.
 * IPv6, NAT rebinding (a session is tied to the source address), path MTU discovery.
-* A browser transport (WebSocket or WebRTC). The browser build compiles without UDP.
+* Raw browser UDP is unavailable. The supported WebSocket adapter and dedicated-server listener are described in [Browser session transport](network_websocket.md).
 * Entity replication, RPC dispatch, prediction and interest management (A146, A147 and later).
 
 ## Tests
@@ -241,3 +241,19 @@ timeout, host capacity, a 30% loss, 15% duplication, 20% reordering network with
 messages each way, two clients on that network with one of them reconnecting from another address
 (which prints a report of loss, round trip time, retransmissions and rejected packets), and a real UDP
 round trip on 127.0.0.1.
+
+## Dedicated-server distribution
+
+`scripts/package_server.py --binary <kb_dedicated_server> --output <new-directory>`
+creates a runtime distribution containing the executable, license notices,
+SBOM and SHA-256 file inventory. Optional `--runtime-library` arguments add
+explicit native shared libraries. Existing output directories are refused.
+
+Use `--process-tests <kb_dedicated_server_tests>` to run the real server suite
+against the staged executable before publishing the directory. This checks
+multiple clients, replication and script RPC, signed login tokens, persisted
+scene checkpoints, invalid checkpoint handling, metrics and clean shutdown
+from the relocated runtime. Project content and operator credentials remain
+separate deployment inputs passed through `--project` and `--keys`; they are
+never collected from the build tree by the runtime packager. Install the
+platform runtime libraries required by the selected native binary.

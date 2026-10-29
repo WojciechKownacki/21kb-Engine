@@ -1,3 +1,4 @@
+#include "kb/net/WebSocketTransport.hpp"
 #include "DedicatedServer.hpp"
 
 #include "engine/core/JsonValue.hpp"
@@ -128,6 +129,7 @@ std::string SummaryJson(const ServerOptions& options, const ServerSummary& summa
     root.Set("exit_reason", JsonValue::MakeString(summary.exitReason));
     root.Set("project", JsonValue::MakeString(options.project.generic_string()));
     root.Set("port", number(summary.port));
+    root.Set("websocket_port", number(summary.webSocketPort));
     root.Set("state_loaded", JsonValue::MakeBool(summary.stateLoaded));
     root.Set("state_saved", JsonValue::MakeBool(summary.stateSaved));
     root.Set("tick_rate", number(options.tickRate));
@@ -484,9 +486,19 @@ bool DedicatedServer::Start(std::string& error) {
         return false;
     }
     std::string bindError;
-    s.transport = CreateUdpTransport(Endpoint{ address, options.port }, bindError);
+    if (options.webSocketEnabled) {
+        WebSocketServerOptions web;
+        web.udpBind = Endpoint{address, options.port};
+        web.webSocketPort = options.webSocketPort;
+        web.maxClients = options.maxClients;
+        web.allowedOrigin = options.webSocketOrigin;
+        s.transport = CreateWebSocketServerTransport(web, s.summary.webSocketPort, bindError);
+    } else {
+        s.transport = CreateUdpTransport(Endpoint{address, options.port}, bindError);
+    }
     if (s.transport == nullptr) {
-        error = "the UDP socket could not be opened: " + bindError;
+        error = std::string(options.webSocketEnabled ? "the network listener could not be opened: " :
+            "the UDP socket could not be opened: ") + bindError;
         return false;
     }
     s.summary.port = s.transport->LocalEndpoint().port;

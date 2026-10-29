@@ -50,6 +50,8 @@ usage: kb_dedicated_server --project <dir> --keys <file> [options]
   --project <dir>          project directory (required)
   --keys <file>            client keys, one "<client id> <64 hex digits>" per line, '#' starts a comment (required)
   --scene <path>           scene to run (default: the project's startup scene)
+  --websocket-port <n>    enable WebSocket /21kb listener; 0 selects an available TCP port
+  --websocket-origin <s>  optionally restrict the browser Origin to this exact value
   --port <n>               UDP port, 0 lets the system choose (default 27015)
   --bind <ipv4>            address to listen on (default 0.0.0.0)
   --max-clients <n>        connected clients allowed (default 16)
@@ -108,7 +110,7 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
         }
     }
     static const std::set<std::string> known{ "--project", "--keys", "--scene", "--port", "--bind", "--max-clients", "--tick-rate", "--idle-timeout",
-        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--stop-file", "--port-file", "--status-file", "--state-file", "--auth-provider-key", "--auth-revocations", "--json", "--quiet", "--help" };
+        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--stop-file", "--port-file", "--status-file", "--state-file", "--auth-provider-key", "--auth-revocations", "--websocket-port", "--websocket-origin", "--json", "--quiet", "--help" };
     for (const auto& [name, value] : values) {
         if (!known.contains(name)) {
             parsed.error = "unknown option: " + name;
@@ -149,6 +151,13 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
     if (values.contains("--state-file")) options.stateFile = values["--state-file"];
     if (values.contains("--auth-provider-key")) options.authProviderKeyFile = values["--auth-provider-key"];
     if (values.contains("--auth-revocations")) options.authRevocationsFile = values["--auth-revocations"];
+    options.webSocketEnabled = values.contains("--websocket-port");
+    if (values.contains("--websocket-origin")) options.webSocketOrigin = values["--websocket-origin"];
+    if (!number("--websocket-port", 65535U, options.webSocketPort)) return parsed;
+    if (!options.webSocketOrigin.empty() && !options.webSocketEnabled) {
+        parsed.error = "--websocket-origin requires --websocket-port";
+        return parsed;
+    }
     if (!number("--port", 65535U, options.port) || !number("--max-clients", 4096U, options.maxClients) || !number("--tick-rate", 240U, options.tickRate) ||
         !number("--idle-timeout", 3600U, options.idleTimeoutSeconds) || !number("--empty-timeout", 86400U, options.emptyTimeoutSeconds) ||
         !number("--max-seconds", 31536000U, options.maxSeconds)) {

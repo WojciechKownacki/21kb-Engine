@@ -105,7 +105,7 @@ if(NOT WIN32 AND (KB_BUILD_PACKAGED_GAME_HOST OR (ANDROID AND KB_BUILD_ANDROID_H
         "KB_GAME_TARGET_PROFILE_ID=\"${KB_GAME_TARGET_PROFILE_ID}\""
     )
     target_link_libraries(kb_packaged_game_host_core
-        PUBLIC kb_game_core
+        PUBLIC kb_game_core kb_net
         PRIVATE
             kb_physics_jolt_plugin
             kb_audio_miniaudio_plugin

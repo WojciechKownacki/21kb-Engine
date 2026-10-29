@@ -6,6 +6,7 @@
 #include "WebDownloadBuffer.hpp"
 #include "DigitalInputFrame.hpp"
 #include "WebTextClipboard.hpp"
+#include "kb/net/WebSocketTransport.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -304,6 +305,14 @@ EM_JS(int, RecreateBrowserCanvas, (), {
 EM_JS(void, InitializeBrowserStorage, (), { Module['kbInitializeStorage'](); });
 EM_JS(int, BrowserStorageStartup, (), { return Module['kbUserStorage'].startup; });
 EM_JS(char*, BrowserStorageRoot, (), { return stringToNewUTF8(Module['kbUserStorage'].root); });
+EM_JS(char*, BrowserNetworkSettings, (), {
+    if (globalThis.kbNetwork === undefined) return 0;
+    try {
+        const value = JSON.stringify(globalThis.kbNetwork);
+        delete globalThis.kbNetwork;
+        return stringToNewUTF8(typeof value === 'string' && value.length <= 8192 ? value : '!');
+    } catch (error) { return stringToNewUTF8('!'); }
+});
 EM_JS(char*, BrowserStorageDiagnostic, (), { return stringToNewUTF8(Module['kbUserStorage'].diagnostic); });
 // clang-format on
 
@@ -540,6 +549,20 @@ private:
         if (!runtime_.Initialize(pack_, storageRoot, renderer_, diagnostics)) {
             Fail("runtime-init", diagnostics.str());
             return;
+        }
+        if (char* settings = BrowserNetworkSettings()) {
+            kb::net::SceneClientOptions options;
+            std::string url;
+            const bool valid = kb::net::ParseWebSceneClientSettings(settings, options, url);
+            std::free(settings);
+            const auto endpoint = options.server;
+            if (!valid || !runtime_.ConfigureNetwork(std::move(options),
+                    [url = std::move(url), endpoint](std::string& error) {
+                        return kb::net::CreateBrowserWebSocketTransport(url, endpoint, error);
+                    })) {
+                Fail("network-init", "invalid runtime network settings");
+                return;
+            }
         }
         EM_ASM({ location.hash = 'kb-runtime-ready'; });
 

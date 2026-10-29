@@ -8,6 +8,16 @@ and license text. Packaging builds each player's `THIRD_PARTY_NOTICES.txt`, `Lic
 and CycloneDX SBOM (`sbom.cdx.json`) from it; `scripts/third_party_notices.py --product engine`
 builds the same for the editor and tools. Add a dependency there before it is built into a product.
 
+## libwebsockets
+
+- Repository: https://github.com/warmcat/libwebsockets
+- Version: 4.4.1 (`adc128ca082a3c6fb9d4abbadefc09e3bc736724`)
+- License: MIT with retained BSD notices
+- License file: `third_party/licenses/libwebsockets.txt`
+
+Fetched by CMake for the optional native dedicated-server WebSocket listener.
+Browser clients use the platform WebSocket implementation.
+
 ## bgfx
 
 - Repository: https://github.com/bkaradzic/bgfx

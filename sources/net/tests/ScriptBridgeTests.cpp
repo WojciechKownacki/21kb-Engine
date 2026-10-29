@@ -15,6 +15,8 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/net/SceneReplication.hpp"
 #include "kb/net/ScriptBridge.hpp"
+#include "kb/net/SceneClient.hpp"
+#include <sstream>
 
 #include <cmath>
 #include <array>
@@ -410,11 +412,82 @@ void TestRuntimeGuards() {
     static_cast<void>(project);
 }
 
+
+void TestSceneClientLifecycle() {
+    LoopbackNetwork network;
+    auto socket = network.CreateTransport(Endpoint::Loopback(9600));
+    StaticKeyTable keys;
+    keys.Set(7U, KeyFor(7U));
+    Host host(*socket, HostConfig{}, keys);
+    kb::scene::Scene serverScene;
+    kb::scene::Scene clientScene;
+    const auto object = serverScene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Replica"});
+    auto components = MakeSceneReplicationRegistry(1000.0F);
+    RpcRegistry rpcs;
+    DefineStandardRpcs(rpcs);
+    ReplicationServer replication(host, serverScene.Runtime().EcsWorld(), *components, rpcs);
+    Require(replication.Replicate(object.Entity()) != 0U, "scene entity was not replicated");
+    SceneClientOptions options;
+    options.clientId = 7U;
+    options.key = KeyFor(7U);
+    options.server = Endpoint::Loopback(9600);
+    std::uint16_t nextPort = 9601;
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    std::size_t connections = 0U;
+    {
+        SceneClient client(clientScene, options, [&](std::string&) {
+            return network.CreateTransport(Endpoint::Loopback(nextPort++));
+        });
+        const auto step = [&] {
+            now += 10U;
+            network.Advance(now);
+            host.Update(now);
+            NetEvent event;
+            while (host.PollEvent(event)) {
+                if (event.type == NetEventType::Connected) ++connections;
+                replication.HandleEvent(event, now);
+            }
+            replication.Tick(static_cast<std::uint32_t>(now / 10U), now);
+            Require(client.Update(now, diagnostics), diagnostics.str());
+        };
+        for (int i = 0; i < 200; ++i) step();
+        Require(connections == 1U && clientScene.Entities().Count() == 1U, "initial scene replica missing");
+        host.Disconnect(7U);
+        bool cleared = false;
+        for (int i = 0; i < 400; ++i) {
+            step();
+            cleared = cleared || clientScene.Entities().Count() == 0U;
+        }
+        Require(cleared && connections == 2U && clientScene.Entities().Count() == 1U,
+            "reconnect did not clear and restore exactly one replica");
+    }
+    Require(clientScene.Entities().Count() == 0U && kb::script::ScriptNetApi::Attached(clientScene) == nullptr,
+        "scene client shutdown retained replicas or script attachment");
+}
+
+void TestWebSessionSettings() {
+    SceneClientOptions options;
+    std::string url;
+    const std::string key(64, '1');
+    const std::string valid = "{\"url\":\"wss://example.com/21kb\",\"clientId\":\"18446744073709551615\",\"key\":\"" + key + "\"}";
+    Require(ParseWebSceneClientSettings(valid, options, url) && options.clientId == UINT64_MAX,
+        "64-bit runtime identity lost precision");
+    Require(!ParseWebSceneClientSettings("{\"url\":\"ws://localhost\",\"clientId\":7,\"key\":\"" + key + "\"}", options, url),
+        "numeric runtime identity accepted");
+    Require(!ParseWebSceneClientSettings(valid.substr(0, valid.size()-1) + ",\"reconnectAttempts\":1.5}", options, url),
+        "fractional reconnect count accepted");
+    Require(!ParseWebSceneClientSettings(valid.substr(0, valid.size()-1) + ",\"token\":\"" + std::string(1025, 'a') + "\"}", options, url),
+        "oversized runtime token accepted");
+}
+
 } // namespace
 
 int main() {
     const std::vector<std::pair<const char*, void (*)()>> tests{
         { "runtime-guards", &TestRuntimeGuards },
+        { "scene-client-lifecycle", &TestSceneClientLifecycle },
+        { "web-session-settings", &TestWebSessionSettings },
         { "scripts-over-the-network", &TestScriptsOverTheNetwork },
         { "authoritative-script-ability", &TestAuthoritativeScriptAbility },
     };
