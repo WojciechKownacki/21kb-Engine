@@ -1,5 +1,27 @@
 # AI-assisted scripting — quick guide
 
+On Windows, prefix any executable command with `--command-timeout-ms 30000`
+and/or `--command-cancel-file <path>` to bound the whole operation, including
+external native build tools. For example:
+
+```sh
+kb_cli --json --command-timeout-ms 30000 script-build --project .
+```
+
+The cancellation file belongs to the caller and is never deleted. A file that
+already exists prevents the command from starting. Timeout returns 124,
+cancellation 130, and a supervisor failure 125; normal completion preserves
+the command's exit code and JSON. Interrupted JSON uses `21kb.cli-result/v1`
+with a `reason` of `timeout`, `cancelled` or `supervisor-error`, retaining
+captured output. Text mode streams both output channels. Supervised JSON
+capture has a combined 16 MiB limit; exceeding it stops the command with 125.
+The supervisor terminates only its own process tree, including descendants
+left behind by a completed command. Completed file writes are not rolled back.
+These executable options precede the command; `run --timeout-ms` continues to
+provide cooperative scene playback interruption with its final report.
+Process supervision is currently supported on Windows; other hosts reject
+these prefix options explicitly.
+
 You open your game project in VS Code, write a prompt like *"create third-person player
 movement and attach a follow camera"*, and the AI agent writes the Lua scripts, wires
 them into the scene, and checks that they work. The engine ships a small tool,

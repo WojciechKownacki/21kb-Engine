@@ -1,7 +1,9 @@
 #include "CliProgram.hpp"
+#include "CliCommandSupervisor.hpp"
 
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -50,6 +52,16 @@ int main(int argc, char** argv) {
         for (int index = 1; index < argc; ++index) {
             arguments.emplace_back(argv[index]);
         }
+#if defined(_WIN32)
+        std::wstring executable(32768U, L'\0');
+        const DWORD length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+        if (length == 0 || length >= executable.size()) throw std::runtime_error("CLI executable path is unavailable");
+        executable.resize(length);
+#else
+        const std::filesystem::path executable{argv[0]};
+#endif
+        const kb::cli::CommandIo io{ .out = std::cout, .err = std::cerr };
+        if (const auto result = kb::cli::SuperviseCliCommand(executable, arguments, io)) return *result;
         return kb::cli::RunCli(arguments, std::cin, kb::cli::CommandIo{ .out = std::cout, .err = std::cerr });
     } catch (const std::exception& exception) {
         std::cerr << "error: " << exception.what() << '\n';

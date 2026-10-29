@@ -439,10 +439,20 @@ Global options:
                run --report, api --print json, batch) keeps it unchanged. mcp ignores --json.
                Native compiler logs go to process stderr and never precede the JSON object.
   --dry-run    Only for the commands that name it (audio-mixer new/set).
+  --command-timeout-ms <1..86400000>  Bound the entire command on Windows.
+  --command-cancel-file <path>       Stop when this caller-owned file exists.
+               Put these options before the command (optionally after --json).
+               The supervisor stops its command and descendants, including external
+               build tools. Text output streams; interrupted JSON is one result
+               with reason timeout|cancelled|supervisor-error. JSON capture is
+               limited to 16 MiB. Interruption does not roll back completed writes.
+               Example: kb_cli --json --command-timeout-ms 30000 script-build --project .
 
 Exit codes: normally 0 on success and 1 on failure (bad arguments, an unknown
 command, a failed check or build, or inaccessible files). Commands may document
 additional codes; run returns 124 on timeout and 130 on cancellation.
+Command supervision returns 124 on timeout, 130 on cancellation and 125 on a
+supervisor error; otherwise it preserves the child command's exit code.
 help, --help, -h and no command at all print this text and exit 0.
 
 Scene paths may be physical (relative to the project root) or virtual

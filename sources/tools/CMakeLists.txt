@@ -51,6 +51,7 @@ kb_apply_quality_gates(kb_cli_core)
 
 add_executable(kb_cli
     src/main.cpp
+    src/CliCommandSupervisor.cpp
 )
 
 if(WIN32)
@@ -111,6 +112,13 @@ add_custom_command(TARGET kb_cli POST_BUILD
 )
 
 if(BUILD_TESTING)
+    if(WIN32)
+        find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+        add_test(NAME kb_cli_command_limits
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliCommandLimitsTests.py
+                --cli $<TARGET_FILE:kb_cli> --test-root ${CMAKE_BINARY_DIR}/cli-command-limits)
+        set_tests_properties(kb_cli_command_limits PROPERTIES LABELS "tools;process" TIMEOUT 90)
+    endif()
     add_executable(kb_cli_tests
         tests/KbCliTests.cpp
     )
