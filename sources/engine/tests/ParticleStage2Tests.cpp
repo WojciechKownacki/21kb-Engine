@@ -341,9 +341,8 @@ void TestOldEngineModuleAbiRejectedBeforeCreate() {
         "module host called create before rejecting the previous engine ABI");
 }
 
-// A reload that finds a broken plugin file (here: built against the previous engine ABI) leaves nothing of the old
-// code running -- no module, no scene system, no backend -- says why, and a reload after the file is repaired recovers.
-void TestFailedReloadLeavesNothingActiveAndRecovers() {
+// Invalid replacements are rejected before the current module or scene state is detached.
+void TestFailedReloadPreservesActiveModuleAndRecovers() {
     const std::filesystem::path goodPlugin = KB_21KB_PARTICLE_PLUGIN_PATH;
     const std::filesystem::path oldAbiPlugin = KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH;
     if (goodPlugin.empty() || oldAbiPlugin.empty()) return;
@@ -367,18 +366,32 @@ void TestFailedReloadLeavesNothingActiveAndRecovers() {
             kb::particles::ParticlePlayback::HasBackend(scene),
         "the copied plugin did not load");
 
+    const std::size_t stableSystemCount = scene.Runtime().SceneSystemCount();
+    static_cast<void>(scene.Runtime().Update(1.0F / 30.0F));
+    const auto retainedSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(scene);
+    Require(retainedSnapshot != nullptr, "live scene did not publish a retainable snapshot");
     // The loaded copy is a shadow copy, so the file on disk can be replaced while the module runs.
     std::filesystem::copy_file(oldAbiPlugin, working, std::filesystem::copy_options::overwrite_existing, error);
     Require(!error, "the plugin file could not be replaced");
     scene.ReloadModules();
-    Require(!scene.IsModuleActive("Rendering.21kbParticle"), "a reload with a broken plugin left the old module active");
-    Require(scene.Runtime().SceneSystemCount() == baseline, "a failed reload left a scene system of the old plugin running");
-    Require(!kb::particles::ParticlePlayback::HasBackend(scene), "a failed reload left the old plugin's backend registered");
+    Require(scene.IsModuleActive("Rendering.21kbParticle"), "a rejected replacement disabled the working module");
+    Require(scene.Runtime().SceneSystemCount() == stableSystemCount, "a rejected replacement changed the live scene systems");
+    Require(kb::particles::ParticlePlayback::HasBackend(scene), "a rejected replacement removed the working backend");
+    Require(kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) == retainedSnapshot,
+        "a rejected replacement recreated the live scene's retained resource");
     Require(std::ranges::any_of(scene.ModuleDiagnostics(), [](const std::string& line) {
         return line.find("unsupported engine module ABI version") != std::string::npos &&
             line.find("plugin ABI " + std::to_string(kb::modules::kEngineModuleAbiVersion - 1U)) != std::string::npos &&
             line.find("engine ABI " + std::to_string(kb::modules::kEngineModuleAbiVersion)) != std::string::npos;
     }), "a failed reload must say which ABI the plugin has and which the engine needs");
+
+    std::filesystem::remove(working, error);
+    Require(!error, "the replacement file could not be removed");
+    scene.ReloadModules();
+    Require(scene.IsModuleActive("Rendering.21kbParticle") &&
+            scene.Runtime().SceneSystemCount() == stableSystemCount &&
+            kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) == retainedSnapshot,
+        "a missing replacement must preserve the current module and retained scene state");
 
     std::filesystem::copy_file(goodPlugin, working, std::filesystem::copy_options::overwrite_existing, error);
     Require(!error, "the plugin file could not be repaired");
@@ -479,7 +492,7 @@ int main(int argc, char** argv) {
         TestModuleMetadataAndLifecycle();
         TestOldEngineModuleAbiRejectedBeforeCreate();
         TestDynamicModuleHostLifecycle();
-        TestFailedReloadLeavesNothingActiveAndRecovers();
+        TestFailedReloadPreservesActiveModuleAndRecovers();
         TestProjectPolicy();
         std::cout << "Particle stage 2 tests passed\n";
         return 0;

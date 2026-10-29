@@ -13,6 +13,7 @@
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/InputComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -23,6 +24,7 @@
 #include "engine/security/ReleaseManifest.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +41,10 @@ namespace {
 
 #ifndef KB_BASIC_LIGHTING_PLUGIN_PATH
 #define KB_BASIC_LIGHTING_PLUGIN_PATH ""
+#endif
+
+#ifndef KB_PHYSICS_JOLT_PLUGIN_PATH
+#define KB_PHYSICS_JOLT_PLUGIN_PATH ""
 #endif
 
 #ifndef __has_feature
@@ -697,6 +703,41 @@ void RunSceneInputActivationPerLocalUserTest() {
         "Player 1 should remain unaffected by player 2's ArrowUp binding");
 }
 
+void RunPhysicsModuleReloadTest() {
+#if !KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
+    const std::filesystem::path pluginPath = KB_PHYSICS_JOLT_PLUGIN_PATH;
+    if (pluginPath.empty()) return;
+    kb::tests::Require(std::filesystem::is_regular_file(pluginPath),
+        "Physics plugin is missing from the module lifecycle test");
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back({ .name = "Physics.Jolt", .binaryPath = pluginPath.string(), .enabled = true });
+    kb::scene::Scene scene;
+    const auto baseline = scene.Runtime().SceneSystemCount();
+    EngineModuleHost host{ project };
+    host.Load(scene.Runtime().EcsWorld());
+    host.AttachScene(scene);
+    host.AttachScene(scene);
+    kb::tests::Require(scene.Runtime().SceneSystemCount() == baseline + 1U,
+        "Physics module attached its scene system more than once");
+    std::array<kb::scene::Scene*, 1U> scenes{ &scene };
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        host.Reload(scene.Runtime().EcsWorld(), scenes);
+        kb::tests::Require(host.IsActive("Physics.Jolt") && host.Diagnostics().empty() &&
+                scene.Runtime().SceneSystemCount() == baseline + 1U,
+            "Physics reload retained a scene system from the previous module");
+        static_cast<void>(scene.Runtime().Update(1.0F / 30.0F));
+        kb::tests::Require(kb::scene::PhysicsBackend::HasBackend(scene),
+            "Physics reload did not register the replacement backend");
+    }
+    host.DetachScene(scene);
+    host.DetachScene(scene);
+    kb::tests::Require(scene.Runtime().SceneSystemCount() == baseline &&
+            !kb::scene::PhysicsBackend::HasBackend(scene),
+        "Physics detach retained its scene system or backend");
+#endif
+}
+
 void RunBasicLightingPluginTogglesSceneLightingTest() {
 #if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
     return;
@@ -749,6 +790,7 @@ void RunEngineModuleTests() {
     RunSceneInputActivationUsesUnsafeHotQueryTest();
     RunSceneInputActivationPerLocalUserTest();
     RunBasicLightingPluginTogglesSceneLightingTest();
+    RunPhysicsModuleReloadTest();
 }
 
 } // namespace kb::tests

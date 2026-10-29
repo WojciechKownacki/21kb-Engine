@@ -269,12 +269,23 @@ void EngineModuleHost::LoadProjectPluginModules() {
     projectPluginCandidateStart_ = candidates_.size();
     hasProjectPluginCandidates_ = true;
 
+    CollectProjectPluginModules(candidates_, diagnostics_, warnings_);
+}
+
+void EngineModuleHost::CollectProjectPluginModules(
+    std::vector<std::unique_ptr<IEngineModule>>& output,
+    std::vector<std::string>& diagnostics,
+    std::vector<std::string>& warnings) {
+
     // Platform hosts inject providers as static modules when the platform cannot ship or
     // load project DLLs (Android/Web) or when a monolithic build was requested. A descriptor
     // still carries its portable desktop binary name; do not load a second copy after the
     // matching static provider has already been supplied by the host.
     std::set<std::string> staticModuleNames;
-    for (const std::unique_ptr<IEngineModule>& candidate : candidates_) {
+    const std::size_t staticCount = hasProjectPluginCandidates_
+        ? projectPluginCandidateStart_ : candidates_.size();
+    for (std::size_t index = 0U; index < staticCount; ++index) {
+        const auto& candidate = candidates_[index];
         if (candidate != nullptr) {
             staticModuleNames.insert(candidate->Metadata().name);
         }
@@ -284,9 +295,9 @@ void EngineModuleHost::LoadProjectPluginModules() {
         if (!plugin.enabled || plugin.binaryPath.empty() || staticModuleNames.contains(plugin.name)) {
             continue;
         }
-        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics_, warnings_);
+        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics, warnings);
         if (module != nullptr) {
-            candidates_.push_back(std::move(module));
+            output.push_back(std::move(module));
         }
     }
 }
@@ -304,11 +315,15 @@ void EngineModuleHost::Load(kb::ecs::World& world) {
     if (loaded_) {
         return;
     }
-    loaded_ = true;
     diagnostics_.clear();
     warnings_.clear();
 
     LoadProjectPluginModules();
+    LoadPreparedModules(world);
+}
+
+void EngineModuleHost::LoadPreparedModules(kb::ecs::World& world) {
+    loaded_ = true;
 
     std::vector<ResolveEntry> entries;
     entries.reserve(candidates_.size());
@@ -391,6 +406,16 @@ void EngineModuleHost::Unload() {
 }
 
 void EngineModuleHost::Reload(kb::ecs::World& world, std::span<kb::scene::Scene*> attachedScenes) {
+    std::vector<std::unique_ptr<IEngineModule>> replacement;
+    std::vector<std::string> replacementErrors;
+    std::vector<std::string> replacementWarnings;
+    CollectProjectPluginModules(replacement, replacementErrors, replacementWarnings);
+    if (!replacementErrors.empty()) {
+        diagnostics_ = std::move(replacementErrors);
+        diagnostics_.push_back("module reload rejected before detaching the current scenes");
+        warnings_ = std::move(replacementWarnings);
+        return;
+    }
     if (loaded_) {
         for (auto it = attachedScenes.rbegin(); it != attachedScenes.rend(); ++it) {
             if (*it != nullptr) {
@@ -402,7 +427,14 @@ void EngineModuleHost::Reload(kb::ecs::World& world, std::span<kb::scene::Scene*
     }
 
     ClearProjectPluginModules();
-    Load(world);
+    projectPluginCandidateStart_ = candidates_.size();
+    hasProjectPluginCandidates_ = true;
+    for (auto& module : replacement) {
+        candidates_.push_back(std::move(module));
+    }
+    diagnostics_.clear();
+    warnings_ = std::move(replacementWarnings);
+    LoadPreparedModules(world);
 
     for (kb::scene::Scene* scene : attachedScenes) {
         if (scene != nullptr) {

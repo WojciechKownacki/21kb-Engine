@@ -210,6 +210,8 @@ void RunPackagedRuntimeModuleContractTests() {
         "WebGL.wasm32",
         "WebGPU.wasm32",
     };
+    supported.plugins.push_back({ .name = "Input", .enabled = true });
+    supported.plugins.push_back({ .name = "Script", .enabled = true });
     for (const std::string_view target : kMonolithicTargets) {
         Require(
             !kb::game::FirstUnsupportedPackagedRuntimeModule(target, supported).has_value(),
@@ -261,6 +263,34 @@ void RunPackagedRuntimeModuleContractTests() {
     Require(
         !std::filesystem::exists(outputPack),
         "Android cooker wrote a package after rejecting an unsupported module");
+
+    for (const std::string_view target : { "Windows.x64", "Android.ASTC.arm64", "WebGL.wasm32" }) {
+        for (const bool enabled : { false, true }) {
+            auto duplicate = supported;
+            duplicate.plugins.push_back(duplicate.plugins.front());
+            duplicate.plugins.back().enabled = enabled;
+            const std::string validation =
+                kb::game::ValidatePackagedRuntimeModuleReferences(duplicate);
+            Require(Mentions(validation, "duplicate") && Mentions(validation, "Physics.Jolt"),
+                "Conflicting or repeated module references were not identified");
+            Require(kb::project::ProjectManager::SaveProject(
+                        projectRoot / "Project.21kbproject", duplicate),
+                "Duplicate module fixture could not be written");
+            const auto rejectedCook = kb::game::CookProject(
+                kb::game::ProjectCookRequest{
+                    .projectPath = projectRoot,
+                    .targetProfileId = std::string{ target },
+                    .outputPackPath = outputPack,
+                }, diagnostics);
+            Require(!rejectedCook.succeeded && Mentions(rejectedCook.error, "duplicate") &&
+                    Mentions(rejectedCook.error, "Physics.Jolt") &&
+                    !std::filesystem::exists(outputPack),
+                "Cooker must reject duplicate module references before writing a package");
+        }
+    }
+    supported.plugins.front().name.clear();
+    Require(Mentions(kb::game::ValidatePackagedRuntimeModuleReferences(supported), "empty name"),
+        "Unnamed module references must be rejected before provider construction");
 }
 
 // -------------------------------------------------------------------------
@@ -1254,6 +1284,8 @@ void RunWindowsRuntimeModulePackagingTests() {
             .binaryPath = "authoring-path-must-not-ship.dll",
             .enabled = true,
         },
+        kb::project::ProjectPluginReference{ .name = "Input", .enabled = true },
+        kb::project::ProjectPluginReference{ .name = "Script", .enabled = false },
     };
     Require(kb::project::ProjectManager::SaveProject(
                 fixture.root / "Project.21kbproject", descriptor),
@@ -1290,11 +1322,13 @@ void RunWindowsRuntimeModulePackagingTests() {
     Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) ==
             bake::RuntimeAssetPackStatus::Success,
         "Windows runtime-module package did not mount");
-    Require(pack->Manifest().descriptor.plugins.size() == 2U &&
+    Require(pack->Manifest().descriptor.plugins.size() == 4U &&
             pack->Manifest().descriptor.plugins[0].binaryPath ==
                 "RuntimeModules/Binaries/custom.dll" &&
             pack->Manifest().descriptor.plugins[1].binaryPath ==
-                "kb_physics_jolt_plugin.dll",
+                "kb_physics_jolt_plugin.dll" &&
+            pack->Manifest().descriptor.plugins[2].binaryPath.empty() &&
+            pack->Manifest().descriptor.plugins[3].binaryPath.empty(),
         "Cooked manifest did not contain sealed custom and canonical built-in DLL paths");
 
     std::ostringstream runtimeError;

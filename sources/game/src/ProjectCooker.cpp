@@ -1258,6 +1258,10 @@ struct WindowsRuntimeModuleSnapshot {
     plans.clear();
     std::unordered_map<std::string, std::filesystem::path> plannedDestinations;
     for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        if (IsPackagedHostModule(plugin.name)) {
+            plugin.binaryPath.clear();
+            continue;
+        }
         if (!plugin.enabled) {
             continue;
         }
@@ -2449,6 +2453,11 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     }
     if (!VerifyCookConfigurationInputsUnchanged(configurationSnapshot, error)) {
         return Failure(std::move(error));
+    }
+    if (const std::string moduleError =
+            ValidatePackagedRuntimeModuleReferences(project.descriptor);
+        !moduleError.empty()) {
+        return Failure(moduleError);
     }
     if (const std::optional<std::string_view> unsupported =
             kb::game::FirstUnsupportedPackagedRuntimeModule(profile.identifier, project.descriptor);

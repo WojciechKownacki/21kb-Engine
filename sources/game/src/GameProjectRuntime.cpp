@@ -126,6 +126,10 @@ void MountInstalledMods(
         return false;
     }
     for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        if (IsPackagedHostModule(plugin.name)) {
+            plugin.binaryPath.clear();
+            continue;
+        }
         if (!plugin.enabled) {
             continue;
         }
@@ -376,6 +380,12 @@ bool ReadMountedGameProjectRuntime(
         return false;
     }
     const kb::assets::bake::RuntimeAssetManifest& manifest = pack->Manifest();
+    if (const std::string moduleError =
+            ValidatePackagedRuntimeModuleReferences(manifest.descriptor);
+        !moduleError.empty()) {
+        err << moduleError << '\n';
+        return false;
+    }
     const std::string sceneReference = sceneOverride.empty()
         ? manifest.settings.defaultMap
         : std::string{ sceneOverride };
