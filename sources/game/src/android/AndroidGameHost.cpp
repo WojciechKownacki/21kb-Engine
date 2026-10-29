@@ -10,6 +10,8 @@
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioPlayback.hpp"
+#include "engine/audio/AudioDiagnostics.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -42,6 +44,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cerrno>
 #include <cstddef>
@@ -60,6 +63,7 @@ namespace {
 
 constexpr std::string_view kLogTag = "21kb";
 constexpr std::string_view kPackagedAssetPack = "game.kbpack";
+std::atomic<bool> audioFocusGranted{false};
 
 void LogError(std::string_view message) noexcept {
     const std::size_t length =
@@ -405,6 +409,26 @@ public:
             LogError("Android game controller initialization failed");
             return false;
         }
+        audioEnabled_ = kb::audio::AudioPlayback::HasBackend(*scene_);
+        if (audioEnabled_) {
+            ApplyAudioState();
+            JNIEnv* environment = nullptr;
+            if (app_.activity->vm->GetEnv(reinterpret_cast<void**>(&environment), JNI_VERSION_1_6) != JNI_OK) {
+                LogError("audio focus bridge could not access the owner thread JNI environment");
+                return false;
+            }
+            const auto activityClass = environment->GetObjectClass(app_.activity->javaGameActivity);
+            const auto enable = activityClass == nullptr ? nullptr :
+                environment->GetMethodID(activityClass, "setAudioEnabled", "(Z)V");
+            if (enable != nullptr) environment->CallVoidMethod(app_.activity->javaGameActivity, enable, JNI_TRUE);
+            const bool exception = environment->ExceptionCheck();
+            if (exception) environment->ExceptionClear();
+            if (activityClass != nullptr) environment->DeleteLocalRef(activityClass);
+            if (enable == nullptr || exception) {
+                LogError("audio focus bridge could not enable platform policy");
+                return false;
+            }
+        }
         android_app_set_key_event_filter(&app_, nullptr);
         android_app_set_motion_event_filter(&app_, nullptr);
         LogInfo("Android runtime host initialized");
@@ -431,6 +455,7 @@ public:
             } while (pollResult >= 0);
 
             ApplyWindowState();
+            ApplyAudioState();
             DrainInput();
             if (CanRender()) {
                 RenderFrame();
@@ -479,6 +504,7 @@ private:
             break;
         case APP_CMD_LOST_FOCUS:
             focused_ = false;
+            ApplyAudioState();
             tickClockReady_ = false;
             SetImeVisible(false);
             break;
@@ -488,6 +514,7 @@ private:
         case APP_CMD_PAUSE:
         case APP_CMD_STOP:
             resumed_ = false;
+            ApplyAudioState();
             tickClockReady_ = false;
             SetImeVisible(false);
             DrainStorageWrites();
@@ -740,6 +767,27 @@ private:
         return false;
     }
 
+    void ApplyAudioState() noexcept {
+        if (!audioEnabled_ || scene_ == nullptr) return;
+        const bool suspended = !resumed_ || !focused_ || !audioFocusGranted.load(std::memory_order_acquire);
+        if (audioSuspended_ == static_cast<int>(suspended)) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now < nextAudioAttempt_) return;
+        if (!kb::audio::AudioPlayback::SetPlatformSuspended(*scene_, suspended)) {
+            LogError(suspended ? "audio platform suspension failed" : "audio platform resume failed");
+            nextAudioAttempt_ = now + std::chrono::seconds{1};
+            return;
+        }
+        audioSuspended_ = static_cast<int>(suspended);
+        nextAudioAttempt_ = {};
+        const auto diagnostics = kb::audio::AudioDiagnostics::Report(*scene_);
+        std::ostringstream message;
+        message << (suspended ? "audio platform suspended" : "audio platform resumed")
+                << " generation=" << diagnostics.generation << " deviceFrames=" << diagnostics.deviceFrames
+                << " status=" << static_cast<int>(kb::audio::AudioPlayback::DeviceStatus(*scene_));
+        LogInfo(message.str());
+    }
+
     void DrainStorageWrites() noexcept {
         if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) return;
         const auto storage = scriptModule_->Host()->UserStorage();
@@ -816,6 +864,9 @@ private:
     std::string storageRoot_;
     std::string targetProfileId_;
     bool resumed_ = false;
+    bool audioEnabled_ = false;
+    int audioSuspended_ = -1;
+    std::chrono::steady_clock::time_point nextAudioAttempt_{};
     bool focused_ = false;
     bool windowChanged_ = false;
     bool memoryPressure_ = false;
@@ -833,6 +884,11 @@ private:
 };
 
 } // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_runtime_MainActivity_setAudioFocusGranted(JNIEnv*, jclass, jboolean granted) {
+    audioFocusGranted.store(granted == JNI_TRUE, std::memory_order_release);
+}
 
 extern "C" void android_main(android_app* app) {
     if (app == nullptr) {

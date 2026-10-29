@@ -177,6 +177,12 @@ bool AudioPlayback::ConfigureOffline(kb::scene::Scene& scene) noexcept {
     return backend != nullptr && backend->ConfigureOffline(scene);
 }
 
+bool AudioPlayback::SetPlatformSuspended(kb::scene::Scene& scene, bool suspended) noexcept {
+    AssertOwnerThread(scene);
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetPlatformSuspended(scene, suspended);
+}
+
 AudioOfflinePcm AudioPlayback::RenderOffline(kb::scene::Scene& scene, std::uint32_t frames) {
     AssertOwnerThread(scene);
     if (frames == 0U || frames > kMaxOfflineAudioFramesPerRead) return {.error = "offline audio frame count must be between 1 and 384000"};

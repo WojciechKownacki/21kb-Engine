@@ -206,6 +206,9 @@ public:
     // (AudioPlayback::QueueMarkerEvent) fired by the script runtime the same frame's
     // event dispatch. False for a dead voice or an empty name.
     [[nodiscard]] virtual bool AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) = 0;
+    // Suspend the output device without discarding voices, cursors or user pause state.
+    // Platforms combine their activity and audio-focus policy before calling this.
+    [[nodiscard]] virtual bool SetPlatformSuspended(kb::scene::Scene&, bool) noexcept { return false; }
 };
 
 // LIB-152: one fired voice marker awaiting script dispatch. `target` is the entity whose
@@ -239,6 +242,7 @@ public:
     [[nodiscard]] static AudioSourceControlResult IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
     [[nodiscard]] static AudioDeviceStatus DeviceStatus(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static bool SetPlatformSuspended(kb::scene::Scene& scene, bool suspended) noexcept;
     [[nodiscard]] static bool ConfigureOffline(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static AudioOfflinePcm RenderOffline(kb::scene::Scene& scene, std::uint32_t frames);
     [[nodiscard]] static AudioDspRuntimeReport DspReport(kb::scene::Scene& scene);

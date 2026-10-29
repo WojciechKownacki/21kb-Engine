@@ -45,7 +45,7 @@ void MiniaudioPlaybackBackend::OnCreate() {
 
 void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) {
     AssertOwnerThread();
-    if (!engine_.IsInitialized()) {
+    if (!engine_.IsInitialized() || engine_.IsPlatformSuspended()) {
         return;
     }
 
@@ -233,8 +233,15 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::Reinitialize(kb::scene::S
     return ReinitializeInternal(scene, false);
 }
 
+bool MiniaudioPlaybackBackend::SetPlatformSuspended(kb::scene::Scene& scene, bool suspended) noexcept {
+    AssertOwnerThread();
+    static_cast<void>(scene);
+    return engine_.SetPlatformSuspended(suspended);
+}
+
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::scene::Scene& scene, bool forceNoDevice) noexcept {
     static_cast<void>(scene);
+    const bool suspended = engine_.IsPlatformSuspended();
     sourceRegistry_.ReleaseNativeResources();
     voicePool_.StopAll();
     busRegistry_.StopAll();
@@ -247,11 +254,13 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::
     offline_ = false;
     metersEnabled_ = false;
     engine_.Initialize(forceNoDevice);
+    if (suspended) static_cast<void>(engine_.SetPlatformSuspended(true));
     return engine_.Status();
 }
 
 bool MiniaudioPlaybackBackend::PlaybackAvailable() const noexcept {
-    return engine_.IsPlaybackAvailable() || (offline_ && engine_.IsInitialized());
+    return !engine_.IsPlatformSuspended() &&
+        (engine_.IsPlaybackAvailable() || (offline_ && engine_.IsInitialized()));
 }
 
 bool MiniaudioPlaybackBackend::ConfigureOffline(kb::scene::Scene& scene) noexcept {
@@ -264,6 +273,7 @@ bool MiniaudioPlaybackBackend::ConfigureOffline(kb::scene::Scene& scene) noexcep
 kb::audio::AudioOfflinePcm MiniaudioPlaybackBackend::RenderOffline(kb::scene::Scene& scene, std::uint32_t frames) {
     AssertOwnerThread();
     if (!offline_ || !engine_.IsInitialized()) return {.error = "configure offline audio before rendering"};
+    if (engine_.IsPlatformSuspended()) return {.error = "platform audio is suspended"};
     if (frames == 0U || frames > kb::audio::kMaxOfflineAudioFramesPerRead) return {.error = "offline audio frame count must be between 1 and 384000"};
     kb::scene::SceneSystemContext context{scene, 0.0F};
     OnUpdate(context);

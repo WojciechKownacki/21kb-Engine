@@ -45,6 +45,7 @@ public:
     [[nodiscard]] kb::audio::AudioRuntimeDiagnostics RuntimeDiagnostics() const override;
     [[nodiscard]] kb::audio::AudioDeviceStatus DeviceStatus() const noexcept override;
     [[nodiscard]] kb::audio::AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept override;
+    [[nodiscard]] bool SetPlatformSuspended(kb::scene::Scene& scene, bool suspended) noexcept override;
     [[nodiscard]] bool ConfigureOffline(kb::scene::Scene& scene) noexcept override;
     [[nodiscard]] kb::audio::AudioOfflinePcm RenderOffline(kb::scene::Scene& scene, std::uint32_t frames) override;
     [[nodiscard]] kb::audio::AudioDspRuntimeReport DspReport(kb::scene::Scene& scene) override;

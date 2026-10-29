@@ -27,6 +27,8 @@ public:
 
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bool IsPlaybackAvailable() const noexcept;
+    [[nodiscard]] bool SetPlatformSuspended(bool suspended) noexcept;
+    [[nodiscard]] bool IsPlatformSuspended() const noexcept { return platformSuspended_; }
     [[nodiscard]] kb::audio::AudioDeviceStatus Status() const noexcept;
     [[nodiscard]] kb::audio::AudioRuntimeDiagnostics Diagnostics() const;
     [[nodiscard]] ma_engine& Native() noexcept;
@@ -54,6 +56,7 @@ private:
     bool initialized_ = false;
     bool playbackAvailable_ = false;
     bool initializationFailed_ = false;
+    bool platformSuspended_ = false;
 };
 
 } // namespace kb::audio_miniaudio

@@ -138,6 +138,7 @@ void MiniaudioEngine::Shutdown() noexcept {
     }
     playbackAvailable_ = false;
     initializationFailed_ = false;
+    platformSuspended_ = false;
     const auto lock = LockGraph();
     static_cast<void>(masterMeter_.Configure(1U, false));
 #if defined(__EMSCRIPTEN__)
@@ -150,7 +151,7 @@ bool MiniaudioEngine::IsInitialized() const noexcept {
 }
 
 bool MiniaudioEngine::IsPlaybackAvailable() const noexcept {
-    if (!initialized_ || !playbackAvailable_) {
+    if (!initialized_ || !playbackAvailable_ || platformSuspended_) {
         return false;
     }
     ma_device* device = ma_engine_get_device(const_cast<ma_engine*>(&engine_));
@@ -161,12 +162,27 @@ bool MiniaudioEngine::IsPlaybackAvailable() const noexcept {
     return state == ma_device_state_started || state == ma_device_state_starting;
 }
 
+bool MiniaudioEngine::SetPlatformSuspended(bool suspended) noexcept {
+    if (!initialized_) return false;
+    if (platformSuspended_ == suspended) return true;
+    // Stopping waits for the device callback. Do not hold the graph lock here.
+    if (ma_engine_get_device(&engine_) != nullptr) {
+        const auto result = suspended ? ma_engine_stop(&engine_) : ma_engine_start(&engine_);
+        if (result != MA_SUCCESS) return false;
+    }
+    platformSuspended_ = suspended;
+    return true;
+}
+
 kb::audio::AudioDeviceStatus MiniaudioEngine::Status() const noexcept {
     if (initializationFailed_) {
         return kb::audio::AudioDeviceStatus::Uninitialized;
     }
     if (!initialized_) {
         return kb::audio::AudioDeviceStatus::Uninitialized;
+    }
+    if (platformSuspended_) {
+        return kb::audio::AudioDeviceStatus::PlaybackSuspended;
     }
     if (!IsPlaybackAvailable()) {
         return kb::audio::AudioDeviceStatus::NoPlaybackDevice;
