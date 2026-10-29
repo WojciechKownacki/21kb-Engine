@@ -2237,6 +2237,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case BuildGameField::AndroidVersionCode:
             case BuildGameField::AndroidLabel:
             case BuildGameField::AndroidKeyAlias:
+            case BuildGameField::AndroidFormat:
+            case BuildGameField::AndroidBundletool:
             case BuildGameField::AndroidStorePassword:
             case BuildGameField::AndroidKeyPassword:
             case BuildGameField::BuilderExecutable:

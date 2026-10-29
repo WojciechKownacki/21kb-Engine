@@ -189,6 +189,19 @@ void SchemaAndValidationTest() {
         "Android Release BUILD ignored a missing keystore password");
     Require(kb::editor::BuildGamePanelModel::Validate(AndroidEtc2Arm64, project, local, true, false, true, true).canBuild,
         "Configured Android Release BUILD should be enabled");
+    std::string bundleError;
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::AndroidFormat, "aab",
+        AndroidEtc2Arm64, project, local, bundleError), "AAB format could not be selected");
+    Require(!kb::editor::BuildGamePanelModel::Validate(AndroidEtc2Arm64, project, local, true, false, true, true).canBuild,
+        "AAB BUILD ignored a missing bundletool path");
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::AndroidBundletool, "C:/Tools/bundletool.jar",
+        AndroidEtc2Arm64, project, local, bundleError), "Bundletool path could not be edited");
+    Require(kb::editor::BuildGamePanelModel::Validate(AndroidEtc2Arm64, project, local, true, false, true, true).canBuild,
+        "Configured AAB BUILD should be enabled");
+    Require(local.For(AndroidAstcArm64).androidFormat == "apk",
+        "AAB selection unexpectedly changed another Android target");
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::AndroidFormat, "apk",
+        AndroidEtc2Arm64, project, local, bundleError), "APK format could not be restored");
     Require(kb::editor::BuildGamePanelModel::Validate(WebGpuWasm32, project, local, false, false).canBuild,
         "Configured WebGPU BUILD should be enabled");
     Require(kb::editor::BuildGamePanelModel::Validate(LinuxX64, project, local, false, false).canBuild,
@@ -439,6 +452,14 @@ void SettingsRoundTripTest() {
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).launchAfterBuild = true;
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidKeystore = "C:/Keys/release.jks";
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidKeyAlias = "release";
+    local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidFormat = "aab";
+    local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidBundletool = root / "bundletool.jar";
+    std::string formatError;
+    Require(!kb::editor::BuildGamePanelModel::ApplyText(kb::editor::BuildGameField::AndroidFormat, "zip",
+        kb::packaging::PackagingTarget::AndroidAstcArm64, project, local, formatError),
+        "Unsupported Android package format was accepted");
+    Require(local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidFormat == "aab",
+        "Rejected package format changed persisted selection");
     const auto localPath = root / "Local" / "Packaging.ini";
     Require(kb::editor::EditorBuildGameSettingsStore::Save(localPath, local, saveError), "Local packaging settings save failed");
     const auto loadedLocal = kb::editor::EditorBuildGameSettingsStore::Load(localPath);
@@ -496,6 +517,17 @@ void ProtocolAndArgumentsTest() {
     Require(!has(L"secret-store") && !has(L"secret-key"), "Signing secret leaked into argv");
     Require(!has(L"--application-icon"), "Empty application icon emitted a dangling argv option");
     Require(!has(L"--signing-key"), "Empty release signing key emitted a dangling argv option");
+    request.androidFormat = "aab";
+    request.androidBundletool = "C:/Tools/bundletool.jar";
+    const auto bundleArguments = kb::editor::EditorProjectPackageService::BuildArguments(request);
+    const auto format = std::ranges::find(bundleArguments, std::wstring_view{L"--android-format"});
+    const auto bundletool = std::ranges::find(bundleArguments, std::wstring_view{L"--android-bundletool"});
+    Require(format != bundleArguments.end() && std::next(format) != bundleArguments.end() && *std::next(format) == L"aab" &&
+        bundletool != bundleArguments.end() && std::next(bundletool) != bundleArguments.end() &&
+        std::filesystem::path{*std::next(bundletool)} == request.androidBundletool,
+        "App bundle selection or tool path was lost in exporter arguments");
+    request.androidFormat = "apk";
+    request.androidBundletool.clear();
     request.releaseSigningKey = "C:/Keys/game.kbkey";
     const auto signedArguments = kb::editor::EditorProjectPackageService::BuildArguments(request);
     const auto signingKey = std::ranges::find(signedArguments, std::wstring_view{ L"--signing-key" });
@@ -745,8 +777,25 @@ void GeometryTest() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc > 1) {
+            Require(argc == 7 && std::string_view{argv[1]} == "--android-signing",
+                "Expected --android-signing request response jobs-root keystore alias");
+            std::string storePassword, keyPassword;
+            const bool readStore = static_cast<bool>(std::getline(std::cin, storePassword));
+            const bool readKey = static_cast<bool>(std::getline(std::cin, keyPassword));
+            if (!readStore || !readKey) {
+                kb::editor::EditorAndroidSigningBroker::SecureClear(storePassword);
+                kb::editor::EditorAndroidSigningBroker::SecureClear(keyPassword);
+                throw std::runtime_error("Signing fixture requires two passwords on standard input");
+            }
+            const auto result = kb::editor::EditorAndroidSigningBroker::Execute(
+                argv[2], argv[3], argv[4], argv[5], argv[6], storePassword, keyPassword, nullptr);
+            Require(storePassword.empty() && keyPassword.empty(), "Signing broker retained fixture passwords");
+            std::cout << result.message << '\n' << result.toolOutput;
+            return result.succeeded ? 0 : 1;
+        }
         TargetCatalogTest();
         SchemaAndValidationTest();
         SettingsRoundTripTest();

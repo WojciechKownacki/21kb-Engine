@@ -1,0 +1,25 @@
+plugins {
+    id "com.android.asset-pack"
+}
+
+assetPack {
+    packName = "runtimeassets"
+    dynamicDelivery {
+        deliveryType = "install-time"
+    }
+}
+
+def pack = providers.gradleProperty("kbAssetPack")
+def stageRuntimePack = tasks.register("stageRuntimePack", Sync) {
+    dependsOn(":app:validateRuntimeAssetPack")
+    into(layout.projectDirectory.dir("src/main/assets"))
+    if (pack.isPresent()) {
+        from(new File(pack.get())) {
+            rename { "game.kbpack" }
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "generateAssetPackManifest") dependsOn(stageRuntimePack)
+}

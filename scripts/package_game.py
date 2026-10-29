@@ -53,6 +53,7 @@ from package_contract import (
     verify_unit,
 )
 from elf_trust_anchor import ElfTrustAnchorError, embed_trust_anchor, read_trust_anchor
+from android_bundle import validate_bundle
 from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
 from windows_authenticode import (
     AuthenticodeError,
@@ -276,7 +277,16 @@ def _validate_arguments(args: argparse.Namespace) -> None:
             raise PackagingError("crash report upload is available only for Windows packages")
         args.crash_report_url = _validate_crash_report_url(args.crash_report_url)
     _validate_windows_signing(args)
+    android_format = getattr(args, "android_format", "apk")
+    if android_format == "aab" and not args.target.startswith("Android."):
+        raise PackagingError("Android app bundles require an Android target")
     if args.target.startswith("Android."):
+        if android_format == "aab":
+            if getattr(args, "android_bundletool", None) is None:
+                raise PackagingError("Android app bundles require --android-bundletool")
+            args.android_bundletool = _existing_file(args.android_bundletool, "Android bundletool")
+            if args.launch and not os.environ.get("ANDROID_SERIAL", "").strip():
+                raise PackagingError("Android bundle launch requires ANDROID_SERIAL to select the test device")
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
             raise PackagingError("Android application ID is invalid")
         if args.android_version_code <= 0 or args.android_version_code > 2_100_000_000:
@@ -1250,20 +1260,26 @@ def _request_android_signature(
     signed: Path,
     apksigner_jar: Path,
     job: Path,
+    *,
+    package_format: str = "apk",
 ) -> None:
+    if package_format not in ("apk", "aab"):
+        raise PackagingError("Android signing format must be apk or aab")
     request = job / "android-signing-request.json"
     response = job / "android-signing-response.json"
     session = secrets.token_hex(16)
-    request.write_bytes(canonical_json_bytes({
-        "schema": 1,
+    payload = {
+        "schema": 2 if package_format == "aab" else 1,
         "session": session,
         "keystore": str(keystore),
         "keyAlias": alias,
-        "inputApk": str(aligned),
-        "outputApk": str(signed),
         "java": str(_java()),
-        "apksignerJar": str(apksigner_jar),
-    }))
+    }
+    if package_format == "aab":
+        payload.update(format="aab", inputPackage=str(aligned), outputPackage=str(signed))
+    else:
+        payload.update(inputApk=str(aligned), outputApk=str(signed), apksignerJar=str(apksigner_jar))
+    request.write_bytes(canonical_json_bytes(payload))
     if broker is not None:
         run_checked([broker, "--request", request, "--response", response], cwd=job, timeout_seconds=300)
     else:
@@ -1280,7 +1296,7 @@ def _request_android_signature(
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise PackagingError("Android signing broker returned an invalid response") from error
     if value != {"schema": 1, "session": session, "succeeded": True} or not signed.is_file():
-        raise PackagingError("Android signing broker refused or did not create the signed APK")
+        raise PackagingError("Android signing broker refused or did not create the signed package")
 
 
 def _android_adb() -> Path:
@@ -1301,9 +1317,10 @@ def _try_android_force_stop(adb: Path, application_id: str, cwd: Path) -> None:
         emit_diagnostic("Warning", f"Android runtime cleanup failed: {error}")
 
 
-def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path) -> None:
+def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path, *, install: bool = True) -> None:
     try:
-        run_checked([adb, "install", "-r", apk], cwd=apk.parent, timeout_seconds=300)
+        if install:
+            run_checked([adb, "install", "-r", apk], cwd=apk.parent, timeout_seconds=300)
         _android_force_stop(adb, args.android_application_id, apk.parent)
         run_checked([adb, "shell", "input", "keyevent", "KEYCODE_WAKEUP"], cwd=apk.parent, timeout_seconds=30)
         run_checked(
@@ -1332,6 +1349,7 @@ def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path) 
                 return
             if (
                 "required-texture-capability=missing" in latest
+                or "packaged asset pack was not found" in latest
                 or "FATAL EXCEPTION" in latest
                 or "Fatal signal" in latest
             ):
@@ -1345,6 +1363,52 @@ def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path) 
         raise
 
 
+def _finish_android_bundle(args: argparse.Namespace, pack: Path, stage: Path, job: Path,
+                           flavor: str, build_type: str, legal_assets: Path,
+                           build_tools: Path, gradle_wrapper: Path) -> StageResult:
+    output = args.engine_root / "platform/android/app/build/outputs/bundle" / f"{flavor}{build_type}"
+    bundles = sorted(output.glob("*.aab"))
+    if len(bundles) != 1:
+        raise PackagingError(f"Android build produced {len(bundles)} app bundles instead of one in {output}")
+    source = bundles[0]
+    if args.configuration == "Release":
+        unsigned = job / "android-unsigned.aab"
+        signed = job / "android-signed.aab"
+        shutil.copy2(source, unsigned)
+        _request_android_signature(args.android_signing_broker, args.android_keystore,
+            args.android_key_alias, unsigned, signed, _apksigner_jar(build_tools), job, package_format="aab")
+        source = signed
+    destination = stage / f"{args.executable_name}-{flavor}.aab"
+    shutil.copy2(source, destination)
+    validate_bundle(destination, java=_java(), bundletool=args.android_bundletool,
+        profile=args.target, pack=pack, trust_anchor=args.trust_anchor, legal_assets=legal_assets,
+        application_id=args.android_application_id, version_code=args.android_version_code,
+        version_name=args.version, min_sdk=args.android_min_sdk, target_sdk=args.android_target_sdk,
+        debuggable=args.configuration == "Development", asset_delivery=True)
+    tools = (_java(), gradle_wrapper.resolve(strict=True), args.android_bundletool)
+    if not args.launch:
+        return StageResult(tools)
+    serial = os.environ.get("ANDROID_SERIAL", "").strip()
+    if not serial:
+        raise PackagingError("Android bundle launch requires ANDROID_SERIAL")
+    adb = _android_adb()
+    apks = job / "android-local-test.apks"
+    # Local testing uses bundletool's debug APK signing, independently of the
+    # upload signature on the release AAB. The compiled payload stays unchanged.
+    tool = [_java(), "-jar", args.android_bundletool]
+    run_checked([*tool, "build-apks", f"--bundle={destination}", f"--output={apks}",
+        "--local-testing", "--connected-device", f"--device-id={serial}", f"--adb={adb}"],
+        cwd=job, timeout_seconds=300)
+    try:
+        run_checked([*tool, "install-apks", f"--apks={apks}", f"--device-id={serial}", f"--adb={adb}"],
+            cwd=job, timeout_seconds=300)
+        _verify_android_first_frame(args, destination, adb, install=False)
+        return StageResult((*tools, adb), _first_frame_result(args.target, stage), adb)
+    except BaseException:
+        _try_android_force_stop(adb, args.android_application_id, stage)
+        raise
+
+
 def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> StageResult:
     sdk = _android_sdk()
     build_tools = _latest_android_build_tools(sdk)
@@ -1354,7 +1418,8 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         raise PackagingError("Android Gradle wrapper library is missing")
     flavor = "astc" if args.target == "Android.ASTC.arm64" else "etc2"
     build_type = "Debug" if args.configuration == "Development" else "Release"
-    task = f"assemble{flavor.capitalize()}{build_type}"
+    bundle = getattr(args, "android_format", "apk") == "aab"
+    task = f"{'bundle' if bundle else 'assemble'}{flavor.capitalize()}{build_type}"
     validator = _build_tool_path(args.build_root, CONFIGURATIONS[args.configuration], "kb_runtime_asset_pack_validator")
     legal_assets = job / "android-legal-assets"
     legal_assets.mkdir()
@@ -1372,6 +1437,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         f"-PkbLegalAssets={legal_assets}",
         f"-PkbMinSdk={args.android_min_sdk}",
         f"-PkbTargetSdk={args.android_target_sdk}",
+        f"-PkbAssetDelivery={str(bundle).lower()}",
         "--no-daemon",
     ]
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
@@ -1389,6 +1455,9 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         timeout_seconds=3600,
         on_line=lambda line: emit_diagnostic("Info", line),
     )
+    if bundle:
+        return _finish_android_bundle(args, pack, stage, job, flavor, build_type,
+            legal_assets, build_tools, gradle_wrapper)
     output_directory = args.engine_root / "platform/android/app/build/outputs/apk" / flavor / build_type.casefold()
     apks = sorted(output_directory.glob("*.apk"))
     if len(apks) != 1:
@@ -2390,6 +2459,8 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--android-keystore", type=Path)
     parser.add_argument("--android-key-alias", default="")
     parser.add_argument("--android-signing-broker", type=Path)
+    parser.add_argument("--android-format", choices=("apk", "aab"), default="apk")
+    parser.add_argument("--android-bundletool", type=Path)
     parser.add_argument("--emsdk", type=Path)
     parser.add_argument("--webgl-fallback", type=Path,
         help="Verified WebGL package of the same project to include with a WebGPU package")

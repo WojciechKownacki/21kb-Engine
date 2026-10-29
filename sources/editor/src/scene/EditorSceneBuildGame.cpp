@@ -487,6 +487,8 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         request.androidLabel = Trimmed(projectConfig_.androidLabel);
         request.androidKeystore = targetSettings.androidKeystore;
         request.androidKeyAlias = Trimmed(targetSettings.androidKeyAlias);
+        request.androidFormat = targetSettings.androidFormat;
+        if (!targetSettings.androidBundletool.empty()) request.androidBundletool = AbsoluteNormalized(targetSettings.androidBundletool);
         request.androidStorePassword = buildGameStorePassword_;
         request.androidKeyPassword = buildGameKeyPassword_;
     }
