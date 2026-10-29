@@ -44,3 +44,42 @@ Modules must remove their systems, callbacks and registrations before unloading.
 An external resource whose destructor or callback belongs to a plugin must not
 outlive that plugin's library. Binary validation does not provide automatic
 migration or lifetime tracking for arbitrary external registrations.
+
+## Public C module SDK
+
+External modules can include `engine/modules/EngineModuleSdk.h` without linking
+engine libraries. Export `kb_get_engine_module_api` using `KB_MODULE_SDK_EXPORT`
+and `KB_MODULE_CALL`. Version 1 requires exact structure sizes, the same pointer
+width and the platform's default C structure alignment. Reject unsupported
+versions or output sizes before writing the output. The host validates the
+returned version, size, identity, dependencies and mandatory functions before
+calling `create`. This entry takes precedence over legacy C++ module exports.
+
+Only fixed-width values, opaque handles, borrowed byte views and C function
+pointers cross this interface. The module allocates and destroys its own instance;
+even a failed `create` transfers a non-null output to `destroy`. Fallible callbacks
+return a status and may write the caller's fixed error buffer. Cleanup callbacks
+must succeed; no callback may throw across the boundary. Legacy C++ module exports
+still require a matching engine build and are not this SDK's binary contract.
+
+The host table provides scoped entity creation, position access and scene update
+registration. All operations run on the owning thread. Entity handles belong to
+one module attachment and cannot be used with another scene. Update registration
+is allowed during `attach`; userdata ownership transfers only on success. The
+supplied release function runs exactly once on unregister, detach, failed attach
+or unload, before the library closes. A callback cannot unregister itself while
+executing; that operation returns `KB_MODULE_BUSY`.
+
+The engine removes registrations before calling `detach`, then destroys remaining
+SDK-created entities. Successful reload recreates these objects through `attach`;
+their state is not migrated. Engine code may retain `EngineModuleCallback` handles.
+After cleanup they return `KB_MODULE_STALE_HANDLE`, without retaining a function
+pointer or plugin allocation. Scene objects must outlive their module host or be
+explicitly detached before scene destruction. Destroying a host during callback
+dispatch is unsupported.
+
+`EngineModuleSdkPlugin.c` demonstrates a separate C plugin using only the public
+header. Its test build uses a separate static C runtime on Windows and verifies
+allocation cleanup, live scene updates, repeated reload, incompatible replacement,
+partial factory/attachment failure and retained callback invalidation. This SDK
+does not yet expose asset-loader or custom component-type registration.

@@ -591,6 +591,10 @@ add_library(kb_engine STATIC
     include/engine/modules/EngineModuleHost.hpp
     src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
+    include/engine/modules/EngineModuleSdk.h
+    include/engine/modules/EngineModuleCallback.hpp
+    src/private/modules/EngineModuleSdkAdapter.hpp
+    src/modules/EngineModuleSdkAdapter.cpp
     src/core/ConsoleCommands.cpp
     src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
@@ -1867,6 +1871,29 @@ if(BUILD_TESTING)
     add_test(NAME kb_background_read_tests COMMAND $<TARGET_FILE:kb_background_read_tests>)
     set_tests_properties(kb_background_read_tests PROPERTIES TIMEOUT 60)
     kb_apply_quality_gates(kb_background_read_tests)
+
+    add_executable(kb_engine_module_sdk_tests tests/EngineModuleSdkTests.cpp)
+    target_link_libraries(kb_engine_module_sdk_tests PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_engine_module_sdk_tests)
+    foreach(sdk_fault RANGE 1 4)
+        add_library(kb_engine_sdk_${sdk_fault} SHARED tests/EngineModuleSdkPlugin.c)
+        target_include_directories(kb_engine_sdk_${sdk_fault} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_features(kb_engine_sdk_${sdk_fault} PRIVATE c_std_11)
+        target_compile_definitions(kb_engine_sdk_${sdk_fault} PRIVATE
+            KB_SDK_FAULT=${sdk_fault} _CRT_SECURE_NO_WARNINGS
+            "KB_SDK_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/sdk_${sdk_fault}.events\"")
+        if(MSVC)
+            # A separate CRT proves that each side frees its own allocations.
+            set_property(TARGET kb_engine_sdk_${sdk_fault} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        endif()
+        kb_apply_quality_gates(kb_engine_sdk_${sdk_fault})
+        add_dependencies(kb_engine_module_sdk_tests kb_engine_sdk_${sdk_fault})
+        target_compile_definitions(kb_engine_module_sdk_tests PRIVATE
+            "KB_SDK_${sdk_fault}_PATH=\"$<TARGET_FILE:kb_engine_sdk_${sdk_fault}>\""
+            "KB_SDK_${sdk_fault}_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/sdk_${sdk_fault}.events\"")
+    endforeach()
+    add_test(NAME kb_engine_module_sdk_tests COMMAND $<TARGET_FILE:kb_engine_module_sdk_tests>)
+    set_tests_properties(kb_engine_module_sdk_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     foreach(fault RANGE 1 3)
         add_library(kb_engine_module_fault_${fault} SHARED tests/EngineModuleFaultPlugin.cpp)

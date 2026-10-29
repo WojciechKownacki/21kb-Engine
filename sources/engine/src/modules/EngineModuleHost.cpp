@@ -5,6 +5,7 @@
 #include "engine/modules/EngineModuleExports.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "modules/EngineModuleSdkAdapter.hpp"
 
 #include <exception>
 #include <algorithm>
@@ -106,6 +107,10 @@ private:
         return nullptr;
     }
 
+    std::vector<std::string> optionalExportDiagnostics;
+    if (auto* entry = loaded.library.FindSymbol(KB_MODULE_SDK_ENTRY, optionalExportDiagnostics); entry != nullptr) {
+        return CreateSdkModule(std::move(loaded.library), reinterpret_cast<KbModuleGetApi>(entry), plugin.name, diagnostics);
+    }
     auto* abiVersion = reinterpret_cast<EngineModuleAbiVersionFn>(loaded.library.FindSymbol(kEngineModuleAbiVersionSymbol, diagnostics, "engine module plugin"));
     auto* moduleName = reinterpret_cast<EngineModuleNameFn>(loaded.library.FindSymbol(kEngineModuleNameSymbol, diagnostics, "engine module plugin"));
     auto* create = reinterpret_cast<CreateEngineModuleFn>(loaded.library.FindSymbol(kEngineModuleCreateSymbol, diagnostics, "engine module plugin"));
