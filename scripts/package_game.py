@@ -653,8 +653,11 @@ def _build_tool_path(build_root: Path, configuration: str, name: str) -> Path:
 
 
 def _build_targets(cmake: Path, build_root: Path, configuration: str, targets: Sequence[str], engine_root: Path) -> None:
+    jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
+    if jobs and (not jobs.isdecimal() or int(jobs) < 1):
+        raise PackagingError("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
     run_checked(
-        [cmake, "--build", build_root, "--config", configuration, "--target", *targets, "--parallel"],
+        [cmake, "--build", build_root, "--config", configuration, "--target", *targets, "--parallel", *([jobs] if jobs else [])],
         cwd=engine_root,
         timeout_seconds=3600,
         on_line=lambda line: emit_diagnostic("Info", line),
@@ -716,6 +719,7 @@ def _find_optional_build_tool(build_root: Path, configuration: str, name: str) -
         build_root / "bin" / configuration / f"{name}{suffix}",
         build_root / "bin" / f"{name}{suffix}",
         build_root / "third_party" / "bgfx.cmake" / "cmake" / "bgfx" / configuration / f"{name}{suffix}",
+        build_root / "third_party" / "bgfx.cmake" / "cmake" / "bgfx" / f"{name}{suffix}",
     ]
     matches.extend(build_root.glob(f"**/{configuration}/{name}{suffix}"))
     return next((path.resolve(strict=True) for path in matches if path.is_file()), None)
@@ -1299,25 +1303,30 @@ def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path) 
     try:
         run_checked([adb, "install", "-r", apk], cwd=apk.parent, timeout_seconds=300)
         _android_force_stop(adb, args.android_application_id, apk.parent)
-        run_checked([adb, "logcat", "-c"], cwd=apk.parent, timeout_seconds=30)
+        run_checked([adb, "shell", "input", "keyevent", "KEYCODE_WAKEUP"], cwd=apk.parent, timeout_seconds=30)
         run_checked(
-            [adb, "shell", "monkey", "-p", args.android_application_id, "1"],
+            [adb, "shell", "am", "start", "-W", "-n",
+                f"{args.android_application_id}/com.kbengine.runtime.MainActivity"],
             cwd=apk.parent,
             timeout_seconds=60,
         )
-        expected = runtime_first_frame_observation(args.target)[1]
+        pid = run_checked([adb, "shell", "pidof", args.android_application_id],
+            cwd=apk.parent, timeout_seconds=30).output.strip()
+        if not re.fullmatch(r"[0-9]+", pid):
+            raise PackagingError("Android launch did not identify a single application process")
         deadline = time.monotonic() + 60.0
         latest = ""
         while time.monotonic() < deadline:
             latest = run_checked(
                 [
-                    adb, "logcat", "-d", "-v", "brief", "21kb:I", "AndroidRuntime:E",
+                    adb, "logcat", "-d", f"--pid={pid}", "-v", "brief", "21kb:I", "AndroidRuntime:E",
                     "libc:F", "DEBUG:F", "*:S",
                 ],
                 cwd=apk.parent,
                 timeout_seconds=30,
             ).output
-            if expected in latest:
+            if any(f"profile={args.target}" in line.split() and "first-frame=rendered" in line.split()
+                    for line in latest.splitlines()):
                 return
             if (
                 "required-texture-capability=missing" in latest
@@ -1363,6 +1372,11 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         f"-PkbTargetSdk={args.android_target_sdk}",
         "--no-daemon",
     ]
+    jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
+    if jobs:
+        if not jobs.isdecimal() or int(jobs) < 1:
+            raise PackagingError("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
+        command.append(f"--max-workers={jobs}")
     if args.application_icon is not None:
         command.append(f"-PkbApplicationIcon={args.application_icon}")
     if getattr(args, "trust_anchor", None):

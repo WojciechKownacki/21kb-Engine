@@ -17,6 +17,8 @@
 #include "engine/input/InputTouchPoint.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/security/ReleaseKeys.hpp"
@@ -466,7 +468,11 @@ private:
             windowChanged_ = true;
             break;
         case APP_CMD_TERM_WINDOW:
-            windowTerminated_ = true;
+            // The glue acknowledges window destruction when this callback returns.
+            // Finish GPU teardown before the UI thread can destroy that window.
+            ShutdownRenderer();
+            surface_.SetWindow(nullptr);
+            windowChanged_ = false;
             break;
         case APP_CMD_GAINED_FOCUS:
             focused_ = true;
@@ -484,14 +490,24 @@ private:
             resumed_ = false;
             tickClockReady_ = false;
             SetImeVisible(false);
+            DrainStorageWrites();
             if (command == APP_CMD_STOP) gamepads_.OnStop();
             break;
         case APP_CMD_START:
             gamepads_.OnStart();
             break;
         case APP_CMD_SAVE_STATE:
+            DrainStorageWrites();
+            LogInfo("lifecycle save-state: queued storage writes drained");
+            break;
         case APP_CMD_CONFIG_CHANGED:
+            windowChanged_ = true;
+            tickClockReady_ = false;
+            LogInfo("lifecycle configuration changed");
+            break;
         case APP_CMD_LOW_MEMORY:
+            memoryPressure_ = true;
+            break;
         case APP_CMD_WINDOW_REDRAW_NEEDED:
         case APP_CMD_DESTROY:
             break;
@@ -501,17 +517,22 @@ private:
     }
 
     void ApplyWindowState() {
-        if (windowTerminated_) {
+        if (memoryPressure_) {
+            DrainStorageWrites();
             ShutdownRenderer();
-            surface_.SetWindow(nullptr);
-            windowTerminated_ = false;
-            windowChanged_ = false;
+            const std::size_t pruned = scene_ != nullptr ? scene_->Assets().Manager().PruneUnreferenced() : 0U;
+            std::ostringstream message;
+            message << "lifecycle memory-pressure: renderer-released=1 assets-pruned=" << pruned;
+            LogInfo(message.str());
+            memoryPressure_ = false;
+            windowChanged_ = app_.window != nullptr;
         }
         if (!windowChanged_ || app_.window == nullptr) {
             return;
         }
 
         surface_.SetWindow(app_.window);
+        if (!resumed_) return;
         if (!renderer_.IsInitialized()) {
             kb::render::DisplayConfig config{};
             config.writableStorageRoot = storageRoot_;
@@ -521,6 +542,11 @@ private:
                 failed_ = true;
                 return;
             }
+            ++rendererGeneration_;
+            std::ostringstream generation;
+            generation << "lifecycle renderer-ready generation=" << rendererGeneration_
+                       << " resolution=" << surface_.Width() << 'x' << surface_.Height();
+            LogInfo(generation.str());
             if (!HasRequiredTextureCapabilities()) {
                 std::ostringstream message;
                 message << "profile=" << targetProfileId_
@@ -681,10 +707,17 @@ private:
             failed_ = true;
             return;
         }
+        if (presentedGeneration_ != rendererGeneration_) {
+            std::ostringstream message;
+            message << "lifecycle frame-presented generation=" << rendererGeneration_;
+            LogInfo(message.str());
+            presentedGeneration_ = rendererGeneration_;
+        }
         if (!firstFrameReported_) {
             std::ostringstream message;
             message << "profile=" << targetProfileId_
                     << " backend=" << renderer_.CapabilityReport().selectedBackendName
+                    << " resolution=" << surface_.Width() << 'x' << surface_.Height()
                     << " first-frame=rendered";
             LogInfo(message.str());
             firstFrameReported_ = true;
@@ -707,12 +740,27 @@ private:
         return false;
     }
 
+    void DrainStorageWrites() noexcept {
+        if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) return;
+        const auto storage = scriptModule_->Host()->UserStorage();
+        if (storage == nullptr) return;
+        storage->WaitForPendingWrites();
+        if (!storage->Flush()) LogError("lifecycle storage flush failed");
+    }
+
     void ShutdownRenderer() noexcept {
         if (renderer_.IsInitialized()) {
             if (scene_ != nullptr) {
                 renderer_.ReleaseScene(*scene_);
             }
             renderer_.Shutdown();
+            const auto resources = renderer_.RuntimeResourceStats();
+            std::ostringstream message;
+            message << "lifecycle renderer-released generation=" << rendererGeneration_
+                    << " meshes=" << resources.cachedMeshCount
+                    << " materials=" << resources.cachedMaterialCount
+                    << " textures=" << resources.cachedTextureCount;
+            LogInfo(message.str());
         }
         tickClockReady_ = false;
         renderSceneSync_.Reset();
@@ -770,7 +818,9 @@ private:
     bool resumed_ = false;
     bool focused_ = false;
     bool windowChanged_ = false;
-    bool windowTerminated_ = false;
+    bool memoryPressure_ = false;
+    std::uint64_t rendererGeneration_ = 0U;
+    std::uint64_t presentedGeneration_ = 0U;
     bool failed_ = false;
     bool tickClockReady_ = false;
     bool scriptShutdownDispatched_ = false;

@@ -52,6 +52,9 @@ public:
     [[nodiscard]] bool Delete(std::string_view key);
     [[nodiscard]] std::vector<std::string> List() const;
     [[nodiscard]] std::future<bool> WriteAsync(std::string key, std::string data);
+    // Native lifecycle barrier: wait for writes already queued by this storage.
+    // Individual write futures still report failure; this is not a disk fsync.
+    void WaitForPendingWrites();
     // Web writes first reach the mounted working filesystem. Flush requests
     // its asynchronous browser transaction; only Clean confirms completion.
     // Desktop writes already reach the host filesystem; this is not fsync.

@@ -25,7 +25,7 @@ bool AndroidTouchInput::Process(const GameActivityMotionEvent& event) noexcept {
             if (event.pointers[earlier].id == point.id) return false;
         }
     }
-    if (action == AMOTION_EVENT_ACTION_DOWN) Cancel();
+    if (action == AMOTION_EVENT_ACTION_DOWN) frame_.Cancel(true);
     for (std::uint32_t index = 0U; index < event.pointerCount; ++index) {
         auto phase = input::InputTouchPhase::Moved;
         if (index == actionIndex &&

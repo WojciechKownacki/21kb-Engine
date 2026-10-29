@@ -195,6 +195,13 @@ def main():
             expect("browser cancel", [[23, 3, 620, 300]])
             client.evaluate("Module._kb_input_finish()")
             expect("consumed cancellation", [])
+            touch("touchStart", [(7, 140, 150)])
+            touch("touchEnd", [(7, 140, 150)])
+            expect("tap between frames retains begin", [[7, 0, 200, 200]])
+            client.evaluate("Module._kb_input_finish()")
+            expect("tap between frames delivers release", [[7, 2, 200, 200]])
+            client.evaluate("Module._kb_input_finish()")
+            expect("short tap consumed", [])
             assert snapshot()["mouseEvents"] == 2 and snapshot()["mouseLeft"] == 0, "Touch became emulated mouse input"
             touch("touchStart", [(7, 140, 150)])
             expect("focus fixture down", [[7, 0, 200, 200]])

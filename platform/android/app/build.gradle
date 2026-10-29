@@ -162,6 +162,17 @@ android {
 
         externalNativeBuild {
             cmake {
+                def nativeJobs = providers.environmentVariable("CMAKE_BUILD_PARALLEL_LEVEL").getOrNull()
+                if (nativeJobs != null && !nativeJobs.isEmpty()) {
+                    if (!(nativeJobs ==~ /[1-9][0-9]*/)) {
+                        throw new GradleException("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
+                    }
+                    arguments += [
+                        "-DCMAKE_JOB_POOLS=kb_limit=${nativeJobs}",
+                        "-DCMAKE_JOB_POOL_COMPILE=kb_limit",
+                        "-DCMAKE_JOB_POOL_LINK=kb_limit"
+                    ]
+                }
                 targets += ["kb_game_android"]
                 arguments += [
                     "-DANDROID_STL=c++_shared",

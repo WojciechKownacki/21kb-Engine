@@ -176,6 +176,16 @@ public final class ControllerInstrumentation extends Instrumentation {
         runOnMainSync(() -> touch(MotionEvent.ACTION_CANCEL, new int[]{23}, 90, 100));
         awaitTouches(new int[]{23}, new int[]{3}, 90, 100);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
+        runOnMainSync(() -> {
+            holdMotion(true);
+            try {
+                touch(MotionEvent.ACTION_DOWN, new int[]{7}, 20, 30);
+                touch(MotionEvent.ACTION_UP, new int[]{7}, 25, 35);
+            } finally { holdMotion(false); }
+        });
+        awaitTouches(new int[]{7}, new int[]{0}, 20, 30);
+        consumeTouchFrame(); awaitTouches(new int[]{7}, new int[]{2}, 25, 35);
+        consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
         runOnMainSync(() -> touch(MotionEvent.ACTION_DOWN, new int[]{7}, 30, 40));
         awaitTouches(new int[]{7}, new int[]{0}, 30, 40);
         setFocused(false); awaitTouches(new int[]{7}, new int[]{3}, 30, 40);
@@ -209,6 +219,8 @@ public final class ControllerInstrumentation extends Instrumentation {
         final float restoredX = size[0] * 0.25f, restoredY = size[1] * 0.75f;
         runOnMainSync(() -> touch(MotionEvent.ACTION_DOWN, new int[]{23}, restoredX, restoredY));
         awaitTouches(new int[]{23}, new int[]{0}, new float[]{restoredX, restoredY}, size[0], size[1]);
+        consumeTouchFrame();
+        awaitTouches(new int[]{23}, new int[]{1}, restoredX, restoredY);
         runOnMainSync(() -> touch(MotionEvent.ACTION_UP, new int[]{23}, restoredX, restoredY));
         awaitTouches(new int[]{23}, new int[]{2}, restoredX, restoredY);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});

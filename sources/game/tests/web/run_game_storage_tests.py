@@ -23,8 +23,8 @@ import urllib.request
 from run_game_touch_tests import OBSERVER, RuntimeClient, TouchScenario, graphics_contexts, require
 
 
-def author_fixture(args, root, *, script_name="StorageFlow", script_source=None, configure=None):
-    project, web = root / "Sample", root / "Web"
+def author_fixture(args, root, *, script_name="StorageFlow", script_source=None, configure=None, target="WebGL.wasm32"):
+    project, web = root / "Sample", root / ("Web" if target == "WebGL.wasm32" else "Android")
     web.mkdir()
     commands = []
 
@@ -63,11 +63,12 @@ def author_fixture(args, root, *, script_name="StorageFlow", script_source=None,
         "--node", "SaveButton", "--script", "/Game/Scripts/" + script_name + ".lua")
     if configure is not None:
         configure(run, component, project)
-    run(args.cooker, "--project", project, "--target", "WebGL.wasm32",
+    run(args.cooker, "--project", project, "--target", target,
         "--output", web / "Game.kbpack", "--engine-root", args.engine_root,
         "--shaderc", args.shaderc, "--cache", args.cook_cache or root / "CookCache")
-    for name in ["Game.html", "Game.js", "Game.wasm"]:
-        shutil.copy2(args.directory / name, web / name)
+    if target == "WebGL.wasm32":
+        for name in ["Game.html", "Game.js", "Game.wasm"]:
+            shutil.copy2(args.directory / name, web / name)
     return web
 
 

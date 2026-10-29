@@ -117,9 +117,30 @@ void VerifyAndroidTouchInput() {
     event.action = AMOTION_EVENT_ACTION_UP; Require(input.Process(event), "Reused ID fixture up");
     event.action = AMOTION_EVENT_ACTION_DOWN; Require(input.Process(event), "Reused ID fixture next down");
     input.Publish(state);
-    Require(state.TouchPoints().size() == 2U && state.TouchPoints()[0].phase == InputTouchPhase::Ended &&
-        state.TouchPoints()[1].phase == InputTouchPhase::Began && state.TouchPoints()[0].id == state.TouchPoints()[1].id,
-        "Reusing an ID in one frame must preserve the old end and the new begin");
+    Require(state.TouchPoints().size() == 1U && state.TouchPoints()[0].phase == InputTouchPhase::Began,
+        "A tap completed before a frame must still publish its begin");
+    input.FinishFrame(); input.Publish(state);
+    Require(state.TouchPoints().size() == 1U && state.TouchPoints()[0].phase == InputTouchPhase::Ended,
+        "The completed tap must publish its end in the next frame");
+    input.FinishFrame(); input.Publish(state);
+    Require(state.TouchPoints().size() == 1U && state.TouchPoints()[0].phase == InputTouchPhase::Began,
+        "A reused ID must retain its begin until the previous contact is consumed");
+    input.Cancel(); input.FinishFrame();
+    event = Down(); Require(input.Process(event), "Short drag fixture down");
+    event.action = AMOTION_EVENT_ACTION_UP;
+    event.pointers[0].axisValues[AMOTION_EVENT_AXIS_X] = 400.0F;
+    Require(input.Process(event), "Short drag fixture up"); input.Publish(state);
+    Require(state.TouchPoints()[0].phase == InputTouchPhase::Began && state.TouchPoints()[0].x == 20.0F,
+        "A short drag must retain its initial hit-test position");
+    input.FinishFrame(); input.Publish(state);
+    Require(state.TouchPoints()[0].phase == InputTouchPhase::Ended && state.TouchPoints()[0].x == 400.0F,
+        "A short drag must release at its terminal position");
+    input.FinishFrame();
+    event = Down(); Require(input.Process(event), "Cancelled tap fixture down");
+    event.action = AMOTION_EVENT_ACTION_UP; Require(input.Process(event), "Cancelled tap fixture up");
+    input.HandleAppCommand(APP_CMD_PAUSE); input.Publish(state);
+    Require(state.TouchPoints()[0].phase == InputTouchPhase::Cancelled,
+        "Lifecycle cancellation must discard a pending tap release");
     input.Cancel(); input.FinishFrame();
     for (int id = 0; id < 12; ++id) { event = Down(id); Require(input.Process(event), "Bounded touch fixture"); }
     input.Publish(state);

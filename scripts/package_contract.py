@@ -70,7 +70,7 @@ _SOURCE_TEXT_NAMES = frozenset((
     "CMakeLists.txt", "CODEOWNERS", "COPYING", "Doxyfile", "gradlew", "LICENSE",
     "README", "updateGrammar", "WORKSPACE",
 ))
-_SOURCE_GENERATED_DIRECTORY_NAMES = frozenset((".gradle", "cmakefiles"))
+_SOURCE_GENERATED_DIRECTORY_NAMES = frozenset((".gradle", ".cxx", "__pycache__", "cmakefiles"))
 _SOURCE_GENERATED_FILE_NAMES = frozenset(("cmake_install.cmake",))
 _SOURCE_GENERATED_FILE_SUFFIXES = (".vcxproj", ".vcxproj.filters")
 
@@ -164,7 +164,9 @@ def _source_files(root: Path) -> list[tuple[str, Path]]:
     folded: dict[str, str] = {}
     for directory, names, file_names in os.walk(root, topdown=True, followlinks=False):
         directory_path = Path(directory)
-        names[:] = [name for name in names if name.casefold() not in _SOURCE_GENERATED_DIRECTORY_NAMES]
+        gradle_project = "build.gradle" in file_names or "build.gradle.kts" in file_names
+        names[:] = [name for name in names if name.casefold() not in _SOURCE_GENERATED_DIRECTORY_NAMES
+            and not (gradle_project and name.casefold() == "build")]
         for name in tuple(names):
             child = directory_path / name
             if child.is_symlink() or _is_reparse(child):

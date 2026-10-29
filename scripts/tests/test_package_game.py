@@ -127,6 +127,17 @@ def seal_with_first_frame(root: Path, fields: dict[str, object]) -> None:
 
 
 class PackageGameTests(unittest.TestCase):
+    def test_build_respects_explicit_parallel_limit(self) -> None:
+        with mock.patch.dict(os.environ, {'CMAKE_BUILD_PARALLEL_LEVEL': '2'}), \
+                mock.patch.object(package_game, 'run_checked') as run:
+            package_game._build_targets(Path('cmake'), Path('build'), 'Release', ['kb_game'], Path('engine'))
+            self.assertEqual(['--parallel', '2'], run.call_args.args[0][-2:])
+        with mock.patch.dict(os.environ, {'CMAKE_BUILD_PARALLEL_LEVEL': '0'}), \
+                mock.patch.object(package_game, 'run_checked') as run:
+            with self.assertRaises(PackagingError):
+                package_game._build_targets(Path('cmake'), Path('build'), 'Release', ['kb_game'], Path('engine'))
+            run.assert_not_called()
+
     @staticmethod
     def _windows_launch_package(root: Path) -> argparse.Namespace:
         build_root = root / "build"
@@ -1528,7 +1539,7 @@ class PackageGameTests(unittest.TestCase):
         apk = Path("stage/Game-etc2.apk")
 
         def run(arguments: list[object], **_kwargs: object) -> mock.Mock:
-            output = "FATAL EXCEPTION: main" if "-d" in arguments else ""
+            output = "123" if "pidof" in arguments else ("FATAL EXCEPTION: main" if "-d" in arguments else "")
             return mock.Mock(output=output)
 
         with mock.patch.object(package_game, "run_checked", side_effect=run) as checked:
@@ -1540,6 +1551,26 @@ class PackageGameTests(unittest.TestCase):
             if call.args[0][1:4] == ["shell", "am", "force-stop"]
         ]
         self.assertEqual(2, len(force_stops))
+        self.assertFalse(any("-c" in call.args[0] for call in checked.call_args_list))
+        self.assertTrue(any("--pid=123" in call.args[0] for call in checked.call_args_list))
+
+    def test_android_first_frame_requires_matching_fields_on_one_process_log_line(self) -> None:
+        args = argparse.Namespace(target="Android.ASTC.arm64", android_application_id="com.example.game")
+        outputs = iter([
+            "profile=Android.ETC2.arm64 backend=Vulkan first-frame=rendered",
+            "profile=Android.ASTC.arm64 backend=Vulkan\nfirst-frame=rendered",
+            "I/21kb: profile=Android.ASTC.arm64 backend=Vulkan resolution=1920x1080 first-frame=rendered",
+        ])
+        def run(arguments: list[object], **_kwargs: object) -> mock.Mock:
+            return mock.Mock(output="123" if "pidof" in arguments else next(outputs) if "-d" in arguments else "")
+        with mock.patch.object(package_game, "run_checked", side_effect=run) as checked, \
+                mock.patch.object(package_game.time, "sleep"):
+            package_game._verify_android_first_frame(args, Path("stage/Game.apk"), Path("adb"))
+        self.assertEqual(3, sum("--pid=123" in call.args[0] for call in checked.call_args_list))
+        calls = [call.args[0] for call in checked.call_args_list]
+        wake = next(index for index, command in enumerate(calls) if "KEYCODE_WAKEUP" in command)
+        launch = next(index for index, command in enumerate(calls) if "com.example.game/com.kbengine.runtime.MainActivity" in command)
+        self.assertLess(wake, launch)
 
     def test_android_stage_uses_adb_only_for_explicit_launch_and_probes_final_apk(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
