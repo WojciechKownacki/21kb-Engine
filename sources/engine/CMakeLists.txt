@@ -1872,6 +1872,18 @@ if(BUILD_TESTING)
     set_tests_properties(kb_background_read_tests PROPERTIES TIMEOUT 60)
     kb_apply_quality_gates(kb_background_read_tests)
 
+    add_library(kb_module_type_fixture SHARED tests/ModuleTypeFixture.cpp)
+    target_include_directories(kb_module_type_fixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    kb_apply_quality_gates(kb_module_type_fixture)
+    add_executable(kb_module_type_lifetime_tests tests/ModuleTypeLifetimeTests.cpp)
+    target_include_directories(kb_module_type_lifetime_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+    target_link_libraries(kb_module_type_lifetime_tests PRIVATE kb_engine flecs::flecs_static)
+    target_compile_definitions(kb_module_type_lifetime_tests PRIVATE
+        "KB_MODULE_TYPE_PATH=\"$<TARGET_FILE:kb_module_type_fixture>\"")
+    add_dependencies(kb_module_type_lifetime_tests kb_module_type_fixture)
+    kb_apply_quality_gates(kb_module_type_lifetime_tests)
+    add_test(NAME kb_module_type_lifetime_tests COMMAND $<TARGET_FILE:kb_module_type_lifetime_tests>)
+
     add_executable(kb_engine_module_sdk_tests tests/EngineModuleSdkTests.cpp)
     target_link_libraries(kb_engine_module_sdk_tests PRIVATE kb_engine)
     kb_apply_quality_gates(kb_engine_module_sdk_tests)

@@ -30,6 +30,14 @@ Before unloading, the host releases unused query plans from every attached
 scene's world. A plan still owned by a live query is not discarded by this cache
 cleanup; modules must release those queries during detach.
 
+Component, tag and relation registries own their type-name keys. They do not keep
+`std::type_index` objects pointing into a library after unload. The component
+address cache is invalidated when a library closes; its fallback lookup uses the
+owned name. Reloading the same type preserves its identifier and existing data.
+ECS components remain restricted to trivially copyable, trivially destructible
+values; this does not make plugin function pointers stored inside a value safe
+after unload, or support changing a live component's binary layout.
+
 The host takes ownership of a factory result immediately through the plugin's
 exported destroy function. A metadata error or inconsistent module name destroys
 the object before closing the library. Plugin-defined exceptions are also
