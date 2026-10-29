@@ -3,6 +3,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 
 #include <filesystem>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -22,6 +23,12 @@ struct RuntimeAssetPayload;
 struct AssetPackBlockEntry;
 }
 
+// Cooperative cancellation shared by the manager, source readers and decoders.
+struct AssetLoadCancellation {
+    std::atomic_bool requested{false};
+    std::atomic_bool observed{false};
+};
+
 struct AssetLoadRequest {
     const AssetMetadata& metadata;
     std::filesystem::path resolvedPath;
@@ -29,6 +36,14 @@ struct AssetLoadRequest {
     // Optional immutable source snapshot supplied by deterministic tools such as the cooker.
     // The view is non-owning and must outlive this request and every synchronous loader call.
     std::optional<std::span<const std::uint8_t>> sourceBytes;
+    std::shared_ptr<AssetLoadCancellation> cancellation;
+
+    // Long decoders should poll between bounded chunks and return without a payload.
+    [[nodiscard]] bool IsCancellationRequested() const noexcept {
+        if (!cancellation || !cancellation->requested.load(std::memory_order_acquire)) return false;
+        cancellation->observed.store(true, std::memory_order_release);
+        return true;
+    }
 
     [[nodiscard]] bool IsPackaged() const noexcept {
         return runtimePack != nullptr;
@@ -101,6 +116,10 @@ public:
         return {};
     }
     [[nodiscard]] virtual AssetLoadResult Load(const AssetLoadRequest& request) = 0;
+    // Host wrappers attach the defining library's lifetime to externally published payloads.
+    [[nodiscard]] virtual std::shared_ptr<void> RetainPayload(std::shared_ptr<void> payload) const {
+        return payload;
+    }
     // The asset manager runs loaders one at a time unless a loader says otherwise. Return true only when Load() and
     // ValidateRuntimeDependencies() touch no state shared between calls (no static or member data that is written, no
     // non-thread-safe library); the manager then lets several loads of this loader run at once.

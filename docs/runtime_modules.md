@@ -53,6 +53,35 @@ An external resource whose destructor or callback belongs to a plugin must not
 outlive that plugin's library. Binary validation does not provide automatic
 migration or lifetime tracking for arbitrary external registrations.
 
+## Loader and payload ownership
+
+Legacy C++ modules register dynamic asset loaders through
+`EngineModuleContext::RegisterAssetLoader`. Copy the context received in `OnLoad`
+when registration happens later during scene attachment. The context dispatches
+registration to host code, which wraps the loader and its decoded or published
+payloads with a shared library lifetime. Calling the plain `AssetManager` overload
+directly from a dynamic plugin does not establish that ownership contract.
+
+Remove the loader with `AssetManager::UnregisterLoader` during detach. Removal
+cancels queued work, waits for active decoding, discards pending results and clears
+that type's cached payloads. Replacement similarly drains the previous loader.
+External handles preserve their original immutable payload; new loads use the
+replacement loader. A preserved payload's original destructor runs while its DLL
+is still mapped. The native library closes after its final dependent loader or
+payload is released. Weak asset handles retain only host-owned control blocks and
+can safely expire after the DLL closes.
+
+Loaders and payload deleters must own their required state independently of the
+module instance. Keeping code mapped does not preserve the module object after
+`OnUnload`. Modules must also stop their own workers and remove other callbacks
+before returning from detach. This is lifetime retention, not state migration.
+
+Stable host integrations can use `EngineModuleLibrary::Retain` and the explicit
+library-lifetime overload of `AssetManager::RegisterLoader`. Keep all ownership
+wrappers in the host; transferring a raw plugin-owned control block without its
+library lease is unsupported. The legacy module ABI is 14 for the extended
+context and loader interface; rebuild C++ providers. The public C SDK stays at 1.
+
 ## Public C module SDK
 
 External modules can include `engine/modules/EngineModuleSdk.h` without linking

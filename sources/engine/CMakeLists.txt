@@ -591,6 +591,8 @@ add_library(kb_engine STATIC
     include/engine/modules/EngineModuleHost.hpp
     src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
+    src/modules/EngineModuleContext.cpp
+    src/private/assets/LibraryAssetLoader.hpp
     include/engine/modules/EngineModuleSdk.h
     include/engine/modules/EngineModuleCallback.hpp
     src/private/modules/EngineModuleSdkAdapter.hpp
@@ -1871,6 +1873,19 @@ if(BUILD_TESTING)
     add_test(NAME kb_background_read_tests COMMAND $<TARGET_FILE:kb_background_read_tests>)
     set_tests_properties(kb_background_read_tests PROPERTIES TIMEOUT 60)
     kb_apply_quality_gates(kb_background_read_tests)
+
+    add_library(kb_module_asset_fixture SHARED tests/ModuleAssetFixture.cpp)
+    target_link_libraries(kb_module_asset_fixture PRIVATE kb_engine)
+    target_compile_definitions(kb_module_asset_fixture PRIVATE "KB_ASSET_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_asset.events\"")
+    kb_apply_quality_gates(kb_module_asset_fixture)
+    add_executable(kb_module_asset_lifetime_tests tests/ModuleAssetLifetimeTests.cpp)
+    target_link_libraries(kb_module_asset_lifetime_tests PRIVATE kb_engine)
+    target_compile_definitions(kb_module_asset_lifetime_tests PRIVATE
+        "KB_ASSET_PLUGIN=\"$<TARGET_FILE:kb_module_asset_fixture>\""
+        "KB_ASSET_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_asset.events\"")
+    add_dependencies(kb_module_asset_lifetime_tests kb_module_asset_fixture)
+    kb_apply_quality_gates(kb_module_asset_lifetime_tests)
+    add_test(NAME kb_module_asset_lifetime_tests COMMAND $<TARGET_FILE:kb_module_asset_lifetime_tests>)
 
     add_library(kb_module_type_fixture SHARED tests/ModuleTypeFixture.cpp)
     target_include_directories(kb_module_type_fixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

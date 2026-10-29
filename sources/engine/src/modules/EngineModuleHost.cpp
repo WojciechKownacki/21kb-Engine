@@ -6,6 +6,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "modules/EngineModuleSdkAdapter.hpp"
+#include "engine/assets/AssetManager.hpp"
 
 #include <exception>
 #include <algorithm>
@@ -56,7 +57,10 @@ public:
     }
 
     void OnLoad(EngineModuleContext& context) override {
-        module_->OnLoad(context);
+        EngineModuleContext scoped{ context.EcsWorld(), context.Project(), library_.Retain(),
+            +[](kb::assets::AssetManager& manager, std::unique_ptr<kb::assets::IAssetLoader> loader,
+                std::shared_ptr<void> library) { return manager.RegisterLoader(std::move(loader), std::move(library)); } };
+        module_->OnLoad(scoped);
     }
 
     void OnEnable() override {

@@ -14,8 +14,8 @@
 
 namespace kb::modules {
 
-// Mixer buses retain ordered DSP effect settings across module boundaries.
-inline constexpr std::uint32_t kEngineModuleAbiVersion = 13U;
+// Module contexts and asset loaders carry explicit library lifetime ownership.
+inline constexpr std::uint32_t kEngineModuleAbiVersion = 14U;
 inline constexpr const char* kEngineModuleCreateSymbol = "kb_create_engine_module";
 inline constexpr const char* kEngineModuleDestroySymbol = "kb_destroy_engine_module";
 inline constexpr const char* kEngineModuleAbiVersionSymbol = "kb_engine_module_abi_version";

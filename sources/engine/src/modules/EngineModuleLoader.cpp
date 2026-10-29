@@ -257,6 +257,12 @@ void AppendCandidate(std::vector<std::filesystem::path>& candidates, const std::
 
 } // namespace
 
+struct EngineModuleLibraryLifetime {
+    void* handle = nullptr;
+    bool unload = true;
+    ~EngineModuleLibraryLifetime() { if (unload) CloseNativeLibrary(handle); }
+};
+
 EngineModuleLibrary::EngineModuleLibrary(std::filesystem::path originalPath, std::filesystem::path loadedPath, void* handle) noexcept
     : originalPath_(std::move(originalPath))
     , loadedPath_(std::move(loadedPath))
@@ -269,7 +275,8 @@ EngineModuleLibrary::~EngineModuleLibrary() {
 EngineModuleLibrary::EngineModuleLibrary(EngineModuleLibrary&& other) noexcept
     : originalPath_(std::move(other.originalPath_))
     , loadedPath_(std::move(other.loadedPath_))
-    , handle_(std::exchange(other.handle_, nullptr)) {}
+    , handle_(std::exchange(other.handle_, nullptr))
+    , lifetime_(std::move(other.lifetime_)) {}
 
 EngineModuleLibrary& EngineModuleLibrary::operator=(EngineModuleLibrary&& other) noexcept {
     if (this == &other) {
@@ -279,6 +286,7 @@ EngineModuleLibrary& EngineModuleLibrary::operator=(EngineModuleLibrary&& other)
     originalPath_ = std::move(other.originalPath_);
     loadedPath_ = std::move(other.loadedPath_);
     handle_ = std::exchange(other.handle_, nullptr);
+    lifetime_ = std::move(other.lifetime_);
     return *this;
 }
 
@@ -304,16 +312,27 @@ void* EngineModuleLibrary::FindSymbol(std::string_view name, std::vector<std::st
 }
 
 void EngineModuleLibrary::Reset() noexcept {
-    CloseNativeLibrary(handle_);
+    if (lifetime_) lifetime_.reset();
+    else CloseNativeLibrary(handle_);
     handle_ = nullptr;
     originalPath_.clear();
     loadedPath_.clear();
 }
 
 void EngineModuleLibrary::ReleaseWithoutUnload() noexcept {
+    if (lifetime_) { lifetime_->unload = false; lifetime_.reset(); }
     handle_ = nullptr;
     originalPath_.clear();
     loadedPath_.clear();
+}
+
+std::shared_ptr<void> EngineModuleLibrary::Retain() {
+    if (!handle_) return {};
+    if (!lifetime_) {
+        lifetime_ = std::make_shared<EngineModuleLibraryLifetime>();
+        lifetime_->handle = handle_;
+    }
+    return lifetime_;
 }
 
 EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {

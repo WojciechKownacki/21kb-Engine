@@ -12,6 +12,7 @@
 #include "assets/AssetPathUtilities.hpp"
 #include "assets/AssetRuntimeLoadService.hpp"
 #include "assets/AssetRegistrySnapshotCache.hpp"
+#include "assets/LibraryAssetLoader.hpp"
 
 #include <string>
 #include <algorithm>
@@ -26,6 +27,7 @@ namespace kb::assets {
 AssetManager::AssetManager() = default;
 
 AssetManager::~AssetManager() {
+    StopAsyncLoads();
     // Closing the lane cancels the queued loads and waits for the running one, which uses this
     // manager's loaders and mutex.
     asyncLane_.reset();
@@ -96,6 +98,31 @@ bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader) {
         RestartAsyncLoads();
     }
     return registered;
+}
+
+bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader, std::shared_ptr<void> libraryLifetime) {
+    if (!loader) return false;
+    if (!libraryLifetime) return RegisterLoader(std::move(loader));
+    return RegisterLoader(std::make_unique<LibraryAssetLoader>(std::move(libraryLifetime), std::move(loader)));
+}
+
+bool AssetManager::UnregisterLoader(std::string_view type) {
+    const auto found = std::ranges::find_if(loaders_, [type](const auto& loader) { return loader->Type() == type; });
+    if (found == loaders_.end()) return false;
+    StopAsyncLoads();
+    // Retained handles keep their own library lease; cached entries must not
+    // conceal that no loader is available for a new request.
+    for (auto entry = cache_.begin(); entry != cache_.end();) {
+        const auto* metadata = registry_.Find(AssetId{ entry->first });
+        if (metadata && metadata->type == type) {
+            ++asyncLoadGenerations_[entry->first];
+            entry = cache_.erase(entry);
+        } else ++entry;
+    }
+    loaders_.erase(found);
+    ++revision_;
+    RestartAsyncLoads();
+    return true;
 }
 
 bool AssetManager::RegisterAsset(AssetMetadata metadata) {
@@ -678,9 +705,30 @@ AssetManager::AsyncLoadConcurrencyStats AssetManager::AsyncLoadConcurrency() con
     };
 }
 
+AssetManager::AsyncLoadLifecycleStats AssetManager::AsyncLoadLifecycle() const noexcept {
+    return {cancelledBeforeLoad_.load(std::memory_order_relaxed), cancelledDuringLoad_.load(std::memory_order_relaxed),
+        discardedResults_.load(std::memory_order_relaxed), publishedLoads_.load(std::memory_order_relaxed)};
+}
+
 void AssetManager::StopAsyncLoads() noexcept {
+    for (const auto& [id, record] : asyncLoads_) {
+        static_cast<void>(id);
+        record.state->cancellation->requested.store(true, std::memory_order_release);
+    }
     if (asyncLane_ != nullptr) {
         asyncLane_->CancelAndWait();
+    }
+    for (const auto& [id, record] : asyncLoads_) {
+        static_cast<void>(id);
+        if (!record.state->started.load(std::memory_order_acquire) &&
+            !record.state->accounted.exchange(true, std::memory_order_acq_rel))
+            cancelledBeforeLoad_.fetch_add(1U, std::memory_order_relaxed);
+        std::scoped_lock stateLock{record.state->mutex};
+        if (record.state->prepared && !record.state->prepared->discarded) {
+            discardedResults_.fetch_add(1U, std::memory_order_relaxed);
+            record.state->prepared->result.asset.reset();
+            record.state->prepared->discarded = true;
+        }
     }
 }
 
@@ -746,6 +794,15 @@ void AssetManager::RestartAsyncLoads() {
 
 void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
     AsyncPreparedAsset prepared;
+    job.state->started.store(true, std::memory_order_release);
+    if (job.state->cancellation->requested.load(std::memory_order_acquire)) {
+        if (!job.state->accounted.exchange(true, std::memory_order_acq_rel))
+            cancelledBeforeLoad_.fetch_add(1U, std::memory_order_relaxed);
+        prepared.discarded = true;
+        std::scoped_lock stateLock{job.state->mutex};
+        job.state->prepared = std::move(prepared);
+        return;
+    }
     try {
         std::unique_lock lock{ loaderExecutionMutex_, std::defer_lock };
         if (!job.loader->AllowsConcurrentLoad()) {
@@ -769,9 +826,14 @@ void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
             .metadata = job.metadata,
             .resolvedPath = job.resolvedPath,
             .runtimePack = std::move(job.runtimePack),
+            .cancellation = job.state->cancellation,
         };
-        if (const auto diagnostic = job.loader->ValidateRuntimeDependencies(request, *job.registry)) {
+        if (request.IsCancellationRequested()) {
+            prepared.result.error = "Asset load cancelled";
+        } else if (const auto diagnostic = job.loader->ValidateRuntimeDependencies(request, *job.registry)) {
             prepared.result.error = "Asset dependency validation failed: " + *diagnostic;
+        } else if (request.IsCancellationRequested()) {
+            prepared.result.error = "Asset load cancelled";
         } else {
             prepared.result = job.loader->Load(request);
         }
@@ -787,7 +849,16 @@ void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
             .typeName = job.typeName,
         };
     }
-    std::scoped_lock stateLock{ job.state->mutex };
+    std::scoped_lock stateLock{job.state->mutex};
+    if (job.state->cancellation->requested.load(std::memory_order_acquire)) {
+        if (!job.state->accounted.exchange(true, std::memory_order_acq_rel)) {
+            if (job.state->cancellation->observed.load(std::memory_order_acquire) && !prepared.result.asset)
+                cancelledDuringLoad_.fetch_add(1U, std::memory_order_relaxed);
+            else discardedResults_.fetch_add(1U, std::memory_order_relaxed);
+        }
+        prepared.result.asset.reset();
+        prepared.discarded = true;
+    }
     job.state->prepared = std::move(prepared);
 }
 
@@ -809,10 +880,13 @@ void AssetManager::PumpAsyncLoads() {
         const std::uint64_t generation = iterator->second.generation;
         const std::uint64_t registryGeneration = iterator->second.registryGeneration;
         iterator = asyncLoads_.erase(iterator);
+        if (prepared->discarded) continue;
         if (asyncLoadGenerations_[assetId] != generation) {
+            discardedResults_.fetch_add(1U, std::memory_order_relaxed);
             continue;
         }
         if (registry_.Generation() != registryGeneration) {
+            discardedResults_.fetch_add(1U, std::memory_order_relaxed);
             asyncLoadErrors_[assetId] = "Asset registry changed during asynchronous preparation; request again";
             continue;
         }
@@ -827,6 +901,7 @@ void AssetManager::PumpAsyncLoads() {
             .policy = policy,
         };
         asyncLoadErrors_.erase(assetId);
+        publishedLoads_.fetch_add(1U, std::memory_order_relaxed);
     }
 }
 
@@ -846,6 +921,16 @@ std::string AssetManager::AsyncLoadError(AssetId id) const {
 }
 
 bool AssetManager::Unload(AssetId id) noexcept {
+    if (const auto pending = asyncLoads_.find(id.value); pending != asyncLoads_.end()) {
+        const auto& state = pending->second.state;
+        std::scoped_lock lock{state->mutex};
+        state->cancellation->requested.store(true, std::memory_order_release);
+        if (state->prepared && !state->prepared->discarded) {
+            discardedResults_.fetch_add(1U, std::memory_order_relaxed);
+            state->prepared->result.asset.reset();
+            state->prepared->discarded = true;
+        }
+    }
     ++asyncLoadGenerations_[id.value];
     asyncLoadErrors_.erase(id.value);
     return cache_.erase(id.value) > 0;
@@ -1023,6 +1108,7 @@ void AssetManager::ClearRuntimeCache() noexcept {
 }
 
 void AssetManager::Clear() noexcept {
+    StopAsyncLoads();
     // A cleared manager holds no lane; the next asynchronous request opens one.
     asyncLane_.reset();
     asyncLoads_.clear();
