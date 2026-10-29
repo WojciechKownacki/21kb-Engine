@@ -30,7 +30,7 @@ class InputDeviceState;
 class Win32InputCollector {
 public:
     // Observes message-driven device input that cannot be polled: touch
-    // contacts and mouse-wheel deltas. Touch messages are consumed (true);
+    // contacts, raw relative mouse motion and mouse-wheel deltas. Touch messages are consumed (true);
     // wheel messages return false so the host UI can route the same wheel
     // event while the normalized runtime snapshot receives it next Collect.
     [[nodiscard]] bool HandleWindowMessage(
@@ -66,6 +66,9 @@ private:
     std::size_t pendingTextInputCount_ = 0U;
     Utf16InputDecoder textDecoder_{};
     float pendingMouseWheel_ = 0.0F;
+    float pendingRawMouseX_ = 0.0F;
+    float pendingRawMouseY_ = 0.0F;
+    bool rawRelativeMouse_ = false;
     HWND pointerCoordinateWindow_ = nullptr;
     RECT pointerClientViewport_{};
     std::uint32_t pointerRenderWidth_ = 0U;

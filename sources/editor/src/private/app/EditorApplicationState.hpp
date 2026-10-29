@@ -8,6 +8,7 @@
 #include "app/EditorShellInteractionState.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
+#include "engine/platform/win32/Win32RawMouseRegistration.hpp"
 #include "platform/win32/Win32InputDebugLogger.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
@@ -46,6 +47,7 @@ struct EditorApplicationState {
     EditorShellInteractionState shellInteraction;
     EditorPointerDragState pointerDrag;
     kb::input::Win32InputCollector inputCollector;
+    kb::input::Win32RawMouseRegistration rawMouse;
     Win32InputDebugLogger inputDebugLogger;
     // Last observed ScriptEditorWindow::SaveSerial() — a change means the user
     // saved a script (Ctrl+S), so the open script's asset is reloaded and any

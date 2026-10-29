@@ -1747,6 +1747,9 @@ if(WIN32)
         kb_apply_quality_gates(kb_win32_gamepad_host_tests)
         add_test(NAME kb_win32_gamepad_host COMMAND kb_win32_gamepad_host_tests)
         set_tests_properties(kb_win32_gamepad_host PROPERTIES TIMEOUT 30 LABELS "input;platform")
+        add_executable(kb_win32_pointer_host_tests tests/Win32PointerHostTests.cpp)
+        target_link_libraries(kb_win32_pointer_host_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_win32_pointer_host_tests)
     endif()
 
     # Crash capture shared by the game and the editor. dbghelp and version are

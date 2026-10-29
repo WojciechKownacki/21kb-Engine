@@ -125,6 +125,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
         return false;
     }
 
+    static_cast<void>(state.rawMouse.Register(state.window));
     EditorMainWindow::EnableDarkMode(state.window);
     static_cast<void>(state.sceneContext.LoadEditorSettings());
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
@@ -170,6 +171,7 @@ void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 
+    state.rawMouse.Reset();
     if (state.window != nullptr) {
         static_cast<void>(UnregisterTouchWindow(state.window));
         DestroyWindow(state.window);

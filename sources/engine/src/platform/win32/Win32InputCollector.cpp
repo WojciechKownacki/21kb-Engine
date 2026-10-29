@@ -67,6 +67,27 @@ void Win32InputCollector::AdvanceTouchFrame() noexcept {
 
 bool Win32InputCollector::HandleWindowMessage(
     HWND ownerWindow, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_INPUT) {
+        RAWINPUT raw{};
+        UINT size = sizeof(raw);
+        if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw,
+                &size, sizeof(RAWINPUTHEADER)) != UINT(-1) &&
+            raw.header.dwType == RIM_TYPEMOUSE && OwnerProcessIsForeground(ownerWindow)) {
+            rawRelativeMouse_ = (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0;
+            if (rawRelativeMouse_) {
+                pendingRawMouseX_ += static_cast<float>(raw.data.mouse.lLastX);
+                pendingRawMouseY_ += static_cast<float>(raw.data.mouse.lLastY);
+            } else {
+                pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
+            }
+        }
+        return false; // The host must call DefWindowProc for raw-input cleanup.
+    }
+    if (message == WM_KILLFOCUS || message == WM_CANCELMODE) {
+        pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
+        rawRelativeMouse_ = false;
+        hasPreviousMouse_ = false;
+    }
     if (message == WM_CANCELMODE) {
         for (std::size_t index = 0U; index < touchPointCount_; ++index) touchPoints_[index].phase = InputTouchPhase::Cancelled;
         return false;
@@ -166,6 +187,8 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
     state.SetHasFocus(focused);
     CollectWin32Gamepads(state, ownerWindow);
     if (!focused) {
+        pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
+        rawRelativeMouse_ = false;
         hasPreviousMouse_ = false;
         touchPointCount_ = 0U;
         pendingMouseWheel_ = 0.0F;
@@ -195,7 +218,7 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
 
     POINT cursor{};
     if (GetCursorPos(&cursor) != 0) {
-        if (hasPreviousMouse_) {
+        if (hasPreviousMouse_ && !rawRelativeMouse_) {
             state.SetAnalog(
                 InputKey::MouseX,
                 static_cast<float>(cursor.x - previousMouse_.x) * pointerDeltaScaleX);
@@ -227,6 +250,13 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
         }
     }
 
+    if (rawRelativeMouse_) {
+        // Raw relative counts are independent of cursor acceleration, warps and
+        // viewport DPI. Absolute pointer coordinates still use the client map.
+        state.SetAnalog(InputKey::MouseX, pendingRawMouseX_);
+        state.SetAnalog(InputKey::MouseY, pendingRawMouseY_);
+    }
+    pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
     state.SetTouchPoints(std::span<const InputTouchPoint>{
         touchPoints_.data(), touchPointCount_});
     static_cast<void>(state.AddTextInput(std::span<const char32_t>{
