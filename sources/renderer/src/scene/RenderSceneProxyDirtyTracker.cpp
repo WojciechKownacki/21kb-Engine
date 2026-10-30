@@ -4,7 +4,7 @@ namespace kb::render {
 
 RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForMeshChange(const MeshRenderProxyDesc& current, const MeshRenderProxyDesc& next) noexcept {
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
-    if (current.model != next.model ||
+    if (current.model != next.model || current.localRenderOffset != next.localRenderOffset ||
         current.boundsOverride.center != next.boundsOverride.center ||
         current.boundsOverride.radius != next.boundsOverride.radius) {
         dirty |= RenderProxyDirtyFlag::Transform;

@@ -35,6 +35,7 @@ RenderMaterialResource RenderMaterialResourceBuilder::Build(const RenderMaterial
     resource.translucencyBlend = desc.translucencyBlend;
     resource.doubleSided = desc.doubleSided;
     resource.writesDepth = desc.writesDepth;
+    resource.pointSampling = desc.pointSampling;
     resource.albedoTextureAssetId = desc.albedoTextureAssetId;
     resource.normalTextureAssetId = desc.normalTextureAssetId;
     resource.metallicRoughnessTextureAssetId = desc.metallicRoughnessTextureAssetId;

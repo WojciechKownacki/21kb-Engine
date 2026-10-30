@@ -1073,7 +1073,13 @@ void RenderScene::RecordPreviousSwarmModel(GeometrySwarmRenderProxy& proxy, cons
     proxy.previousModelFrame = motionFrame_;
 }
 
-RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged) {
+RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& worldModel, bool markGroupChanged) {
+    auto model = worldModel;
+    for (std::size_t component = 0; component < 3; ++component) {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            model[12 + component] += worldModel[axis * 4 + component] * proxy.desc.localRenderOffset[axis];
+        }
+    }
     if (proxy.desc.model != model) {
         RecordPreviousModel(proxy, proxy.desc.model);
     }

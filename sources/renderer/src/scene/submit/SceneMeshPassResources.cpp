@@ -1330,13 +1330,16 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         return resolution.program;
     }
 
+    const std::uint32_t spriteSampler = material && material->pointSampling
+        ? BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP
+        : UINT32_MAX;
     if (desc.pass == MeshPassType::ShadowDepth) {
         const SceneMeshShadowMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::ResolveShadow(
             material,
             desc.resources,
             desc.resourceMap,
             fallbacks);
-        bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+        bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture, spriteSampler);
         bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
         bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
         bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
@@ -1350,7 +1353,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         desc.resources,
         desc.resourceMap,
         fallbacks);
-    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture, spriteSampler);
     bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
     bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
     bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
@@ -1360,7 +1363,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(1U, normalSampler_, materialBinding.normalTexture);
     bgfx::setTexture(2U, metallicRoughnessSampler_, materialBinding.metallicRoughnessTexture);
     bgfx::setTexture(3U, occlusionSampler_, materialBinding.occlusionTexture);
-    bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture);
+    bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture, spriteSampler);
     bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
     if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
         lightGrid_.Bind(desc.lighting.lightGrid, 6U);

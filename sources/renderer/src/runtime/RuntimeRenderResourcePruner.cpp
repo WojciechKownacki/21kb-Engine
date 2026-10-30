@@ -28,6 +28,15 @@ void UnloadTextureFromSubmittedScene(std::span<const kb::scene::Scene*> submitte
     }
 }
 
+[[nodiscard]] bool SourceWasRemoved(std::span<const kb::scene::Scene*> scenes, RuntimeAssetKey key, std::uint64_t sourceAssetId) {
+    for (const auto* scene : scenes) {
+        if (scene != nullptr && scene->Id() == key.sceneId) {
+            return scene->Assets().Manager().Registry().Find(kb::assets::AssetId{ sourceAssetId != 0U ? sourceAssetId : key.assetId }) == nullptr;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] bool ShouldRetain(
     const RuntimeFrameResourceReferences& frameReferences,
     RuntimeAssetKey key,
@@ -52,7 +61,11 @@ void RuntimeRenderResourcePruner::PruneUnused(
     RuntimeMaterialResourceMap& embeddedMaterials,
     RuntimeTextureResourceMap& textures) {
     for (auto it = meshes.begin(); it != meshes.end();) {
-        if (ShouldRetain(frameReferences, it->first, it->second.lastReferencedFrame, currentFrame, retentionFrames, false)) {
+        // Released generated meshes cannot be reused; keeping them for the normal cache
+        // window can exhaust GPU buffer handles during repeated prefab streaming.
+        const bool removed = !frameReferences.ContainsMesh(it->first) &&
+            SourceWasRemoved(submittedScenes, it->first, it->second.sourceAssetId);
+        if (!removed && ShouldRetain(frameReferences, it->first, it->second.lastReferencedFrame, currentFrame, retentionFrames, false)) {
             ++it;
             continue;
         }

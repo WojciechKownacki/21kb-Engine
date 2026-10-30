@@ -734,6 +734,7 @@ enum class SecondaryDetail : std::uint8_t { Tangent, Uv1, Color };
     material.desc.translucencyBlend = RenderMaterialTranslucencyBlend::AlphaHoldout;
     material.desc.doubleSided = true;
     material.desc.writesDepth = false;
+    material.desc.pointSampling = true;
     std::array<std::uint64_t*, 13U> assetIds{
         &material.desc.albedoTextureAssetId,
         &material.desc.normalTextureAssetId,
@@ -1333,6 +1334,7 @@ void RunBakedMeshMaterialMetadataTest() {
             actual.desc.translucencyBlend == expected.desc.translucencyBlend &&
             actual.desc.doubleSided == expected.desc.doubleSided &&
             actual.desc.writesDepth == expected.desc.writesDepth &&
+            actual.desc.pointSampling == expected.desc.pointSampling &&
             MaterialTexturePaths(actual) == MaterialTexturePaths(expected),
         "An embedded material changed while passing through the baked mesh format");
 

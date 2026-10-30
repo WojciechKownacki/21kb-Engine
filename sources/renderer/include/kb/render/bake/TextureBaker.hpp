@@ -84,6 +84,7 @@ enum class TextureBakeStatus : std::uint8_t {
 struct TextureBakeSettings {
     RenderTextureAssetSemantic semantic = RenderTextureAssetSemantic::Unknown;
     RenderTextureAssetColorSpace colorSpace = RenderTextureAssetColorSpace::Unknown;
+    bool preserveAtlas = false; // Exact dimensions/texels, one RGBA8 level; avoids cross-cell mip bleeding.
 };
 
 struct TextureBakeOutput {

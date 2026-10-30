@@ -286,3 +286,12 @@ Unicode bidirectional and script analysis uses SheenBidi 3.0.0, commit
 `cfe430e7375a7845b679adae9d51dac6deaa8858`. The unmodified source and
 headers in `third_party/sheenbidi` retain their Apache-2.0 notices.
 `LICENSE` is included in engine and game packages.
+
+## Text shaping font fixtures
+
+`sources/engine/tests/fixtures/fonts` contains the unmodified Noto Sans Devanagari
+font and its renamed ShapingReference derivative under the SIL Open Font License
+1.1. `noto-font-source.json` records upstream revisions and SHA-256 hashes.
+The same directory contains CaretTest, an independently generated synthetic font
+under the repository MIT license. These test fixtures are covered by the engine
+notice inventory; the standard game payload does not include them.

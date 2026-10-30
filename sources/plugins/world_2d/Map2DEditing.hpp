@@ -80,6 +80,9 @@ private:
         float parallaxX, parallaxY;
         bool sortByY;
         bool lit;
+        kb::assets::Map2DCamera camera;
+        std::uint32_t propertySchemaVersion;
+        kb::assets::Map2DProperties propertyDefaults;
         explicit Settings(const kb::assets::Map2DAsset& map);
         void Apply(kb::assets::Map2DAsset& map) const;
         friend bool operator==(const Settings&, const Settings&) = default;
@@ -141,7 +144,8 @@ public:
         bool asGround,
         Map2DRect area,
         std::int32_t z,
-        std::string* error = nullptr);
+        std::string* error = nullptr,
+        float animationPhaseSeconds = 0.0F);
     // The top item of each tile, or everything on it.
     void Erase(Map2DRect area, std::int32_t z, bool itemsOnly);
     void PaintCollision(Map2DRect area, std::int32_t z, bool solid);

@@ -2670,6 +2670,30 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     manifest.targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile);
     manifest.descriptor = std::move(packagedDescriptor);
     manifest.settings = settings;
+    // Tile atlas coordinates refer to the exact source dimensions. Preserve texels and avoid
+    // mip generation across neighboring cells, including partial final rows and odd dimensions.
+    std::set<std::string> atlasTextures;
+    std::set<std::uint64_t> pointTextures;
+    for (const auto& metadata : assets) {
+        if (IsMaterialAsset(metadata)) {
+            std::vector<std::uint8_t> source;
+            if (!ReadSourceSnapshot(sourceSnapshots, metadata.id.value, source, error)) return Failure(error);
+            kb::assets::AssetMemoryInputStream pointMaterialInput{source};
+            const auto material = kb::render::RenderMaterialAssetLoader::LoadMaterial(pointMaterialInput);
+            if (material && material->desc.pointSampling) {
+                pointTextures.insert(material->desc.albedoTextureAssetId);
+                pointTextures.insert(material->desc.emissiveTextureAssetId);
+                if (!material->albedoTexturePath.empty()) atlasTextures.insert(kb::assets::NormalizeAssetPath(material->albedoTexturePath));
+                if (!material->emissiveTexturePath.empty()) atlasTextures.insert(kb::assets::NormalizeAssetPath(material->emissiveTexturePath));
+            }
+        }
+        if (metadata.physicalPath.extension() != kb::assets::kMap2DAssetExtension) continue;
+        std::vector<std::uint8_t> source;
+        if (!ReadSourceSnapshot(sourceSnapshots, metadata.id.value, source, error)) return Failure(error);
+        const auto map = kb::assets::Map2DAssetIO::Load(source, &error);
+        if (!map) return Failure(error);
+        for (const auto& sheet : map->sheets) atlasTextures.insert(kb::assets::NormalizeAssetPath(sheet.texture));
+    }
     std::set<std::string> packagedPaths;
     std::set<asset_bake::AssetBakeDigest> bakedTextures;
     ProjectCookResult result{};
@@ -2734,6 +2758,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             const kb::render::bake::TextureBakeSettings textureSettings{
                 .semantic = texture->semantic,
                 .colorSpace = texture->colorSpace,
+                .preserveAtlas = atlasTextures.contains(virtualPath) || pointTextures.contains(metadata.id.value),
             };
             for (std::uint32_t familyIndex = 0U;
                  familyIndex < asset_bake::kTextureCompressionFamilyCount;
@@ -2785,9 +2810,10 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 entry.artifacts.push_back(asset_bake::RuntimeArtifactReference{
                     .digest = digest,
                     .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
-                    .qualifier = std::string{ asset_bake::TextureCompressionFamilyName(family) },
+                    .qualifier = textureSettings.preserveAtlas ? "rgba8-atlas" : std::string{ asset_bake::TextureCompressionFamilyName(family) },
                 });
                 ++result.textureArtifactCount;
+                if (textureSettings.preserveAtlas) break;
             }
         } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension &&
                    entry.sourceExtension != kb::assets::kMap2DAssetExtension) {

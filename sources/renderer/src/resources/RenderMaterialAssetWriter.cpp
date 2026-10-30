@@ -378,6 +378,7 @@ class WritesDepthPropertyWriter final : public IRenderMaterialAssetPropertyWrite
 public:
     void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
         output << "writesDepth " << (asset.desc.writesDepth ? "true" : "false") << '\n';
+        if (asset.desc.pointSampling) output << "pointSampling true\n";
     }
 };
 

@@ -1793,6 +1793,94 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Map2D-Component")
     set_tests_properties(kb_editor_map2d_component PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;map2d" TIMEOUT 180)
+    if(Python3_EXECUTABLE AND TARGET kb_game AND TARGET kb_cooker)
+            add_test(NAME kb_editor_map2d_visual_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DVisualTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/map2d_visual_tests")
+            set_tests_properties(kb_editor_map2d_visual_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+            add_test(NAME kb_editor_camera2d_workflow_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Camera2DWorkflowTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/camera2d_workflow_tests")
+            set_tests_properties(kb_editor_camera2d_workflow_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+            add_test(NAME kb_editor_platformer_navigation_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PlatformerNavigationTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/platformer_navigation_tests")
+            set_tests_properties(kb_editor_platformer_navigation_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+            add_test(NAME kb_editor_tile_data_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/TileDataWorkflowTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/tile_data_tests")
+            set_tests_properties(kb_editor_tile_data_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+            add_test(NAME kb_editor_beginner_workflow_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Player2DWorkflowTests.py"
+                    --beginner --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/beginner_workflow_tests")
+            set_tests_properties(kb_editor_beginner_workflow_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+            add_test(NAME kb_editor_platformer_surfaces_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PlatformerSurfaceTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/platformer_surface_tests")
+            set_tests_properties(kb_editor_platformer_surfaces_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+            add_test(NAME kb_editor_player2d_workflow_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Player2DWorkflowTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/player2d_workflow_tests")
+            set_tests_properties(kb_editor_player2d_workflow_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+            add_test(NAME kb_editor_tilephysics_workflow_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Player2DWorkflowTests.py"
+                    --tile-collisions --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/tilephysics_workflow_tests")
+            set_tests_properties(kb_editor_tilephysics_workflow_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+        add_test(NAME kb_cli_map2d_authoring
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/sources/tools/tests/Map2DAuthoringTests.py"
+                --cli "$<TARGET_FILE:kb_cli>"
+                --image "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/map2d/Tiles.png"
+                --test-root "${CMAKE_BINARY_DIR}/map2d_authoring_tests")
+        set_tests_properties(kb_cli_map2d_authoring PROPERTIES LABELS "cli;map2d;authoring" TIMEOUT 120)
+    endif()
     add_test(NAME kb_editor_map2d_lighting
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DLightingScenario.json"

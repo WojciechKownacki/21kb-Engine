@@ -113,7 +113,16 @@ enum class InspectorSectionId : std::uint8_t {
     // A Mesh Renderer drawing a .kbmap2d tile map (the World 2D Map component).
     World2DMap,
     AudioMixerRuntime,
+    CharacterController2D,
+    Sprite2D,
+    Body2D,
+    Collider2D,
+    Grid,
+    Tilemap,
+    TilemapRenderer,
+    TilemapCollider,
     UITheme,
+
 };
 
 enum class InspectorHitKind : std::uint8_t {

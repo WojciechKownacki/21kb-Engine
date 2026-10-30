@@ -10,6 +10,7 @@
 #include <string>
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cctype>
 #include <deque>
 #include <fstream>
@@ -215,13 +216,16 @@ Map2DChangeSet::Settings::Settings(const Map2DAsset& map)
     : width(map.width), height(map.height), viewWidth(map.viewWidth), viewHeight(map.viewHeight),
       tileSize(map.tileSize), floorHeight(map.floorHeight), orientation(map.orientation),
       background(map.background), sheets(map.sheets), groundRules(map.groundRules),
-      parallaxX(map.parallaxX), parallaxY(map.parallaxY), sortByY(map.sortByY), lit(map.lit) {}
+      parallaxX(map.parallaxX), parallaxY(map.parallaxY), sortByY(map.sortByY), lit(map.lit), camera(map.camera),
+      propertySchemaVersion(map.propertySchemaVersion), propertyDefaults(map.propertyDefaults) {}
 
 void Map2DChangeSet::Settings::Apply(Map2DAsset& map) const {
     map.width = width; map.height = height; map.viewWidth = viewWidth; map.viewHeight = viewHeight;
     map.tileSize = tileSize; map.floorHeight = floorHeight; map.orientation = orientation;
     map.background = background; map.sheets = sheets;
     map.groundRules = groundRules; map.parallaxX = parallaxX; map.parallaxY = parallaxY; map.sortByY = sortByY; map.lit = lit;
+    map.camera = camera;
+    map.propertySchemaVersion = propertySchemaVersion; map.propertyDefaults = propertyDefaults;
 }
 
 void Map2DChangeSet::RecordSettings(const Map2DAsset& map) {
@@ -356,6 +360,7 @@ bool WriteMap2DSpriteMaterial(const std::filesystem::path& file, std::string_vie
     desc.alphaMode = kb::render::RenderMaterialAlphaMode::Mask;
     desc.alphaCutoff = 0.5F;
     desc.doubleSided = true;
+    desc.pointSampling = true;
     desc.albedoTextureAssetId = textureId;
     desc.emissiveTextureAssetId = textureId;
     std::error_code fileError;
@@ -415,9 +420,10 @@ std::optional<std::uint16_t> EnsureMap2DSheet(
 }
 
 void ResizeMap2D(Map2DAsset& map, std::uint32_t width, std::uint32_t height, Map2DChangeSet* changes) {
+    if (width == 0U || height == 0U || width > Map2DAsset::MaximumSize || height > Map2DAsset::MaximumSize) return;
     if (changes != nullptr) changes->RecordSettings(map);
-    map.width = std::clamp(width, 1U, Map2DAsset::MaximumSize);
-    map.height = std::clamp(height, 1U, Map2DAsset::MaximumSize);
+    map.width = width;
+    map.height = height;
     std::erase_if(map.tiles, [&map, changes](const auto& entry) {
         const bool outside = kb::assets::Map2DTileKeyX(entry.first) >= map.width || kb::assets::Map2DTileKeyY(entry.first) >= map.height;
         if (outside && changes != nullptr) changes->Record(map, entry.first);
@@ -536,7 +542,8 @@ bool Map2DEditor::PaintSprite(
     bool asGround,
     Map2DRect area,
     std::int32_t z,
-    std::string* error) {
+    std::string* error, float animationPhaseSeconds) {
+    if (!std::isfinite(animationPhaseSeconds) || animationPhaseSeconds < 0) { SetError(error, "Animation phase must be finite and nonnegative"); return false; }
     if (z < Map2DAsset::MinimumFloor || z > Map2DAsset::MaximumFloor) return false;
     // An area that lies wholly outside the map is refused; it is not squeezed onto the edge cells.
     if (std::min(area.x0, area.x1) >= map_.width || std::min(area.y0, area.y1) >= map_.height) {
@@ -551,7 +558,8 @@ bool Map2DEditor::PaintSprite(
         SetError(error, "Cell " + std::to_string(cell) + " is outside " + std::string{ texture });
         return false;
     }
-    const Map2DSprite sprite{ *sheet, cell };
+    Map2DSprite sprite{ *sheet, cell };
+    sprite.animationPhaseSeconds = animationPhaseSeconds;
     for (std::uint32_t y = area.y0; y <= area.y1; ++y) {
         for (std::uint32_t x = area.x0; x <= area.x1; ++x) {
             const std::uint64_t key = Map2DTileKey(x, y, z);

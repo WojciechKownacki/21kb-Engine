@@ -34,6 +34,7 @@ struct Map2DSprite {
     std::uint32_t tint = 0xFFFFFFFFU; // RGBA, red in the most significant byte.
     float offsetX = 0.0F; // Tile units, positive right/down in the map.
     float offsetY = 0.0F;
+    float animationPhaseSeconds = 0.0F; // Nonnegative per-instance clip offset.
 
     [[nodiscard]] bool IsValid() const noexcept { return sheet != kNoSheet; }
     friend bool operator==(const Map2DSprite&, const Map2DSprite&) = default;
@@ -131,6 +132,8 @@ struct Map2DCamera {
     float deadZoneHeight = 0.0F;
     // Keeps the view inside the map (a map smaller than the view stays centred).
     bool clampToMap = false;
+    // Magnification relative to the configured view; pixel-perfect views use whole screen pixels.
+    float zoom = 1.0F;
     friend bool operator==(const Map2DCamera&, const Map2DCamera&) = default;
 };
 
@@ -159,6 +162,9 @@ struct Map2DAsset {
     bool sortByY = false;
     bool lit = false;
     Map2DCamera camera;
+    // Declared types are the variants of their defaults. Older maps may keep undeclared fields.
+    std::uint32_t propertySchemaVersion = 0U;
+    Map2DProperties propertyDefaults;
     // Non-empty tiles by Map2DTileKey.
     std::map<std::uint64_t, Map2DTile> tiles;
 };
@@ -175,6 +181,10 @@ struct Map2DAsset {
 [[nodiscard]] std::string_view Map2DOrientationName(Map2DOrientation orientation) noexcept;
 
 [[nodiscard]] bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error = nullptr);
+[[nodiscard]] std::optional<Map2DValue> ParseMap2DPropertyValue(std::string_view type, std::string_view text);
+// Atomically declare/change a field, optionally renaming it and migrating all stored overrides.
+[[nodiscard]] bool SetMap2DPropertySchema(Map2DAsset& map, std::string_view name, Map2DValue defaultValue,
+    std::string_view previousName = {}, std::string* error = nullptr);
 [[nodiscard]] bool IsMap2DCollisionValid(const Map2DCollision& collision) noexcept;
 [[nodiscard]] Map2DCollision Map2DCellCollision(const Map2DAsset& map, const Map2DTile& tile);
 [[nodiscard]] const Map2DTileDefinition* Map2DDefinition(const Map2DAsset& map, Map2DSprite sprite) noexcept;

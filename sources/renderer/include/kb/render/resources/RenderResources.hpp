@@ -333,6 +333,7 @@ struct RenderMaterialDesc {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;
@@ -481,6 +482,7 @@ struct RenderMaterialResource {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;

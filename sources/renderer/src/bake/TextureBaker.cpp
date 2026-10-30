@@ -101,7 +101,7 @@ private:
     TextureCompressionFamily family,
     const TextureBakeSettings& settings) noexcept {
     return {
-        static_cast<std::uint8_t>(family),
+        static_cast<std::uint8_t>(static_cast<unsigned>(family) | (settings.preserveAtlas ? 0x80U : 0U)),
         static_cast<std::uint8_t>(settings.semantic),
         static_cast<std::uint8_t>(settings.colorSpace),
     };
@@ -331,7 +331,10 @@ TextureBakeOutput BakeTextureBytes(
     bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Count;
     std::uint16_t blockWidth = 0U;
     std::uint16_t blockHeight = 0U;
-    if (!TryChooseBakedTextureFormat(family, settings.semantic, sourceHasAlpha, format) ||
+    if (settings.preserveAtlas) {
+        format = bgfx::TextureFormat::RGBA8;
+        blockWidth = blockHeight = 1U;
+    } else if (!TryChooseBakedTextureFormat(family, settings.semantic, sourceHasAlpha, format) ||
         !BakedTextureBlockFootprint(format, blockWidth, blockHeight)) {
         output.status = TextureBakeStatus::EncodeFailed;
         return output;
@@ -367,20 +370,21 @@ TextureBakeOutput BakeTextureBytes(
     const RenderTextureColorSpace mipColorSpace = settings.colorSpace == RenderTextureAssetColorSpace::Srgb
         ? RenderTextureColorSpace::Srgb
         : RenderTextureColorSpace::Linear;
-    const std::optional<RuntimeTextureMipChain> chain =
+    std::optional<RuntimeTextureMipChain> chain =
         BuildRuntimeTexture2DMipChain(baseRgba8, width, height, mipColorSpace);
     if (!chain.has_value() || chain->mipCount == 0U) {
         output.status = TextureBakeStatus::EncodeFailed;
         return output;
     }
 
+    if (settings.preserveAtlas) { chain->mipCount = 1U; chain->rgba8.resize(baseRgba8.size()); }
     const bimg::TextureFormat::Enum bimgFormat = ToBimgFormat(format);
-    if (chain->mipCount != bimg::imageGetNumMips(bimgFormat, width, height)) {
+    if (!settings.preserveAtlas && chain->mipCount != bimg::imageGetNumMips(bimgFormat, width, height)) {
         output.status = TextureBakeStatus::EncodeFailed;
         return output;
     }
     const std::uint32_t encodedSize =
-        TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, false, true, 1U, bimgFormat));
+        TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, false, chain->mipCount > 1U, 1U, bimgFormat));
     if (encodedSize == 0U) {
         output.status = TextureBakeStatus::EncodeFailed;
         return output;
@@ -419,7 +423,8 @@ TextureBakeOutput BakeTextureBytes(
 
         CopyLevelIntoBlockAlignedBuffer(
             chain->rgba8.data() + levelSourceOffset, levelWidth, levelHeight, paddedWidth, paddedHeight, paddedLevel);
-        bimg::imageEncode(
+        if (settings.preserveAtlas) std::copy(paddedLevel.begin(), paddedLevel.end(), blocks.begin() + static_cast<std::ptrdiff_t>(levelDestinationOffset));
+        else bimg::imageEncode(
             &allocator,
             blocks.data() + levelDestinationOffset,
             paddedLevel.data(),
@@ -450,7 +455,7 @@ TextureBakeOutput BakeTextureBytes(
     // texture loads with its tail and sharpens as the larger levels arrive. The primary block
     // then holds a small header naming the full chain, followed by a KTX container of the tail.
     std::uint32_t streamedMipCount = 0U;
-    while (streamedMipCount < chain->mipCount &&
+    while (!settings.preserveAtlas && streamedMipCount < chain->mipCount &&
         std::max<std::uint32_t>(std::max<std::uint32_t>(1U, width >> streamedMipCount),
             std::max<std::uint32_t>(1U, height >> streamedMipCount)) > kStreamedTextureTailEdge) {
         ++streamedMipCount;

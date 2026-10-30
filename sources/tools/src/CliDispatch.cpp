@@ -209,10 +209,11 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  block|unblock --project <dir> --map <path> --at x,y[,floor] [--to x,y]
                  borderize --project <dir> --map <path> [--floor n]
                  set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]
-                     [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds]
+                     [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds] [--camera-zoom n]
                      [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera, see docs/world_2d_camera.md)
                  view --project <dir> --entity <Name>   (update the Map Camera and painted collision)
                  info --project <dir> --map <path>
+                 schema --project <dir> --map <path> --name <field> --type bool|int|float|string --default <value> [--rename-from <field>]
                  path --project <dir> --map <path> --from x,y --to x,y [--floor n] [--clearance 0..8]
                      [--diagonal none|safe|free] [--cost-property <name>] [--max-visited 1..1048576]
                      [--timeout-ms <milliseconds>] (default 25 ms; JSON; exits 0 found, 2 no path, 3 budget)
@@ -264,13 +265,11 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
-                 --name then defaults to the item. --create 'Platformer Player' or 'Top Down Player'
-                 makes a ready-made 2D player named Player: a CharacterController, a copy of
-                 Platformer2DPlayer.lua or TopDown2DPlayer.lua in Assets/Scripts (never overwritten;
-                 speed, jumpSpeed, coyoteTime, jumpBuffer are its @expose lines), default Move and
-                 Jump input when the project has no input context, and every map of the scene
-                 following the player; --physics 2d makes it a Character Controller 2D on the
-                 2D physics with Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua;
+                 --name then defaults to the item. --create 'Platformer Player', 'Top Down Player' or 'Platformer Navigator'
+                 makes a 2D player named Player with Sprite2D, CharacterController2D, a following
+                 orthographic camera and Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua.
+                 Existing scripts and input contexts are preserved; a new project gets Move/Jump
+                 bindings. --physics 3d selects the legacy CharacterController and scripts.
                  see docs/world_2d_presets.md)
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>

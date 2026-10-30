@@ -4970,8 +4970,8 @@ void RunPlayerPresetCliTests() {
 
     const CliRun added = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--position", "2,3,0" });
     Require(added.exitCode == 0, "the Platformer Player preset failed: " + added.out + added.err);
-    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DPlayer.lua";
-    Require(std::filesystem::exists(script) && Contains(read(script), "@expose coyoteTime") && Contains(read(script), "@expose jumpBuffer"),
+    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua";
+    Require(std::filesystem::exists(script) && Contains(read(script), "@expose jumpSpeed") && Contains(read(script), "@expose jumpBuffer"),
         "the preset must write the platformer script, with its tunables");
     for (const char* file : { "Move.21kbinputaction", "Jump.21kbinputaction", "PlayerInput.21kbinputcontext" }) {
         Require(std::filesystem::exists(root / "Assets" / "Input" / file), std::string{ "the preset must write the input asset " } + file);
@@ -4979,9 +4979,9 @@ void RunPlayerPresetCliTests() {
     Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.inputMappingContext ==
                 "/Game/Input/PlayerInput.21kbinputcontext", "the project's input context must be the preset's");
     const CliRun listed = RunCliProgram({ "scene-list", "--project", project });
-    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController"),
-        "the scene must hold a Player with a CharacterController: " + listed.out);
-    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DPlayer.lua" });
+    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController2D"),
+        "the scene must hold a Player with a CharacterController2D: " + listed.out);
+    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DBox2DPlayer.lua" });
     Require(behaviours.exitCode == 0, "the preset script must validate: " + behaviours.out + behaviours.err);
     const CliRun info = RunCliProgram({ "map2d", "info", "--project", project, "--map", "/Game/Maps/World.kbmap2d" });
     Require(Contains(info.out, "follows Player") && Contains(info.out, "kept inside the map"), "the map camera must follow the Player: " + info.out);
@@ -4999,11 +4999,16 @@ void RunPlayerPresetCliTests() {
     const CliRun again = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player" });
     Require(again.exitCode == 1 && Contains(again.err, "already exists"), "a second entity named Player must be refused: " + again.err);
     const CliRun topDown = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--name", "Walker" });
-    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DPlayer.lua"),
+    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DBox2DPlayer.lua"),
         "the top-down preset works and notes that the map is a platformer map: " + topDown.out + topDown.err);
-    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
+    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DBox2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
 
-    // The same players on the 2D physics.
+    const CliRun legacy = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "3d", "--name", "LegacyPlayer" });
+    const std::string legacyScript = read(root / "Assets" / "Scripts" / "Platformer2DPlayer.lua");
+    Require(legacy.exitCode == 0 && Contains(legacyScript, "@expose coyoteTime") && Contains(legacyScript, "@expose jumpBuffer"),
+        "the explicit 3D physics preset must preserve its script and tunables: " + legacy.out + legacy.err);
+
+    // Explicit 2D selection uses the same native presets as the default.
     const CliRun box2d = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "2d", "--name", "Hero2D" });
     Require(box2d.exitCode == 0 && Contains(box2d.out, "Platformer2DBox2DPlayer.lua"), "the 2D physics preset failed: " + box2d.out + box2d.err);
     Require(Contains(read(root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua"), "Physics2D.MoveCharacter"), "the preset must write the 2D physics script");

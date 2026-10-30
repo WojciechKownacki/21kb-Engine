@@ -638,7 +638,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
     kb::scene::SceneEntity entity{};
     if (playerPreset) {
-        entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io, physics.has_value() && *physics == "2d");
+        entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io, !physics.has_value() || *physics == "2d");
         if (!entity.IsValid()) return 1;
         if (parent.has_value() && !scene.Hierarchy().SetParent(entity, *parent)) {
             io.err << "error: '" << *name << "' could not be parented\n";

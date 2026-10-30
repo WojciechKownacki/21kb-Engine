@@ -462,6 +462,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     std::uint32_t effectiveMaterialSlotOverrideCount = materialSlotOverrideCount;
     bool visible = visibility.visible && !renderer.previewHidden;
     auto model = RenderModel(*sync, entity, transform, renderTransform);
+    std::array<float, 3> localRenderOffset{};
     auto tilemapOwner = entity;
     const auto* ownedMap = sync->scene->Components().Tilemaps().TryGet(entity);
     bool mapMesh = ownedMap && ownedMap->mapAssetId == renderer.meshAssetId;
@@ -491,6 +492,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         const bool wall = grid != nullptr && grid->wall;
         const float lift = static_cast<float>(std::clamp(tilemap->sortingOrder, -1000, 1000)) *
             RenderMap2DMeshBuilder::kSortingOrderLift * (wall ? -1.0F : 1.0F);
+        localRenderOffset[wall ? 2U : 1U] = lift;
         const std::size_t axis = wall ? 8U : 4U;
         for (std::size_t component = 0U; component < 3U; ++component) model[12U + component] += model[axis + component] * lift;
     }
@@ -558,6 +560,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
         .model = model,
+        .localRenderOffset = localRenderOffset,
         .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, geometry, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,

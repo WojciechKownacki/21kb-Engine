@@ -3763,6 +3763,13 @@ void RunRendererPrunesUnreferencedResourcesAfterRetentionTest() {
     Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
         "A pruned asset must be cleanly re-ensured when a new entity references it again");
 
+    fixture.scene.Entities().Destroy(revived);
+    Require(fixture.scene.Assets().Manager().Registry().Remove(kb::assets::AssetId{ fixture.meshAssetId }),
+        "Retired mesh source was not removed");
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "Retired source cleanup did not submit");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U,
+        "A removed mesh source must release its GPU resource without waiting for cache retention");
+
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }

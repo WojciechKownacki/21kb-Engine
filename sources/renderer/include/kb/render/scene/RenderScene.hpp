@@ -66,6 +66,8 @@ struct MeshRenderProxyDesc {
     std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
     std::uint32_t materialSlotOverrideCount = 0;
     std::array<float, 16> model{};
+    // Already included in model; reapplied when publishing an ECS world transform.
+    std::array<float, 3> localRenderOffset{};
     // Optional animated/deformed local-space sphere. When valid it replaces
     // static mesh bounds for every visibility and shadow-culling path.
     RenderBoundsSphere boundsOverride{};

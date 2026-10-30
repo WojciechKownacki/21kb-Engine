@@ -3033,7 +3033,11 @@ void RunAddComponentBrowserModelTest() {
     kb::editor::tests::Require(physics.size() == 7U && physics.front().kind == AddComponentRowKind::Component, "A category lists its 7 components as Component rows");
 
     const std::vector<kb::editor::AddComponentRow> search = InspectorAddComponentBrowserModel::Rows("Physics", "collid");
-    kb::editor::tests::Require(search.size() == 2U && search.front().id == "Collider" && search.back().id == "Collider2D", "A search query overrides the category and finds Collider and Collider 2D");
+    kb::editor::tests::Require(search.size() == 3U &&
+        std::ranges::any_of(search, [](const auto& row) { return row.id == "Collider"; }) &&
+        std::ranges::any_of(search, [](const auto& row) { return row.id == "Collider2D"; }) &&
+        std::ranges::any_of(search, [](const auto& row) { return row.id == "TilemapCollider"; }),
+        "A search query overrides the category and finds all three collider components");
 
     const auto noPlugins = [](std::string_view) { return false; };
     const std::vector<kb::editor::AddComponentRow> filteredCategories =

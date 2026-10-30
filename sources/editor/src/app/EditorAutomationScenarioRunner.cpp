@@ -1,8 +1,12 @@
+#include "engine/scene/SceneRenderFeedback.hpp"
+#include "inspection/InspectorGenericComponentModel.hpp"
 #include "inspection/ui/InspectorUIThemeModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
 #include "rendering/GameplayGraphEditorPanel.hpp"
+#include "rendering/BuildGamePanelModel.hpp"
+#include "packaging/EditorProjectPackageService.hpp"
 #include "engine/assets/AssetImportPreset.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -22,6 +26,7 @@
 #include "Sprite2DRuntime.hpp"
 #include "Map2DView.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionController.hpp"
+#include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
 #ifdef DrawText
 #undef DrawText
 #endif
@@ -31,6 +36,7 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "engine/scene/SceneTemplates.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
@@ -181,6 +187,7 @@ struct StepOutcome {
 struct EntityAlias {
     kb::scene::SceneEntity entity{};
     std::string name;
+    std::string parentName;
 };
 
 struct ScenarioState {
@@ -443,7 +450,8 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     }
     if (state.context.Scene().Entities().IsAlive(found->second.entity) &&
         state.context.Scene().Entities().Name(found->second.entity) ==
-            found->second.name) {
+            found->second.name && (found->second.parentName.empty() || state.context.Scene().Entities().Name(
+                state.context.Scene().Hierarchy().Parent(found->second.entity)) == found->second.parentName)) {
         return found->second.entity;
     }
 
@@ -453,6 +461,8 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
             found->second.name) {
             continue;
         }
+        if (!found->second.parentName.empty() && state.context.Scene().Entities().Name(
+                state.context.Scene().Hierarchy().Parent(row.entity)) != found->second.parentName) continue;
         if (resolved.IsValid()) {
             return {};
         }
@@ -1403,6 +1413,33 @@ ReadScriptValue(
         const kb::scene::Sprite2DComponent* sprite = state.context.Scene().Components().Sprites2D().TryGet(entity);
         return { changed && sprite != nullptr && sprite->imageAssetId == metadata->id.value,
             sprite == nullptr ? "no sprite" : std::to_string(sprite->imageWidth) + "x" + std::to_string(sprite->imageHeight) + " px" };
+    }
+    if (*operation == "assert_scene_ray_pick") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!alias || !x || !y || !z) return {false, error};
+        const EditorSceneViewportRay ray{{static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(*z)}, {0, 0, 1}};
+        const auto hit = EditorSceneViewportMeshPicker::PickNearest(state.context.Scene(), ray);
+        state.context.ClearHierarchySelection();
+        if (hit.IsValid()) EditorSceneViewportSelectionController::ApplyClick(state.context, hit.entity, EditorSceneViewportSelectionMode::Replace);
+        const bool matched = state.context.SelectedEntity() == ResolveEntity(state, *alias);
+        return {matched, matched ? "ray selects the rendered owner" : "ray selected a different object"};
+    }
+    if (*operation == "assert_sprite_visibility") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expected = BoolMember(step, "visible", error);
+        if (!alias || !expected) return { false, error };
+        const auto owner = ResolveEntity(state, *alias);
+        for (const auto child : state.context.Scene().Hierarchy().ChildEntities(owner)) {
+            const auto* renderer = std::as_const(state.context.Scene()).Components().MeshRenderers().TryGet(child);
+            if (!renderer || !renderer->transient) continue;
+            const auto bounds = kb::scene::SceneRenderFeedback::WorldBounds(state.context.Scene(), child);
+            const bool visible = kb::scene::SceneRenderFeedback::IsVisible(state.context.Scene(), child);
+            return { bounds.IsValid() && visible == *expected, "renderer sprite bounds and frustum visibility" };
+        }
+        return { false, "sprite render proxy missing" };
     }
     if (*operation == "pick_generated_visual") {
         // A click in the Scene View lands on the generated picture of a sprite; it must select the sprite's object, as it does for
@@ -2506,6 +2543,43 @@ ReadScriptValue(
         return { unloaded, *asset };
     }
 
+    if (*operation == "build_game") {
+        const auto output = StringMember(step, "output", error);
+        const auto buildRoot = StringMember(step, "build_root", error);
+        const auto builder = StringMember(step, "builder", error);
+        if (!output || !buildRoot || !builder) return {false, error};
+        const auto targets = kb::packaging::PackagingTargets();
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            if (targets[i].target == kb::packaging::PackagingTarget::WindowsX64)
+                static_cast<void>(state.context.SetBuildGameSelectedTarget(static_cast<int>(i)));
+        }
+        static_cast<void>(state.context.SetBuildGameSelectedProfile(0));
+        const auto edit = [&](BuildGameField field, std::string_view value) {
+            return state.context.BeginBuildGameTextEdit(field) && state.context.SelectAllBuildGameText() &&
+                state.context.InsertBuildGameText(value) && state.context.CommitBuildGameTextEdit();
+        };
+        if (!edit(BuildGameField::ProductName, "Sample") || !edit(BuildGameField::Publisher, "Sample") ||
+            !edit(BuildGameField::Version, "1.0.0") || !edit(BuildGameField::ExecutableName, "Sample") ||
+            !edit(BuildGameField::BuilderExecutable, *builder) ||
+            !state.context.SetBuildGameBuildRoot(std::filesystem::path{*buildRoot}) ||
+            !state.context.SetBuildGameOutputDirectory(std::filesystem::path{*output})) return {false, "Build Game field rejected"};
+        if (state.context.BuildGameSettings().For(state.context.BuildGameTarget()).launchAfterBuild)
+            static_cast<void>(state.context.ToggleBuildGameLaunchAfterBuild());
+        if (!state.context.StartBuildGamePackage(EditorDirtySceneResolution::Save)) return {false, "Build Game rejected"};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(8);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto snapshot = state.context.BuildGamePackageSnapshot();
+            if (snapshot.state != EditorPackageJobState::Running) {
+                std::string detail = snapshot.status;
+                for (const auto& diagnostic : snapshot.diagnostics) detail += "\n" + diagnostic.message;
+                return {snapshot.state == EditorPackageJobState::Succeeded, detail};
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        state.context.CancelBuildGamePackage();
+        return {false, "Build Game timed out"};
+    }
+
     if (*operation == "import_asset") {
         const auto source = StringMember(step, "source", error);
         const auto destination =
@@ -2731,7 +2805,8 @@ ReadScriptValue(
             *resultAlias,
             EntityAlias{
                 .entity = entity,
-                .name = state.context.Scene().Entities().Name(entity) });
+                .name = state.context.Scene().Entities().Name(entity),
+                .parentName = state.context.Scene().Entities().Name(state.context.Scene().Hierarchy().Parent(entity)) });
         return { true, *resultAlias };
     }
 
@@ -2854,7 +2929,8 @@ ReadScriptValue(
             *resultAlias,
             EntityAlias{
                 .entity = entity,
-                .name = state.context.Scene().Entities().Name(entity) });
+                .name = state.context.Scene().Entities().Name(entity),
+                .parentName = state.context.Scene().Entities().Name(state.context.Scene().Hierarchy().Parent(entity)) });
         return { true, *resultAlias };
     }
 
@@ -2925,6 +3001,41 @@ ReadScriptValue(
         return {
             state.context.SetParticleEffectAsset(entity, assetId),
             *asset + " on " + *alias };
+    }
+
+    if (*operation == "component_inspector_field") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto component = StringMember(step, "component", error);
+        const auto property = StringMember(step, "property", error);
+        const auto text = StringMember(step, "text", error, false);
+        if (!alias || !component || !property) return { false, error };
+        state.context.SelectEntity(ResolveEntity(state, *alias));
+        if (*component == "Light" && *property == "intensity" && text) {
+            if (!state.automation.InspectorClickRow(InspectorPropertyId::LightIntensity, -1, InspectorHitKind::FloatField, InspectorSectionId::Light))
+                return {false, "light intensity field is not visible"};
+            for (int erase = 0; erase < 64; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+            for (const unsigned char character : *text) if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return {false, "inspector typing failed"};
+            return {state.automation.InspectorKey(VK_RETURN), "Light.intensity"};
+        }
+        const auto sections = InspectorGenericComponentModel::Sections();
+        const auto fields = kb::script::ScriptSceneComponentApi::ComponentProperties(*component);
+        for (std::size_t section = 0; section < sections.size(); ++section) {
+            if (sections[section].component != *component) continue;
+            for (std::size_t field = 0; field < fields.size(); ++field) {
+                if (fields[field].name != *property) continue;
+                const auto kind = fields[field].type == kb::script::ScriptValueType::Bool ? InspectorHitKind::BoolField : InspectorHitKind::TextField;
+                const int index = static_cast<int>(section) * InspectorGenericComponentModel::kFieldsPerSection + static_cast<int>(field);
+                if (!state.automation.InspectorClickRow(InspectorPropertyId::GenericComponentField, index, kind, sections[section].id))
+                    return { false, "component inspector field is not visible" };
+                if (text) {
+                    for (int erase = 0; erase < 64; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+                    for (const unsigned char character : *text) if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return { false, "inspector typing failed" };
+                    if (!state.automation.InspectorKey(VK_RETURN)) return { false, "inspector commit failed" };
+                }
+                return { true, *component + "." + *property };
+            }
+        }
+        return { false, "unknown component inspector field" };
     }
 
     if (*operation == "set_entity_position") {
@@ -3804,6 +3915,10 @@ ReadScriptValue(
         if (*role == "mesh") {
             assigned =
                 state.context.SetMeshRendererMeshAsset(entity, id);
+        } else if (*role == "tilemap") {
+            assigned = kb::script::ScriptSceneComponentApi::SetProperty(state.context.Scene(), entity, "Tilemap", "mapAssetId",
+                kb::script::ScriptValue{id.value, kb::script::ScriptValueType::Hash}).succeeded;
+            if (assigned) { state.context.MarkSceneDocumentDirty(); state.context.MarkSceneRenderDirty(); }
         } else if (*role == "material") {
             assigned =
                 state.context.SetMeshRendererMaterialAsset(entity, id);
@@ -5704,8 +5819,12 @@ ReadScriptValue(
                    << " play camera " << (state.context.PlayCameraEntity() == child.Entity() ? "yes" : "no");
             const bool direction = !orientation ? (forwardY < -0.99F || forwardZ > 0.99F) :
                 *orientation == "flat" ? forwardY < -0.99F : forwardZ > 0.99F;
+            const auto expectedHeight = NumberMember(step, "height", error, false);
+            const auto expectedX = NumberMember(step, "x", error, false);
+            const bool framing = error.empty() && (!expectedHeight || (lens && std::abs(lens->orthographicHeight - *expectedHeight) < 0.001)) &&
+                (!expectedX || std::abs(position.x - *expectedX) < 0.001);
             const bool ok = lens != nullptr && lens->primary && lens->projection == kb::scene::CameraProjection::Orthographic && direction &&
-                (!state.context.HasPlayModeSceneSession() || state.context.PlayCameraEntity() == child.Entity());
+                framing && (!state.context.HasPlayModeSceneSession() || state.context.PlayCameraEntity() == child.Entity());
             return { ok, report.str() };
         }
         return { false, "the map has no Map Camera" };

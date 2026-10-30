@@ -1,3 +1,4 @@
+#include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "app/EditorHeadlessPopupChecks.hpp"
@@ -901,6 +902,8 @@ bool EditorHeadlessAutomation::AddComponent(
         Trace("add_component", false, "overlay-closed");
         return false;
     }
+    const auto matchingRows = InspectorAddComponentBrowserModel::Rows({}, searchText,
+        [this](std::string_view plugin) { return context_.IsProjectPluginEnabled(plugin); });
     InspectorPanelRenderer::Hit option{};
     bool foundOption = false;
     for (int y = filteredOverlay->top;
@@ -913,7 +916,8 @@ bool EditorHeadlessAutomation::AddComponent(
         foundOption =
             option.property ==
                 InspectorPropertyId::AddComponentOption &&
-            option.index >= 0;
+            option.index >= 0 && static_cast<std::size_t>(option.index) < matchingRows.size() &&
+            matchingRows[static_cast<std::size_t>(option.index)].id == tile->id;
     }
     if (!foundOption) {
         const InspectorPanelState& inspector = context_.Inspector();
@@ -1617,7 +1621,11 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
         if (context_.Scene().Entities().Name(entity) != item->name) return fail(id + ": wrong name");
         const auto has = [&](std::string_view component) { return kb::scene::SceneComponentAuthoring::Has(context_.Scene(), entity, component); };
         const bool shape = kb::assets::FindBuiltInShape(item->id) != nullptr;
+        const bool player = item->id == "Platformer Player" || item->id == "Top Down Player" || item->id == "Platformer Navigator";
         const bool components =
+            player ? context_.Scene().Components().CharacterControllers2D().TryGet(entity) != nullptr &&
+                context_.Scene().Components().Sprites2D().TryGet(entity) != nullptr &&
+                context_.Scene().Components().Behaviours().TryGet(entity) != nullptr :
             shape ? has("MeshRenderer") && (item->id == "Cone" || has("Collider")) :
             item->id.ends_with("Light") ? has("Light") :
             item->id == "Environment" ? has("WorldBackdrop") && has("Ambient Radiance") :
@@ -1630,7 +1638,7 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
                 kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)
             return fail(id + ": not the engine shape");
         const std::size_t created = context_.HierarchyRows().size() - baseline;
-        if (created != (map ? 6U : 1U)) return fail(id + ": created " + std::to_string(created) + " rows");
+        if (created != (map ? 6U : player ? 2U : 1U)) return fail(id + ": created " + std::to_string(created) + " rows");
         if (!context_.UndoSceneCommand() || context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
         Trace("scene_creation_menu", true, id);
     }

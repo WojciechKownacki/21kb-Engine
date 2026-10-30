@@ -9,6 +9,7 @@
 #if KB_CLI_RENDERER
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #if KB_CLI_RENDERER
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -104,6 +105,8 @@ bool MountProjectAssets(
         return false;
     }
 #if KB_CLI_RENDERER
+    // Tilemap asset IDs and collision sources must match the editor and packaged runtime.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()));
     // Materials are typed by the renderer's loader, as in the editor and the game; without it
     // a .kbmat is an unknown file and MeshRenderer material= cannot reference it.
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));

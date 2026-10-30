@@ -461,6 +461,59 @@ function Tick(self, dt)
 end
 )lua";
 
+constexpr std::string_view kPlatformer2DNavigatorLuaTemplate = R"lua(-- Platformer2DNavigator.lua
+-- Drives the native 2D controller along live tilemap routes without changing transforms.
+-- @expose mapName String = "Map"
+-- @expose targetX Int = 6
+-- @expose targetY Int = 6
+-- @expose floor Int = 0
+-- @expose speed Float = 4.0
+-- @expose jumpSpeed Float = 9.0
+-- @expose jumpHeight Int = 3
+-- @expose jumpDistance Int = 4
+local states = {}
+local function report(state, status)
+    if state.status ~= status then Log("navigation-" .. status); state.status = status end
+end
+function Tick(self, dt)
+    local e, v = self.entity, self.variables
+    local s = states[e] or {elapsed=0}; states[e] = s
+    local grounded = CallFunction("Physics2D.IsGrounded", {entity=e})
+    if s.flight then
+        s.elapsed = s.elapsed + dt
+        if not grounded then s.leftGround = true end
+        if grounded and s.leftGround then s.flight = false end
+        if s.elapsed > 4 then
+            s.flight = false; s.x = nil
+            report(s,"unreachable")
+        end
+    end
+    if grounded and not s.flight then
+        local map = World.FindByName(v.mapName)
+        if map == nil or map == 0 then
+            s.x = nil; report(s,"missing-map")
+        else
+            local next = CallFunction("Map2D.PlatformerWaypoint", {entity=map,character=e,
+                targetX=v.targetX,targetY=v.targetY,floor=v.floor,jumpHeight=v.jumpHeight,jumpDistance=v.jumpDistance})
+            if not next or not next.found then
+                s.x = nil; report(s,"unreachable")
+            elseif next.reached then
+                s.x = nil; report(s,"reached")
+            else
+                s.x = next.x; report(s,"moving")
+                if next.jump then
+                    s.flight = CallFunction("Physics2D.JumpCharacter", {entity=e,speed=v.jumpSpeed})
+                    s.elapsed = 0; s.leftGround = false
+                end
+            end
+        end
+    end
+    local x = Transform.GetPosition(e).x
+    local velocity = s.x and math.max(-v.speed,math.min(v.speed,(s.x-x)/math.max(dt,0.001))) or 0
+    CallFunction("Physics2D.MoveCharacter", {entity=e,x=velocity,y=0})
+end
+)lua";
+
 constexpr std::string_view kTopDown2DBox2DPlayerLuaTemplate = R"lua(-- TopDown2DBox2DPlayer.lua
 -- For a Map Top Down (a flat map: x across, z up the screen) on the 2D physics. Requires: Character Controller 2D
 -- with Side View off. Input: Move (Axis2D).
@@ -580,6 +633,7 @@ constexpr std::string_view kLuarcTemplate = R"json({
 } // namespace
 
 std::string_view ScriptAgentProjectFiles::PresetScript(std::string_view fileName) noexcept {
+    if (fileName == "Platformer2DNavigator.lua") return kPlatformer2DNavigatorLuaTemplate;
     if (fileName == "Platformer2DPlayer.lua") return kPlatformer2DPlayerLuaTemplate;
     if (fileName == "TopDown2DPlayer.lua") return kTopDown2DPlayerLuaTemplate;
     if (fileName == "Platformer2DBox2DPlayer.lua") return kPlatformer2DBox2DPlayerLuaTemplate;

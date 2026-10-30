@@ -5,6 +5,8 @@
 #include "localization/EditorLocalization.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
+#include "engine/scene/ScenePlayerPreset.hpp"
+#include <sstream>
 #include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -676,6 +678,7 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
     const std::span<const kb::scene::SceneEntity> pendingRenderUpdates = runtime.RenderProxyUpdateEntities();
     const std::vector<kb::scene::SceneEntity> preUpdateRenderUpdates{
         pendingRenderUpdates.begin(), pendingRenderUpdates.end() };
+    static_cast<void>(scene_->UI().SetViewport(uiAuthoringViewportSize_.x, uiAuthoringViewportSize_.y));
     static_cast<void>(runtime.Update(deltaSeconds));
     // Ready may create the camera on the first tick of an already attached
     // script module. A destroyed or disabled camera also needs a new selection.
@@ -2526,8 +2529,22 @@ kb::scene::SceneEntity EditorSceneContext::CreateMenuObject(std::string_view id,
     kb::scene::SceneEntity created{};
     std::string error;
     if (ExecuteSceneCommand("Create " + std::string{ item->name }, [this, item, parent, &created, &error]() {
-            kb::scene::SceneCreateResult result = kb::scene::SceneCreateMenu::Create(*scene_, item->id,
-                EditorHierarchyObjectFactory::MakeUniqueName(*scene_, item->name), project_, parent);
+            const auto name = EditorHierarchyObjectFactory::MakeUniqueName(*scene_, item->name);
+            kb::scene::SceneCreateResult result;
+            if (kb::scene::IsPlayerPreset(item->id)) {
+                std::ostringstream notes, errors;
+                result.entity = kb::scene::AddPlayerPreset(*scene_, EditorProjectPaths::ProjectRoot(), item->id, name, { notes, errors });
+                result.error = errors.str();
+                if (!notes.str().empty()) console_.Info("2D Player", notes.str());
+                if (result.entity.IsValid() && !result.error.empty()) console_.Warning("2D Player", result.error);
+                const auto settings = kb::project::ProjectSettingsStore::Load(
+                    kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()));
+                if (settings.Succeeded()) projectConfig_.inputMappingContext = settings.settings.inputMappingContext;
+                if (result.entity.IsValid() && parent.IsValid() && !scene_->Hierarchy().SetParent(result.entity, parent)) {
+                    scene_->Entities().Destroy(result.entity);
+                    result = { {}, "The player could not be parented" };
+                }
+            } else result = kb::scene::SceneCreateMenu::Create(*scene_, item->id, name, project_, parent);
             if (!result.entity.IsValid()) {
                 error = std::move(result.error);
                 return false;

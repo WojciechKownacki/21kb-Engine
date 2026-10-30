@@ -26,10 +26,13 @@ namespace {
 constexpr std::string_view k3DObject = "3D Object";
 constexpr std::string_view kLight = "Light";
 
-constexpr std::array<SceneCreateItem, 21> kItems{ {
+constexpr std::array<SceneCreateItem, 24> kItems{ {
     { "Empty", "Create Empty", "Entity", {}, "Ctrl+Shift+N" },
     { "Map Top Down", "Map - Top Down", "Map", "2D Object", {} },
     { "Map Platformer", "Map - Platformer", "Map", "2D Object", {} },
+    { "Platformer Player", "Platformer Player", "Player", "2D Object", "2D physics" },
+    { "Platformer Navigator", "Platformer Navigator", "Navigator", "2D Object", "2D physics" },
+    { "Top Down Player", "Top Down Player", "Player", "2D Object", "2D physics" },
     { "Sprite 2D", "Sprite 2D", "Sprite", "2D Object", {} },
     { "Animated Sprite", "Animated Sprite", "Animated Sprite", "2D Object", {} },
     { "Cube", "Cube", "Cube", k3DObject, "1 m" },
@@ -136,6 +139,7 @@ SceneCreateResult SceneCreateMenu::Create(Scene& scene, std::string_view id, std
         }
     }
 
+    if (id == "Platformer Player" || id == "Top Down Player" || id == "Platformer Navigator") return { {}, "Player presets require a project root; use AddPlayerPreset" };
     SceneObjectDesc desc{};
     desc.name = std::move(name);
     const std::optional<LightKind> lightKind = LightKindOf(item->id);

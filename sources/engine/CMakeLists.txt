@@ -762,6 +762,7 @@ add_library(kb_engine STATIC
     src/scene/Scene.cpp
     src/scene/SceneComponentAuthoring.cpp
     src/scene/SceneCreateMenu.cpp
+    src/scene/ScenePlayerPreset.cpp
     src/scene/SceneSkeletalMeshSetup.cpp
     src/scene/SceneTemplates.cpp
     src/gameplay/GameInstance.cpp

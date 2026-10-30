@@ -192,8 +192,10 @@ const Map2DTileDefinition* Map2DDefinition(const Map2DAsset& map, Map2DSprite sp
     return found == definitions.end() ? nullptr : &found->second;
 }
 Map2DSprite Map2DAnimatedSprite(const Map2DAsset& map, Map2DSprite sprite, double seconds) noexcept {
-    if (const auto* definition = Map2DDefinition(map, sprite); definition && !definition->frames.empty() && std::isfinite(seconds)) {
-        const auto frame = static_cast<std::size_t>(std::fmod(std::max(0.0, seconds) * definition->framesPerSecond, static_cast<double>(definition->frames.size())));
+    if (const auto* definition = Map2DDefinition(map, sprite); definition && !definition->frames.empty() && std::isfinite(seconds) &&
+        std::isfinite(sprite.animationPhaseSeconds) && sprite.animationPhaseSeconds >= 0.0F &&
+        std::isfinite(definition->framesPerSecond) && definition->framesPerSecond > 0.0F) {
+        const auto frame = static_cast<std::size_t>(std::fmod((std::fmod(std::max(0.0, seconds), static_cast<double>(definition->frames.size()) / definition->framesPerSecond) + sprite.animationPhaseSeconds) * definition->framesPerSecond, static_cast<double>(definition->frames.size())));
         sprite.cell = definition->frames[frame];
     }
     return sprite;
@@ -203,9 +205,16 @@ std::array<float, 2> Map2DSpriteUV(Map2DSprite sprite, float u, float v) noexcep
     return { sprite.flipX ? 1.0F - u : u, sprite.flipY ? 1.0F - v : v };
 }
 namespace {
-Map2DCollision GraphicCollision(const Map2DTileDefinition& definition, Map2DSprite sprite) {
+Map2DCollision GraphicCollision(const Map2DAsset& map, const Map2DTileDefinition& definition, Map2DSprite sprite) {
     auto shape = definition.collision;
-    if ((!sprite.rotation && !sprite.flipX && !sprite.flipY) || shape.kind == Map2DCollisionKind::None || shape.kind == Map2DCollisionKind::Solid || shape.kind == Map2DCollisionKind::OneWay) return shape;
+    // Explicit cell collisions and one-way platforms describe the grid, not a graphic outline.
+    if (shape.kind == Map2DCollisionKind::None || shape.kind == Map2DCollisionKind::OneWay) return shape;
+    const auto& sheet = map.sheets[sprite.sheet];
+    float width = 1.0F, height = static_cast<float>(sheet.CellHeight()) / static_cast<float>(sheet.cellSize);
+    if (sprite.rotation % 2U) std::swap(width, height);
+    const bool placed = width != 1.0F || height != 1.0F || sprite.offsetX != 0.0F || sprite.offsetY != 0.0F;
+    if (!placed && ((!sprite.rotation && !sprite.flipX && !sprite.flipY) || shape.kind == Map2DCollisionKind::Solid)) return shape;
+    if (shape.kind == Map2DCollisionKind::Solid) shape.polygon = {{0,0},{1,0},{1,1},{0,1}};
     if (shape.kind == Map2DCollisionKind::SlopeUp) shape.polygon = {{0,1},{1,0},{1,1}};
     if (shape.kind == Map2DCollisionKind::SlopeDown) shape.polygon = {{0,0},{1,1},{0,1}};
     shape.kind = Map2DCollisionKind::Polygon;
@@ -213,6 +222,8 @@ Map2DCollision GraphicCollision(const Map2DTileDefinition& definition, Map2DSpri
         if (sprite.flipX) point[0] = 1.0F - point[0];
         if (sprite.flipY) point[1] = 1.0F - point[1];
         for (unsigned turn = 0; turn < sprite.rotation; ++turn) { const auto x = point[0]; point[0] = 1.0F - point[1]; point[1] = x; }
+        point[0] = (1.0F - width) * 0.5F + point[0] * width + sprite.offsetX;
+        point[1] = 1.0F - height + point[1] * height + sprite.offsetY;
     }
     return shape;
 }
@@ -221,9 +232,9 @@ Map2DCollision Map2DCellCollision(const Map2DAsset& map, const Map2DTile& tile) 
     if (tile.collision) return *tile.collision;
     if (tile.solid) return Map2DCollision{ .kind = Map2DCollisionKind::Solid };
     for (auto it = tile.items.rbegin(); it != tile.items.rend(); ++it) {
-        if (const auto* definition = Map2DDefinition(map, *it); definition && definition->collision.kind != Map2DCollisionKind::None) return GraphicCollision(*definition, *it);
+        if (const auto* definition = Map2DDefinition(map, *it); definition && definition->collision.kind != Map2DCollisionKind::None) return GraphicCollision(map, *definition, *it);
     }
-    if (const auto* definition = Map2DDefinition(map, tile.ground)) return GraphicCollision(*definition, tile.ground);
+    if (const auto* definition = Map2DDefinition(map, tile.ground)) return GraphicCollision(map, *definition, tile.ground);
     return {};
 }
 std::optional<Map2DValue> Map2DCellProperty(const Map2DAsset& map, const Map2DTile& tile, std::string_view name) {
@@ -236,10 +247,58 @@ std::optional<Map2DValue> Map2DCellProperty(const Map2DAsset& map, const Map2DTi
         return found == definition->properties.end() ? std::nullopt : std::optional<Map2DValue>(found->second);
     };
     for (auto it = tile.items.rbegin(); it != tile.items.rend(); ++it) if (auto value = lookup(*it)) return value;
-    return lookup(tile.ground);
+    if (auto value = lookup(tile.ground)) return value;
+    const auto fallback = map.propertyDefaults.find(std::string(name));
+    return fallback == map.propertyDefaults.end() ? std::nullopt : std::optional<Map2DValue>{fallback->second};
+}
+std::optional<Map2DValue> ParseMap2DPropertyValue(std::string_view type, std::string_view text) {
+    if (type == "string") return Map2DValue{std::string(text)};
+    if (type == "bool") { bool value=false; if (ParseBool(text,value)) return Map2DValue{value}; }
+    if (type == "int") { std::int64_t value=0; if (ParseNumber(text,value)) return Map2DValue{value}; }
+    if (type == "float") { double value=0; if (ParseNumber(text,value) && std::isfinite(value)) return Map2DValue{value}; }
+    return std::nullopt;
+}
+bool SetMap2DPropertySchema(Map2DAsset& map, std::string_view name, Map2DValue defaultValue,
+    std::string_view previousName, std::string* error) {
+    auto updated = map;
+    const std::string source{previousName.empty() ? name : previousName}, target{name};
+    if (target.empty() || (source!=target && updated.propertyDefaults.contains(target)) ||
+        updated.propertySchemaVersion == UINT32_MAX) { SetError(error,"Invalid or duplicate schema field"); return false; }
+    const auto migrate = [&](Map2DProperties& values) {
+        const auto found=values.find(source);
+        if (found==values.end()) return true;
+        if (source!=target && values.contains(target)) return false;
+        auto value=found->second;
+        if (value.index()!=defaultValue.index()) {
+            if (const auto* integer=std::get_if<std::int64_t>(&value); integer && std::holds_alternative<double>(defaultValue) &&
+                *integer>=-9007199254740992LL && *integer<=9007199254740992LL) value=static_cast<double>(*integer);
+            else if (const auto* number=std::get_if<double>(&value); number && std::holds_alternative<std::int64_t>(defaultValue) &&
+                std::floor(*number)==*number && *number>=-9223372036854775808.0 && *number<9223372036854775808.0) value=static_cast<std::int64_t>(*number);
+            else return false;
+        }
+        values.erase(found); values[target]=std::move(value); return true;
+    };
+    for (auto& [cell,tile]:updated.tiles) { static_cast<void>(cell); if (!migrate(tile.properties)) { SetError(error,"Cell property migration would lose data"); return false; } }
+    for (auto& sheet:updated.sheets) for (auto& [cell,definition]:sheet.definitions) {
+        static_cast<void>(cell); if (!migrate(definition.properties)) { SetError(error,"Graphic property migration would lose data"); return false; }
+    }
+    updated.propertyDefaults.erase(source); updated.propertyDefaults[target]=std::move(defaultValue); ++updated.propertySchemaVersion;
+    if (!IsMap2DAssetValid(updated,error)) return false;
+    map=std::move(updated); return true;
 }
 
 bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error) {
+    if (!PropertiesValid(map.propertyDefaults) || (!map.propertyDefaults.empty() && map.propertySchemaVersion==0U)) {
+        SetError(error,"Invalid map property schema"); return false;
+    }
+    const auto schemaValid = [&](const Map2DProperties& values) {
+        if (!PropertiesValid(values)) return false;
+        for (const auto& [name,value]:values) {
+            const auto field=map.propertyDefaults.find(name);
+            if (field!=map.propertyDefaults.end() && field->second.index()!=value.index()) return false;
+        }
+        return true;
+    };
     if (map.width == 0U || map.height == 0U || map.width > Map2DAsset::MaximumSize || map.height > Map2DAsset::MaximumSize) {
         SetError(error, "Map size must be 1.." + std::to_string(Map2DAsset::MaximumSize) + " tiles each way");
         return false;
@@ -257,7 +316,7 @@ bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error) {
         const Map2DCamera& camera = map.camera;
         const auto inRange = [](float value, float highest) { return std::isfinite(value) && value >= 0.0F && value <= highest; };
         if (!inRange(camera.pixelsPerUnit, 4096.0F) || !inRange(camera.smoothingSeconds, 60.0F) || !inRange(camera.deadZoneWidth, 255.0F) ||
-            !inRange(camera.deadZoneHeight, 255.0F) || camera.followTarget.size() > 128U ||
+            !inRange(camera.deadZoneHeight, 255.0F) || !std::isfinite(camera.zoom) || camera.zoom <= 0.0F || camera.zoom > 1024.0F || camera.followTarget.size() > 128U ||
             camera.followTarget.find_first_of("\"\r\n") != std::string::npos) {
             SetError(error, "Invalid map camera settings");
             return false;
@@ -281,7 +340,7 @@ bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error) {
     for (const auto& sheet : map.sheets) for (const auto& [cell, definition] : sheet.definitions) {
         if (cell >= sheet.columns * sheet.rows || definition.frames.size() > 256U || !std::isfinite(definition.framesPerSecond) ||
             definition.framesPerSecond <= 0.0F || definition.framesPerSecond > 240.0F || !IsMap2DCollisionValid(definition.collision) ||
-            !PropertiesValid(definition.properties)) { SetError(error, "Invalid tile definition"); return false; }
+            !schemaValid(definition.properties)) { SetError(error, "Invalid tile definition or property type"); return false; }
         for (auto frame : definition.frames) if (frame >= sheet.columns * sheet.rows) { SetError(error, "Animation frame is outside the sheet"); return false; }
     }
     if (map.groundRules.size() > 4096U) { SetError(error, "Too many ground rules"); return false; }
@@ -293,7 +352,7 @@ bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error) {
         for (auto cell : rule.borders) if (cell != UINT32_MAX && cell >= count) { SetError(error, "Ground border is outside its sheet"); return false; }
     }
     const auto spriteValid = [&map](Map2DSprite sprite) {
-        return sprite.rotation < 4U && std::isfinite(sprite.offsetX) && std::isfinite(sprite.offsetY) && std::abs(sprite.offsetX) <= 16.0F && std::abs(sprite.offsetY) <= 16.0F && sprite.sheet < map.sheets.size() &&
+        return std::isfinite(sprite.animationPhaseSeconds) && sprite.animationPhaseSeconds >= 0.0F && sprite.rotation < 4U && std::isfinite(sprite.offsetX) && std::isfinite(sprite.offsetY) && std::abs(sprite.offsetX) <= 16.0F && std::abs(sprite.offsetY) <= 16.0F && sprite.sheet < map.sheets.size() &&
             sprite.cell < map.sheets[sprite.sheet].columns * map.sheets[sprite.sheet].rows;
     };
     for (const auto& [key, tile] : map.tiles) {
@@ -302,7 +361,7 @@ bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error) {
             SetError(error, "Map tile lies outside the map");
             return false;
         }
-        if ((tile.collision && !IsMap2DCollisionValid(*tile.collision)) || !PropertiesValid(tile.properties) ||
+        if ((tile.collision && !IsMap2DCollisionValid(*tile.collision)) || !schemaValid(tile.properties) ||
             (!tile.prefab.empty() && (!tile.prefab.starts_with("/Game/") || !tile.prefab.ends_with(".kbprefab") || tile.prefab.find_first_of("\"\r\n") != std::string::npos))) {
             SetError(error, "Invalid tile collision, properties or prefab"); return false;
         }
@@ -360,9 +419,10 @@ bool Map2DSpriteRect(const Map2DAsset& map, Map2DSprite sprite, std::uint32_t& l
 }
 std::string FormatMap2DSprite(Map2DSprite sprite) {
     auto text = std::to_string(sprite.sheet) + ":" + std::to_string(sprite.cell);
-    if (sprite.rotation || sprite.flipX || sprite.flipY || sprite.tint != 0xFFFFFFFFU || sprite.offsetX != 0.0F || sprite.offsetY != 0.0F)
+    if (sprite.rotation || sprite.flipX || sprite.flipY || sprite.tint != 0xFFFFFFFFU || sprite.offsetX != 0.0F || sprite.offsetY != 0.0F || sprite.animationPhaseSeconds != 0.0F)
         text += "@" + std::to_string(sprite.rotation) + "/" + std::to_string((sprite.flipX ? 1 : 0) | (sprite.flipY ? 2 : 0)) + "/" +
             std::to_string(sprite.tint) + "/" + FloatText(sprite.offsetX) + "/" + FloatText(sprite.offsetY);
+    if (sprite.animationPhaseSeconds != 0.0F) text += "/" + FloatText(sprite.animationPhaseSeconds);
     return text;
 }
 std::optional<Map2DSprite> ParseMap2DSprite(std::string_view text) noexcept {
@@ -381,7 +441,8 @@ std::optional<Map2DSprite> ParseMap2DSprite(std::string_view text) noexcept {
             text.remove_prefix(slash == std::string_view::npos ? text.size() : slash + 1);
         }
         unsigned rotation = 0, flip = 0;
-        if (!text.empty() || !ParseNumber(values[0], rotation) || rotation > 3 || !ParseNumber(values[1], flip) || flip > 3 ||
+        if (!text.empty() && (!ParseNumber(text, sprite.animationPhaseSeconds) || !std::isfinite(sprite.animationPhaseSeconds) || sprite.animationPhaseSeconds < 0.0F)) return {};
+        if (!ParseNumber(values[0], rotation) || rotation > 3 || !ParseNumber(values[1], flip) || flip > 3 ||
             !ParseNumber(values[2], sprite.tint) || !ParseNumber(values[3], sprite.offsetX) || !ParseNumber(values[4], sprite.offsetY)) return {};
         sprite.rotation = static_cast<std::uint8_t>(rotation); sprite.flipX = (flip & 1U) != 0; sprite.flipY = (flip & 2U) != 0;
     }
@@ -472,6 +533,13 @@ std::optional<Map2DAsset> Map2DAssetIO::Parse(std::string_view text, std::string
             if (words.size() != 2U || !ParseBool(words[1], map.sortByY)) return fail("sortByY needs true or false");
         } else if (keyword == "lit") {
             if (words.size() != 2U || !ParseBool(words[1], map.lit)) return fail("lit needs true or false");
+        } else if (keyword == "propertySchema") {
+            if (words.size()!=2U || !ParseNumber(words[1],map.propertySchemaVersion)) return fail("Invalid property schema version");
+        } else if (keyword == "propertyDefault") {
+            const auto count=map.propertyDefaults.size();
+            if (!ReadProperty(words,1,map.propertyDefaults) || map.propertyDefaults.size()!=count+1U) return fail("Invalid or duplicate property default");
+        } else if (keyword == "cameraZoom") {
+            if (words.size() != 2U || !ParseNumber(words[1], map.camera.zoom)) return fail("cameraZoom needs a positive magnification");
         } else if (keyword == "camera") {
             // camera <pixelsPerUnit> <smoothingSeconds> <deadZoneWidth> <deadZoneHeight> <clamp> "<followTarget>"
             if (words.size() != 7U || !ParseNumber(words[1], map.camera.pixelsPerUnit) || !ParseNumber(words[2], map.camera.smoothingSeconds) ||
@@ -588,6 +656,9 @@ std::string Map2DAssetIO::Write(const Map2DAsset& map) {
         WriteQuoted(output, map.camera.followTarget);
         output << '\n';
     }
+    if (map.camera.zoom != 1.0F) output << "cameraZoom " << FloatText(map.camera.zoom) << '\n';
+    if (map.propertySchemaVersion!=0U) output << "propertySchema " << map.propertySchemaVersion << '\n';
+    WriteProperties(output,"propertyDefault",map.propertyDefaults);
     std::size_t sheetIndex = 0;
     for (const Map2DSheet& sheet : map.sheets) {
         output << "sheet " << sheet.cellSize << ' ' << sheet.columns << ' ' << sheet.rows << ' ';
