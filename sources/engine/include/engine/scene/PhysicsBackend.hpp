@@ -11,6 +11,10 @@
 #include <string_view>
 #include <vector>
 
+namespace kb::core {
+class IRuntimeStateProvider;
+}
+
 namespace kb::scene {
 
 class Scene;
@@ -303,6 +307,8 @@ struct PendingCollisionEvent {
 
 class PhysicsBackend final {
 public:
+    // Null when the installed provider cannot capture its native simulation state.
+    [[nodiscard]] static kb::core::IRuntimeStateProvider* RuntimeStateProvider(Scene& scene) noexcept;
     PhysicsBackend() = delete;
 
     static void RegisterBackend(Scene& scene, IPhysicsBackend& backend);

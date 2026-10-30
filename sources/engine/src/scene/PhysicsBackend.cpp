@@ -1,4 +1,5 @@
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/core/RuntimeState.hpp"
 
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/scene/Scene.hpp"
@@ -39,6 +40,10 @@ std::optional<std::uint64_t> PhysicsBackend::MemoryUsageBytes(Scene& scene) noex
 
 bool PhysicsBackend::HasBackend(Scene& scene) noexcept {
     return FindBackend(scene) != nullptr;
+}
+
+kb::core::IRuntimeStateProvider* PhysicsBackend::RuntimeStateProvider(Scene& scene) noexcept {
+    return dynamic_cast<kb::core::IRuntimeStateProvider*>(FindBackend(scene));
 }
 
 void PhysicsBackend::RaycastAll(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
