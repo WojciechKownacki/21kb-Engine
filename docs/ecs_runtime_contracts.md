@@ -198,3 +198,19 @@ graph nodes or chunk jobs. Pump active time includes time spent waiting for work
 system event durations include time spent waiting for nested work and can include
 helping another system's chunks. These durations are elapsed time, not measured
 thread CPU time or a reliable measure of worker utilization.
+
+## Chunk delta application
+
+`World::ApplyChunkedDeltaSnapshot` prepares and validates the complete input before
+deleting entities, writing columns or changing archetypes. Invalid payload sizes,
+duplicate identities or component columns, stale live generations, overlapping
+deletion/update sets and inconsistent final entity counts return `false` without
+applying an earlier part of the delta. A destroyed identity may be replaced by a
+new generation at the same index when that deletion is included in the delta.
+Structural changes remain forbidden during query iteration.
+
+This rejection guarantee covers malformed input. Allocation failures and user
+observer exceptions during application are not a rollback transaction. Chunk
+snapshots contain native component columns; they do not capture physics solver
+state, Lua execution state, entity names or backend relations. They must not be
+used alone as a complete runtime continuation snapshot.
