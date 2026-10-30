@@ -304,7 +304,7 @@ chunks of the missing levels; the mesh keeps its full bounds as levels arrive.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `budgetBytes` | 512 MiB | GPU memory for streamed textures and meshes, floors included |
+| `budgetBytes` | 512 MiB | Resident levels and the admitted rebuild payload working set, including floors |
 | `maxLoadsInFlight` | 32 | Level loads in flight across all resources |
 | `maxRebuildsPerFrame`, `maxUploadBytesPerFrame` | 8, 64 MiB | Spreads a burst of arrivals over frames |
 | `meshMaxScreenErrorPixels` | 1 | Mesh detail target |
@@ -315,6 +315,26 @@ uploaded bytes and the last and slowest load latency. In the renderer suite a 51
 (two streamed mips) and a four-level mesh stream fully in within three frames (about 50 ms in
 total; the slowest single level, read, verified and decoded on the background load service, about 20 ms), and a
 far camera with a small budget evicts both back to their floors.
+
+## Rebuild memory accounting
+
+A replacement is admitted against `budgetBytes` before composition and checked again before
+GPU allocation. The payload working set includes live streamed GPU resources, old resources
+still held by the registry, outstanding upload copies, the replacement GPU payload and its
+composition buffers. Mesh composition includes both copies of the encoded chunks. A deferred
+replacement remains retryable; it is not classified as corrupt content.
+
+`pendingGpuReleaseBytes` follows resource-handle generations through the registry's deferred
+release queue, including after scene unloading. Upload copies are owned until the backend
+release callback, so another frame or view cannot reset their charge. `peakAdmittedRebuildBytes`
+reports the admitted payload working set and `rebuildBudgetDeferrals` counts memory deferrals.
+If a lowered budget requires shrinking an existing resource, that shrinking swap remains
+possible; `budgetContractionOverrunBytes` reports its peak excess above the new limit.
+
+These counters describe payload bytes, not allocator metadata, driver padding or physical
+residency after the registry submits destruction. They do not replace process GPU-memory
+telemetry. The Windows content-streaming test separately samples DXGI local and shared
+process usage during four D3D11 upgrade/budget-pressure eviction cycles and reports the observed peak growth.
 
 ## Tools
 

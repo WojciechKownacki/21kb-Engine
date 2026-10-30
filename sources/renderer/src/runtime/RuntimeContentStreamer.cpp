@@ -34,6 +34,12 @@ namespace streaming = kb::assets::streaming;
         static_cast<streaming::BackgroundPriority>(level);
 }
 
+[[nodiscard]] std::uint64_t MeshPayloadBytes(const RenderMeshDesc& desc) {
+    return static_cast<std::uint64_t>(RenderStaticMeshVertexStride(desc.vertexFormat)) * desc.vertexCount +
+        static_cast<std::uint64_t>(desc.indexCount) * (desc.indexFormat == RenderIndexFormat::Uint32 ? 4U : 2U) +
+        desc.terrainLayerWeightBytes;
+}
+
 } // namespace
 
 struct RuntimeContentStreamer::Record {
@@ -184,7 +190,7 @@ void RuntimeContentStreamer::TrackMesh(
     record->meshHandle = handle;
     record->floor = layout.firstLod;
     record->uploadedLevel = layout.firstLod;
-    record->gpuBytes = layout.lodGeometryBytes[layout.firstLod];
+    record->gpuBytes = MeshPayloadBytes(asset->desc);
     record->levelData.resize(levels);
     record->levelData[layout.firstLod] = layout.chunks;
     record->materialSlots = std::move(materialSlots);
@@ -222,6 +228,7 @@ void RuntimeContentStreamer::Forget(std::uint64_t id) noexcept {
     } else {
         meshIds_.erase(found->second->meshKey);
     }
+    RetainRetired(*found->second);
     residency_.Unregister(id);
     records_.erase(found);
     // A load still in flight for it finishes into nothing: CollectLoads drops loads whose record
@@ -233,6 +240,11 @@ void RuntimeContentStreamer::Forget(std::uint64_t id) noexcept {
             }
         }
     }
+}
+
+void RuntimeContentStreamer::RetainRetired(const Record& record) {
+    retired_.push_back({record.texture ? record.textureHandle : RenderTextureHandle{},
+        record.texture ? RenderMeshHandle{} : record.meshHandle, record.gpuBytes});
 }
 
 void RuntimeContentStreamer::NoteTextureUse(RuntimeTextureAssetKey key, std::uint64_t materialAssetId) {
@@ -438,7 +450,31 @@ void RuntimeContentStreamer::StartLoads(const kb::assets::streaming::StreamingPl
     }
 }
 
-bool RuntimeContentStreamer::RebuildTexture(
+bool RuntimeContentStreamer::AdmitRebuild(const Record& record, const SceneRenderer& renderer,
+    std::uint64_t newBytes, std::uint64_t compositionBytes) {
+    std::uint64_t workingBytes = renderer.Resources().PendingUploadBytes();
+    const auto add = [&](std::uint64_t bytes) {
+        workingBytes += std::min(bytes, std::numeric_limits<std::uint64_t>::max() - workingBytes);
+    };
+    for (const auto& item : records_) add(item.second->gpuBytes);
+    for (const auto& item : retired_) add(item.bytes);
+    add(newBytes); // New GPU resource, before the old one can be destroyed.
+    add(newBytes); // Upload copy, retained until the backend release callback.
+    add(compositionBytes);
+    if (workingBytes > settings_.budgetBytes) {
+        if (newBytes >= record.gpuBytes) {
+            ++counters_.rebuildBudgetDeferrals;
+            return false;
+        }
+        // A reduced budget must still allow eviction to the permanent floor.
+        counters_.budgetContractionOverrunBytes = std::max(counters_.budgetContractionOverrunBytes,
+            workingBytes - settings_.budgetBytes);
+    }
+    counters_.peakAdmittedRebuildBytes = std::max(counters_.peakAdmittedRebuildBytes, workingBytes);
+    return true;
+}
+
+RuntimeContentStreamer::RebuildResult RuntimeContentStreamer::RebuildTexture(
     Record& record,
     SceneRenderer& sceneRenderer,
     RuntimeStreamedTextureMap& textures,
@@ -447,33 +483,36 @@ bool RuntimeContentStreamer::RebuildTexture(
     std::vector<std::span<const std::uint8_t>> levels;
     for (std::uint32_t mip = level; mip < record.floor; ++mip) {
         if (record.levelData[mip].size() != 1U) {
-            return false;
+            return RebuildResult::Failed;
         }
         levels.emplace_back(record.levelData[mip].front());
     }
     RenderTextureAssetData composed{};
     if (!bake::ComposeBakedTextureLevels(*record.tail, levels, composed) ||
         composed.gpuBlocks->blocks.size() > std::numeric_limits<std::uint32_t>::max()) {
-        return false;
+        return RebuildResult::Failed;
     }
-    const bgfx::Memory* memory = bgfx::copy(
+    if (!AdmitRebuild(record, sceneRenderer, composed.gpuBlocks->blocks.size(),
+        composed.gpuBlocks->blocks.capacity())) return RebuildResult::Deferred;
+    const bgfx::Memory* memory = sceneRenderer.Resources().CopyUploadMemory(
         composed.gpuBlocks->blocks.data(), static_cast<std::uint32_t>(composed.gpuBlocks->blocks.size()));
     const RenderTextureHandle handle =
         sceneRenderer.Resources().RegisterTexture(composed.MakeDesc(memory, record.textureKey.colorSpace));
     if (!handle.IsValid()) {
-        return false;
+        return RebuildResult::Failed;
     }
     const auto entry = textures.find(record.textureKey);
     sceneRenderer.ResourceMap().UnbindTextureHandle(record.textureHandle);
+    RetainRetired(record);
     sceneRenderer.Resources().DestroyTexture(record.textureHandle);
     sceneRenderer.ResourceMap().BindTexture(record.textureKey.assetId, record.textureKey.colorSpace, handle);
     entry->second.handle = handle;
     record.textureHandle = handle;
     uploaded += composed.gpuBlocks->blocks.size();
-    return true;
+    return RebuildResult::Succeeded;
 }
 
-bool RuntimeContentStreamer::RebuildMesh(
+RuntimeContentStreamer::RebuildResult RuntimeContentStreamer::RebuildMesh(
     Record& record,
     SceneRenderer& sceneRenderer,
     RuntimeStreamedMeshMap& meshes,
@@ -482,33 +521,40 @@ bool RuntimeContentStreamer::RebuildMesh(
     std::vector<std::vector<std::uint8_t>> chunks;
     for (std::uint32_t lod = level; lod < record.levelData.size(); ++lod) {
         if (record.levelData[lod].empty()) {
-            return false;
+            return RebuildResult::Failed;
         }
         chunks.insert(chunks.end(), record.levelData[lod].begin(), record.levelData[lod].end());
     }
     RenderMeshAssetData mesh{};
     if (!AssembleStreamedMeshLevels(*record.coarse->streaming, level, chunks, mesh)) {
-        return false;
+        return RebuildResult::Failed;
     }
     RenderMeshDesc desc = mesh.desc;
     if (!record.materialSlots.empty()) {
         desc.materialSlots = record.materialSlots.data();
         desc.materialSlotCount = static_cast<std::uint32_t>(record.materialSlots.size());
     }
+    const auto newBytes = MeshPayloadBytes(desc);
+    std::uint64_t compositionBytes =
+        mesh.vertices.capacity() * sizeof(RenderStaticMeshVertexP3N3UV2) +
+        mesh.tangentVertices.capacity() * sizeof(RenderStaticMeshVertexP3N3T4UV2) +
+        mesh.indices16.capacity() * sizeof(std::uint16_t) + mesh.indices32.capacity() * sizeof(std::uint32_t);
+    for (const auto& chunk : chunks) compositionBytes += chunk.capacity();
+    for (const auto& chunk : mesh.streaming->chunks) compositionBytes += chunk.capacity();
+    if (!AdmitRebuild(record, sceneRenderer, newBytes, compositionBytes)) return RebuildResult::Deferred;
     const RenderMeshHandle handle = sceneRenderer.Resources().RegisterMesh(desc);
     if (!handle.IsValid()) {
-        return false;
+        return RebuildResult::Failed;
     }
     const auto entry = meshes.find(record.meshKey);
     sceneRenderer.ResourceMap().UnbindMeshHandle(record.meshHandle);
+    RetainRetired(record);
     sceneRenderer.Resources().DestroyMesh(record.meshHandle);
     sceneRenderer.ResourceMap().BindMesh(record.meshKey.assetId, handle);
     entry->second.handle = handle;
     record.meshHandle = handle;
-    for (std::uint32_t lod = level; lod < record.levelData.size(); ++lod) {
-        uploaded += record.coarse->streaming->lodGeometryBytes[lod];
-    }
-    return true;
+    uploaded += newBytes;
+    return RebuildResult::Succeeded;
 }
 
 void RuntimeContentStreamer::Rebuild(
@@ -554,17 +600,44 @@ void RuntimeContentStreamer::Rebuild(
             break;
         }
         const std::uint32_t level = residency_.ResidentLevel(record->id);
+        std::uint64_t requiredBytes = 0U;
+        if (record->texture) {
+            requiredBytes = record->tail->gpuBlocks->blocks.size();
+            for (std::uint32_t mip = level; mip < record->floor; ++mip) {
+                for (const auto& block : record->levelData[mip]) {
+                    requiredBytes += block.size();
+                }
+            }
+        } else {
+            for (std::uint32_t lod = level; lod < record->levelData.size(); ++lod) {
+                requiredBytes += record->coarse->streaming->lodGeometryBytes[lod];
+            }
+        }
+        // Reserve the next old-resource and staging charge before creating its replacement.
+        // The first indivisible rebuild may exceed the per-frame limit on its own.
+        if (rebuilt != 0U && settings_.maxTransientBytesPerFrame != 0U) {
+            const auto remaining = settings_.maxTransientBytesPerFrame - transient;
+            if (record->gpuBytes > remaining || requiredBytes > remaining - record->gpuBytes) {
+                break;
+            }
+        }
+        std::uint64_t compositionBytes = requiredBytes;
+        if (!record->texture) {
+            for (std::uint32_t lod = level; lod < record->levelData.size(); ++lod)
+                for (const auto& block : record->levelData[lod]) compositionBytes += 2U * block.size();
+        }
+        if (!AdmitRebuild(*record, sceneRenderer, requiredBytes, compositionBytes)) continue;
         const std::uint64_t uploadedBefore = uploaded;
-        const bool succeeded = record->texture ? RebuildTexture(*record, sceneRenderer, textures, level, uploaded)
+        const RebuildResult result = record->texture ? RebuildTexture(*record, sceneRenderer, textures, level, uploaded)
                                                : RebuildMesh(*record, sceneRenderer, meshes, level, uploaded);
-        if (succeeded) {
+        if (result == RebuildResult::Succeeded) {
             const std::uint64_t newBytes = uploaded - uploadedBefore;
             transient += record->gpuBytes + newBytes;
             record->gpuBytes = newBytes;
             record->uploadedLevel = level;
             ++rebuilt;
             ++counters_.rebuilds;
-        } else {
+        } else if (result == RebuildResult::Failed) {
             // Bytes that do not compose are a damaged pack; keep drawing what is there.
             record->rebuildFailed = true;
         }
@@ -583,6 +656,10 @@ void RuntimeContentStreamer::Update(
     SceneRenderer& sceneRenderer,
     RuntimeStreamedTextureMap& textures,
     RuntimeStreamedMeshMap& meshes) {
+    std::erase_if(retired_, [&](const RetiredResource& resource) {
+        return !sceneRenderer.Resources().RetainsTexture(resource.texture) &&
+            !sceneRenderer.Resources().RetainsMesh(resource.mesh);
+    });
     if (records_.empty()) {
         materialTextures_.clear();
         materialLessTextures_.clear();
@@ -640,6 +717,7 @@ std::int32_t RuntimeContentStreamer::UploadedLevel(RuntimeAssetKey key) const no
 RuntimeContentStreamingStats RuntimeContentStreamer::Stats() const {
     RuntimeContentStreamingStats stats = counters_;
     stats.residency = residency_.Stats();
+    for (const auto& resource : retired_) stats.pendingGpuReleaseBytes += resource.bytes;
     stats.streamedTextures = static_cast<std::uint32_t>(textureIds_.size());
     stats.streamedMeshes = static_cast<std::uint32_t>(meshIds_.size());
     stats.loadsInFlight = static_cast<std::uint32_t>(pending_.size());

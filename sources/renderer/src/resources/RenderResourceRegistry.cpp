@@ -68,7 +68,7 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
             << " doubleSided=" << (desc.doubleSided ? "true" : "false");
         WriteRendererMaterialGraphDebugLog("resource", row.str());
     }
-    const bgfx::Memory* vertexMemory = bgfx::copy(vertexData, static_cast<std::uint32_t>(RenderStaticMeshVertexStride(desc.vertexFormat) * desc.vertexCount));
+    const bgfx::Memory* vertexMemory = uploads_.Copy(vertexData, static_cast<std::uint32_t>(RenderStaticMeshVertexStride(desc.vertexFormat) * desc.vertexCount));
     bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle dynamicVertexBuffer = BGFX_INVALID_HANDLE;
     if (desc.dynamicVertexBuffer) {
@@ -83,8 +83,8 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
     }
 
     const bgfx::Memory* indexMemory = desc.indexFormat == RenderIndexFormat::Uint32
-        ? bgfx::copy(desc.indices32, static_cast<std::uint32_t>(sizeof(std::uint32_t) * desc.indexCount))
-        : bgfx::copy(desc.indices, static_cast<std::uint32_t>(sizeof(std::uint16_t) * desc.indexCount));
+        ? uploads_.Copy(desc.indices32, static_cast<std::uint32_t>(sizeof(std::uint32_t) * desc.indexCount))
+        : uploads_.Copy(desc.indices, static_cast<std::uint32_t>(sizeof(std::uint16_t) * desc.indexCount));
     const std::uint16_t indexFlags = desc.indexFormat == RenderIndexFormat::Uint32 ? BGFX_BUFFER_INDEX32 : 0U;
     bgfx::IndexBufferHandle indexBuffer = bgfx::createIndexBuffer(indexMemory, indexFlags);
     if (!bgfx::isValid(indexBuffer)) {
@@ -124,7 +124,7 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
         // Passing initial memory to createTexture2D makes a bgfx texture immutable. Terrain painting
         // updates subregions in place, so allocate mutable storage first and upload the initial map
         // through the same update path that later brush strokes use.
-        const bgfx::Memory* weightMemory = bgfx::copy(
+        const bgfx::Memory* weightMemory = uploads_.Copy(
             desc.terrainLayerWeights, desc.terrainLayerWeightBytes);
         bgfx::updateTexture2D(
             terrainLayerWeightTexture, 0U, 0U,
@@ -166,7 +166,7 @@ bool RenderResourceRegistry::UpdateMeshVertices(
     const std::uint32_t stride = RenderStaticMeshVertexStride(desc.vertexFormat);
     const auto* vertexBytes = static_cast<const std::byte*>(RenderMeshResourceBuilder::VertexData(desc));
     if (vertexBytes == nullptr) return false;
-    const bgfx::Memory* memory = bgfx::copy(
+    const bgfx::Memory* memory = uploads_.Copy(
         vertexBytes + static_cast<std::size_t>(firstVertex) * stride,
         vertexCount * stride);
     bgfx::update(resource->dynamicVertexBuffer, firstVertex, memory);
@@ -224,7 +224,7 @@ bool RenderResourceRegistry::UpdateMeshTerrainLayerWeights(
             rowBytes,
             compact.data() + static_cast<std::size_t>(row) * rowBytes);
     }
-    const bgfx::Memory* memory = bgfx::copy(
+    const bgfx::Memory* memory = uploads_.Copy(
         compact.data(), static_cast<std::uint32_t>(compact.size()));
     bgfx::updateTexture2D(
         resource->terrainLayerWeightTexture, 0U, 0U,

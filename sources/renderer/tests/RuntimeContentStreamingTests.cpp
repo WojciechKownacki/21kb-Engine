@@ -37,6 +37,17 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <d3d11.h>
+#include <dxgi1_4.h>
+#undef small
+#undef far
+#endif
+
 namespace kb::render::tests {
 namespace {
 
@@ -45,6 +56,22 @@ using Clock = std::chrono::steady_clock;
 
 class HeadlessSurface final : public RenderSurface {
 public:
+    explicit HeadlessSurface(bool hardware = false) {
+#if defined(_WIN32)
+        if (hardware) {
+            window_ = CreateWindowExW(0U, L"STATIC", L"Content Streaming", WS_OVERLAPPEDWINDOW,
+                0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            Require(window_ != nullptr, "Could not create the hidden streaming test window");
+        }
+#else
+        Require(!hardware, "Hardware streaming readback requires a native surface");
+#endif
+    }
+    ~HeadlessSurface() override {
+#if defined(_WIN32)
+        if (window_ != nullptr) DestroyWindow(static_cast<HWND>(window_));
+#endif
+    }
     [[nodiscard]] std::uint32_t Width() const noexcept override {
         return 64U;
     }
@@ -52,11 +79,13 @@ public:
         return 64U;
     }
     [[nodiscard]] void* NativeWindowHandle() const noexcept override {
-        return nullptr;
+        return window_;
     }
     [[nodiscard]] void* NativeDisplayHandle() const noexcept override {
         return nullptr;
     }
+private:
+    void* window_ = nullptr;
 };
 
 [[nodiscard]] std::filesystem::path TestRoot() {
@@ -294,8 +323,8 @@ struct StreamingPack {
 // A compressed runtime pack with a scene, a 512x512 texture in every family the profile ships
 // and a sphere with a level-of-detail chain. The ETC2 profile ships one texture family with a
 // fast encoder, which keeps the fixture cheap; nothing here is specific to it.
-[[nodiscard]] StreamingPack BuildStreamingPack(const std::filesystem::path& path) {
-    const asset_bake::BakeTargetProfile profile = asset_bake::AndroidEtc2Arm64BakeTargetProfile();
+[[nodiscard]] StreamingPack BuildStreamingPack(const std::filesystem::path& path, bool hardware = false) {
+    const auto profile = hardware ? asset_bake::WebGlWasm32BakeTargetProfile() : asset_bake::AndroidEtc2Arm64BakeTargetProfile();
     asset_bake::AssetPackWriterOptions options{};
     options.compression = asset_bake::AssetPackBlockCompression::Zstd;
     asset_bake::AssetPackWriter writer{ path, profile, options };
@@ -455,7 +484,7 @@ void PackagedTexturesAndMeshesStreamUnderTheBudget() {
         const std::uint32_t meshLevels = static_cast<std::uint32_t>(coarse->streaming->lodGeometryBytes.size());
 
         const RenderTextureHandle textureHandle = sceneRenderer.Resources().RegisterTexture(tail->MakeDesc(
-            bgfx::copy(tail->gpuBlocks->blocks.data(), static_cast<std::uint32_t>(tail->gpuBlocks->blocks.size())),
+            sceneRenderer.Resources().CopyUploadMemory(tail->gpuBlocks->blocks.data(), static_cast<std::uint32_t>(tail->gpuBlocks->blocks.size())),
             RenderTextureColorSpace::Linear));
         const RenderMeshHandle meshHandle = sceneRenderer.Resources().RegisterMesh(coarse->desc);
         Require(textureHandle.IsValid() && meshHandle.IsValid(), "The streamed resources could not be created");
@@ -547,6 +576,8 @@ void PackagedTexturesAndMeshesStreamUnderTheBudget() {
                 streamer.UploadedLevel(meshKey) == static_cast<std::int32_t>(meshLevels - 1U);
         });
         Require(evicted, ("A far camera and a small budget did not evict back to the resident floor" + describe()).c_str());
+        Require(streamer.Stats().budgetContractionOverrunBytes > 0U,
+            "Shrinking below the existing working set must report its temporary budget overrun");
         const RenderTextureResource* evictedTexture = sceneRenderer.Resources().FindTexture(textures.at(textureKey).handle);
         Require(evictedTexture != nullptr && evictedTexture->width == 128U && streamer.Stats().residency.evictions > 0U,
             "The evicted texture was not rebuilt from its tail");
@@ -598,6 +629,7 @@ struct StreamingRig {
             Require(stats.residency.residentBytes + stats.residency.inFlightBytes <= stats.residency.budgetBytes, "Streaming exceeded its budget");
             perFrame(stats);
             sceneRenderer.TickFrame();
+            bgfx::frame();
             std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
         }
         return done();
@@ -605,22 +637,22 @@ struct StreamingRig {
 };
 
 template <typename Body>
-void WithStreamingRig(const RuntimeContentStreamingSettings& settings, bool unmountPackBeforeStreaming, const Body& body) {
+void WithStreamingRig(const RuntimeContentStreamingSettings& settings, bool unmountPackBeforeStreaming, const Body& body, bool hardware = false) {
     const std::filesystem::path root = TestRoot();
     std::error_code error;
     std::filesystem::create_directories(root, error);
-    StreamingPack fixture = BuildStreamingPack(root / "Game.kbpack");
-    HeadlessSurface surface;
+    StreamingPack fixture = BuildStreamingPack(root / "Game.kbpack", hardware);
+    HeadlessSurface surface{hardware};
     DisplayConfig config{};
     config.allowHeadlessNoop = true;
-    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(hardware ? bgfx::RendererType::Direct3D11 : bgfx::RendererType::Noop);
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "The headless renderer did not initialize");
     {
         StreamingRig rig;
         const kb::assets::AssetMetadata textureMetadata = MetadataOf(fixture.texture);
         const kb::assets::AssetMetadata meshMetadata = MetadataOf(fixture.mesh);
-        RenderTextureAssetLoader textureLoader{ bgfx::RendererType::Noop };
+        RenderTextureAssetLoader textureLoader{ hardware ? bgfx::RendererType::Direct3D11 : bgfx::RendererType::Noop };
         const kb::assets::AssetLoadResult textureLoad = textureLoader.Load(kb::assets::AssetLoadRequest{
             .metadata = textureMetadata, .resolvedPath = {}, .runtimePack = fixture.pack });
         RenderMeshAssetLoader meshLoader;
@@ -631,7 +663,7 @@ void WithStreamingRig(const RuntimeContentStreamingSettings& settings, bool unmo
         const auto coarse = std::static_pointer_cast<const RenderMeshAssetData>(meshLoad.asset);
         rig.meshLevels = static_cast<std::uint32_t>(coarse->streaming->lodGeometryBytes.size());
         rig.textureHandle = rig.sceneRenderer.Resources().RegisterTexture(tail->MakeDesc(
-            bgfx::copy(tail->gpuBlocks->blocks.data(), static_cast<std::uint32_t>(tail->gpuBlocks->blocks.size())),
+            rig.sceneRenderer.Resources().CopyUploadMemory(tail->gpuBlocks->blocks.data(), static_cast<std::uint32_t>(tail->gpuBlocks->blocks.size())),
             RenderTextureColorSpace::Linear));
         rig.meshHandle = rig.sceneRenderer.Resources().RegisterMesh(coarse->desc);
         Require(rig.textureHandle.IsValid() && rig.meshHandle.IsValid(), "The streamed resources could not be created");
@@ -701,10 +733,120 @@ void UploadLimitsSpreadRebuildsWithoutStarving() {
 // Red when: the memory a rebuild holds beyond the resident levels (the old GPU resource and the staging copy of the new
 // one) is not measured; the transient limit does not spread the rebuilds of one frame; or the measured peak with the
 // transient bytes falls below the resident bytes.
+#if defined(_WIN32)
+[[nodiscard]] std::uint64_t ProcessGpuBytes() {
+    Require(bgfx::getRendererType() == bgfx::RendererType::Direct3D11, "GPU memory measurement requires D3D11");
+    auto* device = static_cast<ID3D11Device*>(bgfx::getInternalData()->context);
+    IDXGIDevice* dxgi = nullptr;
+    Require(SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi))), "DXGI device unavailable");
+    IDXGIAdapter* adapter = nullptr;
+    const auto adapterResult = dxgi->GetAdapter(&adapter);
+    dxgi->Release();
+    Require(SUCCEEDED(adapterResult), "DXGI adapter unavailable");
+    IDXGIAdapter3* memoryAdapter = nullptr;
+    const auto memoryResult = adapter->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&memoryAdapter));
+    adapter->Release();
+    Require(SUCCEEDED(memoryResult), "Per-process GPU memory query unavailable");
+    DXGI_QUERY_VIDEO_MEMORY_INFO local{}, shared{};
+    const auto localResult = memoryAdapter->QueryVideoMemoryInfo(0U, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local);
+    const auto sharedResult = memoryAdapter->QueryVideoMemoryInfo(0U, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &shared);
+    memoryAdapter->Release();
+    Require(SUCCEEDED(localResult) && SUCCEEDED(sharedResult), "Per-process GPU memory measurement failed");
+    return local.CurrentUsage + shared.CurrentUsage;
+}
+
+void HardwareRebuildMemoryPeak() {
+    constexpr std::uint64_t budget = 64ULL * 1024ULL * 1024ULL;
+    WithStreamingRig(RuntimeContentStreamingSettings{.budgetBytes = budget, .meshMaxScreenErrorPixels = 1.0e-6F},
+        false, [](StreamingRig& rig) {
+            for (unsigned frame = 0U; frame < 8U; ++frame) bgfx::frame();
+            const auto baseline = ProcessGpuBytes();
+            auto peak = baseline;
+            std::uint64_t pendingPeak = 0U, retiredPeak = 0U;
+            const auto sample = [&](const RuntimeContentStreamingStats& stats) {
+                peak = std::max(peak, ProcessGpuBytes());
+                pendingPeak = std::max(pendingPeak, rig.sceneRenderer.Resources().PendingUploadBytes());
+                retiredPeak = std::max(retiredPeak, stats.pendingGpuReleaseBytes);
+                Require(stats.peakAdmittedRebuildBytes <= budget,
+                    "Hardware rebuild admission exceeded its payload working-set budget");
+            };
+            for (unsigned cycle = 0U; cycle < 4U; ++cycle) {
+                rig.streamer.Configure({.budgetBytes = budget, .meshMaxScreenErrorPixels = 1.0e-6F});
+                Require(rig.Run(CameraAt(2.0F), [&] {
+                    return rig.streamer.UploadedLevel(rig.textureKey) == 0 && rig.streamer.UploadedLevel(rig.meshKey) == 0;
+                }, sample), "Hardware streaming did not reach full detail");
+                rig.streamer.Configure({.budgetBytes = rig.streamer.Stats().residency.floorBytes, .meshMaxScreenErrorPixels = 1.0F});
+                Require(rig.Run(CameraAt(4000.0F), [&] {
+                    return rig.streamer.UploadedLevel(rig.textureKey) == 2 &&
+                        rig.streamer.UploadedLevel(rig.meshKey) == static_cast<std::int32_t>(rig.meshLevels - 1U);
+                }, sample), "Hardware streaming did not release fine detail");
+            }
+            Require(rig.streamer.Stats().budgetContractionOverrunBytes > 0U,
+                "Budget-pressure eviction did not report the charged old/new overlap");
+            Require(pendingPeak > 0U && retiredPeak > 0U, "Hardware workload did not overlap upload and old-resource lifetimes");
+            Require(peak > baseline && peak - baseline <= budget, "Measured GPU memory growth exceeded the rebuild budget");
+            std::cout << "rebuild_memory cycles=4 budget_bytes=" << budget << " admitted_peak_bytes="
+                << rig.streamer.Stats().peakAdmittedRebuildBytes << " queued_upload_peak_bytes=" << pendingPeak
+                << " retired_payload_peak_bytes=" << retiredPeak
+                << " contraction_overrun_bytes=" << rig.streamer.Stats().budgetContractionOverrunBytes
+                << " dxgi_baseline_bytes=" << baseline
+                << " dxgi_peak_bytes=" << peak << " dxgi_growth_bytes=" << peak - baseline << '\n';
+            rig.sceneRenderer.Resources().DestroyTexture(rig.textures.at(rig.textureKey).handle);
+            rig.sceneRenderer.Resources().DestroyMesh(rig.meshes.at(rig.meshKey).handle);
+        }, true);
+}
+#endif
+
+void RebuildAdmissionDefersAndRetries() {
+    WithStreamingRig(RuntimeContentStreamingSettings{.budgetBytes = 64ULL * 1024ULL * 1024ULL,
+        .maxRebuildsPerFrame = 0U, .meshMaxScreenErrorPixels = 1.0e-6F}, false, [](StreamingRig& rig) {
+        const auto camera = CameraAt(2.0F);
+        unsigned settled = 0U;
+        Require(rig.Run(camera, [&] { return settled >= 10U; }, [&](const RuntimeContentStreamingStats& stats) {
+            settled = stats.loadsInFlight == 0U ? settled + 1U : 0U;
+        }), "Admission fixture loads did not settle");
+        const auto limit = rig.streamer.Stats().residency.residentBytes;
+        rig.streamer.Configure({.budgetBytes = limit, .meshMaxScreenErrorPixels = 1.0e-6F});
+        unsigned frames = 0U;
+        Require(rig.Run(camera, [&] { return frames == 12U; }, [&](const RuntimeContentStreamingStats& stats) {
+            ++frames;
+            Require(stats.peakAdmittedRebuildBytes <= limit && stats.budgetContractionOverrunBytes == 0U,
+                "Admission omitted old resources, upload copies or composition from the working set");
+        }), "Admission fixture did not advance");
+        Require(rig.streamer.Stats().rebuildBudgetDeferrals > 0U,
+            "A resident-only budget incorrectly admitted every replacement and staging copy");
+        rig.streamer.Configure({.budgetBytes = 64ULL * 1024ULL * 1024ULL, .meshMaxScreenErrorPixels = 1.0e-6F});
+        Require(rig.Run(camera, [&] {
+            return rig.streamer.UploadedLevel(rig.textureKey) == 0 && rig.streamer.UploadedLevel(rig.meshKey) == 0;
+        }, [](const RuntimeContentStreamingStats&) {}), "Budget deferral permanently failed a valid resource");
+        Require(rig.streamer.Stats().peakAdmittedRebuildBytes <= 64ULL * 1024ULL * 1024ULL,
+            "The resumed rebuild exceeded its working-set allowance");
+        rig.sceneRenderer.Resources().DestroyTexture(rig.textures.at(rig.textureKey).handle);
+        rig.sceneRenderer.Resources().DestroyMesh(rig.meshes.at(rig.meshKey).handle);
+    });
+}
+
+void UploadStagingFollowsBackendConsumption() {
+    WithStreamingRig(RuntimeContentStreamingSettings{}, false, [](StreamingRig&) {
+        RenderUploadMemory uploads;
+        const std::array<std::uint8_t, 64U * 64U * 4U> pixels{};
+        const auto* memory = uploads.Copy(pixels.data(), static_cast<std::uint32_t>(pixels.size()));
+        Require(uploads.PendingBytes() == pixels.size() && uploads.PeakBytes() == pixels.size(),
+            "Upload bytes were not charged before backend submission");
+        const auto texture = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, 0U, memory);
+        Require(bgfx::isValid(texture), "Upload lifetime fixture could not create a texture");
+        for (unsigned frame = 0U; frame < 8U; ++frame) bgfx::frame();
+        Require(uploads.PendingBytes() == 0U && uploads.PeakBytes() == pixels.size(),
+            "Backend consumption did not release the upload charge");
+        bgfx::destroy(texture);
+    });
+}
+
 void RebuildTransientMemoryIsMeasuredAndBounded() {
     std::uint64_t limitedPeak = 0U;
     std::uint64_t unlimitedPeak = 0U;
-    for (const bool limited : { true, false }) {
+    for (const unsigned mode : { 0U, 1U, 2U }) {
+        const bool limited = mode != 2U;
         // Rebuilds wait until both level loads have landed, so both resources are due in the same frame.
         WithStreamingRig(RuntimeContentStreamingSettings{ .budgetBytes = 64ULL * 1024ULL * 1024ULL, .maxRebuildsPerFrame = 0U,
                              .meshMaxScreenErrorPixels = 1.0e-6F },
@@ -719,13 +861,17 @@ void RebuildTransientMemoryIsMeasuredAndBounded() {
                     [](const RuntimeContentStreamingStats&) {});
                 Require(landed, "The level loads did not land");
                 Require(rig.streamer.Stats().peakRebuildTransientBytes == 0U, "Nothing rebuilt yet, so no transient bytes");
+                const auto combinedCharge = initialResident + rig.streamer.Stats().residency.residentBytes;
+                const auto limit = mode == 0U ? 1U : mode == 1U ? combinedCharge - 1U : 0U;
                 rig.streamer.Configure(RuntimeContentStreamingSettings{ .budgetBytes = 64ULL * 1024ULL * 1024ULL,
-                    .maxRebuildsPerFrame = 8U, .maxTransientBytesPerFrame = limited ? 1U : 0U, .meshMaxScreenErrorPixels = 1.0e-6F });
+                    .maxRebuildsPerFrame = 8U, .maxTransientBytesPerFrame = limit, .meshMaxScreenErrorPixels = 1.0e-6F });
                 std::uint64_t previousRebuilds = 0U;
                 std::uint64_t largestStep = 0U;
                 const bool streamedIn = rig.Run(closeCamera,
                     [&] { return rig.streamer.UploadedLevel(rig.textureKey) == 0 && rig.streamer.UploadedLevel(rig.meshKey) == 0; },
                     [&](const RuntimeContentStreamingStats& stats) {
+                        if (stats.rebuilds > previousRebuilds) Require(stats.pendingGpuReleaseBytes > 0U,
+                            "Replaced GPU resources stopped being charged before deferred release");
                         largestStep = std::max(largestStep, stats.rebuilds - previousRebuilds);
                         previousRebuilds = stats.rebuilds;
                     });
@@ -736,14 +882,31 @@ void RebuildTransientMemoryIsMeasuredAndBounded() {
                 Require(stats.peakCommittedWithTransientBytes > stats.peakRebuildTransientBytes,
                     "The committed peak must include the resident levels next to the transient bytes");
                 if (limited) {
-                    Require(largestStep == 1U, "A transient limit must admit one rebuild per frame when each one exceeds it");
-                    limitedPeak = stats.peakRebuildTransientBytes;
+                    Require(largestStep == 1U, "The next rebuild must wait when its charge exceeds the remaining transient allowance");
+                    if (mode == 1U) Require(stats.peakRebuildTransientBytes <= limit,
+                        "Rebuild admission exceeded the transient budget despite each resource fitting alone");
+                    limitedPeak = std::max(limitedPeak, stats.peakRebuildTransientBytes);
                 } else {
                     Require(largestStep >= 2U, "Without a transient limit both due resources rebuild in the same frame");
                     unlimitedPeak = stats.peakRebuildTransientBytes;
                 }
                 rig.sceneRenderer.Resources().DestroyTexture(rig.textures.at(rig.textureKey).handle);
                 rig.sceneRenderer.Resources().DestroyMesh(rig.meshes.at(rig.meshKey).handle);
+                rig.streamer.ReleaseAll();
+                const auto retiring = rig.streamer.Stats().pendingGpuReleaseBytes;
+                Require(retiring > 0U, "Untracking resources lost their pending release charge");
+                rig.textures.clear(); rig.meshes.clear();
+                const auto update = [&] {
+                    rig.streamer.Update({.sceneId = StreamingRig::kSceneId, .frame = rig.frame++},
+                        rig.sceneRenderer, rig.textures, rig.meshes);
+                };
+                update(); update();
+                Require(rig.streamer.Stats().pendingGpuReleaseBytes == retiring,
+                    "Application frame numbers released GPU charges before the resource registry");
+                for (unsigned tick = 0U; tick < 8U; ++tick) rig.sceneRenderer.TickFrame();
+                update();
+                Require(rig.streamer.Stats().pendingGpuReleaseBytes == 0U,
+                    "An empty streamer retained charges after the registry released its resources");
             });
     }
     Require(unlimitedPeak > limitedPeak, "Rebuilding both at once must hold more transient memory than one after the other");
@@ -785,6 +948,11 @@ void RunRuntimeContentStreamingTests() {
     UploadLimitsSpreadRebuildsWithoutStarving();
     MissingLevelDataKeepsTheTailDrawable();
     RebuildTransientMemoryIsMeasuredAndBounded();
+    UploadStagingFollowsBackendConsumption();
+    RebuildAdmissionDefersAndRetries();
+#if defined(_WIN32)
+    HardwareRebuildMemoryPeak();
+#endif
 }
 
 } // namespace kb::render::tests

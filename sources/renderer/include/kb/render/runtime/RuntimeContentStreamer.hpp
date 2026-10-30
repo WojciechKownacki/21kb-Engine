@@ -70,6 +70,15 @@ struct RuntimeContentStreamingStats {
     // that sum at the end of a frame -- the true peak the budget has to cover while resources are swapped.
     std::uint64_t peakRebuildTransientBytes = 0U;
     std::uint64_t peakCommittedWithTransientBytes = 0U;
+    // Replaced or untracked payloads still owned by the renderer's deferred queue.
+    // Logical payload bytes, excluding driver padding and backend retirement after submission.
+    std::uint64_t pendingGpuReleaseBytes = 0U;
+    std::uint64_t rebuildBudgetDeferrals = 0U;
+    // Admitted payload working set: live/retired GPU bytes, queued uploads, replacement and composition.
+    // Excludes driver padding and allocator metadata. Budget reductions may require a shrinking swap
+    // above the new limit; that unavoidable overrun is reported separately.
+    std::uint64_t peakAdmittedRebuildBytes = 0U;
+    std::uint64_t budgetContractionOverrunBytes = 0U;
 };
 
 // One frame of what the renderer sees, for streaming decisions.
@@ -157,6 +166,16 @@ public:
 private:
     struct Record;
     struct PendingLoad;
+    enum class RebuildResult { Succeeded, Deferred, Failed };
+    [[nodiscard]] bool AdmitRebuild(const Record& record, const SceneRenderer& renderer,
+        std::uint64_t newBytes, std::uint64_t compositionBytes);
+    struct RetiredResource {
+        RenderTextureHandle texture{};
+        RenderMeshHandle mesh{};
+        std::uint64_t bytes = 0U;
+    };
+    std::vector<RetiredResource> retired_;
+    void RetainRetired(const Record& record);
 
     [[nodiscard]] Record* FindTexture(RuntimeTextureAssetKey key) noexcept;
     [[nodiscard]] Record* FindMesh(RuntimeAssetKey key) noexcept;
@@ -167,9 +186,9 @@ private:
     void StartLoads(const kb::assets::streaming::StreamingPlan& plan);
     void ApplyEvictions(const kb::assets::streaming::StreamingPlan& plan);
     void Rebuild(SceneRenderer& sceneRenderer, RuntimeStreamedTextureMap& textures, RuntimeStreamedMeshMap& meshes);
-    [[nodiscard]] bool RebuildTexture(Record& record, SceneRenderer& sceneRenderer, RuntimeStreamedTextureMap& textures,
+    [[nodiscard]] RebuildResult RebuildTexture(Record& record, SceneRenderer& sceneRenderer, RuntimeStreamedTextureMap& textures,
         std::uint32_t level, std::uint64_t& uploaded);
-    [[nodiscard]] bool RebuildMesh(Record& record, SceneRenderer& sceneRenderer, RuntimeStreamedMeshMap& meshes,
+    [[nodiscard]] RebuildResult RebuildMesh(Record& record, SceneRenderer& sceneRenderer, RuntimeStreamedMeshMap& meshes,
         std::uint32_t level, std::uint64_t& uploaded);
     void EnsureReader(const kb::assets::bake::RuntimeAssetPack& pack);
     void ForgetFiles() noexcept;

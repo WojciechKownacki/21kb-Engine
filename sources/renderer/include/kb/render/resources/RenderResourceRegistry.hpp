@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/resources/RenderHandles.hpp"
+#include "kb/render/resources/RenderUploadMemory.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/resources/detail/RenderResourceSlotPool.hpp"
 
@@ -76,6 +77,15 @@ public:
     [[nodiscard]] bool ContainsTexture(RenderTextureHandle handle) const noexcept;
     void DestroyTexture(RenderTextureHandle handle) noexcept;
 
+    // Includes resources queued for deferred destruction, until their release is submitted.
+    [[nodiscard]] bool RetainsMesh(RenderMeshHandle handle) const noexcept { return meshes_.Retains(handle); }
+    [[nodiscard]] bool RetainsTexture(RenderTextureHandle handle) const noexcept { return textures_.Retains(handle); }
+
+    [[nodiscard]] const bgfx::Memory* CopyUploadMemory(const void* data, std::uint32_t size) {
+        return uploads_.Copy(data, size);
+    }
+    [[nodiscard]] std::uint64_t PendingUploadBytes() const noexcept { return uploads_.PendingBytes(); }
+
     void Reserve(const RenderResourceRegistryReserveDesc& desc);
     void TickFrame() noexcept;
     void Shutdown() noexcept;
@@ -103,6 +113,7 @@ private:
     detail::RenderResourceSlotPool<RenderMeshResource> meshes_;
     detail::RenderResourceSlotPool<RenderMaterialResource> materials_;
     detail::RenderResourceSlotPool<RenderTextureResource> textures_;
+    RenderUploadMemory uploads_;
     std::vector<DeferredDestroyEntry> deferredDestroy_;
     std::uint64_t frameNumber_ = 0;
     std::uint64_t nextResourceVersion_ = 1;

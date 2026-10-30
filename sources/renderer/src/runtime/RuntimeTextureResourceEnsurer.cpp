@@ -176,7 +176,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
             uploadBytes = &generatedMipChain->rgba8;
         }
 
-        const bgfx::Memory* memory = bgfx::copy(uploadBytes->data(), static_cast<std::uint32_t>(uploadBytes->size()));
+        const bgfx::Memory* memory = context.sceneRenderer.Resources().CopyUploadMemory(uploadBytes->data(), static_cast<std::uint32_t>(uploadBytes->size()));
         RenderTextureDesc textureDesc = textureRef->MakeDesc(memory, colorSpace);
         if (generatedMipChain.has_value()) {
             textureDesc.mipCount = generatedMipChain->mipCount;
