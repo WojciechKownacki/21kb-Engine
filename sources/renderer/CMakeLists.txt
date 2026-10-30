@@ -387,6 +387,7 @@ add_library(kb_renderer STATIC
     src/private/ui/ScreenUIDrawData.hpp
     src/private/ui/ScreenUIDrawBatchBuilder.hpp
     src/private/ui/ScreenUIFontPayloadValidator.hpp
+    src/private/ui/ScreenUIFontDistanceField.hpp
     src/private/ui/ScreenUIFontAtlasCache.hpp
     src/private/ui/ScreenUITextMarkupParser.hpp
     src/ui/ScreenUIBackgroundBlur.cpp
@@ -394,7 +395,9 @@ add_library(kb_renderer STATIC
     src/ui/ScreenUIDrawBatchBuilder.cpp
     src/ui/ScreenUIRenderer.cpp
     src/ui/ScreenUIFontPayloadValidator.cpp
+    src/ui/ScreenUIFontDistanceField.cpp
     src/ui/ScreenUIFontAtlasCache.cpp
+    src/ui/ScreenUIVariableFontRasterizer.cpp
     src/ui/ScreenUITextMarkupParser.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/allocator.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexgenerator.cpp
@@ -630,6 +633,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_screen_ui.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_screen_ui_sdf.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -785,6 +789,8 @@ target_link_libraries(kb_renderer
         bimg
         bimg_decode
         kb_ufbx
+    PRIVATE
+        kb_harfbuzz
 )
 
 if(WIN32)

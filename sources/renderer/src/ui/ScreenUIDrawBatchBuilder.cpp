@@ -1,4 +1,5 @@
 #include "private/ui/ScreenUIDrawBatchBuilder.hpp"
+#include "private/ui/ScreenUIFontDistanceField.hpp"
 
 #include "engine/scene/SceneUI.hpp"
 
@@ -567,6 +568,21 @@ void ScreenUIDrawBatchBuilder::AppendText(const kb::scene::SceneUIFrameElement& 
     const kb::math::Color outlineColor = element.outline.has_value() ? element.outline->color : element.text->color;
     AppendTextLayer(element, run, TintedColor(element, element.text->color), TintedColor(element, outlineColor), 0.0F,
                     0.0F, outlineWidth, true);
+    for (const auto& glyph : run.glyphs) {
+        if (!glyph.underline || glyph.advanceRight <= glyph.advanceLeft) continue;
+        const float thickness = std::max(1.0F, static_cast<float>(run.pixelSize) / 20.0F);
+        const ScreenUIRect line{glyph.cellClip ? std::max(glyph.advanceLeft, glyph.cellLeft) : glyph.advanceLeft,
+                                glyph.lineBottom - thickness,
+                                glyph.cellClip ? std::min(glyph.advanceRight, glyph.cellRight) : glyph.advanceRight,
+                                glyph.lineBottom};
+        if (!line.IsValid()) continue;
+        ScreenUIDrawStyle style{};
+        style.fillColor = TintedColor(element, element.text->color);
+        for (std::size_t channel = 0U; channel < style.fillColor.size(); ++channel)
+            style.fillColor[channel] *= glyph.color[channel];
+        style.opacity = std::clamp(element.effectiveOpacity, 0.0F, 1.0F);
+        AppendShape(element, line, style);
+    }
 }
 
 void ScreenUIDrawBatchBuilder::AppendTextLayer(const kb::scene::SceneUIFrameElement& element,
@@ -579,24 +595,51 @@ void ScreenUIDrawBatchBuilder::AppendTextLayer(const kb::scene::SceneUIFrameElem
     style.opacity = std::clamp(element.effectiveOpacity, 0.0F, 1.0F);
     style.fragmentKind = ScreenUIFragmentKind::Font;
     style.fontOutlineWidth = outlineWidth;
-    const ScreenUITextureKey texture{
-        .source = ScreenUITextureSource::FontAtlas, .assetId = run.fontAssetId, .pixelSize = run.pixelSize};
-    const float atlasWidth = static_cast<float>(std::max(run.atlasWidth, static_cast<std::uint16_t>(1U)));
-    const float atlasHeight = static_cast<float>(std::max(run.atlasHeight, static_cast<std::uint16_t>(1U)));
+    const ScreenUITextureKey primaryTexture{
+        .source = ScreenUITextureSource::FontAtlas, .assetId = run.fontAssetId, .pixelSize = run.pixelSize,
+        .fontVariations = run.fontVariations, .distanceField = run.distanceField};
+    const ScreenUITextureKey fallbackTexture{
+        .source = ScreenUITextureSource::FontAtlas, .assetId = run.fallbackFontAssetId, .pixelSize = run.pixelSize,
+        .distanceField = run.distanceField};
     const ScreenUIRect fullRect = Rect(element.rect);
     for (const ScreenUIGlyphQuad& glyph : run.glyphs) {
+        const bool useFallback = glyph.fallbackFont && run.fallbackFontAssetId != 0U;
+        const float atlasWidth = static_cast<float>(std::max(useFallback ? run.fallbackAtlasWidth : run.atlasWidth, static_cast<std::uint16_t>(1U)));
+        const float atlasHeight = static_cast<float>(std::max(useFallback ? run.fallbackAtlasHeight : run.atlasHeight, static_cast<std::uint16_t>(1U)));
         ScreenUIDrawStyle glyphStyle = style;
+        if (glyph.distanceField) {
+            glyphStyle.fragmentKind = ScreenUIFragmentKind::DistanceFieldFont;
+            // Encode the authored outline as an atlas distance. Derivatives are
+            // reserved for antialiasing: using them for width changes the outline
+            // with contour orientation and framebuffer resolution.
+            const float glyphWidth = glyph.right - glyph.left;
+            glyphStyle.fontOutlineWidth = glyphWidth > 0.0F
+                ? outlineWidth * (glyph.u1 - glyph.u0) * atlasWidth / glyphWidth * kFontDistanceFieldScale / 255.0F
+                : 0.0F;
+        }
         if (applyMarkupColor) {
             for (std::size_t channel = 0U; channel < glyphStyle.fillColor.size(); ++channel) {
                 glyphStyle.fillColor[channel] *= glyph.color[channel];
             }
         }
-        const ScreenUIRect rect{glyph.left + offsetX - outlineWidth, glyph.top + offsetY - outlineWidth,
-                                glyph.right + offsetX + outlineWidth, glyph.bottom + offsetY + outlineWidth};
+        const float bitmapOutline = glyph.distanceField ? 0.0F : outlineWidth;
+        const ScreenUIRect original{glyph.left + offsetX - bitmapOutline, glyph.top + offsetY - bitmapOutline,
+                                    glyph.right + offsetX + bitmapOutline, glyph.bottom + offsetY + bitmapOutline};
+        if (!original.IsValid()) continue;
+        ScreenUIRect rect = original;
+        if (glyph.cellClip) {
+            rect.left = std::max(rect.left, glyph.cellLeft);
+            rect.right = std::min(rect.right, glyph.cellRight);
+        }
         if (rect.IsValid()) {
-            AppendQuad(element, fullRect, rect, glyph.u0 - outlineWidth / atlasWidth,
-                       glyph.v0 - outlineWidth / atlasHeight, glyph.u1 + outlineWidth / atlasWidth,
-                       glyph.v1 + outlineWidth / atlasHeight, texture, glyphStyle);
+            const float u0 = glyph.u0 - bitmapOutline / atlasWidth;
+            const float u1 = glyph.u1 + bitmapOutline / atlasWidth;
+            const float span = original.right - original.left;
+            const float clippedU0 = u0 + (u1 - u0) * (rect.left - original.left) / span;
+            const float clippedU1 = u0 + (u1 - u0) * (rect.right - original.left) / span;
+            AppendQuad(element, fullRect, rect, clippedU0,
+                       glyph.v0 - bitmapOutline / atlasHeight, clippedU1,
+                       glyph.v1 + bitmapOutline / atlasHeight, useFallback ? fallbackTexture : primaryTexture, glyphStyle);
         }
     }
 }

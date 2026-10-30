@@ -1053,7 +1053,7 @@ void RunAssetKindClassificationTest() {
         kb::assets::AssetKind::Mesh, kb::assets::AssetKind::Material, kb::assets::AssetKind::Texture,
         kb::assets::AssetKind::Audio, kb::assets::AssetKind::Prefab, kb::assets::AssetKind::Scene,
         kb::assets::AssetKind::Animation, kb::assets::AssetKind::Graph, kb::assets::AssetKind::InputAction,
-        kb::assets::AssetKind::InputMap, kb::assets::AssetKind::Font,
+        kb::assets::AssetKind::InputMap, kb::assets::AssetKind::Font, kb::assets::AssetKind::UITheme,
     };
     static_assert(std::size(kinds) == kb::assets::kAssetKindCount, "AssetKind test must cover every kind");
     for (const kb::assets::AssetKind kind : kinds) {

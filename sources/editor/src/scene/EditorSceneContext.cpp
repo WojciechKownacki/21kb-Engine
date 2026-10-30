@@ -66,6 +66,7 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
+#include "scene/ui/EditorUIThemeAssets.hpp"
 #include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "scene/EditorHierarchyObjectFactory.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
@@ -4388,6 +4389,13 @@ bool EditorSceneContext::SetUIColor(kb::scene::SceneEntity entity, kb::scene::UI
             return false;
         }
     }
+    std::vector<kb::scene::UIThemePropertyKey> themeKeys;
+    for (int lane = 0; lane < 4; ++lane)
+        themeKeys.push_back({component, std::string{rows[static_cast<std::size_t>(found->groupStart + lane)].name}});
+    if (!EditorUIThemeAssets::MarkLocalOverrides(candidate, themeKeys)) {
+        console_.Warning("Inspector", "The local theme override list is invalid or full.");
+        return false;
+    }
     if (kb::scene::AreUIComponentSetsEqual(current, candidate)) return false;
     return ExecuteSceneCommand("Edit UI Color", [this, entity, candidate = std::move(candidate)]() {
         kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
@@ -4480,6 +4488,11 @@ bool EditorSceneContext::SetUIComponentProperty(
     if (kb::scene::WriteUIComponentProperty(candidate, component, property, value) !=
         kb::scene::UIComponentPropertyWriteResult::Succeeded) {
         console_.Warning("Inspector", "UI property value is invalid.");
+        return false;
+    }
+    const kb::scene::UIThemePropertyKey themeKey{component, std::string{property}};
+    if (!EditorUIThemeAssets::MarkLocalOverrides(candidate, std::span{&themeKey, 1U})) {
+        console_.Warning("Inspector", "The local theme override list is invalid or full.");
         return false;
     }
     const kb::scene::UIComponentSet current =

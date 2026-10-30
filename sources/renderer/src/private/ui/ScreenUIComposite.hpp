@@ -48,12 +48,14 @@ class ScreenUIComposite {
     void Shutdown() noexcept;
     [[nodiscard]] bool Submit(const ScreenUICompositeDesc& desc) const;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] bool SupportsDistanceField() const noexcept { return bgfx::isValid(distanceFieldProgram_); }
 
   private:
     [[nodiscard]] static const ScreenUIResolvedTexture* Resolve(std::span<const ScreenUIResolvedTexture> textures,
-                                                                 ScreenUITextureKey key) noexcept;
+                                                                 const ScreenUITextureKey& key) noexcept;
 
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle distanceFieldProgram_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle whiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle viewportUniform_ = BGFX_INVALID_HANDLE;

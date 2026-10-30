@@ -190,6 +190,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateAudioMixerAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewUITheme: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateUIThemeAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::NewPostProcessProfile: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreatePostProcessProfileAsset(destinationFolder);

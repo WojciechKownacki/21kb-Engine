@@ -6,6 +6,8 @@
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
 #include "inspection/InspectorAudioMixerRuntimeInteraction.hpp"
 #include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "scene/ui/EditorUIThemeAssets.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
@@ -3473,6 +3475,22 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
     const bool assetSelected = sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset;
+    if (assetSelected && hit.section == InspectorSectionId::UITheme && hit.kind == InspectorHitKind::TextField &&
+        (hit.property == InspectorPropertyId::UIThemeVariant || hit.property == InspectorPropertyId::UIThemeField)) {
+        const auto data = sceneContext.ReadUITheme(sceneContext.AssetBrowser().InspectorAsset());
+        if (!data) return true;
+        InspectorUIThemeModel::NormalizeSelection(*data, sceneContext.AssetBrowser().InspectorAsset().value,
+            sceneContext.Inspector().themeAssetId, sceneContext.Inspector().themeVariant);
+        std::string value = hit.index == -2 ? std::string{} : sceneContext.Inspector().themeVariant;
+        if (hit.property == InspectorPropertyId::UIThemeField) {
+            const auto rows = InspectorUIThemeModel::Rows(*data, sceneContext.Inspector().themeVariant);
+            if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) return true;
+            value = rows[static_cast<std::size_t>(hit.index)].value;
+        }
+        sceneContext.Inspector().BeginTextEdit(hit.property, value);
+        sceneContext.Inspector().SetEditIndex(hit.index);
+        return true;
+    }
     if (assetSelected && hit.property == InspectorPropertyId::PostProcessProfileField &&
         InspectorPostProcessProfileModel::IsSection(hit.section)) {
         // A checkbox toggles and a choice steps to the next value at once; a number opens its
@@ -4052,6 +4070,30 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (inspector.EditedProperty() == InspectorPropertyId::InputActionName) {
             static_cast<void>(sceneContext.SetInputActionName(sceneContext.AssetBrowser().InspectorAsset(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::UIThemeVariant ||
+            inspector.EditedProperty() == InspectorPropertyId::UIThemeField) {
+            const auto id = sceneContext.AssetBrowser().InspectorAsset();
+            auto data = sceneContext.ReadUITheme(id);
+            if (data) {
+                InspectorUIThemeModel::NormalizeSelection(*data, id.value, inspector.themeAssetId, inspector.themeVariant);
+                if (inspector.EditedProperty() == InspectorPropertyId::UIThemeVariant) {
+                    const std::string name{inspector.EditBuffer()};
+                    if (name.empty() || std::ranges::any_of(data->variants, [&](const auto& v) { return v.name == name; }))
+                        inspector.themeVariant = name;
+                    else if (EditorUIThemeAssets::AddVariant(*data, name) && sceneContext.SetUITheme(id, *data))
+                        inspector.themeVariant = name;
+                } else {
+                    const auto rows = InspectorUIThemeModel::Rows(*data, inspector.themeVariant);
+                    const int index = inspector.EditIndex();
+                    if (index >= 0 && static_cast<std::size_t>(index) < rows.size() &&
+                        InspectorUIThemeModel::Edit(*data, inspector.themeVariant, rows[static_cast<std::size_t>(index)].key,
+                                                    inspector.EditBuffer()))
+                        static_cast<void>(sceneContext.SetUITheme(id, *data));
+                }
+            }
             inspector.EndTextEdit();
             return true;
         }

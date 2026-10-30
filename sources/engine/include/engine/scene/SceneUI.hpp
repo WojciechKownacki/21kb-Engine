@@ -37,10 +37,17 @@ struct SceneUITextCaretStop {
     bool leading = false;
 };
 
+struct SceneUITextLinkRegion {
+    std::array<kb::math::Vec2, 4U> corners{};
+    std::string target;
+    std::uint32_t instance = 0U;
+};
+
 struct SceneUITextLayout {
     SceneEntity entity;
     std::string source;
     std::vector<SceneUITextCaretStop> carets;
+    std::vector<SceneUITextLinkRegion> links;
 };
 
 enum class UIInteractionState : std::uint8_t {
@@ -106,6 +113,7 @@ enum class SceneUIEventType : std::uint8_t {
     Dragged,
     DragEnded,
     Dropped,
+    LinkActivated,
 };
 
 struct SceneUIEventDescriptor {
@@ -164,6 +172,7 @@ struct SceneUIFrameElement {
     kb::math::Color interactionTint{};
     bool interactionEnabled = false;
     bool hitTestable = false;
+    std::optional<UISelectable> selectable;
     std::optional<UISprite> sprite;
     std::optional<UIImage> image;
     std::optional<UIRawImage> rawImage;
@@ -191,6 +200,10 @@ struct SceneUIFrameElement {
     bool textCaretVisible = false;
     std::uint32_t textSelectionBegin = 0U;
     std::uint32_t textSelectionEnd = 0U;
+    // Language of the resolved text, which may differ from the selected locale.
+    std::string textLanguage;
+    // The selectable's own transition state, retained even when tint is applied to another graphic.
+    kb::math::Color selectableTransitionTint{};
 };
 
 // Why a frame build refused, and which entity caused it. The frame builder is fail-closed:
@@ -215,6 +228,7 @@ struct SceneUIFrame {
     // hit-testable nor interactive.
     bool modalActive = false;
     std::int32_t modalSortingOrder = 0;
+    std::string language;
 
     [[nodiscard]] SceneEntity HitTest(kb::math::Vec2 point) const noexcept;
     // The topmost hit that is not `excluded` or inside it - where a dragged widget is being dropped.

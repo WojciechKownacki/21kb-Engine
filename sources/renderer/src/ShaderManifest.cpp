@@ -76,6 +76,7 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_particle_strip.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_present_tex.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_screen_ui.sc", .stage = ShaderStage::Fragment},
+    ShaderManifestEntry{.name = "fs_screen_ui_sdf.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "vs_editor_gizmo.sc", .stage = ShaderStage::Vertex,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::Editor)},
     ShaderManifestEntry{.name = "vs_editor_grid.sc", .stage = ShaderStage::Vertex,

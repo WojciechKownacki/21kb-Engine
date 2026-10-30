@@ -1,3 +1,5 @@
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
 #include "rendering/GameplayGraphEditorPanel.hpp"
@@ -3192,9 +3194,42 @@ ReadScriptValue(
         return { changed || visibility.mask == *mask, changed ? "visibility mask changed" : "visibility mask already set" };
     }
 
+    if (*operation == "theme_field") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto component = StringMember(step, "component", error);
+        const auto property = StringMember(step, "property", error);
+        const auto text = StringMember(step, "text", error);
+        const auto variant = StringMember(step, "variant", error, false).value_or("");
+        if (!asset || !component || !property || !text) return {false, error};
+        const auto id = ResolveAsset(state, *asset);
+        const auto theme = state.context.ReadUITheme(id);
+        const auto* descriptor = kb::scene::FindUIComponentDescriptor(*component);
+        if (!theme || !descriptor || !state.context.AssetBrowser().SelectAsset(id, state.context.Scene().Assets().Manager()))
+            return {false, "Theme or component unavailable"};
+        auto& inspector = state.context.Inspector();
+        inspector.themeAssetId = id.value;
+        inspector.themeVariant = variant;
+        const auto rows = InspectorUIThemeModel::Rows(*theme, variant);
+        const kb::scene::UIThemePropertyKey key{descriptor->type, *property};
+        const auto row = std::ranges::find(rows, key, &InspectorUIThemeRow::key);
+        if (row == rows.end() || !state.automation.InspectorClickRow(InspectorPropertyId::UIThemeField,
+            static_cast<int>(row - rows.begin()), InspectorHitKind::TextField, InspectorSectionId::UITheme))
+            return {false, "Theme field not reachable in Inspector"};
+        for (int erase = 0; erase < 1024; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+        for (const unsigned char character : *text)
+            if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return {false, "Theme field typing failed"};
+        if (!state.automation.InspectorKey(VK_RETURN)) return {false, "Theme field commit failed"};
+        const auto edited = state.context.ReadUITheme(id);
+        if (!edited) return {false, "Edited theme unreadable"};
+        const auto changedRows = InspectorUIThemeModel::Rows(*edited, variant);
+        const auto changed = std::ranges::find(changedRows, key, &InspectorUIThemeRow::key);
+        const auto expected = InspectorUIComponentModel::Parse(row->type, *text);
+        const auto actual = changed != changedRows.end() ? InspectorUIComponentModel::Parse(row->type, changed->value) : std::nullopt;
+        return {expected && actual && *expected == *actual, "Theme field persisted through Inspector"};
+    }
     if (*operation == "set_property" ||
         *operation == "set_property_rejected" ||
-        *operation == "assert_property") {
+        *operation == "assert_property" || *operation == "assert_resolved_ui_property") {
         const auto alias = StringMember(step, "entity", error);
         const auto component =
             StringMember(step, "component", error);
@@ -3231,9 +3266,20 @@ ReadScriptValue(
                     expectedRejection ? *component + "." + *property + " rejected"
                                       : *component + "." + *property };
             }
-            const kb::scene::UIComponentSet values =
+            kb::scene::UIComponentSet values =
                 kb::scene::CaptureSceneUIComponents(
                     state.context.Scene().Components().UI(), entity);
+            if (*operation == "assert_resolved_ui_property") {
+                if (!state.context.Scene().UI().Update(640, 480, {}, 0.016F)) return {false, "UI frame failed"};
+                const auto& frame = state.context.Scene().UI().Frame();
+                const auto found = std::ranges::find(frame.elements, entity, &kb::scene::SceneUIFrameElement::entity);
+                if (found == frame.elements.end()) return {false, "UI frame element absent"};
+                values.text = found->text;
+                values.border = found->border;
+                values.image = found->image;
+                values.outline = found->outline;
+                values.shadow = found->shadow;
+            }
             kb::scene::UIComponentPropertyValue actual;
             const double tolerance = NumberMember(
                 step, "tolerance", error, false).value_or(0.0001);
@@ -3675,6 +3721,8 @@ ReadScriptValue(
             created = state.context.CreateGameplayGraphAsset(virtualFolder);
         } else if (*type == "post_process_profile") {
             created = state.context.CreatePostProcessProfileAsset(virtualFolder);
+        } else if (*type == "ui_theme") {
+            created = state.context.CreateUIThemeAsset(virtualFolder);
         } else if (*type == "import_preset") {
             created = state.context.CreateImportPresetAsset(virtualFolder);
         } else {

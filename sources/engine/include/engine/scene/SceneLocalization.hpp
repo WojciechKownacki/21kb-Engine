@@ -22,6 +22,8 @@ public:
     [[nodiscard]] bool SetLanguage(std::string_view language);
     [[nodiscard]] std::string Language() const;
     [[nodiscard]] std::string FallbackLanguage() const;
+    // The language that supplies this key, including catalog fallback.
+    [[nodiscard]] std::string MessageLanguage(std::string_view key) const;
     [[nodiscard]] std::string Translate(std::string_view key) const;
     [[nodiscard]] std::string FormatPlural(std::string_view key, std::int64_t count) const;
     // Plural formatting for a decimal written as text ("1.5", "2.00", "1.2c6"): visible fraction digits

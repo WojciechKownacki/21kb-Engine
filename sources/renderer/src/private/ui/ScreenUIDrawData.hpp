@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace kb::render {
@@ -21,6 +22,7 @@ enum class ScreenUIFragmentKind : std::uint8_t {
     Image,
     Font,
     BackgroundBlur,
+    DistanceFieldFont,
 };
 
 struct ScreenUIRect {
@@ -67,6 +69,8 @@ struct ScreenUITextureKey {
     ScreenUITextureSource source = ScreenUITextureSource::None;
     std::uint64_t assetId = 0U;
     std::uint32_t pixelSize = 0U;
+    std::string fontVariations;
+    bool distanceField = false;
 
     [[nodiscard]] bool operator==(const ScreenUITextureKey&) const noexcept = default;
 };
@@ -126,6 +130,15 @@ struct ScreenUIGlyphQuad {
     std::uint32_t sourceEnd = 0U;
     float advanceLeft = 0.0F;
     bool rightToLeft = false;
+    std::uint32_t link = 0U;
+    bool underline = false;
+    bool fallbackFont = false;
+    bool cellClip = false;
+    float cellLeft = 0.0F;
+    float cellRight = 0.0F;
+    bool distanceField = false;
+    float fontOriginX = 0.0F;
+    float fontOriginY = 0.0F;
 };
 
 struct ScreenUITextCaret {
@@ -144,6 +157,12 @@ struct ScreenUITextRun {
     std::uint16_t atlasHeight = 0U;
     std::vector<ScreenUIGlyphQuad> glyphs;
     std::vector<ScreenUITextCaret> carets;
+    std::vector<std::string> links;
+    std::string fontVariations;
+    std::uint64_t fallbackFontAssetId = 0U;
+    std::uint16_t fallbackAtlasWidth = 0U;
+    std::uint16_t fallbackAtlasHeight = 0U;
+    bool distanceField = false;
 };
 
 } // namespace kb::render

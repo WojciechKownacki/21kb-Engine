@@ -36,9 +36,14 @@ enum class UITextOverflow : std::uint8_t {
     Ellipsis,
 };
 
+enum class UITextFontRenderMode : std::uint8_t {
+    Bitmap,
+    SignedDistanceField,
+};
+
 struct UIText {
     static constexpr std::string_view StableId = "kb21.ui.text";
-    static constexpr std::uint32_t SchemaVersion = 3U;
+    static constexpr std::uint32_t SchemaVersion = 6U;
     static constexpr std::size_t MaxUtf8Bytes = 1024U;
     static constexpr std::size_t MaxLocalizationKeyBytes = 128U;
 
@@ -65,7 +70,24 @@ struct UIText {
     // Empty selects ordinary translation; a decimal selects a plural and replaces {count}.
     // Preserve visible fraction digits (for example "1.00") when selecting the category.
     std::array<char, 32U> localizationNumber{};
+    // Comma-separated OpenType axis settings, for example "wght=450,wdth=90".
+    std::array<char, 128U> fontVariations{};
+    // An optional font used for graphemes absent from the primary font.
+    std::uint64_t fallbackFontAssetId = 0U;
+    // Opt in to scalable signed-distance rendering; existing text uses bitmaps.
+    UITextFontRenderMode fontRenderMode = UITextFontRenderMode::Bitmap;
 };
+
+[[nodiscard]] inline std::string_view UITextFontVariations(const UIText& value) noexcept {
+    const auto end = std::find(value.fontVariations.begin(), value.fontVariations.end(), '\0');
+    return {value.fontVariations.data(), static_cast<std::size_t>(end - value.fontVariations.begin())};
+}
+[[nodiscard]] inline bool SetUITextFontVariations(UIText& value, std::string_view settings) noexcept {
+    if (settings.size() >= value.fontVariations.size() || settings.find('\0') != std::string_view::npos) return false;
+    value.fontVariations.fill('\0');
+    std::copy(settings.begin(), settings.end(), value.fontVariations.begin());
+    return true;
+}
 
 [[nodiscard]] inline std::string_view UITextLocalizationNumber(const UIText& value) noexcept {
     const auto end = std::find(value.localizationNumber.begin(), value.localizationNumber.end(), '\0');

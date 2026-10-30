@@ -187,7 +187,7 @@ FindInspectorHit(
     InspectorPropertyId property,
     int index = -1,
     InspectorHitKind kind = InspectorHitKind::None, POINT* matchedPoint = nullptr) {
-    const bool uiField = InspectorUIComponentModel::Component(section).has_value();
+    const bool uiField = InspectorUIComponentModel::Component(section).has_value() || section == InspectorSectionId::UITheme;
     const bool addButton = section == InspectorSectionId::AddComponent &&
         property == InspectorPropertyId::AddComponentButton;
     int compactX = -1;

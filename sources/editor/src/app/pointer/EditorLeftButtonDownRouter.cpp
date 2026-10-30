@@ -48,6 +48,8 @@
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/InspectorSceneColor.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "scene/ui/EditorUIThemeAssets.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
@@ -1754,6 +1756,56 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
     if (panelHit.inInspectorPanel) {
         const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
+        if (hit.section == InspectorSectionId::UITheme) {
+            const auto id = sceneContext_.AssetBrowser().InspectorAsset();
+            auto data = sceneContext_.ReadUITheme(id);
+            auto& inspector = sceneContext_.Inspector();
+            if (data) {
+                InspectorUIThemeModel::NormalizeSelection(*data, id.value, inspector.themeAssetId, inspector.themeVariant);
+                if (hit.kind == InspectorHitKind::ChoiceField && hit.property == InspectorPropertyId::UIThemeVariant) {
+                    HMENU menu = CreatePopupMenu();
+                    if (!menu) return;
+                    kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant.empty() ? MF_CHECKED : 0), 1, "Base");
+                    for (std::size_t i = 0; i < data->variants.size(); ++i)
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant == data->variants[i].name ? MF_CHECKED : 0),
+                            i + 2, data->variants[i].name.c_str());
+                    const auto removeId = static_cast<UINT>(data->variants.size() + 2);
+                    if (!inspector.themeVariant.empty()) kb::editor::AppendMenuUtf8(menu, MF_STRING, removeId, "Remove selected variant");
+                    POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
+                    const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
+                        anchor.x, anchor.y, 0, messageWindow, nullptr);
+                    DestroyMenu(menu);
+                    if (choice == 1) inspector.themeVariant.clear();
+                    else if (choice > 1 && choice < removeId) inspector.themeVariant = data->variants[choice - 2].name;
+                    else if (choice == removeId && !inspector.themeVariant.empty() &&
+                        EditorUIThemeAssets::RemoveVariant(*data, inspector.themeVariant) && sceneContext_.SetUITheme(id, *data))
+                        inspector.themeVariant.clear();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+                const auto rows = InspectorUIThemeModel::Rows(*data, inspector.themeVariant);
+                if (hit.property == InspectorPropertyId::UIThemeField && hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                    const auto& row = rows[hit.index];
+                    const auto* descriptor = kb::scene::FindUIComponentProperty(row.key.component, row.key.property);
+                    bool changed = false;
+                    bool handled = true;
+                    if (hit.kind == InspectorHitKind::ColorField && row.color) {
+                        POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
+                        const auto color = EditorMaterialColorPickerDialog::Show(mainWindow_, row.label, *row.color, &anchor);
+                        changed = color && InspectorUIThemeModel::EditColor(*data, inspector.themeVariant, row.key, *color);
+                    } else if (hit.kind == InspectorHitKind::TextField && descriptor && descriptor->assetKind) {
+                        const auto picked = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(), sceneContext_,
+                            kb::assets::AssetId{std::stoull(row.value)}, *descriptor->assetKind);
+                        changed = picked.accepted && EditorUIThemeAssets::SetProperty(*data, inspector.themeVariant, {row.key, picked.assetId.value});
+                    } else handled = false;
+                    if (handled) {
+                        if (changed && sceneContext_.SetUITheme(id, *data)) sceneViewport_.RequestPresent();
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
+                }
+            }
+        }
         if (hit.kind == InspectorHitKind::ChoiceField) {
             const auto component = InspectorUIComponentModel::Component(hit.section);
             if (component) {

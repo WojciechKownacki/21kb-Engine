@@ -50,9 +50,11 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -2321,8 +2323,26 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                 }
             }
         };
-        const std::size_t workerCount =
-            std::min<std::size_t>(misses.size(), std::max(1U, std::thread::hardware_concurrency()));
+        unsigned shaderJobs = std::max(1U, std::thread::hardware_concurrency());
+        // Honor the build's explicit process budget for standalone cooks too.
+#if defined(_WIN32)
+        std::array<char, 32> jobBuffer{};
+        const DWORD jobLength = GetEnvironmentVariableA("CMAKE_BUILD_PARALLEL_LEVEL", jobBuffer.data(),
+            static_cast<DWORD>(jobBuffer.size()));
+        const std::string_view jobLimit = jobLength > 0 && jobLength < jobBuffer.size()
+            ? std::string_view{jobBuffer.data(), jobLength} : std::string_view{};
+#else
+        const char* jobEnvironment = std::getenv("CMAKE_BUILD_PARALLEL_LEVEL");
+        const std::string_view jobLimit = jobEnvironment ? jobEnvironment : "";
+#endif
+        if (!jobLimit.empty()) {
+            unsigned requested = 0U;
+            const auto parsed = std::from_chars(jobLimit.data(), jobLimit.data() + jobLimit.size(), requested);
+            if (parsed.ec == std::errc{} && parsed.ptr == jobLimit.data() + jobLimit.size() && requested > 0U)
+                shaderJobs = std::min(shaderJobs, requested);
+        }
+        const std::size_t workerCount = std::min<std::size_t>(misses.size(), shaderJobs);
+        diagnostics << "fixed shader compiler jobs: " << workerCount << '\n';
         std::vector<std::thread> workers;
         workers.reserve(workerCount - 1U);
         for (std::size_t worker = 1U; worker < workerCount; ++worker) {

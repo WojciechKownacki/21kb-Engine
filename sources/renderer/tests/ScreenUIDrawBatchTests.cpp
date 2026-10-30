@@ -2,6 +2,7 @@
 
 #include "private/ui/ScreenUIDrawBatchBuilder.hpp"
 #include "private/ui/ScreenUIFontAtlasCache.hpp"
+#include "private/ui/ScreenUIFontDistanceField.hpp"
 #include "private/ui/ScreenUIFontPayloadValidator.hpp"
 #include "private/ui/ScreenUITextMarkupParser.hpp"
 
@@ -13,6 +14,7 @@
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/ui/visual/UIText.hpp"
+#include "engine/ui/visual/UITextGraphemes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -25,6 +27,7 @@
 #include <ranges>
 #include <span>
 #include <string>
+
 
 namespace kb::render::tests {
 namespace {
@@ -215,6 +218,31 @@ void BatchBuilderAppliesInteractionTintToEveryVisualLayer() {
             "Screen UI interaction tint did not cover every visual layer");
 }
 
+void DistanceFieldOutlineTracksGlyphScale() {
+    ScreenUIDrawBatchBuilder builder;
+    for (const float scale : {0.75F, 1.0F, 1.5F, 2.0F}) {
+        kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+        auto element = Element(30U, {0.0F, 0.0F, 200.0F, 100.0F});
+        element.text = kb::scene::UIText{.fontAssetId = 5U};
+        Require(kb::scene::SetUITextContent(*element.text, "I"), "SDF outline fixture must contain text");
+        element.canvasScale = scale;
+        element.outline = kb::scene::UIOutline{.color = {1, 0, 0, 1}, .width = 2.0F};
+        frame.elements = {element};
+        ScreenUITextRun run{.entity = 30U, .fontAssetId = 5U, .pixelSize = 64U,
+            .atlasWidth = 256U, .atlasHeight = 256U};
+        run.distanceField = true;
+        run.glyphs.push_back(ScreenUIGlyphQuad{.left = 0.0F, .top = 0.0F,
+            .right = 32.0F * scale, .bottom = 64.0F * scale,
+            .u0 = 0, .v0 = 0, .u1 = 0.125F, .v1 = 0.25F, .distanceField = true});
+        const auto& draw = builder.Build(frame, {}, std::span{&run, 1U});
+        const auto found = std::ranges::find_if(draw.batches, [](const auto& batch) {
+            return batch.style.fragmentKind == ScreenUIFragmentKind::DistanceFieldFont;
+        });
+        Require(found != draw.batches.end() && NearlyEqual(found->style.fontOutlineWidth, 32.0F / 255.0F),
+            "SDF outline must keep its authored distance when canvas pixels scale");
+    }
+}
+
 void FocusedInputFieldDrawsItsCaretAtTheEditedOffset() {
     // The engine tracked a caret byte offset and moved it with the arrow keys, but nothing ever
     // drew it. A shipped text field therefore looked inert no matter what the player typed.
@@ -266,6 +294,26 @@ void FocusedInputFieldDrawsItsCaretAtTheEditedOffset() {
         }
     }
     Require(foundAtPen, "A caret past the last character must sit at the pen position, not the glyph edge");
+}
+
+void TableCellClipsGlyphAndUnderlineGeometry() {
+    kb::scene::SceneUIFrame frame{.viewportSize = {200.0F, 100.0F}};
+    auto element = Element(45U, {0.0F, 0.0F, 100.0F, 50.0F});
+    element.text = kb::scene::UIText{.fontAssetId = 7U};
+    Require(kb::scene::SetUITextContent(*element.text, "x"), "Table clipping fixture failed");
+    frame.elements = {element};
+    ScreenUITextRun run{.entity = 45U, .fontAssetId = 7U, .pixelSize = 16U, .atlasWidth = 64U, .atlasHeight = 64U};
+    run.glyphs.push_back(ScreenUIGlyphQuad{.left = 40.0F, .top = 10.0F, .right = 60.0F, .bottom = 30.0F,
+        .u0 = 0.0F, .v0 = 0.0F, .u1 = 1.0F, .v1 = 1.0F, .lineTop = 10.0F, .lineBottom = 30.0F,
+        .advanceRight = 60.0F, .advanceLeft = 40.0F, .underline = true,
+        .cellClip = true, .cellLeft = 0.0F, .cellRight = 50.0F});
+    ScreenUIDrawBatchBuilder builder;
+    const std::array<ScreenUITextRun, 1> runs{run};
+    const auto& draw = builder.Build(frame, {}, runs);
+    Require(draw.vertices.size() == 8U, "Clipped table glyph and underline must each produce a quad");
+    Require(std::ranges::all_of(draw.vertices, [](const auto& vertex) { return vertex.x <= 50.01F; }),
+            "Clipped table glyphs and underlines must stay inside the cell");
+    Require(NearlyEqual(draw.vertices[1].u, 0.5F), "Clipped table glyphs must adjust their atlas UVs");
 }
 
 void FontPreparationDropsOnlyTheTextItCannotPrepare() {
@@ -404,6 +452,70 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         Require(accent.failureReason == nullptr && accent.runs.size() == 1U && accent.runs[0].glyphs.size() == 1U &&
                 accent.runs[0].glyphs[0].color[1] == 1.0F,
                 "A color boundary inside a grapheme must retain base styling and composed shaping");
+        auto scalable = Element(76U, {0.0F, 0.0F, 500.0F, 100.0F});
+        scalable.text = kb::scene::UIText{.fontAssetId = 7U, .fontSize = 32.0F};
+        Require(kb::scene::SetUITextContent(*scalable.text, "SDF"), "Distance field fixture failed");
+        frame.elements = {scalable};
+        const auto bitmapPrepared = fonts.Prepare(1U, assets, resources, frame);
+        Require(bitmapPrepared.failureReason == nullptr && bitmapPrepared.runs.size() == 1U, "Bitmap comparison failed");
+        const auto bitmapRun = bitmapPrepared.runs[0];
+        scalable.text->fontRenderMode = kb::scene::UITextFontRenderMode::SignedDistanceField;
+        frame.elements = {scalable};
+        const auto sdfPrepared = fonts.Prepare(1U, assets, resources, frame);
+        Require(sdfPrepared.failureReason == nullptr && sdfPrepared.runs.size() == 1U &&
+                sdfPrepared.runs[0].distanceField && sdfPrepared.runs[0].glyphs.size() == bitmapRun.glyphs.size() &&
+                std::ranges::all_of(sdfPrepared.runs[0].glyphs, [](const auto& glyph) { return glyph.distanceField; }),
+                "SDF text must use a distinct distance field atlas");
+        for (std::size_t i = 0U; i < bitmapRun.glyphs.size(); ++i)
+            Require(NearlyEqual(bitmapRun.glyphs[i].advanceLeft, sdfPrepared.runs[0].glyphs[i].advanceLeft) &&
+                    NearlyEqual(bitmapRun.glyphs[i].advanceRight, sdfPrepared.runs[0].glyphs[i].advanceRight) &&
+                    NearlyEqual(bitmapRun.glyphs[i].lineTop, sdfPrepared.runs[0].glyphs[i].lineTop),
+                    "SDF and bitmap must retain identical shaped advances and line metrics");
+        Require(fonts.Resolve(1U, 7U, 32U, {}, true, resources).idx != bgfx::kInvalidHandle &&
+                fonts.Resolve(1U, 7U, 32U, {}, false, resources).idx != bgfx::kInvalidHandle,
+                "SDF and bitmap atlas keys must coexist");
+        const auto unavailable = fonts.Prepare(1U, assets, resources, frame, false);
+        Require(unavailable.failureReason == nullptr && unavailable.runs.size() == 1U &&
+                !unavailable.runs[0].distanceField && !unavailable.runs[0].glyphs.empty(),
+                "An unavailable SDF shader must select bitmap before preparing text");
+        scalable.outline = kb::scene::UIOutline{};
+        scalable.outline->width = 12.0F;
+        frame.elements = {scalable};
+        const auto wideOutline = fonts.Prepare(1U, assets, resources, frame);
+        Require(wideOutline.failureReason == nullptr && wideOutline.runs.size() == 1U &&
+                !wideOutline.runs[0].distanceField && !wideOutline.runs[0].glyphs.empty(),
+                "An outline wider than the field range must retain bitmap text");
+        auto table = Element(75U, {0.0F, 0.0F, 100.0F, 200.0F});
+        table.text = kb::scene::UIText{.fontAssetId = 7U, .fontSize = 24.0F};
+        const std::string tableSource = "<table><tr><td>A</td><td><link=cell>BBBBBBBB</link></td></tr><tr><td>Z</td><td></td></tr></table>";
+        Require(kb::scene::SetUITextContent(*table.text, tableSource), "Table fixture failed");
+        frame.elements = {table};
+        const auto tablePrepared = fonts.Prepare(1U, assets, resources, frame);
+        Require(tablePrepared.failureReason == nullptr && tablePrepared.runs.size() == 1U &&
+                tablePrepared.runs[0].links.size() == 1U, "Table layout must retain one run and its link");
+        const auto& tableGlyphs = tablePrepared.runs[0].glyphs;
+        const auto a = std::ranges::find_if(tableGlyphs, [&](const auto& glyph) { return glyph.sourceOffset == tableSource.find('A'); });
+        const auto b = std::ranges::find_if(tableGlyphs, [&](const auto& glyph) { return glyph.sourceOffset == tableSource.find("BBBB"); });
+        const auto z = std::ranges::find_if(tableGlyphs, [&](const auto& glyph) { return glyph.sourceOffset == tableSource.find('Z'); });
+        Require(a != tableGlyphs.end() && b != tableGlyphs.end() && z != tableGlyphs.end() &&
+                b->advanceLeft >= 50.0F && NearlyEqual(a->lineTop, b->lineTop) && z->lineTop > b->lineTop && b->link == 1U,
+                "Table columns must share a first baseline and reserve the wrapped row height");
+        table.text->maxLines = 1U;
+        table.text->overflow = kb::scene::UITextOverflow::Truncate;
+        frame.elements = {table};
+        const auto truncatedTable = fonts.Prepare(1U, assets, resources, frame);
+        Require(truncatedTable.failureReason == nullptr && truncatedTable.runs.size() == 1U &&
+                std::ranges::none_of(truncatedTable.runs[0].glyphs, [&](const auto& glyph) { return glyph.sourceOffset == tableSource.find('Z'); }) &&
+                std::ranges::all_of(truncatedTable.runs[0].glyphs, [](const auto& glyph) { return glyph.cellClip; }),
+                "Table maxLines must truncate all columns together and clip their contents");
+        table.text->maxLines = 0U;
+        table.text->autoSize = true;
+        table.text->minFontSize = 8.0F;
+        table.rect.height = 35.0F;
+        frame.elements = {table};
+        const auto fittedTable = fonts.Prepare(1U, assets, resources, frame);
+        Require(fittedTable.failureReason == nullptr && fittedTable.runs.size() == 1U && fittedTable.runs[0].pixelSize < 24U,
+                "Table autosize must measure wrapped cell rows rather than flattened text");
         latin.text->richText = false;
         Require(kb::scene::SetUITextContent(*latin.text, "a\n"), "Empty final line fixture failed");
         frame.elements = {latin};
@@ -430,6 +542,133 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr &&
                 fonts.TextCacheStats().misses > beforeReload.misses,
                 "A new font generation must invalidate cached shaping results");
+        auto caretFont = std::make_shared<kb::assets::ImportedAsset>(*font);
+        std::ifstream caretStream(std::filesystem::path{KB_RENDERER_TEST_SOURCE_ROOT} /
+            "sources/engine/tests/fixtures/fonts/CaretTest.ttf", std::ios::binary | std::ios::ate);
+        Require(caretStream.good() && caretStream.tellg() > 0, "GDEF font fixture missing");
+        caretFont->payload.resize(static_cast<std::size_t>(caretStream.tellg()));
+        caretStream.seekg(0);
+        caretStream.read(reinterpret_cast<char*>(caretFont->payload.data()), static_cast<std::streamsize>(caretFont->payload.size()));
+        caretFont->sourceSize = caretFont->payload.size();
+        Require(assets.PublishRuntimeAsset(kb::assets::AssetId{7U}, caretFont), "GDEF font publication failed");
+        Require(kb::scene::SetUITextContent(*latin.text, "fi"), "GDEF text fixture failed");
+        frame.elements = {latin};
+        const auto gdef = fonts.Prepare(1U, assets, resources, frame);
+        Require(gdef.failureReason == nullptr && gdef.runs.size() == 1U && gdef.runs[0].carets.size() == 3U,
+                "GDEF ligature must expose all insertion positions");
+        const auto& gdefStops = gdef.runs[0].carets;
+        Require(std::abs((gdefStops[1].x - gdefStops[0].x) /
+                (gdefStops[2].x - gdefStops[0].x) - 0.2F) < 0.001F,
+                "Rendered caret must use the font's GDEF position rather than equal-width division");
+        auto complexFont = std::make_shared<kb::assets::ImportedAsset>(*font);
+        std::ifstream complexStream(std::filesystem::path{KB_RENDERER_TEST_SOURCE_ROOT} /
+            "sources/engine/tests/fixtures/fonts/NotoSansDevanagari-Regular.ttf", std::ios::binary | std::ios::ate);
+        Require(complexStream.good() && complexStream.tellg() > 0, "Complex-script font fixture missing");
+        complexFont->payload.resize(static_cast<std::size_t>(complexStream.tellg()));
+        complexStream.seekg(0);
+        complexStream.read(reinterpret_cast<char*>(complexFont->payload.data()), static_cast<std::streamsize>(complexFont->payload.size()));
+        complexFont->sourceSize = complexFont->payload.size();
+        Require(assets.PublishRuntimeAsset(kb::assets::AssetId{7U}, complexFont), "Complex-script font publication failed");
+        const std::string devanagari = "\xE0\xA4\xA8\xE0\xA4\xAE\xE0\xA4\xB8\xE0\xA5\x8D\xE0\xA4\xA4\xE0\xA5\x87";
+        Require(kb::scene::SetUITextContent(*latin.text, devanagari), "Complex-script text fixture failed");
+        frame.elements = {latin};
+        const auto complex = fonts.Prepare(1U, assets, resources, frame);
+        Require(complex.failureReason == nullptr && complex.runs.size() == 1U && complex.runs[0].glyphs.size() == 5U,
+                "Complex-script rendering must keep contextual half-forms and vowel signs");
+        for (const auto& caret : complex.runs[0].carets)
+            Require(kb::scene::SnapToUITextGraphemeBoundary(devanagari, caret.sourceOffset) == caret.sourceOffset,
+                    "A shaping subcluster must never expose a caret inside an Indic grapheme");
+        const auto& complexStops = complex.runs[0].carets;
+        Require(!complexStops.empty() && complexStops.front().sourceOffset == 0U &&
+                complexStops.back().sourceOffset == devanagari.size() && complexStops.back().x > complexStops.front().x,
+                "Complex-script caret endpoints must cover the complete shaped line");
+        Require(assets.RegisterAsset({.id = kb::assets::AssetId{8U}, .type = "ImportedAsset", .name = "Fallback font",
+                                      .virtualPath = "/Text/Fallback.kbasset", .runtimeLoadable = true}) &&
+                assets.PublishRuntimeAsset(kb::assets::AssetId{8U}, font), "Fallback font fixture publication failed");
+        latin.text->fallbackFontAssetId = 8U;
+        latin.text->fontSize = 40.0F;
+        Require(kb::scene::SetUITextContent(*latin.text, "ffi " + devanagari), "Mixed-font fixture failed");
+        frame.elements = {latin};
+        const auto mixed = fonts.Prepare(1U, assets, resources, frame);
+        Require(mixed.failureReason == nullptr && mixed.runs.size() == 1U &&
+                std::ranges::any_of(mixed.runs[0].glyphs, [](const auto& glyph) { return glyph.fallbackFont; }) &&
+                std::ranges::any_of(mixed.runs[0].glyphs, [](const auto& glyph) { return !glyph.fallbackFont; }),
+                "Mixed text must retain both primary and fallback glyphs in one run");
+        Require(fonts.Resolve(1U, 7U, 40U, {}, false, resources).idx != bgfx::kInvalidHandle &&
+                fonts.Resolve(1U, 8U, 40U, {}, false, resources).idx != bgfx::kInvalidHandle,
+                "Both font atlases must resolve");
+        Require(kb::scene::SetUITextContent(*latin.text, "\xE0\xA4\x95\xE0\xA4\xBFZ"), "Spacing fixture failed");
+        latin.text->characterSpacing = 0.0F;
+        frame.elements = {latin};
+        const auto unspaced = fonts.Prepare(1U, assets, resources, frame);
+        Require(unspaced.failureReason == nullptr && unspaced.runs.size() == 1U, "Unspaced mixed text failed");
+        const auto unspacedGlyph = std::ranges::find_if(unspaced.runs[0].glyphs, [](const auto& glyph) { return glyph.fallbackFont; });
+        Require(unspacedGlyph != unspaced.runs[0].glyphs.end(), "Spacing fixture did not select fallback");
+        const float previousX = unspacedGlyph->advanceLeft;
+        latin.text->characterSpacing = 5.0F;
+        frame.elements = {latin};
+        const auto spaced = fonts.Prepare(1U, assets, resources, frame);
+        Require(spaced.failureReason == nullptr && spaced.runs.size() == 1U, "Spaced mixed text failed");
+        const auto spacedGlyph = std::ranges::find_if(spaced.runs[0].glyphs, [](const auto& glyph) { return glyph.fallbackFont; });
+        Require(spacedGlyph != spaced.runs[0].glyphs.end() && std::abs(spacedGlyph->advanceLeft - previousX - 5.0F) < 0.01F,
+                "Character spacing must occur once after the full grapheme");
+        latin.text->characterSpacing = 0.0F;
+        Require(kb::scene::SetUITextContent(*latin.text, "a\r\nb"), "CRLF text fixture failed");
+        frame.elements = {latin};
+        const auto crlf = fonts.Prepare(1U, assets, resources, frame);
+        Require(crlf.failureReason == nullptr && crlf.runs.size() == 1U && crlf.runs[0].glyphs.size() == 2U &&
+                crlf.runs[0].glyphs[1].lineTop > crlf.runs[0].glyphs[0].lineTop,
+                "CRLF must form one line break and must not draw control glyphs");
+        frame.language = "en";
+        Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr, "English text preparation failed");
+        const auto beforeLanguageChange = fonts.TextCacheStats();
+        frame.language = "tr";
+        Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr &&
+                fonts.TextCacheStats().misses > beforeLanguageChange.misses,
+                "Changing language must re-shape cached text");
+        const auto beforeReturn = fonts.TextCacheStats();
+        frame.language = "en";
+        Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr &&
+                fonts.TextCacheStats().hits > beforeReturn.hits,
+                "Returning to a language must reuse its matching cached shaping");
+        latin.text->fontSize = 41.0F;
+        frame.elements = {latin};
+        Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr, "Temporary font size failed");
+        latin.text->fontSize = 40.0F;
+        frame.elements = {latin};
+        for (unsigned i = 0; i < 120U; ++i)
+            Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr, "Repeated font preparation failed");
+        Require(fonts.Resolve(1U, 7U, 41U, {}, false, resources).idx == bgfx::kInvalidHandle,
+                "Unused font-size atlas must be released after subsequent frames");
+        latin.text->fontAssetId = 8U;
+        latin.text->fallbackFontAssetId = 0U;
+        Require(kb::scene::SetUITextContent(*latin.text, "\xD0\xB1"), "Locale-sensitive glyph fixture failed");
+        frame.language = "sr";
+        frame.elements = {latin};
+        const auto serbian = fonts.Prepare(1U, assets, resources, frame);
+        Require(serbian.failureReason == nullptr && serbian.runs.size() == 1U && serbian.runs[0].glyphs.size() == 1U,
+                "Serbian glyph preparation failed");
+        const auto serbianGlyph = serbian.runs[0].glyphs[0].glyphId;
+        frame.language = "ru";
+        const auto russian = fonts.Prepare(1U, assets, resources, frame);
+        Require(russian.failureReason == nullptr && russian.runs.size() == 1U && russian.runs[0].glyphs.size() == 1U &&
+                russian.runs[0].glyphs[0].glyphId != serbianGlyph,
+                "Locale changes must select the font's language-specific glyph");
+        latin.text->richText = false;
+        std::string manyGlyphs;
+        for (char c = 33; c <= 126; ++c) manyGlyphs.push_back(c);
+        Require(kb::scene::SetUITextContent(*latin.text, manyGlyphs), "Atlas compaction fixture failed");
+        frame.elements = {latin};
+        const auto crowded = fonts.Prepare(1U, assets, resources, frame);
+        Require(crowded.failureReason == nullptr && crowded.runs.size() == 1U, "Crowded atlas preparation failed");
+        const auto crowdedWidth = crowded.runs[0].atlasWidth;
+        Require(kb::scene::SetUITextContent(*latin.text, "a"), "Atlas compaction replacement failed");
+        frame.elements = {latin};
+        for (unsigned i = 0; i < 121U; ++i)
+            Require(fonts.Prepare(1U, assets, resources, frame).failureReason == nullptr, "Atlas compaction lost active text");
+        const auto compacted = fonts.Prepare(1U, assets, resources, frame);
+        Require(compacted.failureReason == nullptr && compacted.runs.size() == 1U &&
+                compacted.runs[0].atlasWidth < crowdedWidth, "Atlas compaction must discard unused historical glyphs");
         fonts.ReleaseScene(1U, resources);
         Require(fonts.TextCacheStats().entries == 0U && fonts.TextCacheStats().payloadBytes == 0U,
                 "Unloading a scene must release its typography cache");
@@ -466,6 +705,16 @@ void FontPayloadValidatorRejectsUnsupportedAndTruncatedData() {
     font.sourceSize = font.payload.size();
     Require(!ScreenUIFontPayloadValidator::Validate(font),
             "Screen UI font safety gate accepted a truncated SFNT payload");
+}
+
+void DistanceFieldHandlesUnrepresentableCoverage() {
+    std::vector<std::uint8_t> result;
+    const std::array<std::uint8_t, 1U> thin{127U};
+    Require(!BuildFontDistanceField(thin, 1, 1, result) && result.empty(),
+            "A contour with no interior must report fallback instead of producing invisible text");
+    const std::array<std::uint8_t, 1U> solid{255U};
+    Require(BuildFontDistanceField(solid, 1, 1, result) && result.size() == 17U * 17U && result[8U * 17U + 8U] > 128U,
+            "An SDF must retain the inside of a visible pixel with padding");
 }
 
 void RichTextParserAppliesColorAndLineBreakWithoutChangingLiteralText() {
@@ -568,6 +817,79 @@ void RichTextParserKeepsItsContractOnNestedAndMalformedMarkup() {
     }
 }
 
+void RichTextParserScopesLinkIdentifiers() {
+    const auto parsed = ScreenUITextMarkupParser{}.Parse(
+        "a<link=first>b<color=#FF0000>c<link=second>d</link>e</color>f</link>g", true, true);
+    Require(parsed.succeeded && parsed.links == std::vector<std::string>{"first", "second"} &&
+            parsed.glyphs.size() == 7U, "Link targets and visible text must be retained");
+    const std::array<std::uint32_t, 7U> expected{0U, 1U, 1U, 2U, 1U, 1U, 0U};
+    for (std::size_t i = 0U; i < expected.size(); ++i)
+        Require(parsed.glyphs[i].link == expected[i], "Nested link scope must be restored");
+    const auto literal = ScreenUITextMarkupParser{}.Parse("<link=>a</link>", true, true);
+    Require(literal.succeeded && literal.links.empty() && literal.glyphs.size() == 15U,
+            "Malformed links must remain literal");
+    const auto disabled = ScreenUITextMarkupParser{}.Parse("<link=x>a</link>", true);
+    Require(disabled.links.empty() && disabled.glyphs.size() == 16U,
+            "Link parsing must remain opt-in until event handling is available");
+}
+
+void RichTextParserScopesUnderline() {
+    const auto result = ScreenUITextMarkupParser{}.Parse("a<u>b<u>c</u>d</u>e</u>", true);
+    Require(result.succeeded && result.glyphs.size() == 9U &&
+            !result.glyphs[0].underline && result.glyphs[1].underline &&
+            result.glyphs[2].underline && result.glyphs[3].underline && !result.glyphs[4].underline,
+            "Nested underline tags must restore their enclosing scope and leave stray closes literal");
+}
+
+void RichTextParserTablesAreOptInAndAtomic() {
+    const std::string source = "a<color=#FF0000><link=same><table><tr><td><u>x</u></td><td>y<br>z</td></tr><tr><td></td><td><color=#00FF00>g</td></tr></table>r</link></color>b";
+    const auto parsed = ScreenUITextMarkupParser{}.Parse(source, true, true, true);
+    Require(parsed.succeeded && parsed.blocks.size() == 3U && !parsed.blocks[0].table &&
+            parsed.blocks[1].table && !parsed.blocks[2].table && parsed.blocks[1].rows.size() == 2U &&
+            parsed.blocks[1].rows[0].cells.size() == 2U && parsed.blocks[1].rows[1].cells.size() == 2U,
+            "Tables must preserve ordered text blocks and rectangular cells");
+    const auto& first = parsed.blocks[1].rows[0].cells[0];
+    const auto& second = parsed.blocks[1].rows[0].cells[1];
+    const auto& empty = parsed.blocks[1].rows[1].cells[0];
+    const auto& green = parsed.blocks[1].rows[1].cells[1];
+    Require(first.end - first.begin == 1U && second.end - second.begin == 3U && empty.begin == empty.end &&
+            green.end - green.begin == 1U && parsed.glyphs[first.begin].underline &&
+            !parsed.glyphs[second.begin].underline && parsed.glyphs[second.begin + 1U].codepoint == '\n' &&
+            parsed.glyphs[first.begin].link == 1U && parsed.glyphs[second.begin].link == 1U &&
+            parsed.glyphs[green.begin].color[1] == 1.0F && parsed.glyphs[green.begin].color[0] == 0.0F &&
+            parsed.glyphs[parsed.blocks[2].text.begin].color[0] == 1.0F &&
+            parsed.glyphs[parsed.blocks[2].text.begin].color[1] == 0.0F,
+            "Cell styles and inherited link scopes must remain isolated");
+    Require(source[parsed.glyphs[first.begin].sourceOffset] == 'x' &&
+            source[parsed.glyphs[second.begin].sourceOffset] == 'y', "Cell glyph offsets must refer to source bytes");
+    const auto scopes = ScreenUITextMarkupParser{}.Parse(
+        "<u><link=same><table><tr><td></u></link>x</td><td><link=same>y</link>z</td></tr></table>q</link></u>", true, true, true);
+    Require(scopes.succeeded && scopes.links == std::vector<std::string>{"same", "same"} &&
+            scopes.glyphs.size() == 4U && !scopes.glyphs[0].underline && scopes.glyphs[0].link == 0U &&
+            scopes.glyphs[1].underline && scopes.glyphs[1].link == 2U &&
+            scopes.glyphs[2].underline && scopes.glyphs[2].link == 1U &&
+            scopes.glyphs[3].underline && scopes.glyphs[3].link == 1U,
+            "Cell closures must not escape, and separate link openings need distinct identities");
+    const auto defaultMode = ScreenUITextMarkupParser{}.Parse("<table><tr><td>x</td></tr></table>", true);
+    Require(defaultMode.blocks.empty() && defaultMode.glyphs.size() == std::string_view{"<table><tr><td>x</td></tr></table>"}.size(),
+            "Table parsing must be disabled by default");
+    for (const std::string_view bad : {"<table><tr><td><u>x</u></tr></table>",
+                                       "<table><tr><td>x</td><td>y</td></tr><tr><td>z</td></tr></table>",
+                                       "<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>",
+                                       "<table><tr><td>x"}) {
+        const auto literal = ScreenUITextMarkupParser{}.Parse(bad, true, true, true);
+        Require(literal.succeeded && literal.blocks.size() == 1U && !literal.blocks[0].table &&
+                literal.glyphs.size() == bad.size() && literal.links.empty(),
+                "Malformed tables must remain wholly literal without partial styles");
+        for (std::size_t i = 0U; i < bad.size(); ++i)
+            Require(literal.glyphs[i].codepoint == static_cast<unsigned char>(bad[i]), "Malformed table lost source text");
+    }
+    const std::string broken = "<table><tr><td>\xFF</td></tr></table>";
+    const auto invalidUtf8 = ScreenUITextMarkupParser{}.Parse(broken, true, true, true);
+    Require(!invalidUtf8.succeeded && invalidUtf8.glyphs.empty() && invalidUtf8.links.empty() && invalidUtf8.blocks.empty(),
+            "Malformed UTF-8 inside a table must fail atomically");
+}
+
 } // namespace
 
 void RunScreenUIDrawBatchTests() {
@@ -577,12 +899,19 @@ void RunScreenUIDrawBatchTests() {
     BatchBuilderUsesTextRunAndHonorsHiddenMask();
     BatchBuilderAppliesInteractionTintToEveryVisualLayer();
     FocusedInputFieldDrawsItsCaretAtTheEditedOffset();
+    DistanceFieldOutlineTracksGlyphScale();
+    TableCellClipsGlyphAndUnderlineGeometry();
     FontPreparationDropsOnlyTheTextItCannotPrepare();
     FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates();
     ImportCatalogOffersOnlyRasterizableFontFormats();
     FontPayloadValidatorRejectsUnsupportedAndTruncatedData();
+    DistanceFieldHandlesUnrepresentableCoverage();
     RichTextParserAppliesColorAndLineBreakWithoutChangingLiteralText();
     RichTextParserKeepsItsContractOnNestedAndMalformedMarkup();
+    RichTextParserScopesLinkIdentifiers();
+    RichTextParserScopesUnderline();
+    RichTextParserTablesAreOptInAndAtomic();
 }
+
 
 } // namespace kb::render::tests

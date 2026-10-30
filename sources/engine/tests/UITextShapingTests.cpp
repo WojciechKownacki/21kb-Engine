@@ -34,7 +34,7 @@ std::vector<kb::scene::UITextShapedGlyph> Shape(const std::vector<std::byte>& fo
 
 int main(int argc, char** argv) {
     try {
-        Require(argc == 2, "Expected a font fixture path");
+        Require(argc == 4, "Expected text, GDEF caret and complex-script font fixture paths");
         std::ifstream stream(argv[1], std::ios::binary | std::ios::ate);
         Require(stream.good(), "Cannot open font fixture");
         const auto length = stream.tellg();
@@ -43,8 +43,60 @@ int main(int argc, char** argv) {
         stream.seekg(0);
         stream.read(reinterpret_cast<char*>(font.data()), static_cast<std::streamsize>(font.size()));
         Require(stream.good(), "Cannot read font fixture");
+        {
+            std::ifstream caretStream(argv[2], std::ios::binary | std::ios::ate);
+            Require(caretStream.good() && caretStream.tellg() > 0, "Cannot read the caret font fixture");
+            std::vector<std::byte> caretFont(static_cast<std::size_t>(caretStream.tellg()));
+            caretStream.seekg(0);
+            caretStream.read(reinterpret_cast<char*>(caretFont.data()), static_cast<std::streamsize>(caretFont.size()));
+            const auto caretGlyphs = Shape(caretFont, U"fi");
+            Require(caretGlyphs.size() == 1U && caretGlyphs[0].ligatureCarets.size() == 1U &&
+                std::abs(caretGlyphs[0].ligatureCarets[0] - 4.0F) < 0.001F &&
+                std::abs(caretGlyphs[0].advance - 20.0F) < 0.001F,
+                "GDEF carets must retain the font's asymmetric component position, not half the advance");
+        }
 
         const auto ligature = Shape(font, U"ffi");
+        {
+            std::ifstream complexStream(argv[3], std::ios::binary | std::ios::ate);
+            Require(complexStream.good() && complexStream.tellg() > 0, "Cannot read complex-script font fixture");
+            std::vector<std::byte> complexFont(static_cast<std::size_t>(complexStream.tellg()));
+            complexStream.seekg(0);
+            complexStream.read(reinterpret_cast<char*>(complexFont.data()), static_cast<std::streamsize>(complexFont.size()));
+            const auto matra = Shape(complexFont, U"\u0915\u093F");
+            Require(matra.size() == 2U && matra[0].glyphId == 545U && matra[1].glyphId == 56U &&
+                matra[0].clusterBegin == 0U && matra[1].clusterEnd == 2U,
+                "Devanagari pre-base vowel shaping must select and reorder the contextual matra");
+            const auto conjunct = Shape(complexFont, U"\u0915\u094D\u0937\u093F");
+            Require(conjunct.size() == 2U && conjunct[0].glyphId == 551U && conjunct[1].glyphId == 90U &&
+                conjunct[0].clusterBegin == 0U && conjunct[1].clusterEnd == 4U,
+                "Devanagari conjuncts must substitute the joined form and preserve the logical syllable");
+            const std::vector<std::uint32_t> mixedText{U'f', U'f', U'i', U' ', 0x0915U, 0x093FU};
+            const std::vector<std::uint32_t> graphemes{0U, 1U, 2U, 3U, 4U, 6U};
+            std::vector<kb::scene::UITextFontShapedGlyph> mixedFonts;
+            Require(kb::scene::ShapeUITextWithFallback(font, complexFont, mixedText, 0U, mixedText.size(),
+                0.02F, 0.02F, graphemes, mixedFonts), "Mixed-font shaping failed");
+            Require(!mixedFonts.empty() && mixedFonts.front().glyph.clusterBegin == 0U &&
+                mixedFonts.front().glyph.clusterEnd == 3U && !mixedFonts.front().fallback &&
+                std::ranges::count_if(mixedFonts, [](const auto& g) { return g.fallback; }) == 2 &&
+                std::ranges::none_of(mixedFonts, [](const auto& g) { return g.glyph.glyphId == 0U; }),
+                "Fallback must preserve the primary ligature and shape the Devanagari grapheme in one font");
+            const std::vector<std::uint32_t> rtlText{0x0915U, U' ', U'a', U'b', U' ', 0x05D0U, 0x05D1U};
+            const std::vector<std::uint32_t> rtlBoundaries{0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U};
+            Require(kb::scene::ShapeUITextWithFallback(complexFont, font, rtlText, 0U, rtlText.size(),
+                0.02F, 0.02F, rtlBoundaries, mixedFonts) &&
+                std::ranges::none_of(mixedFonts, [](const auto& g) { return g.glyph.glyphId == 0U; }),
+                "Mixed-direction fallback text must retain covered glyphs");
+            const auto hebrewFirst = std::ranges::find_if(mixedFonts, [](const auto& g) { return g.glyph.clusterBegin == 6U; });
+            const auto hebrewLast = std::ranges::find_if(mixedFonts, [](const auto& g) { return g.glyph.clusterBegin == 5U; });
+            Require(hebrewFirst != mixedFonts.end() && hebrewLast != mixedFonts.end() && hebrewFirst < hebrewLast &&
+                hebrewFirst->fallback && hebrewLast->fallback, "Fallback must retain visual RTL glyph order");
+            const std::vector<std::uint32_t> unknown{0x10FFFFU};
+            const std::vector<std::uint32_t> unknownBoundaries{0U, 1U};
+            Require(kb::scene::ShapeUITextWithFallback(font, complexFont, unknown, 0U, 1U, 0.02F, 0.02F,
+                unknownBoundaries, mixedFonts) && mixedFonts.size() == 1U && mixedFonts[0].glyph.glyphId == 0U &&
+                !mixedFonts[0].fallback, "A grapheme absent from both fonts must use the primary missing glyph");
+        }
         Require(ligature.size() == 1U && ligature[0].clusterBegin == 0U && ligature[0].clusterEnd == 3U,
                 "Latin ligatures must retain all source characters");
         {
@@ -62,6 +114,17 @@ int main(int argc, char** argv) {
         Require(hebrew.size() == 3U && hebrew[0].clusterBegin == 2U && hebrew[2].clusterBegin == 0U &&
                 std::all_of(hebrew.begin(), hebrew.end(), [](const auto& g) { return g.rightToLeft; }),
                 "Hebrew must appear in visual RTL order");
+        {
+            const std::vector<std::uint32_t> text{0x0431U};
+            const std::vector<std::uint32_t> boundaries{0U, 1U};
+            std::vector<kb::scene::UITextFontShapedGlyph> serbian, russian;
+            Require(kb::scene::ShapeUITextWithFallback(font, {}, text, 0U, 1U, 0.02F, 0.0F, boundaries,
+                        serbian, {}, {}, "sr") &&
+                    kb::scene::ShapeUITextWithFallback(font, {}, text, 0U, 1U, 0.02F, 0.0F, boundaries,
+                        russian, {}, {}, "ru") && serbian.size() == 1U && russian.size() == 1U &&
+                    serbian[0].glyph.glyphId != russian[0].glyph.glyphId,
+                    "Locale-sensitive OpenType substitutions must follow the selected language");
+        }
         const auto arabic = Shape(font, U"\u0633\u0644\u0627\u0645");
         Require(arabic.size() == 3U && arabic.front().clusterBegin == 3U && arabic.back().clusterBegin == 0U,
                 "Arabic must join contextually and form the lam-alef ligature");
@@ -84,11 +147,21 @@ int main(int argc, char** argv) {
 
         const std::vector<std::uint32_t> text{U'A'};
         std::vector<kb::scene::UITextShapedGlyph> output = ligature;
+        std::vector<kb::scene::UITextFontVariation> axes;
+        Require(kb::scene::ParseUITextFontVariations("wght=450,wdth=90", axes) && axes.size() == 2U &&
+                axes[0].tag == 0x77676874U && axes[0].value == 450.0F && axes[1].value == 90.0F,
+                "Variable font settings must retain their tags and values");
+        for (const std::string_view invalid : {"wght=", "wght=nan", "wght=1,", "wght=1,wght=2", "bad=1"})
+            Require(!kb::scene::ParseUITextFontVariations(invalid, axes) && axes.empty(),
+                    "Malformed variable font settings must fail without partial output");
         Require(!kb::scene::ShapeUIText({}, text, 0, 1, 1.0F, output) && output.empty(),
                 "Invalid fonts must clear previous output");
         Require(!kb::scene::ShapeUIText(font, text, 0, 2, 1.0F, output), "Invalid line ranges must fail");
         Require(!kb::scene::ShapeUIText(font, text, 0, 1, std::numeric_limits<float>::infinity(), output),
                 "Nonfinite scale must fail");
+        const std::vector<kb::scene::UITextFontVariation> nonexistentAxis{{0x77676874U, 400.0F}};
+        Require(!kb::scene::ShapeUIText(font, text, 0, 1, 1.0F, output, {}, nonexistentAxis) && output.empty(),
+                "An axis absent from the face must fail without producing glyphs");
         Require(kb::scene::ShapeUIText(font, text, 0, 0, 1.0F, output) && output.empty(),
                 "An empty line must succeed without glyphs");
         for (const auto invalid : {0xD800U, 0xDFFFU, 0x110000U, 0xFFFFFFFFU}) {

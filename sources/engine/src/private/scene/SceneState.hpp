@@ -868,6 +868,9 @@ public:
     std::vector<SceneUIEvent> uiEvents;
     SceneEntity uiHovered{};
     SceneEntity uiPressed{};
+    std::string uiPressedLink;
+    std::string uiPressedLinkSource;
+    std::uint32_t uiPressedLinkInstance = 0U;
     SceneEntity uiFocused{};
     // A modal canvas was shown in the last frame, and the widget that had focus before it appeared.
     bool uiModalActive = false;

@@ -91,6 +91,7 @@ constexpr std::array KnownExtensionsAfterAudio{
     ExtensionCategory{ ".prefab", AssetImportCategory::Scene },
     ExtensionCategory{ ".kbprefab", AssetImportCategory::Scene },
     ExtensionCategory{ ".kbloc", AssetImportCategory::Data },
+    ExtensionCategory{ ".kbtheme", AssetImportCategory::Data },
     ExtensionCategory{ ".xml", AssetImportCategory::Data },
     ExtensionCategory{ ".yaml", AssetImportCategory::Data },
     ExtensionCategory{ ".yml", AssetImportCategory::Data },

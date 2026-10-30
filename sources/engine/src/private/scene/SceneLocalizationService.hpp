@@ -15,6 +15,7 @@ public:
     [[nodiscard]] static bool SetLanguage(Scene& scene, std::string_view language);
     [[nodiscard]] static std::string Language(const Scene& scene);
     [[nodiscard]] static std::string FallbackLanguage(const Scene& scene);
+    [[nodiscard]] static std::string MessageLanguage(const Scene& scene, std::string_view key, std::string_view number = {});
     [[nodiscard]] static std::string Translate(const Scene& scene, std::string_view key);
     [[nodiscard]] static std::string FormatPlural(const Scene& scene, std::string_view key, std::int64_t count);
     [[nodiscard]] static std::string FormatPluralNumber(const Scene& scene, std::string_view key, std::string_view number);

@@ -113,6 +113,7 @@ enum class InspectorSectionId : std::uint8_t {
     // A Mesh Renderer drawing a .kbmap2d tile map (the World 2D Map component).
     World2DMap,
     AudioMixerRuntime,
+    UITheme,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -622,6 +623,8 @@ enum class InspectorPropertyId : std::uint16_t {
     AudioMixerMeterHold,
     AudioMixerMeterClips,
     AudioMixerMeterFrames,
+    UIThemeVariant,
+    UIThemeField,
 };
 
 struct InspectorDynamicRowIdentity {
@@ -646,6 +649,8 @@ struct InspectorRowBounds {
 };
 
 struct InspectorPanelState {
+    std::string themeVariant;
+    std::uint64_t themeAssetId = 0U;
     [[nodiscard]] bool IsCollapsed(InspectorSectionId section) const noexcept;
     void ToggleCollapsed(InspectorSectionId section) noexcept;
 

@@ -121,6 +121,18 @@ std::string SceneLocalizationService::FallbackLanguage(const Scene& scene) {
     return state.localizationCatalog.IsLoaded() ? state.localizationCatalog->fallbackLanguage : std::string{};
 }
 
+std::string SceneLocalizationService::MessageLanguage(const Scene& scene, std::string_view key, std::string_view number) {
+    const auto& state = SceneAccess::State(scene);
+    const auto found = FindWithFallback(state, key);
+    if (!found.message) return state.localizationLanguage;
+    if (number.empty()) return found.message->text.empty() ? state.localizationLanguage : std::string{found.language};
+    const auto operands = kb::localization::ParsePluralOperands(number);
+    if (!operands) return state.localizationLanguage;
+    const auto category = kb::localization::PluralCategoryName(kb::localization::SelectPluralCategory(found.language, *operands));
+    if (!found.message->plurals.contains(category) && !found.message->plurals.contains("other")) return state.localizationLanguage;
+    return std::string{found.language};
+}
+
 std::string SceneLocalizationService::Translate(const Scene& scene, std::string_view key) {
     const SceneState& state = SceneAccess::State(scene);
     const auto* message = FindWithFallback(state, key).message;

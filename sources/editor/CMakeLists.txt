@@ -919,6 +919,11 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorBundledFontPath.hpp
     src/scene/EditorSceneContextSkeletalMesh.cpp
     src/scene/EditorSceneContextPostProcess.cpp
+    src/scene/ui/EditorUIThemeAssets.cpp
+    src/private/scene/ui/EditorUIThemeAssets.hpp
+    src/scene/ui/EditorSceneContextUITheme.cpp
+    src/inspection/ui/InspectorUIThemeModel.cpp
+    src/private/inspection/ui/InspectorUIThemeModel.hpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
@@ -1510,6 +1515,8 @@ if(BUILD_TESTING)
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp
         src/inspection/ui/InspectorUIComponentModel.cpp
+        src/inspection/ui/InspectorUIThemeModel.cpp
+        src/scene/ui/EditorUIThemeAssets.cpp
         src/inspection/InspectorAddComponentBrowserModel.cpp
         src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
         src/inspection/InspectorMaterialTextureSlotFormatter.cpp
@@ -1677,6 +1684,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-UI-Catalog")
     set_tests_properties(kb_editor_ui_component_catalog_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_ui_theme_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/UIThemeWorkflowScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-Theme")
+    set_tests_properties(kb_editor_ui_theme_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui" TIMEOUT 180)
     add_test(NAME kb_editor_localization_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLocalizationScenario.json"

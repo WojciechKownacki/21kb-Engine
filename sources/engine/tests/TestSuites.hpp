@@ -33,6 +33,7 @@ void RunTimelineRuntimeTests();
 void RunBlendSpace2DRuntimeTests();
 void RunLocalizationTests();
 void RunUITextLineBreakingTests();
+void RunUIThemeTests();
 void RunCrashReportConsentTests();
 void RunNavigationRuntimeTests();
 void RunNavigationMeshTests();

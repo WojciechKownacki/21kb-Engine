@@ -1,4 +1,5 @@
 #pragma once
+#include "engine/ui/UITheme.hpp"
 
 #include "engine/assets/Map2DAsset.hpp"
 #include "engine/scene/SceneTemplates.hpp"
@@ -902,6 +903,9 @@ public:
     [[nodiscard]] bool SetSceneAudioOcclusion(const kb::scene::AudioOcclusionSettings& settings);
     // A post-process profile asset's values (the Inspector edits them, undoably) and the scene's
     // profile (saved with the scene, undoable through the scene history); 0 clears it.
+    [[nodiscard]] bool CreateUIThemeAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] std::optional<kb::scene::UITheme> ReadUITheme(kb::assets::AssetId id) const;
+    [[nodiscard]] bool SetUITheme(kb::assets::AssetId id, const kb::scene::UITheme& theme);
     [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> ReadPostProcessProfile(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetPostProcessProfile(kb::assets::AssetId id, const kb::render::ScenePostProcessSettings& settings);
     [[nodiscard]] bool SetScenePostProcessProfile(kb::assets::AssetId id);

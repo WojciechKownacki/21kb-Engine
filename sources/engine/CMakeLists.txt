@@ -345,6 +345,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneCrashReportConsent.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
+    include/engine/ui/UITheme.hpp
+    include/engine/ui/UIThemeIO.hpp
+    include/engine/ui/UIThemeAssetLoader.hpp
     include/engine/localization/LocalizationCatalogAssetLoader.hpp
     include/engine/localization/PluralRules.hpp
     include/engine/scene/SceneAnimators.hpp
@@ -830,6 +833,9 @@ add_library(kb_engine STATIC
     src/scene/SceneCrashReportConsent.cpp
     src/scene/modules/SceneLocalization.cpp
     src/localization/LocalizationCatalogIO.cpp
+    src/ui/UITheme.cpp
+    src/ui/UIThemeIO.cpp
+    src/ui/UIThemeAssetLoader.cpp
     src/localization/LocalizationCatalogAssetLoader.cpp
     src/localization/PluralRules.cpp
     src/scene/ParticleEffectAssetIO.cpp
@@ -2070,6 +2076,7 @@ if(BUILD_TESTING)
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
         tests/UITextLineBreakingTests.cpp
+        tests/UIThemeTests.cpp
         tests/CrashReportConsentTests.cpp
         tests/NavigationMeshTests.cpp
         tests/NavigationRuntimeTests.cpp

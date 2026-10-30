@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -27,6 +28,7 @@
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
+#include "engine/ui/UITheme.hpp"
 #include "scene/asset/io/SceneAssetReader.hpp"
 #include "scene/asset/io/components/SceneAssetUIComponentCodec.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
@@ -1770,6 +1772,10 @@ void TestDropdownPersistenceAndOptionEdits() {
     authored.dropdown->value = 1U;
     std::vector<std::uint8_t> bytes;
     kb::scene::SceneAssetUIComponentCodec::Write(bytes, authored);
+    // The v38 fixture predates theme binding on Rect Transform. Remove its
+    // empty v59 extension while retaining the following dropdown bytes.
+    constexpr std::size_t rectEnd = sizeof(std::uint64_t) + 12U * sizeof(float) + sizeof(float) + sizeof(std::int32_t);
+    bytes.erase(bytes.begin() + rectEnd, bytes.begin() + rectEnd + sizeof(std::uint64_t) + 2U * sizeof(std::uint32_t));
     kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
     kb::scene::UIComponentSet decoded;
     kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 38U, decoded) && reader.Exhausted() &&
@@ -1829,6 +1835,131 @@ struct PointerDriver {
         At(x, y, false);
     }
 };
+
+void TestThemedSelectableFadeWithSeparateGraphic() {
+    using namespace kb::scene;
+    Scene scene;
+    const kb::assets::AssetId themeId{7123U};
+    auto& assets = scene.Assets().Manager();
+    kb::tests::Require(assets.RegisterAsset({.id = themeId, .type = "UITheme", .name = "Theme",
+                                            .virtualPath = "/Game/Theme.kbtheme", .runtimeLoadable = true}),
+                       "Theme fixture registration failed");
+    const auto publish = [&](bool alternate) {
+        UITheme theme;
+        theme.properties = {
+            {{UIComponentType::Selectable, "highlightedColor.r"}, alternate ? 0.0F : 1.0F},
+            {{UIComponentType::Selectable, "highlightedColor.g"}, alternate ? 1.0F : 0.0F},
+            {{UIComponentType::Selectable, "highlightedColor.b"}, 0.0F},
+            {{UIComponentType::Selectable, "normalColor.r"}, alternate ? 0.0F : 1.0F},
+            {{UIComponentType::Selectable, "normalColor.g"}, alternate ? 0.25F : 1.0F},
+            {{UIComponentType::Selectable, "colorFadeSeconds"}, 1.0F},
+        };
+        return assets.PublishRuntimeAsset(themeId, std::make_shared<UITheme>(std::move(theme)));
+    };
+    kb::tests::Require(publish(false), "Theme fixture publication failed");
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    std::array<SceneEntity, 2U> graphics{};
+    for (std::size_t i = 0U; i < graphics.size(); ++i) {
+        UIComponentSet control;
+        control.rectTransform = Rect(static_cast<float>(i) * 120.0F, 0.0F, 100.0F, 50.0F);
+        control.rectTransform->themeAssetId = themeId.value;
+        control.selectable.emplace();
+        if (i == 1U) {
+            control.selectable->normalColor.r = 0.8F;
+            kb::tests::Require(SetUIRectThemeOverrides(*control.rectTransform, "kb21.ui.selectable:normalColor.r"),
+                               "Theme override fixture failed");
+        }
+        const auto owner = AddUI(scene, canvas, control);
+        UIComponentSet graphic;
+        graphic.rectTransform = Rect(0.0F, 0.0F, 100.0F, 50.0F);
+        graphic.border.emplace();
+        const auto child = AddUI(scene, owner, graphic);
+        graphics[i] = child.Entity();
+        scene.Components().UI().TryGet<UISelectable>(owner.Entity())->targetGraphic = child.Entity().Id();
+    }
+    PointerDriver pointer{scene};
+    pointer.At(350.0F, 350.0F, false, 0.25F);
+    pointer.At(10.0F, 10.0F, false, 0.25F);
+    const auto first = FindElement(scene.UI().Frame(), graphics[0]);
+    kb::tests::Require(first && kb::tests::NearlyEqual(first->interactionTint.g, 0.75F),
+                       "First transition frame must move toward the themed highlight");
+    pointer.At(10.0F, 10.0F, false, 0.25F);
+    const auto second = FindElement(scene.UI().Frame(), graphics[0]);
+    kb::tests::Require(second && kb::tests::NearlyEqual(second->interactionTint.g, 0.5625F),
+                       "Separate target graphic must continue fading from the prior selector state");
+    SceneUIFrame rendered;
+    kb::tests::Require(static_cast<const Scene&>(scene).UI().BuildFrame(400.0F, 400.0F, rendered) &&
+                       FindElement(rendered, graphics[0]) &&
+                       kb::tests::NearlyEqual(FindElement(rendered, graphics[0])->interactionTint.g, 0.5625F),
+                       "A read-only render frame must retain the transition on the separate graphic");
+    kb::tests::Require(publish(true), "Theme replacement publication failed");
+    pointer.At(10.0F, 10.0F, false, 0.25F);
+    const auto changed = FindElement(scene.UI().Frame(), graphics[0]);
+    const auto other = FindElement(scene.UI().Frame(), graphics[1]);
+    kb::tests::Require(changed && other && kb::tests::NearlyEqual(changed->interactionTint.r, 0.75F) &&
+                       kb::tests::NearlyEqual(changed->interactionTint.g, 0.671875F) &&
+                       kb::tests::NearlyEqual(other->interactionTint.r, 0.8F) &&
+                       kb::tests::NearlyEqual(other->interactionTint.g, 0.8125F),
+                       "A changed shared theme must retarget both controls while retaining local overrides and fades");
+
+    UIComponentSet lateControl;
+    lateControl.rectTransform = Rect(250.0F, 0.0F, 100.0F, 50.0F);
+    lateControl.border.emplace();
+    const auto late = AddUI(scene, canvas, lateControl);
+    pointer.At(350.0F, 350.0F, false, 0.25F);
+    UISelectable selectable;
+    selectable.normalColor.r = 0.25F;
+    selectable.colorFadeSeconds = 1.0F;
+    scene.Components().UI().Set(late.Entity(), selectable);
+    pointer.At(350.0F, 350.0F, false, 0.25F);
+    const auto* lateFrame = FindElement(scene.UI().Frame(), late.Entity());
+    kb::tests::Require(lateFrame && kb::tests::NearlyEqual(lateFrame->interactionTint.r, 0.25F),
+                       "A newly added selectable must start at its current state color");
+}
+
+void TestRichTextLinkActivation() {
+    using namespace kb::scene;
+    Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    auto components = BuildUIComponentPreset(UIComponentPreset::Button);
+    components.rectTransform = Rect(0.0F, 0.0F, 100.0F, 50.0F);
+    static_cast<void>(SetUITextContent(*components.text, "<link=help>Help</link><link=help>More</link>"));
+    const auto label = AddUI(scene, canvas, components);
+    PointerDriver pointer{scene};
+    pointer.At(10.0F, 10.0F, false);
+    scene.UI().PublishTextLayouts({{label.Entity(), "<link=help>Help</link><link=help>More</link>", {},
+        {{{kb::math::Vec2{5.0F, 5.0F}, kb::math::Vec2{45.0F, 5.0F},
+           kb::math::Vec2{45.0F, 30.0F}, kb::math::Vec2{5.0F, 30.0F}}, "help", 1U},
+         {{kb::math::Vec2{50.0F, 5.0F}, kb::math::Vec2{85.0F, 5.0F},
+           kb::math::Vec2{85.0F, 30.0F}, kb::math::Vec2{50.0F, 30.0F}}, "help", 2U}}}});
+    pointer.Click(10.0F, 10.0F);
+    const auto* activated = FindEvent(scene.UI().Events(), SceneUIEventType::LinkActivated, label.Entity());
+    kb::tests::Require(activated && SceneUIEventText(*activated) == "help", "A link click must carry its target");
+    static_cast<void>(scene.UI().DrainEvents());
+    pointer.At(10.0F, 10.0F, true);
+    pointer.At(75.0F, 10.0F, false);
+    kb::tests::Require(!HasEvent(scene.UI().Events(), SceneUIEventType::LinkActivated, label.Entity()),
+        "Releasing over another link with the same target must not activate the first link");
+    static_cast<void>(scene.UI().DrainEvents());
+    pointer.At(10.0F, 10.0F, true);
+    auto replacing = *scene.Components().UI().TryGet<UIText>(label.Entity());
+    static_cast<void>(SetUITextContent(replacing, "<link=help>Other</link>"));
+    scene.Components().UI().Set(label.Entity(), replacing);
+    pointer.At(10.0F, 10.0F, true);
+    scene.UI().PublishTextLayouts({{label.Entity(), "<link=help>Other</link>", {},
+        {{{kb::math::Vec2{5.0F, 5.0F}, kb::math::Vec2{45.0F, 5.0F},
+           kb::math::Vec2{45.0F, 30.0F}, kb::math::Vec2{5.0F, 30.0F}}, "help", 1U}}}});
+    pointer.At(10.0F, 10.0F, false);
+    kb::tests::Require(!HasEvent(scene.UI().Events(), SceneUIEventType::LinkActivated, label.Entity()),
+        "Replacing text during a press must not activate a new link at the same position");
+    static_cast<void>(scene.UI().DrainEvents());
+    auto changed = *scene.Components().UI().TryGet<UIText>(label.Entity());
+    static_cast<void>(SetUITextContent(changed, "Changed"));
+    scene.Components().UI().Set(label.Entity(), changed);
+    pointer.Click(10.0F, 10.0F);
+    kb::tests::Require(!HasEvent(scene.UI().Events(), SceneUIEventType::LinkActivated, label.Entity()),
+        "Geometry for a previous text must not activate a link");
+}
 
 // Radio buttons: toggles naming one group switch each other off and the chosen one stays chosen. A slider or
 // progress bar positions the fill and handle widgets it names along its direction.
@@ -2268,7 +2399,7 @@ void TestScrollMovementAndLocalizedText() {
     for (int index = 0; index < 600; ++index) tooLong += accent;
     const kb::localization::LocalizationCatalog edgeCatalog{
         .fallbackLanguage = "en",
-        .languages = {{"en", {{"long.text", {.text = tooLong}}, {"short.text", {.text = "ok"}}}}, {"pl", {{"short.text", {.text = "OK!"}}}}},
+        .languages = {{"en", {{"long.text", {.text = tooLong}}, {"short.text", {.text = "ok"}}, {"plural.text", {.plurals = {{"other", "{count} items"}}}}}}, {"pl", {{"short.text", {.text = "OK!"}}}}},
     };
     kb::tests::Require(kb::localization::LocalizationCatalogIO::Save(root / "Assets" / "Localization" / "Edge.kbloc", edgeCatalog), "The edge catalog must save");
     static_cast<void>(scene.Assets().Discover());
@@ -2284,6 +2415,12 @@ void TestScrollMovementAndLocalizedText() {
     const kb::scene::SceneObject longText = addLocalized("long.text", 130.0F);
     const kb::scene::SceneObject shortText = addLocalized("short.text", 150.0F);
     const kb::scene::SceneObject missingText = addLocalized("no.such.key", 170.0F);
+    auto pluralFallbackComponents = kb::scene::UIComponentSet{};
+    pluralFallbackComponents.rectTransform = Rect(0.0F, 190.0F, 100.0F, 20.0F);
+    pluralFallbackComponents.text.emplace();
+    static_cast<void>(kb::scene::SetUITextLocalizationKey(*pluralFallbackComponents.text, "plural.text"));
+    static_cast<void>(kb::scene::SetUITextLocalizationNumber(*pluralFallbackComponents.text, "2"));
+    const auto pluralFallback = AddUI(scene, canvas, pluralFallbackComponents);
     for (const char* language : {"pl", "en"}) {
         kb::tests::Require(scene.Localization().SetLanguage(language), "The edge catalog language must switch");
         pointer.At(390.0F, 390.0F, false);
@@ -2294,6 +2431,13 @@ void TestScrollMovementAndLocalizedText() {
         kb::tests::Require(ShownText(scene.UI().Frame(), shortText.Entity()) == (std::string{language} == "pl" ? "OK!" : "ok"),
             "A short message must follow the language");
         kb::tests::Require(ShownText(scene.UI().Frame(), missingText.Entity()) == "no.such.key", "A message missing everywhere must show its key");
+        kb::tests::Require(FindElement(scene.UI().Frame(), longText.Entity())->textLanguage == "en" &&
+                FindElement(scene.UI().Frame(), shortText.Entity())->textLanguage == language &&
+                FindElement(scene.UI().Frame(), missingText.Entity())->textLanguage == language,
+            "Shaping language must follow the actual translated message or the selected locale for missing keys");
+        kb::tests::Require(ShownText(scene.UI().Frame(), pluralFallback.Entity()) == "2 items" &&
+                FindElement(scene.UI().Frame(), pluralFallback.Entity())->textLanguage == "en",
+            "Plural fallback must shape using the language supplying the selected plural form");
     }
     std::filesystem::remove_all(root);
 }
@@ -2368,6 +2512,9 @@ void TestModalCanvasBlocksCanvasesBelow() {
 void TestWidgetSettingsPersistence() {
     kb::scene::UIComponentSet authored;
     authored.rectTransform.emplace();
+    authored.rectTransform->themeAssetId = 83U;
+    static_cast<void>(kb::scene::SetUIRectThemeVariant(*authored.rectTransform, "accent"));
+    static_cast<void>(kb::scene::SetUIRectThemeOverrides(*authored.rectTransform, "kb21.ui.text:color.r"));
     authored.canvas.emplace();
     authored.canvas->renderMode = kb::scene::UICanvasRenderMode::WorldSpace;
     authored.canvas->pixelsPerUnit = 50.0F;
@@ -2389,6 +2536,9 @@ void TestWidgetSettingsPersistence() {
     authored.text.emplace();
     static_cast<void>(kb::scene::SetUITextLocalizationKey(*authored.text, "hud.title"));
     static_cast<void>(kb::scene::SetUITextLocalizationNumber(*authored.text, "1.00"));
+    static_cast<void>(kb::scene::SetUITextFontVariations(*authored.text, "wght=450,wdth=90"));
+    authored.text->fallbackFontAssetId = 82U;
+    authored.text->fontRenderMode = kb::scene::UITextFontRenderMode::SignedDistanceField;
     authored.text->overflow = kb::scene::UITextOverflow::Ellipsis;
     authored.text->autoSize = true;
     authored.text->minFontSize = 9.0F;
@@ -2425,7 +2575,10 @@ void TestWidgetSettingsPersistence() {
     kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
     kb::scene::UIComponentSet decoded;
     kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, kb::scene::SceneDocument::CurrentFileVersion, decoded) && reader.Exhausted(), "The current widget set must load");
-    kb::tests::Require(decoded.canvas->renderMode == kb::scene::UICanvasRenderMode::WorldSpace && decoded.canvas->pixelsPerUnit == 50.0F &&
+    kb::tests::Require(decoded.rectTransform->themeAssetId == 83U &&
+        kb::scene::UIRectThemeVariant(*decoded.rectTransform) == "accent" &&
+        kb::scene::UIRectThemeOverrides(*decoded.rectTransform) == "kb21.ui.text:color.r" &&
+        decoded.canvas->renderMode == kb::scene::UICanvasRenderMode::WorldSpace && decoded.canvas->pixelsPerUnit == 50.0F &&
         !decoded.canvas->respectSafeArea && decoded.canvas->player == 2 && decoded.canvas->modal && !decoded.canvasGroup->visible &&
         decoded.canvasGroup->transitionSeconds == 0.3F && decoded.canvasGroup->hiddenOffset.y == 5.0F && decoded.canvasGroup->hiddenScale == 0.8F &&
         decoded.image->fillMethod == kb::scene::UIImageFillMethod::Radial360 && decoded.image->fillOrigin == kb::scene::UIImageFillOrigin::End &&
@@ -2433,6 +2586,8 @@ void TestWidgetSettingsPersistence() {
         decoded.image->materialAssetId == 81U &&
         kb::scene::UITextLocalizationKey(*decoded.text) == "hud.title" && kb::scene::UITextLocalizationNumber(*decoded.text) == "1.00" && decoded.text->overflow == kb::scene::UITextOverflow::Ellipsis &&
         decoded.text->autoSize && decoded.text->minFontSize == 9.0F && decoded.text->maxLines == 2U && decoded.text->characterSpacing == 1.5F &&
+        kb::scene::UITextFontVariations(*decoded.text) == "wght=450,wdth=90" && decoded.text->fallbackFontAssetId == 82U &&
+        decoded.text->fontRenderMode == kb::scene::UITextFontRenderMode::SignedDistanceField &&
         decoded.mask->softness == 6.0F && decoded.selectable->transition == kb::scene::UISelectableTransition::SpriteSwap &&
         decoded.selectable->pressedImage == 21U && decoded.selectable->raycastPadding.bottom == 4.0F &&
         kb::scene::UITooltipText(*decoded.selectable) == "Hint" && decoded.selectable->draggable && decoded.selectable->eventTarget == 31U &&
@@ -2443,6 +2598,64 @@ void TestWidgetSettingsPersistence() {
         decoded.progressBar->direction == kb::scene::UIAxisDirection::TopToBottom && decoded.progressBar->fillRect == 71U,
         "Every v45 widget setting must round-trip");
 
+    // Older records containing both components must keep their payloads aligned.
+    for (std::uint32_t version = 54U; version <= 58U; ++version) {
+        kb::scene::UIComponentSet rect;
+        rect.rectTransform.emplace();
+        rect.rectTransform->offsetMax = {120.0F, 80.0F};
+        std::vector<std::uint8_t> rectBytes;
+        kb::scene::SceneAssetUIComponentCodec::Write(rectBytes, rect);
+        rectBytes.resize(rectBytes.size() - sizeof(std::uint64_t) - 2U * sizeof(std::uint32_t));
+
+        kb::scene::UIComponentSet text;
+        text.text.emplace();
+        static_cast<void>(kb::scene::SetUITextContent(*text.text, "Legacy"));
+        static_cast<void>(kb::scene::SetUITextLocalizationKey(*text.text, "label"));
+        static_cast<void>(kb::scene::SetUITextLocalizationNumber(*text.text, "2"));
+        static_cast<void>(kb::scene::SetUITextFontVariations(*text.text, "wght=450"));
+        text.text->fallbackFontAssetId = 82U;
+        text.text->fontRenderMode = kb::scene::UITextFontRenderMode::SignedDistanceField;
+        std::vector<std::uint8_t> textBytes;
+        kb::scene::SceneAssetUIComponentCodec::Write(textBytes, text);
+        if (version < 58U) textBytes.resize(textBytes.size() - sizeof(std::uint32_t));
+        if (version < 57U) textBytes.resize(textBytes.size() - sizeof(std::uint64_t));
+        if (version < 56U) textBytes.resize(textBytes.size() - sizeof(std::uint32_t) - std::string_view{"wght=450"}.size());
+        if (version < 55U) textBytes.resize(textBytes.size() - sizeof(std::uint32_t) - std::string_view{"2"}.size());
+        std::vector<std::uint8_t> legacyMixedBytes;
+        kb::scene::SceneAssetBinaryIO::WriteUInt64(legacyMixedBytes,
+            (1ULL << static_cast<unsigned>(kb::scene::UIComponentType::RectTransform)) |
+            (1ULL << static_cast<unsigned>(kb::scene::UIComponentType::Text)));
+        legacyMixedBytes.insert(legacyMixedBytes.end(), rectBytes.begin() + sizeof(std::uint64_t), rectBytes.end());
+        legacyMixedBytes.insert(legacyMixedBytes.end(), textBytes.begin() + sizeof(std::uint64_t), textBytes.end());
+        kb::scene::SceneAssetBinaryIO::ByteReader legacyMixedReader{legacyMixedBytes};
+        kb::scene::UIComponentSet legacyMixedDecoded;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(legacyMixedReader, version, legacyMixedDecoded) && legacyMixedReader.Exhausted() &&
+            legacyMixedDecoded.rectTransform && legacyMixedDecoded.text && legacyMixedDecoded.rectTransform->themeAssetId == 0U &&
+            legacyMixedDecoded.rectTransform->offsetMax.x == 120.0F && kb::scene::UITextContent(*legacyMixedDecoded.text) == "Legacy" &&
+            kb::scene::UITextLocalizationKey(*legacyMixedDecoded.text) == "label" &&
+            kb::scene::UITextLocalizationNumber(*legacyMixedDecoded.text) == (version >= 55U ? "2" : "") &&
+            kb::scene::UITextFontVariations(*legacyMixedDecoded.text) == (version >= 56U ? "wght=450" : "") &&
+            legacyMixedDecoded.text->fallbackFontAssetId == (version >= 57U ? 82U : 0U) &&
+            legacyMixedDecoded.text->fontRenderMode == (version >= 58U ? kb::scene::UITextFontRenderMode::SignedDistanceField :
+                                                            kb::scene::UITextFontRenderMode::Bitmap),
+            "Legacy Rect Transform and Text payloads must remain aligned");
+    }
+
+    // A pre-theme Rect Transform has no binding and keeps its layout.
+    {
+        kb::scene::UIComponentSet onlyRect;
+        onlyRect.rectTransform.emplace();
+        onlyRect.rectTransform->offsetMax = {120.0F, 80.0F};
+        std::vector<std::uint8_t> legacy;
+        kb::scene::SceneAssetUIComponentCodec::Write(legacy, onlyRect);
+        legacy.resize(legacy.size() - sizeof(std::uint64_t) - 2U * sizeof(std::uint32_t));
+        kb::scene::SceneAssetBinaryIO::ByteReader legacyReader{legacy};
+        kb::scene::UIComponentSet decoded58;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(legacyReader, 58U, decoded58) &&
+            legacyReader.Exhausted() && decoded58.rectTransform->themeAssetId == 0U &&
+            decoded58.rectTransform->offsetMax.x == 120.0F, "Version 58 Rect Transform must load without a theme");
+    }
+
     // Text saved before v55 has no plural number; keep the authored translation key.
     {
         kb::scene::UIComponentSet onlyText;
@@ -2450,12 +2663,56 @@ void TestWidgetSettingsPersistence() {
         static_cast<void>(kb::scene::SetUITextLocalizationKey(*onlyText.text, "hud.title"));
         std::vector<std::uint8_t> oldBytes;
         kb::scene::SceneAssetUIComponentCodec::Write(oldBytes, onlyText);
-        oldBytes.resize(oldBytes.size() - sizeof(std::uint32_t)); // empty trailing string length
+        oldBytes.resize(oldBytes.size() - 3U * sizeof(std::uint32_t) - sizeof(std::uint64_t));
         kb::scene::SceneAssetBinaryIO::ByteReader oldReader{oldBytes};
         kb::scene::UIComponentSet oldText;
         kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(oldReader, 54U, oldText) && oldReader.Exhausted() &&
             kb::scene::UITextLocalizationNumber(*oldText.text).empty() && kb::scene::UITextLocalizationKey(*oldText.text) == "hud.title",
             "Legacy localized text must load without a plural number");
+    }
+
+    // Version 55 ended after the plural number, before variable font settings existed.
+    {
+        kb::scene::UIComponentSet onlyText;
+        onlyText.text.emplace();
+        static_cast<void>(kb::scene::SetUITextLocalizationNumber(*onlyText.text, "1.00"));
+        std::vector<std::uint8_t> oldBytes;
+        kb::scene::SceneAssetUIComponentCodec::Write(oldBytes, onlyText);
+        oldBytes.resize(oldBytes.size() - 2U * sizeof(std::uint32_t) - sizeof(std::uint64_t));
+        kb::scene::SceneAssetBinaryIO::ByteReader reader55{oldBytes};
+        kb::scene::UIComponentSet decoded55;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader55, 55U, decoded55) && reader55.Exhausted() &&
+            kb::scene::UITextLocalizationNumber(*decoded55.text) == "1.00" &&
+            kb::scene::UITextFontVariations(*decoded55.text).empty(), "Version 55 text must retain its old settings");
+    }
+
+    {
+        kb::scene::UIComponentSet onlyText;
+        onlyText.text.emplace();
+        static_cast<void>(kb::scene::SetUITextFontVariations(*onlyText.text, "wdth=75"));
+        std::vector<std::uint8_t> oldBytes;
+        kb::scene::SceneAssetUIComponentCodec::Write(oldBytes, onlyText);
+        oldBytes.resize(oldBytes.size() - sizeof(std::uint64_t) - sizeof(std::uint32_t));
+        kb::scene::SceneAssetBinaryIO::ByteReader reader56{oldBytes};
+        kb::scene::UIComponentSet decoded56;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader56, 56U, decoded56) && reader56.Exhausted() &&
+            kb::scene::UITextFontVariations(*decoded56.text) == "wdth=75" && decoded56.text->fallbackFontAssetId == 0U,
+            "Version 56 text must load without a fallback font");
+    }
+
+    {
+        kb::scene::UIComponentSet onlyText;
+        onlyText.text.emplace();
+        onlyText.text->fallbackFontAssetId = 82U;
+        onlyText.text->fontRenderMode = kb::scene::UITextFontRenderMode::SignedDistanceField;
+        std::vector<std::uint8_t> bytes57;
+        kb::scene::SceneAssetUIComponentCodec::Write(bytes57, onlyText);
+        bytes57.resize(bytes57.size() - sizeof(std::uint32_t));
+        kb::scene::SceneAssetBinaryIO::ByteReader reader57{bytes57};
+        kb::scene::UIComponentSet decoded57;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader57, 57U, decoded57) && reader57.Exhausted() &&
+            decoded57.text->fallbackFontAssetId == 82U && decoded57.text->fontRenderMode == kb::scene::UITextFontRenderMode::Bitmap,
+            "Version 57 text must keep the bitmap rendering default");
     }
 
     // A canvas saved before the modal flag existed (v51) ends one byte earlier and never blocks the canvases below.
@@ -2678,6 +2935,8 @@ void RunSceneUITests() {
     TestAutomaticRuntimeInput();
     TestFocusedTextAfterViewportResize();
     TestIndependentTouchCapture();
+    TestThemedSelectableFadeWithSeparateGraphic();
+    TestRichTextLinkActivation();
     TestControllerNavigation();
     TestRadioGroupsAndDrivenWidgets();
     TestSelectablePresentationAndHits();

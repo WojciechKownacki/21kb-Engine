@@ -7,6 +7,8 @@
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "scene/audio/EditorAudioMixerRuntime.hpp"
 #include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "engine/ui/UITheme.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "rendering/InspectorSceneAudioView.hpp"
@@ -1492,6 +1494,42 @@ void PaintPostProcessProfileAsset(HDC dc, RECT content, const EditorTheme& theme
 }
 
 
+[[nodiscard]] RECT ValueRectForRow(RECT row) noexcept;
+
+void PaintUIThemeAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneContext& sceneContext,
+                       const kb::assets::AssetMetadata& metadata) {
+    auto& inspector = sceneContext.Inspector();
+    DrawHeader(dc, content, theme, HeroIconKind::AdjustmentsHorizontal,
+        metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, "UI Theme");
+    const auto data = sceneContext.ReadUITheme(metadata.id);
+    int y = InspectorBodyTop(content);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::UITheme, HeroIconKind::AdjustmentsHorizontal, "Shared UI Theme (@inherit resets)");
+    if (!data) { section.Field("Theme", "Could not be read"); return; }
+    InspectorUIThemeModel::NormalizeSelection(*data, metadata.id.value, inspector.themeAssetId, inspector.themeVariant);
+    section.Tag("Variant", inspector.themeVariant.empty() ? "Base" : inspector.themeVariant, InspectorPropertyId::UIThemeVariant);
+    section.Field("New variant", "", InspectorPropertyId::UIThemeVariant, -2);
+    const auto rows = InspectorUIThemeModel::Rows(*data, inspector.themeVariant);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const auto& row = rows[i];
+        const auto label = row.label + (row.authored ? "" : " (inherited)");
+        const auto* descriptor = kb::scene::FindUIComponentProperty(row.key.component, row.key.property);
+        if (row.color) {
+            const RECT bounds = section.Reserve(kFieldRowHeight + kDividerHeight);
+            if (bounds.bottom > bounds.top) {
+                DrawFieldRow(dc, bounds, theme, inspector, InspectorSectionId::UITheme,
+                    InspectorPropertyId::UIThemeField, label, "", static_cast<int>(i));
+                DrawColorSwatch(dc, ValueRectForRow(bounds), theme, *row.color,
+                    inspector.IsHovered(InspectorHitKind::ColorField, InspectorSectionId::UITheme,
+                        InspectorPropertyId::UIThemeField, static_cast<int>(i)));
+            }
+        } else if (descriptor && descriptor->assetKind) {
+            section.AssetField(label, AssetDisplayName(sceneContext, std::stoull(row.value)),
+                InspectorPropertyId::UIThemeField, InspectorPropertyId::UIThemeField, static_cast<int>(i));
+        } else section.Field(label, row.value, InspectorPropertyId::UIThemeField, static_cast<int>(i));
+    }
+}
+
 // The scene's profile on its environment object (the World Backdrop), as Unity shows the global
 // Volume's profile: the profile field (picker) and, with one set, Clear.
 [[nodiscard]] int ScenePostProcessRows(const EditorSceneContext& sceneContext) {
@@ -1535,6 +1573,10 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
         }
         if (IsMaterialDocument(*metadata)) {
             PaintMaterialAsset(dc, content, theme, sceneContext, *metadata);
+            return;
+        }
+        if (metadata->type == kb::scene::kUIThemeAssetType) {
+            PaintUIThemeAsset(dc, content, theme, sceneContext, *metadata);
             return;
         }
         if (IsPostProcessProfile(*metadata)) {
@@ -3965,6 +4007,12 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata), MaterialDebugChannelRowsFor(sceneContext, metadata).size());
         return height;
     }
+    if (metadata.type == kb::scene::kUIThemeAssetType) {
+        const auto data = sceneContext.ReadUITheme(metadata.id);
+        const auto variant = data ? InspectorUIThemeModel::EffectiveVariant(*data, metadata.id.value, inspector.themeAssetId, inspector.themeVariant) : std::string_view{};
+        const auto rows = data ? InspectorUIThemeModel::Rows(*data, variant).size() : 0U;
+        return height + SectionHeight(inspector, InspectorSectionId::UITheme, 2 + static_cast<int>(rows));
+    }
     if (IsPostProcessProfile(metadata)) {
         return height + PostProcessProfileContentHeight(inspector);
     }
@@ -5293,6 +5341,31 @@ void InspectorPanelRenderer::Paint(
     RestoreDC(dc, savedDc);
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestUITheme(const RECT& content, const InspectorPanelState& state,
+    const EditorSceneContext& sceneContext, kb::assets::AssetId id, int x, int yPoint, int& y) {
+    if (auto hit = HitSectionHeader(content, y, state, InspectorSectionId::UITheme, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+    if (state.IsCollapsed(InspectorSectionId::UITheme)) return {};
+    if (auto hit = HitTextRow(RowRect(content, y), InspectorSectionId::UITheme, InspectorPropertyId::UIThemeVariant, x, yPoint);
+        hit.kind != InspectorHitKind::None) { hit.kind = InspectorHitKind::ChoiceField; return hit; }
+    AdvanceRow(y);
+    if (auto hit = HitTextRow(RowRect(content, y), InspectorSectionId::UITheme, InspectorPropertyId::UIThemeVariant, x, yPoint);
+        hit.kind != InspectorHitKind::None) { hit.index = -2; return hit; }
+    AdvanceRow(y);
+    const auto data = sceneContext.ReadUITheme(id);
+    const auto variant = data ? InspectorUIThemeModel::EffectiveVariant(*data, id.value, state.themeAssetId, state.themeVariant) : std::string_view{};
+    const auto rows = data ? InspectorUIThemeModel::Rows(*data, variant) : std::vector<InspectorUIThemeRow>{};
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        auto hit = HitTextRow(RowRect(content, y), InspectorSectionId::UITheme, InspectorPropertyId::UIThemeField, x, yPoint);
+        if (hit.kind != InspectorHitKind::None) {
+            hit.index = static_cast<int>(i);
+            if (rows[i].color) hit.kind = InspectorHitKind::ColorField;
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    return {};
+}
+
 // Mirrors PaintPostProcessProfileAsset: one section per effect, a Bool row is a checkbox, every
 // other row a value field; the hit's index is the row of InspectorPostProcessProfileModel.
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestPostProcessProfile(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) {
@@ -5376,6 +5449,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (metadata != nullptr && metadata->type == "InputMappingContext") {
             return HitTestInputMappingSection(viewport, state, sceneContext, metadata->id, x, scrolledY, y);
+        }
+        if (metadata != nullptr && metadata->type == kb::scene::kUIThemeAssetType) {
+            return HitTestUITheme(viewport, state, sceneContext, metadata->id, x, scrolledY, y);
         }
         if (metadata != nullptr && IsPostProcessProfile(*metadata)) {
             return HitTestPostProcessProfile(viewport, state, x, scrolledY, y);

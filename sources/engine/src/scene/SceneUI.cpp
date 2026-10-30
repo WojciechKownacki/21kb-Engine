@@ -5,6 +5,9 @@
 #include "engine/input/InputText.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/ui/UITheme.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -20,6 +23,7 @@
 #include "engine/ui/UIComponentValidation.hpp"
 #include "engine/ui/visual/UITextGraphemes.hpp"
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneLocalizationService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityCounter.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
@@ -55,6 +59,7 @@ constexpr std::array kEventDescriptors{
     SceneUIEventDescriptor{SceneUIEventType::Dragged, "OnUIDragged"},
     SceneUIEventDescriptor{SceneUIEventType::DragEnded, "OnUIDragEnded"},
     SceneUIEventDescriptor{SceneUIEventType::Dropped, "OnUIDropped"},
+    SceneUIEventDescriptor{SceneUIEventType::LinkActivated, "OnUILinkActivated"},
 };
 
 struct GroupState {
@@ -351,6 +356,7 @@ class FrameBuilder {
     FrameBuilder(const Scene& scene, Vec2 viewport)
         : scene_(scene), state_(SceneAccess::State(scene)), ui_(scene), viewport_(viewport) {
         frame_.viewportSize = viewport;
+        frame_.language = scene_.Localization().Language();
     }
 
     [[nodiscard]] bool Build(SceneUIFrame& output) {
@@ -471,7 +477,7 @@ class FrameBuilder {
         KB_VALIDATE_COPY(UIShadow, shadow);
         KB_VALIDATE_COPY(UIOutline, outline);
         KB_VALIDATE_COPY(UIBackgroundBlur, backgroundBlur);
-        KB_VALIDATE(UISelectable);
+        KB_VALIDATE_COPY(UISelectable, selectable);
         KB_VALIDATE(UIButton);
         KB_VALIDATE_COPY(UIToggle, toggle);
         KB_VALIDATE_COPY(UISlider, slider);
@@ -484,6 +490,14 @@ class FrameBuilder {
 #undef KB_VALIDATE_COPY
 #undef KB_VALIDATE_LAYOUT
 #undef KB_VALIDATE
+        UIComponentSet themed;
+        if (!ResolveTheme(entity, themed)) return "UI theme could not be resolved";
+        if (themed.rectTransform && themed.rectTransform->themeAssetId != 0U) {
+            element.sprite = themed.sprite; element.image = themed.image; element.rawImage = themed.rawImage;
+            element.text = themed.text; element.border = themed.border; element.shadow = themed.shadow;
+            element.outline = themed.outline; element.backgroundBlur = themed.backgroundBlur;
+            element.selectable = themed.selectable;
+        }
         if (layoutCount > 1U)
             return "UI object carries more than one layout component";
         const std::size_t directChildCount = scene_.Hierarchy().ChildCount(entity);
@@ -491,6 +505,22 @@ class FrameBuilder {
         if (switcher != nullptr && directChildCount != 0U && switcher->visibleChildIndex >= directChildCount)
             return "Widget Switcher visibleChildIndex is past its last child";
         return nullptr;
+    }
+
+    [[nodiscard]] bool ResolveTheme(SceneEntity entity, UIComponentSet& result) const {
+        const UIRectTransform* rect = ui_.TryGet<UIRectTransform>(entity);
+        if (!rect || rect->themeAssetId == 0U) return true;
+        result = CaptureSceneUIComponents(scene_.Components().UI(), entity);
+        const auto id = scene_.Localization().ResolveResource(result.rectTransform->themeAssetId);
+        auto found = themes_.find(id);
+        if (found == themes_.end())
+            found = themes_.emplace(id, scene_.Assets().Manager().Load<UITheme>(kb::assets::AssetId{id})).first;
+        const auto& theme = found->second;
+        if (!theme.IsLoaded()) return false;
+        std::vector<UIThemePropertyKey> overrides;
+        if (!ParseUIThemeOverrides(UIRectThemeOverrides(*result.rectTransform), overrides)) return false;
+        return ResolveUITheme(*theme, UIRectThemeVariant(*result.rectTransform), overrides, result, result) ==
+            UIThemeResolveResult::Succeeded;
     }
 
     void TranslateText(UIText& text) const {
@@ -506,10 +536,12 @@ class FrameBuilder {
         DesiredSize size{rect != nullptr ? Width(*rect) : 0.0F, rect != nullptr ? Height(*rect) : 0.0F};
         if (const UIText* text = ui_.TryGet<UIText>(entity)) {
             UIText displayed = *text;
+            UIComponentSet themed;
+            if (ResolveTheme(entity, themed) && themed.text) displayed = *themed.text;
             TranslateText(displayed);
             size.width = std::max(size.width,
-                                  static_cast<float>(Utf8CodePointCount(UITextContent(displayed))) * text->fontSize * 0.5F);
-            size.height = std::max(size.height, text->fontSize * text->lineSpacing);
+                                  static_cast<float>(Utf8CodePointCount(UITextContent(displayed))) * displayed.fontSize * 0.5F);
+            size.height = std::max(size.height, displayed.fontSize * displayed.lineSpacing);
         }
         const std::size_t childCount = scene_.Hierarchy().ChildCount(entity);
         std::vector<DesiredSize> children;
@@ -836,11 +868,18 @@ class FrameBuilder {
             else
                 element.image->imageAssetId = image;
         }
-        if (element.text) element.text->fontAssetId = scene_.Localization().ResolveResource(element.text->fontAssetId);
+        if (element.text) {
+            element.text->fontAssetId = scene_.Localization().ResolveResource(element.text->fontAssetId);
+            element.text->fallbackFontAssetId = scene_.Localization().ResolveResource(element.text->fallbackFontAssetId);
+        }
         if (element.image) element.image->imageAssetId = scene_.Localization().ResolveResource(element.image->imageAssetId);
         if (element.rawImage) element.rawImage->imageAssetId = scene_.Localization().ResolveResource(element.rawImage->imageAssetId);
         if (element.sprite) element.sprite->spriteAssetId = scene_.Localization().ResolveResource(element.sprite->spriteAssetId);
-        if (element.text) TranslateText(*element.text);
+        if (element.text) {
+            const auto key = UITextLocalizationKey(*element.text);
+            if (!key.empty()) element.textLanguage = SceneLocalizationService::MessageLanguage(scene_, key, UITextLocalizationNumber(*element.text));
+            TranslateText(*element.text);
+        }
         if (element.inputField.has_value()) {
             if (state_.uiFocused == entity) {
                 element.textCaretByteOffset = static_cast<std::uint32_t>(state_.uiTextCursorByteOffset);
@@ -871,7 +910,7 @@ class FrameBuilder {
                 }
             }
         }
-        const UISelectable* selectable = ui_.TryGet<UISelectable>(entity);
+        const UISelectable* selectable = element.selectable ? &*element.selectable : nullptr;
         if (selectable != nullptr && !IsUIComponentValid(*selectable)) {
             Refuse(entity, "Selectable holds an invalid value");
             return;
@@ -1291,6 +1330,7 @@ class FrameBuilder {
 
     const Scene& scene_;
     const SceneState& state_;
+    mutable std::unordered_map<std::uint64_t, kb::assets::AssetHandle<UITheme>> themes_;
     std::unordered_set<std::uint64_t> uiHierarchy_;
     std::vector<SceneEntity> uiRoots_;
     FrameUIComponentQueries ui_;
@@ -1329,6 +1369,18 @@ void Queue(SceneState& state, const Scene& scene, SceneUIEventType type, SceneEn
 [[nodiscard]] const SceneUIFrameElement* Find(const SceneUIFrame& frame, SceneEntity entity) noexcept {
     const auto found = std::ranges::find(frame.elements, entity, &SceneUIFrameElement::entity);
     return found != frame.elements.end() ? &*found : nullptr;
+}
+
+[[nodiscard]] const SceneUITextLinkRegion* LinkAt(const SceneState& state, SceneEntity entity, Vec2 point) noexcept {
+    const auto* element = Find(state.uiFrame, entity);
+    if (!element || !element->text) return {};
+    const auto source = UITextContent(*element->text);
+    for (const auto& layout : state.uiTextLayouts) {
+        if (layout.entity != entity || layout.source != source) continue;
+        for (const auto& link : layout.links)
+            if (InQuad(link.corners, point)) return &link;
+    }
+    return {};
 }
 
 [[nodiscard]] Vec2 ScrollLimits(const Scene& scene, const SceneUIFrame& frame, SceneEntity entity,
@@ -1434,7 +1486,7 @@ void Queue(SceneState& state, const Scene& scene, SceneUIEventType type, SceneEn
 void ResolveInteractionPresentation(const Scene& scene, const SceneState& state, bool primaryDown, float deltaSeconds,
                                     const SceneUIFrame& previous, SceneUIFrame& current, bool advanceTransition) {
     for (SceneUIFrameElement& element : current.elements) {
-        const UISelectable* selectable = Selectable(scene, element.entity);
+        const UISelectable* selectable = element.selectable ? &*element.selectable : nullptr;
         if (selectable == nullptr) {
             element.interactionState = UIInteractionState::Normal;
             element.interactionTint = {};
@@ -1459,24 +1511,25 @@ void ResolveInteractionPresentation(const Scene& scene, const SceneState& state,
                                            ? selectable->selectedColor
                                            : InteractionColor(*selectable, element.interactionState);
         const SceneUIFrameElement* prior = Find(previous, element.entity);
-        if (prior == nullptr) {
-            element.interactionTint = target;
+        if (prior == nullptr || !prior->selectable) {
+            element.selectableTransitionTint = target;
             continue;
         }
         if (!advanceTransition) {
-            element.interactionTint = prior->interactionTint;
+            element.selectableTransitionTint = prior->selectableTransitionTint;
             continue;
         }
         const float amount = selectable->colorFadeSeconds <= 0.0F
                                  ? 1.0F
                                  : std::clamp(deltaSeconds / selectable->colorFadeSeconds, 0.0F, 1.0F);
-        element.interactionTint = LerpColor(prior->interactionTint, target, amount);
+        element.selectableTransitionTint = LerpColor(prior->selectableTransitionTint, target, amount);
     }
     // A selectable shows its state on its target graphic, or on itself without one: tinted with the state
     // colour, with the image swapped for the state image, or not at all.
     std::unordered_map<std::uint64_t, std::size_t> indexByEntity;
     for (std::size_t index = 0U; index < current.elements.size(); ++index) {
-        const UISelectable* selectable = Selectable(scene, current.elements[index].entity);
+        const auto& selected = current.elements[index].selectable;
+        const UISelectable* selectable = selected ? &*selected : nullptr;
         if (selectable == nullptr)
             continue;
         std::size_t target = index;
@@ -1491,7 +1544,7 @@ void ResolveInteractionPresentation(const Scene& scene, const SceneState& state,
         }
         SceneUIFrameElement& graphic = current.elements[target];
         const UIInteractionState shownState = current.elements[index].interactionState;
-        const kb::math::Color tint = current.elements[index].interactionTint;
+        const kb::math::Color tint = current.elements[index].selectableTransitionTint;
         current.elements[index].interactionTint = {};
         graphic.interactionState = shownState;
         graphic.interactionTint = selectable->transition == UISelectableTransition::ColorTint ? tint : kb::math::Color{};
@@ -1771,12 +1824,47 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         state.uiTextSelectionAnchor = state.uiTextCursorByteOffset;
     };
     if (replacement && replacement->text.empty()) static_cast<void>(eraseSelection());
+    std::string incoming;
+    std::vector<std::size_t> incomingOffsets;
+    incomingOffsets.reserve(input.textInput.size());
+    for (const auto scalar : input.textInput) {
+        incomingOffsets.push_back(incoming.size());
+        std::array<char, 4U> encoded{};
+        incoming.append(encoded.data(), kb::input::EncodeUtf8(scalar, encoded));
+    }
+    std::size_t inputIndex = 0U, clusterEnd = 0U, clusterStartIndex = 0U;
+    std::string beforeCluster;
+    std::size_t beforeClusterCaret = 0U, beforeClusterAnchor = 0U;
+    bool clusterRejected = false;
     for (const char32_t codePoint : input.textInput) {
+        const auto offset = incomingOffsets[inputIndex];
+        if (offset >= clusterEnd) {
+            clusterEnd = NextUITextGraphemeBoundary(incoming, offset);
+            clusterStartIndex = inputIndex;
+            beforeCluster = buffer;
+            beforeClusterCaret = state.uiTextCursorByteOffset;
+            beforeClusterAnchor = state.uiTextSelectionAnchor;
+            clusterRejected = false;
+        }
+        ++inputIndex;
         if (nativeEdit) {
             if (nativeIndex == nativeEdit->caret) nativeCaret = buffer.size();
             if (nativeIndex == nativeEdit->selectionAnchor.value_or(nativeEdit->caret)) nativeAnchor = buffer.size();
             ++nativeIndex;
         }
+        if (clusterRejected) continue;
+        const auto rejectCluster = [&] {
+            buffer = beforeCluster;
+            state.uiTextCursorByteOffset = beforeClusterCaret;
+            state.uiTextSelectionAnchor = beforeClusterAnchor;
+            clusterRejected = true;
+            if (nativeEdit) {
+                if (nativeEdit->caret >= clusterStartIndex && nativeEdit->caret < inputIndex)
+                    nativeCaret = beforeClusterCaret;
+                const auto anchor = nativeEdit->selectionAnchor.value_or(nativeEdit->caret);
+                if (anchor >= clusterStartIndex && anchor < inputIndex) nativeAnchor = beforeClusterAnchor;
+            }
+        };
         if (codePoint == U'\b') { sawBackspace = true; eraseBack(); continue; }
         if (codePoint == 0x7FU) { sawDelete = true; eraseForward(); continue; }
         if (codePoint == U'\n' && field->multiline && field->contentType == UIInputContentType::Standard) {
@@ -1789,9 +1877,15 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         if (codePoint != U'\n' && !AcceptsCharacter(field->contentType, candidate, begin, codePoint)) continue;
         std::array<char, 4U> encoded{};
         const auto encodedSize = kb::input::EncodeUtf8(codePoint, encoded);
-        if (encodedSize == 0U || candidate.size() + encodedSize >= UIText::MaxUtf8Bytes) continue;
+        if (encodedSize == 0U || candidate.size() + encodedSize >= UIText::MaxUtf8Bytes) {
+            rejectCluster();
+            continue;
+        }
         candidate.insert(begin, encoded.data(), encodedSize);
-        if (field->characterLimit > 0U && UITextGraphemeCount(candidate) > field->characterLimit) continue;
+        if (field->characterLimit > 0U && UITextGraphemeCount(candidate) > field->characterLimit) {
+            rejectCluster();
+            continue;
+        }
         buffer = std::move(candidate);
         state.uiTextCursorByteOffset = state.uiTextSelectionAnchor = begin + encodedSize;
     }
@@ -2890,8 +2984,18 @@ void SceneUIAccess::PublishTextLayouts(std::vector<SceneUITextLayout> layouts) {
         const auto* frame = Find(state.uiFrame, layout.entity);
         const auto* field = scene_.Components().UI().TryGet<UIInputField>(layout.entity);
         const auto* text = scene_.Components().UI().TryGet<UIText>(layout.entity);
-        if (frame == nullptr || !frame->text || field == nullptr || text == nullptr ||
+        if (frame == nullptr || !frame->text || text == nullptr ||
             layout.source != UITextContent(*frame->text) || layout.carets.size() > UIText::MaxUtf8Bytes * 2U) continue;
+        if (layout.links.size() > UIText::MaxUtf8Bytes || std::ranges::any_of(layout.links, [](const auto& link) {
+            return link.instance == 0U || link.target.empty() || link.target.size() >= 256U ||
+                std::ranges::any_of(link.corners, [](const auto& p) { return !std::isfinite(p.x) || !std::isfinite(p.y); });
+        })) continue;
+        if (field == nullptr) {
+            if (!layout.carets.empty() || layout.links.empty() ||
+                std::ranges::any_of(state.uiTextLayouts, [&](const auto& previous) { return previous.entity == layout.entity; })) continue;
+            state.uiTextLayouts.push_back(std::move(layout));
+            continue;
+        }
         const auto content = UITextContent(*text);
         const bool masked = field->contentType == UIInputContentType::Password || field->contentType == UIInputContentType::Pin;
         std::vector<std::size_t> boundaries{0U};
@@ -3049,6 +3153,12 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         state.uiScrollVelocity = {};
         state.uiSnappingScrollView = {};
         state.uiPressed = hovered;
+        const auto* link = hovered.IsValid() && input.pointerAvailable ? LinkAt(state, hovered, input.pointerPosition) : nullptr;
+        state.uiPressedLink = link ? link->target : std::string{};
+        state.uiPressedLinkInstance = link ? link->instance : 0U;
+        const auto* linkElement = link ? Find(state.uiFrame, hovered) : nullptr;
+        state.uiPressedLinkSource = linkElement && linkElement->text
+            ? std::string{UITextContent(*linkElement->text)} : std::string{};
         if (const UISelectable* pressedSelectable = Selectable(scene_, hovered);
             pressedSelectable != nullptr && pressedSelectable->draggable) {
             state.uiDragged = hovered;
@@ -3102,8 +3212,17 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         if (!dropped && pressed == hovered && (button == nullptr || button->submitOnRelease)) {
             presentationDirty = Activate(scene_, state, pressed, input) || presentationDirty;
             Queue(state, scene_, SceneUIEventType::Clicked, pressed, &input);
+            const auto* link = input.pointerAvailable ? LinkAt(state, pressed, input.pointerPosition) : nullptr;
+            const auto* linkElement = link ? Find(state.uiFrame, pressed) : nullptr;
+            if (link && linkElement && linkElement->text &&
+                UITextContent(*linkElement->text) == state.uiPressedLinkSource &&
+                link->instance == state.uiPressedLinkInstance && link->target == state.uiPressedLink)
+                Queue(state, scene_, SceneUIEventType::LinkActivated, pressed, &input, 0.0F, 0.0F, state.uiPressedLink);
         }
         state.uiPressed = {};
+        state.uiPressedLink.clear();
+        state.uiPressedLinkSource.clear();
+        state.uiPressedLinkInstance = 0U;
     }
     presentationDirty = UpdateScrollInertia(scene_, state, input, deltaSeconds) || presentationDirty;
     presentationDirty = UpdateScrollSnap(scene_, state, input, deltaSeconds) || presentationDirty;

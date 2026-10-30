@@ -101,6 +101,8 @@ template <typename Value>
         }
     } else if constexpr (std::is_enum_v<Value>) {
         if (const std::int32_t* value = std::get_if<std::int32_t>(&source)) {
+            using Underlying = std::underlying_type_t<Value>;
+            if (!std::in_range<Underlying>(*value)) return false;
             output = static_cast<Value>(*value);
             return true;
         }
@@ -273,6 +275,9 @@ constexpr std::array kRectTransformProperties{
     KB_NESTED(UIRectTransform, kb::math::Vec2, scale, y),
     KB_FLOAT(UIRectTransform, rotationDegrees),
     KB_INT(UIRectTransform, zOrder),
+    KB_TYPED_ASSET(UIRectTransform, themeAssetId, UITheme, "ui.theme"),
+    StringBinding<UIRectTransform, &UIRectThemeVariant, &SetUIRectThemeVariant>("themeVariant"),
+    StringBinding<UIRectTransform, &UIRectThemeOverrides, &SetUIRectThemeOverrides>("themeOverrides"),
 };
 constexpr std::array kCanvasProperties{
     KB_ENUM(UICanvas, renderMode),       KB_INT(UICanvas, sortingOrder),  KB_BOOL(UICanvas, pixelPerfect),
@@ -387,7 +392,10 @@ constexpr std::array kTextProperties{
     StringBinding<UIText, &UITextContent, &SetUITextContent>("content"),
     StringBinding<UIText, &UITextLocalizationKey, &SetUITextLocalizationKey>("localizationKey"),
     StringBinding<UIText, &UITextLocalizationNumber, &SetUITextLocalizationNumber>("localizationNumber"),
+    StringBinding<UIText, &UITextFontVariations, &SetUITextFontVariations>("fontVariations"),
     KB_TYPED_ASSET(UIText, fontAssetId, Font, "ui.font"),
+    KB_TYPED_ASSET(UIText, fallbackFontAssetId, Font, "ui.fallbackFont"),
+    KB_ENUM(UIText, fontRenderMode),
     KB_FLOAT(UIText, fontSize),
     KB_COLOR(UIText, color),
     KB_ENUM(UIText, horizontalAlignment),

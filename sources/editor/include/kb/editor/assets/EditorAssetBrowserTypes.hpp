@@ -60,6 +60,7 @@ enum class EditorAssetContextCommand {
     NewAudioMixer,
     NewParticleEffect,
     NewPostProcessProfile,
+    NewUITheme,
     NewImportPreset,
     ExtractMaterials,
     AddLighting,

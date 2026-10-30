@@ -57,7 +57,8 @@ bool IsUIComponentValid(const UIRectTransform& value) noexcept {
         Finite(value.pivot) && Finite(value.scale) && Finite(value.rotationDegrees) && value.anchorMin.x >= 0.0F &&
         value.anchorMin.y >= 0.0F && value.anchorMax.x <= 1.0F && value.anchorMax.y <= 1.0F &&
         value.anchorMin.x <= value.anchorMax.x && value.anchorMin.y <= value.anchorMax.y &&
-        value.pivot.x >= 0.0F && value.pivot.x <= 1.0F && value.pivot.y >= 0.0F && value.pivot.y <= 1.0F;
+        value.pivot.x >= 0.0F && value.pivot.x <= 1.0F && value.pivot.y >= 0.0F && value.pivot.y <= 1.0F &&
+        Utf8Terminated(value.themeVariant) && Utf8Terminated(value.themeOverrides);
 }
 bool IsUIComponentValid(const UICanvas& value) noexcept {
     return EnumAtMost(value.renderMode, UICanvasRenderMode::WorldSpace) && Finite(value.pixelsPerUnit) &&
@@ -122,7 +123,8 @@ bool IsUIComponentValid(const UIText& value) noexcept {
         EnumAtMost(value.verticalAlignment, UITextVerticalAlignment::Bottom) && EnumAtMost(value.wrapMode, UITextWrapMode::Character) &&
         Finite(value.lineSpacing) && value.lineSpacing > 0.0F && Utf8Terminated(value.localizationKey) &&
         EnumAtMost(value.overflow, UITextOverflow::Ellipsis) && Finite(value.minFontSize) && value.minFontSize > 0.0F &&
-        Finite(value.characterSpacing) && Utf8Terminated(value.localizationNumber) &&
+        Finite(value.characterSpacing) && Utf8Terminated(value.localizationNumber) && Utf8Terminated(value.fontVariations) &&
+        EnumAtMost(value.fontRenderMode, UITextFontRenderMode::SignedDistanceField) &&
         (UITextLocalizationNumber(value).empty() ||
             kb::localization::ParsePluralOperands(UITextLocalizationNumber(value)).has_value());
 }
