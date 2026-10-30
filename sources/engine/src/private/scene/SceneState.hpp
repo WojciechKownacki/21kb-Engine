@@ -373,6 +373,7 @@ public:
     class SceneTilemapRuntime* tilemapRuntime = nullptr;
     class ScenePhysics2DRuntime* physics2DRuntime = nullptr;
     SceneRuntimeFixedStepSettings fixedStepSettings;
+    bool deterministicExecution = false;
     // The delta exposed by Time.FixedDelta. In an installed production
     // ScriptRuntimeSceneSystem this mirrors fixedStepSettings exactly: script
     // FixedTick and physics consume one authoritative accumulator. It remains

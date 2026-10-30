@@ -18,11 +18,11 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <stdexcept>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
 #include <optional>
-#include <stdexcept>
 #include <utility>
 
 namespace kb::scene {
@@ -361,6 +361,16 @@ void SceneRuntimeService::SetEcsProfilerEnabled(Scene& scene, bool enabled) noex
     SceneAccess::State(scene).systemScheduler.SetProfilerEnabled(enabled);
 }
 
+void SceneRuntimeService::SetDeterministicExecution(Scene& scene, bool enabled) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    state.deterministicExecution = enabled;
+    state.systemScheduler.SetSchedulingMode(enabled ? kb::ecs::SystemSchedulingMode::Deterministic : kb::ecs::SystemSchedulingMode::Automatic);
+}
+
+SceneRuntimeDeterminismScope SceneRuntimeService::DeterminismScope(const Scene& scene) noexcept {
+    return {SceneAccess::State(scene).deterministicExecution};
+}
+
 void SceneRuntimeService::SetEcsParallelismMode(Scene& scene, kb::ecs::SystemSchedulerParallelismMode mode) noexcept {
     SceneAccess::State(scene).systemScheduler.SetParallelismMode(mode);
 }
@@ -490,6 +500,10 @@ std::uint64_t SceneRuntimeService::RenderTopologyVersion(const Scene& scene) noe
 
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    // Zero asks the backend to measure wall time. Replay must never take that path.
+    if (state.deterministicExecution && (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F)) {
+        throw std::invalid_argument("Deterministic execution requires a finite positive frame delta");
+    }
     using Clock = std::chrono::steady_clock;
     const auto updateStart = Clock::now();
     const auto nanosecondsSince = [](Clock::time_point start) {
@@ -504,6 +518,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.lastRuntimeTransformSyncNanoseconds += nanosecondsSince(start);
     };
     ApplyRuntimeCommands(state);
+    // Reapply restored execution policy before any systems run.
+    state.systemScheduler.SetSchedulingMode(state.deterministicExecution
+        ? kb::ecs::SystemSchedulingMode::Deterministic : kb::ecs::SystemSchedulingMode::Automatic);
     // LIB-065: counts every Update() call, unconditionally (including
     // PrefabPrivate scenes below) — "how many times has this scene been
     // stepped" is well-defined regardless of mode.
@@ -570,7 +587,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
             ++state.fixedStepIndex;
             // A step slower than real time can never be caught up; further steps
             // would only multiply the frame cost (spiral of death), so drop the debt.
-            if (static_cast<double>(nanosecondsSince(stepStart)) * 1e-9 >= static_cast<double>(fixed.fixedDeltaSeconds)) {
+            if (!state.deterministicExecution && static_cast<double>(nanosecondsSince(stepStart)) * 1e-9 >= static_cast<double>(fixed.fixedDeltaSeconds)) {
                 state.fixedStepAccumulatorSeconds = std::min(state.fixedStepAccumulatorSeconds, fixed.fixedDeltaSeconds * 0.5F);
                 break;
             }

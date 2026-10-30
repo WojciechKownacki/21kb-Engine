@@ -35,24 +35,59 @@ backs each statement. Where a statement has no test, it says so.
 
 ## Determinism scope
 
-What is promised: with `SystemSchedulingMode::Deterministic`, the `Deterministic` query policy,
-iteration order and reduction mode, the same registration order and the same fixed step, the
-scheduler runs the systems in the same order and the components end with the same values, whatever
-the number of workers. Independent systems are ordered by name.
+`SceneRuntime::SetDeterministicExecution(true)` opts into dependency/name ordered ECS
+execution and phase/registration ordered scene execution on the owner thread. It also
+removes the fixed-step early exit based on measured CPU duration. Disabling restores
+automatic ECS scheduling. `DeterminismScope()` returns the active policy and the
+simulation, RNG, fixed-tick and backend contracts used by the CLI report.
 
-What is not promised:
+The same binary, registration, initial state and ordered inputs produce the same
+results only when content also uses deterministic query iteration/reductions and
+controls its external inputs. Internal jobs or asynchronous work started by a system
+remain that system's responsibility. Deterministic ECS dispatch alone does not alter
+user query policies.
 
-* bitwise identical floating point results on different platforms or compilers. The golden checksum
-  in `EcsDeterministicReplayTests.cpp` is an exact value for MSVC on x64 only. Linux and ARM runs of
-  the same test are evidence about those platforms and are still to be recorded; a differing result
-  must be reported, not re-baselined;
-* determinism of the physics backend, the GPU, scripts that use time or random sources, or anything
-  that depends on thread timing outside the deterministic scheduler;
-* determinism of the non-deterministic scheduling modes.
+Enabled mode rejects zero, negative, NaN and infinite frame deltas before changing
+scene state; zero would otherwise ask the backend to measure wall time. Fixed ticks
+depend on the same finite positive frame delta sequence, playing state and
+`FixedStepSettings()`. Frame deltas are clamped, at most `maxFixedStepsPerFrame`
+steps run, and excess whole-step debt is discarded. CPU duration does not affect
+this decision in enabled mode. Variable Tick still receives the supplied frame
+delta. Equivalent elapsed time with different frame partitions is not a guarantee.
 
-Tests: `RunDeterministicReplayProducesStableResultTest`,
-`RunDeterministicReplayIgnoresWorkerCountTest` (0, 1, 2, 4 and 7 workers) and
-`RunDeterministicReplayGoldenTest`.
+`kb::math::NextUInt32` has an exact uint32 sequence for the same seed/counter;
+the complete state is the caller-owned seed and counter, including modulo counter
+wrap. Preserve stream ownership, consumption order and state on restore. Floating
+distributions are subject to floating-point rounding; Lua `math.random`, OS entropy,
+GPU random sources and wall-clock seeding are outside this contract.
+
+`kb_cli run --project <dir> --deterministic --report determinism` executes the actual
+headless scene and emits `21kb.determinism/v1` with its policy, fixed-step settings,
+completed frame/tick counts and scope. The CLI also uses synchronous physics stepping.
+Without `--deterministic`, the report explicitly says the policy is disabled.
+JSON goes to stdout and runtime logs to stderr.
+
+No general cross-platform bitwise floating-point or backend guarantee is made. Physics
+requires the same binary, ordered mutations and synchronous steps; cross-platform
+physics comparisons need scenario-specific tolerances. GPU execution, external I/O,
+asynchronous asset readiness and scripts using wall time are outside this guarantee.
+The API and CLI do not invent a universal backend tolerance: the report uses null and
+states that the comparison scenario must supply its bounds.
+
+`kb_ecs_deterministic_replay_tests` checks the ECS recurrence against a double-precision
+numeric golden with absolute component tolerance `0.0001` on every platform. It also
+retains the exact MSVC x64 quantized checksum `536938034` and prints observed checksums
+on other platforms. Worker counts 0, 1, 2, 4 and 7 must agree within a run.
+The scene replay checks exact RNG golden `13224159966847899506` (1024 draws), counter
+wrap and state restoration, 12 bounded fixed ticks over fractional/clamped frame
+deltas, serial scene order with 1/2/4 workers, and steps deliberately slower than their
+simulation delta. These integer/tick comparisons have zero tolerance. The test prints
+portable results for comparison across hosts; Linux and ARM execution evidence is
+still required before claiming qualification on those hosts. The CLI/Lua workflow
+also checks synchronous Jolt constant-velocity motion against its numeric golden
+with absolute position/velocity tolerance `0.001`; this is a bound for that simple
+scenario only. Engine module ABI 24 requires providers to be rebuilt with the
+scene execution policy.
 
 ## Declared access validation
 

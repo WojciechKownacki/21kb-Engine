@@ -2,6 +2,8 @@
 
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/ParallelSceneSystem.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/StatelessSceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -253,7 +255,7 @@ void RunSelected(ParallelState& state, std::span<SceneSystem* const> selected, U
     std::size_t next = 0U;
     while (next < selected.size()) {
         std::vector<SceneSystem*> group{ selected[next] };
-        const SystemAccess* first = state.enabled ? accessOf(selected[next]) : nullptr;
+        const SystemAccess* first = state.enabled && !scene.Runtime().DeterminismScope().enabled ? accessOf(selected[next]) : nullptr;
         if (first != nullptr) {
             std::size_t cursor = next + 1U;
             for (; cursor < selected.size(); ++cursor) {

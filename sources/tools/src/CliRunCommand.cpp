@@ -291,7 +291,7 @@ struct DiagnosticPrinter {
 
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
     std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr, std::ostream* inputReport = nullptr,
-    std::ostream* aiReport = nullptr) {
+    std::ostream* aiReport = nullptr, std::ostream* determinismReport = nullptr) {
     const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -472,6 +472,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         ? projectSettings.settings.inputMappingContext : loadedProject.legacySettings.inputMappingContext;
     kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
     if (ecsParallelism) scene.Runtime().SetEcsParallelismMode(*ecsParallelism);
+    scene.Runtime().SetDeterministicExecution(arguments.Flag("--deterministic"));
     // A headless run is a determinism tool: scripts see each physics step in the update that ran it.
     kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
     if (!scene.ModuleDiagnostics().empty()) {
@@ -784,6 +785,31 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         *aiReport << aiSnapshot.Dump() << '\n';
         if (!aiReport->good()) { io.err << "error: AI decision report could not be written\n"; return 1; }
     }
+    if (determinismReport != nullptr) {
+        using kb::core::JsonValue;
+        const auto scope = scene.Runtime().DeterminismScope();
+        const auto fixed = scene.Runtime().FixedStepSettings();
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.determinism/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
+        report.Set("enabled", JsonValue::MakeBool(scope.enabled));
+        report.Set("frame_delta_requirement", JsonValue::MakeString("Enabled mode requires finite positive deltas; invalid input is rejected before mutation"));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("fixed_step_index", JsonValue::MakeString(std::to_string(scene.Runtime().FixedStepIndex())));
+        report.Set("fixed_delta_seconds", JsonValue::MakeNumber(fixed.fixedDeltaSeconds));
+        report.Set("max_frame_delta_seconds", JsonValue::MakeNumber(fixed.maxFrameDeltaSeconds));
+        report.Set("max_fixed_steps_per_frame", JsonValue::MakeNumber(static_cast<double>(fixed.maxFixedStepsPerFrame)));
+        report.Set("simulation", JsonValue::MakeString(std::string{scope.simulation}));
+        report.Set("rng", JsonValue::MakeString(std::string{scope.rng}));
+        report.Set("fixed_tick", JsonValue::MakeString(std::string{scope.fixedTick}));
+        report.Set("backends", JsonValue::MakeString(std::string{scope.backends}));
+        report.Set("cross_platform_float_bitwise", JsonValue::MakeBool(scope.crossPlatformFloatBitwise));
+        report.Set("backend_absolute_tolerance", JsonValue::MakeNull());
+        report.Set("tolerance_basis", JsonValue::MakeString("No universal tolerance; compare each backend scenario against its declared bounds"));
+        *determinismReport << report.Dump() << '\n';
+        if (!determinismReport->good()) { io.err << "error: determinism report could not be written\n"; return 1; }
+    }
     if (inputReport != nullptr) {
         using kb::core::JsonValue;
         auto report = JsonValue::MakeObject();
@@ -897,14 +923,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input or ai\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input, ai or determinism\n"; return 1; }
     if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
         io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai") {
-        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input or ai\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai" && *report != "determinism") {
+        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input, ai or determinism\n";
         return 1;
     }
+    if (report && *report == "determinism") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "ai") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "input") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "ecs") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, &io.out);

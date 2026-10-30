@@ -2385,6 +2385,7 @@ if(BUILD_TESTING)
     kb_add_ecs_test_target(kb_ecs_deterministic_replay_tests
         tests/EcsDeterministicReplayTestMain.cpp
         tests/EcsDeterministicReplayTests.cpp
+        tests/SceneDeterministicReplayTests.cpp
     )
     set_tests_properties(kb_ecs_deterministic_replay_tests PROPERTIES LABELS "ecs;deterministic;replay")
 

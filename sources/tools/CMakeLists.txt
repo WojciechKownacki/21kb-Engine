@@ -114,6 +114,13 @@ add_custom_command(TARGET kb_cli POST_BUILD
 )
 
 if(BUILD_TESTING)
+    find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME kb_cli_determinism_workflow
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/DeterminismWorkflowTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_determinism_workflow PROPERTIES LABELS "tools;deterministic;replay" TIMEOUT 120)
+    endif()
     if(WIN32)
         find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
         add_test(NAME kb_cli_command_limits

@@ -200,6 +200,14 @@ void SceneRuntime::SetEcsProfilerEnabled(bool enabled) noexcept {
     SceneRuntimeService::SetEcsProfilerEnabled(scene_, enabled);
 }
 
+void SceneRuntime::SetDeterministicExecution(bool enabled) noexcept {
+    SceneRuntimeService::SetDeterministicExecution(scene_, enabled);
+}
+
+SceneRuntimeDeterminismScope SceneRuntime::DeterminismScope() const noexcept {
+    return SceneRuntimeService::DeterminismScope(scene_);
+}
+
 void SceneRuntime::SetEcsParallelismMode(kb::ecs::SystemSchedulerParallelismMode mode) noexcept {
     SceneRuntimeService::SetEcsParallelismMode(scene_, mode);
 }

@@ -13,6 +13,7 @@
 #include <vector>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <type_traits>
 
 namespace kb::ecs {
@@ -38,6 +39,25 @@ struct SceneRuntimeFixedStepSettings {
     float fixedDeltaSeconds = kSceneRuntimeDefaultFixedDeltaSeconds;
     float maxFrameDeltaSeconds = 0.25F;
     std::size_t maxFixedStepsPerFrame = kSceneRuntimeDefaultMaxFixedStepsPerFrame;
+};
+
+// Conditions on content remain necessary even when deterministic execution is enabled.
+struct SceneRuntimeDeterminismScope {
+    bool enabled = false;
+    static constexpr bool crossPlatformFloatBitwise = false;
+    static constexpr std::string_view simulation =
+        "Same binary, ordered inputs, registration and deterministic query/reduction policies; "
+        "ECS systems run by dependency/name and scene systems by phase/registration order";
+    static constexpr std::string_view rng =
+        "RandomStream NextUInt32: exact uint32 sequence for the same seed/counter; "
+        "caller owns stream order and restored state; floating distributions and Lua math.random excluded";
+    static constexpr std::string_view fixedTick =
+        "Enabled mode ignores CPU step duration; same finite frame deltas, playing state and settings "
+        "give the same bounded fixed ticks; frame clamp and max-step debt discard still apply";
+    static constexpr std::string_view backends =
+        "Physics requires the same binary, ordered calls and synchronous stepping; "
+        "cross-platform physics needs scenario-specific numeric tolerances; "
+        "GPU, external I/O, asynchronous asset readiness and wall-clock scripts have no determinism guarantee";
 };
 
 struct SceneTransformPropagationBudget {
@@ -242,6 +262,10 @@ public:
     [[nodiscard]] SceneTransformPropagationBudget TransformPropagationBudget() const noexcept;
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
+    // Also disables parallel dispatch between scene systems. Disabling restores automatic ECS scheduling.
+    // Does not change backend pipelining, user queries, RNG ownership or fixed-step settings.
+    void SetDeterministicExecution(bool enabled) noexcept;
+    [[nodiscard]] SceneRuntimeDeterminismScope DeterminismScope() const noexcept;
     void SetEcsProfilerEnabled(bool enabled) noexcept;
     void SetEcsParallelismMode(kb::ecs::SystemSchedulerParallelismMode mode) noexcept;
     [[nodiscard]] kb::ecs::SystemSchedulerParallelismMode EcsParallelismMode() const noexcept;
