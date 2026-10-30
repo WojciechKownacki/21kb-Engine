@@ -275,6 +275,8 @@ struct DiagnosticPrinter {
     report.Set("estimated_resident_bytes", JsonValue::MakeNumber(static_cast<double>(memory.estimatedResidentBytes)));
     report.Set("resident_units", JsonValue::MakeNumber(static_cast<double>(memory.residentUnits)));
     report.Set("measured_bytes", JsonValue::MakeNumber(static_cast<double>(memory.measuredBytes)));
+    report.Set("estimated_bytes", JsonValue::MakeNumber(static_cast<double>(memory.estimatedBytes)));
+    report.Set("has_estimated_kinds", JsonValue::MakeBool(memory.hasEstimatedKinds));
     report.Set("has_unavailable_kinds", JsonValue::MakeBool(memory.hasUnavailableKinds));
     report.Set("error_ratio", JsonValue::MakeNumber(memory.errorRatio));
     report.Set("minimum_error_ratio", JsonValue::MakeNumber(memory.minimumErrorRatio));

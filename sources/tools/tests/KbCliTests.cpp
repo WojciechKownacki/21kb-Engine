@@ -4909,6 +4909,10 @@ void RunWorldMemoryCliTests() {
     Require(kind("physics")->Find("source")->AsString() == "unavailable" && kind("physics")->Find("bytes")->IsNull() &&
             kind("gpu")->Find("source")->AsString() == "unavailable" && memory->Find("has_unavailable_kinds")->AsBool(),
         "kinds this host cannot read are unavailable, not zero");
+    Require(memory->Find("has_estimated_kinds")->AsBool() &&
+            memory->Find("estimated_bytes")->AsNumber() == kind("assets_cpu")->Find("bytes")->AsNumber() &&
+            memory->Find("measured_bytes")->AsNumber() == kind("instances")->Find("bytes")->AsNumber() + kind("scripts")->Find("bytes")->AsNumber(),
+        "estimated asset bytes are excluded from measured totals");
     Require(memory->Find("samples")->AsNumber() >= 1.0 && memory->Find("minimum_error_ratio")->AsNumber() > 0.0 &&
             memory->Find("minimum_error_ratio")->AsNumber() <= memory->Find("maximum_error_ratio")->AsNumber(), "the error ratio was sampled");
     const CliRun refused = RunCliProgram({ "run", "--project", project, "--report", "bogus" });
@@ -5109,6 +5113,10 @@ int main(int argc, char** argv) {
 #else
         RunSprite2DAssetRefusalTests();
 #endif
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "world-memory") {
+        RunWorldMemoryCliTests();
         return EXIT_SUCCESS;
     }
     if (argc != 1) return EXIT_FAILURE;

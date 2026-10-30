@@ -120,11 +120,14 @@ struct WorldMemoryReport {
     // What the streaming budget charges for the cells resident now.
     std::uint64_t estimatedResidentBytes = 0U;
     std::array<WorldMemoryCategory, kWorldMemoryKindCount> categories{};
-    // The sum of the kinds that have a reading; kinds without one are not guessed.
+    // Only subsystem measurements contribute here; estimates remain separate.
     std::uint64_t measuredBytes = 0U;
+    std::uint64_t estimatedBytes = 0U;
+    bool hasEstimatedKinds = false;
     bool hasUnavailableKinds = false;
     // measuredBytes / estimatedResidentBytes for the cells resident now (0 when none), and the lowest, highest and number of such
-    // ratios taken each time the set of resident cells settled. Above 1 the estimate is too small.
+    // ratios taken each time the set of resident cells settled. With estimated or unavailable kinds,
+    // this is only a partial comparison, not the total estimation error.
     double errorRatio = 0.0;
     double minimumErrorRatio = 0.0;
     double maximumErrorRatio = 0.0;

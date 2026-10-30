@@ -604,18 +604,21 @@ namespace {
     if (!memory.probes[kAssets]) {
         // The size of every loaded asset's file: not its decoded size, which only the loader knows.
         std::uint64_t bytes = 0U;
+        bool available = true;
         kb::assets::AssetManager& manager = scene.Assets().Manager();
         for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
-            if (!manager.IsLoaded(metadata.id) || metadata.physicalPath.empty()) {
+            if (!manager.IsLoaded(metadata.id)) {
                 continue;
             }
             std::error_code error;
             const std::uintmax_t size = std::filesystem::file_size(metadata.physicalPath, error);
-            if (!error) {
-                bytes += size;
+            if (error) {
+                available = false;
+                break;
             }
+            bytes += size;
         }
-        readings[kAssets] = bytes;
+        if (available) readings[kAssets] = bytes;
     }
     return readings;
 }
@@ -658,7 +661,12 @@ void TakeMemoryBaseline(scene::Scene& scene, WorldMemoryState& memory) {
         }
         category.baselineBytes = *memory.baseline[kind];
         category.bytes = *readings[kind] > *memory.baseline[kind] ? *readings[kind] - *memory.baseline[kind] : 0U;
-        report.measuredBytes += category.bytes;
+        if (category.source == WorldMemorySource::Measured) {
+            report.measuredBytes += category.bytes;
+        } else {
+            report.estimatedBytes += category.bytes;
+            report.hasEstimatedKinds = true;
+        }
     }
     report.errorRatio = estimatedResident == 0U ? 0.0 : static_cast<double>(report.measuredBytes) / static_cast<double>(estimatedResident);
     report.minimumErrorRatio = memory.minimumRatio;
