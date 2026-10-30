@@ -24,11 +24,11 @@ Requirements: CMake 3.27 or newer and a C++20 compiler. The configure step downl
 Monocypher and Recast (pinned in the root `CMakeLists.txt`), so it needs network access. The editor and the
 renderer build on Windows only (`KB_BUILD_EDITOR`, `KB_BUILD_RENDERER` default to `ON` there).
 
-Windows, as CI does it (any other generator works too):
+Windows:
 
 ```powershell
-cmake -S . -B build/dev -G "Visual Studio 18 2026" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
-cmake --build build/dev --config Release --target kb_cli kb_cli_tests --parallel 4
+cmake -S . -B build/dev -G "Visual Studio 17 2022" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
+cmake --build build/dev --config Release --target kb_cli kb_cli_tests --parallel 2
 ```
 
 Build only the targets you changed; a full build of the editor is large. `kb_cli.exe` is written to

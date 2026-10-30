@@ -736,7 +736,7 @@ endif()
 if(MSVC)
     foreach(_kb_shipped_target IN ITEMS
             kb_game kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin
-            kb_21kb_particle_plugin kb_crash_reporting_test_helper)
+            kb_21kb_particle_plugin kb_ai_plugin kb_world2d_plugin kb_crash_reporting_test_helper)
         if(TARGET ${_kb_shipped_target})
             get_target_property(_kb_shipped_type ${_kb_shipped_target} TYPE)
             if(_kb_shipped_type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
