@@ -52,6 +52,7 @@
 #include <sstream>
 #include <future>
 #include <iterator>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -130,6 +131,13 @@ public:
     [[nodiscard]] std::vector<std::string> Extensions() const override { return { ".slow" }; }
     [[nodiscard]] bool AllowsConcurrentLoad() const noexcept override { return allowConcurrent_; }
 
+    [[nodiscard]] std::optional<std::string> ValidateRuntimeDependencies(
+        const kb::assets::AssetLoadRequest&, const kb::assets::AssetRegistry&) const override {
+        if (!allowConcurrent_ && overlap_->active.load() != 0U)
+            return "Validation overlapped a non-concurrent load";
+        return std::nullopt;
+    }
+
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override {
         const unsigned now = overlap_->active.fetch_add(1U) + 1U;
         unsigned peak = overlap_->peak.load();
@@ -151,6 +159,9 @@ struct AsyncLoaderGate {
     std::atomic_bool entered{ false };
     std::shared_future<void> release{};
     bool validate = false;
+    bool cooperative = false;
+    bool deepDependencies = false;
+    std::atomic_uint dependenciesRead{0U};
     std::thread::id ownerThread = std::this_thread::get_id();
     kb::assets::AssetId dependency{};
     std::atomic_bool validatedOnWorker{ false };
@@ -169,7 +180,13 @@ public:
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override {
         ++gate_->loadCount;
         gate_->entered.store(true, std::memory_order_release);
-        gate_->release.wait();
+        if (gate_->cooperative) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (gate_->release.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+                if (request.IsCancellationRequested()) return {.asset = {}, .error = "Asset load cancelled"};
+                if (std::chrono::steady_clock::now() >= deadline) return {.asset = {}, .error = "Decode deadline exceeded"};
+            }
+        } else gate_->release.wait();
         std::ifstream input{ request.resolvedPath, std::ios::binary };
         if (!input.is_open()) {
             return { .asset = {}, .error = "Gated text file could not be opened" };
@@ -179,7 +196,24 @@ public:
     }
 
     [[nodiscard]] std::optional<std::string> ValidateRuntimeDependencies(
-        const kb::assets::AssetLoadRequest&, const kb::assets::AssetRegistry& registry) const override {
+        const kb::assets::AssetLoadRequest& request, const kb::assets::AssetRegistry& registry) const override {
+        if (gate_->deepDependencies) {
+            if (std::this_thread::get_id() == gate_->ownerThread) return "Dependency IO ran on owner thread";
+            auto dependencies = request.metadata.dependencies;
+            std::vector<std::uint8_t> bytes;
+            std::string error;
+            while (!dependencies.empty()) {
+                if (request.IsCancellationRequested()) return "Asset load cancelled";
+                const auto id = dependencies.back();
+                dependencies.pop_back();
+                const auto* metadata = registry.Find(id);
+                if (!metadata) return "Missing dependency";
+                if (!request.ReadDependencySourceBytes(*metadata, bytes, error)) return error;
+                ++gate_->dependenciesRead;
+                dependencies.insert(dependencies.end(), metadata->dependencies.begin(), metadata->dependencies.end());
+            }
+            return std::nullopt;
+        }
         if (!gate_->validate) return std::nullopt;
         if (std::this_thread::get_id() == gate_->ownerThread) return "Validation ran on the owner thread";
         gate_->validatedOnWorker.store(true, std::memory_order_release);
@@ -579,6 +613,156 @@ void RunAssetManagerConcurrentLoaderTest() {
     }
 }
 
+void RunAssetManagerSyncValidationGateTest() {
+    ResetTestRoot();
+    const auto root = TestRoot() / "ValidationGate";
+    WriteTextFile(root / "First.slow", "first");
+    WriteTextFile(root / "Second.slow", "second");
+    for (unsigned round = 0U; round < 4U; ++round) {
+        auto overlap = std::make_shared<LoadOverlap>();
+        kb::assets::AssetManager manager;
+        kb::tests::Require(manager.RegisterLoader(std::make_unique<SlowTextAssetLoader>(overlap, false)) &&
+            manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() == 2U,
+            "Validation gate fixture failed");
+        const auto first = manager.Registry().FindByPath("/Game/First.slow")->id;
+        const auto second = manager.Registry().FindByPath("/Game/Second.slow")->id;
+        kb::tests::Require(manager.RequestLoadAsync(first), "Validation gate request failed");
+        SpinUntil([&] { return overlap->active.load() != 0U; });
+        const auto loaded = manager.Load<std::string>(second);
+        kb::tests::Require(loaded.IsLoaded() && *loaded == "second" && overlap->peak == 1U,
+            "Synchronous validation raced a non-concurrent background decoder");
+        SpinUntil([&] { return manager.AsyncLoadStatus(first) != kb::assets::AsyncAssetLoadStatus::Pending; },
+            [&] { manager.PumpAsyncLoads(); });
+        const auto background = manager.AcquireLoaded<std::string>(first);
+        kb::tests::Require(background.IsLoaded() && *background == "first", "Background payload was corrupted");
+    }
+}
+
+void RunAssetManagerDeepDependencyLatencyTest() {
+    ResetTestRoot();
+    const auto root = TestRoot() / "DeepDependencies";
+    constexpr unsigned depth = 128U;
+    for (unsigned i = 0; i < depth; ++i) WriteTextFile(root / (std::to_string(i) + ".gated"), std::string(4096U, 'x'));
+    for (const bool missingFile : {false, true}) {
+        std::promise<void> release;
+        auto gate = std::make_shared<AsyncLoaderGate>();
+        gate->release = release.get_future().share(); release.set_value();
+        gate->deepDependencies = true;
+        kb::assets::AssetManager manager;
+        kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+            manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() == depth, "Deep fixture discovery failed");
+        for (unsigned i = 0; i + 1U < depth; ++i) {
+            auto metadata = *manager.Registry().FindByPath("/Game/" + std::to_string(i) + ".gated");
+            metadata.dependencies = {manager.Registry().FindByPath("/Game/" + std::to_string(i + 1U) + ".gated")->id};
+            kb::tests::Require(manager.Registry().Upsert(std::move(metadata)), "Dependency chain registration failed");
+        }
+        if (missingFile) std::filesystem::remove(root / (std::to_string(depth - 1U) + ".gated"));
+        const auto id = manager.Registry().FindByPath("/Game/0.gated")->id;
+        const auto start = std::chrono::steady_clock::now();
+        kb::tests::Require(manager.RequestLoadAsync(id), "Deep request was rejected");
+        const double requestMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        double maxPumpMs = 0.0;
+        SpinUntil([&] { return manager.AsyncLoadStatus(id) != kb::assets::AsyncAssetLoadStatus::Pending; }, [&] {
+            const auto pumpStart = std::chrono::steady_clock::now();
+            manager.PumpAsyncLoads();
+            maxPumpMs = std::max(maxPumpMs,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pumpStart).count());
+        });
+        const auto status = manager.AsyncLoadStatus(id);
+        const double publicationMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        kb::tests::Require(status == (missingFile ? kb::assets::AsyncAssetLoadStatus::Failed : kb::assets::AsyncAssetLoadStatus::Completed),
+            "Deep dependency publication or IO failure was not terminal");
+        kb::tests::Require(gate->dependenciesRead == (missingFile ? depth - 2U : depth - 1U) &&
+            manager.AsyncLoadLifecycle().publishedLoads == (missingFile ? 0U : 1U), "Deep dependency read/publication count changed");
+        if (missingFile) kb::tests::Require(manager.LoadedCount() == 0U && !manager.AsyncLoadError(id).empty(),
+            "Failed dependency published a partial root asset");
+        std::cout << "asset_dependencies depth=" << depth << " io_failure=" << missingFile
+            << " request_ms=" << requestMs << " request_to_terminal_ms=" << publicationMs
+            << " pump_stall_max_ms=" << maxPumpMs << '\n';
+    }
+}
+
+void RunAssetManagerCancellationTelemetryTest() {
+    ResetTestRoot();
+    const auto root = TestRoot() / "Cooperative";
+    WriteTextFile(root / "First.gated", "first");
+    WriteTextFile(root / "Queued.gated", "queued");
+    std::array<double, 16U> clearMilliseconds{};
+    double maxRequestMilliseconds = 0.0;
+    double maxPumpMilliseconds = 0.0;
+    for (auto& elapsed : clearMilliseconds) {
+        std::promise<void> release;
+        auto gate = std::make_shared<AsyncLoaderGate>();
+        gate->release = release.get_future().share();
+        gate->cooperative = true;
+        kb::assets::AssetManager manager;
+        kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+            manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() == 2U,
+            "Cancellation fixture discovery failed");
+        const auto first = manager.Registry().FindByPath("/Game/First.gated")->id;
+        const auto queued = manager.Registry().FindByPath("/Game/Queued.gated")->id;
+        auto start = std::chrono::steady_clock::now();
+        kb::tests::Require(manager.RequestLoadAsync(first) && manager.RequestLoadAsync(queued), "Cancellation requests failed");
+        maxRequestMilliseconds = std::max(maxRequestMilliseconds,
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); }, [] {});
+        start = std::chrono::steady_clock::now();
+        manager.PumpAsyncLoads();
+        maxPumpMilliseconds = std::max(maxPumpMilliseconds,
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        start = std::chrono::steady_clock::now();
+        manager.Clear();
+        elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        const auto stats = manager.AsyncLoadLifecycle();
+        kb::tests::Require(elapsed < 500.0 && stats.cancelledBeforeLoad == 1U && stats.cancelledDuringLoad == 1U &&
+            stats.discardedResults == 0U && stats.publishedLoads == 0U && gate->loadCount == 1U && manager.LoadedCount() == 0U,
+            "Clear did not cancel queued/running work promptly or distinguish cancellation from stale results");
+    }
+    std::array<double, 16U> shutdownMilliseconds{};
+    for (auto& elapsed : shutdownMilliseconds) {
+        std::promise<void> release;
+        auto gate = std::make_shared<AsyncLoaderGate>();
+        gate->release = release.get_future().share(); gate->cooperative = true;
+        auto manager = std::make_unique<kb::assets::AssetManager>();
+        kb::tests::Require(manager->RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+            manager->Mounts().Mount("Game", root) && manager->DiscoverMountedAssets() == 2U,
+            "Shutdown fixture discovery failed");
+        kb::tests::Require(manager->RequestLoadAsync(manager->Registry().FindByPath("/Game/First.gated")->id),
+            "Shutdown fixture request failed");
+        SpinUntil([&] { return gate->entered.load(std::memory_order_acquire); });
+        kb::tests::Require(gate->entered.load(), "Shutdown loader did not start");
+        const std::weak_ptr<AsyncLoaderGate> lifetime = gate;
+        gate.reset();
+        const auto start = std::chrono::steady_clock::now();
+        manager.reset();
+        elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        kb::tests::Require(elapsed < 500.0 && lifetime.expired(), "Shutdown retained a loader or waited for its decode deadline");
+    }
+    std::sort(shutdownMilliseconds.begin(), shutdownMilliseconds.end());
+    std::cout << "asset_shutdown samples=16 p95_ms=" << shutdownMilliseconds[15]
+        << " p99_ms=" << shutdownMilliseconds[15] << '\n';
+    std::sort(clearMilliseconds.begin(), clearMilliseconds.end());
+    std::cout << "asset_cancel samples=16 clear_p95_ms=" << clearMilliseconds[15]
+        << " clear_p99_ms=" << clearMilliseconds[15] << " request_max_ms=" << maxRequestMilliseconds
+        << " pump_stall_max_ms=" << maxPumpMilliseconds << '\n';
+    auto cancellation = std::make_shared<kb::assets::AssetLoadCancellation>();
+    cancellation->requested = true;
+    kb::assets::AssetMetadata metadata{};
+    const kb::assets::AssetLoadRequest request{.metadata = metadata, .resolvedPath = root / "First.gated",
+        .cancellation = cancellation};
+    std::vector<std::uint8_t> bytes{42U};
+    std::string error;
+    kb::tests::Require(!request.ReadSourceBytes(bytes, error) && bytes == std::vector<std::uint8_t>{42U} &&
+        cancellation->observed.load() && error == "Asset load cancelled", "Cancelled source read modified its output");
+    cancellation->requested = false;
+    cancellation->observed = false;
+    const std::string largeSource(1024U * 1024U + 13U, 'q');
+    WriteTextFile(root / "First.gated", largeSource);
+    kb::tests::Require(request.ReadSourceBytes(bytes, error) &&
+        std::string(bytes.begin(), bytes.end()) == largeSource,
+        "Chunked source reading lost bytes at block boundaries or the final short block");
+}
+
 void RunAssetManagerTrueAsyncLoadTest() {
     ResetTestRoot();
     const std::filesystem::path assetsRoot = TestRoot() / "AsyncProject" / "Assets";
@@ -653,6 +837,9 @@ void RunAssetManagerTrueAsyncLoadTest() {
     kb::tests::Require(cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::NotRequested &&
             !cancelManager.IsLoaded(cancelMetadata->id),
         "Unload during an async request must invalidate the worker result before owner-thread commit");
+    kb::tests::Require(cancelManager.AsyncLoadLifecycle().discardedResults == 1U &&
+        cancelManager.AsyncLoadLifecycle().cancelledDuringLoad == 0U,
+        "A non-cooperative completed read was incorrectly reported as cancelled IO");
 }
 
 // An I/O error of an asynchronous load is reported as a failure with the loader's message and does not publish
@@ -704,6 +891,8 @@ void RunAssetManagerAsyncFailureAndRequestAfterUnloadTest() {
         "A request made after an unload during I/O must publish its own result");
     const kb::assets::AssetHandle<std::string> payload = again.AcquireLoaded<std::string>(reloaded);
     kb::tests::Require(payload.IsLoaded() && *payload == "second request payload", "The re-requested payload must be the loaded text");
+    kb::tests::Require(again.AsyncLoadLifecycle().discardedResults == 1U && again.AsyncLoadLifecycle().publishedLoads == 1U,
+        "Unload/reload counters confused the discarded old read with the published replacement");
 }
 
 // Asynchronous loads are jobs of the engine's one background load service: a blocked loader
@@ -792,6 +981,8 @@ void RunAssetManagerAsyncDependencyValidationTest() {
     kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Failed &&
         !manager.IsLoaded(id) && gate->loadCount == 1U && manager.AsyncLoadError(id).find("registry changed") != std::string::npos,
         "Async validation raced registry edits or published a stale dependency closure");
+    kb::tests::Require(manager.AsyncLoadLifecycle().discardedResults == 1U && manager.AsyncLoadLifecycle().cancelledDuringLoad == 0U,
+        "Registry invalidation was reported as cancellation of the completed IO");
     kb::tests::Require(manager.RegisterAsset(dependency) && manager.RequestLoadAsync(id), "Validation retry was rejected");
     pump();
     const auto loaded = manager.AcquireLoaded<std::string>(id);
@@ -2744,10 +2935,13 @@ void RunAssetRuntimeTests() {
     RunSingleAssetRefreshTest();
     RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
+    RunAssetManagerDeepDependencyLatencyTest();
+    RunAssetManagerCancellationTelemetryTest();
     RunAssetManagerTrueAsyncLoadTest();
     RunAssetManagerAsyncFailureAndRequestAfterUnloadTest();
     RunAssetManagerAsyncLoadsShareBackgroundServiceTest();
     RunAssetManagerConcurrentLoaderTest();
+    RunAssetManagerSyncValidationGateTest();
     RunAssetManagerAsyncDependencyValidationTest();
     RunAssetManagerAsyncLoaderReplacementTest();
     RunAssetManagerNewLoaderPreservesRetainedAssetsTest();

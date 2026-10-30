@@ -145,6 +145,7 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] std::vector<std::string> BakedAssetTypes() const override;
+    [[nodiscard]] bool AllowsConcurrentLoad() const noexcept override { return true; }
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
 
     // LoadTexture(path) decodes through a process-wide cache keyed by (path, last-write-time, size): a file is

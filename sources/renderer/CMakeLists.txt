@@ -847,6 +847,13 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     set_tests_properties(kb_renderer_cpu_contract_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;correctness")
 
+    add_executable(kb_asset_loading_tests tests/AssetLoadingConcurrencyTests.cpp)
+    target_link_libraries(kb_asset_loading_tests PRIVATE kb_renderer kb_renderer_bake)
+    kb_apply_quality_gates(kb_asset_loading_tests)
+    add_test(NAME kb_asset_loading_tests COMMAND kb_asset_loading_tests)
+    set_tests_properties(kb_asset_loading_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "assets;concurrency;packaging")
+
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
         tests/AssetImportCatalogCoverageTests.cpp

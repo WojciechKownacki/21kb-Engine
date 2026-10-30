@@ -121,8 +121,8 @@ public:
         return payload;
     }
     // The asset manager runs loaders one at a time unless a loader says otherwise. Return true only when Load() and
-    // ValidateRuntimeDependencies() touch no state shared between calls (no static or member data that is written, no
-    // non-thread-safe library); the manager then lets several loads of this loader run at once.
+    // ValidateRuntimeDependencies() use only call-local or synchronized shared state and thread-safe libraries;
+    // the manager then lets several loads of this loader run at once. Configure the loader before submitting work.
     [[nodiscard]] virtual bool AllowsConcurrentLoad() const noexcept {
         return false;
     }
