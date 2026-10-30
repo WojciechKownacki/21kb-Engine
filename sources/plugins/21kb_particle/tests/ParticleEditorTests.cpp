@@ -1250,10 +1250,17 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
     }
 }
 
+#include "ParticleCurveSamplingTests.inl"
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view{argv[1]} == "--curve-sampling") {
+            TestCurveSamplingAccuracy();
+            std::cout << "Curve/gradient sampling, save/bake and headless preview checks passed\n";
+            return EXIT_SUCCESS;
+        }
         if (argc == 2 && std::string_view{argv[1]} == "--external-effects") {
             TestExternalEffectEvents();
             TestModuleStackCommandsCapabilitiesAndAuthoredOrder();
@@ -1268,6 +1275,7 @@ int main(int argc, char** argv) {
         TestCloseGuardAllDirtyTransitions();
         TestProductionBakeCacheAndCapabilityGates();
         TestExternalEffectEvents();
+        TestCurveSamplingAccuracy();
         TestIsolatedRuntimePreviewAndGpuRelease();
         std::cout << "21kb Particle System editor core tests passed\n";
         return EXIT_SUCCESS;

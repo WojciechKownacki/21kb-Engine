@@ -536,3 +536,35 @@ instances after their particles and queued events finish; looping effects remain
 owned by the scene and drain when their owner dies. The headless editor test
 `kb_21kb_particle_editor_tests --external-effects` exercises the provider, preview
 snapshot, lifecycle, depth and binding budget, dependency cycles and baked cache.
+
+## Appearance curve sampling accuracy
+
+CPU particles evaluate the authored size and alpha curves (including easing) and
+color gradient at normalized age. GPU appearance uses eight uniform samples,
+including ages zero and one, with linear interpolation and clamped age. Source
+save/reload and the compiled bake cache preserve all keys, easing and gradient
+stops; the LUT is derived data and does not replace the authored curves.
+
+The table is an approximation. A peak narrower than its sample spacing can be
+missed completely. For piecewise linear curves/gradient channels, the exact
+maximum absolute interpolation error occurs at the union of authored knots and
+LUT sample ages. For a unit quadratic curve, the bound is `1 / (4 * (N-1)^2)`.
+Eased curves, HDR intensity and multiplied gradient/alpha values need their own
+error analysis; no universal small error or monotonic improvement is promised.
+
+The focused headless test `kb_21kb_particle_editor_tests --curve-sampling` checks
+the actual provider's eight-sample GPU commands, CPU lifetime and editor snapshots,
+source persistence and cooked-cache keys/values. It compares reference tables of
+4, 8, 16 and 32 samples (alternative resolutions are test references, not runtime
+settings), including knot ages and their immediate float neighbors:
+
+| Unit-amplitude fixture | 4 samples | 8 samples | 16 samples | 32 samples |
+| --- | ---: | ---: | ---: | ---: |
+| Linear curve/gradient | 0 | 0 | 0 | 0 |
+| Quadratic curve | 0.027778 | 0.005103 | 0.001112 | 0.000261 |
+| Triangular peak, ages 0.499/0.500/0.501 | 1 | 1 | 1 | 1 |
+| Ramp from zero at 0.499 to one at 0.501 | 0.497 | 0.493 | 0.485 | 0.469 |
+
+Entries are maximum absolute errors, with `0.00002` test tolerance for float
+arithmetic. The interpolation comparison executes the shader's sampling arithmetic
+on the host; this test does not assert device readback or bitwise GPU agreement.
