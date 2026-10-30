@@ -28,7 +28,7 @@ otherwise; the other backends are not run by CI.
 | Heightmap terrain | terrain editor | yes | yes | yes | `ctest:kb_terrain_editor_tests` | Undo, cook, collision, chunk borders, RAM of a large terrain |
 | World partition and HLOD | scene settings | yes | yes | yes | `selector:world-hlod` | Long travel, teleport, cancelled loads, hitch limits |
 | GPU particles | effect asset, `kb_cli vfx-*` | yes | yes | yes | `ctest:kb_renderer_particle_motion`, `ctest:kb_renderer_particle_contact_death`, `ctest:kb_renderer_particle_depth_collision`, `ctest:kb_21kb_particle_cpu_backend_tests`, `ctest:kb_game_particle_gpu_package` | Backends other than Direct3D 11 in CTest; GPU flipbook, mesh emission, collision events |
-| GPU culling | diagnostics only | n/a | opt-in | n/a | `selector:mesh-pipeline` | Draws are still culled on the CPU; no frustum-edge image comparison; no measured gain |
+| GPU culling and meshlet indirect submission | cooked mesh metadata | yes | opt-in | yes | `selector:gpu-frustum-culling`, `selector:gpu-meshlet-submission` | D3D11 camera-edge identity/image parity and CPU/GPU costs verified; other backend runtime checks remain |
 
 Temporal history is scoped to a viewport and invalidated when its scene or selected camera changes,
 when switching between perspective and orthographic projection, after a skipped render frame,
@@ -37,9 +37,11 @@ overrides sets `RenderSceneSubmitDesc::resetTemporalHistory` for that submission
 movement retains reprojection history. The reset affects both temporal resolve and motion-vector
 camera matrices. It does not reset exposure adaptation.
 
+Optional indexed indirect and bounded meshlet submission use GPU-compacted instances; see [GPU culling](gpu_culling.md).
+
 ## Not implemented
 
-Indirect and meshlet submission are not implemented (the capability report says so). Temporal upscaling, baked
+Temporal upscaling, baked
 lightmaps, depth of field, ray tracing, OpenXR and a public compute or render-effect extension API have no code
 behind them either. Documents must not describe them as present; `scripts/tests/test_renderer_claims.py` guards
 the first of these.

@@ -437,6 +437,8 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             bgfx::setState(command.state);
             bgfx::submit(desc.viewId, program, culled.indirect, 0U, 1U);
             desc.stats.gpuCullingDispatchCount += 2U;
+            ++desc.stats.indirectDrawSubmitCount;
+            desc.stats.meshletSubmitCount += command.gpuMeshletDraw ? 1U : 0U;
             desc.stats.gpuDrivenBufferCapacity += culled.capacity;
             desc.stats.gpuDrivenUploadBytes += culled.uploadBytes;
         } else {

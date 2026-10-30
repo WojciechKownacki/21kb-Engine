@@ -196,6 +196,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
 
     gpuDrivenSupport.computeCullingSupported = gpuDrivenSupport.computeCullingSupported && gpuDrivenCullingPass_.IsInitialized();
     gpuDrivenSupport.indirectDrawSupported = gpuDrivenSupport.indirectDrawSupported && gpuDrivenCullingPass_.IsInitialized();
+    gpuDrivenSupport.meshletSubmitSupported = gpuDrivenSupport.meshletSubmitSupported && gpuDrivenCullingPass_.IsInitialized();
     auto& passCommands = passCommandScratch_.at(static_cast<std::size_t>(pass));
     pipelineScratch_.commands.swap(passCommands);
     struct RestorePassCommands {

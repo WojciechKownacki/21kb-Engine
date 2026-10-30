@@ -42,3 +42,16 @@ The focused check reads back actual indirect counts and compacted identities for
 moving cameras, reverse-Z, guard bands and clip boundaries, compares complete
 production images with CPU visibility, checks scene invalidation, and prints
 submission and frame/readback costs for a dense static scene.
+
+When meshlet submission is supported and enabled in the cooked mesh metadata,
+complete section index ranges are split into meshlet indirect commands. Each
+command keeps the section vertex binding and material, compacts against the
+meshlet sphere, and uses the same synchronized GPU outputs. The shader path is
+ordinary indexed indirect rendering; it does not require a hardware mesh shader.
+LOD and material sections keep their original selection rules. Incomplete or
+invalid meshlet coverage uses the whole section. Expansion is bounded to 4,096
+meshlet commands and 1,048,576 duplicated candidate records per build; larger
+workloads retain whole-section indirect culling and report a fallback.
+`indirectDrawSubmitCount` and `meshletSubmitCount` count actual submitted commands.
+Run `kb_renderer_tests gpu-meshlet-submission` for the two-meshlet large-scene
+image comparison and CPU/GPU cost check.

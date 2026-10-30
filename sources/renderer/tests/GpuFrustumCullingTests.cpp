@@ -17,7 +17,7 @@
 #endif
 
 namespace kb::render::tests {
-void RunGpuFrustumCullingTests() {
+void RunGpuFrustumCullingTestsImpl(bool meshletMode) {
 #if defined(_WIN32)
     const auto window = CreateWindowExW(0, L"STATIC", L"frustum-headless", WS_OVERLAPPEDWINDOW,
         0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -37,13 +37,19 @@ void RunGpuFrustumCullingTests() {
         const std::array vertices{
             RenderStaticMeshVertexP3N3UV2{.x=-0.04F, .y=-0.04F, .nz=1.0F},
             RenderStaticMeshVertexP3N3UV2{.x=0.04F, .y=-0.04F, .nz=1.0F},
-            RenderStaticMeshVertexP3N3UV2{.x=0.0F, .y=0.04F, .nz=1.0F}};
-        const std::array<std::uint16_t,3> indices{0U,1U,2U};
-        const RenderBoundsSphere bounds{.radius=0.06F};
-        const RenderMeshletDesc meshlet{.indexCount=3U,.vertexCount=3U,.bounds=bounds};
-        const RenderMeshDesc mesh{.vertexData=vertices.data(),.vertexCount=3U,.indices=indices.data(),
-            .indexCount=3U,.vertexFormat=RenderVertexFormat::P3N3UV2,.bounds=bounds,
-            .gpuDriven={.meshlets=&meshlet,.meshletCount=1U,.allowMeshletCulling=false},.doubleSided=true};
+            RenderStaticMeshVertexP3N3UV2{.x=0.0F, .y=0.04F, .nz=1.0F},
+            RenderStaticMeshVertexP3N3UV2{.x=0.10F, .y=-0.04F, .nz=1.0F},
+            RenderStaticMeshVertexP3N3UV2{.x=0.18F, .y=-0.04F, .nz=1.0F},
+            RenderStaticMeshVertexP3N3UV2{.x=0.14F, .y=0.04F, .nz=1.0F}};
+        const std::array<std::uint16_t,6> indices{0U,1U,2U,3U,4U,5U};
+        const RenderBoundsSphere bounds{.radius=meshletMode ? 0.20F : 0.06F};
+        const std::array meshlets{
+            RenderMeshletDesc{.indexCount=3U,.vertexCount=3U,.bounds={.radius=0.06F}},
+            RenderMeshletDesc{.indexStart=3U,.indexCount=3U,.vertexStart=3U,.vertexCount=3U,
+                .bounds={.center={0.14F,0,0},.radius=0.06F}}};
+        const RenderMeshDesc mesh{.vertexData=vertices.data(),.vertexCount=meshletMode?6U:3U,.indices=indices.data(),
+            .indexCount=meshletMode?6U:3U,.vertexFormat=RenderVertexFormat::P3N3UV2,.bounds=bounds,
+            .gpuDriven={.meshlets=meshlets.data(),.meshletCount=meshletMode?2U:1U,.allowMeshletCulling=meshletMode},.doubleSided=true};
         const auto handle = renderer.Resources().RegisterMesh(mesh);
         Require(handle.IsValid(), "GPU frustum mesh failed");
         renderer.ResourceMap().BindMesh(1U,handle);
@@ -57,8 +63,8 @@ void RunGpuFrustumCullingTests() {
         for (std::uint32_t i=0U;i<32768U;++i) {
             MeshRenderProxyDesc proxy{.entityId=i+1U,.meshAssetId=1U,.materialAssetId=2U};
             proxy.model={1,0,0,0,0,1,0,0,0,0,1,0,
-                (static_cast<float>(i%256U)-128.0F)*0.08F,
-                (static_cast<float>(i/256U)-64.0F)*0.08F,0.5F,1};
+                (static_cast<float>(i%256U)-128.0F)*(meshletMode?0.25F:0.08F),
+                (static_cast<float>(i/256U)-64.0F)*(meshletMode?0.25F:0.08F),0.5F,1};
             static_cast<void>(scene.UpsertMesh(proxy));
         }
         for (std::uint32_t i=0U;i<6U;++i) {
@@ -67,7 +73,7 @@ void RunGpuFrustumCullingTests() {
             proxy.model[12U+i/2U]=i/2U==2U?static_cast<float>(i%2U):(i%2U==0U?-1.0F:1.0F);
             static_cast<void>(scene.UpsertMesh(proxy));
         }
-        {
+        if (!meshletMode) {
             SceneGpuDrivenCullingPass culling;
             Require(culling.Initialize(), "GPU frustum compute programs failed");
             MeshDrawCommand command;
@@ -137,12 +143,13 @@ void RunGpuFrustumCullingTests() {
         SceneRenderLightingConfig lighting{};
         lighting.shadowsEnabled=false;
         lighting.environmentMode=SceneRenderEnvironmentMode::Disabled;
-        const SceneGpuDrivenFeatureSupport gpu{true,true,false,true},cpu{};
+        const SceneGpuDrivenFeatureSupport gpu{true,true,meshletMode,true},cpu{};
         double cpuSubmit=0.0,gpuSubmit=0.0,cpuFrame=0.0,gpuFrame=0.0;
         std::uint64_t gpuUpload=0U,reused=0U;
         double cpuGpuTime=0.0,gpuGpuTime=0.0;
         std::uint32_t cpuGpuSamples=0U,gpuGpuSamples=0U;
         std::set<std::uint32_t> gpuFrames;
+        std::uint32_t expectedDraws=meshletMode?2U:1U,expectedMeshletDraws=meshletMode?2U:0U;
 
         const auto capture=[&](bool useGpu, bool timed) {
             bgfx::setViewFrameBuffer(0U,target);
@@ -154,9 +161,14 @@ void RunGpuFrustumCullingTests() {
             const auto stats=renderer.LastSubmitStats();
             Require(!renderer.LastDiagnostics().HasErrors(),"GPU frustum production diagnostics failed");
             if(useGpu) {
-                Require(stats.gpuCullingDispatchCount==2U,"GPU frustum did not execute clear and compact dispatches");
+                Require(stats.gpuCullingDispatchCount==2U*expectedDraws,"GPU frustum did not execute clear and compact dispatches");
+                Require(stats.indirectDrawSubmitCount==expectedDraws,"GPU culling did not submit real indirect commands");
+                Require(stats.meshletSubmitCount==expectedMeshletDraws,"Meshlet submission did not consume both index ranges");
                 gpuUpload+=stats.gpuDrivenUploadBytes;
                 reused+=stats.meshCommandReuseCount;
+            } else {
+                Require(stats.gpuCullingDispatchCount==0U&&stats.indirectDrawSubmitCount==0U&&stats.meshletSubmitCount==0U,
+                    "CPU fallback submitted unexpected compute or indirect work");
             }
             bgfx::blit(240U,bgfx::TextureRegion{.handle=readback},bgfx::TextureRegion{.handle=color,.width=64U,.height=64U});
             std::vector<std::uint8_t> pixels(64U*64U*4U);
@@ -200,7 +212,7 @@ void RunGpuFrustumCullingTests() {
                 }
             }
         }
-        std::cout<<"gpu_frustum frames=16 candidates=32774 pixel_mismatches=0 dispatches=2 readback_wait_in_runtime=0"
+        std::cout<<"gpu_frustum frames=16 candidates=32774 pixel_mismatches=0 meshlet_mode="<<meshletMode<<" readback_wait_in_runtime=0"
             <<" cpu_submit_ms="<<cpuSubmit/15.0<<" gpu_submit_ms="<<gpuSubmit/15.0
             <<" cpu_frame_sync_readback_ms="<<cpuFrame/15.0<<" gpu_frame_sync_readback_ms="<<gpuFrame/15.0
             <<" cpu_gpu_view_ms="<<(cpuGpuSamples?cpuGpuTime/cpuGpuSamples:0.0)<<" gpu_gpu_view_ms="<<(gpuGpuSamples?gpuGpuTime/gpuGpuSamples:0.0)
@@ -213,6 +225,19 @@ void RunGpuFrustumCullingTests() {
         const auto changedCpu=capture(false,false);
         const auto changedGpu=capture(true,false);
         Require(changedCpu==changedGpu,"GPU frustum retained stale scene content");
+        if(meshletMode) {
+            auto partialMesh=mesh;
+            partialMesh.gpuDriven.meshletCount=1U;
+            const auto partial=renderer.Resources().RegisterMesh(partialMesh);
+            Require(partial.IsValid(),"Partial meshlet metadata fixture registration failed");
+            renderer.ResourceMap().BindMesh(1U,partial);
+            expectedDraws=1U;expectedMeshletDraws=0U;
+            const auto fallbackCpu=capture(false,false);
+            const auto fallbackGpu=capture(true,false);
+            Require(fallbackCpu==fallbackGpu,"Incomplete meshlet coverage lost section geometry");
+            Require(renderer.LastSubmitStats().gpuDrivenFallbackCount>0U,"Incomplete meshlet coverage did not report fallback");
+            std::cout<<"gpu_meshlet_fallback pixel_mismatches=0 submitted_meshlets=0 indirect_commands=1\n";
+        }
         bgfx::destroy(target);bgfx::destroy(readback);bgfx::destroy(depth);bgfx::destroy(color);
         renderer.Shutdown();
     }
@@ -222,4 +247,6 @@ void RunGpuFrustumCullingTests() {
     Require(false,"GPU frustum acceptance needs a configured graphics surface");
 #endif
 }
+void RunGpuFrustumCullingTests() { RunGpuFrustumCullingTestsImpl(false); }
+void RunGpuMeshletSubmissionTests() { RunGpuFrustumCullingTestsImpl(true); }
 } // namespace kb::render::tests
