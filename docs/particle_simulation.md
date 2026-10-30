@@ -568,3 +568,16 @@ settings), including knot ages and their immediate float neighbors:
 Entries are maximum absolute errors, with `0.00002` test tolerance for float
 arithmetic. The interpolation comparison executes the shader's sampling arithmetic
 on the host; this test does not assert device readback or bitwise GPU agreement.
+
+## GPU event lifecycle verification
+
+The opt-in headless editor test `kb_21kb_particle_editor_tests --gpu-events`
+requires a real D3D11 device. It reads back compute-produced child instances for
+birth and lifetime events, verifies their event positions and subsequent motion,
+and checks that restarting clears both scheduled deaths and GPU instance buffers.
+An 8193-parent death burst verifies the bounded 8192-event queue and binding
+budget, including rejection counters visible in the editor snapshot. A plane
+collision uses the reported `collision-event` CPU fallback for the source emitter
+and dispatches its children to the GPU. Collision events are not read back from
+the GPU as part of normal simulation. Releasing the preview must free all emitter
+buffers. Other graphics backends require separate execution evidence.

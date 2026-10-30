@@ -24,6 +24,8 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/particles/ParticleGpuEmitterSimulation.hpp"
+#include "kb/render/particles/ParticleGpuReadback.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -42,6 +44,13 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 #ifndef KB_21KB_PARTICLE_PLUGIN_PATH
 #define KB_21KB_PARTICLE_PLUGIN_PATH ""
@@ -1251,11 +1260,17 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
 }
 
 #include "ParticleCurveSamplingTests.inl"
+#include "ParticleGpuEventTests.inl"
 
 } // namespace
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view{argv[1]} == "--gpu-events") {
+            TestGpuEventLifecycle();
+            std::cout << "GPU event lifecycle, overflow, fallback and readback checks passed\n";
+            return EXIT_SUCCESS;
+        }
         if (argc == 2 && std::string_view{argv[1]} == "--curve-sampling") {
             TestCurveSamplingAccuracy();
             std::cout << "Curve/gradient sampling, save/bake and headless preview checks passed\n";
