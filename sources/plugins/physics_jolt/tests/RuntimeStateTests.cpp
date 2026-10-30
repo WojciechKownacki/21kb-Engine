@@ -15,6 +15,11 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/TimelineAssetIO.hpp"
+#include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SceneAnimatorComponents.hpp"
+#include "engine/scene/SceneTimelines.hpp"
 
 #include <array>
 #include <chrono>
@@ -226,6 +231,8 @@ public:
     }
 };
 
+#include "SceneAnimationStateFixture.inl"
+
 void RunSceneContinuation(bool pipelined, bool useDelta = false) {
     const auto root = std::filesystem::temp_directory_path() / ("kb-scene-state-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -256,13 +263,15 @@ end
     }
     std::unique_ptr<kb::core::RuntimeStateSnapshot> detached;
     {
+        SceneAnimationStateFixture::Write(root);
         kb::scene::Scene scene{Descriptor(true)};
         kb::tests::Require(scene.IsModuleActive("Physics.Jolt"), "Scene continuation requires the real physics module");
         kb::tests::Require(scene.IsModuleActive("Input"), "Scene continuation requires the built-in input module");
         kb::scene::PhysicsBackend::SetStepPipelining(scene, pipelined);
-        kb::tests::Require(scene.Assets().MountProject(root) && scene.Assets().Discover()==1U, "Scene script fixture mount failed");
+        kb::tests::Require(scene.Assets().MountProject(root) && scene.Assets().Discover()==5U, "Scene script fixture mount failed");
         const auto* script=scene.Assets().Manager().Registry().FindByPath("/Game/State.lua");
         kb::tests::Require(script!=nullptr, "Scene script fixture missing");
+        SceneAnimationStateFixture animation{scene};
         const auto floor=scene.Entities().CreateObject({.name="Floor", .transform={.localPosition={0,-0.5F,0}}});
         scene.Components().Colliders().Set(floor.Entity(), {.boxSize={40,1,40}});
         const auto body=scene.Entities().CreateObject({.name="Body", .transform={.localPosition={0,3,0}}});
@@ -323,6 +332,7 @@ end
             kb::tests::Require(result && result->Succeeded() && prepared && prepared->Succeeded(), "Scene script continuation failed");
         };
         for(int i=0;i<20;++i) tick(i);
+        animation.BeginTransition();
         scene.Input().MutableDeviceState().SetKeyDown(kb::input::InputKey::W,true);
         kb::tests::Require(scene.Runtime().EnqueueCommand({.kind=kb::scene::SceneRuntimeCommandKind::SetTimeScale, .timeScale=0.75F}), "Queued source command failed");
         std::string error;
@@ -346,6 +356,7 @@ end
         struct Sample {
             std::array<double,12> simulation;
             std::array<std::int64_t,7> script;
+            SceneAnimationStateFixture::Sample animation;
         };
         auto sample=[&] {
             const auto position=scene.Transforms().Get(body).localPosition;
@@ -357,7 +368,7 @@ end
                 scene.Runtime().ElapsedSeconds(),static_cast<double>(scene.Runtime().FrameIndex()),
                 static_cast<double>(scene.Runtime().FixedStepIndex()),scene.Runtime().FixedInterpolationAlpha(),
                 interpolated->localPosition.y,scene.Transforms().LocalTranslation(child.Entity()).x,scene.Runtime().TimeScale()},
-                {value("created"),value("count"),value("random"),value("total"),value("fixed"),value("timers"),value("collisions")}};
+                {value("created"),value("count"),value("random"),value("total"),value("fixed"),value("timers"),value("collisions")}, animation.Read()};
         };
         std::vector<Sample> expected;
         for(int i=0;i<60;++i) {tick(i);expected.push_back(sample());}
@@ -367,7 +378,8 @@ end
             && error.find("previous state restored")!=std::string::npos,"Provider restore failure did not roll back");
         const auto afterFailure=sample();
         kb::tests::Require(afterFailure.simulation==beforeFailure.simulation && afterFailure.script==beforeFailure.script
-            && fault->value==providerBeforeFailure,"Failed checkpoint restore did not preserve the prior scene/provider state");
+            && afterFailure.animation==beforeFailure.animation && fault->value==providerBeforeFailure,"Failed checkpoint restore did not preserve the prior scene/provider state");
+        animation.DestroyFuture();
         scene.Entities().Destroy(body);
         const auto futureParent=scene.Entities().CreateObject({.name="FutureParent"});
         kb::tests::Require(child.SetParent(futureParent), "Future parent setup failed");
@@ -416,6 +428,7 @@ end
             && world.Has<SparseMarker>(child.EntityHandle()),"Native side storage did not restore");
         for(std::size_t i=0;i<expected.size();++i) {
             tick(static_cast<int>(i));const auto actual=sample();
+            kb::tests::Require(actual.animation==expected[i].animation,"Animator/timeline continuation differs");
             kb::tests::Require(actual.script==expected[i].script, "Joint Lua event/timer/coroutine replay differs");
             for(std::size_t j=0;j<actual.simulation.size();++j) if(std::abs(actual.simulation[j]-expected[i].simulation[j])>0.0001) {
                 std::cerr<<"Scene replay frame="<<i<<" value="<<j<<" expected="<<expected[i].simulation[j]<<" actual="<<actual.simulation[j]<<'\n';
@@ -440,6 +453,7 @@ end
         static_cast<void>(scene.Runtime().RemoveSceneSystem(unknown));
         detached=scene.Runtime().CaptureRuntimeState(error);
         kb::tests::Require(detached!=nullptr,"Detached coordinated scene capture failed");
+        animation.VerifyChangedAssetRefusal(*detached);
         std::cout<<"Scene continuation pipelined="<<pipelined<<" delta="<<useDelta<<" replay_frames=60 restore_us="<<restoreUs
             <<" history_images=32 retained_full_baselines="<<useDelta<<" measured_payload_bytes="<<payload<<" process_private_before="<<before
             <<" process_private_with_history="<<after<<" process_private_after_release="<<released<<'\n';

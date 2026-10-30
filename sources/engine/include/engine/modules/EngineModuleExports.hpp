@@ -17,7 +17,7 @@
 namespace kb::modules {
 
 // Dynamic modules must also export the build fingerprint below.
-inline constexpr std::uint32_t kEngineModuleAbiVersion = 22U;
+inline constexpr std::uint32_t kEngineModuleAbiVersion = 23U;
 inline constexpr const char* kEngineModuleCreateSymbol = "kb_create_engine_module";
 inline constexpr const char* kEngineModuleDestroySymbol = "kb_destroy_engine_module";
 inline constexpr const char* kEngineModuleAbiVersionSymbol = "kb_engine_module_abi_version";

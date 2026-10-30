@@ -104,7 +104,7 @@ after ECS replacement. Restore captures a backup and attempts rollback on failur
 the error reports whether rollback succeeded. Allocation failure can also prevent
 rollback, so this is not an unconditional transaction guarantee.
 
-Active animation, timelines, prefab/content streaming, polygon navigation, native
+Active prefab/content streaming, polygon navigation, native
 tasks, asynchronous script asset loads, audio, particles, 2D runtimes and arbitrary
 ECS systems still require their
 own coordinated state providers. Checkpoint capture currently refuses these active
@@ -130,5 +130,13 @@ same scene while the coordinator is calling it. The installed script provider ow
 shared host state directly. Destroying the host facade during dispatch therefore
 leaves the scheduler-owned state valid until the system itself is removed.
 
-Engine module ABI 22 requires rebuilding C++ modules after the scene/provider
+Engine module ABI 23 requires rebuilding C++ modules after the scene/provider
 interface changes; an older module is rejected before its factory runs.
+
+Scene images also retain animator layers, transitions, parameter values, pose buffers,
+update-rate accumulators, spring state, skeleton bindings and silent timeline playheads
+and bindings. Immutable animation resources remain strongly held. Restore requires
+their recorded asset load generations; a later asset reload is refused before scene
+mutation. Borrowed pose pointers and published debug poses are invalidated, completed
+hierarchy observations are remapped to the restored topology, and issued runtime
+identities remain monotonic. Audio-bearing timelines still require an audio provider.

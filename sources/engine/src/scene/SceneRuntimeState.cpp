@@ -1,4 +1,5 @@
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "ecs/FlecsEntityIds.hpp"
 #include "ecs/world/WorldInternalAccess.hpp"
 #include "scene/SceneAccess.hpp"
@@ -33,15 +34,62 @@ bool CheckBoundary(const SceneState& state, std::string& error) {
     if (!state.systemScheduler.ExecutionOrderSnapshot().empty()) {
         error = "ECS systems require runtime state providers before scene checkpoints"; return false;
     }
-    if (!state.animators.empty() || !state.timelines.empty() || !state.contentInstances.empty()
-        || !state.skeletonBindingPoses.empty() || !state.timelineAnimatorControls.empty() || !state.scriptPendingAssets.empty()
+    if (!state.contentInstances.empty() || !state.scriptPendingAssets.empty()
         || state.streaming || state.worldPartition || state.prefabs.Count() != 0U || state.prefabInstances.Count() != 0U
         || state.navigation.polygons || state.navigation.crowd || !state.tasks.empty()
         || state.audioPlaybackBackend || state.particleSimulationBackend || state.tilemapRuntime || state.physics2DRuntime
         || state.particleGpuEmitterConsumer || state.particleRenderConsumerId != 0U || state.pendingScreenCaptureId != 0U) {
         error = "Active scene subsystem requires a runtime state provider before checkpointing"; return false;
     }
+    for (const auto& [id, timeline] : state.timelines) {
+        static_cast<void>(id);
+        if (!timeline.asset->audioTracks.empty() || std::any_of(timeline.segments.begin(), timeline.segments.end(), [](const auto& segment) {
+            return !segment.source.asset->audioTracks.empty() || std::any_of(segment.audioVoices.begin(), segment.audioVoices.end(),
+                [](const auto& voice) { return voice.id != 0U; });
+        })) { error = "Audio timeline checkpoint requires an audio state provider"; return false; }
+    }
     error.clear();
+    return true;
+}
+
+using AssetVersion = std::pair<kb::assets::AssetId, std::uint64_t>;
+
+std::vector<AssetVersion> AnimationAssetVersions(const SceneValues& values) {
+    std::vector<AssetVersion> result;
+    const auto add = [&](const auto& handle, std::uint64_t generation) {
+        if (handle.Id().value != 0U) result.emplace_back(handle.Id(), generation);
+    };
+    const auto animator = [&](const AnimatorInstance& instance) {
+        add(instance.controller, instance.controllerLoadGeneration);
+        if (instance.skeleton) add(instance.skeleton->asset, instance.skeleton->loadGeneration);
+        for (const auto& layer : instance.layers) for (const auto& state : layer.states) {
+            add(state.blendSpace, state.blendSpaceLoadGeneration);
+            for (const auto& motion : state.motions) add(motion.clip, motion.clipLoadGeneration);
+        }
+    };
+    for (const auto& [id, instance] : values.animators) { static_cast<void>(id); animator(instance); }
+    for (const auto& [id, control] : values.timelineAnimatorControls) {
+        static_cast<void>(id); if (control.previous) animator(*control.previous);
+    }
+    for (const auto& [id, pose] : values.skeletonBindingPoses) { static_cast<void>(id); add(pose.skeleton.asset, pose.skeleton.loadGeneration); }
+    for (const auto& [key, clip] : values.retargetedClips) {
+        static_cast<void>(clip);
+        for (std::size_t index=0; index<key.size(); index+=2U) result.emplace_back(kb::assets::AssetId{key[index]}, key[index+1U]);
+    }
+    for (const auto& [id, timeline] : values.timelines) {
+        static_cast<void>(id); add(timeline.asset, timeline.assetLoadGeneration);
+        for (const auto& segment : timeline.segments) {
+            add(segment.source.asset, segment.assetLoadGeneration);
+            for (const auto& animation : segment.animations) add(animation.asset, animation.assetLoadGeneration);
+        }
+    }
+    return result;
+}
+
+bool ValidateAnimationAssets(const kb::assets::AssetManager& assets, std::span<const AssetVersion> versions, std::string& error) {
+    for (const auto& [id, generation] : versions) if (assets.LoadGeneration(id) != generation) {
+        error = "Animation checkpoint asset generation changed"; return false;
+    }
     return true;
 }
 
@@ -85,6 +133,8 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
     std::shared_ptr<const kb::ecs::ChunkedWorldSnapshot> world;
     std::optional<kb::ecs::ChunkedWorldDeltaSnapshot> delta;
     SceneValues values;
+    std::vector<AssetVersion> animationAssets;
+    std::uint64_t hierarchyVersion = 0U;
     std::vector<EntityMetadata> entities;
     std::vector<SceneTransformResidual> residuals;
     std::vector<SceneRuntimeCommand> commands;
@@ -95,6 +145,7 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
 
     bool Apply(Scene& scene, std::span<const SceneSystemScheduler::RuntimeStateBinding> bindings, std::string& error) const {
         auto& state = SceneAccess::State(scene);
+        scene.Animators().WaitForDebugSnapshot();
         const auto replaceNative = [&](const kb::ecs::ChunkedWorldSnapshot& full) {
             auto current = state.world.CaptureChunkedSnapshot();
             std::unordered_set<kb::ecs::Entity::IdType> targetIds;
@@ -139,6 +190,8 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
             for (const auto id : metadata.ids) ecs_add_id(state.world.NativeHandle(), kb::ecs::FlecsEntityId(metadata.entity), id);
         }
         for (const auto& metadata : entities) state.world.SetName(metadata.entity, metadata.name);
+        const auto nextAnimator = state.nextAnimatorRuntimeBindingGeneration;
+        const auto nextTimeline = state.nextTimelineInstanceId;
         const auto nextTimer = state.nextTimerId;
         const auto nextTask = state.nextTaskId;
         const auto nextMaterial = state.nextMaterialInstanceId;
@@ -148,6 +201,8 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
 #define KB_RUNTIME_FIELD(name) state.name = values.name;
 #include "scene/SceneRuntimeStateFields.inl"
 #undef KB_RUNTIME_FIELD
+        state.nextAnimatorRuntimeBindingGeneration = std::max(nextAnimator, state.nextAnimatorRuntimeBindingGeneration);
+        state.nextTimelineInstanceId = std::max(nextTimeline, state.nextTimelineInstanceId);
         state.nextTimerId = std::max(nextTimer, state.nextTimerId);
         state.nextTaskId = std::max(nextTask, state.nextTaskId);
         state.nextMaterialInstanceId = std::max(nextMaterial, state.nextMaterialInstanceId);
@@ -159,6 +214,19 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
         for (const auto& residual : residuals) state.transformResiduals.Acquire(SceneEntity{residual.entityId}) = residual;
         // Borrowed rows and derived caches must observe the new native storage.
         ++state.hierarchyTopologyVersion;
+        const auto updateHierarchy = [&](auto& record) {
+            if (record.observedHierarchyTopologyVersion == hierarchyVersion)
+                record.observedHierarchyTopologyVersion = state.hierarchyTopologyVersion;
+        };
+        for (auto& [id, instance] : state.animators) { static_cast<void>(id); updateHierarchy(instance); }
+        for (auto& [id, control] : state.timelineAnimatorControls) {
+            static_cast<void>(id); if (control.previous) updateHierarchy(*control.previous);
+        }
+        for (auto& [id, timeline] : state.timelines) { static_cast<void>(id); updateHierarchy(timeline); }
+        state.animatorParallelPoseScratch.clear();
+        AnimatorDebugSnapshot debug;
+        debug.revision = ++state.animatorDebugSnapshotRevision;
+        state.animatorDebugSnapshots.Publish(std::move(debug));
         ++state.hierarchyRootAppendEpoch;
         state.transformTopology = {};
         state.transformRootQueryCache.reset();
@@ -205,6 +273,7 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
 std::unique_ptr<kb::core::RuntimeStateSnapshot> SceneRuntime::CaptureRuntimeState(std::string& error) {
     auto& state = SceneAccess::State(scene_);
     if (!CheckBoundary(state, error)) return {};
+    scene_.Animators().WaitForDebugSnapshot();
     std::vector<SceneSystemScheduler::RuntimeStateBinding> bindings;
     if (!state.sceneSystemScheduler.CollectRuntimeStateProviders(bindings, error)) return {};
     const auto operation = state.sceneSystemScheduler.BeginRuntimeStateOperation();
@@ -260,6 +329,9 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> SceneRuntime::CaptureRuntimeStat
 #define KB_RUNTIME_FIELD(name) snapshot->values.name = state.name;
 #include "scene/SceneRuntimeStateFields.inl"
 #undef KB_RUNTIME_FIELD
+    snapshot->hierarchyVersion = state.hierarchyTopologyVersion;
+    snapshot->animationAssets = AnimationAssetVersions(snapshot->values);
+    if (!ValidateAnimationAssets(state.assets, snapshot->animationAssets, error)) return {};
     snapshot->commands = state.runtimeCommands.CapturePending();
     error.clear();
     return snapshot;
@@ -296,6 +368,7 @@ bool SceneRuntime::ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& so
     if (!snapshot || snapshot->sceneId != scene_.Id()) { error = "Scene checkpoint belongs to another scene lifetime"; return false; }
     const auto& state = SceneAccess::State(scene_);
     if (!CheckBoundary(state, error)) return false;
+    if (!ValidateAnimationAssets(state.assets, snapshot->animationAssets, error)) return false;
     std::vector<SceneSystemScheduler::RuntimeStateBinding> bindings;
     if (!state.sceneSystemScheduler.CollectRuntimeStateProviders(bindings, error)) return false;
     if (bindings.size() != snapshot->providers.size()) { error = "Scene system topology changed since checkpoint"; return false; }
