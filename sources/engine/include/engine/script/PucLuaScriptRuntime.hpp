@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/core/RuntimeState.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/ScriptApiNameRegistry.hpp"
@@ -24,6 +25,7 @@ struct lua_State;
 namespace kb::script {
 
 struct PucLuaMemoryBudget;
+struct PucLuaStateLifetime;
 
 using PucLuaLoadResult = LuaScriptLoadResult;
 
@@ -79,10 +81,14 @@ struct PucLuaExposedVariableInstance {
     bool overridden = false;
 };
 
-class PucLuaScriptRuntime final : public ILuaScriptRuntime, public ILuaScriptAssetStore {
+class PucLuaScriptRuntime final : public ILuaScriptRuntime, public ILuaScriptAssetStore, public kb::core::IRuntimeStateProvider {
 public:
     PucLuaScriptRuntime();
     ~PucLuaScriptRuntime() override;
+
+    [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override;
+    [[nodiscard]] bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& snapshot, std::string& error) const override;
+    [[nodiscard]] bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& snapshot, std::string& error) override;
 
     PucLuaScriptRuntime(const PucLuaScriptRuntime&) = delete;
     PucLuaScriptRuntime& operator=(const PucLuaScriptRuntime&) = delete;
@@ -171,6 +177,7 @@ public:
 
 private:
     friend class PucLuaEventsApi;
+    struct RuntimeSnapshot;
 
     [[nodiscard]] ScriptBackendExecutionResult ExecuteFunction(
         const kb::scene::BehaviourComponent& behaviour,
@@ -244,6 +251,7 @@ private:
     // Declared before state_: the state's allocator writes into it from the
     // first allocation lua_newstate makes until lua_close frees the last one.
     std::unique_ptr<PucLuaMemoryBudget> memoryBudget_;
+    std::shared_ptr<PucLuaStateLifetime> stateLifetime_;
     lua_State* state_ = nullptr;
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
     std::unordered_map<std::string, ModuleRecord> modules_;

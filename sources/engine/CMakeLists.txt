@@ -1252,6 +1252,8 @@ add_library(kb_engine STATIC
     src/script/lua/PucLuaStateUtilities.cpp
     src/script/lua/PucLuaValueBridge.cpp
     src/script/PucLuaScriptRuntime.cpp
+    src/script/PucLuaRuntimeState.cpp
+    src/script/lua/PucLuaStateGraph.cpp
     src/script/AudioShooterDemoProjectFiles.cpp
     src/script/ScriptAgentProjectFiles.cpp
     src/script/ScriptApiCatalog.cpp
@@ -2420,6 +2422,15 @@ if(BUILD_TESTING)
     )
 
     kb_apply_quality_gates(kb_ecs_snapshot_scale_tests)
+
+    add_executable(kb_lua_state_tests tests/LuaRuntimeStateTests.cpp)
+    target_link_libraries(kb_lua_state_tests PRIVATE kb_engine)
+    add_dependencies(kb_lua_state_tests kb_engine_old_abi_test_plugin)
+    target_compile_definitions(kb_lua_state_tests PRIVATE
+        "KB_OLD_STATE_ABI_PLUGIN_PATH=\"$<TARGET_FILE:kb_engine_old_abi_test_plugin>\"")
+    kb_apply_quality_gates(kb_lua_state_tests)
+    add_test(NAME kb_lua_state_tests COMMAND $<TARGET_FILE:kb_lua_state_tests>)
+    set_tests_properties(kb_lua_state_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
     add_executable(kb_ecs_workload_benchmark tests/EcsWorkloadBenchmark.cpp)
     target_link_libraries(kb_ecs_workload_benchmark PRIVATE kb_engine)

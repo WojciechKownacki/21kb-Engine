@@ -5,6 +5,7 @@
 #include "script/lua/PucLuaSandboxEnvironment.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
+#include "script/lua/PucLuaStateGraph.hpp"
 
 extern "C" {
 #include <lauxlib.h>
@@ -60,7 +61,9 @@ int Panic(lua_State* state) {
 
 PucLuaScriptRuntime::PucLuaScriptRuntime()
     : memoryBudget_(std::make_unique<PucLuaMemoryBudget>(PucLuaMemoryBudget{ .limitBytes = ScriptExecutionBudgetSettings{}.luaMemoryBytes }))
+    , stateLifetime_(std::make_shared<PucLuaStateLifetime>())
     , state_(lua_newstate(&PucLuaMemoryBudget::Allocate, memoryBudget_.get())) {
+    stateLifetime_->state = state_;
     if (state_ != nullptr) {
         lua_atpanic(state_, &Panic);
         *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state_)) = this;
@@ -69,6 +72,7 @@ PucLuaScriptRuntime::PucLuaScriptRuntime()
 }
 
 PucLuaScriptRuntime::~PucLuaScriptRuntime() {
+    stateLifetime_->state = nullptr;
     if (state_ != nullptr) {
         lua_close(state_);
         state_ = nullptr;

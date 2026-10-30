@@ -40,3 +40,23 @@ after restoring body contacts, a distance constraint and a virtual character. It
 exercises synchronous and pipelined stepping, unrelated ECS structural changes,
 native body/character/constraint reconstruction, detached snapshot destruction,
 and rejection of incompatible provider lifetimes and authored definitions.
+
+## Lua VM state
+
+`PucLuaScriptRuntime` implements the same optional provider interface. It captures
+reachable script/module tables, cycles and shared aliases, function upvalues,
+the standard math library RNG state, and exposed instance values. Retained Lua
+references preserve object identities; a weak VM lifetime makes detached snapshot
+destruction safe after the VM closes. Capture and restore use protected calls,
+pause automatic garbage collection and bound graph depth, object count and payload.
+
+Capture rejects coroutine instruction state, opaque userdata without a codec and
+host-managed event subscriptions. Restore also rejects changed script/module code
+catalogs or another VM lifetime. These refusals must be handled by the caller;
+this VM snapshot does not capture script-host lifecycle, shared state or event
+queues. Lua payload accounting measures captured values, excluding retained VM
+object storage and container capacity. It is not a total history memory measure.
+
+The added C++ runtime interface and lifetime member change the public Lua runtime
+layout. Engine module ABI 18 requires rebuilding C++ modules; an older module is
+rejected before its factory runs.
