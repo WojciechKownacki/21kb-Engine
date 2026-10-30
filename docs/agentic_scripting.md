@@ -104,9 +104,17 @@ graphs refuse the copy without modifying the source.
 Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `ipairs`, `pairs`,
 `pcall`, `select`, `tonumber`, `tostring`, `type` and the `coroutine`, `table`, `string`, `math` and
 `utf8` libraries. There is no `os`, `io`, `debug` or `package`, and `load`, `loadfile`, `dofile`,
-`require` and `collectgarbage` do not exist; text chunks only. The only files a script can reach are its
-own save slots (through `Save.*`, with a quota), and the only network access is the `Net.*` API. A
-script cannot start a process.
+`require` and `collectgarbage` do not exist; text chunks only. Persistent writes use `Save.*` and
+`Settings.*` slots under the host's configured user-storage root, with a shared quota. Slot names
+cannot specify filesystem paths. `Import` resolves registered Lua assets, not arbitrary files.
+The shipped Lua API cannot start a process or open a socket. `Net.*` uses the scene's host-created
+network session; offline calls fail instead of opening a connection.
+
+This is the restricted execution contract for project and mod Lua, including unsigned mods when
+the host explicitly allows them. It does not assign permissions or private storage to individual
+mods: scripts in one game share save slots, exposed gameplay APIs and the network session. Signing
+a mod authenticates its publisher; it does not grant extra Lua capabilities. Native host code and
+custom registered functions are trusted and must preserve these boundaries themselves.
 
 Limits, per behaviour call: the instruction budget (`luaInstructionsPerBehaviour`, one million by default; also applied to the
 code at the top of a script while it loads, so a loop there fails the load) and a memory cap per Lua

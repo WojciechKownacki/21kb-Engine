@@ -47,6 +47,18 @@ def hello(text):
     assert(os == nil and io == nil and package == nil and debug == nil)
     assert(load == nil and loadfile == nil and dofile == nil and require == nil)
     assert(collectgarbage == nil and _G._G == _G and _G.os == nil and _G.io == nil)
+    for _, domain in ipairs({{"Save", "Settings"}}) do
+        for _, operation in ipairs({{"Read", "Write", "Delete"}}) do
+            local value, diagnostic = CallFunction(domain .. "." .. operation, {{slot="../escape"}})
+            assert(value == nil and string.find(diagnostic, "not a slot name", 1, true))
+        end
+    end
+    local imported, importError = Import("../Unregistered.lua")
+    assert(imported == nil and string.find(importError, "not registered", 1, true))
+    local mode = CallFunction("Net.Mode", {{}})
+    assert(mode.mode == "offline" and not mode.connected)
+    local sent, networkError = CallFunction("Net.Call", {{rpc="Probe"}})
+    assert(sent == nil and string.find(networkError, "no network session", 1, true))
     Log("{text}")
 end
 '''
