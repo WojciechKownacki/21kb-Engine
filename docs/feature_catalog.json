@@ -1,0 +1,22 @@
+{
+  "schema": "21kb.feature-catalog/v1",
+  "apiReference": "kb_cli api --project <project-directory>",
+  "componentReference": "kb_cli schema",
+  "statusMeanings": {
+    "tutorial-covered": "Executed by the first-scene recipe on Windows x64/D3D11.",
+    "separate-test": "Has separate checks; the tutorial does not establish their execution or coverage.",
+    "not-covered-by-tutorial": "Requires separate platform or workflow qualification."
+  },
+  "entries": [
+    {"feature": "Projects and scenes", "commands": ["new", "scene-new", "scene-list"], "status": "tutorial-covered", "scope": "Empty project and persisted startup scene", "evidence": "docs/tutorials/first_scene.json"},
+    {"feature": "Entities and components", "commands": ["entity", "component", "schema"], "status": "tutorial-covered", "scope": "Camera, light, environment and primitives; component editing", "evidence": "docs/tutorials/first_scene.json"},
+    {"feature": "Lua behaviour", "commands": ["script-new", "scene-attach", "validate", "run", "api"], "status": "tutorial-covered", "scope": "Generated behaviour, validation and runtime execution", "evidence": "docs/tutorials/first_scene.json"},
+    {"feature": "Rendering", "commands": ["material-new", "post-process-new"], "status": "separate-test", "scope": "Tutorial covers basic D3D11; broader editor/player parity has its own scenario", "evidence": "sources/editor/tests/Scene3DParityScenario.json"},
+    {"feature": "Runtime UI", "commands": ["entity", "component"], "status": "separate-test", "scope": "Cooked controls and normalized input; not every physical input host", "evidence": "sources/game/tests/UIInputPackagedTests.py"},
+    {"feature": "Input and physics", "commands": ["entity", "api"], "status": "separate-test", "scope": "Component and input APIs; physical input hosts need their own workflow checks", "evidence": "sources/engine/tests/PhysicsSceneSystemTests.cpp"},
+    {"feature": "Asset import", "commands": ["import", "schema"], "status": "separate-test", "scope": "Import and asset references through editor authoring", "evidence": "sources/editor/tests/HeadlessAutomationScenario.json"},
+    {"feature": "Map and sprites", "commands": ["entity", "component"], "status": "separate-test", "scope": "Editor authoring, save and packaged rendering", "evidence": "sources/editor/tests/Map2DPackagedSmoke.cmake"},
+    {"feature": "Release export", "commands": ["keys", "pack"], "status": "tutorial-covered", "scope": "Windows x64 signed pack and source-independent launch", "evidence": "scripts/run_first_scene_tutorial.py"},
+    {"feature": "Other platforms", "commands": [], "status": "not-covered-by-tutorial", "scope": "Desktop success does not verify mobile or browser behaviour", "evidence": "docs/library_support_matrix.md"}
+  ]
+}

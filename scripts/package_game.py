@@ -1115,7 +1115,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     copy_tree_exact(stage, smoke)
     try:
         output = run_checked(
-            [smoke / destination.name, "--frames=1"], cwd=smoke, timeout_seconds=120
+            [smoke / destination.name, "--headless", "--frames=1"], cwd=smoke, timeout_seconds=120
         ).output
         if "frames=1" not in output or "shutdown=clean" not in output or "rendered=1" not in output:
             raise PackagingError("Windows player did not prove one rendered frame and clean shutdown")

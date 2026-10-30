@@ -31,11 +31,8 @@ struct AudioMixerSnapshotBusVolume {
     float volume = 1.0F;
 };
 
-// LIB-147: a named parameter set - when active, each listed bus's volume replaces its
-// authored value (buses not listed keep their authored volume). This is deliberately the
-// whole v1 snapshot payload: mute/pitch/effect parameters and timed TRANSITIONS between
-// snapshots are LIB-150's own explicitly-named scope ("snapshot transition"), not smuggled
-// in here.
+// Named per-bus volume overrides. Unlisted buses retain their authored gain.
+// SceneAudioMixerAccess selects snapshots and controls timed transitions.
 struct AudioMixerSnapshot {
     std::string name;
     std::vector<AudioMixerSnapshotBusVolume> busVolumes;

@@ -1,5 +1,9 @@
 # AI-assisted scripting — quick guide
 
+See [empty project to export](first_scene.md) for an executable walkthrough.
+The [feature catalog](feature_catalog.json) links public entry points to their
+verification scopes. `kb_cli api` and `kb_cli schema` expose the current API.
+
 On Windows, prefix any executable command with `--command-timeout-ms 30000`
 and/or `--command-cancel-file <path>` to bound the whole operation, including
 external native build tools. For example:
