@@ -2,6 +2,7 @@
 
 #include "engine/particles/ParticleCompiledEffect.hpp"
 #include "engine/scene/ParticleEffectAssetValidation.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -30,6 +31,8 @@ struct ParticleCompilerCapabilities {
 struct ParticleCompileRequest {
     kb::particles::ParticleCompilePlatform platform = kb::particles::ParticleCompilePlatform::PlatformIndependent;
     ParticleCompilerCapabilities capabilities{};
+    // Runtime compilation resolves dependencies through the mounted asset manager.
+    std::function<kb::scene::ParticleEffectLoadResult(const kb::assets::AssetMetadata&)> dependencyLoader;
 };
 
 struct ParticleCompileResult {

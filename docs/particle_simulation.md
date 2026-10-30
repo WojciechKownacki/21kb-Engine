@@ -516,3 +516,23 @@ is explicitly labelled as a capacity ceiling, never measured throughput.
 The CLI and cooked-player integration tests fill a two-particle emitter with
 ten births per step and require two live render records and ten rejected births
 once full, independently of the scene's much larger configured ceiling.
+
+## External effect events
+
+`EmitEffectAsset` queues independent effect instances at the event's world position,
+with the source owner's rotation and scale. The target's emitter offsets still apply.
+Requests are dispatched after the current simulation pass; events produced while a
+child prewarms wait for a later pass. Dependencies resolve through the runtime asset
+manager, so source files are not required by a mounted or already loaded effect.
+
+Binding depth continues across effect boundaries. Dependency cycles are rejected;
+the binding budget, fixed-step spawn budget, bounded request queue and scene instance
+limit also apply. `StepTelemetry::spawnedEffects` and `rejectedEffects` report child
+instance admissions separately from particle births.
+
+Children keep the original scene owner but do not follow its transform. Releasing
+the source instance leaves admitted children running. Finite effects release their
+instances after their particles and queued events finish; looping effects remain
+owned by the scene and drain when their owner dies. The headless editor test
+`kb_21kb_particle_editor_tests --external-effects` exercises the provider, preview
+snapshot, lifecycle, depth and binding budget, dependency cycles and baked cache.

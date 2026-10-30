@@ -1145,8 +1145,8 @@ void TestModuleCompileRejection() {
         .targetEffect = {.virtualPath = "/Game/Effects/External.kbvfx"},
     });
     Require(createStatus(std::move(unsupportedExternalEffect)) ==
-            kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
-        "external effect event action was accepted by the internal-event compiler");
+            kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "external effect event accepted an unregistered target asset");
 
     auto gpuRequired = Fixture::MakeEffect();
     gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;

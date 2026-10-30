@@ -20,6 +20,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -578,10 +579,7 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         .targetEffect = {.assetId = 200U}});
     const auto capabilityDiagnostics =
         kb::particle_plugin::ParticleEffectCompiler::ValidateCapabilities(unsupported);
-    Require(capabilityDiagnostics.size() == 1U &&
-            std::all_of(capabilityDiagnostics.begin(), capabilityDiagnostics.end(), [](const auto& diagnostic) {
-                return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
-            }), "public capability validator did not preserve the external-event failure");
+    Require(capabilityDiagnostics.empty(), "external events should reach dependency validation, not a capability refusal");
     const auto inspector = ParticleEmitterInspectorModel::Build(unsupported, 11U, 2U, nullptr, nullptr);
     Require(inspector.outputChoices.size() == 8U && inspector.outputChoices[7].enabled &&
             inspector.outputChoices[7].diagnostics.empty() &&
@@ -932,8 +930,12 @@ void TestProductionBakeCacheAndCapabilityGates() {
         .trigger = kb::scene::ParticleEventTrigger::Death,
         .action = kb::scene::ParticleEventAction::EmitEffectAsset,
         .targetEffect = {.assetId = 74U}, .count = 1U, .maxDepth = 1U, .perStepBudget = 1U});
-    Require(bake(external).status == ParticleBakeStatus::UnsupportedCapability,
-        "external particle effect event was silently accepted by Bake");
+    const auto externalBake = bake(external);
+    Require(externalBake.Succeeded() && externalBake.effect->eventBindings[0].targetEffectAssetId == 74U,
+        "external particle effect target was not compiled by Bake");
+    const auto externalReload = kb::particles::ParticleCompiledEffectCache::Load(externalBake.cachePath, externalBake.key);
+    Require(externalReload.Succeeded() && externalReload.effect->eventBindings[0].targetEffectAssetId == 74U,
+        "compiled cache lost the external effect target");
     Require(ReadBytes(sourcePath) == originalSource, "Bake changed source bytes while exercising failure paths");
 }
 
@@ -944,6 +946,89 @@ public:
     [[nodiscard]] void* NativeWindowHandle() const noexcept override { return nullptr; }
     [[nodiscard]] void* NativeDisplayHandle() const noexcept override { return nullptr; }
 };
+
+void TestExternalEffectEvents() {
+    auto parent = MakeEffect(0.0F);
+    parent.emitters[0].spawn.speedMin = parent.emitters[0].spawn.speedMax = 0.0F;
+    parent.eventBindings.push_back({.sourceEmitterId = 11U, .trigger = kb::scene::ParticleEventTrigger::Birth,
+        .action = kb::scene::ParticleEventAction::EmitEffectAsset, .targetEffect = {.assetId = 73U},
+        .count = 2U, .maxDepth = 1U, .perStepBudget = 1U});
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back({.name = "Rendering.21kbParticle",
+        .binaryPath = KB_21KB_PARTICLE_PLUGIN_PATH, .enabled = true});
+    kb::assets::AssetRegistry registry;
+    Require(registry.Upsert({.id = kb::assets::AssetId{72U}, .type = "RenderMaterial",
+        .virtualPath = "/Game/Materials/PreviewParticle.21kb", .contentHash = 1U}), "material registration failed");
+    kb::particle_editor::ParticlePreviewSession preview;
+    Require(preview.Start(project, registry, kb::assets::AssetId{71U},
+        "/Game/Effects/ExternalParent.kbvfx", parent).Succeeded(), "editor preview failed to start");
+    struct FixtureView { kb::scene::Scene& scene; kb::scene::SceneEntity owner; std::uint64_t effectAssetId; };
+    const FixtureView fixture{preview.PreviewScene(), preview.EffectEntity(), 71U};
+    const auto instanceCount = [&] { return kb::particles::ParticlePlayback::LiveInstanceIds(fixture.scene).size(); };
+    auto child = MakeEffect(0.0F);
+    child.looping = false;
+    child.durationSeconds = 0.04F;
+    child.emitters[0].localPosition = {1.0F, 0.0F, 0.0F};
+    child.emitters[0].spawn.mode = kb::scene::ParticleSpawnMode::Burst;
+    child.emitters[0].spawn.bursts = {{.timeSeconds = 0.0F, .count = 1U}};
+    child.emitters[0].spawn.speedMin = child.emitters[0].spawn.speedMax = 0.0F;
+    child.emitters[0].spawn.lifetimeMin = child.emitters[0].spawn.lifetimeMax = 0.05F;
+    const auto publish = [&](std::uint64_t id, const kb::scene::ParticleEffectAsset& asset) {
+        const auto path = "/Game/Effects/Child" + std::to_string(id) + ".kbvfx";
+        Require(fixture.scene.Assets().Manager().RegisterAsset({.id = kb::assets::AssetId{id},
+            .type = kb::scene::kParticleEffectAssetType, .name = "Child", .virtualPath = path,
+            .physicalPath = "UnavailableChild.kbvfx", .contentHash = 1U}), "child registration failed");
+        Require(fixture.scene.Assets().Manager().PublishRuntimeAsset(kb::assets::AssetId{id},
+            std::make_shared<kb::scene::ParticleEffectAsset>(asset)), "child publication failed");
+    };
+    publish(74U, child);
+    child.eventBindings.push_back({.sourceEmitterId = 11U, .trigger = kb::scene::ParticleEventTrigger::Birth,
+        .action = kb::scene::ParticleEventAction::EmitEffectAsset, .targetEffect = {.assetId = 74U}, .maxDepth = 1U});
+    publish(73U, child);
+    Require(kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(), "snapshot setup failed");
+    const auto created = kb::particles::ParticlePlayback::Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded(), "external dependencies must resolve from loaded assets without source files");
+    Require(kb::particles::ParticlePlayback::ConfigureComponent(fixture.scene, created.instanceId, 1.0F, 0U, false,
+        {.position = {4.0F, 2.0F, 3.0F}}).Succeeded(), "parent transform failed");
+    Require(kb::particles::ParticlePlayback::Play(fixture.scene, created.instanceId).Succeeded() &&
+        kb::particles::ParticlePlayback::Emit(fixture.scene, created.instanceId, 3U).Succeeded(), "parent emission failed");
+    const auto step = [&] {
+        Require(kb::particles::ParticlePlayback::Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "external effect step failed");
+    };
+    step();
+    Require(instanceCount() == 3U, "external effect binding budget was not enforced");
+    const auto instances = kb::particles::ParticlePlayback::LiveInstanceIds(fixture.scene);
+    Require(instances.size() == 3U, "child instance enumeration failed");
+    step();
+    {
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && snapshot->Emitters().size() == 3U && snapshot->Particles().size() == 5U,
+            "headless render snapshot omitted the child effects");
+    }
+    for (const auto id : instances) {
+        if (id == created.instanceId) continue;
+        const auto states = kb::particles::ParticlePlayback::LiveParticleStates(fixture.scene, id);
+        Require(states.size() == 1U && std::abs(states[0].position.x - 5.0F) < 0.0001F &&
+            std::abs(states[0].position.y - 2.0F) < 0.0001F && std::abs(states[0].position.z - 3.0F) < 0.0001F,
+            "child did not start at the event transform with its own emitter offset");
+    }
+    step();
+    Require(instanceCount() == 3U, "external effect depth restarted at a child boundary");
+    Require(kb::particles::ParticlePlayback::Release(fixture.scene, created.instanceId).Succeeded(), "parent release failed");
+    Require(instanceCount() == 2U, "parent release prematurely removed independently owned children");
+    for (int index = 0; index < 8; ++index) step();
+    Require(instanceCount() == 0U &&
+        kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene)->Emitters().empty(),
+        "finished child effects retained runtime instances or render records");
+    child.eventBindings[0].targetEffect.assetId = fixture.effectAssetId;
+    Require(fixture.scene.Assets().Manager().PublishRuntimeAsset(kb::assets::AssetId{73U},
+        std::make_shared<kb::scene::ParticleEffectAsset>(child)), "cycle fixture publication failed");
+    Require(!kb::particles::ParticlePlayback::Create(fixture.scene, fixture.effectAssetId, fixture.owner).Succeeded(),
+        "external effect dependency cycle was accepted");
+    preview.Release([](const kb::scene::Scene&) {});
+}
 
 void TestIsolatedRuntimePreviewAndGpuRelease() {
     const std::filesystem::path pluginPath = KB_21KB_PARTICLE_PLUGIN_PATH;
@@ -1167,14 +1252,22 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view{argv[1]} == "--external-effects") {
+            TestExternalEffectEvents();
+            TestModuleStackCommandsCapabilitiesAndAuthoredOrder();
+            TestProductionBakeCacheAndCapabilityGates();
+            std::cout << "External effect runtime, editor preview and bake checks passed\n";
+            return EXIT_SUCCESS;
+        }
         TestNewProjectEffectMaterialDependency();
         TestDocumentHistorySavePointAndAtomicFailure();
         TestEmitterListCommandsAndAuthoredCompileOrder();
         TestModuleStackCommandsCapabilitiesAndAuthoredOrder();
         TestCloseGuardAllDirtyTransitions();
         TestProductionBakeCacheAndCapabilityGates();
+        TestExternalEffectEvents();
         TestIsolatedRuntimePreviewAndGpuRelease();
         std::cout << "21kb Particle System editor core tests passed\n";
         return EXIT_SUCCESS;

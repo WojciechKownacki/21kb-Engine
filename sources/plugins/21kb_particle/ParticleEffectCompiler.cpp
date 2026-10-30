@@ -56,12 +56,6 @@ std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::Validat
     diagnostics.reserve(1U + asset.emitters.size() + asset.eventBindings.size());
     for (std::size_t bindingIndex = 0U; bindingIndex < asset.eventBindings.size(); ++bindingIndex) {
         const auto& binding = asset.eventBindings[bindingIndex];
-        if (binding.action == kb::scene::ParticleEventAction::EmitEffectAsset) {
-            Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-                "effect.eventBinding[" + std::to_string(bindingIndex) + "].action",
-                "external particle effect events are not executable by the current compiler", binding.sourceEmitterId,
-                binding.sourceModuleId);
-        }
         if (binding.sourceModuleId == 0U) continue;
         const auto emitter = std::find_if(asset.emitters.begin(), asset.emitters.end(), [&](const auto& candidate) {
             return candidate.emitterId == binding.sourceEmitterId;
@@ -112,7 +106,9 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
     if (kb::scene::ParticleEffectDiagnosticsHaveErrors(capabilities)) return result;
 
     const kb::scene::ParticleEffectDependencyResult dependencies =
-        kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry);
+        request.dependencyLoader
+            ? kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry, request.dependencyLoader)
+            : kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry);
     result.transitiveDependencies = dependencies.transitiveDependencies;
     result.diagnostics.insert(result.diagnostics.end(), dependencies.diagnostics.begin(),
         dependencies.diagnostics.end());
@@ -354,6 +350,8 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         compiled.eventBindings[index] = {.sourceEmitterIndex = static_cast<std::uint8_t>(sourceEmitter - compiled.emitters.begin()),
             .trigger = source.trigger, .sourceModuleId = source.sourceModuleId,
             .targetEmitterIndex = static_cast<std::uint8_t>(targetEmitter - compiled.emitters.begin()),
+            .targetEffectAssetId = source.action == kb::scene::ParticleEventAction::EmitEffectAsset
+                ? Resolve(source.targetEffect, registry) : 0U,
             .count = source.count, .maxDepth = static_cast<std::uint8_t>(source.maxDepth),
             .perStepBudget = source.perStepBudget, .ratePerSecond = source.ratePerSecond};
     }

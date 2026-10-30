@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 8U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 9U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -153,6 +153,7 @@ struct ParticleCompiledEffect {
         kb::scene::ParticleEventTrigger trigger = kb::scene::ParticleEventTrigger::Death;
         kb::scene::ParticleStableId sourceModuleId = 0U;
         std::uint8_t targetEmitterIndex = 0U;
+        std::uint64_t targetEffectAssetId = 0U;
         std::uint32_t count = 1U;
         std::uint8_t maxDepth = 1U;
         std::uint32_t perStepBudget = 1U;
