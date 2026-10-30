@@ -29,6 +29,7 @@ otherwise; the other backends are not run by CI.
 | World partition and HLOD | scene settings | yes | yes | yes | `selector:world-hlod` | Long travel, teleport, cancelled loads, hitch limits |
 | GPU particles | effect asset, `kb_cli vfx-*` | yes | yes | yes | `ctest:kb_renderer_particle_motion`, `ctest:kb_renderer_particle_contact_death`, `ctest:kb_renderer_particle_depth_collision`, `ctest:kb_21kb_particle_cpu_backend_tests`, `ctest:kb_game_particle_gpu_package` | Backends other than Direct3D 11 in CTest; GPU flipbook, mesh emission, collision events |
 | GPU culling and meshlet indirect submission | cooked mesh metadata | yes | opt-in | yes | `selector:gpu-frustum-culling`, `selector:gpu-meshlet-submission` | D3D11 camera-edge identity/image parity and CPU/GPU costs verified; other backend runtime checks remain |
+| Native compute/render effects | public plugin API and manifest | exported bundle | yes | native library and compiled shader variants | `selector:render-effect-plugin` | D3D11 external module workflow; other native target libraries and runtime backends remain |
 
 Temporal history is scoped to a viewport and invalidated when its scene or selected camera changes,
 when switching between perspective and orthographic projection, after a skipped render frame,
@@ -39,9 +40,10 @@ camera matrices. It does not reset exposure adaptation.
 
 Optional indexed indirect and bounded meshlet submission use GPU-compacted instances; see [GPU culling](gpu_culling.md).
 
+Native compute/render effect plugins use a versioned public API, owned resources and source-free bundle export; see [render effect plugins](render_effect_plugins.md).
+
 ## Not implemented
 
-Temporal upscaling, baked
-lightmaps, depth of field, ray tracing, OpenXR and a public compute or render-effect extension API have no code
-behind them either. Documents must not describe them as present; `scripts/tests/test_renderer_claims.py` guards
+Temporal upscaling, baked lightmaps, depth of field, ray tracing and OpenXR have no code
+behind them. Documents must not describe them as present; `scripts/tests/test_renderer_claims.py` guards
 the first of these.

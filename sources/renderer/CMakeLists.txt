@@ -19,6 +19,9 @@ add_library(kb_renderer STATIC
     include/kb/render/SceneRenderTargetFormat.hpp
     include/kb/render/ShaderManifest.hpp
     include/kb/render/ShaderLoader.hpp
+    include/kb/render/effects/RenderEffectApi.hpp
+    include/kb/render/effects/RenderEffectHost.hpp
+    src/effects/RenderEffectHost.cpp
     include/kb/render/ShaderBinaryProvider.hpp
     include/kb/render/RuntimeAssetShaderProvider.hpp
     include/kb/render/frame/FinalCompositePass.hpp
@@ -876,6 +879,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
         tests/GpuFrustumCullingTests.cpp
+        tests/RenderEffectPluginTests.cpp
         tests/RendererTestSupport.hpp
         tests/FinalCompositePassTests.cpp
         tests/PostProcessChainTests.cpp
@@ -925,6 +929,11 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             KB_TEST_AUDIO_ASSET_DIR="${CMAKE_SOURCE_DIR}/sources/plugins/audio_miniaudio/tests/assets"
             KB_RENDERER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
     )
+
+    set(KB_RENDER_EFFECT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    add_subdirectory("${CMAKE_SOURCE_DIR}/samples/RenderEffectPlugin" "${CMAKE_CURRENT_BINARY_DIR}/external_render_effect")
+    add_dependencies(kb_renderer_tests sample_render_effect)
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/render_effect_plugin_path.txt" CONTENT "$<TARGET_FILE:sample_render_effect>")
 
     # The file-to-pixel particle test loads the real particle provider as a module.
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_21kb_particle_plugin)

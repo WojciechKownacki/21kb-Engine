@@ -44,6 +44,7 @@
 #include <vector>
 
 namespace kb::render {
+class RenderEffectHost;
 
 class BgfxContext;
 class EcsRenderSceneSynchronizer;
@@ -68,6 +69,7 @@ class WorkerPool;
 }
 
 namespace kb::render {
+class RenderEffectHost;
 
 class Renderer {
 public:
@@ -242,8 +244,9 @@ public:
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
     void SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;
     [[nodiscard]] SceneRenderLightingConfig DefaultSceneLightingConfig() const noexcept;
-    // Compute visibility is diagnostic until draw submission consumes its output.
+    // Optional GPU compaction drives indexed indirect and bounded meshlet draws.
     void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
+    [[nodiscard]] RenderEffectHost& RenderEffects();
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
     // Cook graph materials on demand into the graph shader cache (an unpackaged project run, as
@@ -387,6 +390,7 @@ private:
     std::string graphShaderCacheRoot_;
     std::optional<RenderMaterialGraphShaderToolchain> graphShaderCookToolchain_;
     std::shared_ptr<const ShaderBinaryProvider> shaderBinaryProvider_;
+    std::unique_ptr<RenderEffectHost> renderEffects_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = false;
     std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;

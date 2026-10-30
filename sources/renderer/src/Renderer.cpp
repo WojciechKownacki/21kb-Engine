@@ -1,4 +1,5 @@
 #include "kb/render/Renderer.hpp"
+#include "kb/render/effects/RenderEffectHost.hpp"
 
 #include "kb/render/BgfxContext.hpp"
 #include "kb/render/RendererCapabilityReport.hpp"
@@ -378,6 +379,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
 }
 
 void Renderer::Shutdown() {
+    renderEffects_.reset();
     if (context_ == nullptr && sceneRenderer_ == nullptr && scenePostProcessRenderer_ == nullptr &&
         finalCompositePass_ == nullptr && renderSceneSynchronizer_ == nullptr) {
         frameActive_ = false;
@@ -483,6 +485,14 @@ void Renderer::EndFrame() {
         return;
     }
 
+    if (renderEffects_ != nullptr) {
+        const auto resolved = defaultSceneTarget_.ResolvedColorTexture();
+        const auto source = bgfx::isValid(resolved) ? resolved : defaultSceneTarget_.ColorTexture();
+        if (!renderEffects_->Run(ViewId::RenderEffectStart, BackbufferWidth(), BackbufferHeight(), lastCompletedFrame_, frameDeltaSeconds_,
+            UINT16_MAX, source.idx)) {
+            WriteRendererDebugLog("render_effect", renderEffects_->LastError());
+        }
+    }
     lastCompletedFrame_ = context_->EndFrame();
     if (deferredLightingPass_ != nullptr) deferredLightingPass_->EndFrame();
     skyReflection_.EndFrame();
@@ -2273,6 +2283,11 @@ void Renderer::SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingC
 
 SceneRenderLightingConfig Renderer::DefaultSceneLightingConfig() const noexcept {
     return defaultSceneLightingConfig_;
+}
+
+RenderEffectHost& Renderer::RenderEffects() {
+    if (!renderEffects_) renderEffects_ = std::make_unique<RenderEffectHost>();
+    return *renderEffects_;
 }
 
 void Renderer::SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept {

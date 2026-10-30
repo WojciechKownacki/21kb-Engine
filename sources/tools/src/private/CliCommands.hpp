@@ -46,6 +46,8 @@ namespace kb::cli {
 [[nodiscard]] int RunPostProcessNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVfxCommand(std::string_view command, const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVfxProfileCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunRenderEffectRunCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunRenderEffectExportCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRendererInfoCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPostProcessSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io);
