@@ -455,6 +455,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .passResources = passResources_,
         .instanceBufferPool = &instanceBuffers_,
         .diagnostics = diagnostics,
+        .coverageProbe = coverageProbe_,
         .gpuCulling = &gpuDrivenCullingPass_,
         .camera = camera,
         .stats = stats,

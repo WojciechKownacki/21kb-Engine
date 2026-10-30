@@ -360,6 +360,7 @@ add_library(kb_renderer STATIC
     src/scene/submit/SceneMeshInstanceBufferPool.hpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.cpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.hpp
+    src/scene/submit/SceneMeshCoverageProbe.hpp
     src/scene/submit/SceneMeshMaterialBindingResolver.cpp
     src/scene/submit/SceneMeshMaterialBindingResolver.hpp
     src/scene/submit/SceneMeshPassResources.cpp
@@ -479,6 +480,8 @@ if(BGFX_CONFIG_RENDERER_WEBGPU AND KB_GENERATE_RENDERER_SHADERS AND
     list(APPEND KB_RENDERER_SHADER_PROFILES wgsl)
 endif()
 
+# Optional shaders may be missing on backends without a locally generated binary;
+# the UI renderer falls back to its required bitmap shader in that case.
 set(KB_RENDERER_SHADER_MANIFEST
     cs_hzb_downsample.sc
     cs_hzb_seed.sc
@@ -619,6 +622,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         SHADERS
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_layered_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
@@ -710,6 +714,22 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_GENERATED_FRAGMENT_SHADERS}
             ${KB_RENDERER_GENERATED_COMPUTE_SHADERS}
     )
+
+    # bgfx's fixed-shader commands track the entry point and varying definition.
+    # Height fog is shared with graph shaders, whose cooker already tracks transitive includes.
+    foreach(_fog_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS)
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh")
+        endif()
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND DEPENDS
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/gbuffer_contract.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/shading_models.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_layers.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_gbuffer.sh")
+        endif()
+    endforeach()
 
     add_custom_command(
         OUTPUT "${KB_RENDERER_SHADER_STAGE_STAMP}"
@@ -951,6 +971,20 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-contact-death)
             set_tests_properties(kb_renderer_particle_contact_death PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            add_test(NAME kb_renderer_particle_sort_modes
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-sort-modes)
+            set_tests_properties(kb_renderer_particle_sort_modes PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            add_test(NAME kb_renderer_particle_blend_goldens
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-blend-goldens)
+            set_tests_properties(kb_renderer_particle_blend_goldens PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            foreach(backend IN ITEMS d3d12 vulkan opengl)
+                add_test(NAME kb_renderer_particle_blend_goldens_${backend}
+                    COMMAND $<TARGET_FILE:kb_renderer_tests> particle-blend-goldens --backend ${backend})
+                set_tests_properties(kb_renderer_particle_blend_goldens_${backend} PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            endforeach()
             add_test(NAME kb_renderer_particle_depth_collision
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-depth-collision)
             set_tests_properties(kb_renderer_particle_depth_collision PROPERTIES
@@ -961,6 +995,14 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     # The complete node/profile sweep has separate bounded processes below.
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-integration)
     if(WIN32)
+        add_test(NAME kb_renderer_ui_overdraw COMMAND $<TARGET_FILE:kb_renderer_tests> screen-ui-overdraw)
+        set_tests_properties(kb_renderer_ui_overdraw PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;ui;gpu;headless" TIMEOUT 60)
+    endif()
+    if(WIN32)
+        add_test(NAME kb_renderer_particle_depth_outputs COMMAND $<TARGET_FILE:kb_renderer_tests> particle-volumetric-submit)
+        set_tests_properties(kb_renderer_particle_depth_outputs PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 180)
         add_test(NAME kb_renderer_display_alpha COMMAND $<TARGET_FILE:kb_renderer_tests> display-alpha)
         set_tests_properties(kb_renderer_display_alpha PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 180
@@ -977,6 +1019,23 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
         # Screen-space ambient occlusion, reflections and bounce light, and the voxel grid built from mesh geometry.
         add_test(NAME kb_renderer_screen_space COMMAND $<TARGET_FILE:kb_renderer_tests> screen-space)
+        add_test(NAME kb_renderer_graph_compact_gbuffer COMMAND $<TARGET_FILE:kb_renderer_tests> graph-compact-gbuffer)
+        set_tests_properties(kb_renderer_graph_compact_gbuffer PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
+        foreach(_fog_backend d3d11 d3d12 vulkan opengl)
+            add_test(NAME kb_renderer_material_matrix_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> material-matrix --backend ${_fog_backend})
+            set_tests_properties(kb_renderer_material_matrix_${_fog_backend} PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
+            add_test(NAME kb_renderer_fog_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> fog-profiles --backend ${_fog_backend})
+            set_tests_properties(kb_renderer_fog_${_fog_backend} PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;fog" TIMEOUT 180)
+        endforeach()
+        add_test(NAME kb_renderer_screen_effect_lifecycle COMMAND $<TARGET_FILE:kb_renderer_tests> screen-effect-lifecycle)
+        set_tests_properties(kb_renderer_screen_effect_lifecycle PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;screen-space" TIMEOUT 180)
+        add_test(NAME kb_renderer_diagnostics COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-diagnostics)
+        set_tests_properties(kb_renderer_diagnostics PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;diagnostics" TIMEOUT 180)
         set_tests_properties(kb_renderer_screen_space PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;screen-space" TIMEOUT 180)
         # Point, spot, directional and cascaded shadows, and GPU mesh particles, with image readback.

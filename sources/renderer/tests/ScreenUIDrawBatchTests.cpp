@@ -1,6 +1,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "private/ui/ScreenUIDrawBatchBuilder.hpp"
+#include "private/ui/ScreenUIComposite.hpp"
 #include "private/ui/ScreenUIFontAtlasCache.hpp"
 #include "private/ui/ScreenUIFontDistanceField.hpp"
 #include "private/ui/ScreenUIFontPayloadValidator.hpp"
@@ -27,7 +28,13 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <cstdio>
+#include <thread>
+#include <chrono>
 
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
 
 namespace kb::render::tests {
 namespace {
@@ -913,5 +920,85 @@ void RunScreenUIDrawBatchTests() {
     RichTextParserTablesAreOptInAndAtomic();
 }
 
+void RunScreenUIOverdrawGpuTests() {
+#if defined(_WIN32)
+    const auto window = CreateWindowExW(0, L"STATIC", L"ui-overdraw-headless", WS_OVERLAPPEDWINDOW,
+        0, 0, 64, 64, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    Require(window != nullptr, "Cannot create hidden overdraw surface");
+    bgfx::Init init{};
+    init.type = bgfx::RendererType::Direct3D11;
+    init.swapChain.nwh = window;
+    init.swapChain.width = init.swapChain.height = 64U;
+    Require(bgfx::init(init), "Overdraw measurement requires D3D11");
+    Require(bgfx::getCaps()->limits.maxOcclusionQueries != 0U,
+        "GPU does not support passing-sample queries");
+    {
+        ScreenUIComposite composite;
+        Require(composite.Initialize(), "Cannot initialize UI composite");
+        ScreenUIDrawBatchBuilder builder;
+        auto measure = [&](const char* name, unsigned layers, bool clipped, bool effects, unsigned outputSize) {
+            kb::scene::SceneUIFrame frame{.viewportSize = {64.0F, 64.0F}};
+            for (unsigned layer = 0; layer < layers; ++layer) {
+                auto element = Element(10U + layer, {16.0F, 16.0F, 32.0F, 32.0F});
+                element.border = kb::scene::UIBorder{.backgroundColor = {1.0F, 0.2F, 0.1F, 0.5F}};
+                element.clipRect = clipped ? kb::math::Rect{16, 16, 16, 32} : kb::math::Rect{0, 0, 64, 64};
+                if (effects) {
+                    element.shadow = kb::scene::UIShadow{.offset = {2, 3}, .color = {0, 0, 0, 0.5F}, .blur = 2};
+                    element.outline = kb::scene::UIOutline{.color = {1, 1, 0, 1}, .width = 2};
+                }
+                frame.elements.push_back(element);
+            }
+            const auto& draw = builder.Build(frame, {}, {});
+            std::vector<bgfx::OcclusionQueryHandle> queries(draw.batches.size());
+            for (auto& query : queries) {
+                query = bgfx::createOcclusionQuery();
+                Require(bgfx::isValid(query), "Cannot allocate overdraw query");
+            }
+            const auto target = bgfx::createFrameBuffer(static_cast<std::uint16_t>(outputSize),
+                static_cast<std::uint16_t>(outputSize), bgfx::TextureFormat::RGBA8);
+            Require(bgfx::isValid(target), "Cannot allocate overdraw target");
+            ScreenUICompositeDesc desc{.viewId = 1, .frameBuffer = target, .presentationExtent = {64, 64},
+                .outputExtent = {outputSize, outputSize}, .drawList = &draw, .overdrawQueries = queries};
+            Require(composite.Submit(desc), "Measured UI submit failed");
+            bgfx::frame();
+            std::uint64_t samples = 0;
+            for (auto query : queries) {
+                std::int32_t count = 0;
+                auto result = bgfx::getResult(query, &count);
+                for (unsigned attempt = 0; result == bgfx::OcclusionQueryResult::NoResult && attempt < 120; ++attempt) {
+                    bgfx::frame();
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                    result = bgfx::getResult(query, &count);
+                }
+                Require(result != bgfx::OcclusionQueryResult::NoResult && count >= 0,
+                    "GPU sample query did not resolve");
+                samples += static_cast<std::uint64_t>(count);
+                bgfx::destroy(query);
+            }
+            bgfx::destroy(target);
+            bgfx::frame();
+            std::printf("ui_overdraw case=%s width=%u height=%u batches=%zu passing_samples=%llu samples_per_target_pixel=%.6f\n",
+                name, outputSize, outputSize, draw.batches.size(), static_cast<unsigned long long>(samples),
+                static_cast<double>(samples) / (outputSize * outputSize));
+            return samples;
+        };
+        const auto single = measure("single", 1, false, false, 64);
+        const auto layered = measure("four_layers", 4, false, false, 64);
+        const auto clipped = measure("four_layers_clipped", 4, true, false, 64);
+        const auto effects = measure("shadow_outline", 1, false, true, 64);
+        const auto resized = measure("four_layers_resized", 4, false, false, 128);
+        Require(single == 1024U, "Single quad must cover 32x32 GPU samples without MSAA");
+        Require(layered == 4U * single, "Four blended layers must measure four times the fill work");
+        Require(clipped * 2U == layered, "Half-width clipping must halve passing samples");
+        Require(effects > single, "Shadow and outline must expose additional overdraw");
+        Require(resized == 4U * layered, "Doubling target dimensions must quadruple sample count");
+        composite.Shutdown();
+    }
+    bgfx::shutdown();
+    DestroyWindow(window);
+#else
+    std::puts("SKIP: UI overdraw GPU measurement requires the D3D11 headless test host");
+#endif
+}
 
 } // namespace kb::render::tests

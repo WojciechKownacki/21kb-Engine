@@ -1,6 +1,9 @@
 #include "rendering/PanelContentRenderer.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "localization/EditorLocalization.hpp"
+#include "engine/ecs/World.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/ecs/SystemSchedulerTrace.hpp"
 
 #if defined(_WIN32)
 #include "console/EditorConsoleLayout.hpp"
@@ -16,6 +19,7 @@
 #include "rendering/BlendSpace2DEditorPanel.hpp"
 #include "rendering/GameplayGraphEditorPanel.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/AudioMixerPanelView.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/BuildGamePanelRenderer.hpp"
@@ -340,6 +344,39 @@ void PanelContentRenderer::Paint(
     const RECT visibleContent = IntersectRectOrEmpty(content, contentClip);
 
     switch (panel.kind) {
+    case DockPanelKind::AudioMixer: {
+        const auto id = sceneContext.AudioMixerPanelAsset();
+        const auto asset = sceneContext.ReadAudioMixerAsset(id);
+        const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), id);
+        const DockRect bounds{visibleContent.left, visibleContent.top, visibleContent.right - visibleContent.left, visibleContent.bottom - visibleContent.top};
+        const auto layout = AudioMixerPanelView::Layout(bounds, asset.value_or(kb::audio::AudioMixerAsset{}), runtime, sceneContext.AudioMixerPanelFirst());
+        AudioMixerPanelView::Paint(dc, bounds, theme, layout, asset ? runtime.diagnostic : "Select an audio mixer in Project Files.");
+        break;
+    }
+    case DockPanelKind::Profiler: {
+        const auto snapshot = sceneContext.Scene().Runtime().EcsWorld().TelemetrySnapshot();
+        const std::array<std::string, 13> rows{
+            "ECS profiler - current scene",
+            "Entities: " + std::to_string(snapshot.entityCount) + " count (measured)",
+            "Chunks: " + std::to_string(snapshot.chunkCount) + " count (measured)",
+            "Native payload: " + std::to_string(snapshot.committedBytes) + " bytes (measured allocation capacity)",
+            "Entity records: " + std::to_string(snapshot.entityRecordBytes) + " bytes (measured capacity)",
+            "Occupancy: " + std::to_string(snapshot.occupancyPercent) + " % (derived)",
+            "Storage allocations: " + std::to_string(snapshot.storageSystemAllocationCount) + " count (measured)",
+            "Query cache hits: " + std::to_string(snapshot.queryCacheHits) + " count (measured)",
+            "Query cache misses: " + std::to_string(snapshot.queryCacheMisses) + " count (measured)",
+            "Query prepare: " + std::to_string(snapshot.queryPrepareElapsedNanoseconds) + " ns (measured)",
+            "Query kernels: " + std::to_string(snapshot.queryKernelElapsedNanoseconds) + " ns (measured CPU sum)",
+            "Query traffic: " + std::to_string(snapshot.queryBytesTouched) + " bytes (estimated)",
+            "Native storage scope; excludes GPU, physics and backend mirror memory."};
+        int y = content.top + 20;
+        for (const auto& row : rows) {
+            DrawText(dc, RECT{content.left + 20, y, content.right - 16, y + 24}, row,
+                Color(theme.textPrimary), 11, FW_NORMAL, DT_LEFT | DT_SINGLELINE);
+            y += 27;
+        }
+        break;
+    }
     case DockPanelKind::Hierarchy:
         HierarchyPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;

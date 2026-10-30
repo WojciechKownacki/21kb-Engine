@@ -1,3 +1,4 @@
+#include <chrono>
 #include "CpuParticleBackend.hpp"
 #include "ParticleEffectCompiler.hpp"
 
@@ -30,6 +31,22 @@
 
 namespace kb::particle_plugin {
 namespace {
+
+class EmitterWorkTimer final {
+public:
+    EmitterWorkTimer(bool enabled, std::uint64_t& destination) noexcept
+        : destination_(enabled ? &destination : nullptr),
+          started_(enabled ? Clock::now() : Clock::time_point{}) {}
+    ~EmitterWorkTimer() {
+        if (destination_) *destination_ += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - started_).count());
+    }
+private:
+    using Clock = std::chrono::steady_clock;
+    std::uint64_t* destination_;
+    Clock::time_point started_;
+};
+
 
 static_assert(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds ==
     1.0F / static_cast<float>(kb::scene::kParticleEffectFixedStepsPerSecond));
@@ -742,6 +759,11 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     ProcessOwnerLifecycle(scene);
     UpdateSharedSimulations();
     stepTelemetry_ = {};
+    profileEmitterWork_ = kb::particles::ParticlePlayback::EmitterProfilingEnabled(scene);
+    for (std::uint32_t index = 0U; index < denseInstanceCount_; ++index) {
+        instanceRuntime_[index].emissionNanoseconds.fill(0U);
+        instanceRuntime_[index].integrationNanoseconds.fill(0U);
+    }
     std::fill(renderRejectedByCapacity_.begin(), renderRejectedByCapacity_.end(), 0U);
     std::fill(renderRejectedBySpawnBudget_.begin(), renderRejectedBySpawnBudget_.end(), 0U);
     std::fill(renderRejectedByEventBudget_.begin(), renderRejectedByEventBudget_.end(), 0U);
@@ -1723,6 +1745,7 @@ void CpuParticleBackend::StepEmitter(
     std::uint32_t& remainingSpawnBudget,
     std::uint8_t prewarmGroup) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
+    EmitterWorkTimer emissionTimer(profileEmitterWork_, runtime.emissionNanoseconds[emitterIndex]);
     const CompiledEffect& effect = *compiledEffects_[runtime.compiledEffectIndex].effect;
     const CompiledEmitter& emitter = effect.emitters[emitterIndex];
     if (!emitter.enabled) return;
@@ -1955,6 +1978,8 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         if (integrated == nullptr) continue;
         const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[index]);
         const CompiledEmitter& emitter = *integrated;
+        EmitterWorkTimer integrationTimer(profileEmitterWork_,
+            instanceRuntime_[denseIndex].integrationNanoseconds[particleEmitterIndices_[index]]);
         kb::math::Vec3& velocity = particleVelocities_[index];
         const float normalizedAge = kb::math::Clamp(
             static_cast<float>(particleAges_[index] / particleLifetimes_[index]), 0.0F, 1.0F);
@@ -2468,6 +2493,9 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                 .simulationPath = fallback == kb::particles::ParticleGpuFallbackReason::None
                     ? kb::particles::ParticleEmitterSimulationPath::Gpu : kb::particles::ParticleEmitterSimulationPath::Cpu,
                 .gpuFallbackReason = fallback,
+                .cpuWorkProfiled = profileEmitterWork_,
+                .cpuEmissionNanoseconds = runtime.emissionNanoseconds[emitterIndex],
+                .cpuIntegrationNanoseconds = runtime.integrationNanoseconds[emitterIndex],
                 .flipbookColumnsEncoded = static_cast<std::uint8_t>(emitter.flipbookColumns),
                 .flipbookRowsEncoded = static_cast<std::uint8_t>(emitter.flipbookRows),
                 .localBasisQuaternionSnorm = PackQuaternion(kb::math::Normalize(

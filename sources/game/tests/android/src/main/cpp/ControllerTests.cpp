@@ -129,6 +129,11 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_requestIme(JNIEnv*, 
     imeRequest.store(shown ? 1 : 0);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_requestMultilineIme(JNIEnv*, jclass) {
+    imeRequest.store(2);
+}
+
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_kbengine_controllertests_ControllerInstrumentation_imeState(JNIEnv* env, jclass) {
     const std::lock_guard lock{observationMutex};
@@ -328,6 +333,7 @@ extern "C" void android_main(android_app* app) {
             const int requested = imeRequest.exchange(-1);
             if (requested >= 0) {
                 platform.imeRequested = requested != 0;
+                if (requested != 0) kb::game::ConfigureAndroidTextInput(app->activity, requested == 2);
                 if (requested != 0 && !platform.imeInitialized) {
                     constexpr std::u32string_view initial = U"Start \U0001F600 ";
                     kb::game::SetAndroidTextInputState(app->activity, initial, initial.size());

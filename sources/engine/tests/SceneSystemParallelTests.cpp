@@ -3,6 +3,7 @@
 
 #include "engine/scene/ParallelSceneSystem.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "scene/systems/SceneSystemParallel.hpp"
@@ -178,6 +179,26 @@ void RunParallelEqualsSerialTest() {
     kb::tests::Require(serial == parallel, "parallel execution of independent systems changed their results");
 }
 
+void RunConfiguredWorkerLimitTest() {
+    std::vector<std::uint64_t> reference;
+    for (const std::size_t count : {1U, 2U, 4U}) {
+        kb::ecs::WorldConfig config;
+        config.workerThreadLimit = count;
+        kb::scene::Scene scene{config};
+        kb::scene::SceneSystemScheduler scheduler;
+        const Fleet fleet = AddDisjointFleet(scheduler, scene, 8U, 20'000U);
+        kb::scene::SetSceneSystemParallelExecution(scheduler, true);
+        for (int frame = 0; frame < 20; ++frame)
+            scheduler.Update(scene, 0.016F, kb::scene::SceneUpdatePhase::PreFixed);
+        kb::tests::Require(kb::scene::SceneSystemParallelWorkerCount(scheduler) == count,
+            "Scene system worker pool ignored the configured worker limit");
+        if (reference.empty()) reference = fleet.Results();
+        kb::tests::Require(reference == fleet.Results(), "Worker limit changed scene system results");
+        std::printf("scene_workers configured=%zu actual=%u result=PASS\n", count,
+            kb::scene::SceneSystemParallelWorkerCount(scheduler));
+    }
+}
+
 void RunSystemsReallyOverlapTest() {
     kb::scene::Scene scene;
     kb::scene::SceneSystemScheduler scheduler;
@@ -197,6 +218,26 @@ void RunSystemsReallyOverlapTest() {
     }
     kb::tests::Require(firstPtr->RendezvousSucceeded() && secondPtr->RendezvousSucceeded(),
         "two systems with disjoint access were not inside OnUpdate at the same time");
+}
+
+void RunSceneSystemOverlapTraceTest() {
+    kb::ecs::WorldConfig config; config.workerThreadLimit = 2U;
+    kb::scene::Scene scene{config};
+    auto runtime = scene.Runtime();
+    runtime.SetEcsProfilerEnabled(true);
+    std::atomic<int> arrived{0};
+    auto first = std::make_unique<WorkSystem>("First", Writes("a"), 10U);
+    auto second = std::make_unique<WorkSystem>("Second", Writes("b"), 10U);
+    first->SetRendezvous(&arrived, 2); second->SetRendezvous(&arrived, 2);
+    static_cast<void>(runtime.AddSceneSystem(std::move(first)));
+    static_cast<void>(runtime.AddSceneSystem(std::move(second)));
+    static_cast<void>(runtime.Update(0.016F));
+    std::vector<kb::scene::SceneRuntimeSystemTiming> events;
+    for (const auto& event : runtime.HotPathReport().sceneSystems)
+        if (event.systemType.find("WorkSystem") != std::string::npos && !event.ownerThread && event.phase == "scene.update.pre_fixed") events.push_back(event);
+    kb::tests::Require(events.size() == 2U && events[0].dispatchGroup == events[1].dispatchGroup && events[0].workerIndex != events[1].workerIndex &&
+        events[0].startNanoseconds < events[1].endNanoseconds && events[1].startNanoseconds < events[0].endNanoseconds,
+        "scene trace did not capture overlapping worker callbacks");
 }
 
 void RunConflictsAndBarriersKeepOrderTest() {
@@ -315,6 +356,8 @@ void RunPlainSchedulerIsUnchangedTest() {
 namespace kb::tests {
 
 void RunSceneSystemParallelTests() {
+    RunSceneSystemOverlapTraceTest();
+    RunConfiguredWorkerLimitTest();
     RunPlainSchedulerIsUnchangedTest();
     RunParallelEqualsSerialTest();
     RunSystemsReallyOverlapTest();

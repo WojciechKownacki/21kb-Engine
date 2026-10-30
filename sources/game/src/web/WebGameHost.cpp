@@ -44,6 +44,7 @@
 
 extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_web_selected_text(void* host);
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_replace_text(void* host, const char* text, std::size_t length);
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_commit_text(void* host, const char* text, std::size_t length);
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
     void* host, std::uint32_t codePoint) noexcept;
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_download_begin(void* host, double length);
@@ -176,9 +177,11 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
     const state = { control, active: false, composing: false, suppressedComposition: null };
     const append = (text) => {
         if (!state.active || !text) return;
-        for (const character of text) {
-            if (!_kb_web_append_committed_text(host, character.codePointAt(0))) break;
-        }
+        if (text.length > 4096 || lengthBytesUTF8(text) > 4096) return;
+        const pointer = stringToNewUTF8(text);
+        if (!pointer) return;
+        try { _kb_web_commit_text(host, pointer, lengthBytesUTF8(text)); }
+        finally { _free(pointer); }
     };
     control.addEventListener('compositionstart', () => {
         if (!state.active) return;
@@ -766,6 +769,9 @@ private:
         if (scene == nullptr || event == nullptr || host->graphicsContextLost_) return EM_FALSE;
         const kb::input::InputKey key = WebKey(event->code);
         if (key == kb::input::InputKey::None) return EM_FALSE;
+        if (eventType == EMSCRIPTEN_EVENT_KEYDOWN && host->textInputActive_ &&
+            EM_ASM_INT({ return Module['kbTextInput']?.composing ? 1 : 0; }) != 0)
+            return EM_FALSE; // Candidate navigation belongs to the browser IME.
         static_cast<void>(host->digital_.Queue(scene->Input().MutableDeviceState(),
             key, eventType == EMSCRIPTEN_EVENT_KEYDOWN));
         return host->textInputActive_ && eventType == EMSCRIPTEN_EVENT_KEYDOWN
@@ -913,6 +919,13 @@ private:
             scene->Input().MutableDeviceState().AddTextInput(codePoint);
     }
 
+    [[nodiscard]] bool CommitText(const char* text, std::size_t length) {
+        auto* scene = runtime_.Scene();
+        return textInputActive_ && scene != nullptr && text != nullptr &&
+            scene->UI().Focused() == textInputField_ &&
+            kb::game::AppendWebCommittedText(scene->Input().MutableDeviceState(), {text, length});
+    }
+
     void Fail(const char* code, std::string_view message) {
         SetBrowserStartupError(code);
         std::fprintf(stderr, "kb_game_web: %.*s\n", static_cast<int>(message.size()), message.data());
@@ -972,6 +985,7 @@ private:
     std::uint32_t healthyGraphicsFrames_ = 0U;
 
     friend int ::kb_web_append_committed_text(void* host, std::uint32_t codePoint) noexcept;
+    friend int ::kb_web_commit_text(void* host, const char* text, std::size_t length);
     friend const char* ::kb_web_selected_text(void* host);
     friend int ::kb_web_replace_text(void* host, const char* text, std::size_t length);
     friend int ::kb_web_download_begin(void* host, double length);
@@ -1021,6 +1035,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
 extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_web_selected_text(void* host) {
     auto* gameHost = static_cast<WebGameHost*>(host);
     return gameHost == nullptr ? nullptr : gameHost->SelectedText();
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_commit_text(void* host, const char* text, std::size_t length) {
+    auto* gameHost = static_cast<WebGameHost*>(host);
+    return gameHost != nullptr && gameHost->CommitText(text, length) ? 1 : 0;
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_replace_text(void* host, const char* text, std::size_t length) {

@@ -83,6 +83,7 @@ public:
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
     [[nodiscard]] bool SubmitScreenMaterial(const SceneMeshScreenMaterialDesc& desc) const { return passResources_.SubmitScreenMaterial(desc); }
     void SetSkinningPaletteAllocator(const RenderSkinningPaletteAllocator* allocator) noexcept { skinningPaletteAllocator_ = allocator; }
+    void SetCoverageProbe(SceneMeshCoverageProbe* probe) noexcept { coverageProbe_ = probe; }
 
 private:
     SceneMeshPassResources passResources_;
@@ -104,6 +105,7 @@ private:
     // Derived renderer state only. The authored detail-switch policy remains in ECS.
     mutable const RenderScene* detailSwitchScene_ = nullptr;
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;
+    SceneMeshCoverageProbe* coverageProbe_ = nullptr;
 };
 
 } // namespace kb::render

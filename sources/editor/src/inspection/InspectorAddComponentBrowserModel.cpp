@@ -66,6 +66,12 @@ std::vector<AddComponentRow> InspectorAddComponentBrowserModel::Rows(
     return BuildRows(category, query, &pluginEnabled);
 }
 
+std::string_view InspectorAddComponentBrowserModel::Description(const std::vector<AddComponentRow>& rows, int index) noexcept {
+    if (index < 0 || static_cast<std::size_t>(index) >= rows.size()) return {};
+    const auto& row = rows[static_cast<std::size_t>(index)];
+    return row.kind == AddComponentRowKind::Component ? InspectorComponentCatalog::Description(row.id) : std::string_view{};
+}
+
 int InspectorAddComponentBrowserModel::TotalHeight(int rowCount, int rowHeightPx) noexcept {
     return std::max(0, rowCount) * std::max(0, rowHeightPx);
 }

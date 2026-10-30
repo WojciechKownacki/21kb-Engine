@@ -4,6 +4,17 @@
 
 namespace kb::assets {
 
+std::string AssetImportRecoveryAdvice(const AssetImportItemResult& item) {
+    if (item.Succeeded()) return {};
+    if (!item.conflicts.empty())
+        return "Keep the edited assets or choose Overwrite in Reimport (CLI: --on-conflict keep-local or overwrite).";
+    if (item.status == AssetImportItemStatus::Missing)
+        return "Restore the source file at the reported path, or select its new location, then retry Import.";
+    if (item.status == AssetImportItemStatus::Unsupported)
+        return "Export the source in a format listed by Import, then import that file (models: glTF, GLB, OBJ or FBX).";
+    return "Correct the reported source error and restore any missing companion files beside the source, then retry Import. For an existing asset, use Reimport to preserve its references.";
+}
+
 std::size_t AssetImportResult::ImportedCount() const noexcept {
     return static_cast<std::size_t>(std::ranges::count_if(items, [](const AssetImportItemResult& item) {
         return item.Succeeded();

@@ -2,6 +2,7 @@
 #include "inspection/InspectorGenericComponentModel.hpp"
 #include "inspection/ui/InspectorUIThemeModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
 #include "rendering/GameplayGraphEditorPanel.hpp"
@@ -23,6 +24,9 @@
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "docking/EditorDockModel.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
+#include "app/EditorWorkspaceSession.hpp"
+#include "settings/EditorPanelSessionText.hpp"
 #include "Sprite2DRuntime.hpp"
 #include "Map2DView.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionController.hpp"
@@ -209,7 +213,7 @@ struct ScenarioState {
     std::unordered_map<std::string, std::uint32_t> materialNodes;
     // The dock workspace the workspace_* steps arrange, and the layouts saved by name.
     EditorDockModel dock;
-    std::unordered_map<std::string, std::string> savedWorkspaces;
+    std::unordered_map<std::string, EditorLayoutPreset> savedWorkspaces;
 };
 
 class ScopedProjectFile final {
@@ -1248,6 +1252,20 @@ ReadScriptValue(
     return true;
 }
 
+[[nodiscard]] std::string WorkspaceFingerprint(const EditorLayoutPreset& preset) {
+    std::vector<std::string> panels;
+    for (const auto& panel : preset.panels) {
+        std::string text;
+        if (EditorPanelSessionText::Format(panel, EditorProjectPaths::ProjectRoot(), text)) {
+            panels.push_back(std::to_string(panel.panelId) + " " + text);
+        }
+    }
+    std::ranges::sort(panels);
+    std::string result = preset.tree;
+    for (const auto& panel : panels) result += "\n" + panel;
+    return result;
+}
+
 [[nodiscard]] std::optional<StepOutcome> ExecuteWorkspaceStep(
     ScenarioState& state, const JsonValue& step, std::string_view operation) {
     std::string error;
@@ -1271,46 +1289,29 @@ ReadScriptValue(
     }
     if (operation == "workspace_save") {
         const auto slot = StringMember(step, "slot", error);
-        const auto file = StringMember(step, "file", error, false);
-        if (!slot) return StepOutcome{ false, error };
-        error.clear();
-        const std::string text = state.dock.Commands().SerializeWorkspace();
-        state.savedWorkspaces[*slot] = text;
-        if (file) {
-            const auto resolved = ResolveProjectPath(*file, error);
-            if (!resolved) return StepOutcome{ false, error };
-            std::error_code fileError;
-            std::filesystem::create_directories(resolved->parent_path(), fileError);
-            std::ofstream output(*resolved, std::ios::binary | std::ios::trunc);
-            output << text << '\n';
-            if (!output.good()) return StepOutcome{ false, "the layout file could not be written" };
-        }
-        return StepOutcome{ !text.empty(), "saved '" + *slot + "' (" + std::to_string(text.size()) + " bytes)" };
+        if (!slot) return StepOutcome{false, error};
+        const auto preset = EditorWorkspaceArrangement::Capture(state.dock);
+        const auto root = EditorProjectPaths::ProjectRoot();
+        if (!EditorLayoutLibrary::Save(root, *slot, preset, error)) return StepOutcome{false, error};
+        state.savedWorkspaces[*slot] = preset;
+        EditorWorkspaceSession::SaveAs(state.dock, state.context, *slot);
+        return StepOutcome{true, "saved full layout " + *slot};
     }
     if (operation == "workspace_reset") {
         state.dock.Commands().ResetWorkspace();
-        return StepOutcome{ true, "default workspace restored" };
+        return StepOutcome{true, "default workspace restored"};
+    }
+    if (operation == "workspace_restore_current") {
+        const auto root = EditorProjectPaths::ProjectRoot();
+        const auto loaded = EditorConfigurationStore::Load(EditorConfigurationStore::FilePath(root), root);
+        return StepOutcome{loaded.Succeeded() && EditorWorkspaceArrangement::Apply(state.dock,
+            {.tree = loaded.configuration.layout, .panels = loaded.configuration.panels}), "current project workspace"};
     }
     if (operation == "workspace_restore") {
-        const auto slot = StringMember(step, "slot", error, false);
-        const auto file = StringMember(step, "file", error, false);
-        if (!error.empty()) return StepOutcome{ false, error };
-        std::string text;
-        if (slot) {
-            const auto saved = state.savedWorkspaces.find(*slot);
-            if (saved == state.savedWorkspaces.end()) return StepOutcome{ false, "no saved layout named '" + *slot + "'" };
-            text = saved->second;
-        } else if (file) {
-            const auto resolved = ResolveProjectPath(*file, error);
-            if (!resolved) return StepOutcome{ false, error };
-            text = ReadText(*resolved, error);
-            if (!error.empty()) return StepOutcome{ false, error };
-            while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
-        } else {
-            return StepOutcome{ false, "restore needs 'slot' or 'file'" };
-        }
-        const bool restored = state.dock.Commands().RestoreWorkspace(text);
-        return StepOutcome{ restored, restored ? "layout restored" : "the layout text was refused" };
+        const auto slot = StringMember(step, "slot", error);
+        if (!slot) return StepOutcome{false, error};
+        const auto preset = EditorLayoutLibrary::Load(EditorProjectPaths::ProjectRoot(), *slot);
+        return StepOutcome{preset && EditorWorkspaceArrangement::Apply(state.dock, *preset), "restored full layout " + *slot};
     }
     if (operation == "assert_workspace") {
         std::vector<std::string> visible;
@@ -1339,16 +1340,16 @@ ReadScriptValue(
                 return StepOutcome{ false, "'" + title + "' should be floating" };
             }
         }
-        const std::string current = state.dock.Commands().SerializeWorkspace();
+        const std::string current = WorkspaceFingerprint(EditorWorkspaceArrangement::Capture(state.dock));
         if (sameAs) {
             const auto saved = state.savedWorkspaces.find(*sameAs);
-            if (saved == state.savedWorkspaces.end() || saved->second != current) {
+            if (saved == state.savedWorkspaces.end() || WorkspaceFingerprint(saved->second) != current) {
                 return StepOutcome{ false, "the layout differs from '" + *sameAs + "'" };
             }
         }
         if (differsFrom) {
             const auto saved = state.savedWorkspaces.find(*differsFrom);
-            if (saved == state.savedWorkspaces.end() || saved->second == current) {
+            if (saved == state.savedWorkspaces.end() || WorkspaceFingerprint(saved->second) == current) {
                 return StepOutcome{ false, "the layout should differ from '" + *differsFrom + "'" };
             }
         }
@@ -2862,6 +2863,41 @@ ReadScriptValue(
             *childAlias + " -> " + *parentAlias };
     }
 
+    if (*operation == "prefab_open") {
+        const auto path = StringMember(step, "path", error);
+        const auto alias = StringMember(step, "id", error);
+        if (!path || !alias) return {false, error};
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved || !state.context.OpenPrefabEditMode(*resolved)) return {false, "prefab edit could not be opened: " + error};
+        const auto entity = state.context.SelectedEntity();
+        state.entities.insert_or_assign(*alias, EntityAlias{entity, state.context.Scene().Entities().Name(entity)});
+        return {true, *path};
+    }
+    if (*operation == "prefab_save") return {state.context.SavePrefabEditMode(), "save prefab edit"};
+    if (*operation == "prefab_close") return {state.context.ClosePrefabEditMode(), "close prefab edit"};
+    if (*operation == "prefab_apply" || *operation == "prefab_revert" || *operation == "assert_prefab_link") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (*operation == "prefab_apply") return {state.context.ApplyPrefabInstance(entity), *alias};
+        if (*operation == "prefab_revert") return {state.context.RevertPrefabInstance(entity), *alias};
+        return {state.context.Scene().Prefabs().SourcePrefab(entity).IsValid(), *alias};
+    }
+    if (*operation == "bind_entity") {
+        const auto alias = StringMember(step, "id", error);
+        const auto name = StringMember(step, "name", error);
+        if (!alias || !name) return {false, error};
+        kb::scene::SceneEntity found{};
+        for (const auto& row : state.context.HierarchyRows()) {
+            if (state.context.Scene().Entities().Name(row.entity) != *name) continue;
+            if (found.IsValid()) return {false, "entity name is ambiguous"};
+            found = row.entity;
+        }
+        if (!found.IsValid()) return {false, "entity name not found"};
+        state.entities.insert_or_assign(*alias, EntityAlias{found, *name});
+        return {true, *name};
+    }
+
     if (*operation == "create_prefab") {
         const auto alias = StringMember(step, "entity", error);
         const auto path = StringMember(step, "path", error);
@@ -3075,9 +3111,10 @@ ReadScriptValue(
         if (!state.context.Scene().Entities().IsAlive(entity)) {
             return { false, "entity alias is not alive" };
         }
-        if (*component == "World2DMap" || *component == "MeshRenderer") {
+        if (*component == "World2DMap" || *component == "MeshRenderer" || *component == "AudioSource") {
             state.context.SelectEntity(entity);
-            const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap : InspectorSectionId::MeshRenderer;
+            const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap :
+                *component == "AudioSource" ? InspectorSectionId::AudioSource : InspectorSectionId::MeshRenderer;
             const bool clicked = state.automation.InspectorClickRow(InspectorPropertyId::ComponentRemove, -1,
                 InspectorHitKind::ComponentMenuButton, section);
             return { clicked && !HasAuthoredComponent(state.context.Scene(), entity, *component), *component };
@@ -3860,6 +3897,16 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(createdId.value) };
     }
 
+    if (*operation == "rename_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto name = StringMember(step, "name", error);
+        if (!asset || !name) return {false, error};
+        const auto id = ResolveAsset(state, *asset);
+        if (!id.IsValid() || !state.context.BeginAssetRename(id)) return {false, "asset rename did not begin"};
+        state.context.AssetBrowser().SetTextEditValue(*name);
+        return {state.context.CommitAssetTextEdit(), *name};
+    }
+
     if (*operation == "copy_asset" ||
         *operation == "move_asset") {
         const auto asset = StringMember(step, "asset", error);
@@ -4103,6 +4150,11 @@ ReadScriptValue(
                 updated.has_value() ? getValue(*updated) : 0.0F);
         }
         return { succeeded, actual };
+    }
+
+    if (*operation == "focus_material_editor") {
+        state.context.FocusMaterialGraph(true);
+        return {state.context.IsMaterialGraphFocused(), "material editor keyboard focus"};
     }
 
     if (*operation == "save_material") {
@@ -4545,6 +4597,13 @@ ReadScriptValue(
         return { attached, attached ? *asset : "attach failed" };
     }
 
+    if (*operation == "add_animator_clip") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const auto* metadata = state.context.Scene().Assets().Manager().Registry().FindByPath(*asset);
+        const bool added = metadata != nullptr && state.context.AddAnimationClipToAnimatorEditor(metadata->id, 260, 80);
+        return { added && state.context.SaveAnimatorEditorAsset(), "add and save clip through animator graph authoring" };
+    }
     if (*operation == "set_animator_debug_target") {
         const auto target = StringMember(step, "target", error);
         if (!target) return { false, error };
@@ -4576,10 +4635,12 @@ ReadScriptValue(
             snapshot == nullptr ? nullptr : snapshot->Find(expected);
         const auto minimumLayers = NumberMember(step, "minimum_layers", error, false);
         const auto minimumBones = NumberMember(step, "minimum_bones", error, false);
+        const auto minimumTargets = NumberMember(step, "minimum_targets", error, false);
         if (!error.empty()) return { false, error };
         const bool valid = uiMatchesTarget && instance != nullptr &&
             (!minimumLayers.has_value() || instance->layers.size() >= static_cast<std::size_t>(*minimumLayers)) &&
-            (!minimumBones.has_value() || instance->bones.size() >= static_cast<std::size_t>(*minimumBones));
+            (!minimumBones.has_value() || instance->bones.size() >= static_cast<std::size_t>(*minimumBones)) &&
+            (!minimumTargets.has_value() || AnimatorEditorPanelRenderer::TargetMarkers(*instance).size() >= static_cast<std::size_t>(*minimumTargets) * 3U);
         return { valid, valid ? "immutable animator debug snapshot" : "animator debug snapshot mismatch" };
     }
 
@@ -4786,10 +4847,11 @@ ReadScriptValue(
         if (!path) return { false, error };
         const auto resolved = ResolveProjectPath(*path, error);
         if (!resolved) return { false, error };
-        return {
-            state.context.OpenScene(
-                *resolved, EditorDirtySceneResolution::Discard),
-            resolved->string() };
+        const auto started = std::chrono::steady_clock::now();
+        const bool opened = state.context.OpenScene(*resolved, EditorDirtySceneResolution::Discard);
+        const auto milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        state.automation.Trace("scene_transition_latency", opened, std::to_string(milliseconds));
+        return {opened, resolved->string()};
     }
 
     if (*operation == "reload_scene") {
@@ -4843,6 +4905,26 @@ ReadScriptValue(
             alias->second.name = state.context.Scene().Entities().Name(restored);
         }
         return { true, "redo" };
+    }
+
+    if (*operation == "serve_lua_debugger") {
+        const auto root = state.automation.ArtifactRoot().parent_path();
+        if (!state.context.StartLuaDebugger(root / "Debugger", error)) return {false, error};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{75};
+        bool interactionVerified = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (!state.context.TickPlayModeSceneSession(1.0F / 60.0F)) return {false, "debug runtime stopped"};
+            if (state.context.LuaDebuggerPaused() && !interactionVerified) {
+                if (!state.automation.VerifyDebuggerInteraction()) return {false, "paused editor interaction failed"};
+                interactionVerified = true;
+                std::ofstream(root / "debugger-gui-pass.txt") << "console tab and splitter responsive";
+            }
+            if (std::filesystem::exists(root / "debugger-done.txt")) {
+                return {interactionVerified && !state.context.LuaDebuggerPaused(), "CLI debug session and paused GUI interaction"};
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        }
+        return {false, "debug client deadline expired"};
     }
 
     if (*operation == "play") {
@@ -5205,6 +5287,10 @@ ReadScriptValue(
                 std::to_string(selectedMatches) + " project=" + std::to_string(projectMatches) + " saved=" + std::to_string(saved)};
     }
 
+    if (*operation == "verify_particle_controls") {
+        return {state.automation.VerifyParticleControls(), "particle controls, history, save/reload and preview"};
+    }
+
     if (*operation == "verify_particle_execution") {
         const auto* current = state.context.ParticleEditorWorkingAsset();
         if (current == nullptr || current->emitters.empty()) return {false, "particle document is not open"};
@@ -5321,6 +5407,10 @@ ReadScriptValue(
                 ", named=" + (saved.named ? "true" : "false") +
                 ", deleted=" + (saved.deleted ? "true" : "false") +
                 ", layout=" + saved.layout };
+    }
+
+    if (*operation == "assert_workspace_controls") {
+        return {state.automation.VerifyWorkspaceControls(), "real toolbar, keyboard, display and DPI routing"};
     }
 
     if (*operation == "assert_workspace_layout_persistence") {
@@ -5611,6 +5701,17 @@ ReadScriptValue(
                 (!last || (named && named->AsString() == *last));
         }
         return {valid,"Timeline authored document and isolated runtime"};
+    }
+
+    if (*operation == "audio_mixer_pointer") {
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto width = UInt32Member(step, "width", error);
+        const auto height = UInt32Member(step, "height", error);
+        if (!x || !y || !width || !height || *width < 240U || *width > 3840U || *height < 270U || *height > 2160U
+            || *x < 0 || *y < 0 || *x >= *width || *y >= *height) return {false, "invalid mixer panel pointer geometry"};
+        return {state.context.AudioMixerPanelPointer({0, 0, static_cast<int>(*width), static_cast<int>(*height)},
+            static_cast<int>(*x), static_cast<int>(*y)), "audio mixer panel pointer"};
     }
 
     if (*operation == "capture") {

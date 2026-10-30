@@ -27,6 +27,8 @@ Commands:
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
                a template: Basic (camera, sun, sky, floor; default) or Empty.
                  --parent <dir> --name <Name> [--template Basic|Empty]
+  layout       Save, restore or reset the editor workspace for the next session.
+                 list|save|restore|reset --project <dir> [--name <name>]
   scene-new    Create a scene from a template, as File > New Scene does.
                  --project <dir> --name <Name> [--folder Assets/Scenes]
                  [--template Basic|Empty] [--default yes|no]
@@ -229,6 +231,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  formats and the reason for every quality fallback (Windows).
                  [--backend auto|d3d11|d3d12|vulkan|opengl] [--allow-fallback]
                  Exits 1 when an explicit backend is not the one selected, unless --allow-fallback.
+  debug        Control a local Lua debugger endpoint (connect, breakpoints, step_into/over/out, continue, stack, locals, evaluate, disconnect).
   vfx-profile  Profile an isolated effect with a hidden bgfx GPU host (Windows).
                  --project <dir> --effect /Game/<path>.kbvfx
                  [--backend d3d11|d3d12|vulkan|opengl] [--warmup 60] [--frames 180]
@@ -344,6 +347,7 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
+                 [--workers <1..64>] [--ecs-history <1..256> with --report ecs]
                  [--ecs-parallelism systems|chunks|combined] [--deterministic]
                Replay uses recorded per-tick durations and controller slots; --frames
                may select a prefix. --dt and audio probes cannot override replay timing.
@@ -492,6 +496,7 @@ constexpr bool kRendererAvailable = false;
 #endif
 
 constexpr CliCommandDescriptor kCommands[]{
+    {"debug", &RunLuaDebugCommand, CliCommandKind::Normal, true, ""},
     {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, ""},
     {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space"},
     {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph"},
@@ -511,6 +516,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script"},
     {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list"},
     {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach"},
+    {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}},
     {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
     {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
     {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, ""},

@@ -10,6 +10,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneSystem.hpp"
 
 #include <array>
 #include <cstdint>
@@ -197,6 +198,44 @@ void RunGraphSceneRuntimeTest() {
     kb::tests::Require(runtime.Update(0.016F), "scene runtime update failed");
     kb::tests::Require(total == 73 && runtime.LastEcsProfilerTrace().frameCounters.lastWorkerDispatchMode == "job_graph",
         "scene runtime did not execute and trace its graph");
+}
+
+void RunSceneRuntimeStageTraceTest() {
+    class FixedProbe final : public kb::scene::SceneSystem {
+    public:
+        explicit FixedProbe(int& count) : count_(count) {}
+        bool RequiresFixedStep() const override { return true; }
+        void OnFixedUpdate(kb::scene::SceneSystemContext&) override { ++count_; }
+    private:
+        int& count_;
+    };
+    kb::scene::Scene scene;
+    auto runtime = scene.Runtime();
+    int fixedSteps = 0;
+    static_cast<void>(runtime.AddSceneSystem(std::make_unique<FixedProbe>(fixedSteps)));
+    runtime.SetEcsProfilerEnabled(true);
+    static_cast<void>(runtime.Update(0.02F));
+    const auto report = runtime.HotPathReport();
+    bool sawFixed = false;
+    std::uint64_t previousEnd = 0;
+    for (const auto& event : report.runtimeStages) {
+        kb::tests::Require(event.startNanoseconds >= previousEnd && event.endNanoseconds >= event.startNanoseconds &&
+            event.endNanoseconds <= report.runtimeUpdateNanoseconds, "runtime stage trace has invalid intervals");
+        previousEnd = event.endNanoseconds;
+        if (event.name == "scene.fixed.simulation") sawFixed = true;
+    }
+    kb::tests::Require(fixedSteps > 0 && sawFixed, "runtime trace omitted the fixed simulation phase");
+    bool sawFixedSystem = false;
+    for (const auto& event : report.sceneSystems) {
+        if (event.systemType.find("FixedProbe") != std::string::npos && event.phase == "scene.fixed.simulation") {
+            sawFixedSystem = event.ownerThread && event.endNanoseconds >= event.startNanoseconds &&
+                event.endNanoseconds <= report.runtimeUpdateNanoseconds;
+        }
+    }
+    kb::tests::Require(sawFixedSystem, "runtime trace omitted the fixed system callback");
+    runtime.SetEcsProfilerEnabled(false);
+    static_cast<void>(runtime.Update(0.0F));
+    kb::tests::Require(runtime.HotPathReport().runtimeStages.empty(), "disabled profiler retained old stage trace");
 }
 
 [[nodiscard]] kb::ecs::SystemAccess ReadPosition(kb::ecs::World& world) {
@@ -970,6 +1009,7 @@ void RunSystemFusionPlannerReducesChunkPassesTest() {
 }
 
 void RunEcsSystemSchedulerTests() {
+    RunSceneRuntimeStageTraceTest();
     RunGraphSceneRuntimeTest();
     RunGraphSchedulerIntegrationTest();
     RunSystemFusionPlannerReducesChunkPassesTest();

@@ -485,6 +485,11 @@ PucLuaDebugPauseSnapshot PucLuaScriptRuntime::InspectDebugPause() const {
     return snapshot;
 }
 
+PucLuaDebugEvaluationResult PucLuaScriptRuntime::EvaluateDebugExpression(std::string_view expression, int frame) const {
+    if (!debugPause_) return {.error = "debugger is not paused"};
+    return PucLuaDebugHook::Evaluate(debugPause_->thread, expression, frame);
+}
+
 void PucLuaScriptRuntime::RecordDebugPause(PucLuaDebugPauseSnapshot snapshot) {
     lastDebugPause_ = std::move(snapshot);
 }

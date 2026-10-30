@@ -11,7 +11,20 @@
 
 namespace kb::render {
 
+// Logical GPU payload estimates owned by this registry, including its deferred
+// destruction queue. Excludes driver padding, staging, shader programs and
+// framebuffer/palette allocations owned elsewhere. Not measured VRAM residency.
+struct RenderResourceMemoryStats {
+    std::uint64_t meshBytes = 0U, textureBytes = 0U;
+    std::uint64_t pendingMeshBytes = 0U, pendingTextureBytes = 0U;
+    std::uint64_t peakRetainedBytes = 0U, allocatedBytes = 0U, releasedBytes = 0U;
+    [[nodiscard]] std::uint64_t RetainedBytes() const noexcept {
+        return meshBytes + textureBytes + pendingMeshBytes + pendingTextureBytes;
+    }
+};
+
 struct RenderResourceRegistryStats {
+    RenderResourceMemoryStats memory{};
     std::uint64_t frameNumber = 0;
     std::uint32_t meshCount = 0;
     std::uint32_t materialCount = 0;
@@ -61,6 +74,10 @@ public:
         std::uint16_t y,
         std::uint16_t width,
         std::uint16_t height);
+    // Publish bounded, immutable CPU triangles for GI when the render mesh has
+    // no retained copy. Dynamic vertex uploads invalidate this proxy; republish
+    // the updated geometry afterwards. Two empty arrays clear it explicitly.
+    [[nodiscard]] bool SetMeshProxyGeometry(RenderMeshHandle handle, const RenderMeshProxyGeometry& geometry);
     void DestroyMesh(RenderMeshHandle handle) noexcept;
 
     [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc);
@@ -115,6 +132,8 @@ private:
     detail::RenderResourceSlotPool<RenderTextureResource> textures_;
     RenderUploadMemory uploads_;
     std::vector<DeferredDestroyEntry> deferredDestroy_;
+    RenderResourceMemoryStats memory_{};
+    void ObserveAllocation(std::uint64_t bytes) noexcept;
     std::uint64_t frameNumber_ = 0;
     std::uint64_t nextResourceVersion_ = 1;
 };

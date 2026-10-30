@@ -21,6 +21,12 @@ struct EditorHeadlessPopupCheckResult {
 class EditorHeadlessPopupChecks final {
 public:
 #if defined(_WIN32)
+    [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyParticleControls(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
+    [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyDebuggerInteraction(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
+    [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyWorkspaceControls(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
     // Opens toolbar menus with clicks on the menu bar and checks that each dropdown
     // is a popup above the window and its scene viewport, paints every row, and
     // hands a click on a row to the toolbar's own menu handling.

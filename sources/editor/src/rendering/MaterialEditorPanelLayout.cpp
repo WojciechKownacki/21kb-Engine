@@ -1,4 +1,5 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/EditorAssetEditScope.hpp"
 #include "rendering/gdi/EditorTextMeasure.hpp"
 
 #include <initializer_list>
@@ -128,6 +129,8 @@ MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT&
         layout.validateButton = placeButton(actionCursor, actionTop, fit(62, { validateLabel }), 4);
     }
 
+    layout.headerHeight += kAssetEditScopeHeight;
+    layout.header.bottom += kAssetEditScopeHeight;
     layout.graphCanvas = RECT{ content.left, content.top + layout.headerHeight, content.right, content.bottom };
     const int overlayLeft = layout.graphCanvas.left + MaterialEditorPanelMetrics::Padding;
     const int overlayTop = layout.graphCanvas.top + MaterialEditorPanelMetrics::Padding;

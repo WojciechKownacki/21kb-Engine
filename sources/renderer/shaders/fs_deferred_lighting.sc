@@ -154,7 +154,7 @@ float ContactShadow(vec3 worldPos, vec3 lightVector, float contactLength)
 // Material ambient occlusion darkens only the light from the surroundings; a light
 // shining on the surface is not occluded by it.
 vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular,
-    float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris)
+    float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris, float layeredSubsurface)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     ReadSceneLight(lightIndex, dirKind, positionRange, colorIntensity, spot, areaRight);
@@ -190,11 +190,12 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     float nDotLRaw = dot(normal, lightVector);
     float nDotL = max(nDotLRaw, 0.0);
     // Light from behind lights only a surface that lets it through (subsurface).
-    if (nDotL <= 0.0 && !KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_SUBSURFACE)) {
+    if (nDotL <= 0.0 && !KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_SUBSURFACE) &&
+        !(KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_LAYERED_PBR) && layeredSubsurface > 0.0)) {
         return vec3(0.0, 0.0, 0.0);
     }
 
-    vec3 halfVector = normalize(viewDir + lightVector);
+    vec3 halfVector = ((viewDir + lightVector) / max(length(viewDir + lightVector), 0.00001));
     float nDotV = max(dot(normal, viewDir), 0.0001);
     float nDotH = max(dot(normal, halfVector), 0.0);
     float hDotV = max(dot(halfVector, viewDir), 0.0);
@@ -208,6 +209,10 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
+    if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_LAYERED_PBR)) {
+        return KbLayeredPbrLight(customData0, customData1, layeredSubsurface, modelColor, normal, viewDir, lightVector,
+            nDotLRaw, albedo, metallic, roughness, diffuse, specularTerm) * radiance;
+    }
     return KbShadingModelLightFull(shadingModel, customData0, customData1, normal, viewDir, lightVector, nDotLRaw,
         albedo, metallic, roughness, diffuse, specularTerm, modelColor, irisNormal, iris) * radiance;
 }
@@ -256,15 +261,9 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 // Exponential height fog and volumetric fog. u_fogParams: density at the base height,
 // falloff per metre above it, base height, 1 = fog on. u_fogColor: colour, w = anisotropy.
 // u_fogVolumetric: x 1 = volumetric, y = how far (m) it is marched.
-uniform vec4 u_fogParams;
-uniform vec4 u_fogColor;
+#include "height_fog.sh"
 uniform vec4 u_fogVolumetric;
 uniform vec4 u_fogSky; // rgb = the colour the scene clears its sky to, w = 1 when fog is on
-
-float FogDensity(float height)
-{
-    return u_fogParams.x * exp(-u_fogParams.y * max(height - u_fogParams.z, -100.0));
-}
 
 // Henyey-Greenstein phase function, normalised over the sphere.
 float FogPhase(float cosTheta, float g)
@@ -336,10 +335,7 @@ vec3 ApplyFog(vec3 color, vec3 worldPos, vec2 pixel)
     vec3 ray = worldPos - camera;
     float rayLength = length(ray);
     vec3 rayDir = ray / max(rayLength, 0.0001);
-    float falloff = max(u_fogParams.y, 0.0001);
-    float rise = falloff * ray.y;
-    float alongRay = abs(rise) > 0.001 ? (1.0 - exp(-rise)) / rise : 1.0;
-    float transmittance = exp(-FogDensity(camera.y) * alongRay * rayLength);
+    float transmittance = KbFogTransmittance(camera, worldPos);
     if (u_fogVolumetric.x < 0.5) {
         return color * transmittance + u_fogColor.rgb * (1.0 - transmittance);
     }
@@ -354,8 +350,9 @@ vec3 ApplyFog(vec3 color, vec3 worldPos, vec2 pixel)
         vec3 p = camera + rayDir * ((float(i) + jitter) * stepLength);
         float density = FogDensity(p.y);
         // White albedo: the lights' own colour scatters.
-        inScattered += throughput * density * stepLength * LightInFog(p, rayDir);
-        throughput *= exp(-density * stepLength);
+        float stepTransmittance = exp(-min(density * stepLength, 80.0));
+        inScattered += throughput * (1.0 - stepTransmittance) * LightInFog(p, rayDir);
+        throughput *= stepTransmittance;
     }
     return color * transmittance + u_fogColor.rgb * (1.0 - transmittance) + inScattered;
 }
@@ -372,13 +369,16 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
     float roughness = clamp(material.y, 0.04, 1.0);
     float occlusion = clamp(material.z, 0.0, 1.0);
     float shadingModel = KbDecodeGBufferShadingModel(material.w);
+    bool compactMaterial = shadingModel >= KB_GBUFFER_COMPACT_MODEL_OFFSET;
+    if (compactMaterial) shadingModel -= KB_GBUFFER_COMPACT_MODEL_OFFSET;
     float specular = clamp(surface.w, 0.0, 1.0);
     float customData0 = clamp(albedo.a, 0.0, 1.0);
     float customData1 = KbDecodeGBufferCustomData1(encodedNormal.a);
     vec3 modelColor = KbDefaultShadingModelColor(shadingModel, albedo.rgb, metallic);
     vec3 irisNormal = normal;
     vec2 iris = vec2_splat(0.0);
-    if (u_deferredCustomData.x > 0.5) {
+    float layeredSubsurface = 0.0;
+    if (u_deferredCustomData.x > 0.5 && !compactMaterial) {
         vec4 customData = texture2D(s_gbufferCustom, uv);
         if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_EYE) < 0.5) {
             // Iris normal (octahedral), mask, distance; zero = an eye without iris data.
@@ -386,6 +386,9 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
                 irisNormal = KbOctDecode(customData.xy * 2.0 - 1.0);
                 iris = customData.zw;
             }
+        } else if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_LAYERED_PBR)) {
+            modelColor = customData.rgb;
+            layeredSubsurface = customData.a;
         } else {
             modelColor = customData.a > 0.5 ? customData.rgb : modelColor;
         }
@@ -421,7 +424,8 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
     skyAccumulated = mix(1.0, skyAccumulated, step(0.0001, u_giParams.x));
     vec4 reflection = KbScreenSpaceReflection(worldPos, normal, viewDir, roughness, pixel);
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated * skyAccumulated, reflection);
-    if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) && u_deferredEnvironmentParams.x > 0.5) {
+    if ((KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) ||
+         KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_LAYERED_PBR)) && u_deferredEnvironmentParams.x > 0.5) {
         vec3 coatDirection = reflect(-viewDir, normal);
         vec3 coatReflection = mix(KbSkyReflection(coatDirection, customData1, EnvironmentColor(coatDirection)) * u_deferredEnvironmentParams.z,
             reflection.rgb * u_ssrParams.x, reflection.a);
@@ -433,7 +437,7 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular,
-                shadingModel, customData0, customData1, modelColor, irisNormal, iris);
+                shadingModel, customData0, customData1, modelColor, irisNormal, iris, layeredSubsurface);
             lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos, normal);
         }
     }

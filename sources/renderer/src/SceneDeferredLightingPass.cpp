@@ -510,14 +510,10 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
     {
         const SceneRenderLightingConfig& config = desc.lightingConfig;
-        const std::array<float, 4> fogParams{ std::max(config.fogDensity, 0.0F), std::max(config.fogHeightFalloff, 0.0F),
-            config.fogBaseHeight, config.fogEnabled ? 1.0F : 0.0F };
-        const std::array<float, 4> fogColor{ config.fogColor[0], config.fogColor[1], config.fogColor[2],
-            std::clamp(config.fogAnisotropy, -0.9F, 0.9F) };
         // Volumetric fog is marched over the first 100 m.
         const std::array<float, 4> fogVolumetric{ config.volumetricFogEnabled ? 1.0F : 0.0F, 100.0F, 0.0F, 0.0F };
-        bgfx::setUniform(fogParamsUniform_, fogParams.data());
-        bgfx::setUniform(fogColorUniform_, fogColor.data());
+        bgfx::setUniform(fogParamsUniform_, lighting.fogParams.data());
+        bgfx::setUniform(fogColorUniform_, lighting.fogColor.data());
         bgfx::setUniform(fogVolumetricUniform_, fogVolumetric.data());
         // The sky the scene clears to is part of what the fog covers: the pass rewrites those pixels with
         // the fog in front of them instead of leaving the clear colour.

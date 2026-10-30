@@ -1,3 +1,4 @@
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
@@ -2068,6 +2069,10 @@ void TestSelectablePresentationAndHits() {
     PointerDriver pointer{scene};
     pointer.At(110.0F, 20.0F, false);
     kb::tests::Require(scene.UI().Hovered() == button.Entity(), "Raycast padding must grow where a press lands");
+    kb::script::ScriptRuntimeHost hoveredApi{scene};
+    const auto hoveredResult = hoveredApi.Functions().Call("UI.Hovered", {}, kb::script::ScriptFunctionCallContext{.scene = &scene});
+    kb::tests::Require(hoveredResult.executed && hoveredResult.Succeeded() && hoveredResult.Output("entity")->AsUInt64() == button.Entity().Id(),
+        "UI.Hovered did not return the actual hit-tested button");
     const kb::scene::SceneUIFrameElement* hovered = FindElement(scene.UI().Frame(), button.Entity());
     kb::tests::Require(hovered->image->imageAssetId == 12U && hovered->interactionTint.r == 1.0F && hovered->interactionTint.g == 1.0F,
         "Sprite swap must show the highlighted image untinted");
@@ -2082,6 +2087,11 @@ void TestSelectablePresentationAndHits() {
         "A widget the pointer rests on must show its tooltip over everything, in the menu's font");
     static_cast<void>(scene.UI().DrainEvents());
     pointer.At(50.0F, 20.0F, true);
+    for (const char* name : {"UI.Pressed", "UI.Focused"}) {
+        const auto result = hoveredApi.Functions().Call(name, {}, kb::script::ScriptFunctionCallContext{.scene = &scene});
+        kb::tests::Require(result.Succeeded() && result.Output("entity")->AsUInt64() == button.Entity().Id(),
+            "UI state API did not return the pressed and focused button");
+    }
     kb::tests::Require(std::ranges::none_of(scene.UI().Frame().elements, &kb::scene::SceneUIFrameElement::tooltip),
         "Pressing must hide the tooltip");
     pointer.At(50.0F, 20.0F, false);
@@ -2098,6 +2108,12 @@ void TestSelectablePresentationAndHits() {
     pointer.At(25.0F, 20.0F, false);
     kb::tests::Require(scene.UI().HitTest({25.0F, 20.0F}) != button.Entity() && scene.UI().HitTest({75.0F, 20.0F}) == button.Entity(),
         "A press must only land where the image is opaque enough");
+    const std::array hitArguments{
+        kb::script::ScriptFunctionArgument{"x", kb::script::ScriptValue{75.0F}},
+        kb::script::ScriptFunctionArgument{"y", kb::script::ScriptValue{20.0F}}};
+    const auto hit = hoveredApi.Functions().Call("UI.HitTest", hitArguments, kb::script::ScriptFunctionCallContext{.scene = &scene});
+    kb::tests::Require(hit.Succeeded() && hit.Output("entity")->AsUInt64() == button.Entity().Id(),
+        "UI.HitTest did not return the opaque button pixel");
 }
 
 // A draggable widget reports its drag and the widget it lands on, and a finished drag does not click.
@@ -2507,6 +2523,75 @@ void TestModalCanvasBlocksCanvasesBelow() {
     kb::tests::Require(scene.UI().Focused() == hudFirst.Entity(), "Focus must return to where it was before the modal canvas");
     kb::tests::Require(scene.UI().HitTest({50.0F, 50.0F}) == hudSecond.Entity() && scene.UI().SetFocus(hudSecond.Entity()),
         "The canvas below is reachable again once the modal canvas is gone");
+}
+
+void TestNestedModalsRestoreFocusAndBlockGameplayImmediately() {
+    using namespace kb::scene;
+    using namespace kb::input;
+    Scene scene;
+    const auto hud = AddUI(scene, {}, CanvasComponents());
+    auto button = BuildUIComponentPreset(UIComponentPreset::Button);
+    button.rectTransform = Rect(0.0F, 0.0F, 100.0F, 30.0F);
+    const auto hudButton = AddUI(scene, hud, button);
+    auto dialog = CanvasComponents();
+    dialog.canvas->modal = true;
+    dialog.canvas->sortingOrder = 10;
+    dialog.canvasGroup = UICanvasGroup{.visible = false};
+    const auto first = AddUI(scene, {}, dialog);
+    const auto firstButton = AddUI(scene, first, button);
+    dialog.canvas->sortingOrder = 20;
+    const auto second = AddUI(scene, {}, dialog);
+    const auto secondButton = AddUI(scene, second, button);
+    auto action = std::make_shared<InputActionAsset>();
+    action->name = "Use";
+    auto mapping = std::make_shared<InputMappingContextAsset>();
+    mapping->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Enter});
+    scene.Input().SetResolvers([action](std::uint64_t) { return action; }, [mapping](std::uint64_t) { return mapping; });
+    kb::tests::Require(scene.Input().AddMappingContext(1U, 0), "Modal mapping failed");
+    auto& secondary = scene.Input(LocalUserId{2U});
+    secondary.SetResolvers([action](std::uint64_t) { return action; }, [mapping](std::uint64_t) { return mapping; });
+    kb::tests::Require(secondary.AddMappingContext(1U, 0), "Secondary modal mapping failed");
+    auto& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    device.SetPointerViewportExtent(400U, 400U);
+    device.SetPointerPosition(390.0F, 390.0F);
+    const auto tick = [&] { static_cast<void>(scene.Runtime().Update(.016F)); };
+    const auto show = [&](SceneEntity entity, bool visible) {
+        scene.Components().UI().TryGet<UICanvasGroup>(entity)->visible = visible;
+        scene.Components().UI().MarkModified<UICanvasGroup>(entity);
+    };
+    tick();
+    kb::tests::Require(scene.UI().SetFocus(hudButton.Entity()), "Initial focus failed");
+    device.SetPointerPosition(50.0F, 10.0F);
+    device.SetKeyDown(InputKey::MouseLeft, true);
+    tick();
+    static_cast<void>(scene.UI().DrainEvents());
+    show(first.Entity(), true);
+    device.SetKeyDown(InputKey::Enter, true);
+    tick();
+    device.SetKeyDown(InputKey::MouseLeft, false);
+    tick();
+    const auto modalEvents = scene.UI().DrainEvents();
+    kb::tests::Require(std::ranges::none_of(modalEvents, [&](const auto& event) {
+        return event.entity == hudButton.Entity() && event.type == SceneUIEventType::Clicked;
+    }), "Releasing a covered pointer capture must not click the HUD");
+    kb::tests::Require(scene.UI().Focused() == firstButton.Entity() && !scene.Input().IsActionPressed("Use") && !secondary.IsActionPressed("Use"),
+        "Opening modal must focus UI and block gameplay in the same frame");
+    show(second.Entity(), true);
+    tick();
+    kb::tests::Require(scene.UI().Focused() == secondButton.Entity(), "Nested modal must acquire focus");
+    show(second.Entity(), false);
+    tick();
+    kb::tests::Require(scene.UI().Focused() == firstButton.Entity(), "Closing nested modal must restore first modal focus");
+    show(first.Entity(), false);
+    tick();
+    kb::tests::Require(scene.UI().Focused() == hudButton.Entity() && !scene.Input().IsActionPressed("Use"),
+        "Closing final modal must restore HUD without leaking held input");
+    device.SetKeyDown(InputKey::Enter, false);
+    tick();
+    device.SetKeyDown(InputKey::Enter, true);
+    tick();
+    kb::tests::Require(scene.Input().IsActionPressed("Use"), "Fresh gameplay input must work after modal closes");
 }
 
 void TestWidgetSettingsPersistence() {
@@ -2947,6 +3032,7 @@ void RunSceneUITests() {
     TestScrollMovementAndLocalizedText();
     TestWidgetSettingsPersistence();
     TestModalCanvasBlocksCanvasesBelow();
+    TestNestedModalsRestoreFocusAndBlockGameplayImmediately();
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
     TestInputFieldEditsGraphemeClusters();

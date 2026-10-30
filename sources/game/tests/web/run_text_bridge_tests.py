@@ -38,6 +38,7 @@ for (const kind of ['input', 'compositionstart', 'compositionupdate', 'compositi
 let selected = '', allocation = 10;
 const memory = new Map();
 function _kb_web_append_committed_text(host, scalar) { commits.push(String.fromCodePoint(scalar)); return 1; }
+function _kb_web_commit_text(host, pointer, length) { commits.push(memory.get(pointer)); return 1; }
 function _kb_web_selected_text() { memory.set(1, selected); return selected ? 1 : 0; }
 function _kb_web_replace_text(host, pointer, length) { replacements.push(pointer ? memory.get(pointer) : ''); return 1; }
 function UTF8ToString(pointer) { return memory.get(pointer); }
@@ -96,11 +97,12 @@ function require(condition, message) { if (!condition) throw Error(message); }
             report['checks'].append('Trusted typing and native composition commit exactly once; repeated text survives')
             client.evaluate("""
 selected = 'ż😀\u0301';
+const beforePasteFreed = freed.length;
 require(clipboard('copy').text === selected && replacements.length === 0, 'Unicode copy');
 require(clipboard('cut', '', true).prevented && replacements.length === 0, 'Denied cut must not delete');
 require(clipboard('cut').text === selected && replacements.length === 1 && replacements[0] === '', 'Cut after copy');
 require(clipboard('paste', 'line 1\\n😀').prevented && replacements[1] === 'line 1\\n😀', 'Atomic multiline paste');
-require(freed.length === 1, 'Paste allocation must be freed');
+require(freed.length === beforePasteFreed + 1, 'Paste allocation must be freed');
 clipboard('paste', 'x'.repeat(16385));
 clipboard('paste', '😀'.repeat(5000));
 require(replacements.length === 2, 'Oversized paste must be refused');

@@ -397,6 +397,7 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
             continue;
         }
         host.Functions().SetRegistrationAllocationTelemetry(&entry.registrationAllocationTelemetry);
+        const std::size_t functionCountBefore = host.Functions().Functions().size();
         const bool registered = module.Register != nullptr && module.Register(host);
         host.Functions().SetRegistrationAllocationTelemetry(nullptr);
         if (module.Register == nullptr) {
@@ -409,17 +410,29 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
             entry.reason = "script API could not be fully registered";
             result.succeeded = false;
             result.diagnostics.emplace_back(module.name + " script API could not be fully registered");
+        } else if (host.Functions().Functions().size() == functionCountBefore && module.functions.empty()) {
+            entry.installed = false;
+            entry.reason = "provider registered no callable API";
+            result.succeeded = false;
+            result.diagnostics.emplace_back("module '" + module.name + "' has capability but its provider registered no callable API");
         } else {
             entry.installed = true;
             // A function the catalog audits has to exist once Register() has run; an audit entry without a
             // registered function would pass every metadata check while describing nothing callable.
             for (const LibraryFunctionDesc& function : module.functions) {
-                if (host.Functions().FindSignature(function.canonicalName) == nullptr) {
+                const auto* signature = host.Functions().FindSignature(function.canonicalName);
+                if (signature == nullptr) {
                     entry.installed = false;
                     entry.reason = "an audited function was not registered";
                     result.succeeded = false;
                     result.diagnostics.emplace_back(
                         "module '" + module.name + "' audits '" + function.canonicalName + "', but Register() did not register it");
+                } else if (!FunctionDescMatchesSignature(function, *signature)) {
+                    entry.installed = false;
+                    entry.reason = "audited signature differs from registered implementation";
+                    result.succeeded = false;
+                    result.diagnostics.emplace_back("module '" + module.name + "' audits '" + function.canonicalName +
+                        "' with inputs, outputs or thread affinity that differ from its registered implementation");
                 }
             }
             // LIB-025: apply each audited function's declared deprecation

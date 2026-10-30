@@ -1,4 +1,5 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/LuaDebugFileTransport.hpp"
 
 #include "script/ScriptFunctionDocumentation.hpp"
 
@@ -83,6 +84,7 @@ struct ScriptRuntimeHostState final : std::enable_shared_from_this<ScriptRuntime
     kb::scene::SceneSystemHandle sceneSystemHandle;
     kb::scene::Scene& scene;
     PucLuaScriptRuntime luaRuntime;
+    std::unique_ptr<LuaDebugFileServer> luaDebugger;
     kb::visual::VisualGraphRuntimeRegistry visualGraphs;
     kb::visual::VisualGraphRuntimeBindingRegistry visualGraphRuntimeBindings;
     kb::visual::VisualGraphNativeBindingRegistry visualGraphNativeBindings;
@@ -283,6 +285,7 @@ void ScriptRuntimeHostSceneSystem::OnCreate(kb::scene::SceneSystemContext& conte
 }
 
 void ScriptRuntimeHostSceneSystem::OnFrameStart(kb::scene::SceneSystemContext& context) {
+    if (state_->luaDebugger) state_->luaDebugger->Poll();
     system_.OnFrameStart(context);
     CollectDiagnostics();
 }
@@ -424,6 +427,18 @@ const ScriptRuntimeAssetPrepareResult* ScriptRuntimeHost::InstalledSceneSystemLa
 const std::vector<kb::library::EngineLibraryModuleReportEntry>& ScriptRuntimeHost::LibraryStartupReport() const noexcept {
     return libraryStartupReport_;
 }
+
+bool ScriptRuntimeHost::StartLuaDebugger(const std::filesystem::path& endpoint, std::string& error) {
+    if (state_->luaDebugger) { error = "Lua debugger endpoint is already active"; return false; }
+    auto server = std::make_unique<LuaDebugFileServer>(state_->luaRuntime);
+    if (!server->Start(endpoint, error)) return false;
+    state_->luaDebugger = std::move(server);
+    return true;
+}
+void ScriptRuntimeHost::PollLuaDebugger() {
+    if (state_->luaDebugger) state_->luaDebugger->Poll();
+}
+void ScriptRuntimeHost::StopLuaDebugger() noexcept { state_->luaDebugger.reset(); }
 
 bool ScriptRuntimeHost::InstallSceneSystem() {
     if (state_->installedSceneSystem != nullptr) {

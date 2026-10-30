@@ -1,0 +1,161 @@
+{
+  "schema": "21kb.render-goldens/v1",
+  "fixture_sha256": "b9127f7a856b78678d940cd2ef2f1b65884f68f2d20004e087414d53985e0ecf",
+  "width": 960,
+  "height": 540,
+  "frames": [
+    60,
+    120,
+    240
+  ],
+  "images": {
+    "d3d11-frame-60.png": "13c9ad5b5718f7757ed0c92d6503c8817e0bb87feee24fba5d4c54e80b30694c",
+    "d3d11-frame-120.png": "a04ace5fcaef5eb490606b10e41270f2d464249aa9ac2f08783509441d83f178",
+    "d3d11-frame-240.png": "3d6e387a91375b3364819629cafdae71af52c022d288f77f1ae417b6cd8a78ca",
+    "d3d12-frame-60.png": "43246271fc749f4738de9c4c2063c6a5498cd06ccd3b2929bd3a875bbd669089",
+    "d3d12-frame-120.png": "ae32b8ba9959e310f1c85d441291efa45978dc9d1c3ff1de370f9b4db75c20c7",
+    "d3d12-frame-240.png": "7759b3de158385cdb582ed8bbce5ebf410b13ae19983d3536df27693c15b8408",
+    "vulkan-frame-60.png": "62da76d5c0acfba264de6684d83edeb89d86a582777169de51dc5c79b4e36391",
+    "vulkan-frame-120.png": "34f445c397940944a997825d66a4458a1385013c3c5f9abfc4d2110803d48370",
+    "vulkan-frame-240.png": "28dff7e588caf1551f702faf4f56d1fe85c78086f9bd725d74fef6f47a9ee4d1",
+    "opengl-frame-60.png": "1869ba8a27f065411c9dfae6d4d664433c4bea184e819ce58662cbe8f9775211",
+    "opengl-frame-120.png": "82a9bc45555de86764ab01d43b7e9e74dcbe7de5a149a01fb09156a13a099bf3",
+    "opengl-frame-240.png": "bf89bc9ff5e0ed724197145a471c529d5a14cea4807871f72e7c454118faba4c"
+  },
+  "tolerances": {
+    "d3d11": {
+      "pixel_tolerance": 8,
+      "max_mean": 0.5,
+      "max_differing": 0.001,
+      "rationale": "Compare to the same native backend and same fixed-step frame; permit sparse raster/rounding differences only."
+    },
+    "d3d12": {
+      "pixel_tolerance": 8,
+      "max_mean": 0.5,
+      "max_differing": 0.001,
+      "rationale": "Compare to the same native backend and same fixed-step frame; permit sparse raster/rounding differences only."
+    },
+    "vulkan": {
+      "pixel_tolerance": 8,
+      "max_mean": 0.5,
+      "max_differing": 0.001,
+      "rationale": "Compare to the same native backend and same fixed-step frame; permit sparse raster/rounding differences only."
+    },
+    "opengl": {
+      "pixel_tolerance": 8,
+      "max_mean": 0.5,
+      "max_differing": 0.001,
+      "rationale": "Compare to the same native backend and same fixed-step frame; permit sparse raster/rounding differences only."
+    }
+  },
+  "scope": "Windows native: packaged D3D11/D3D12/Vulkan; development OpenGL. No qualification for Metal, GLES or WebGPU.",
+  "review": {
+    "date": "2026-10-28",
+    "method": "Inspect all 12 backend frames beside the three editor frames and amplified difference images. Confirm moving cube, contact shadows, metallic sphere, capsule, terrain horizon, visible soft particles and post-processing.",
+    "findings": "Corrected OpenGL soft-depth reconstruction and D3D12 previous-buffer screenshot selection before accepting references. No ignored regions.",
+    "parity_limits": {
+      "pixel_tolerance": 12,
+      "max_mean": 2,
+      "max_differing": 0.002
+    },
+    "reference_limits_rationale": "Deterministic fixed-step captures should reproduce closely. Allow at most 0.1% of pixels above 8/255 channel error and mean error at most 0.5/255 for minor shader/raster rounding. These limits reject the observed missing soft particles, one-frame D3D12 delay and removed-cube control; they do not qualify untested drivers.",
+    "parity_measured": {
+      "editor-d3d11-120": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.04655156893004115,
+        "differing": 6.751543209876543e-05,
+        "worst": 38
+      },
+      "editor-d3d11-240": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.007300025720164609,
+        "differing": 6.558641975308642e-05,
+        "worst": 38
+      },
+      "editor-d3d11-60": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.007462705761316872,
+        "differing": 6.944444444444444e-05,
+        "worst": 39
+      },
+      "editor-d3d12-120": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.07051054526748972,
+        "differing": 6.751543209876543e-05,
+        "worst": 38
+      },
+      "editor-d3d12-240": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.03133037551440329,
+        "differing": 6.558641975308642e-05,
+        "worst": 39
+      },
+      "editor-d3d12-60": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.031654449588477365,
+        "differing": 6.944444444444444e-05,
+        "worst": 39
+      },
+      "editor-opengl-120": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.33749871399176956,
+        "differing": 3.858024691358025e-06,
+        "worst": 20
+      },
+      "editor-opengl-240": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.33608474794238685,
+        "differing": 0.0,
+        "worst": 9
+      },
+      "editor-opengl-60": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.33588477366255143,
+        "differing": 1.9290123456790124e-06,
+        "worst": 20
+      },
+      "editor-vulkan-120": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.07086998456790124,
+        "differing": 6.944444444444444e-05,
+        "worst": 38
+      },
+      "editor-vulkan-240": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.03171939300411523,
+        "differing": 6.558641975308642e-05,
+        "worst": 39
+      },
+      "editor-vulkan-60": {
+        "width": 960,
+        "height": 540,
+        "pixels": 518400,
+        "mean": 0.03215792181069959,
+        "differing": 6.944444444444444e-05,
+        "worst": 39
+      }
+    }
+  }
+}

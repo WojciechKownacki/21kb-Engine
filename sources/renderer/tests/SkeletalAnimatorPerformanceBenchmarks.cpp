@@ -26,6 +26,7 @@
 #include <bgfx/bgfx.h>
 
 #include <array>
+#include <bit>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -89,6 +90,7 @@ struct BenchmarkResult {
     std::size_t parallelPoseWorkers = 1U;
     std::size_t updateRateSkippedPoses = 0U;
     double firstPoseFingerprint = 0.0;
+    std::uint64_t allPoseFingerprint = 1469598103934665603ULL;
     std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> retainedDebugSnapshot;
     bool stressLifecycleCompleted = false;
 };
@@ -335,7 +337,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
 [[nodiscard]] BenchmarkResult RunBenchmark(
     Workload workload, kb::render::Renderer& renderer,
     bool includeConstraint = true, float poseUpdateRateHz = 0.0F,
-    bool stressLifecycle = false) {
+    bool stressLifecycle = false, std::size_t workerCount = 0U) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb-sk12-87-" + std::to_string(workload.rigCount) + "x" +
          std::to_string(workload.boneCount));
@@ -356,7 +358,9 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     Require(!error, "SK-12.87 could not create the mesh fixture folder");
     WriteTriangleObj(meshPath);
 
-    kb::scene::Scene scene;
+    kb::ecs::WorldConfig worldConfig;
+    worldConfig.workerThreadLimit = workerCount;
+    kb::scene::Scene scene{worldConfig};
     Require(scene.Assets().MountProject(root),
         "SK-12.87 could not mount the production fixture project");
     Require(scene.Assets().Manager().RegisterLoader(
@@ -470,6 +474,12 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             "SK-12.87 runtime pose did not retain every benchmark bone");
         result.evaluatedPoses += instance->evaluationCount;
         result.hierarchySolves += instance->hierarchySolveCount;
+        for (const kb::math::Mat4& matrix : instance->currentSkinMatrices) {
+            for (const auto& column : matrix.columns) for (float value : {column.x, column.y, column.z, column.w}) {
+                result.allPoseFingerprint ^= std::bit_cast<std::uint32_t>(value);
+                result.allPoseFingerprint *= 1099511628211ULL;
+            }
+        }
         if (palette.empty()) {
             palette.reserve(instance->currentSkinMatrices.size());
             for (const kb::math::Mat4& matrix : instance->currentSkinMatrices) {
@@ -824,6 +834,22 @@ int main(int argc, char** argv) {
         }
         const bool sk1289Only = argc == 2 && std::string_view{ argv[1] } == "--sk12-89-only";
         const bool sk1290Only = argc == 2 && std::string_view{ argv[1] } == "--sk12-90-only";
+        if (argc == 2 && std::string_view{argv[1]} == "--worker-scaling") {
+            const Workload workload{.rigCount = 100U, .boneCount = 100U};
+            for (int repeat = 0; repeat < 3; ++repeat) {
+                const auto serial = RunBenchmark(workload, renderer, false, 0.0F, false, 1U);
+                const auto parallel = RunBenchmark(workload, renderer, false, 0.0F, false, 4U);
+                Require(serial.allPoseFingerprint == parallel.allPoseFingerprint &&
+                    serial.evaluatedPoses == parallel.evaluatedPoses && parallel.parallelPoseWorkers == 4U,
+                    "worker scaling changed skeletal pose results");
+                std::cout << "worker_scaling repeat=" << repeat << " rigs=" << workload.rigCount
+                          << " bones=" << workload.boneCount << " one_ms=" << serial.animationMilliseconds
+                          << " four_ms=" << parallel.animationMilliseconds << " pose_fingerprint="
+                          << parallel.allPoseFingerprint << '\n';
+            }
+            renderer.Shutdown();
+            return 0;
+        }
         if (!sk1289Only && !sk1290Only) {
             for (const Workload workload : std::array<Workload, 2U>{
                      Workload{ .rigCount = 100U, .boneCount = 100U },

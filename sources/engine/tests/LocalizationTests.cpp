@@ -1,3 +1,4 @@
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "TestSupport.hpp"
 
 #include "engine/localization/LocalizationCatalog.hpp"
@@ -154,6 +155,23 @@ void RunLocalizationTests() {
     Require(scene.Localization().SetCatalog(metadata->id.value), "Scene localization rejected a valid catalog asset");
     Require(scene.Localization().Translate("menu.play") == "Play", "Fallback language did not resolve the default translation");
     Require(scene.Localization().SetLanguage("pl"), "Scene localization rejected an authored language");
+    kb::script::ScriptRuntimeHost languageHost{scene};
+    const auto callLocalization = [&](const char* name, std::initializer_list<kb::script::ScriptFunctionArgument> arguments) {
+        auto result = languageHost.Functions().Call(name, {arguments.begin(), arguments.size()}, kb::script::ScriptFunctionCallContext{.scene = &scene});
+        Require(result.executed && result.Succeeded(), name);
+        return result;
+    };
+    using kb::script::ScriptValue;
+    Require(callLocalization("Localization.SetCatalog", {{"catalog", ScriptValue{metadata->id.value, kb::script::ScriptValueType::Hash}}}).Output("set")->AsBool() &&
+        callLocalization("Localization.SetLanguage", {{"language", ScriptValue{std::string{"pl"}}}}).Output("set")->AsBool(),
+        "Localization API could not select the catalog and language");
+    Require(callLocalization("Localization.Translate", {{"key", ScriptValue{std::string{"menu.play"}}}}).Output("text")->AsString() == "Graj" &&
+        callLocalization("Localization.FormatPlural", {{"key", ScriptValue{std::string{"hud.coins"}}}, {"count", ScriptValue{2}}}).Output("text")->AsString() == "2 monety",
+        "Localization API did not use selected translations and plural rules");
+    const auto language = languageHost.Functions().Call("Localization.Language", {},
+        kb::script::ScriptFunctionCallContext{.scene = &scene});
+    Require(language.executed && language.Succeeded() && language.Output("language")->AsString() == "pl",
+        "Localization.Language API did not read the selected runtime language");
     Require(scene.Localization().Translate("menu.play") == "Graj", "Selected localization language did not override fallback text");
     Require(scene.Localization().Translate("menu.quit") == "Quit", "Missing selected-language text did not fall back to the catalog language");
     Require(scene.Localization().FormatPlural("hud.coins", 1) == "1 moneta" &&

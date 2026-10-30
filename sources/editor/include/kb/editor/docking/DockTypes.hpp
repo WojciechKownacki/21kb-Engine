@@ -32,6 +32,8 @@ enum class DockPanelKind : std::uint8_t {
     ParticleEditor,
     BuildGame,
     TilemapEditor,
+    Profiler,
+    AudioMixer,
     TimelineEditor,
     BlendSpace2DEditor,
     GameplayGraphEditor,

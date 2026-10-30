@@ -88,11 +88,44 @@ bool Win32InputCollector::HandleWindowMessage(
         rawRelativeMouse_ = false;
         hasPreviousMouse_ = false;
     }
+    if (message == WM_IME_STARTCOMPOSITION && textEntity_ != 0U) {
+        imeComposing_ = true;
+        imeKeysPendingRelease_ = true;
+        imeScene_ = textScene_;
+        imeEntity_ = textEntity_;
+        imeDecoder_.Reset();
+        imeOverflow_ = false;
+        return false; // Let the native IME display its uncommitted composition.
+    }
+    if (message == WM_IME_ENDCOMPOSITION) {
+        imeComposing_ = false;
+        return false;
+    }
+    if (message == WM_IME_CHAR && textEntity_ != 0U) {
+        // A result arriving after cancellation belongs to the retired editor.
+        if (imeEntity_ == 0U || imeScene_ != textScene_ || imeEntity_ != textEntity_) return true;
+        imeKeysPendingRelease_ = true;
+        char32_t scalar = 0U;
+        if (imeDecoder_.Consume(static_cast<char16_t>(wparam), scalar)) {
+            if (pendingImeCount_ < pendingImeText_.size()) pendingImeText_[pendingImeCount_++] = scalar;
+            else imeOverflow_ = true;
+        }
+        // DefWindowProc would translate this into WM_CHAR a second time.
+        return true;
+    }
+    if (message == WM_KILLFOCUS) {
+        textEntity_ = 0U;
+        imeComposing_ = false;
+        pendingImeCount_ = 0U;
+        imeEntity_ = 0U;
+        imeDecoder_.Reset();
+    }
     if (message == WM_CANCELMODE) {
         for (std::size_t index = 0U; index < touchPointCount_; ++index) touchPoints_[index].phase = InputTouchPhase::Cancelled;
         return false;
     }
     if (message == WM_CHAR) {
+        if (imeComposing_) return false;
         const std::uint16_t repeatCount =
             (std::max)(static_cast<std::uint16_t>(LOWORD(lparam)), std::uint16_t{1U});
         for (std::uint16_t repeat = 0U; repeat < repeatCount; ++repeat) {

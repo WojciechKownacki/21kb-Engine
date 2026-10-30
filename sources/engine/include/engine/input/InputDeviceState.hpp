@@ -36,7 +36,7 @@ public:
     // per WM_TOUCH message on typical hardware); enough for real multi-touch
     // gestures without an unbounded allocation.
     static constexpr std::size_t kMaxTouchPoints = 10U;
-    static constexpr std::size_t kMaxTextInputCodePoints = 64U;
+    static constexpr std::size_t kMaxTextInputCodePoints = 1024U;
 
     void Reset() noexcept {
         digital_.fill(false);
@@ -135,6 +135,16 @@ public:
             static_cast<void>(AddTextInput(codePoint));
         }
         return textInputCount_ - before;
+    }
+
+    // Native composition commits are transactions: reject the entire value if
+    // it cannot fit, rather than splitting a combining or emoji sequence.
+    [[nodiscard]] bool TryAddTextInput(std::span<const char32_t> codePoints) noexcept {
+        if (codePoints.size() > textInput_.size() - textInputCount_) return false;
+        for (const char32_t codePoint : codePoints)
+            if (!IsUnicodeScalar(codePoint)) return false;
+        for (const char32_t codePoint : codePoints) textInput_[textInputCount_++] = codePoint;
+        return true;
     }
 
     [[nodiscard]] std::size_t SetTextInput(

@@ -34,7 +34,7 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 
 // How many of those rows each menu actually shows. Layout counts zero here: its
 // length comes from the project, not from the build.
-constexpr std::array<int, 6> kDropdownRowCounts{ 5, 4, 0, 3, 11, 4 };
+constexpr std::array<int, 6> kDropdownRowCounts{ 5, 4, 0, 5, 11, 4 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -336,10 +336,12 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
         return rows[static_cast<std::size_t>(row)];
     }
     case EditorMenuCommand::Options: {
-        const std::array<std::string_view, 3> rows{
+        const std::array<std::string_view, 5> rows{
             EditorText("menu.options.renderer", "Renderer"),
             EditorText("menu.options.projectSettings", "Project Settings"),
             EditorText("menu.options.editorSettings", "Editor Settings"),
+            EditorText("panel.profiler", "Profiler"),
+            EditorText("inspector.audioMixer.subtitle", "Audio Mixer"),
         };
         return rows[static_cast<std::size_t>(row)];
     }

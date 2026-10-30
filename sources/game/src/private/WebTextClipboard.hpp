@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/input/InputText.hpp"
+#include "engine/input/InputDeviceState.hpp"
 #include "engine/scene/SceneUI.hpp"
 
 #include <algorithm>
@@ -11,6 +12,15 @@
 #include <utility>
 
 namespace kb::game {
+
+inline bool AppendWebCommittedText(input::InputDeviceState& state, std::string_view source) {
+    if (source.size() > input::InputDeviceState::kMaxTextInputCodePoints * 4U ||
+        source.find('\0') != std::string_view::npos) return false;
+    std::array<char32_t, input::InputDeviceState::kMaxTextInputCodePoints> decoded{};
+    const auto result = input::DecodeUtf8(source, decoded);
+    return result.wellFormed && !result.truncated &&
+        state.TryAddTextInput({decoded.data(), result.codePointCount});
+}
 
 inline std::optional<std::string> ReadWebClipboardSelection(scene::SceneUIAccess ui, scene::SceneEntity field) {
     if (!field.IsValid() || ui.Focused() != field) return std::nullopt;

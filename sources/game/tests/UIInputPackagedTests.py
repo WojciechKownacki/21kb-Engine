@@ -15,7 +15,7 @@ def require(value, message):
         raise RuntimeError(message)
 
 
-def recording(frames):
+def recording(frames, viewport=(640, 480)):
     # Public input recording v5: fixed-width little-endian fields, no struct padding.
     output = bytearray(b'21KBIRC\0' + struct.pack('<II', 5, len(frames)))
     for frame in frames:
@@ -34,7 +34,7 @@ def recording(frames):
         output += struct.pack('<I', len(text))
         for character in text:
             output += struct.pack('<I', ord(character))
-        output += struct.pack('<II', 640, 480)
+        output += struct.pack('<II', *viewport)
     return output
 
 

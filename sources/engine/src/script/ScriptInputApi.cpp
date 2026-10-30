@@ -26,6 +26,7 @@
 #include <vector>
 
 namespace kb::script {
+bool RegisterInputRebindSessionApi(ScriptRuntimeHost& host);
 namespace {
 
 const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) {
@@ -455,7 +456,7 @@ bool RegisterTouchCount(ScriptRuntimeHost& host) {
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"count", ScriptValue{
-                static_cast<int>(context.scene->Input().DeviceState().TouchPoints().size())}}},
+                static_cast<int>(context.scene->Input().GameplayDeviceState().TouchPoints().size())}}},
             .errors = {}};
     };
     return host.RegisterFunction(std::move(desc));
@@ -475,7 +476,7 @@ bool RegisterTouchPoint(ScriptRuntimeHost& host) {
     };
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) return NoScene();
-        const auto points = context.scene->Input().DeviceState().TouchPoints();
+        const auto points = context.scene->Input().GameplayDeviceState().TouchPoints();
         const ScriptValue* argument = FindArg(arguments, "index");
         const int index = argument != nullptr ? argument->AsInt(-1) : -1;
         const bool valid = index >= 0 && static_cast<std::size_t>(index) < points.size();
@@ -505,7 +506,7 @@ bool RegisterPointerPosition(ScriptRuntimeHost& host) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        const kb::input::InputDeviceState& device = context.scene->Input().GameplayDeviceState();
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{device.PointerX()}},
@@ -524,7 +525,7 @@ bool RegisterPointerDelta(ScriptRuntimeHost& host) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        const kb::input::InputDeviceState& device = context.scene->Input().GameplayDeviceState();
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{device.GetValue(kb::input::InputKey::MouseX)}},
@@ -557,7 +558,7 @@ bool RegisterPointerButton(ScriptRuntimeHost& host) {
         }
         const ScriptValue* buttonArg = FindArg(arguments, "button");
         const kb::input::InputKey key = MouseButtonKey(buttonArg != nullptr ? buttonArg->AsInt() : 0);
-        const bool pressed = context.scene->Input().DeviceState().IsKeyDown(key);
+        const bool pressed = context.scene->Input().GameplayDeviceState().IsKeyDown(key);
         return BoolResult("pressed", pressed);
     };
     return host.RegisterFunction(std::move(desc));
@@ -571,7 +572,7 @@ bool RegisterPointerScroll(ScriptRuntimeHost& host) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const float delta = context.scene->Input().DeviceState().GetValue(
+        const float delta = context.scene->Input().GameplayDeviceState().GetValue(
             kb::input::InputKey::MouseWheel);
         return ScriptFunctionCallResult{
             .executed = true,
@@ -604,7 +605,7 @@ bool RegisterPointerRay(ScriptRuntimeHost& host) {
         // intentionally evaluate the primary device snapshot); only the
         // active camera is selected per local player.
         const kb::input::InputDeviceState& device =
-            context.scene->Input().DeviceState();
+            context.scene->Input().GameplayDeviceState();
         const kb::scene::SceneRenderCameraRay cameraRay =
             kb::scene::SceneRenderFeedback::ScreenPointToRay(
                 *context.scene,
@@ -658,7 +659,7 @@ bool RegisterHasFocus(ScriptRuntimeHost& host) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        return BoolResult("focus", context.scene->Input().DeviceState().HasFocus());
+        return BoolResult("focus", context.scene->Input().GameplayDeviceState().HasFocus());
     };
     return host.RegisterFunction(std::move(desc));
 }
@@ -676,7 +677,7 @@ bool RegisterIsGamepadConnected(ScriptRuntimeHost& host) {
         }
         const ScriptValue* indexArg = FindArg(arguments, "gamepadIndex");
         const auto gamepadIndex = static_cast<std::uint8_t>(indexArg != nullptr ? indexArg->AsInt() : 0);
-        return BoolResult("connected", context.scene->Input().DeviceState().IsGamepadConnected(gamepadIndex));
+        return BoolResult("connected", context.scene->Input().GameplayDeviceState().IsGamepadConnected(gamepadIndex));
     };
     return host.RegisterFunction(std::move(desc));
 }
@@ -826,6 +827,7 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterAddMappingContext(host, "Input.AddMappingContext") && ok;
     ok = RegisterRemoveMappingContext(host, "Input.RemoveMappingContext") && ok;
     ok = RegisterRebind(host) && ok;
+    ok = RegisterInputRebindSessionApi(host) && ok;
     ok = RegisterSaveRebindProfile(host) && ok;
     ok = RegisterLoadRebindProfile(host) && ok;
 

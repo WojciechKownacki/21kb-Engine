@@ -25,6 +25,8 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     case DockPanelKind::EditorSettings: return std::string{ EditorText("panel.editorSettings", "Editor Settings") };
     case DockPanelKind::BuildGame: return std::string{ EditorText("panel.buildGame", "Build Game") };
     case DockPanelKind::TilemapEditor: return std::string{ EditorText("panel.tilemap", "2D Map") };
+    case DockPanelKind::AudioMixer: return std::string{ EditorText("inspector.audioMixer.subtitle", "Audio Mixer") };
+    case DockPanelKind::Profiler: return std::string{ EditorText("panel.profiler", "Profiler") };
     case DockPanelKind::TimelineEditor: return "Timeline";
     case DockPanelKind::BlendSpace2DEditor: return "BlendSpace2D";
     case DockPanelKind::GameplayGraphEditor: return "Gameplay Graph";
@@ -39,6 +41,8 @@ std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
         DockPanel{ .id = 22, .kind = DockPanelKind::GameplayGraphEditor, .title = PanelTitle(DockPanelKind::GameplayGraphEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 760 } },
         DockPanel{ .id = 21, .kind = DockPanelKind::BlendSpace2DEditor, .title = PanelTitle(DockPanelKind::BlendSpace2DEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
         DockPanel{ .id = 20, .kind = DockPanelKind::TimelineEditor, .title = PanelTitle(DockPanelKind::TimelineEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
+        DockPanel{ .id = 19, .kind = DockPanelKind::AudioMixer, .title = PanelTitle(DockPanelKind::AudioMixer), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1000, 640 } },
+        DockPanel{ .id = 18, .kind = DockPanelKind::Profiler, .title = PanelTitle(DockPanelKind::Profiler), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 900, 640 } },
         DockPanel{ .id = 17, .kind = DockPanelKind::TilemapEditor, .title = PanelTitle(DockPanelKind::TilemapEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 720 } },
         DockPanel{ .id = 1, .kind = DockPanelKind::Hierarchy, .title = PanelTitle(DockPanelKind::Hierarchy), .area = DockArea::Left, .floatingRect = DockRect{ 96, 96, 360, 520 } },
         DockPanel{ .id = 2, .kind = DockPanelKind::Scene, .title = PanelTitle(DockPanelKind::Scene), .area = DockArea::Center, .floatingRect = DockRect{ 128, 128, 720, 520 } },

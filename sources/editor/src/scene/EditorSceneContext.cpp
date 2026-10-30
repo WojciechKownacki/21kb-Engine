@@ -117,6 +117,8 @@
 #include "scene/input/EditorInputAssetGateway.hpp"
 #include "scene/input/EditorInputMappingContextAuthoring.hpp"
 #include "scene/audio/EditorAudioMixerAuthoring.hpp"
+#include "rendering/AudioMixerPanelView.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 #include "scene/EditorAssetErrorMessage.hpp"
@@ -304,6 +306,7 @@ void AppendEntityBranchRenderDirty(
     if (!item.error.empty()) {
         message += " (" + item.error + ")";
     }
+    if (!item.Succeeded()) message += " Fix: " + kb::assets::AssetImportRecoveryAdvice(item);
     return message;
 }
 
@@ -488,6 +491,23 @@ EditorSceneContext::~EditorSceneContext() {
     scriptModuleHost_.reset();
 }
 
+namespace {
+std::filesystem::path luaDebugDirectory;
+}
+void EditorSceneContext::ConfigureLuaDebugger(std::filesystem::path directory) {
+    luaDebugDirectory = std::move(directory);
+}
+bool EditorSceneContext::StartLuaDebugger(const std::filesystem::path& directory, std::string& error) {
+    if (!scriptModule_ || !scriptModule_->Host()) { error = "start Play before attaching the debugger"; return false; }
+    return scriptModule_->Host()->StartLuaDebugger(directory, error);
+}
+bool EditorSceneContext::LuaDebuggerPaused() const {
+    return scriptModule_ && scriptModule_->Host() && scriptModule_->Host()->LuaRuntime().IsDebugPaused();
+}
+void EditorSceneContext::PollLuaDebugger() {
+    if (scriptModule_ && scriptModule_->Host()) scriptModule_->Host()->PollLuaDebugger();
+}
+
 void EditorSceneContext::EnsureScriptRuntime() {
     if (scriptModuleHost_ != nullptr) {
         return;
@@ -562,6 +582,11 @@ void EditorSceneContext::EnsureScriptRuntime() {
         console_.Error("Scripts", "Script runtime could not be fully initialized; behaviours may not run.");
     } else {
         console_.Info("Scripts", "Script runtime ready for play mode.");
+    }
+    if (!luaDebugDirectory.empty()) {
+        std::string error;
+        if (!StartLuaDebugger(luaDebugDirectory, error)) console_.Error("Debugger", error);
+        else console_.Info("Debugger", "Lua debugger ready; connect with kb_cli debug.");
     }
     SurfaceScriptLibraryStartupReport();
 }
@@ -659,6 +684,7 @@ void EditorSceneContext::SurfaceScriptDiagnostics() {
 }
 
 bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
+    PollLuaDebugger();
     if (!HasPlayModeSceneSession() || !std::isfinite(deltaSeconds) ||
         deltaSeconds < 0.0F) {
         return false;
@@ -2292,9 +2318,6 @@ bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& v
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    if (PrefabAssetHasSceneInstances(id, "move")) {
-        return false;
-    }
     const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
@@ -2783,6 +2806,24 @@ bool EditorSceneContext::CreateInputAxisAsset(const std::filesystem::path& virtu
 
 bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder) {
     return InputMappingContextAuthoring().Create(virtualFolder);
+}
+
+kb::assets::AssetId EditorSceneContext::AudioMixerPanelAsset() const {
+    const auto selected = assetBrowser_.InspectorAsset();
+    const auto* metadata = scene_->Assets().Manager().Registry().Find(selected);
+    if (metadata != nullptr && metadata->type == kb::audio::kAudioMixerAssetType) return selected;
+    return kb::assets::AssetId{kb::scene::SceneAudioMixerAccess::ActiveMixer(*scene_)};
+}
+
+bool EditorSceneContext::AudioMixerPanelPointer(DockRect content, int x, int y) {
+    const auto id = AudioMixerPanelAsset();
+    const auto asset = ReadAudioMixerAsset(id);
+    if (!asset) return false;
+    // Keep Undo routed to this asset even when the panel follows the active scene mixer.
+    if (!assetBrowser_.SelectAsset(id, scene_->Assets().Manager())) return false;
+    auto authoring = AudioMixerAuthoring();
+    const auto layout = AudioMixerPanelView::Layout(content, *asset, EditorAudioMixerRuntime::Query(*scene_, id), audioMixerPanelFirst_);
+    return AudioMixerPanelView::PointerDown(*scene_, id, authoring, layout, x, y, audioMixerPanelFirst_);
 }
 
 bool EditorSceneContext::CreateAudioMixerAsset(const std::filesystem::path& virtualFolder) {

@@ -1,0 +1,130 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "AnimatorWorkflow",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "rig",
+      "name": "Rig"
+    },
+    {
+      "op": "add_component",
+      "entity": "rig",
+      "component": "Animator"
+    },
+    {
+      "op": "add_component",
+      "entity": "rig",
+      "component": "SkeletonBinding"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Skeletal/AutomationRig.kbskeleton",
+      "content": "21kb Skeleton 1\nbone 1 -1 \"Root\" 0 0 0 0 0 0 1 1 1 1\ninverseBind 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Skeletal/AutomationMesh.kbskeletalmesh",
+      "content": "21kb SkeletalMesh 1\nskeleton {{ASSET_ID:/Game/Skeletal/AutomationRig.kbskeleton}} 16356918308828979207\nbounds 0.5 0.5 0 0.5 0.5 0.1\nlod 1\nvertex 0 0 0 0 0 1 0 1 0 0 1 0 0 0 0 0 0 1 0 0 0\nvertex 0 1 0 0 0 1 0 1 0 0 1 1 0 0 0 0 0 1 0 0 0\nvertex 0 0 1 0 0 1 0 1 0 0 1 0 1 0 0 0 0 1 0 0 0\nindex 0 0\nindex 0 1\nindex 0 2\nsection 0 0 3 0\nsectionBone 0 0 1\nrequiredBone 0 1\n"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Animation/Move.kbanim",
+      "content": "21kb AnimationClip 2\ndurationSeconds 1\nlooping 1\ntargetSkeleton {{ASSET_ID:/Game/Skeletal/AutomationRig.kbskeleton}} 16356918308828979207\nskeletalTrack 1 18446744073709551615\nskeletalKey 0 0 0 0 0 0 0 0 1 1 1 1\nskeletalKey 0 1 1 0 0 0 0 0 1 1 1 1\nevent 0.25 730001\nrootMotion None 0\ncurve \"FootPlant\"\ncurveKey 0 0 0\ncurveKey 0 1 4\n"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Animation/Extra.kbanim",
+      "content": "21kb AnimationClip 2\ndurationSeconds 1\nlooping 1\ntargetSkeleton {{ASSET_ID:/Game/Skeletal/AutomationRig.kbskeleton}} 16356918308828979207\nskeletalTrack 1 18446744073709551615\nskeletalKey 0 0 0 0 0 0 0 0 1 1 1 1\nskeletalKey 0 1 1 0 0 0 0 0 1 1 1 1\nevent 0.25 730001\nrootMotion None 0\ncurve \"FootPlant\"\ncurveKey 0 0 0\ncurveKey 0 1 4\n"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Animation/Workflow.kbanimcontroller",
+      "content": "parameter \"Jump\" Trigger 0\nlayer \"Base\" \"Idle\" 1 18446744073709551615\nstate 0 \"Idle\" \"/Game/Animation/Move.kbanim\"\nstate 0 \"Move\" \"/Game/Animation/Move.kbanim\"\nskeletalConstraint CopyTransform \"Follow\" 1 0 0 \"Goal\" \"\" 0.5\n"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Logic/AnimatorProbe.lua",
+      "content": "local frame = 0\nfunction Tick(self, dt)\n frame = frame + 1\n if frame == 1 then\n  local target = CallFunction(\"Animator.SetIKTarget\", {name=\"Goal\", x=1, y=1, z=0, positionWeight=0.5})\n  local fade = CallFunction(\"Animator.CrossFade\", {layer=\"Base\", state=\"Move\", duration=1})\n  if not target or not fade then error(\"animator setup failed\") end\n elseif frame == 2 then\n  local fade = CallFunction(\"Animator.CrossFade\", {layer=\"Base\", state=\"Idle\", duration=0.5})\n  if not fade then error(\"animator interruption failed\") end\n elseif frame == 3 then\n  local state = CallFunction(\"Animator.State\", {layer=\"Base\"})\n  if state.state ~= \"Idle\" or not state.transitioning then error(\"animator debug mismatch\") end\n  local curve = CallFunction(\"Animator.Curve\", {name=\"FootPlant\"})\n  if type(curve) ~= \"number\" or curve <= 0 or curve >= 1 then error(\"curve sampling failed\") end\n  Log(\"animator-workflow-pass\")\n end\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "assign_asset",
+      "entity": "rig",
+      "asset": "/Game/Animation/Workflow.kbanimcontroller",
+      "role": "animator_controller"
+    },
+    {
+      "op": "assign_asset",
+      "entity": "rig",
+      "asset": "/Game/Skeletal/AutomationRig.kbskeleton",
+      "role": "skeleton_binding"
+    },
+    {
+      "op": "attach_script",
+      "entity": "rig",
+      "asset": "/Game/Logic/AnimatorProbe.lua"
+    },
+    {
+      "op": "open_asset",
+      "asset": "/Game/Animation/Workflow.kbanimcontroller"
+    },
+    {
+      "op": "add_animator_clip",
+      "asset": "/Game/Animation/Extra.kbanim"
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "animator-authoring"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/AnimatorWorkflow.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 4,
+      "dt": 0.05
+    },
+    {
+      "op": "assert_console",
+      "contains": "animator-workflow-pass",
+      "category": "Script",
+      "level": "info"
+    },
+    {
+      "op": "set_animator_debug_target",
+      "target": "rig"
+    },
+    {
+      "op": "assert_animator_debug_snapshot",
+      "target": "rig",
+      "minimum_layers": 1,
+      "minimum_targets": 1
+    },
+    {
+      "op": "verify_viewport_host_lifecycle"
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "animator-ik-target"
+    },
+    {
+      "op": "stop"
+    }
+  ]
+}

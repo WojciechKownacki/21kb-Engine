@@ -76,6 +76,10 @@ if(BUILD_TESTING)
     target_link_libraries(kb_21kb_particle_cpu_backend_tests PRIVATE kb_21kb_particle_core)
     add_test(NAME kb_21kb_particle_cpu_backend_tests COMMAND $<TARGET_FILE:kb_21kb_particle_cpu_backend_tests>)
     set_tests_properties(kb_21kb_particle_cpu_backend_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    add_test(NAME kb_21kb_particle_cpu_performance
+        COMMAND $<TARGET_FILE:kb_21kb_particle_cpu_backend_tests> --sharing-benchmark)
+    set_tests_properties(kb_21kb_particle_cpu_performance PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "particle;cpu;performance" TIMEOUT 180 RUN_SERIAL TRUE)
     kb_apply_quality_gates(kb_21kb_particle_cpu_backend_tests)
 
     if(KB_BUILD_RENDERER)

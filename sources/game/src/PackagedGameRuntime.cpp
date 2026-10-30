@@ -13,6 +13,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
+#include "GameProjectLighting.hpp"
 
 #include <filesystem>
 #include <chrono>
@@ -120,6 +121,9 @@ bool PackagedGameRuntime::Initialize(
     project_ = std::move(project);
     scene_ = std::move(scene);
     runtimeClean_ = true;
+    lightingApplied_ = false;
+    reportedMaterialShadingFallback_ = false;
+    reportedGraphProgramFallback_ = false;
     renderSceneSync_.Reset();
     return true;
 }
@@ -149,12 +153,21 @@ bool PackagedGameRuntime::Tick(
         return false;
     }
     renderer.SetFrameDeltaSeconds(deltaSeconds);
+    // The platform initializes (or recreates) its renderer after loading the pack.
+    // Apply the project's path on its first frame instead of silently using the host default.
+    if (!lightingApplied_) {
+        ApplyGameProjectLighting(renderer, project_, diagnostics);
+        lightingApplied_=true;
+    }
     if (!renderer.BeginFrame()) {
         diagnostics << "renderer could not begin a frame\n";
         runtimeClean_ = false;
         return false;
     }
     const bool submitted = renderSceneSync_.Submit(*scene_, renderer);
+    // A capability reduction or absent graph program must be visible in shipped
+    // host logs. Report each category once per runtime, without per-frame log growth.
+    ReportGameMaterialFallbacks(renderer, reportedMaterialShadingFallback_, reportedGraphProgramFallback_, diagnostics);
     renderer.EndFrame();
     if (!submitted) {
         diagnostics << "renderer could not submit the scene\n";
@@ -180,6 +193,7 @@ void PackagedGameRuntime::ReleaseRenderResources(kb::render::Renderer& renderer)
         renderer.ReleaseScene(*scene_);
     }
     renderSceneSync_.Reset();
+    lightingApplied_ = false;
 }
 
 bool PackagedGameRuntime::Shutdown(

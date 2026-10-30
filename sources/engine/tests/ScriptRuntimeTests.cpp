@@ -1,3 +1,7 @@
+#include "engine/script/LuaDebugFileTransport.hpp"
+#include <future>
+#include <thread>
+#include "engine/script/LuaDebugSession.hpp"
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
@@ -1295,6 +1299,42 @@ void RunPucLuaReloadKeepsTheWorkingScriptTest() {
 
 // A debugger that goes away must not leave the game paused: clearing the settings and the pause lets the script
 // finish on the next tick while the others never stopped.
+void RunPucLuaDebugFileTransportTest() {
+    kb::script::PucLuaScriptRuntime runtime;
+    kb::script::LuaDebugFileServer server(runtime);
+    const auto endpoint = std::filesystem::temp_directory_path() /
+        ("21kb_debug_endpoint_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::string error;
+    kb::tests::Require(server.Start(endpoint, error, std::chrono::milliseconds{100}), "Debug endpoint did not start");
+    const auto send = [&](std::string request) {
+        auto client = std::async(std::launch::async, [&] {
+            return kb::script::SendLuaDebugFileRequest(endpoint, request, std::chrono::seconds{2});
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+        unsigned polls = 0U;
+        while (client.wait_for(std::chrono::milliseconds{0}) != std::future_status::ready && std::chrono::steady_clock::now() < deadline) {
+            server.Poll();
+            ++polls;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        kb::tests::Require(polls > 0U && client.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready,
+            "Debug transport blocked its owner thread");
+        return client.get();
+    };
+    kb::tests::Require(send(R"({"schema":"21kb.lua-debug/v1","command":"connect"})").Find("succeeded")->AsBool(), "Debug transport connection failed");
+    kb::tests::Require(send(R"({"schema":"21kb.lua-debug/v1","command":"breakpoints","breakpoints":[{"chunk":"Probe.lua","line":3}]})").Find("succeeded")->AsBool() &&
+        runtime.DebugSettings().breakpoints.size() == 1U, "Debug transport did not deliver breakpoints");
+    kb::tests::Require(!send(R"({"schema":"21kb.lua-debug/v1","command":"breakpoints","breakpoints":[{"chunk":"Probe.lua","line":-1}]})").Find("succeeded")->AsBool() &&
+        runtime.DebugSettings().breakpoints.size() == 1U, "Invalid transported breakpoints mutated runtime state");
+    std::this_thread::sleep_for(std::chrono::milliseconds{120});
+    server.Poll();
+    kb::tests::Require(!runtime.DebugSettings().enableBreakpoints &&
+        !send(R"({"schema":"21kb.lua-debug/v1","command":"status"})").Find("succeeded")->AsBool(),
+        "Lost debugger client did not expire its session");
+    server.Stop();
+    kb::tests::Require(!std::filesystem::exists(endpoint), "Closed debug endpoint retained protocol files");
+}
+
 void RunPucLuaDebuggerDisconnectTest() {
     LuaSafetyHost host;
     constexpr kb::assets::AssetId kDebugged{ 3631U };
@@ -1584,6 +1624,12 @@ void RunPucLuaDebuggerSuspendsAtBreakpointTest() {
     constexpr kb::assets::AssetId kDebuggedAsset{ 3301U };
     constexpr kb::assets::AssetId kTickerAsset{ 3302U };
     kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::script::LuaDebugSession session(luaRuntime);
+    const auto command = [&](std::string_view name) {
+        return session.Execute("{\"schema\":\"21kb.lua-debug/v1\",\"command\":\"" + std::string{name} + "\"}");
+    };
+    kb::tests::Require(!command("status").Find("succeeded")->AsBool() && command("connect").Find("succeeded")->AsBool(),
+        "Debug protocol connection state is wrong");
     kb::tests::Require(luaRuntime.LoadScript(kDebuggedAsset, R"(local function inner(v)
     local doubled = v * 2
     return doubled
@@ -1640,7 +1686,27 @@ end
     kb::tests::Require(delta != nullptr && delta->type == kb::script::ScriptValueType::Float && delta->value.starts_with("0.25"),
         "Lua paused script locals are not inspectable");
 
-    luaRuntime.RequestStepOver();
+    const auto status = command("status");
+    kb::tests::Require(status.Find("paused")->AsBool() && command("stack").Find("stack")->Size() == 1U &&
+        command("locals").Find("stack")->At(0)->Find("locals")->Size() > 0U &&
+        !command("unknown").Find("succeeded")->AsBool(), "Debug protocol did not expose stack/locals or reject invalid commands");
+    const auto protocolEvaluation = session.Execute(R"({"schema":"21kb.lua-debug/v1","command":"evaluate","expression":"dt * 4"})");
+    kb::tests::Require(protocolEvaluation.Find("succeeded")->AsBool() &&
+        protocolEvaluation.Find("result")->Find("value")->AsString().starts_with("1."), "Debug protocol evaluation failed");
+    const auto evaluated = luaRuntime.EvaluateDebugExpression("dt * 4");
+    kb::tests::Require(evaluated.succeeded && evaluated.value.value.starts_with("1."), "Debugger could not evaluate paused scalar locals");
+    const auto wideInteger = luaRuntime.EvaluateDebugExpression("4294967296");
+    kb::tests::Require(wideInteger.succeeded && wideInteger.value.value == "4294967296", "Debugger truncated a Lua integer");
+    kb::tests::Require(!luaRuntime.EvaluateDebugExpression("dt +").succeeded &&
+        !luaRuntime.EvaluateDebugExpression("dt", 127).succeeded &&
+        !luaRuntime.EvaluateDebugExpression("(function() while true do end end)()").succeeded &&
+        !luaRuntime.EvaluateDebugExpression("(function() local s='1234567890'; for i=1,50 do s=s..s end; return s end)()").succeeded,
+        "Debugger failed to bound invalid, infinite or memory-heavy evaluation");
+    kb::tests::Require(luaRuntime.EvaluateDebugExpression("(function() dt=9; return dt end)()").succeeded &&
+        luaRuntime.EvaluateDebugExpression("dt").value.value.starts_with("0.25") && luaRuntime.IsDebugPaused(),
+        "Debugger expression mutated the paused script or released its pause");
+
+    kb::tests::Require(command("step_over").Find("succeeded")->AsBool(), "Debug protocol step_over failed");
     kb::tests::Require(!luaRuntime.IsDebugPaused(), "Lua step over did not release the pause");
     tick("Lua step over raised an error");
     inspected = luaRuntime.InspectDebugPause();
@@ -1649,7 +1715,7 @@ end
             luaRuntime.LastDebugPause().line == 7 && a != nullptr && a->value == "1" && a->type == kb::script::ScriptValueType::Int,
         "Lua step over did not stop on the next line with the updated locals");
 
-    luaRuntime.RequestStepInto();
+    kb::tests::Require(command("step_into").Find("succeeded")->AsBool(), "Debug protocol step_into failed");
     tick("Lua step into raised an error");
     inspected = luaRuntime.InspectDebugPause();
     const kb::script::PucLuaDebugVariableSnapshot* v = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "v");
@@ -1657,7 +1723,7 @@ end
             inspected.callStack[1].line == 7 && v != nullptr && v->value == "1",
         "Lua step into did not stop inside the called function");
 
-    luaRuntime.RequestStepOut();
+    kb::tests::Require(command("step_out").Find("succeeded")->AsBool(), "Debug protocol step_out failed");
     tick("Lua step out raised an error");
     inspected = luaRuntime.InspectDebugPause();
     const kb::script::PucLuaDebugVariableSnapshot* b = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "b");
@@ -1665,7 +1731,7 @@ end
         "Lua step out did not stop in the caller after the function returned");
     kb::tests::Require(shared("lua.pause.done") == 0 && shared("lua.pause.ticker") == 6, "Lua stepping ran ahead of the paused line or held the other scripts");
 
-    luaRuntime.ResumeDebugExecution();
+    kb::tests::Require(command("continue").Find("succeeded")->AsBool(), "Debug protocol continue failed");
     tick("Lua continue raised an error");
     kb::tests::Require(!luaRuntime.IsDebugPaused() && shared("lua.pause.done") == 1 && shared("lua.pause.b") == 2 && luaRuntime.SuspendedCoroutineCount() == 0U,
         "Lua continue did not run the paused script to completion");
@@ -1676,12 +1742,12 @@ end
     });
     tick("Lua breakpoint on a call line raised an error");
     kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 7, "Lua breakpoint on a call line did not suspend");
-    luaRuntime.RequestStepOver();
+    kb::tests::Require(command("step_over").Find("succeeded")->AsBool(), "Debug protocol step_over failed");
     tick("Lua step over a call raised an error");
     kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 8 && luaRuntime.InspectDebugPause().callStack.size() == 1U,
         "Lua step over stopped inside the called function");
     luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{});
-    luaRuntime.ResumeDebugExecution();
+    kb::tests::Require(command("disconnect").Find("succeeded")->AsBool(), "Debug protocol disconnect failed");
     tick("Lua continue after a step raised an error");
     tick("Lua Tick without breakpoints raised an error");
     kb::tests::Require(!luaRuntime.IsDebugPaused() && shared("lua.pause.done") == 3 && luaRuntime.SuspendedCoroutineCount() == 0U,
@@ -3534,6 +3600,9 @@ void RunScriptAudioSourceAndDeviceApiTest() {
             && !explicitPause.Output("playing").value_or(kb::script::ScriptValue{ true }).AsBool()
             && backend.lastSourceEntity == caller.Entity() && backend.lastSourceOperation == "pause",
         "Script source control did not dispatch an explicit entity or preserve the backend result");
+    const auto resumedSource = host.Functions().Call("Audio.ResumeSource", explicitArguments, context);
+    kb::tests::Require(resumedSource.executed && resumedSource.Succeeded() && resumedSource.Output("playing")->AsBool() &&
+        backend.lastSourceOperation == "resume" && backend.lastSourceEntity == caller.Entity(), "Audio.ResumeSource did not resume the backend source");
 
     const std::vector<kb::script::ScriptFunctionArgument> invalidArguments{
         kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Entity } },
@@ -4564,6 +4633,10 @@ void RunScriptParticleSystemApiTest() {
         kb::script::ScriptFunctionCallContext{ .scene = &scene });
     kb::tests::Require(play.Succeeded() && play.Output("set").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Play must report true for a live instance");
     kb::tests::Require(scene.Particles().IsPlaying(instance), "Particles.Play must actually set the instance's playing state");
+    const std::vector<kb::script::ScriptFunctionArgument> playingArguments{{"instance", kb::script::ScriptValue{instance, kb::script::ScriptValueType::Hash}}};
+    const auto playingResult = host.Functions().Call("Particles.IsPlaying", playingArguments, kb::script::ScriptFunctionCallContext{.scene = &scene});
+    kb::tests::Require(playingResult.executed && playingResult.Succeeded() && playingResult.Output("playing")->AsBool(),
+        "Particles.IsPlaying did not read the running instance");
 
     const kb::script::ScriptFunctionCallResult emit = host.Functions().Call(
         "Particles.Emit",
@@ -6122,6 +6195,18 @@ void RunSceneRenderFeedbackTest() {
     kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenToWorld(scene, 50.0F, 50.0F, 3.0F, alongRay)
             && std::abs(alongRay.x) < 0.001F && std::abs(alongRay.y) < 0.001F && std::abs(alongRay.z - 3.0F) < 0.001F,
         "ScreenToWorld must return the point `distance` units along the center pixel's forward ray");
+    kb::script::ScriptRuntimeHost projectionApi{scene};
+    const std::array projectionArguments{
+        kb::script::ScriptFunctionArgument{"screenX", kb::script::ScriptValue{50.0F}},
+        kb::script::ScriptFunctionArgument{"screenY", kb::script::ScriptValue{50.0F}},
+        kb::script::ScriptFunctionArgument{"distance", kb::script::ScriptValue{3.0F}}};
+    const auto projected = projectionApi.Functions().Call("Renderer.ScreenToWorld", projectionArguments,
+        kb::script::ScriptFunctionCallContext{.scene = &scene});
+    kb::tests::Require(projected.Succeeded() && projected.Output("valid")->AsBool()
+        && std::abs(projected.Output("x")->AsFloat()) < 0.001F
+        && std::abs(projected.Output("y")->AsFloat()) < 0.001F
+        && std::abs(projected.Output("z")->AsFloat() - 3.0F) < 0.001F,
+        "Renderer.ScreenToWorld did not unproject the center pixel at the requested distance");
 
     kb::scene::SceneRenderVisibilityFrame secondaryPlayerFrame =
         perspectiveFrame;
@@ -8783,6 +8868,15 @@ void RunWorldSetPropertyTest() {
 
     const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
 
+    const std::vector<kb::script::ScriptFunctionArgument> nameArguments{{"entity", kb::script::ScriptValue{cameraObject.Entity().Id(), kb::script::ScriptValueType::Entity}}};
+    const auto objectName = host.Functions().Call("World.Name", nameArguments, context);
+    kb::tests::Require(objectName.executed && objectName.Succeeded() && objectName.Output("name")->AsString() == "Camera", "World.Name did not read the entity name");
+    auto parentArguments = nameArguments;
+    parentArguments.push_back({"parent", kb::script::ScriptValue{behaviourObject.Entity().Id(), kb::script::ScriptValueType::Entity}});
+    const auto parented = host.Functions().Call("World.SetParent", parentArguments, context);
+    kb::tests::Require(parented.executed && parented.Succeeded() && parented.Output("parented")->AsBool() &&
+        scene.Hierarchy().Parent(cameraObject.Entity()) == behaviourObject.Entity(), "World.SetParent did not change the live hierarchy");
+
     // A property setter is only meaningfully proven by first observing
     // the property's default, then observing it changed — not merely
     // that the call reported success.
@@ -9020,7 +9114,58 @@ void RunWorldInstantiatePrefabOwnershipTest() {
 // "OnPrefabInstantiated" event to the CALLER, which a real
 // ScriptRuntimeSceneSystem frame dispatches to the caller's behaviour with
 // the root and count — and an instantiation with no caller queues nothing.
+void RunWorldTypedPrefabParametersTest() {
+    ResetTestRoot();
+    const auto project = TestRoot() / "TypedPrefabProject";
+    const auto path = project / "Assets/Prefabs/Typed.kbprefab";
+    {
+        kb::scene::Scene source;
+        const auto root = source.Entities().CreateObject({.name = "Root"});
+        const auto first = source.Entities().CreateObject({.name = "FirstCell", .parent = root});
+        const auto second = source.Entities().CreateObject({.name = "SecondCell", .parent = root});
+        source.Components().VisibilityCells().Set(first.Entity(), kb::scene::VisibilityCellComponent{});
+        source.Components().VisibilityCells().Set(second.Entity(), kb::scene::VisibilityCellComponent{});
+        source.Components().RegionPortals().Set(root.Entity(), kb::scene::SceneRegionPortalComponent{.sourceCell = first.Entity(), .targetCell = second.Entity()});
+        source.Components().Cameras().Set(root.Entity(), kb::scene::CameraComponent{});
+        source.Components().Tags().Set(root.Entity(), kb::scene::TagsComponent{});
+        const auto prefab = source.Prefabs().CaptureRegistered(root, "Typed");
+        kb::tests::Require(source.Prefabs().Save(prefab, path), "Typed prefab fixture could not be saved");
+    }
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(project) && scene.Assets().Discover() == 1U, "Typed prefab fixture not discovered");
+    const auto externalCell = scene.Entities().CreateObject({.name = "ExternalCell"});
+    scene.Components().VisibilityCells().Set(externalCell.Entity(), kb::scene::VisibilityCellComponent{});
+    kb::script::ScriptRuntimeHost host{scene};
+    using kb::script::ScriptValue;
+    using kb::script::ScriptValueType;
+    const auto call = [&](const char* name, std::initializer_list<kb::script::ScriptFunctionArgument> arguments) {
+        auto result = host.Functions().Call(name, {arguments.begin(), arguments.size()}, kb::script::ScriptFunctionCallContext{.scene = &scene});
+        kb::tests::Require(result.executed && result.Succeeded(), (std::string{name} + " failed").c_str());
+        return result;
+    };
+    const auto id = call("World.CreatePrefabParameters", {}).Output("parameters")->AsUInt64();
+    const auto parameter = [&](const char* function, const char* component, const char* property, ScriptValue value) {
+        const auto result = call(function, {{"parameters", ScriptValue{id, ScriptValueType::Hash}}, {"node", ScriptValue{0}},
+            {"component", ScriptValue{std::string{component}}}, {"property", ScriptValue{std::string{property}}}, {"value", value}});
+        kb::tests::Require(result.Output("set")->AsBool(), "Typed prefab parameter was not recorded");
+    };
+    parameter("World.SetPrefabParameterBool", "Region Portal", "enabled", ScriptValue{false});
+    parameter("World.SetPrefabParameterInt", "Camera", "priority", ScriptValue{7});
+    parameter("World.SetPrefabParameterString", "Tags", "text", ScriptValue{std::string{"Sample"}});
+    parameter("World.SetPrefabParameterEntity", "Region Portal", "sourceCell", ScriptValue{externalCell.Entity().Id(), ScriptValueType::Entity});
+    const auto spawned = call("World.InstantiatePrefab", {{"prefab", ScriptValue{std::string{"/Game/Prefabs/Typed.kbprefab"}}},
+        {"parameters", ScriptValue{id, ScriptValueType::Hash}}});
+    const kb::scene::SceneEntity entity{spawned.Output("entity")->AsUInt64()};
+    const auto* camera = scene.Components().Cameras().TryGet(entity);
+    const auto* tags = scene.Components().Tags().TryGet(entity);
+    const auto* portal = scene.Components().RegionPortals().TryGet(entity);
+    kb::tests::Require(spawned.Output("count")->AsInt() == 3 && camera && camera->priority == 7 &&
+        tags && kb::scene::TagsText(*tags) == "Sample" && portal && !portal->enabled && portal->sourceCell == externalCell.Entity(),
+        "Typed prefab API parameters did not reach the instantiated component state");
+}
+
 void RunWorldInstantiatePrefabParentTransformCallbackTest() {
+    RunWorldTypedPrefabParametersTest();
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "PrefabSpawnProject";
     const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "SpawnPrefab.kbprefab";
@@ -9542,7 +9687,77 @@ void RunSceneLifecycleEventsReachBehaviourTest() {
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
 // choke point every Native/Lua/Visual Graph caller funnels through, with
 // known-value correctness, not just "registered".
+void RunMathProviderResultsTest() {
+    using kb::script::ScriptValue;
+    using kb::script::ScriptFunctionArgument;
+    struct Case { const char* name; std::vector<ScriptFunctionArgument> inputs; std::vector<ScriptFunctionArgument> outputs; };
+    const std::vector<Case> cases{
+        {"Math.Abs", {{"value", ScriptValue{-3.00000000F}}}, {{"result", ScriptValue{3.00000000F}}}},
+        {"Math.Sign", {{"value", ScriptValue{-3.00000000F}}}, {{"result", ScriptValue{-1.00000000F}}}},
+        {"Math.Floor", {{"value", ScriptValue{2.80000000F}}}, {{"result", ScriptValue{2.00000000F}}}},
+        {"Math.Ceil", {{"value", ScriptValue{2.20000000F}}}, {{"result", ScriptValue{3.00000000F}}}},
+        {"Math.Round", {{"value", ScriptValue{2.80000000F}}}, {{"result", ScriptValue{3.00000000F}}}},
+        {"Math.Frac", {{"value", ScriptValue{2.25000000F}}}, {{"result", ScriptValue{0.25000000F}}}},
+        {"Math.Exp", {{"value", ScriptValue{0.00000000F}}}, {{"result", ScriptValue{1.00000000F}}}},
+        {"Math.Log", {{"value", ScriptValue{1.00000000F}}}, {{"result", ScriptValue{0.00000000F}}}},
+        {"Math.Cos", {{"angle", ScriptValue{0.00000000F}}}, {{"result", ScriptValue{1.00000000F}}}},
+        {"Math.Tan", {{"angle", ScriptValue{0.00000000F}}}, {{"result", ScriptValue{0.00000000F}}}},
+        {"Math.Atan", {{"value", ScriptValue{1.00000000F}}}, {{"result", ScriptValue{0.78539816F}}}},
+        {"Math.Min", {{"a", ScriptValue{4.00000000F}}, {"b", ScriptValue{-2.00000000F}}}, {{"result", ScriptValue{-2.00000000F}}}},
+        {"Math.Pow", {{"base", ScriptValue{2.00000000F}}, {"exponent", ScriptValue{3.00000000F}}}, {{"result", ScriptValue{8.00000000F}}}},
+        {"Math.SmoothStep", {{"edge0", ScriptValue{0.00000000F}}, {"edge1", ScriptValue{1.00000000F}}, {"x", ScriptValue{0.50000000F}}}, {{"result", ScriptValue{0.50000000F}}}},
+        {"Math.Dot", {{"aX", ScriptValue{1.00000000F}}, {"aY", ScriptValue{2.00000000F}}, {"aZ", ScriptValue{3.00000000F}}, {"bX", ScriptValue{4.00000000F}}, {"bY", ScriptValue{5.00000000F}}, {"bZ", ScriptValue{6.00000000F}}}, {{"result", ScriptValue{32.00000000F}}}},
+        {"Math.Length", {{"valueX", ScriptValue{3.00000000F}}, {"valueY", ScriptValue{4.00000000F}}, {"valueZ", ScriptValue{0.00000000F}}}, {{"result", ScriptValue{5.00000000F}}}},
+        {"Math.Normalize", {{"valueX", ScriptValue{0.00000000F}}, {"valueY", ScriptValue{3.00000000F}}, {"valueZ", ScriptValue{0.00000000F}}}, {{"x", ScriptValue{0.00000000F}}, {"y", ScriptValue{1.00000000F}}, {"z", ScriptValue{0.00000000F}}}},
+        {"Math.Project", {{"valueX", ScriptValue{2.00000000F}}, {"valueY", ScriptValue{3.00000000F}}, {"valueZ", ScriptValue{4.00000000F}}, {"ontoX", ScriptValue{0.00000000F}}, {"ontoY", ScriptValue{1.00000000F}}, {"ontoZ", ScriptValue{0.00000000F}}}, {{"x", ScriptValue{0.00000000F}}, {"y", ScriptValue{3.00000000F}}, {"z", ScriptValue{0.00000000F}}}},
+        {"Math.Reflect", {{"incidentX", ScriptValue{1.00000000F}}, {"incidentY", ScriptValue{-1.00000000F}}, {"incidentZ", ScriptValue{0.00000000F}}, {"normalX", ScriptValue{0.00000000F}}, {"normalY", ScriptValue{1.00000000F}}, {"normalZ", ScriptValue{0.00000000F}}}, {{"x", ScriptValue{1.00000000F}}, {"y", ScriptValue{1.00000000F}}, {"z", ScriptValue{0.00000000F}}}},
+        {"Math.Refract", {{"incidentX", ScriptValue{0.00000000F}}, {"incidentY", ScriptValue{-1.00000000F}}, {"incidentZ", ScriptValue{0.00000000F}}, {"normalX", ScriptValue{0.00000000F}}, {"normalY", ScriptValue{1.00000000F}}, {"normalZ", ScriptValue{0.00000000F}}, {"eta", ScriptValue{1.00000000F}}}, {{"x", ScriptValue{0.00000000F}}, {"y", ScriptValue{-1.00000000F}}, {"z", ScriptValue{0.00000000F}}}},
+        {"Math.SignedAngle", {{"aX", ScriptValue{1.00000000F}}, {"aY", ScriptValue{0.00000000F}}, {"aZ", ScriptValue{0.00000000F}}, {"bX", ScriptValue{0.00000000F}}, {"bY", ScriptValue{1.00000000F}}, {"bZ", ScriptValue{0.00000000F}}, {"axisX", ScriptValue{0.00000000F}}, {"axisY", ScriptValue{0.00000000F}}, {"axisZ", ScriptValue{1.00000000F}}}, {{"result", ScriptValue{1.57079633F}}}},
+        {"Math.FromToRotation", {{"fromX", ScriptValue{1.00000000F}}, {"fromY", ScriptValue{0.00000000F}}, {"fromZ", ScriptValue{0.00000000F}}, {"toX", ScriptValue{0.00000000F}}, {"toY", ScriptValue{1.00000000F}}, {"toZ", ScriptValue{0.00000000F}}}, {{"x", ScriptValue{0.00000000F}}, {"y", ScriptValue{0.00000000F}}, {"z", ScriptValue{0.70710678F}}, {"w", ScriptValue{0.70710678F}}}},
+        {"Math.RotateTowards", {{"fromX", ScriptValue{0.00000000F}}, {"fromY", ScriptValue{0.00000000F}}, {"fromZ", ScriptValue{0.00000000F}}, {"fromW", ScriptValue{1.00000000F}}, {"toX", ScriptValue{0.00000000F}}, {"toY", ScriptValue{0.00000000F}}, {"toZ", ScriptValue{1.00000000F}}, {"toW", ScriptValue{0.00000000F}}, {"maxDelta", ScriptValue{1.57079633F}}}, {{"x", ScriptValue{0.00000000F}}, {"y", ScriptValue{0.00000000F}}, {"z", ScriptValue{0.70710678F}}, {"w", ScriptValue{0.70710678F}}}},
+        {"Math.RectIntersects", {{"aX", ScriptValue{0.00000000F}}, {"aY", ScriptValue{0.00000000F}}, {"aWidth", ScriptValue{2.00000000F}}, {"aHeight", ScriptValue{2.00000000F}}, {"bX", ScriptValue{1.00000000F}}, {"bY", ScriptValue{1.00000000F}}, {"bWidth", ScriptValue{2.00000000F}}, {"bHeight", ScriptValue{2.00000000F}}}, {{"result", ScriptValue{true}}}},
+        {"Math.RayPointAt", {{"rayOriginX", ScriptValue{1.00000000F}}, {"rayOriginY", ScriptValue{2.00000000F}}, {"rayOriginZ", ScriptValue{3.00000000F}}, {"rayDirectionX", ScriptValue{0.00000000F}}, {"rayDirectionY", ScriptValue{1.00000000F}}, {"rayDirectionZ", ScriptValue{0.00000000F}}, {"t", ScriptValue{4.00000000F}}}, {{"x", ScriptValue{1.00000000F}}, {"y", ScriptValue{6.00000000F}}, {"z", ScriptValue{3.00000000F}}}},
+        {"Math.IVec2Add", {{"aX", ScriptValue{1}}, {"aY", ScriptValue{2}}, {"bX", ScriptValue{3}}, {"bY", ScriptValue{4}}}, {{"x", ScriptValue{4}}, {"y", ScriptValue{6}}}},
+    };
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{scene};
+    for (const auto& test : cases) {
+        const auto result = host.Functions().Call(test.name, test.inputs, kb::script::ScriptFunctionCallContext{.scene = &scene});
+        kb::tests::Require(result.executed && result.Succeeded(), test.name);
+        for (const auto& expected : test.outputs) {
+            const auto actual = result.Output(expected.name);
+            kb::tests::Require(actual.has_value(), test.name);
+            const bool matches = expected.value.Type() == kb::script::ScriptValueType::Float
+                ? std::abs(actual->AsFloat() - expected.value.AsFloat()) < 0.0001F : *actual == expected.value;
+            kb::tests::Require(matches, test.name);
+        }
+    }
+    const auto call = [&](const char* name, std::initializer_list<ScriptFunctionArgument> arguments) {
+        auto result = host.Functions().Call(name, {arguments.begin(), arguments.size()}, kb::script::ScriptFunctionCallContext{.scene = &scene});
+        kb::tests::Require(result.executed && result.Succeeded(), name);
+        return result;
+    };
+    const ScriptValue seed{std::uint32_t{42U}}, zero{std::uint32_t{0U}};
+    const auto noise1 = call("Math.Noise1D", {{"x", ScriptValue{0.37F}}, {"seed", seed}}).Output("result")->AsFloat();
+    const auto noise2 = call("Math.Noise2D", {{"x", ScriptValue{0.37F}}, {"y", ScriptValue{0.0F}}, {"seed", seed}}).Output("result")->AsFloat();
+    kb::tests::Require(noise1 != 0.0F && noise1 == noise2 &&
+        call("Math.Noise1D", {{"x", ScriptValue{7.0F}}, {"seed", seed}}).Output("result")->AsFloat() == 0.0F &&
+        call("Math.Noise2D", {{"x", ScriptValue{4.0F}}, {"y", ScriptValue{-1.0F}}, {"seed", seed}}).Output("result")->AsFloat() == 0.0F,
+        "Noise API did not preserve lattice zeros and dimensional consistency");
+    const auto random = call("Math.RandomNextUInt32", {{"streamSeed", seed}, {"streamCounter", zero}});
+    const auto repeated = call("Math.RandomNextUInt32", {{"streamSeed", seed}, {"streamCounter", zero}});
+    const auto next = call("Math.RandomNextUInt32", {{"streamSeed", seed}, {"streamCounter", *random.Output("streamCounter")}});
+    kb::tests::Require(random.Output("value") == repeated.Output("value") && random.Output("value") != next.Output("value") &&
+        random.Output("streamCounter")->AsUInt32() == 1U && next.Output("streamCounter")->AsUInt32() == 2U,
+        "Random integer API did not preserve stream snapshots and counter advancement");
+    const auto range = call("Math.RandomRange", {{"streamSeed", seed}, {"streamCounter", zero}, {"min", ScriptValue{2.0F}}, {"max", ScriptValue{4.0F}}});
+    kb::tests::Require(range.Output("value")->AsFloat() >= 2.0F && range.Output("value")->AsFloat() <= 4.0F &&
+        range.Output("streamSeed") == random.Output("streamSeed") && range.Output("streamCounter")->AsUInt32() == 1U,
+        "RandomRange did not respect bounds or advance the stream");
+}
+
 void RunScriptMathApiTest() {
+    RunMathProviderResultsTest();
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script math API host did not initialize");
@@ -10462,7 +10677,13 @@ void RunScriptInputApiTest() {
         kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "/Game/Input/Gameplay.21kbinputcontext" } } },
         kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 0 } },
     };
-    const kb::script::ScriptFunctionCallResult added = host.Functions().Call("Input.AddMappingContext", addContextArgs, callContext);
+    const kb::script::ScriptFunctionCallResult added = host.Functions().Call("AddMappingContext", addContextArgs, callContext);
+    const std::vector<kb::script::ScriptFunctionArgument> removeAliasArgs{addContextArgs.front()};
+    const auto removedAlias = host.Functions().Call("RemoveMappingContext", removeAliasArgs, callContext);
+    kb::tests::Require(removedAlias.executed && removedAlias.Succeeded() && removedAlias.Output("removed")->AsBool(),
+        "RemoveMappingContext alias did not remove the active mapping");
+    kb::tests::Require(host.Functions().Call("Input.AddMappingContext", addContextArgs, callContext).Succeeded(),
+        "Canonical mapping could not be restored after alias removal");
     kb::tests::Require(added.Succeeded() && added.Output("added").has_value() && added.Output("added")->AsBool(),
         "Input.AddMappingContext did not resolve a project virtual path");
 
@@ -10476,6 +10697,10 @@ void RunScriptInputApiTest() {
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
     };
     const kb::script::ScriptFunctionCallResult isPressed = host.Functions().Call("Input.IsPressed", jumpArgs, callContext);
+    for (const auto& [name, pin] : {std::pair{"IsActionPressed", "pressed"}, std::pair{"WasActionStarted", "started"}, std::pair{"WasActionTriggered", "triggered"}}) {
+        const auto result = host.Functions().Call(name, jumpArgs, callContext);
+        kb::tests::Require(result.executed && result.Succeeded() && result.Output(pin)->AsBool(), "Legacy action query missed the active edge");
+    }
     const kb::script::ScriptFunctionCallResult wasPressed = host.Functions().Call("Input.WasPressed", jumpArgs, callContext);
     kb::tests::Require(isPressed.Succeeded() && isPressed.Output("pressed")->AsBool(), "Input.IsPressed direct call did not see Jump");
     kb::tests::Require(wasPressed.Succeeded() && wasPressed.Output("pressed")->AsBool(), "Input.WasPressed direct call did not see Jump edge");
@@ -10491,6 +10716,9 @@ void RunScriptInputApiTest() {
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Move" } } },
     };
     const kb::script::ScriptFunctionCallResult moveValue = host.Functions().Call("Input.Value", moveArgs, callContext);
+    const auto legacyMove = host.Functions().Call("GetActionValue", moveArgs, callContext);
+    kb::tests::Require(legacyMove.executed && legacyMove.Succeeded() && legacyMove.Output("value")->AsFloat() == 1.0F,
+        "GetActionValue did not read the active scalar action");
     kb::tests::Require(moveValue.Succeeded() && kb::tests::NearlyEqual(moveValue.Output("value")->AsFloat(), 1.0F),
         "Input.Value direct call returned wrong Move value");
     const kb::script::ScriptFunctionCallResult moveActionFloat = host.Functions().Call("Input.ActionFloat", moveArgs, callContext);
@@ -10501,6 +10729,9 @@ void RunScriptInputApiTest() {
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Look" } } },
     };
     const kb::script::ScriptFunctionCallResult lookVector = host.Functions().Call("Input.Vector2", lookArgs, callContext);
+    const auto legacyLook = host.Functions().Call("GetActionValueXY", lookArgs, callContext);
+    kb::tests::Require(legacyLook.Succeeded() && legacyLook.Output("x") == lookVector.Output("x") && legacyLook.Output("y") == lookVector.Output("y"),
+        "GetActionValueXY alias differs from the live vector action");
     kb::tests::Require(lookVector.Succeeded() && kb::tests::NearlyEqual(lookVector.Output("x")->AsFloat(), 0.25F),
         "Input.Vector2 direct call returned wrong Look value");
     const kb::script::ScriptFunctionCallResult lookAction2D = host.Functions().Call("Input.Action2D", lookArgs, callContext);
@@ -10511,6 +10742,10 @@ void RunScriptInputApiTest() {
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Thrust" } } },
     };
     const kb::script::ScriptFunctionCallResult thrustVector = host.Functions().Call("Input.Vector3", thrustArgs, callContext);
+    const auto legacyThrust = host.Functions().Call("GetActionValueXYZ", thrustArgs, callContext);
+    kb::tests::Require(legacyThrust.Succeeded() && legacyThrust.Output("x") == thrustVector.Output("x") &&
+        legacyThrust.Output("y") == thrustVector.Output("y") && legacyThrust.Output("z") == thrustVector.Output("z"),
+        "GetActionValueXYZ alias differs from the live vector action");
     kb::tests::Require(thrustVector.Succeeded() && kb::tests::NearlyEqual(thrustVector.Output("x")->AsFloat(), 0.75F),
         "Input.Vector3 direct call returned wrong Thrust value");
 
@@ -10518,6 +10753,10 @@ void RunScriptInputApiTest() {
     scene.Input().Evaluate(0.016F);
 
     const kb::script::ScriptFunctionCallResult releasedEdge = host.Functions().Call("Input.Released", jumpArgs, callContext);
+    for (const auto& [name, pin] : {std::pair{"WasActionCompleted", "completed"}, std::pair{"WasActionReleased", "released"}}) {
+        const auto result = host.Functions().Call(name, jumpArgs, callContext);
+        kb::tests::Require(result.executed && result.Succeeded() && result.Output(pin)->AsBool(), "Legacy action query missed the release edge");
+    }
     const kb::script::ScriptFunctionCallResult heldAfterRelease = host.Functions().Call("Input.Held", jumpArgs, callContext);
     const kb::script::ScriptFunctionCallResult actionBoolAfterRelease = host.Functions().Call("Input.ActionBool", jumpArgs, callContext);
     kb::tests::Require(releasedEdge.Succeeded() && releasedEdge.Output("released")->AsBool(),
@@ -10851,6 +11090,52 @@ end
     kb::tests::Require(tick.Succeeded(), "Per-player Lua wrapper execution failed");
     kb::tests::Require(host.SharedState().Get("input.player1Jump")->AsBool(), "Lua Input.IsPressed(action) should still see player 1's Jump");
     kb::tests::Require(host.SharedState().Get("input.player2Jump")->AsBool(), "Lua Input.IsPressed(action, 2) should see player 2's Jump");
+
+    // Each player's context stack consumes only that player's physical pad.
+    scene.Input().MutableDeviceState().Reset();
+    scene.EvaluateAllLocalUserInput(0.016F);
+    primaryContext->mappings = {{.actionId = 1U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 0U}};
+    player2Context->mappings = {{.actionId = 1U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 1U}};
+    auto confirm = std::make_shared<InputActionAsset>(*jump);
+    confirm->name = "Confirm";
+    actions.emplace(2U, confirm);
+    auto menu = std::make_shared<InputMappingContextAsset>();
+    menu->mappings.push_back({.actionId = 2U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 0U});
+    contexts.emplace(30U, menu);
+    scene.ClearAllLocalUserInputMappingContexts();
+    auto& primary = scene.Input();
+    auto& secondary = scene.Input(LocalUserId{2U});
+    kb::tests::Require(primary.AddMappingContext(10U, InputContextPriority::Gameplay)
+        && secondary.AddMappingContext(20U, InputContextPriority::Gameplay), "Pad contexts did not resolve");
+    auto& device = primary.MutableDeviceState();
+    device.SetHasFocus(true);
+    device.SetKeyDown(InputKey::GamepadFaceBottom, true, 0U);
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(primary.IsActionPressed("Jump") && !secondary.IsActionPressed("Jump"),
+        "Pad zero leaked into the second player's action");
+    device.SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    kb::tests::Require(primary.AddMappingContext(30U, InputContextPriority::UI), "Menu context did not resolve");
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(primary.IsActionPressed("Confirm") && !primary.IsActionPressed("Jump")
+        && primary.WasActionCompleted("Jump") && secondary.IsActionPressed("Jump")
+        && !secondary.IsActionPressed("Confirm"), "A player's priority context affected the other player");
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(!primary.WasActionCompleted("Jump"), "Context switch repeated a completed edge");
+    primary.RemoveMappingContext(30U);
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(primary.IsActionPressed("Jump") && !primary.IsActionPressed("Confirm")
+        && secondary.IsActionPressed("Jump"), "Closing a context left an action stuck");
+    // The platform clears physical controls on focus loss; every local stack must settle.
+    device.Reset();
+    device.SetHasFocus(false);
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(!primary.IsActionPressed("Jump") && !secondary.IsActionPressed("Jump")
+        && primary.WasActionCompleted("Jump") && secondary.WasActionCompleted("Jump"),
+        "Focus loss left a local player's action pressed");
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(!primary.WasActionCompleted("Jump") && !secondary.WasActionCompleted("Jump"),
+        "Focus loss repeated local player completion edges");
+
 }
 
 void RunScriptTouchApiTest() {
@@ -13069,6 +13354,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().AudioListeners().Set(object.Entity(), kb::scene::AudioListenerComponent{});
     AttachAllUIComponents(scene, object.Entity());
 
+    kb::script::ScriptRuntimeHost publicApi{scene};
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
         kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), componentName),
@@ -13143,11 +13429,36 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 break;
             }
 
-            const kb::script::ScriptSceneComponentMutationResult set = kb::script::ScriptSceneComponentApi::SetProperty(scene, object.Entity(), componentName, property.name, validValue);
-            kb::tests::Require(set.succeeded, ("Script component API rejected a correctly-typed value for " + fieldLabel).c_str());
+            const char* suffix = nullptr;
+            switch (property.type) {
+            case kb::script::ScriptValueType::Bool: suffix = "Bool"; break;
+            case kb::script::ScriptValueType::Int: suffix = "Int"; break;
+            case kb::script::ScriptValueType::UInt32: suffix = "UInt32"; break;
+            case kb::script::ScriptValueType::Float: suffix = "Float"; break;
+            case kb::script::ScriptValueType::Hash: suffix = "Hash"; break;
+            case kb::script::ScriptValueType::Entity: suffix = "Entity"; break;
+            case kb::script::ScriptValueType::String: suffix = "String"; break;
+            default: kb::tests::Require(false, "No public property API for the reflected type"); return;
+            }
+            std::vector<kb::script::ScriptFunctionArgument> apiArguments{
+                {"entity", kb::script::ScriptValue{object.Entity().Id(), kb::script::ScriptValueType::Entity}},
+                {"component", kb::script::ScriptValue{std::string{componentName}}},
+                {"property", kb::script::ScriptValue{std::string{property.name}}},
+                {"value", validValue}
+            };
+            const kb::script::ScriptFunctionCallContext apiContext{.scene = &scene};
+            const auto set = publicApi.Functions().Call(std::string{"World.SetProperty"} + suffix, apiArguments, apiContext);
+            kb::tests::Require(set.executed && set.Succeeded() && set.Output("set")->AsBool(),
+                ("Public property setter rejected " + fieldLabel).c_str());
+            apiArguments.pop_back();
+            const auto read = publicApi.Functions().Call(std::string{"World.GetProperty"} + suffix, apiArguments, apiContext);
+            kb::tests::Require(read.executed && read.Succeeded() && read.Output("value").has_value(),
+                ("Public property getter rejected " + fieldLabel).c_str());
 
             const kb::script::ScriptSceneComponentPropertyResult get = kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
             kb::tests::Require(get.succeeded, ("Script component API could not read back " + fieldLabel).c_str());
+            kb::tests::Require(read.Output("value").value() == get.value,
+                ("Public getter differs from live component for " + fieldLabel).c_str());
             if (IsUIComponentName(componentName)) {
                 kb::tests::Require(get.value == validValue,
                     ("Script component API did not round-trip " + fieldLabel).c_str());
@@ -13184,7 +13495,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    kb::tests::Require(fieldsChecked == 864U, "Script component API generated accessor coverage test did not exercise the expected total field count (864, including text rendering, themes, audio fields and the compatibility aliases)");
+    kb::tests::Require(fieldsChecked == 864U, "Script component API generated accessor coverage test did not exercise the expected total field count (864, including text rendering, themes, audio fields and compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -13281,7 +13592,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 864U, "LIB-082 raw-pointer audit did not exercise the expected total field count (864, including text rendering, themes, audio fields and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 864U, "LIB-082 raw-pointer audit did not exercise the expected total field count (864, including text rendering, themes, audio fields and compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -14053,6 +14364,22 @@ void RunScriptCollectionsApiTest() {
     kb::tests::Require(kb::tests::NearlyEqual(call("Stack.Pop", { hArg(stack) }).Output("value")->AsFloat(), 1.0F), "Stack.Pop must continue LIFO");
     kb::tests::Require(!call("Stack.Pop", { hArg(stack) }).Output("found")->AsBool(), "Stack.Pop on an empty stack must report found=false");
 
+    static_cast<void>(call("Set.Add", {hArg(set), fArg("value", 3.0F)}));
+    kb::tests::Require(call("Set.Clear", {hArg(set)}).Output("cleared")->AsBool() &&
+        call("Set.Count", {hArg(set)}).Output("count")->AsInt() == 0, "Set.Clear must empty populated set");
+    static_cast<void>(call("Map.Set", {hArg(map), fArg("key", 3.0F), fArg("value", 4.0F)}));
+    kb::tests::Require(call("Map.Clear", {hArg(map)}).Output("cleared")->AsBool() &&
+        call("Map.Count", {hArg(map)}).Output("count")->AsInt() == 0, "Map.Clear must empty populated map");
+    static_cast<void>(call("Queue.Enqueue", {hArg(queue), fArg("value", 3.0F)}));
+    kb::tests::Require(call("Queue.Clear", {hArg(queue)}).Output("cleared")->AsBool() &&
+        call("Queue.Count", {hArg(queue)}).Output("count")->AsInt() == 0, "Queue.Clear must empty populated queue");
+    static_cast<void>(call("Stack.Push", {hArg(stack), fArg("value", 3.0F)}));
+    kb::tests::Require(call("Stack.Count", {hArg(stack)}).Output("count")->AsInt() == 1,
+        "Stack.Count must reflect the pushed value");
+
+    kb::tests::Require(call("Stack.Clear", {hArg(stack)}).Output("cleared")->AsBool() &&
+        call("Stack.Count", {hArg(stack)}).Output("count")->AsInt() == 0, "Stack.Clear did not empty the populated stack");
+
     // --- Real Lua end-to-end: the audit's core gap was "cannot use from
     // Lua." A behaviour creates an Array, pushes two values, reads its
     // length and an element back, all through the generic CallFunction
@@ -14425,6 +14752,10 @@ void RunScriptAssetsApiTest() {
     kb::tests::Require(asyncCompletions.size() == 1U && asyncCompletions[0].id == asyncTaskId && asyncCompletions[0].succeeded && asyncCompletions[0].owner == caller.Entity(),
         "Assets.LoadAsync's task must report Completed and preserve its calling owner");
     kb::tests::Require(scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync did not commit the real loaded payload");
+    const auto asyncStatus = host.Functions().Call("Assets.AsyncStatus", pathArgs, callerContext);
+    kb::tests::Require(asyncStatus.executed && asyncStatus.Succeeded() &&
+        asyncStatus.Output("status")->AsString() == "Completed" && asyncStatus.Output("error")->AsString().empty(),
+        "Assets.AsyncStatus did not expose the completed background load");
 
     const kb::scene::SceneObject secondCaller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second Asset Owner" });
     const kb::script::ScriptFunctionCallContext secondCallerContext{ .scene = &scene, .caller = secondCaller.Entity() };
@@ -14587,6 +14918,22 @@ void RunScriptSaveApiTest() {
     // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
     kb::tests::Require(host.Functions().FindSignature("Settings.SetInt") != nullptr, "Settings.SetInt was not registered");
     kb::tests::Require(host.Functions().FindSignature("Settings.Write") != nullptr, "Settings.Write was not registered");
+
+    using kb::script::ScriptValue;
+    kb::tests::Require(call("Settings.SetString", {keyArg("label"), {"value", ScriptValue{std::string{"Sample"}}}}).Output("set")->AsBool() &&
+        call("Settings.GetString", {keyArg("label")}).Output("value")->AsString() == "Sample", "Settings string API did not round-trip");
+    kb::tests::Require(call("Settings.SetBool", {keyArg("enabled"), {"value", ScriptValue{true}}}).Output("set")->AsBool() &&
+        call("Settings.GetBool", {keyArg("enabled")}).Output("value")->AsBool(), "Settings bool API did not round-trip");
+    kb::tests::Require(call("Settings.SetFloat", {keyArg("volume"), {"value", ScriptValue{0.25F}}}).Output("set")->AsBool() &&
+        call("Settings.GetFloat", {keyArg("volume")}).Output("value")->AsFloat() == 0.25F, "Settings float API did not round-trip");
+    kb::tests::Require(call("Settings.SetAsset", {keyArg("asset"), {"value", ScriptValue{kSavedAssetId, kb::script::ScriptValueType::Hash}}}).Output("set")->AsBool() &&
+        call("Settings.GetAsset", {keyArg("asset")}).Output("value")->AsUInt64() == kSavedAssetId, "Settings asset API did not round-trip");
+    kb::tests::Require(call("Settings.Has", {keyArg("enabled")}).Output("has")->AsBool() &&
+        call("Settings.Remove", {keyArg("enabled")}).Output("removed")->AsBool() &&
+        !call("Settings.Has", {keyArg("enabled")}).Output("has")->AsBool(), "Settings.Remove did not remove the stored key");
+    kb::tests::Require(call("Settings.Clear", {}).Output("cleared")->AsBool() &&
+        !call("Settings.Has", {keyArg("asset")}).Output("has")->AsBool() &&
+        !call("Settings.GetFloat", {keyArg("volume")}).Output("found")->AsBool(), "Settings.Clear did not empty the buffer");
 
     // The same key in each surface is an independent value — the buffers do
     // not share state.
@@ -15224,6 +15571,11 @@ void RunScriptTimerAndTaskCreatorApiTest() {
     const kb::script::ScriptFunctionCallResult creatorResult = host.Functions().Call("Timer.Creator", creatorArgs, context);
     kb::tests::Require(creatorResult.Succeeded() && creatorResult.Output("creator")->AsUInt64() == callerObject.Entity().Id(),
         "Timer.Creator must report the ScriptFunctionCallContext::caller that actually invoked Timer.Once, threaded through automatically");
+    const auto task = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, callerObject.Entity(), callerObject.Entity());
+    const std::vector<kb::script::ScriptFunctionArgument> taskArguments{{"task", kb::script::ScriptValue{task, kb::script::ScriptValueType::Hash}}};
+    const auto taskCreator = host.Functions().Call("Task.Creator", taskArguments, context);
+    kb::tests::Require(taskCreator.executed && taskCreator.Succeeded() && taskCreator.Output("creator")->AsUInt64() == callerObject.Entity().Id(),
+        "Task.Creator did not expose the task's actual creator");
 }
 
 // LIB-102: timer determinism and same-phase cancellation. Part A proves
@@ -17152,6 +17504,10 @@ end
 
 namespace kb::tests {
 
+void RunScriptCollectionsTests() {
+    RunScriptCollectionsApiTest();
+}
+
 void RunScriptSaveTests() {
     RunScriptSaveApiTest();
 }
@@ -17187,6 +17543,7 @@ void RunScriptRuntimeTests() {
     RunPucLuaHostileScriptsTest();
     RunPucLuaErrorsNameFileAndLineTest();
     RunPucLuaReloadKeepsTheWorkingScriptTest();
+    RunPucLuaDebugFileTransportTest();
     RunPucLuaDebuggerDisconnectTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();

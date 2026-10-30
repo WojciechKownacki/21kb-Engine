@@ -389,6 +389,10 @@ public:
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;
     std::uint64_t lastRuntimeUpdateNanoseconds = 0U;
+    std::uint64_t lastRuntimeUpdateStartSteadyNanoseconds = 0U;
+    std::vector<SceneRuntimeStageTiming> lastRuntimeStages;
+    std::vector<SceneRuntimeSystemTiming> lastSceneSystems;
+    std::uint64_t nextSceneTraceGroup = 0U;
     std::uint64_t lastRuntimeTransformSyncNanoseconds = 0U;
     std::uint64_t lastRuntimeFixedCaptureStartNanoseconds = 0U;
     std::uint64_t lastRuntimeFixedCaptureEndNanoseconds = 0U;
@@ -852,6 +856,7 @@ public:
     PhysicsDebugQueryTrace physicsDebugQueryTrace{};
     kb::particles::IParticleSimulationBackend* particleSimulationBackend = nullptr;
     std::uint64_t particleSimulationBackendEpoch = 0U;
+    bool particleEmitterProfilingEnabled = false;
     kb::particles::ParticleRenderSnapshotChannel particleRenderSnapshots;
     kb::particles::ParticleRenderSnapshotResult lastParticleRenderSnapshotPublication{};
     kb::particles::ParticleGpuVisualStepJournal particleGpuVisualSteps;
@@ -873,9 +878,11 @@ public:
     std::string uiPressedLinkSource;
     std::uint32_t uiPressedLinkInstance = 0U;
     SceneEntity uiFocused{};
-    // A modal canvas was shown in the last frame, and the widget that had focus before it appeared.
-    bool uiModalActive = false;
-    SceneEntity uiModalRestoreFocus{};
+    struct UIModalFocus {
+        SceneEntity canvas{};
+        std::array<SceneEntity, 4U> restore{};
+    };
+    std::vector<UIModalFocus> uiModalFocusStack;
     SceneUIInput previousUIInput{};
     std::optional<std::uint32_t> uiTouchCapture;
     SceneEntity uiInertialScrollView{};

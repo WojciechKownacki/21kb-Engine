@@ -85,6 +85,9 @@ public:
     // constructing — not recomputed/guessed, the actual outcome.
     [[nodiscard]] const std::vector<kb::library::EngineLibraryModuleReportEntry>& LibraryStartupReport() const noexcept;
 
+    [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& endpoint, std::string& error);
+    void PollLuaDebugger();
+    void StopLuaDebugger() noexcept;
     [[nodiscard]] bool InstallSceneSystem();
     // Drives the installed script scene system's shutdown lifecycle NOW — fires
     // Deactivated + Destroyed on every tracked behaviour and clears tracking,

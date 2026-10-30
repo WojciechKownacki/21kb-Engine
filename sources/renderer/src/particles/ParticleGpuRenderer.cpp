@@ -1,4 +1,5 @@
 #include "kb/render/particles/ParticleGpuRenderer.hpp"
+#include "scene/submit/SceneMeshCoverageProbe.hpp"
 
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/Scene.hpp"
@@ -302,6 +303,7 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
             std::copy(source.begin(), source.end(), reinterpret_cast<ParticleGpuInstance*>(buffer.data));
             bgfx::setInstanceDataBuffer(&buffer, 0U, available);
         }
+        std::uint64_t drawState;
         if (decal) {
             bgfx::setVertexBuffer(0U, decalBoxVertices_);
             bgfx::setIndexBuffer(decalBoxIndices_);
@@ -330,7 +332,8 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
             kb::particles::HasParticleRenderEmitterFlag(
                 emitter.flags, kb::particles::ParticleRenderEmitterFlag::AntiAliasing) ? 1.0F : 0.0F,
             static_cast<float>(emitter.output),
-            emitter.blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F, 0.0F};
+            emitter.blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F,
+            SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F};
         bgfx::setUniform(emitterParamsUniform_, emitterParams.data());
         bgfx::setUniform(featureParamsUniform_, featureParams.data());
         const std::uint32_t volumetricSteps = volumetricQuality_ == ParticleVolumetricQuality::Low
@@ -362,12 +365,11 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
         bgfx::setTexture(1U, sceneDepthSampler_, bgfx::isValid(sceneDepthTexture) ? sceneDepthTexture : whiteTexture_);
         if (decal) {
             // The box's back faces, unoccluded: the fragment itself finds the scene surface inside the box.
-            bgfx::setState(ParticleBlendState(batch.blend, kb::particles::ParticleRenderDepthMode::Disabled) |
-                BGFX_STATE_CULL_CW);
+            drawState = ParticleBlendState(batch.blend, kb::particles::ParticleRenderDepthMode::Disabled) | BGFX_STATE_CULL_CW;
         } else {
-            bgfx::setState(ParticleBlendState(batch.blend, batch.depth));
+            drawState = ParticleBlendState(batch.blend, batch.depth);
         }
-        bgfx::submit(viewId, decal ? decalProgram_ : program_);
+        SubmitWithSceneCoverage(coverageProbe_, viewId, decal ? decalProgram_ : program_, drawState, true);
         result.submittedParticles += available;
         if (emitter.output == kb::particles::ParticleRenderOutput::Volumetric) {
             result.submittedVolumetricParticles += available;
@@ -489,7 +491,8 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
             camera.projection[10], camera.projection[14], kParticleSoftFadeDistanceMeters, soft ? 1.0F : 0.0F };
         const std::array<float, 4> featureParams{
             0.0F, static_cast<float>(params.output),
-            params.blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F, 0.0F };
+            params.blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F,
+            SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F };
         const std::array<float, 4> volumetricParams{ 1.0F, 1.0F, 1.0F, 0.0F };
         bgfx::setUniform(emitterParamsUniform_, emitterParams.data());
         bgfx::setUniform(featureParamsUniform_, featureParams.data());
@@ -510,8 +513,7 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
         }
         bgfx::setTexture(0U, atlasSampler_, atlas);
         bgfx::setTexture(1U, sceneDepthSampler_, bgfx::isValid(sceneDepthTexture) ? sceneDepthTexture : whiteTexture_);
-        bgfx::setState(ParticleBlendState(params.blend, params.depth));
-        bgfx::submit(viewId, program_);
+        SubmitWithSceneCoverage(coverageProbe_, viewId, program_, ParticleBlendState(params.blend, params.depth), true);
         result.submittedParticles += draw.capacity;
         ++result.drawCalls;
     }

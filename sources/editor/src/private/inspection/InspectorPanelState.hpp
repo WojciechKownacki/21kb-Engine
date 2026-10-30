@@ -151,11 +151,19 @@ enum class InspectorDisclosureId : std::uint8_t {
     TerrainAdvanced,
     UIAnchorPresets,
     UIRectAdvanced,
+    CameraAdvanced,
+    LightAdvanced,
+    RigidbodyAdvanced,
+    ColliderAdvanced,
     Count,
 };
 
 enum class InspectorPropertyId : std::uint16_t {
     None,
+    CameraAdvanced,
+    LightAdvanced,
+    RigidbodyAdvanced,
+    ColliderAdvanced,
     EntityName,
     EntityVisible,
     EntityVisibilityMode,

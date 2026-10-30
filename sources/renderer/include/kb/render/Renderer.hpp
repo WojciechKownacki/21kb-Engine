@@ -77,6 +77,7 @@ public:
     static constexpr std::uint64_t kRuntimeAssetDiscoveryIntervalFrames = 30ULL;
 
     struct RuntimeSceneResourceStats {
+        RenderResourceMemoryStats memory{};
         std::uint32_t cachedMeshCount = 0;
         std::uint32_t cachedMaterialCount = 0;
         std::uint32_t cachedTextureCount = 0;
@@ -218,6 +219,9 @@ public:
     void PrimeExposureAdaptation(float luminance) noexcept;
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     [[nodiscard]] double LastSceneSynchronizationMilliseconds() const noexcept;
+    // Optional delayed GPU passing-sample coverage for mesh passes only.
+    void SetMeshCoverageEnabled(bool enabled) noexcept;
+    [[nodiscard]] SceneMeshCoverageMetric LastMeshCoverage() const noexcept;
     [[nodiscard]] double LastSceneVisibilityBuildMilliseconds() const noexcept;
     [[nodiscard]] double LastSceneVisibilitySortMilliseconds() const noexcept;
     [[nodiscard]] double LastSceneVisibilityPublishMilliseconds() const noexcept;

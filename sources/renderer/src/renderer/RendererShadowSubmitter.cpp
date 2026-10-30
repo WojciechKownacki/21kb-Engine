@@ -84,6 +84,12 @@ void SubmitPointShadows(
     SceneRenderShadowMapBinding& binding) {
     PointShadowSetup setup = PointShadowPassPlanner::Build(
         desc.renderScene, desc.lightingConfig, cameraPosition, cameraCullingMask, BGFX_INVALID_HANDLE);
+    desc.aggregateSubmitStats.selectedShadowLightCount += setup.lightCount;
+    desc.aggregateSubmitStats.droppedShadowLightCount += setup.droppedLights;
+    if (setup.droppedLights != 0U) {
+        desc.diagnostics.events.push_back({.severity = SceneRenderDiagnosticSeverity::Warning,
+            .kind = SceneRenderDiagnosticKind::ShadowLightLimit, .instanceCount = setup.droppedLights});
+    }
     if (!setup.valid || !desc.pointShadowMap.Ensure(setup.atlasWidth, setup.atlasHeight)) {
         return;
     }

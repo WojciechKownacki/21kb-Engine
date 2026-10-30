@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <sstream>
 
 namespace kb::render {
@@ -46,15 +47,18 @@ struct PostProcessSubmitSettings {
 }
 
 [[nodiscard]] PostProcessSubmitSettings ResolveSettings(const ScenePostProcessSubmitDesc& desc) noexcept {
+    const auto finite = [](float value, float maximum) {
+        return std::isnan(value) ? 0.0F : std::clamp(value, 0.0F, maximum);
+    };
     return PostProcessSubmitSettings{
         .width = static_cast<float>(std::max(1U, desc.target.extent.width)),
         .height = static_cast<float>(std::max(1U, desc.target.extent.height)),
         .bloomEnabled = desc.settings.bloomEnabled && desc.settings.bloomStrength > 0.0F,
         .taaEnabled = desc.settings.temporalAntiAliasingEnabled && bgfx::isValid(desc.sceneDepth) && desc.temporal.IsValid(),
-        .bloomStrength = std::max(desc.settings.bloomStrength, 0.0F),
-        .bloomThreshold = std::max(desc.settings.bloomThreshold, 0.0F),
-        .bloomSoftKnee = std::clamp(desc.settings.bloomSoftKnee, 0.0F, 1.0F),
-        .bloomRadius = std::max(desc.settings.bloomRadiusPixels, 0.0F),
+        .bloomStrength = finite(desc.settings.bloomStrength, 65504.0F),
+        .bloomThreshold = finite(desc.settings.bloomThreshold, 65504.0F),
+        .bloomSoftKnee = finite(desc.settings.bloomSoftKnee, 1.0F),
+        .bloomRadius = finite(desc.settings.bloomRadiusPixels, 65504.0F),
         .historyBlend = std::clamp(desc.settings.temporalHistoryBlend, 0.0F, 1.0F),
         .bloomMipCount = static_cast<float>(std::clamp<std::uint8_t>(
             desc.target.bloomMipCount,

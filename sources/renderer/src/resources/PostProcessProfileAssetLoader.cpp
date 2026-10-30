@@ -116,10 +116,10 @@ enum class FieldResult { Applied, Invalid, Unknown };
 
 [[nodiscard]] FieldResult ApplyField(std::string_view keyword, std::string_view rest, ScenePostProcessSettings& settings) {
     if (keyword == "bloomEnabled") return Applied(ParseBoolToken(rest, settings.bloomEnabled));
-    if (keyword == "bloomStrength") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomStrength));
-    if (keyword == "bloomThreshold") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomThreshold));
-    if (keyword == "bloomSoftKnee") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomSoftKnee));
-    if (keyword == "bloomRadiusPixels") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomRadiusPixels));
+    if (keyword == "bloomStrength") return Applied(ParseNonNegativeFloat(Trim(rest), settings.bloomStrength));
+    if (keyword == "bloomThreshold") return Applied(ParseNonNegativeFloat(Trim(rest), settings.bloomThreshold));
+    if (keyword == "bloomSoftKnee") return Applied(ParseUnitFloat(Trim(rest), settings.bloomSoftKnee));
+    if (keyword == "bloomRadiusPixels") return Applied(ParseNonNegativeFloat(Trim(rest), settings.bloomRadiusPixels));
     if (keyword == "temporalAntiAliasingEnabled") return Applied(ParseBoolToken(rest, settings.temporalAntiAliasingEnabled));
     if (keyword == "temporalJitterEnabled") return Applied(ParseBoolToken(rest, settings.temporalJitterEnabled));
     if (keyword == "temporalHistoryBlend") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.temporalHistoryBlend));
@@ -127,7 +127,7 @@ enum class FieldResult { Applied, Invalid, Unknown };
     if (keyword == "tonemapEnabled") return Applied(ParseBoolToken(rest, settings.tonemapEnabled));
     if (keyword == "autoExposureMetering") return Applied(ParseAutoExposureMeteringMode(Trim(rest), settings.autoExposureMetering));
     if (keyword == "outputTransform.exposureStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.exposureStops));
-    if (keyword == "outputTransform.gamma") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.gamma));
+    if (keyword == "outputTransform.gamma") return Applied(ParsePositiveFloat(Trim(rest), settings.outputTransform.gamma));
     if (keyword == "outputTransform.tonemap") return Applied(ParseTonemapOperator(Trim(rest), settings.outputTransform.tonemap));
     if (keyword == "outputTransform.colorGradingLutStrength") {
         float strength = 0.0F;
@@ -140,14 +140,14 @@ enum class FieldResult { Applied, Invalid, Unknown };
         return FieldResult::Applied;
     }
     if (keyword == "outputTransform.autoExposure.enabled") return Applied(ParseBoolToken(rest, settings.outputTransform.autoExposure.enabled));
-    if (keyword == "outputTransform.autoExposure.meteredAverageLuminance") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.meteredAverageLuminance));
-    if (keyword == "outputTransform.autoExposure.middleGray") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.middleGray));
+    if (keyword == "outputTransform.autoExposure.meteredAverageLuminance") return Applied(ParsePositiveFloat(Trim(rest), settings.outputTransform.autoExposure.meteredAverageLuminance));
+    if (keyword == "outputTransform.autoExposure.middleGray") return Applied(ParsePositiveFloat(Trim(rest), settings.outputTransform.autoExposure.middleGray));
     if (keyword == "outputTransform.autoExposure.minExposureStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.minExposureStops));
     if (keyword == "outputTransform.autoExposure.maxExposureStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.maxExposureStops));
     if (keyword == "outputTransform.autoExposure.biasStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.biasStops));
     if (keyword == "outputTransform.autoExposure.temporalAdaptationEnabled") return Applied(ParseBoolToken(rest, settings.outputTransform.autoExposure.temporalAdaptationEnabled));
-    if (keyword == "outputTransform.autoExposure.brightAdaptationRate") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.brightAdaptationRate));
-    if (keyword == "outputTransform.autoExposure.darkAdaptationRate") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.darkAdaptationRate));
+    if (keyword == "outputTransform.autoExposure.brightAdaptationRate") return Applied(ParseNonNegativeFloat(Trim(rest), settings.outputTransform.autoExposure.brightAdaptationRate));
+    if (keyword == "outputTransform.autoExposure.darkAdaptationRate") return Applied(ParseNonNegativeFloat(Trim(rest), settings.outputTransform.autoExposure.darkAdaptationRate));
     if (keyword == "vignetteEnabled") return Applied(ParseBoolToken(rest, settings.vignetteEnabled));
     if (keyword == "vignetteIntensity") return Applied(ParseUnitFloat(Trim(rest), settings.vignetteIntensity));
     if (keyword == "ambientOcclusionEnabled") return Applied(ParseBoolToken(rest, settings.ambientOcclusionEnabled));
@@ -163,6 +163,15 @@ enum class FieldResult { Applied, Invalid, Unknown };
         return FieldResult::Applied;
     }
     if (keyword == "globalIlluminationIntensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.globalIlluminationIntensity));
+    if (keyword == "fogProfile") {
+        const auto value = Trim(rest);
+        if (value == "Automatic") settings.fogProfile = SceneFogProfile::Automatic;
+        else if (value == "Desktop") settings.fogProfile = SceneFogProfile::Desktop;
+        else if (value == "Mobile") settings.fogProfile = SceneFogProfile::Mobile;
+        else if (value == "Web") settings.fogProfile = SceneFogProfile::Web;
+        else return Applied(false);
+        return Applied(true);
+    }
     if (keyword == "fogEnabled") return Applied(ParseBoolToken(rest, settings.fogEnabled));
     if (keyword == "fogDensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.fogDensity));
     if (keyword == "fogHeightFalloff") return Applied(ParseNonNegativeFloat(Trim(rest), settings.fogHeightFalloff));
@@ -195,6 +204,8 @@ enum class FieldResult { Applied, Invalid, Unknown };
             return std::nullopt;
         }
     }
+    if (settings.outputTransform.autoExposure.minExposureStops > settings.outputTransform.autoExposure.maxExposureStops)
+        return std::nullopt;
     return settings;
 }
 
@@ -232,6 +243,10 @@ void WriteProfile(std::ostream& output, const ScenePostProcessSettings& settings
     output << "globalIllumination " << (settings.globalIllumination == Method::ScreenSpace ? "ScreenSpace"
         : settings.globalIllumination == Method::Voxel ? "Voxel" : "Off") << '\n';
     output << "globalIlluminationIntensity " << settings.globalIlluminationIntensity << '\n';
+    output << "fogProfile " << (settings.fogProfile == SceneFogProfile::Automatic ? "Automatic" :
+        settings.fogProfile == SceneFogProfile::Desktop ? "Desktop" :
+        settings.fogProfile == SceneFogProfile::Mobile ? "Mobile" :
+        settings.fogProfile == SceneFogProfile::Web ? "Web" : "Invalid") << '\n';
     output << "fogEnabled " << (settings.fogEnabled ? 1 : 0) << '\n';
     output << "fogDensity " << settings.fogDensity << '\n';
     output << "fogHeightFalloff " << settings.fogHeightFalloff << '\n';
@@ -310,12 +325,11 @@ std::string PostProcessProfileAssetLoader::Describe(const ScenePostProcessSettin
 }
 
 bool PostProcessProfileAssetLoader::SaveProfile(const std::filesystem::path& path, const ScenePostProcessSettings& settings) {
-    // A value the file format refuses on load is not written: the profile would not load again.
-    if (settings.outputTransform.colorGradingLutStrength != 0.0F ||
-        !(settings.vignetteIntensity >= 0.0F && settings.vignetteIntensity <= 1.0F) ||
-        !(settings.ambientOcclusionIntensity >= 0.0F) || !(settings.ambientOcclusionRadius > 0.0F)) {
-        return false;
-    }
+    // Validate the exact serialized representation before replacing an existing profile.
+    std::ostringstream serialized;
+    WriteProfile(serialized, settings);
+    std::istringstream validation{serialized.str()};
+    if (!ParseProfile(validation)) return false;
     return detail::WriteMaterialFileAtomically(path, [&settings](std::ostream& output) {
         WriteProfile(output, settings);
     });

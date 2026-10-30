@@ -1,0 +1,489 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "PhysicsWorkflow",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "anchor",
+      "name": "anchor"
+    },
+    {
+      "op": "add_component",
+      "entity": "anchor",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "anchor",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "anchor",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "anchor",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "anchor",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 5.0
+    },
+    {
+      "op": "set_property",
+      "entity": "anchor",
+      "component": "Rigidbody",
+      "property": "bodyType",
+      "value": 0
+    },
+    {
+      "op": "create_entity",
+      "id": "fixed",
+      "name": "fixed"
+    },
+    {
+      "op": "add_component",
+      "entity": "fixed",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "fixed",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "fixed",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "fixed",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "fixed",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 4.0
+    },
+    {
+      "op": "add_component",
+      "entity": "fixed",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "fixed",
+      "component": "Joint",
+      "property": "type",
+      "value": 0
+    },
+    {
+      "op": "set_property",
+      "entity": "fixed",
+      "component": "Joint",
+      "property": "connectedAnchor.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "fixed",
+      "component": "Joint",
+      "property": "connectedAnchor.y",
+      "value": -1.0
+    },
+    {
+      "op": "set_joint_connection",
+      "entity": "fixed",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "create_entity",
+      "id": "hinge",
+      "name": "hinge"
+    },
+    {
+      "op": "add_component",
+      "entity": "hinge",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "hinge",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 3.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 4.0
+    },
+    {
+      "op": "add_component",
+      "entity": "hinge",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "type",
+      "value": 1
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "connectedAnchor.x",
+      "value": 3.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "connectedAnchor.y",
+      "value": -1.0
+    },
+    {
+      "op": "set_joint_connection",
+      "entity": "hinge",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "create_entity",
+      "id": "distance",
+      "name": "distance"
+    },
+    {
+      "op": "add_component",
+      "entity": "distance",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "distance",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "distance",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "distance",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 6.0
+    },
+    {
+      "op": "set_property",
+      "entity": "distance",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 4.0
+    },
+    {
+      "op": "add_component",
+      "entity": "distance",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "distance",
+      "component": "Joint",
+      "property": "type",
+      "value": 2
+    },
+    {
+      "op": "set_property",
+      "entity": "distance",
+      "component": "Joint",
+      "property": "connectedAnchor.x",
+      "value": 6.0
+    },
+    {
+      "op": "set_property",
+      "entity": "distance",
+      "component": "Joint",
+      "property": "connectedAnchor.y",
+      "value": -1.0
+    },
+    {
+      "op": "set_joint_connection",
+      "entity": "distance",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "create_entity",
+      "id": "point",
+      "name": "point"
+    },
+    {
+      "op": "add_component",
+      "entity": "point",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "point",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "point",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "point",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 9.0
+    },
+    {
+      "op": "set_property",
+      "entity": "point",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 4.0
+    },
+    {
+      "op": "add_component",
+      "entity": "point",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "point",
+      "component": "Joint",
+      "property": "type",
+      "value": 3
+    },
+    {
+      "op": "set_property",
+      "entity": "point",
+      "component": "Joint",
+      "property": "connectedAnchor.x",
+      "value": 9.0
+    },
+    {
+      "op": "set_property",
+      "entity": "point",
+      "component": "Joint",
+      "property": "connectedAnchor.y",
+      "value": -1.0
+    },
+    {
+      "op": "set_joint_connection",
+      "entity": "point",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "enableLimit",
+      "value": true
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "minLimit",
+      "value": -30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "maxLimit",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "motor.targetVelocity",
+      "value": 45.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "motor.force",
+      "value": 10.0
+    },
+    {
+      "op": "set_property",
+      "entity": "fixed",
+      "component": "Rigidbody",
+      "property": "useContinuousCollision",
+      "value": true
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/PhysicsWorkflow.21kbscene"
+    },
+    {
+      "op": "reload_scene"
+    },
+    {
+      "op": "assert_backend",
+      "backend": "physics",
+      "available": true
+    },
+    {
+      "op": "assert_joint_connection",
+      "entity": "fixed",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "select_entity",
+      "entity": "fixed"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-fixed",
+      "height": 1500
+    },
+    {
+      "op": "assert_joint_connection",
+      "entity": "hinge",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "select_entity",
+      "entity": "hinge"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-hinge",
+      "height": 1500
+    },
+    {
+      "op": "assert_joint_connection",
+      "entity": "distance",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "select_entity",
+      "entity": "distance"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-distance",
+      "height": 1500
+    },
+    {
+      "op": "assert_joint_connection",
+      "entity": "point",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "select_entity",
+      "entity": "point"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-point",
+      "height": 1500
+    },
+    {
+      "op": "assert_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "motor.force",
+      "value": 10.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "hinge",
+      "component": "Joint",
+      "property": "enableLimit",
+      "value": true
+    },
+    {
+      "op": "assert_property",
+      "entity": "fixed",
+      "component": "Rigidbody",
+      "property": "useContinuousCollision",
+      "value": true
+    },
+    {
+      "op": "set_physics_debug_draw",
+      "enabled": true
+    },
+    {
+      "op": "assert_physics_debug_line_count",
+      "count": 64
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 60,
+      "dt": 0.016666667
+    },
+    {
+      "op": "delete_entity",
+      "entity": "anchor"
+    },
+    {
+      "op": "step",
+      "frames": 60,
+      "dt": 0.016666667
+    },
+    {
+      "op": "assert_backend",
+      "backend": "physics",
+      "available": true
+    },
+    {
+      "op": "stop"
+    }
+  ]
+}

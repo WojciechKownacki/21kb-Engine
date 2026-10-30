@@ -32,6 +32,9 @@ struct ScreenUICompositeDesc {
     std::span<const ScreenUIResolvedTexture> textures;
     // Draws the Material batches (User Interface materials).
     const SceneRenderer* sceneRenderer = nullptr;
+    // Optional diagnostic queries, one distinct caller-owned handle per batch.
+    // Results count passing GPU samples; custom material batches are not supported.
+    std::span<const bgfx::OcclusionQueryHandle> overdrawQueries;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

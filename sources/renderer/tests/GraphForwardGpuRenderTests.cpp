@@ -925,6 +925,7 @@ public:
         uTime_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
         uDynamicParameter_ = bgfx::createUniform("u_dynamicParameter", bgfx::UniformType::Vec4);
         uMaterialParams_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
+        uMaterialFlags_ = bgfx::createUniform("u_materialFlags", bgfx::UniformType::Vec4);
         resolveTarget_ = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
         resolveReadback_ = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
         resolveFrameBuffer_ = bgfx::createFrameBuffer(1U, &resolveTarget_, false);
@@ -963,7 +964,7 @@ public:
         bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE,
         bgfx::TextureHandle texture = BGFX_INVALID_HANDLE,
         float normalScale = 1.0F,
-        bool customData = false) {
+        bool customData = false, bool doubleSided = false, bool reverseFront = false) {
         const std::array<float, 4U> camera{ 0.0F, 0.0F, 1.0F, 0.0F };
         const std::array<float, 16U> lightDirKind{};
         const std::array<float, 4U> lightParams{};
@@ -980,11 +981,14 @@ public:
         bgfx::setUniform(uTime_, timeConstants.data());
         bgfx::setUniform(uDynamicParameter_, dynamicParameter.data());
         bgfx::setUniform(uMaterialParams_, materialParams.data());
+        const std::array<float,4> materialFlags{0,0,doubleSided ? 1.0F : 0.0F,0};
+        bgfx::setUniform(uMaterialFlags_,materialFlags.data());
         if (bgfx::isValid(sampler) && bgfx::isValid(texture)) {
             bgfx::setTexture(6U, sampler, texture);
         }
         bgfx::setVertexBuffer(0, vbh_);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GEQUAL);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GEQUAL |
+            (reverseFront ? BGFX_STATE_FRONT_CCW : 0));
         bgfx::submit(0, program);
         bgfx::frame();
 
@@ -1013,7 +1017,8 @@ public:
         bgfx::ProgramHandle program,
         bool environmentEnabled,
         bool directionalLightEnabled,
-        bool customData = false) {
+        bool customData = false,
+        float lightDirectionZ = -1.0F) {
         std::array<float, 128U> lightDirKind{};
         std::array<float, 128U> lightPositionRange{};
         std::array<float, 128U> lightColorIntensity{};
@@ -1030,7 +1035,7 @@ public:
             environmentParams = { 1.0F, 1.0F, 1.0F, 0.0F };
         }
         if (directionalLightEnabled) {
-            lightDirKind[2] = -1.0F;
+            lightDirKind[2] = lightDirectionZ;
             lightColorIntensity[0] = 1.0F;
             lightColorIntensity[1] = 1.0F;
             lightColorIntensity[2] = 1.0F;
@@ -1123,6 +1128,7 @@ public:
         bgfx::destroy(resolveTarget_);
         bgfx::destroy(uDynamicParameter_);
         bgfx::destroy(uMaterialParams_);
+        bgfx::destroy(uMaterialFlags_);
         bgfx::destroy(uTime_);
         bgfx::destroy(uLightParams_);
         bgfx::destroy(uLightDirKind_);
@@ -1196,6 +1202,7 @@ private:
     bgfx::UniformHandle uTime_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uDynamicParameter_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uMaterialParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uMaterialFlags_ = BGFX_INVALID_HANDLE;
 };
 
 [[nodiscard]] bgfx::ProgramHandle BuildGraphProgram(const std::vector<std::uint8_t>& vsBytes, const RenderMaterialGraphShaderArtifact& artifact) {
@@ -1373,16 +1380,24 @@ struct AcceptanceCookedMaterial {
 [[nodiscard]] RenderMaterialGraphShaderArtifact CookGBufferProofArtifact(
     const RenderMaterialGraphDocument& graph,
     std::uint64_t assetId,
-    const std::filesystem::path& cacheDir) {
+    const std::filesystem::path& cacheDir,
+    std::string_view pass = "GBuffer") {
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
         graph,
         RenderMaterialGraphBuildContext{ .assetId = assetId, .shadingPath = RenderMaterialGraphShadingPath::Deferred });
     Require(compiled.Succeeded(), "Deferred GBuffer graph proof must compile");
     RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
-    request.pass = "GBuffer";
+    request.pass = pass;
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
     const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
     Require(cooked.Succeeded() && cooked.artifact.has_value(), "Deferred GBuffer graph proof must cook the GBuffer pass");
+    if (pass == kRenderMaterialGraphCompactGBufferPass) {
+        request.shaderPlatform = kb::assets::bake::ShaderBakePlatform::WebGl;
+        request.cacheRoot = (cacheDir / "essl").generic_string();
+        const std::array<RenderMaterialGraphShaderBackend,1> portable{RenderMaterialGraphShaderBackend::Essl};
+        Require(CookRenderMaterialGraphShaderArtifact(compiled.shader,portable,request).Succeeded(),
+            "Compact graph G-buffer must compile for the portable ESSL profile");
+    }
     return *cooked.artifact;
 }
 
@@ -1530,6 +1545,51 @@ void RunDeferredLightingSurfaceSemanticsGpuTest() {
     std::filesystem::remove_all(cacheDir, error);
 }
 
+void RunDeferredGBufferCompactSubsurfaceGpuTest() {
+    const auto cacheDir=std::filesystem::path{KB_TEST_GRAPH_SHADER_CACHE_DIR}/"compact_subsurface";
+    std::error_code error; std::filesystem::remove_all(cacheDir,error); std::filesystem::create_directories(cacheDir,error);
+    const auto geometryVsBin=cacheDir/"vs_graph_probe.bin", resolveVsBin=cacheDir/"vs_present.bin", resolveFsBin=cacheDir/"fs_deferred_lighting.bin";
+    Require(CookHarnessDepthVertexShader(geometryVsBin,0.5F) &&
+        CookHarnessRendererShader("vs_present.sc","vertex",resolveVsBin) &&
+        CookHarnessRendererShader("fs_deferred_lighting.sc","fragment",resolveFsBin),
+        "Compact subsurface harness shaders must compile");
+    auto graph=MakeGBufferProofGraph("0.02 0.05 0.4 1","subsurface","0","0.65","0 0 0 1","0.5","0 0 1");
+    graph.nodes.push_back(RenderMaterialGraphNode{.id=8U,.kind=RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter=RenderMaterialGraphParameterMetadata{.defaultValueHint="0.3 0.02 0.01 1"}});
+    graph.nodes.push_back(RenderMaterialGraphNode{.id=9U,.kind=RenderMaterialGraphNodeKind::ConstantScalar,
+        .parameter=RenderMaterialGraphParameterMetadata{.defaultValueHint="0.2"}});
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor,8U,"rgba",RenderMaterialGraphNodeKind::MaterialOutput,1U,"subsurfaceColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar,9U,"value",RenderMaterialGraphNodeKind::MaterialOutput,1U,"clearCoat"));
+    const auto fullArtifact=CookGBufferProofArtifact(graph,0xD670U,cacheDir/"full");
+    const auto compactArtifact=CookGBufferProofArtifact(graph,0xD670U,cacheDir/"compact",kRenderMaterialGraphCompactGBufferPass);
+    DeferredGBufferHarness harness; Require(harness.Initialize(),"Compact subsurface requires a real D3D11 device");
+    const auto geometryVs=ReadAllBytes(geometryVsBin);
+    const auto fullProgram=BuildGraphProgram(geometryVs,fullArtifact), compactProgram=BuildGraphProgram(geometryVs,compactArtifact);
+    const auto resolveProgram=BuildProgram(ReadAllBytes(resolveVsBin),ReadAllBytes(resolveFsBin));
+    Require(bgfx::isValid(fullProgram) && bgfx::isValid(compactProgram) && bgfx::isValid(resolveProgram),
+        "Compact subsurface programs must link");
+    static_cast<void>(harness.Render(fullProgram,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,1.0F,true));
+    const auto full=harness.Resolve(resolveProgram,false,true,true,1.0F);
+    const auto withoutTint=harness.Resolve(resolveProgram,false,true,false,1.0F);
+    static_cast<void>(harness.Render(compactProgram));
+    const auto compact=harness.Resolve(resolveProgram,false,true,false,1.0F);
+    // The full draw left red scattering data in the separate target. A compact
+    // pixel must ignore it when another draw causes that target to be bound.
+    const auto mixed=harness.Resolve(resolveProgram,false,true,true,1.0F);
+    Require(SimilarProbe(compact,mixed,1U),"Compact material consumed another draw's fifth-target data");
+    Require(full.r>full.b+20U && compact.b>compact.r+20U,
+        "Compact subsurface must replace authored red scattering with the blue diffuse tint");
+    Require(SimilarProbe(compact,withoutTint,3U),"Four-target subsurface must retain the same graph base parameters and strength");
+    std::fprintf(stderr,"Compact subsurface full=%u,%u,%u compact=%u,%u,%u\n",full.r,full.g,full.b,compact.r,compact.g,compact.b);
+    const auto normalA=harness.Render(compactProgram,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,1.0F,false,true,false);
+    const auto normalB=harness.Render(compactProgram,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,1.0F,false,true,true);
+    const std::size_t normalPixel=(32U*64U+32U)*4U+2U;
+    Require(std::abs(int(normalA[1][normalPixel])-int(normalB[1][normalPixel]))>200,
+        "Two-sided graph must reverse its shading normal when front-face winding changes");
+    bgfx::destroy(fullProgram); bgfx::destroy(compactProgram); bgfx::destroy(resolveProgram); harness.Shutdown();
+    std::filesystem::remove_all(cacheDir,error);
+}
+
 // Unreal's Fuzz Color: the graph's colour reaches the cloth sheen through the G-buffer custom data
 // target, and only through it.
 void RunDeferredGBufferFuzzColorGpuTest() {
@@ -1560,6 +1620,7 @@ void RunDeferredGBufferFuzzColorGpuTest() {
         "Fuzz Color: a cloth graph with Fuzz Color must write the model colour");
     const RenderMaterialGraphShaderArtifact plainArtifact = CookGBufferProofArtifact(clothGraph(false), 0xD651U, cacheDir / "plain");
     const RenderMaterialGraphShaderArtifact fuzzArtifact = CookGBufferProofArtifact(clothGraph(true), 0xD650U, cacheDir / "fuzz");
+    const auto compactArtifact=CookGBufferProofArtifact(clothGraph(true),0xD650U,cacheDir/"compact",kRenderMaterialGraphCompactGBufferPass);
 
     DeferredGBufferHarness harness;
     if (!harness.Initialize()) {
@@ -1570,6 +1631,8 @@ void RunDeferredGBufferFuzzColorGpuTest() {
     const bgfx::ProgramHandle resolveProgram = BuildProgram(ReadAllBytes(resolveVsBin), ReadAllBytes(resolveFsBin));
     const bgfx::ProgramHandle plainProgram = BuildGraphProgram(geometryVsBytes, plainArtifact);
     const bgfx::ProgramHandle fuzzProgram = BuildGraphProgram(geometryVsBytes, fuzzArtifact);
+    const auto compactProgram=BuildGraphProgram(geometryVsBytes,compactArtifact);
+    Require(bgfx::isValid(compactProgram),"Compact cloth program must link");
     Require(bgfx::isValid(resolveProgram) && bgfx::isValid(plainProgram) && bgfx::isValid(fuzzProgram),
         "Fuzz Color: programs must link");
 
@@ -1583,6 +1646,10 @@ void RunDeferredGBufferFuzzColorGpuTest() {
         "Fuzz Color: the green fuzz colour must tint the deferred cloth sheen");
     Require(SimilarProbe(fuzzWithoutTarget, plain, 3U),
         "Fuzz Color: without the custom data target the sheen must keep the derived colour");
+    static_cast<void>(harness.Render(compactProgram));
+    const auto compact=harness.Resolve(resolveProgram,false,true,false);
+    Require(SimilarProbe(compact,plain,3U),"Four-target cloth variant must render the derived-color fallback");
+    bgfx::destroy(compactProgram);
 
     bgfx::destroy(fuzzProgram);
     bgfx::destroy(plainProgram);
@@ -1621,6 +1688,7 @@ void RunDeferredGBufferEyeIrisGpuTest() {
     const RenderMaterialGraphShaderArtifact scleraArtifact = CookGBufferProofArtifact(eyeGraph(""), 0xD660U, cacheDir / "sclera");
     const RenderMaterialGraphShaderArtifact facingArtifact = CookGBufferProofArtifact(eyeGraph("0 0 1 1"), 0xD661U, cacheDir / "facing");
     const RenderMaterialGraphShaderArtifact awayArtifact = CookGBufferProofArtifact(eyeGraph("0 0 -1 1"), 0xD662U, cacheDir / "away");
+    const auto compactArtifact=CookGBufferProofArtifact(eyeGraph("0 0 -1 1"),0xD662U,cacheDir/"compact",kRenderMaterialGraphCompactGBufferPass);
     // The forward pass lights the iris itself; it must cook on every desktop backend.
     const RenderMaterialGraphCompileResult forwardEye = CompileRenderMaterialGraphToShaderSource(
         eyeGraph("0 0 1 1"), RenderMaterialGraphBuildContext{ .assetId = 0xD663U });
@@ -1646,6 +1714,8 @@ void RunDeferredGBufferEyeIrisGpuTest() {
     const bgfx::ProgramHandle scleraProgram = BuildGraphProgram(geometryVsBytes, scleraArtifact);
     const bgfx::ProgramHandle facingProgram = BuildGraphProgram(geometryVsBytes, facingArtifact);
     const bgfx::ProgramHandle awayProgram = BuildGraphProgram(geometryVsBytes, awayArtifact);
+    const auto compactProgram=BuildGraphProgram(geometryVsBytes,compactArtifact);
+    Require(bgfx::isValid(compactProgram),"Compact eye program must link");
     Require(bgfx::isValid(resolveProgram) && bgfx::isValid(scleraProgram) && bgfx::isValid(facingProgram) && bgfx::isValid(awayProgram),
         "Eye: programs must link");
 
@@ -1662,6 +1732,10 @@ void RunDeferredGBufferEyeIrisGpuTest() {
         "Eye: an iris turned away from the light must lose its diffuse light in deferred lighting");
     Require(SimilarProbe(awayWithoutTarget, sclera, 3U),
         "Eye: without the custom data target the eye must light like its sclera");
+    static_cast<void>(harness.Render(compactProgram));
+    Require(SimilarProbe(harness.Resolve(resolveProgram,false,true,false),sclera,3U),
+        "Four-target eye variant must render the sclera fallback");
+    bgfx::destroy(compactProgram);
 
     bgfx::destroy(awayProgram);
     bgfx::destroy(facingProgram);
@@ -7303,12 +7377,23 @@ void RunDisplayAlphaGpuTests() {
 #endif
 }
 
+void RunGraphCompactGBufferTests() {
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunDeferredGBufferCompactSubsurfaceGpuTest();
+    RunDeferredGBufferFuzzColorGpuTest();
+    RunDeferredGBufferEyeIrisGpuTest();
+#else
+    Require(false,"Compact G-buffer validation requires shader compilation and GPU readback");
+#endif
+}
+
 void RunGraphForwardGpuRenderTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunTerrainLayerWeightTextureUpdatesGpuTest();
     RunDeferredGBufferGraphGpuReadbackProofTest();
     RunDeferredLightingSurfaceSemanticsGpuTest();
     RunDeferredGBufferTextureNormalMapReadbackProofTest();
+    RunDeferredGBufferCompactSubsurfaceGpuTest();
     RunDeferredGBufferFuzzColorGpuTest();
     RunDeferredGBufferEyeIrisGpuTest();
     RunForwardGraphRenderTest();

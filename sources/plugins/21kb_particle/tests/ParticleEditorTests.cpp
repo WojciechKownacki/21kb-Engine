@@ -441,6 +441,9 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(ParticleEmitterInspectorModel::ParseGradient(gradientRow->value, parsedGradient) &&
             parsedGradient.stops.size() == 2U && parsedGradient.stops[0].color.r == 1.0F,
         "ColorOverLife gradient text did not round-trip through ParseGradient");
+    // Copy payloads before Apply replaces the document asset and invalidates iterators.
+    auto editedGradient = std::get<kb::scene::ParticleColorOverLifeModule>(color->payload);
+    auto editedCurve = std::get<kb::scene::ParticleSizeOverLifeModule>(sizeModule->payload);
     auto tinted = allTypesDocument.Asset().emitters[0].spawn;
     tinted.startColor = {0.2F, 0.4F, 0.8F, 1.0F};
     tinted.startSize = 2.0F;
@@ -449,7 +452,8 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
             allTypesDocument.Asset().emitters[0].spawn.startSize == 2.0F,
         "start color and start size did not persist through SetEmitterSpawn");
 
-    auto editedGradient = std::get<kb::scene::ParticleColorOverLifeModule>(color->payload);
+    std::vector<kb::scene::ParticleEffectDiagnostic> curveDiagnostics;
+    const auto beforeCurves = kb::scene::ParticleEffectAssetIO::Serialize(allTypesDocument.Asset(), curveDiagnostics);
     editedGradient.gradient.stops.insert(editedGradient.gradient.stops.begin() + 1,
         kb::math::GradientStop{.time = 0.5F, .color = {1.0F, 0.5F, 0.0F, 1.0F}});
     Require(ParticleEditorCommands::SetModulePayload(
@@ -463,7 +467,6 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
             std::get<kb::scene::ParticleColorOverLifeModule>(colorEdited->payload).gradient.stops.size() == 3U,
         "gradient stop insertion did not persist a genuine three-stop edit");
 
-    auto editedCurve = std::get<kb::scene::ParticleSizeOverLifeModule>(sizeModule->payload);
     editedCurve.curve.keyframes.push_back(kb::math::CurveKeyframe{
         .time = 1.0F, .value = 2.0F, .easing = kb::math::Easing::OutQuad});
     Require(ParticleEditorCommands::SetModulePayload(
@@ -483,6 +486,22 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(ParticleEditorCommands::SetEmitterSpawn(allTypesDocument, allTypesWorkspace, 11U, editedSpawn).Succeeded() &&
             allTypesDocument.Asset().emitters[0].spawn.rateOverTime.keyframes.size() == 2U,
         "spawn rate curve keyframe insertion via SetEmitterSpawn did not persist a genuine two-key edit");
+
+    const auto afterCurves = kb::scene::ParticleEffectAssetIO::Serialize(allTypesDocument.Asset(), curveDiagnostics);
+    Require(beforeCurves.has_value() && afterCurves.has_value(), "curve fixture serialization failed");
+    Require(allTypesDocument.Undo() && allTypesDocument.Undo() && allTypesDocument.Undo() &&
+            kb::scene::ParticleEffectAssetIO::Serialize(allTypesDocument.Asset(), curveDiagnostics) == beforeCurves,
+        "undo did not restore the complete asset before curve and gradient edits");
+    Require(allTypesDocument.Redo() && allTypesDocument.Redo() && allTypesDocument.Redo() &&
+            kb::scene::ParticleEffectAssetIO::Serialize(allTypesDocument.Asset(), curveDiagnostics) == afterCurves,
+        "redo lost curve keys, easing, gradient stops, or unrelated particle parameters");
+    ParticleAssetGateway curveGateway;
+    const auto curvePath = TestRoot() / "CurveGradientRoundtrip.kbvfx";
+    Require(allTypesDocument.Save(curveGateway, curvePath).Succeeded(), "curve and gradient save failed");
+    ParticleEditorDocument curveReload;
+    Require(curveReload.Open(curveGateway, curvePath).Succeeded() &&
+            kb::scene::ParticleEffectAssetIO::Serialize(curveReload.Asset(), curveDiagnostics) == afterCurves,
+        "curve and gradient save/reload changed the complete particle asset");
 
     ParticleEditorDocument atlasDocument;
     ParticleEditorWorkspaceState atlasWorkspace;
@@ -590,7 +609,8 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         kb::particle_plugin::ParticleEffectCompiler::ValidateCapabilities(unsupported);
     Require(capabilityDiagnostics.empty(), "external events should reach dependency validation, not a capability refusal");
     const auto inspector = ParticleEmitterInspectorModel::Build(unsupported, 11U, 2U, nullptr, nullptr);
-    Require(inspector.outputChoices.size() == 8U && inspector.outputChoices[7].enabled &&
+    Require(inspector.outputChoices.size() == 9U && inspector.outputChoices[8].type == kb::scene::ParticleOutputType::Decal &&
+            inspector.outputChoices[8].enabled && inspector.outputChoices[7].enabled &&
             inspector.outputChoices[7].diagnostics.empty() &&
             inspector.modules.size() == 3U && inspector.modules[2].selected &&
             unsupported.emitters[0].output.type == kb::scene::ParticleOutputType::Volumetric,
@@ -1083,7 +1103,8 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
         const auto retained = kb::particles::ParticlePlayback::ReadRenderSnapshot(routingPreview.PreviewScene());
         const auto cpu = Model::ReadExecution(retained.get(), 71U, 11U);
         Require(cpu && cpu->path == Path::Cpu && cpu->reason == Reason::CpuPolicy && cpu->cpuRenderRecords > 0U &&
-            cpu->cpuRenderBytes == cpu->cpuRenderRecords * sizeof(kb::particles::ParticleRenderRecord),
+            cpu->cpuRenderBytes == cpu->cpuRenderRecords * sizeof(kb::particles::ParticleRenderRecord) &&
+            cpu->cpuWorkProfiled,
             "inspector did not read actual CPU routing and render payload cost");
         Require(!Model::ReadExecution(nullptr, 71U, 11U) && !Model::ReadExecution(retained.get(), 73U, 11U) &&
             !Model::ReadExecution(retained.get(), 71U, 12U), "inspector reused data from another effect or emitter");
@@ -1103,7 +1124,7 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
         view.execution = Model::ReadExecution(fallbackSnapshot.get(), 71U, 11U);
         Require(view.execution && view.execution->path == Path::Cpu && view.execution->reason == Reason::LocalAlignment &&
             Model::ExecutionRows(view)[0] == "Simulation: CPU (local-alignment)" &&
-            Model::ExecutionRows(view)[2] == "CPU/GPU timings: Unavailable" &&
+            Model::ExecutionRows(view)[2].starts_with("CPU work:") &&
             Model::ReadExecution(retained.get(), 71U, 11U)->reason == Reason::CpuPolicy,
             "inspector lost the fallback reason, invented timings or mutated a retained snapshot");
         routingPreview.Release([](const kb::scene::Scene&) {});

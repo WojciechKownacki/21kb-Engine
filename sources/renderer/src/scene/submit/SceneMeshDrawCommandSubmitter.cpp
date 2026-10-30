@@ -1,4 +1,5 @@
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+#include "scene/submit/SceneMeshCoverageProbe.hpp"
 #include "kb/render/scene/SceneGpuDrivenCullingPass.hpp"
 
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
@@ -443,14 +444,25 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             desc.stats.gpuDrivenUploadBytes += culled.uploadBytes;
         } else {
             bgfx::setState(command.state);
-            bgfx::submit(desc.viewId, program);
+        bgfx::submit(desc.viewId, program);
         }
 
         desc.stats.submittedMeshCount += submittedInstances;
         ++desc.stats.submittedDrawCallCount;
-        if (desc.pass == MeshPassType::GBuffer && command.materialResource != nullptr &&
-            command.materialResource->graphProgram.writesShadingModelColor && resolution.graphProgram) {
-            ++desc.stats.shadingModelColorDrawCallCount;
+        if (desc.pass == MeshPassType::GBuffer && command.materialResource != nullptr) {
+            const bool compactGraph = resolution.graphProgram && resolution.key.pass == "GBufferCompact";
+            if ((command.materialResource->graphProgram.writesShadingModelColor && resolution.graphProgram && !compactGraph) ||
+                (!resolution.graphProgram && resolution.key.pass == "GBufferLayered")) {
+                ++desc.stats.shadingModelColorDrawCallCount;
+            } else if (desc.diagnostics != nullptr && (compactGraph ||
+                (!resolution.graphProgram && command.materialResource->subsurfaceFactor > 0.0F))) {
+                desc.diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Warning,
+                    .kind = SceneRenderDiagnosticKind::MaterialShadingFallback,
+                    .materialAssetId = command.materialAssetId,
+                    .instanceCount = submittedInstances,
+                });
+            }
         }
         ++desc.stats.submittedDrawGroupCount;
         if (desc.pass == MeshPassType::ShadowDepth) {

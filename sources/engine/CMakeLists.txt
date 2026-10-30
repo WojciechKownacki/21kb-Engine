@@ -24,6 +24,7 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioMixerAssetIO.hpp
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
+    include/engine/audio/AudioDiagnostics.hpp
     include/engine/audio/AudioMetering.hpp
     include/engine/audio/AudioMixerPreview.hpp
     include/engine/audio/AudioSettings.hpp
@@ -1249,6 +1250,10 @@ add_library(kb_engine STATIC
     src/script/lua/api/PucLuaSelfApi.cpp
     src/script/lua/api/PucLuaSharedApi.cpp
     src/script/lua/api/PucLuaTaskApi.cpp
+    src/script/LuaDebugFileTransport.cpp
+    include/engine/script/LuaDebugFileTransport.hpp
+    src/script/LuaDebugSession.cpp
+    include/engine/script/LuaDebugSession.hpp
     src/script/lua/PucLuaDebugHook.cpp
     src/script/lua/PucLuaRuntimeApi.cpp
     src/script/lua/PucLuaSafeCall.cpp
@@ -1280,6 +1285,7 @@ add_library(kb_engine STATIC
     src/private/script/ScriptFunctionDocumentation.hpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptInputRebindApi.cpp
     src/script/ScriptLocalizationApi.cpp
     src/script/ScriptMaterialInstanceApi.cpp
     src/script/ScriptMathApi.cpp
@@ -1739,6 +1745,7 @@ add_library(kb_engine STATIC
     src/input/InputAssetIO.cpp
     src/input/InputAssetLoaders.cpp
     src/input/InputRebinding.cpp
+    src/input/InputRebindSession.cpp
     src/input/InputRecording.cpp
     src/input/InputText.cpp
     src/input/InputModifiers.cpp
@@ -1762,7 +1769,7 @@ if(WIN32)
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
-    target_link_libraries(kb_engine PRIVATE user32 xinput dinput8 dxguid bcrypt shell32)
+    target_link_libraries(kb_engine PRIVATE user32 xinput dinput8 dxguid bcrypt shell32 imm32)
     if(BUILD_TESTING)
         add_executable(kb_win32_gamepad_host_tests tests/Win32GamepadHostTests.cpp)
         target_link_libraries(kb_win32_gamepad_host_tests PRIVATE kb_engine)
@@ -2325,6 +2332,7 @@ if(BUILD_TESTING)
     kb_add_ecs_test_target(kb_ecs_observer_identity_tests tests/EcsObserverIdentityTests.cpp)
     kb_add_ecs_test_target(kb_ecs_cascade_owner_tests tests/EcsCascadeOwnerTests.cpp)
     kb_add_ecs_test_target(kb_ecs_native_allocation_policy_tests tests/EcsNativeAllocationPolicyTests.cpp)
+    kb_add_ecs_test_target(kb_ecs_resource_handle_tests tests/EcsResourceHandleTests.cpp)
     kb_add_ecs_test_target(kb_ecs_retained_chunk_prefix_tests tests/EcsRetainedChunkPrefixTests.cpp)
     set_tests_properties(kb_ecs_retained_chunk_prefix_tests PROPERTIES LABELS "ecs;storage;correctness")
     set_tests_properties(kb_ecs_observer_identity_tests kb_ecs_cascade_owner_tests kb_ecs_native_allocation_policy_tests
@@ -2372,7 +2380,9 @@ if(BUILD_TESTING)
         tests/EcsSchedulerCorrectnessTestMain.cpp
         tests/EcsSystemSchedulerTests.cpp
         tests/EcsWorkerPoolTests.cpp
+        tests/SceneSystemParallelTests.cpp
     )
+    target_include_directories(kb_ecs_scheduler_correctness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
     if(WIN32)
         add_library(kb_ecs_graph_module_fixture SHARED tests/EcsGraphModuleFixture.cpp)
         target_link_libraries(kb_ecs_graph_module_fixture PRIVATE kb_engine)
@@ -2438,6 +2448,13 @@ if(BUILD_TESTING)
     set_tests_properties(kb_lua_state_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
     add_executable(kb_ecs_workload_benchmark tests/EcsWorkloadBenchmark.cpp)
-    target_link_libraries(kb_ecs_workload_benchmark PRIVATE kb_engine)
+    add_executable(kb_ecs_worker_scaling_benchmark tests/EcsWorkerScalingBenchmark.cpp)
+    target_link_libraries(kb_ecs_worker_scaling_benchmark PRIVATE kb_engine flecs::flecs_static)
+    kb_apply_quality_gates(kb_ecs_worker_scaling_benchmark)
+    target_link_libraries(kb_ecs_workload_benchmark PRIVATE kb_engine flecs::flecs_static)
+    if(WIN32)
+        target_link_libraries(kb_ecs_workload_benchmark PRIVATE psapi)
+        target_link_libraries(kb_ecs_worker_scaling_benchmark PRIVATE psapi)
+    endif()
     kb_apply_quality_gates(kb_ecs_workload_benchmark)
 endif()

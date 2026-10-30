@@ -214,7 +214,39 @@ as commands, played back in registration order after the group (the ECS `Command
 lanes and a defined playback order, see above). AI thinking and the gameplay senses are read heavy and
 would be the first candidates; they need splitting into a read part and a write part first.
 
-## Dependency graph execution
+
+## Storage workload measurements
+
+`python scripts/benchmark_ecs.py --build-dir <release-build> --output <report.json>`
+builds the workload and worker-scaling executables, then repeats equal integration
+workloads and validates their results. The report records the revision, whether the
+tree is dirty, compiler, build configuration and executable hashes, plus latency
+percentiles, process memory and allocation-request counts. The direct Flecs reference
+uses a different structural-change API, so its timings do not imply identical overhead.
+
+`kb_ecs_workload_benchmark <entities> <frames> direct-add` compares with
+`native-only direct-add` and `flecs-reference`. Each path creates the same position
+and velocity columns, integrates ten warmup frames plus the requested frames, adds
+an Active component and checks all resulting positions and active entities. The
+reference calls the Flecs C bulk/query/set APIs directly. Structural timings include
+the chosen API's overhead; they do not imply identical implementation algorithms.
+
+Output separates C++ allocation requests, Flecs C allocator requests, native storage
+capacity accounting, and measured process private/working-set bytes on Windows.
+Process memory includes runtime and benchmark bookkeeping; it is not an ECS-only
+heap total. The automated workflow runs each path three times at 20k, 100k and 200k
+entities and checks identical complete-result checksums before comparing timings.
+
+`kb_cli run --project <project> --report ecs` includes `storage_path`, identifying
+native storage and its mirroring flags. Backend observers see current values for
+backend-bound entities, including writes made before registration. Native-only
+entities deliberately publish no backend events; use the default mirrored path
+for providers whose lifecycle depends on these events. External resources remain
+in an owning provider, while hot components carry trivially copyable handles with
+explicit retention and generation validation.
+
+
+## Worker limits and bounded profiler history
 
 `SystemSchedulerParallelismMode::SystemsAndChunks` is an opt-in execution mode
 for ECS systems. Dependencies release graph successors as they complete; sync
@@ -249,3 +281,44 @@ observer exceptions during application are not a rollback transaction. Chunk
 snapshots contain native component columns; they do not capture physics solver
 state, Lua execution state, entity names or backend relations. They must not be
 used alone as a complete runtime continuation snapshot.
+
+`kb_cli run --project <project> --workers 4 --report ecs --ecs-history 32`
+sets a per-pool scene worker limit and retains only the latest 32 frame snapshots.
+The worker option accepts 1 through 64; omitting it preserves automatic sizing.
+It configures ECS scheduling, transform evaluation, animator evaluation and opt-in
+parallel scene systems. It does not configure independent graphics, audio, physics
+provider or asset-loader threads.
+
+History is opt-in, requires the ECS report, and accepts 1 through 256 frames. Older
+samples are removed before new ones are stored, independently of session duration.
+Every numeric telemetry field has a `metric_descriptors` entry with its unit and
+`measured`, `estimated` or `derived` basis. Memory counters describe native storage
+capacity, not whole-process residency; query traffic is an estimate, not a hardware
+bandwidth counter. Query CPU time sums work and is not frame wall time.
+
+The editor's Options > Profiler panel displays the current scene's ECS entity/chunk
+counts, storage memory, allocations, query cache and query timings. It uses the same
+world telemetry as the CLI and keeps no unbounded history.
+
+When the ECS profiler is enabled, the scene runtime records ordered elapsed intervals
+for streaming, transform synchronization, scene update, fixed-step phases and ECS
+execution. `kb_cli run --report ecs` exports these intervals from the last update;
+the fixed simulation phase includes physics systems. Headless CLI execution does not
+render. `kb_game --profile-file=<path>` records scene update, fixed simulation, ECS and
+render timings for each frame. Its `processing_wall_ms` is elapsed processing time,
+not thread CPU time. The accompanying `.trace.jsonl` file contains one versioned
+record per frame, including scene phases, individual scene-system callbacks, render
+submission and ECS system intervals with dependencies. Scene-system type labels are
+compiler-specific; worker null denotes the owner thread, and dispatch groups describe
+the order of scene scheduler groups. Queue wait is measured from group submission to
+the worker callback starting; it is not CPU time. The scheduler origin ties its relative system times to the same
+steady-clock frame timeline as scene and render stages.
+The editor's headless frame profile uses the same elapsed-time label.
+Frame trace rendering metrics separate scene synchronization, draw count and delayed
+GPU timing. `--profile-scene-overdraw` opts in to an additional GPU replay of opaque,
+GBuffer and transparent mesh and particle draws with depth testing set to always and
+target writes disabled. The delayed sample count is normalized by target pixels; it
+excludes UI, sky, shadows and post-processing. A result is unavailable if queries cannot cover the
+entire measured set or if multiple viewports cannot be distinguished. The queries add
+draw and shader overhead and should not be enabled for ordinary frame-time benchmarks. None of these individual
+metrics alone implies an overall frame-time improvement.

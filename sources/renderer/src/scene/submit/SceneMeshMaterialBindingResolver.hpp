@@ -13,6 +13,10 @@ struct SceneMeshMaterialBinding {
     bgfx::TextureHandle metallicRoughnessTexture = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle occlusionTexture = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle emissiveTexture = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle clearcoatTexture = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle clearcoatRoughnessTexture = BGFX_INVALID_HANDLE;
+    std::array<float, 4> layers{};
+    std::array<float, 4> subsurface{};
     std::array<float, 4> params{};
     std::array<float, 4> emissive{};
     std::array<float, 4> flags{};

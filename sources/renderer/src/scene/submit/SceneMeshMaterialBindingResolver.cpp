@@ -126,7 +126,7 @@ namespace {
     return {
         MaterialAlphaModeValue(material == nullptr ? RenderMaterialAlphaMode::Opaque : material->alphaMode),
         std::clamp(material == nullptr ? 1.0F : material->occlusionStrength, 0.0F, 1.0F),
-        0.0F,
+        material != nullptr && material->doubleSided ? 1.0F : 0.0F,
         0.0F,
     };
 }
@@ -157,6 +157,16 @@ SceneMeshMaterialBinding SceneMeshMaterialBindingResolver::Resolve(
         .metallicRoughnessTexture = ResolveMetallicRoughnessTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .occlusionTexture = ResolveOcclusionTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .emissiveTexture = ResolveEmissiveTexture(material, resources, resourceMap, fallbacks.whiteTexture),
+        .clearcoatTexture = material == nullptr ? fallbacks.whiteTexture : ResolveMaterialTexture(
+            RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::Clearcoat), resources, resourceMap, fallbacks.whiteTexture),
+        .clearcoatRoughnessTexture = material == nullptr ? fallbacks.whiteTexture : ResolveMaterialTexture(
+            RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::ClearcoatRoughness), resources, resourceMap, fallbacks.whiteTexture),
+        .layers = material == nullptr ? std::array<float,4>{} : std::array<float,4>{
+            std::clamp(material->clearcoatFactor,0.0F,1.0F), std::clamp(material->clearcoatRoughnessFactor,0.02F,1.0F),
+            std::clamp(material->subsurfaceFactor,0.0F,1.0F), 0.0F},
+        .subsurface = material == nullptr ? std::array<float,4>{} : std::array<float,4>{
+            std::clamp(material->subsurfaceColor[0],0.0F,1.0F), std::clamp(material->subsurfaceColor[1],0.0F,1.0F),
+            std::clamp(material->subsurfaceColor[2],0.0F,1.0F), 0.0F},
         .params = MaterialParams(material, normalTextureResolved),
         .emissive = MaterialEmissive(material),
         .flags = MaterialFlags(material),

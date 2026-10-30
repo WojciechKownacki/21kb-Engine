@@ -1,0 +1,120 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "MixerWorkflow",
+      "template": "Empty"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Audio/Main.kbmixer",
+      "content": "kbmixer 1\nbus Output - 0.25 0\nbus Effects Output 1 0\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "select_asset",
+      "asset": "/Game/Audio/Main.kbmixer"
+    },
+    {
+      "op": "capture",
+      "panel": "audio-mixer",
+      "checkpoint": "mixer-before",
+      "width": 600,
+      "height": 420
+    },
+    {
+      "op": "audio_mixer_pointer",
+      "x": 180,
+      "y": 362,
+      "width": 600,
+      "height": 420
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Audio/Main.kbmixer",
+      "contains": "bus Output - 0.25 1"
+    },
+    {
+      "op": "capture",
+      "panel": "audio-mixer",
+      "checkpoint": "mixer-muted",
+      "width": 600,
+      "height": 420
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Audio/Main.kbmixer",
+      "contains": "bus Output - 0.25 0"
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Audio/Main.kbmixer",
+      "contains": "bus Output - 0.25 1"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "audio_mixer_pointer",
+      "x": 430,
+      "y": 339,
+      "width": 600,
+      "height": 420
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Audio/Main.kbmixer",
+      "contains": "bus Effects Output 0 0"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Audio/Main.kbmixer",
+      "contains": "bus Effects Output 1 0"
+    },
+    {
+      "op": "audio_mixer_pointer",
+      "x": 195,
+      "y": 20,
+      "width": 240,
+      "height": 420
+    },
+    {
+      "op": "capture",
+      "panel": "audio-mixer",
+      "checkpoint": "mixer-narrow",
+      "width": 240,
+      "height": 420
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/MixerWorkflow.21kbscene"
+    },
+    {
+      "op": "select_asset",
+      "asset": "/Game/Audio/Main.kbmixer"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Audio/Main.kbmixer",
+      "contains": "bus Output - 0.25 0"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

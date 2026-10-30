@@ -7,6 +7,8 @@
 #include "kb/net/SceneClient.hpp"
 
 #include "engine/input/InputHaptics.hpp"
+#include "engine/core/JsonValue.hpp"
+#include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/modules/IEngineModule.hpp"
@@ -73,8 +75,10 @@ struct GameOptions {
     std::uint32_t height = kDefaultWindowHeight;
     bool fullscreen = false;
     bool headless = false;
+    std::filesystem::path luaDebugDirectory;
     bool uncapped = false;
     bool profileFixedStep = false;
+    bool profileSceneOverdraw = false;
     bool particleDiagnostics = false;
     bool particleRequireGpu = false;
     std::uint32_t particleSamples = 64U;
@@ -101,6 +105,7 @@ Usage: kb_game [options]
   --width=<64..8192> --height=<64..8192>  window size
   --fullscreen                      primary monitor, native resolution
   --headless                        render without showing the window (needs --frames)
+  --lua-debug-dir=<new-directory>   enable the local Lua debugger endpoint
   --frames=<n>                      stop after n frames
   --particle-diagnostics            terminal particle JSON; fixed 1/60 step, uncapped
                                     (needs --headless --frames=1..36000)
@@ -112,6 +117,7 @@ Usage: kb_game [options]
   --profile-file=<file>             per-frame timings (needs --frames=1..120000)
   --input-replay=<file>             replay recorded input and time (needs --headless --frames)
   --profile-fixed-step              fixed time step while profiling (needs --headless)
+  --profile-scene-overdraw           measure scene geometry and particle overdraw (needs --profile-file)
   --profile-lighting=Forward|ForwardPlus|Deferred
   --renderer=d3d11|d3d12|vulkan|opengl  graphics backend (default: the platform's)
   --help                            this text
@@ -159,6 +165,9 @@ struct GameFrameProfile {
     float renderCameraZ = 0.0F;
     bool renderCameraValid = false;
     kb::world::WorldMemoryReport worldMemory{};
+    double sceneUpdateMilliseconds = 0.0;
+    double fixedSimulationMilliseconds = 0.0;
+    double ecsSystemsMilliseconds = 0.0;
 };
 
 std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::WorldMemoryReport& report) {
@@ -181,10 +190,11 @@ std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::Wor
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 9U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 10U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
+    L"--profile-scene-overdraw",
     L"--profile-lighting=",
     L"--profile-file=",
     L"--screenshot-file=",
@@ -284,6 +294,9 @@ constexpr std::array<std::wstring_view, 9U> kDevelopmentSwitches{
             options.fullscreen = true;
         } else if (argument == L"--uncapped") {
             options.uncapped = true;
+        } else if (HasPrefix(argument, L"--lua-debug-dir=")) {
+            options.luaDebugDirectory = std::wstring{argument.substr(16U)};
+            if (options.luaDebugDirectory.empty()) return false;
         } else if (argument == L"--headless") {
             options.headless = true;
         } else if (argument == L"--particle-diagnostics") {
@@ -298,6 +311,8 @@ constexpr std::array<std::wstring_view, 9U> kDevelopmentSwitches{
             }
         } else if (argument == L"--profile-fixed-step") {
             options.profileFixedStep = true;
+        } else if (argument == L"--profile-scene-overdraw") {
+            options.profileSceneOverdraw = true;
         } else if (HasPrefix(argument, L"--screenshot-file=")) {
             if (argument.size() == 18U) {
                 std::cerr << "kb_game: --screenshot-file requires a path\n";
@@ -357,6 +372,10 @@ constexpr std::array<std::wstring_view, 9U> kDevelopmentSwitches{
     }
     if (options.profileFixedStep && (!options.headless || options.profilePath.empty())) {
         std::cerr << "kb_game: --profile-fixed-step requires --headless and --profile-file\n";
+        return false;
+    }
+    if (options.profileSceneOverdraw && options.profilePath.empty()) {
+        std::cerr << "kb_game: --profile-scene-overdraw requires --profile-file\n";
         return false;
     }
     if (!options.inputReplayPath.empty() && (!options.headless || options.frameLimit == 0U ||
@@ -450,11 +469,10 @@ int RunGame(const GameOptions& options) {
         }
         inputReplay = std::move(loaded.asset);
     }
-    if (options.fullscreen &&
-        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 &&
+    if (SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 &&
         AreDpiAwarenessContextsEqual(
             GetThreadDpiAwarenessContext(), DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0) {
-        std::cerr << "kb_game: fullscreen requires per-monitor DPI awareness\n";
+        std::cerr << "kb_game: per-monitor DPI awareness is required\n";
         return EXIT_FAILURE;
     }
     kb::game::GameProjectRuntime projectRuntime{};
@@ -582,6 +600,13 @@ int RunGame(const GameOptions& options) {
         network = std::make_unique<kb::net::SceneClient>(scene, std::move(*networkOptions),
             [](std::string& error) { return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0,0,0,0,0), error); });
     }
+    if (!options.luaDebugDirectory.empty()) {
+        std::string error;
+        if (!scriptActive || !scriptModule->Host()->StartLuaDebugger(options.luaDebugDirectory, error)) {
+            std::cerr << "kb_game: cannot start Lua debugger: " << error << '\n';
+            return EXIT_FAILURE;
+        }
+    }
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
     std::cout << "kb_game: project=" << kb::game::NarrowForDiagnostics(projectRuntime.projectRoot)
               << " scene=" << kb::game::NarrowForDiagnostics(scenePath)
@@ -618,6 +643,7 @@ int RunGame(const GameOptions& options) {
     }
 
     std::ofstream profileOutput;
+    std::ofstream profileTraceOutput;
     std::vector<GameFrameProfile> profileRows;
     if (!options.profilePath.empty()) {
         profileOutput.open(options.profilePath, std::ios::trunc);
@@ -627,8 +653,38 @@ int RunGame(const GameOptions& options) {
             return EXIT_FAILURE;
         }
         profileOutput.imbue(std::locale::classic());
-        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes,transform_ms,scene_sync_ms,transform_inspected,transform_updated,mesh_command_reuse,scene_entities,streaming_operations,streaming_ms,render_camera_x,render_camera_y,render_camera_z,render_camera_valid,world_budget_bytes,world_cell_estimate_bytes,world_resident_units,world_measured_bytes,world_estimated_bytes,world_error_ratio,world_cpu_source,world_cpu_bytes,world_cpu_baseline_bytes,world_instances_source,world_instances_bytes,world_instances_baseline_bytes,world_scripts_source,world_scripts_bytes,world_scripts_baseline_bytes,world_physics_source,world_physics_bytes,world_physics_baseline_bytes,world_gpu_source,world_gpu_bytes,world_gpu_baseline_bytes,world_known_payload_bytes,world_unmeasured_payloads,world_baseline_unmeasured_payloads\n";
+        auto tracePath = options.profilePath;
+        tracePath += ".trace.jsonl";
+        profileTraceOutput.open(tracePath, std::ios::trunc);
+        if (!profileTraceOutput) {
+            std::cerr << "kb_game: frame trace file could not be opened\n";
+            return EXIT_FAILURE;
+        }
+        profileOutput << "frame,processing_wall_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes,transform_ms,scene_sync_ms,transform_inspected,transform_updated,mesh_command_reuse,scene_entities,streaming_operations,streaming_ms,render_camera_x,render_camera_y,render_camera_z,render_camera_valid,world_budget_bytes,world_cell_estimate_bytes,world_resident_units,world_measured_bytes,world_estimated_bytes,world_error_ratio,world_cpu_source,world_cpu_bytes,world_cpu_baseline_bytes,world_instances_source,world_instances_bytes,world_instances_baseline_bytes,world_scripts_source,world_scripts_bytes,world_scripts_baseline_bytes,world_physics_source,world_physics_bytes,world_physics_baseline_bytes,world_gpu_source,world_gpu_bytes,world_gpu_baseline_bytes,world_known_payload_bytes,world_unmeasured_payloads,world_baseline_unmeasured_payloads,scene_update_ms,fixed_simulation_ms,ecs_systems_ms\n";
+        auto metadataPath = options.profilePath; metadataPath += ".meta.json";
+        std::ofstream metadataOutput(metadataPath, std::ios::trunc);
+        auto metadata = kb::core::JsonValue::MakeObject();
+        const auto& capabilities = renderer.CapabilityReport();
+        metadata.Set("schema", kb::core::JsonValue::MakeString("21kb.scene-profile/v1"));
+        metadata.Set("backend", kb::core::JsonValue::MakeString(capabilities.selectedBackendName));
+        metadata.Set("vendor_id", kb::core::JsonValue::MakeNumber(capabilities.vendorId));
+        metadata.Set("device_id", kb::core::JsonValue::MakeNumber(capabilities.deviceId));
+        metadata.Set("requested_backend", kb::core::JsonValue::MakeNumber(options.rendererType));
+        metadata.Set("width", kb::core::JsonValue::MakeNumber(window.Width()));
+        metadata.Set("height", kb::core::JsonValue::MakeNumber(window.Height()));
+        metadata.Set("frame_limit", kb::core::JsonValue::MakeNumber(options.frameLimit));
+        metadata.Set("fixed_step", kb::core::JsonValue::MakeBool(options.profileFixedStep));
+        metadata.Set("headless", kb::core::JsonValue::MakeBool(options.headless));
+        metadata.Set("uncapped", kb::core::JsonValue::MakeBool(options.uncapped || options.particleDiagnostics));
+        metadata.Set("overdraw_enabled", kb::core::JsonValue::MakeBool(options.profileSceneOverdraw));
+        metadata.Set("driver_version", kb::core::JsonValue::MakeNull());
+        metadata.Set("driver_version_basis", kb::core::JsonValue::MakeString("bgfx does not expose a portable driver version; the profiling harness records the OS adapter driver"));
+        metadataOutput << metadata.Dump() << '\n';
+        metadataOutput.flush();
+        if (!metadataOutput) { std::cerr << "kb_game: profile metadata could not be written\n"; return EXIT_FAILURE; }
         profileRows.reserve(options.frameLimit);
+        scene.Runtime().SetEcsProfilerEnabled(true);
+        renderer.SetMeshCoverageEnabled(options.profileSceneOverdraw);
     }
     kb::input::Win32XInputHapticsBackend hapticsBackend;
     kb::input::InputHaptics::RegisterBackend(scene, hapticsBackend);
@@ -638,6 +694,7 @@ int RunGame(const GameOptions& options) {
     std::uint32_t observedParticleCompute = 0U;
     std::uint32_t observedParticleDraws = 0U;
     bool runtimeClean = true;
+    std::uint32_t reportedShadowDrops = 0U, reportedGiBoxes = 0U;
     // A shipped game outlives faults in its content. Each distinct script,
     // scene-system or render error is logged once with the entity and asset it
     // concerns; the script host disables the failing behaviour, the renderer
@@ -701,6 +758,7 @@ int RunGame(const GameOptions& options) {
             reportError("network session update failed");
             break;
         }
+        if (!options.headless) inputCollector.SynchronizeTextInput(scene, window.Handle());
         for (std::string& error : kb::game::DrainGameRuntimeErrors(
                  scene, scriptActive ? scriptModule : nullptr)) {
             reportError(std::move(error));
@@ -748,6 +806,126 @@ int RunGame(const GameOptions& options) {
                 : -1.0;
             const double cpuTickMilliseconds = gpu != nullptr && gpu->cpuTimerFreq > 0
                 ? 1000.0 / static_cast<double>(gpu->cpuTimerFreq) : 0.0;
+            const auto hotPath = scene.Runtime().HotPathReport();
+            using kb::core::JsonValue;
+            auto frameTrace = JsonValue::MakeObject();
+            frameTrace.Set("schema", JsonValue::MakeString("21kb.frame-trace/v1"));
+            frameTrace.Set("frame", JsonValue::MakeNumber(renderedFrames));
+            frameTrace.Set("basis", JsonValue::MakeString("elapsed intervals on a shared steady clock; ECS system times are relative to ecs_scheduler_origin_ns"));
+            auto rendering = JsonValue::MakeObject();
+            rendering.Set("scene_sync_ms", JsonValue::MakeNumber(renderer.LastSceneSynchronizationMilliseconds()));
+            rendering.Set("draw_count", JsonValue::MakeNumber(renderStats.submittedDrawCallCount));
+            rendering.Set("gi_triangle_meshes", JsonValue::MakeNumber(renderStats.giGeometryMeshCount));
+            rendering.Set("gi_box_meshes", JsonValue::MakeNumber(renderStats.giBoundingBoxMeshCount));
+            rendering.Set("shadow_lights_selected", JsonValue::MakeNumber(renderStats.selectedShadowLightCount));
+            rendering.Set("shadow_lights_dropped", JsonValue::MakeNumber(renderStats.droppedShadowLightCount));
+            const auto resourceMemory = renderer.RuntimeResourceStats().memory;
+            auto memory = JsonValue::MakeObject();
+            const auto estimate = [&](const char* name, std::uint64_t bytes) { memory.Set(name, JsonValue::MakeString(std::to_string(bytes))); };
+            estimate("mesh_payload_bytes", resourceMemory.meshBytes);
+            estimate("texture_payload_bytes", resourceMemory.textureBytes);
+            estimate("pending_mesh_payload_bytes", resourceMemory.pendingMeshBytes);
+            estimate("pending_texture_payload_bytes", resourceMemory.pendingTextureBytes);
+            estimate("retained_payload_bytes", resourceMemory.RetainedBytes());
+            estimate("peak_retained_payload_bytes", resourceMemory.peakRetainedBytes);
+            estimate("allocated_payload_bytes", resourceMemory.allocatedBytes);
+            estimate("released_payload_bytes", resourceMemory.releasedBytes);
+            memory.Set("registry_basis", JsonValue::MakeString("logical mesh/texture payload estimates including deferred destruction; excludes staging, driver padding and resources owned outside the registry; not measured residency"));
+            const auto bgfxBytes = [&](const char* name, std::int64_t bytes) { memory.Set(name,
+                bytes >= 0 ? JsonValue::MakeString(std::to_string(bytes)) : JsonValue::MakeNull()); };
+            bgfxBytes("bgfx_texture_estimate_bytes", gpu ? gpu->textureMemoryUsed : -1);
+            bgfxBytes("bgfx_render_target_estimate_bytes", gpu ? gpu->rtMemoryUsed : -1);
+            bgfxBytes("driver_gpu_used_bytes", gpu ? gpu->gpuMemoryUsed : -1);
+            bgfxBytes("driver_gpu_max_bytes", gpu ? gpu->gpuMemoryMax : -1);
+            memory.Set("driver_basis", JsonValue::MakeString("backend-reported GPU memory; null when unavailable; asynchronous, backend-specific scope, including the entire adapter on D3D11/NVAPI; not scene or application residency"));
+            rendering.Set("memory", std::move(memory));
+            rendering.Set("gpu_ms", gpuMilliseconds >= 0.0 ? JsonValue::MakeNumber(gpuMilliseconds) : JsonValue::MakeNull());
+            rendering.Set("bgfx_frame", JsonValue::MakeNumber(renderer.LastCompletedFrame()));
+            rendering.Set("gpu_frame", gpu != nullptr ? JsonValue::MakeNumber(gpu->gpuFrameNum) : JsonValue::MakeNull());
+            rendering.Set("gpu_time_basis", JsonValue::MakeString(options.profileSceneOverdraw
+                ? "delayed bgfx GPU frame timing including diagnostic mesh replays; unavailable when the backend does not expose it"
+                : "delayed bgfx GPU frame timing; unavailable when the backend does not expose it"));
+            const auto coverage = renderer.LastMeshCoverage();
+            const double pixelCount = static_cast<double>(coverage.width) * coverage.height;
+            rendering.Set("overdraw", coverage.available && pixelCount > 0.0
+                ? JsonValue::MakeNumber(static_cast<double>(coverage.passingSamples + coverage.particleSamples) / pixelCount)
+                : JsonValue::MakeNull());
+            rendering.Set("overdraw_basis", JsonValue::MakeString("delayed depth-independent GPU replay of 3D mesh and particle samples per target pixel; excludes UI, sky, shadow and post-processing and adds GPU cost"));
+            auto meshCoverage = JsonValue::MakeObject();
+            meshCoverage.Set("enabled", JsonValue::MakeBool(options.profileSceneOverdraw));
+            meshCoverage.Set("available", JsonValue::MakeBool(coverage.available));
+            meshCoverage.Set("samples_per_pixel", coverage.available && coverage.width && coverage.height
+                ? JsonValue::MakeNumber(static_cast<double>(coverage.passingSamples) /
+                    (static_cast<double>(coverage.width) * coverage.height)) : JsonValue::MakeNull());
+            meshCoverage.Set("passing_samples", coverage.available ? JsonValue::MakeNumber(static_cast<double>(coverage.passingSamples)) : JsonValue::MakeNull());
+            meshCoverage.Set("frame", coverage.available ? JsonValue::MakeNumber(static_cast<double>(coverage.frame)) : JsonValue::MakeNull());
+            meshCoverage.Set("draws", JsonValue::MakeNumber(coverage.measuredDraws));
+            meshCoverage.Set("unavailable_reason", coverage.available ? JsonValue::MakeNull() : JsonValue::MakeString(
+                options.profileSceneOverdraw ? "no complete GPU query result is available" : "measurement was not enabled"));
+            meshCoverage.Set("basis", JsonValue::MakeString("delayed GPU samples from depth-independent mesh replay; excludes particles, UI, sky, shadows and post-processing; adds draw and shader cost"));
+            rendering.Set("mesh_overdraw", std::move(meshCoverage));
+            auto particleCoverage = JsonValue::MakeObject();
+            particleCoverage.Set("passing_samples", coverage.available ? JsonValue::MakeNumber(static_cast<double>(coverage.particleSamples)) : JsonValue::MakeNull());
+            particleCoverage.Set("draws", JsonValue::MakeNumber(coverage.particleDraws));
+            rendering.Set("particle_overdraw", std::move(particleCoverage));
+            frameTrace.Set("rendering", std::move(rendering));
+            const auto nsFromFrame = [profileBegin](auto time) {
+                return static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(time - profileBegin).count());
+            };
+            const auto frameOrigin = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(profileBegin.time_since_epoch()).count());
+            const double sceneOffset = static_cast<double>(hotPath.runtimeUpdateStartSteadyNanoseconds - frameOrigin);
+            auto stages = JsonValue::MakeArray();
+            for (const auto& stage : hotPath.runtimeStages) {
+                auto entry = JsonValue::MakeObject();
+                entry.Set("name", JsonValue::MakeString(stage.name));
+                entry.Set("start_ns", JsonValue::MakeNumber(sceneOffset + static_cast<double>(stage.startNanoseconds)));
+                entry.Set("end_ns", JsonValue::MakeNumber(sceneOffset + static_cast<double>(stage.endNanoseconds)));
+                stages.Append(std::move(entry));
+            }
+            auto renderStage = JsonValue::MakeObject();
+            renderStage.Set("name", JsonValue::MakeString("render.submit_and_frame"));
+            renderStage.Set("start_ns", JsonValue::MakeNumber(nsFromFrame(profileSimulationEnd)));
+            renderStage.Set("end_ns", JsonValue::MakeNumber(nsFromFrame(profileEnd)));
+            stages.Append(std::move(renderStage));
+            frameTrace.Set("stages", std::move(stages));
+            auto sceneSystems = JsonValue::MakeArray();
+            for (const auto& timing : hotPath.sceneSystems) {
+                auto entry = JsonValue::MakeObject();
+                entry.Set("type", JsonValue::MakeString(timing.systemType));
+                entry.Set("phase", JsonValue::MakeString(timing.phase));
+                entry.Set("start_ns", JsonValue::MakeNumber(sceneOffset + static_cast<double>(timing.startNanoseconds)));
+                entry.Set("end_ns", JsonValue::MakeNumber(sceneOffset + static_cast<double>(timing.endNanoseconds)));
+                entry.Set("worker", timing.ownerThread ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(timing.workerIndex)));
+                entry.Set("dispatch_group", JsonValue::MakeNumber(static_cast<double>(timing.dispatchGroup)));
+                entry.Set("queue_wait_ns", JsonValue::MakeNumber(static_cast<double>(timing.queueWaitNanoseconds)));
+                sceneSystems.Append(std::move(entry));
+            }
+            frameTrace.Set("scene_systems", std::move(sceneSystems));
+            auto systems = JsonValue::MakeArray();
+            const auto& ecsTrace = scene.Runtime().LastEcsProfilerTrace();
+            frameTrace.Set("ecs_scheduler_origin_ns", ecsTrace.frameStartSteadyNanoseconds >= frameOrigin
+                ? JsonValue::MakeNumber(static_cast<double>(ecsTrace.frameStartSteadyNanoseconds - frameOrigin)) : JsonValue::MakeNull());
+            for (const auto& event : ecsTrace.events) {
+                auto entry = JsonValue::MakeObject();
+                entry.Set("name", JsonValue::MakeString(event.systemName));
+                entry.Set("worker", JsonValue::MakeNumber(static_cast<double>(event.workerIndex)));
+                entry.Set("start_ns", JsonValue::MakeNumber(static_cast<double>(event.startTimeNanoseconds)));
+                entry.Set("end_ns", JsonValue::MakeNumber(static_cast<double>(event.endTimeNanoseconds)));
+                entry.Set("wait_ns", JsonValue::MakeNumber(static_cast<double>(event.waitTimeNanoseconds)));
+                auto dependencies = JsonValue::MakeArray();
+                for (const auto& dependency : event.blockedDependencies) dependencies.Append(JsonValue::MakeString(dependency));
+                entry.Set("dependencies", std::move(dependencies));
+                systems.Append(std::move(entry));
+            }
+            frameTrace.Set("ecs_systems_relative_to_scheduler", std::move(systems));
+            profileTraceOutput << frameTrace.Dump() << '\n';
+            double sceneUpdateMilliseconds = 0.0, fixedSimulationMilliseconds = 0.0, ecsSystemsMilliseconds = 0.0;
+            for (const auto& stage : hotPath.runtimeStages) {
+                const double elapsed = static_cast<double>(stage.endNanoseconds - stage.startNanoseconds) / 1e6;
+                if (stage.name == "scene.update.pre_fixed" || stage.name == "scene.update.post_fixed") sceneUpdateMilliseconds += elapsed;
+                else if (stage.name == "scene.fixed.simulation") fixedSimulationMilliseconds += elapsed;
+                else if (stage.name == "ecs.systems") ecsSystemsMilliseconds += elapsed;
+            }
             profileRows.push_back(GameFrameProfile{
                 .wallFrameMilliseconds = wallFrameMilliseconds,
                 .cpuMilliseconds = std::chrono::duration<double, std::milli>(profileEnd - profileBegin).count(),
@@ -783,10 +961,10 @@ int RunGame(const GameOptions& options) {
                 .lightingPath = renderStats.lightingPath,
                 .shadowDraws = renderStats.submittedShadowDrawCallCount,
                 .instanceUploadBytes = renderStats.instanceUploadBytes,
-                .transformMilliseconds = static_cast<double>(scene.Runtime().HotPathReport().runtimeTransformSyncNanoseconds) / 1e6,
+                .transformMilliseconds = static_cast<double>(hotPath.runtimeTransformSyncNanoseconds) / 1e6,
                 .sceneSyncMilliseconds = renderer.LastSceneSynchronizationMilliseconds(),
-                .transformInspected = static_cast<std::uint32_t>(scene.Runtime().HotPathReport().transformHierarchyInspectedCount),
-                .transformUpdated = static_cast<std::uint32_t>(scene.Runtime().HotPathReport().transformHierarchyUpdatedCount),
+                .transformInspected = static_cast<std::uint32_t>(hotPath.transformHierarchyInspectedCount),
+                .transformUpdated = static_cast<std::uint32_t>(hotPath.transformHierarchyUpdatedCount),
                 .meshCommandReuseCount = renderStats.meshCommandReuseCount,
                 .sceneEntities = static_cast<std::uint32_t>(scene.Entities().Count()),
                 .streamingOperations = static_cast<std::uint32_t>(scene.LoadedContent().StreamingStats().operations),
@@ -796,11 +974,24 @@ int RunGame(const GameOptions& options) {
                 .renderCameraZ = renderCamera.ray.origin.z,
                 .renderCameraValid = renderCamera.valid,
                 .worldMemory = kb::world::WorldPartitionRuntime{scene}.MemoryReport(),
+                .sceneUpdateMilliseconds = sceneUpdateMilliseconds,
+                .fixedSimulationMilliseconds = fixedSimulationMilliseconds,
+                .ecsSystemsMilliseconds = ecsSystemsMilliseconds,
             });
         }
         if (!submitted) {
             reportError("renderer did not accept the scene; the frame was not drawn");
         }
+        if (renderStats.droppedShadowLightCount != 0U && renderStats.droppedShadowLightCount != reportedShadowDrops) {
+            std::cerr << "kb_game: renderer warning: " << renderStats.droppedShadowLightCount
+                      << " local lights exceed the shadow atlas limit; those lights render without shadows\n";
+        }
+        if (renderStats.giBoundingBoxMeshCount != 0U && renderStats.giBoundingBoxMeshCount != reportedGiBoxes) {
+            std::cerr << "kb_game: renderer warning: GI uses solid bounding boxes for " << renderStats.giBoundingBoxMeshCount
+                      << " meshes without CPU triangles; publish a current GI proxy through SetMeshProxyGeometry\n";
+        }
+        reportedShadowDrops = renderStats.droppedShadowLightCount;
+        reportedGiBoxes = renderStats.giBoundingBoxMeshCount;
         if (renderStats.droppedInstanceCount != 0U) {
             reportError("renderer dropped instances from the frame");
         }
@@ -895,10 +1086,12 @@ int RunGame(const GameOptions& options) {
                           << row.sceneEntities << ',' << row.streamingOperations << ',' << row.streamingMilliseconds << ','
                           << row.renderCameraX << ',' << row.renderCameraY << ',' << row.renderCameraZ << ','
                           << row.renderCameraValid;
-            WriteWorldMemoryProfile(profileOutput, row.worldMemory) << '\n';
+            WriteWorldMemoryProfile(profileOutput, row.worldMemory) << ',' << row.sceneUpdateMilliseconds << ','
+                          << row.fixedSimulationMilliseconds << ',' << row.ecsSystemsMilliseconds << '\n';
         }
         profileOutput.flush();
-        if (!profileOutput) {
+        profileTraceOutput.flush();
+        if (!profileOutput || !profileTraceOutput) {
             std::cerr << "kb_game: profile file could not be written\n";
             runtimeClean = false;
         }

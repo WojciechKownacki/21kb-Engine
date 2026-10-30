@@ -10,6 +10,7 @@
     { "op": "assert_particle_thumbnail", "asset": "particleEffect", "max_ticks": 512 },
     { "op": "verify_particle_picker" },
     { "op": "capture_screenshot_matrix", "panel": "particle_editor", "checkpoint": "particle-emitter-list" },
+    { "op": "verify_particle_controls" },
     { "op": "verify_particle_execution" },
     { "op": "verify_particle_depth_authoring" },
     { "op": "verify_particle_contact_authoring" },

@@ -79,6 +79,94 @@ namespace {
 #endif
 }
 
+void RunPhysicsMemoryMeasurementTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
+    kb::scene::Scene withoutPhysics;
+    kb::tests::Require(!kb::scene::PhysicsBackend::MemoryUsageBytes(withoutPhysics), "Absent physics memory is unavailable");
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const auto baseline = kb::scene::PhysicsBackend::MemoryUsageBytes(scene);
+    kb::tests::Require(baseline && *baseline > 0U, "Physics allocator reports actual resident requests");
+    kb::world::WorldPartitionRuntime world{scene};
+    static_cast<void>(world.MemoryReport());
+    std::vector<kb::scene::SceneObject> bodies;
+    for (int index = 0; index < 64; ++index) {
+        const auto object = scene.Entities().CreateObject({.name = "MemoryBody", .transform = {.localPosition = {index * 2.0F, 20.0F, 0.0F}}});
+        scene.Components().Rigidbodies().Set(object.Entity(), {.bodyType = kb::scene::RigidbodyBodyType::Dynamic});
+        scene.Components().Colliders().Set(object.Entity(), {.boxSize = {1,1,1}});
+        bodies.push_back(object);
+    }
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const auto populated = kb::scene::PhysicsBackend::MemoryUsageBytes(scene);
+    kb::tests::Require(populated && *populated > *baseline, "Physics body allocations increase measured resident bytes");
+    const auto report = world.MemoryReport();
+    const auto& physics = report.categories[static_cast<std::size_t>(kb::world::WorldMemoryKind::Physics)];
+    kb::tests::Require(physics.source == kb::world::WorldMemorySource::Measured && physics.bytes == *populated - *baseline,
+        "World report reads physics allocator growth without a synthetic host probe");
+    for (const auto object : bodies) scene.Entities().Destroy(object);
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const auto released = kb::scene::PhysicsBackend::MemoryUsageBytes(scene);
+    kb::tests::Require(released && *released < *populated, "Destroying physics bodies releases measured allocations");
+}
+
+void RunPhysicsStackAndConnectedBodyRemovalTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
+    for (int reload = 0; reload < 2; ++reload) {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
+        kb::scene::Scene scene{std::move(descriptor)};
+        kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+        const auto body = [&](const char* name, kb::scene::Vec3 position, bool dynamic) {
+            const auto entity = scene.Entities().CreateObject({.name = name, .transform = {.localPosition = position}});
+            scene.Components().Rigidbodies().Set(entity.Entity(), {.bodyType = dynamic ? kb::scene::RigidbodyBodyType::Dynamic : kb::scene::RigidbodyBodyType::Static});
+            scene.Components().Colliders().Set(entity.Entity(), {.boxSize = {1,1,1}});
+            return entity;
+        };
+        const auto floor = body("Floor", {0,-0.5F,0}, false);
+        scene.Components().Colliders().Set(floor.Entity(), {.boxSize = {40,1,40}});
+        std::array<kb::scene::SceneObject, 4> stack;
+        for (std::size_t i = 0; i < stack.size(); ++i) stack[i] = body("Stack", {0,0.51F + static_cast<float>(i)*1.02F,0}, true);
+        for (int frame = 0; frame < 360; ++frame) static_cast<void>(scene.Runtime().Update(1.0F/60.0F));
+        for (std::size_t i = 0; i < stack.size(); ++i) {
+            const auto position = scene.Transforms().Get(stack[i]).worldPosition;
+            kb::tests::Require(std::isfinite(position.y) && std::fabs(position.y - (0.5F + static_cast<float>(i))) < 0.2F,
+                "A settled rigidbody stack collapsed or drifted");
+        }
+        const auto top = stack.back();
+        auto teleported = scene.Transforms().Get(top);
+        teleported.localPosition = {6,4,0};
+        teleported.localScale = {2,2,2};
+        scene.Transforms().Set(top.Entity(), teleported);
+        static_cast<void>(scene.Runtime().Update(1.0F/60.0F));
+        kb::tests::Require(kb::scene::PhysicsBackend::Wake(scene, top.Entity()), "Teleported body could not wake");
+        for (int frame = 0; frame < 180; ++frame) static_cast<void>(scene.Runtime().Update(1.0F/60.0F));
+        const auto landed = scene.Transforms().Get(top).worldPosition;
+        kb::tests::Require(std::fabs(landed.x-6.0F)<0.1F && landed.y>0.8F && landed.y<1.2F,
+            "A scaled, teleported body did not settle using its updated shape and pose");
+        const std::array types{kb::scene::JointType::Fixed, kb::scene::JointType::Hinge, kb::scene::JointType::Distance, kb::scene::JointType::Point};
+        for (std::size_t i=0; i<types.size(); ++i) {
+            const float x = -10.0F + static_cast<float>(i)*3.0F;
+            const auto anchor = body("Anchor", {x,5,0}, false);
+            const auto attached = body("Attached", {x,4,0}, true);
+            scene.Components().Joints().Set(attached.Entity(), {.type=types[i], .connectedEntity=anchor.Entity(), .connectedAnchor={0,-1,0}});
+            for (int frame=0; frame<6; ++frame) static_cast<void>(scene.Runtime().Update(1.0F/60.0F));
+            scene.Entities().Destroy(anchor);
+            for (int frame=0; frame<90; ++frame) static_cast<void>(scene.Runtime().Update(1.0F/60.0F));
+            kb::tests::Require(!kb::scene::PhysicsBackend::GetVelocity(scene, anchor.Entity()).found &&
+                kb::scene::PhysicsBackend::GetVelocity(scene, attached.Entity()).found &&
+                std::isfinite(scene.Transforms().Get(attached).worldPosition.y) &&
+                scene.Transforms().Get(attached).worldPosition.y < 1.0F,
+                "Removing a connected body left invalid joint state or a dangling constraint holding the surviving body");
+        }
+        kb::tests::Require(scene.Runtime().DrainSceneSystemErrors().empty(), "Physics lifecycle produced scene errors");
+    }
+}
+
 void RunOneWayPlatformTest() {
     if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
     kb::project::ProjectDescriptor descriptor;
@@ -3407,43 +3495,9 @@ void RunTopDownPlayerPresetTest() {
     kb::tests::Require(rig->scene.Runtime().DrainSceneSystemErrors().empty(), "the top-down script runs without errors");
 }
 
-void RunPhysicsMemoryMeasurementTest() {
-    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
-    kb::scene::Scene withoutPhysics;
-    kb::tests::Require(!kb::scene::PhysicsBackend::MemoryUsageBytes(withoutPhysics), "Absent physics memory is unavailable");
-    kb::project::ProjectDescriptor descriptor;
-    descriptor.disableEnginePluginsByDefault = true;
-    descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
-    kb::scene::Scene scene{std::move(descriptor)};
-    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
-    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
-    const auto baseline = kb::scene::PhysicsBackend::MemoryUsageBytes(scene);
-    kb::tests::Require(baseline && *baseline > 0U, "Physics allocator reports actual resident requests");
-    kb::world::WorldPartitionRuntime world{scene};
-    static_cast<void>(world.MemoryReport());
-    std::vector<kb::scene::SceneObject> bodies;
-    for (int index = 0; index < 64; ++index) {
-        const auto object = scene.Entities().CreateObject({.name = "MemoryBody", .transform = {.localPosition = {index * 2.0F, 20.0F, 0.0F}}});
-        scene.Components().Rigidbodies().Set(object.Entity(), {.bodyType = kb::scene::RigidbodyBodyType::Dynamic});
-        scene.Components().Colliders().Set(object.Entity(), {.boxSize = {1,1,1}});
-        bodies.push_back(object);
-    }
-    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
-    const auto populated = kb::scene::PhysicsBackend::MemoryUsageBytes(scene);
-    kb::tests::Require(populated && *populated > *baseline, "Physics body allocations increase measured resident bytes");
-    const auto report = world.MemoryReport();
-    const auto& physics = report.categories[static_cast<std::size_t>(kb::world::WorldMemoryKind::Physics)];
-    kb::tests::Require(physics.source == kb::world::WorldMemorySource::Measured && physics.bytes == *populated - *baseline,
-        "World report reads physics allocator growth without a synthetic host probe");
-    for (const auto object : bodies) scene.Entities().Destroy(object);
-    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
-    const auto released = kb::scene::PhysicsBackend::MemoryUsageBytes(scene);
-    kb::tests::Require(released && *released < *populated, "Destroying physics bodies releases measured allocations");
-}
-
-
 void RunPhysicsSceneSystemTests() {
     RunPhysicsMemoryMeasurementTest();
+    RunPhysicsStackAndConnectedBodyRemovalTest();
     RunStaticColliderBatchInvalidationTest();
     RunPhysicsEventBatchReuseTest();
     RunPhysicsLayersAssetIOTest();

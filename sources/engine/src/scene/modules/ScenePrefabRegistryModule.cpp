@@ -38,6 +38,13 @@ ScenePrefabHandle ScenePrefabs::FindLoaded(const std::filesystem::path& path) co
     return SceneAccess::State(scene_).prefabs.FindBySourcePath(ScenePrefabAssetService::SourcePathOf(path));
 }
 
+void ScenePrefabs::RelocateSource(const std::filesystem::path& previous, const std::filesystem::path& current) {
+    auto& registry = SceneAccess::State(scene_).prefabs;
+    if (auto* record = registry.FindMutableRecord(FindLoaded(previous)); record != nullptr) {
+        record->sourcePath = ScenePrefabAssetService::SourcePathOf(current);
+    }
+}
+
 bool ScenePrefabs::UsesPrefab(ScenePrefabHandle prefab, ScenePrefabHandle used) const {
     const ScenePrefabRegistry& registry = SceneAccess::State(scene_).prefabs;
     std::vector<ScenePrefabHandle> pending{ prefab };

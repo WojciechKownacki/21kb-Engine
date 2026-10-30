@@ -19,6 +19,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
@@ -327,6 +328,14 @@ void RunComponentSearchSynonymsTest() {
     const std::vector<const kb::editor::InspectorComponentTile*> lightTiles = kb::editor::InspectorComponentCatalog::Search("light");
     kb::editor::tests::Require(!lightTiles.empty() && lightTiles.front()->id == "Light" && finds("light", "Ambient Radiance"),
         "Searching light must list the Light first and still offer the components known by it");
+    const auto billboardRows = kb::editor::InspectorAddComponentBrowserModel::Rows({}, "billboard");
+    kb::editor::tests::Require(!billboardRows.empty() && billboardRows.front().id == "Facing Panel"
+        && kb::editor::InspectorAddComponentBrowserModel::Description(billboardRows, 0).find("face the camera") != std::string_view::npos,
+        "A synonym result must expose the author-facing explanation used by the browser");
+    kb::editor::tests::Require(kb::editor::InspectorAddComponentBrowserModel::Description(billboardRows, -1).empty()
+        && kb::editor::InspectorAddComponentBrowserModel::Description(billboardRows, 10000).empty()
+        && kb::editor::InspectorAddComponentBrowserModel::Description(kb::editor::InspectorAddComponentBrowserModel::Rows({}, {}), 0).empty(),
+        "Invalid selection and category rows must not reuse component help");
     std::size_t described = 0U;
     for (const kb::editor::InspectorComponentTile& tile : kb::editor::InspectorComponentCatalog::Tiles()) {
         if (tile.category == "User Widget") continue;

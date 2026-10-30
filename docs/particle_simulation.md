@@ -581,3 +581,29 @@ collision uses the reported `collision-event` CPU fallback for the source emitte
 and dispatches its children to the GPU. Collision events are not read back from
 the GPU as part of normal simulation. Releasing the preview must free all emitter
 buffers. Other graphics backends require separate execution evidence.
+
+
+Per-emitter host work profiling
+------------------------------
+
+`ParticlePlayback::SetEmitterProfilingEnabled(scene, true)` enables per-emitter
+`cpuEmissionNanoseconds` and `cpuIntegrationNanoseconds` in render snapshots. The
+setting defaults to false. `vfx-profile` and particle editor previews enable it and
+show whether a reading is available. A measured zero can mean work below the clock
+resolution; unavailable readings are distinct from zero. Turning it off clears the readings at the next
+fixed step. Retained snapshots keep their own readings.
+
+These are host elapsed times for the emission loop and each particle's module/integration
+loop in the last fixed step. They include profiling overhead and exclude shared
+scheduler work, age/event processing, separation-grid preparation, snapshot packing and
+GPU execution. They are not a decomposition of total process CPU time. The CLI retains
+whole-effect process/thread CPU and GPU-frame distributions, per-emitter routing/fallback,
+CPU render payload bytes and GPU capture buffer requests. GPU buffer requests are logical
+resource costs rather than measured physical residency; GPU-frame timings are not
+attributed to individual emitters sharing a compute view.
+
+The CPU regression workload uses eight emitters with birth-event children, bounded
+per-emitter capacities and per-binding event budgets. It compares replay state with
+profiling disabled and enabled and reports whole-workload host/process CPU time, live
+particles, capacity, rejected births/events, and process private/working-set memory.
+Process memory includes the engine and test host; capacity is a limit, not throughput.

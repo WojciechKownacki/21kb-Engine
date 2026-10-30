@@ -111,6 +111,22 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         return false;
     }
     const ScreenUIDrawList& drawList = *desc.drawList;
+    if (!desc.overdrawQueries.empty()) {
+        if (bgfx::getCaps()->limits.maxOcclusionQueries == 0U ||
+            desc.overdrawQueries.size() != drawList.batches.size()) return false;
+        for (std::size_t index = 0; index < drawList.batches.size(); ++index) {
+            const auto handle = desc.overdrawQueries[index];
+            if (!bgfx::isValid(handle) ||
+                drawList.batches[index].texture.source == ScreenUITextureSource::Material) return false;
+            const auto key = drawList.batches[index].texture;
+            if (key.source != ScreenUITextureSource::None) {
+                const auto* texture = Resolve(desc.textures, key);
+                if (texture == nullptr || !bgfx::isValid(texture->texture)) return false;
+            }
+            for (std::size_t previous = 0; previous < index; ++previous)
+                if (desc.overdrawQueries[previous].idx == handle.idx) return false;
+        }
+    }
     const RenderViewportRect outputRect =
         desc.outputRect.extent.IsValid() ? desc.outputRect : RenderViewportRect{.extent = desc.outputExtent};
     bgfx::setViewName(desc.viewId, "KB Screen UI Composite");
@@ -209,7 +225,12 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         bgfx::setIndexBuffer(&indices, batch.firstIndex, batch.indexCount);
         const auto program = batch.style.fragmentKind == ScreenUIFragmentKind::DistanceFieldFont ? distanceFieldProgram_ : program_;
         if (!bgfx::isValid(program)) { bgfx::discard(); continue; }
-        bgfx::submit(desc.viewId, program);
+        if (desc.overdrawQueries.empty()) {
+            bgfx::submit(desc.viewId, program);
+        } else {
+            const auto index = static_cast<std::size_t>(&batch - drawList.batches.data());
+            bgfx::submit(desc.viewId, program, desc.overdrawQueries[index]);
+        }
     }
     return true;
 }

@@ -42,6 +42,7 @@ struct RuntimeContentStreamingSettings {
     // GPU resources rebuilt with new levels per frame, and the bytes they may upload per frame,
     // so a burst of arrivals is spread over frames instead of stalling one.
     std::uint32_t maxRebuildsPerFrame = 8U;
+    // An indivisible resource larger than this limit is admitted alone to avoid starvation.
     std::uint64_t maxUploadBytesPerFrame = 64ULL * 1024ULL * 1024ULL;
     // A rebuild holds the old GPU resource and a staging copy of the new one at the same time. Once the rebuilds of a
     // frame have held this many such bytes, the rest wait for the next frame; the first rebuild of a frame is always
@@ -65,6 +66,13 @@ struct RuntimeContentStreamingStats {
     // Time from issuing a level load to having its decoded bytes on the render thread.
     double lastLoadMilliseconds = 0.0;
     double maxLoadMilliseconds = 0.0;
+    // CPU composition and upload submission time, not GPU completion time.
+    double lastRebuildMilliseconds = 0.0;
+    double maxTextureRebuildMilliseconds = 0.0;
+    double maxMeshRebuildMilliseconds = 0.0;
+    double maxMeshBufferCreationMilliseconds = 0.0;
+    std::uint64_t oversizedUploads = 0U;
+    std::uint64_t peakUploadBytesPerFrame = 0U;
     // Memory a rebuild holds beyond the resident levels: the old GPU resource (alive until the frame ends) plus the
     // staging copy of the new one. Largest sum over the rebuilds of one frame, and the largest resident + in flight +
     // that sum at the end of a frame -- the true peak the budget has to cover while resources are swapped.
@@ -207,6 +215,10 @@ private:
     std::vector<std::unique_ptr<PendingLoad>> pending_;
     std::uint64_t nextId_ = 1U;
     std::uint64_t lastPlannedFrame_ = ~0ULL;
+    std::uint64_t uploadFrame_ = ~0ULL;
+    std::uint32_t frameRebuilds_ = 0U;
+    std::uint64_t frameUploadedBytes_ = 0U;
+    std::uint64_t frameTransientBytes_ = 0U;
     RuntimeContentStreamingStats counters_{};
 };
 

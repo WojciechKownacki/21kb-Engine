@@ -11,6 +11,16 @@
 #include <string_view>
 
 namespace kb::game {
+inline void ConfigureAndroidTextInput(GameActivity* activity, bool multiline) noexcept {
+    if (activity == nullptr) return;
+    const auto type = static_cast<GameTextInputType>(TYPE_CLASS_TEXT |
+        (multiline ? TYPE_TEXT_FLAG_MULTI_LINE : 0U));
+    const auto action = multiline ? IME_ACTION_NONE : IME_ACTION_DONE;
+    const auto options = static_cast<GameTextInputImeOptions>(IME_FLAG_NO_FULLSCREEN |
+        static_cast<std::uint32_t>(action) | (multiline ? IME_FLAG_NO_ENTER_ACTION : 0U));
+    GameActivity_setImeEditorInfo(activity, type, action, options);
+}
+
 inline bool QueueAndroidImeDismissal(bool visible, bool requested, bool& previouslyVisible,
     input::InputDeviceState& state, DigitalInputFrame& digital) noexcept {
     const bool dismissed = previouslyVisible && !visible && requested;

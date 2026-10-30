@@ -1,3 +1,4 @@
+#include "rendering/EditorAssetEditScope.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "rendering/material_graph/EditorMaterialGraphPinPresentation.hpp"
@@ -190,12 +191,14 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
     GdiDrawing::FillRectColor(dc, layout.header, GdiDrawing::ToColorRef(theme.strip));
     GdiDrawing::FillRectColor(dc, RECT{ layout.header.left, layout.header.top, layout.header.left + 3, layout.header.bottom }, GdiDrawing::ToColorRef(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ layout.header.left, layout.header.bottom - 1, layout.header.right, layout.header.bottom }, GdiDrawing::ToColorRef(theme.borderChrome));
-    if (layout.headerHeight > MaterialEditorPanelMetrics::HeaderHeight) {
+    if (layout.headerHeight > MaterialEditorPanelMetrics::HeaderHeight + kAssetEditScopeHeight) {
         const int dividerY = layout.compactToolbar ? content.top + 70 : content.top + 40;
         GdiDrawing::FillRectColor(dc, RECT{ layout.header.left + 8, dividerY, layout.header.right - 8, dividerY + 1 }, GdiDrawing::ToColorRef(theme.borderChrome));
     }
     const std::string title = std::string{ EditorText("panel.materialEditor", "Material Editor") } + (dirty ? "  *" : "");
     DrawText(dc, layout.title, title, dirty ? RGB(242, 193, 103) : GdiDrawing::ToColorRef(theme.textPrimary), 14, FW_SEMIBOLD);
+    DrawText(dc, RECT{content.left + 10, layout.header.bottom - kAssetEditScopeHeight, content.right - 10, layout.header.bottom},
+        AssetEditScopeText(), GdiDrawing::ToColorRef(theme.textSecondary), 11, FW_NORMAL);
     DrawCommandButton(dc, layout.infoButton, theme, EditorText("materialEditor.info", "Info"), infoVisible);
     DrawCommandButton(dc, layout.previewPrimitiveButton, theme, MaterialEditorPanelRenderer::PreviewPrimitiveLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
     DrawCommandButton(dc, layout.previewSceneButton, theme, MaterialEditorPanelRenderer::PreviewSceneLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);

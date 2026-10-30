@@ -27,5 +27,6 @@ void main()
         bloom += texture2DLod(s_bloom, v_texcoord0, 5.0).rgb * 0.02;
     }
     bloom *= u_postParams.x;
-    gl_FragColor = vec4(scene.rgb + bloom, scene.a);
+    // The next target is RGBA16F: keep highlights finite before tone mapping.
+    gl_FragColor = vec4(clamp(scene.rgb + bloom, vec3_splat(0.0), vec3_splat(65504.0)), scene.a);
 }

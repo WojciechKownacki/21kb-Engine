@@ -1227,7 +1227,8 @@ bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflectio
          reflection.blendMode == RenderMaterialGraphBlendMode::Masked);
 }
 
-bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass) noexcept {
+bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass,
+    bool fourTargetGBuffer) noexcept {
     // A graph of another domain draws in its own pass only.
     if (reflection.domain == RenderMaterialDomain::PostProcess) {
         return pass == kRenderMaterialGraphPostProcessPass;
@@ -1241,6 +1242,12 @@ bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& refl
     if (pass == kRenderMaterialGraphPostProcessPass || pass == kRenderMaterialGraphUserInterfacePass) {
         return false;
     }
+    if (pass == kRenderMaterialGraphCompactGBufferPass) {
+        return reflection.writesShadingModelColor &&
+            (reflection.blendMode == RenderMaterialGraphBlendMode::Opaque ||
+             reflection.blendMode == RenderMaterialGraphBlendMode::Masked);
+    }
+    if (fourTargetGBuffer && pass == "GBuffer" && reflection.writesShadingModelColor) return false;
     return pass != kRenderMaterialGraphMotionVectorsPass || RenderMaterialGraphDrawsOwnMotionVectors(reflection);
 }
 
@@ -1332,7 +1339,8 @@ std::string BuildGraphFragmentWrapperSource(
         return BuildGraphScreenFragmentWrapperSource(shader, pass == kRenderMaterialGraphUserInterfacePass);
     }
     const bool shadowPass = pass == "ShadowDepth";
-    const bool gbufferPass = pass == "GBuffer";
+    const bool compactGBufferPass = pass == kRenderMaterialGraphCompactGBufferPass;
+    const bool gbufferPass = pass == "GBuffer" || compactGBufferPass;
 
     std::string wrapper;
     wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal" + ExtraUvVaryings(shader) + "\n\n";
@@ -1356,6 +1364,7 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "uniform vec4 u_time;\n";
     wrapper += "uniform vec4 u_dynamicParameter;\n";
     wrapper += "uniform vec4 u_materialParams;\n";
+    wrapper += "uniform vec4 u_materialFlags;\n";
     // Positions arrive camera-relative (docs/large_worlds.md); this offset turns them into the world positions the
     // graph reads (the render origin, wrapped to a period that keeps them exact in float).
     wrapper += "uniform vec4 u_renderOriginOffset;\n";
@@ -1399,7 +1408,8 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         }
         if (gbufferPass) {
-            const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
+            const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel)) +
+                (compactGBufferPass ? 128U : 0U);
             AppendMaterialGraphTangentBasis(wrapper);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
@@ -1411,16 +1421,18 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    vec3 graphNormal = surface.normal;\n";
             wrapper += "    graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(graphNormal.xy * u_materialParams.z, graphNormal.z)) : vec3(0.0, 0.0, 1.0);\n";
             wrapper += "    vec3 worldNormal = normalize(basisTangent * graphNormal.x + basisBitangent * graphNormal.y + basisNormal * graphNormal.z);\n";
+            wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) worldNormal = -worldNormal;\n";
             // Alpha of the albedo and normal targets: the shading model's CustomData0/1 (gbuffer_contract.sh).
             wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, clamp(surface.clearCoat, 0.0, 1.0));\n";
             wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, KbEncodeGBufferCustomData1(surface.clearCoatRoughness));\n";
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
-            if (shader.reflection.writesShadingModelColor && shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
+            if (!compactGBufferPass && shader.reflection.writesShadingModelColor && shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
                 // Unreal's Eye: the iris (octahedral world normal, mask, distance) in the fifth target.
                 wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
+                wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) kbIrisNormal = -kbIrisNormal;\n";
                 wrapper += "    gl_FragData[4] = vec4(KbOctEncode(kbIrisNormal) * 0.5 + 0.5, clamp(surface.irisMask, 0.0, 1.0), clamp(surface.irisDistance, 0.0, 1.0));\n";
-            } else if (shader.reflection.writesShadingModelColor) {
+            } else if (!compactGBufferPass && shader.reflection.writesShadingModelColor) {
                 // Unreal's custom data: the model colour (alpha 1 = given) in the fifth target, which the
                 // G-buffer carries in frames that draw such a material.
                 wrapper += "    gl_FragData[4] = vec4(clamp(" + std::string{ GraphShadingModelColorField(shader) } +
@@ -1447,6 +1459,7 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    vec3 graphNormal = surface.normal;\n";
             wrapper += "    graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(graphNormal.xy * u_materialParams.z, graphNormal.z)) : vec3(0.0, 0.0, 1.0);\n";
             wrapper += "    vec3 worldNormal = normalize(basisTangent * graphNormal.x + basisBitangent * graphNormal.y + basisNormal * graphNormal.z);\n";
+            wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) worldNormal = -worldNormal;\n";
             wrapper += "    float metallic = clamp(surface.metallic, 0.0, 1.0);\n";
             wrapper += "    float roughness = clamp(surface.roughness, 0.04, 1.0);\n";
             wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
@@ -1455,6 +1468,7 @@ std::string BuildGraphFragmentWrapperSource(
             if (shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
                 // Unreal's Eye in the forward pass: the iris normal in world space, as the G-buffer stores it.
                 wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
+                wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) kbIrisNormal = -kbIrisNormal;\n";
                 wrapper += "    vec3 lighting = KbEvaluateForwardLightingFull(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
                     std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0), " +
                     "KbDefaultShadingModelColor(" + std::to_string(shadingModelId) + ".0, surface.baseColor.rgb, metallic), kbIrisNormal, " +
@@ -1474,7 +1488,7 @@ std::string BuildGraphFragmentWrapperSource(
             } else if (shader.reflection.hasRefraction) {
                 AppendMaterialGraphRefraction(wrapper, "worldNormal", "lighting + surface.emissive");
             } else {
-                wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, " + outputAlpha + ");\n";
+                wrapper += "    gl_FragColor = vec4(KbApplyHeightFog(lighting + surface.emissive, u_cameraPosition.xyz, v_worldPos), " + outputAlpha + ");\n";
             }
         }
     }

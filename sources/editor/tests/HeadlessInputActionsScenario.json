@@ -1,0 +1,128 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "InputActions",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "probe",
+      "name": "Probe"
+    },
+    {
+      "op": "create_asset",
+      "id": "move",
+      "type": "input_action",
+      "folder": "/Game/Input"
+    },
+    {
+      "op": "configure_input_action",
+      "asset": "move",
+      "name": "Move",
+      "value_type": "Axis1D"
+    },
+    {
+      "op": "create_asset",
+      "id": "map",
+      "type": "input_context",
+      "folder": "/Game/Input"
+    },
+    {
+      "op": "configure_input_mapping",
+      "context": "map",
+      "index": 0,
+      "key": "D",
+      "scale": 1.0
+    },
+    {
+      "op": "configure_input_mapping",
+      "context": "map",
+      "index": 1,
+      "key": "GamepadLeftStickX",
+      "scale": 0.5
+    },
+    {
+      "op": "activate_input_context",
+      "asset": "map"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Input/InputProbe.lua",
+      "content": "function Tick(self, dt)\n local v = Input.Value(\"Move\")\n if math.abs(v - 1) < 0.001 then Log(\"input-digital-pass\") end\n if math.abs(v - 0.375) < 0.001 then Log(\"input-analog-pass\") end\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "attach_script",
+      "entity": "probe",
+      "asset": "/Game/Input/InputProbe.lua"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/InputActions.21kbscene"
+    },
+    {
+      "op": "reload_scene"
+    },
+    {
+      "op": "select_asset",
+      "asset": "map"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "input-bindings"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "focus",
+      "focused": true
+    },
+    {
+      "op": "key",
+      "key": "D",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 2,
+      "dt": 0.016
+    },
+    {
+      "op": "assert_console",
+      "contains": "input-digital-pass",
+      "category": "Script",
+      "level": "info"
+    },
+    {
+      "op": "key",
+      "key": "D",
+      "down": false
+    },
+    {
+      "op": "analog",
+      "key": "GamepadLeftStickX",
+      "value": 0.75,
+      "gamepad": 0
+    },
+    {
+      "op": "step",
+      "frames": 2,
+      "dt": 0.016
+    },
+    {
+      "op": "assert_console",
+      "contains": "input-analog-pass",
+      "category": "Script",
+      "level": "info"
+    },
+    {
+      "op": "stop"
+    }
+  ]
+}

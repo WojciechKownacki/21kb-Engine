@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -138,7 +139,13 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
     RenderMeshResource resource = RenderMeshResourceBuilder::Build(desc, vertexBuffer, dynamicVertexBuffer, indexBuffer);
     resource.terrainLayerWeightTexture = terrainLayerWeightTexture;
     resource.version = AllocateResourceVersion();
+    resource.estimatedGpuBytes = static_cast<std::uint64_t>(desc.vertexCount) * RenderStaticMeshVertexStride(desc.vertexFormat)
+        + static_cast<std::uint64_t>(desc.indexCount) * (desc.indexFormat == RenderIndexFormat::Uint16 ? 2U : 4U)
+        + (bgfx::isValid(terrainLayerWeightTexture) ? static_cast<std::uint64_t>(desc.terrainLayerWeightWidth) * desc.terrainLayerWeightHeight * 4U : 0U);
+    const auto bytes = resource.estimatedGpuBytes;
     meshes_.Activate(slotIndex, std::move(resource));
+    memory_.meshBytes += bytes;
+    ObserveAllocation(bytes);
     {
         const RenderMeshHandle handle{ detail::MakeRenderHandleValue(slotIndex, meshes_.Generation(slotIndex)) };
         std::ostringstream row;
@@ -170,6 +177,7 @@ bool RenderResourceRegistry::UpdateMeshVertices(
         vertexBytes + static_cast<std::size_t>(firstVertex) * stride,
         vertexCount * stride);
     bgfx::update(resource->dynamicVertexBuffer, firstVertex, memory);
+    resource->proxyGeometry.reset(); // Do not voxelise a stale pose after a dynamic upload.
     resource->version = AllocateResourceVersion();
     return true;
 }
@@ -240,10 +248,31 @@ bool RenderResourceRegistry::ContainsMesh(RenderMeshHandle handle) const noexcep
     return FindMesh(handle) != nullptr;
 }
 
+bool RenderResourceRegistry::SetMeshProxyGeometry(RenderMeshHandle handle, const RenderMeshProxyGeometry& geometry) {
+    auto* resource = meshes_.Find(handle);
+    if (resource == nullptr) return false;
+    if (geometry.positions.empty() && geometry.indices.empty()) {
+        resource->proxyGeometry.reset();
+    } else {
+        constexpr std::size_t maxTriangles = 200000U;
+        if (geometry.positions.empty() || geometry.positions.size() % 3U != 0U ||
+            geometry.positions.size() > maxTriangles * 9U || geometry.indices.empty() ||
+            geometry.indices.size() % 3U != 0U || geometry.indices.size() > maxTriangles * 3U ||
+            !std::ranges::all_of(geometry.positions, [](float value) { return std::isfinite(value); }) ||
+            !std::ranges::all_of(geometry.indices, [&](auto index) { return index < geometry.positions.size() / 3U; })) return false;
+        resource->proxyGeometry = std::make_shared<const RenderMeshProxyGeometry>(geometry);
+    }
+    resource->version = AllocateResourceVersion();
+    return true;
+}
+
 void RenderResourceRegistry::DestroyMesh(RenderMeshHandle handle) noexcept {
-    if (ContainsMesh(handle)) static_cast<void>(AllocateResourceVersion());
+    const auto* resource = FindMesh(handle);
+    const auto bytes = resource == nullptr ? 0U : resource->estimatedGpuBytes;
+    if (resource != nullptr) static_cast<void>(AllocateResourceVersion());
     const std::uint32_t slotIndex = meshes_.MarkPendingDestroy(handle);
     if (slotIndex != 0U) {
+        memory_.meshBytes -= bytes; memory_.pendingMeshBytes += bytes;
         QueueDestroy(DeferredDestroyKind::Mesh, slotIndex);
     }
 }
@@ -340,7 +369,14 @@ RenderTextureHandle RenderResourceRegistry::RegisterTexture(const RenderTextureD
     const std::uint32_t slotIndex = textures_.Allocate();
     RenderTextureResource resource = RenderTextureResourceBuilder::Build(desc, texture);
     resource.version = AllocateResourceVersion();
+    bgfx::TextureInfo info{};
+    bgfx::calcTextureSize(info, desc.width, desc.height, desc.depth,
+        desc.dimension == RenderTextureDimension::TextureCube, desc.mipCount > 1U, desc.layers, desc.format);
+    resource.estimatedGpuBytes = info.storageSize;
+    const auto bytes = resource.estimatedGpuBytes;
     textures_.Activate(slotIndex, std::move(resource));
+    memory_.textureBytes += bytes;
+    ObserveAllocation(bytes);
     const RenderTextureHandle handle{ detail::MakeRenderHandleValue(slotIndex, textures_.Generation(slotIndex)) };
     {
         std::ostringstream row;
@@ -368,9 +404,12 @@ bool RenderResourceRegistry::ContainsTexture(RenderTextureHandle handle) const n
 }
 
 void RenderResourceRegistry::DestroyTexture(RenderTextureHandle handle) noexcept {
-    if (ContainsTexture(handle)) static_cast<void>(AllocateResourceVersion());
+    const auto* resource = FindTexture(handle);
+    const auto bytes = resource == nullptr ? 0U : resource->estimatedGpuBytes;
+    if (resource != nullptr) static_cast<void>(AllocateResourceVersion());
     const std::uint32_t slotIndex = textures_.MarkPendingDestroy(handle);
     if (slotIndex != 0U) {
+        memory_.textureBytes -= bytes; memory_.pendingTextureBytes += bytes;
         QueueDestroy(DeferredDestroyKind::Texture, slotIndex);
     }
 }
@@ -399,6 +438,8 @@ void RenderResourceRegistry::TickFrame() noexcept {
 void RenderResourceRegistry::Shutdown() noexcept {
     static_cast<void>(AllocateResourceVersion());
     deferredDestroy_.clear();
+    memory_.releasedBytes += memory_.RetainedBytes();
+    memory_.meshBytes = memory_.textureBytes = memory_.pendingMeshBytes = memory_.pendingTextureBytes = 0U;
     meshes_.Shutdown([](RenderMeshResource& resource) noexcept {
         RenderResourceReleaser::ReleaseMesh(resource);
     });
@@ -412,6 +453,7 @@ void RenderResourceRegistry::Shutdown() noexcept {
 
 RenderResourceRegistryStats RenderResourceRegistry::Stats() const noexcept {
     RenderResourceRegistryStats stats{};
+    stats.memory = memory_;
     stats.frameNumber = frameNumber_;
     stats.meshCount = meshes_.LiveCount();
     stats.materialCount = materials_.LiveCount();
@@ -450,7 +492,9 @@ void RenderResourceRegistry::QueueDestroy(DeferredDestroyKind kind, std::uint32_
 void RenderResourceRegistry::ReleaseDeferred(const DeferredDestroyEntry& entry) noexcept {
     switch (entry.kind) {
     case DeferredDestroyKind::Mesh:
-        meshes_.ReleasePending(entry.slot, [](RenderMeshResource& resource) noexcept {
+        meshes_.ReleasePending(entry.slot, [this](RenderMeshResource& resource) noexcept {
+            memory_.pendingMeshBytes -= resource.estimatedGpuBytes;
+            memory_.releasedBytes += resource.estimatedGpuBytes;
             RenderResourceReleaser::ReleaseMesh(resource);
         });
         break;
@@ -460,11 +504,18 @@ void RenderResourceRegistry::ReleaseDeferred(const DeferredDestroyEntry& entry) 
         });
         break;
     case DeferredDestroyKind::Texture:
-        textures_.ReleasePending(entry.slot, [](RenderTextureResource& resource) noexcept {
+        textures_.ReleasePending(entry.slot, [this](RenderTextureResource& resource) noexcept {
+            memory_.pendingTextureBytes -= resource.estimatedGpuBytes;
+            memory_.releasedBytes += resource.estimatedGpuBytes;
             RenderResourceReleaser::ReleaseTexture(resource);
         });
         break;
     }
+}
+
+void RenderResourceRegistry::ObserveAllocation(std::uint64_t bytes) noexcept {
+    memory_.allocatedBytes += bytes;
+    memory_.peakRetainedBytes = std::max(memory_.peakRetainedBytes, memory_.RetainedBytes());
 }
 
 std::uint64_t RenderResourceRegistry::AllocateResourceVersion() noexcept {

@@ -32,6 +32,8 @@ struct PackedSceneLighting {
     std::array<float, 4U> ambient{ 0.18F, 0.20F, 0.23F, 1.0F };
     std::array<float, 4U> environmentZenith{ 0.36F, 0.42F, 0.52F, 1.0F };
     std::array<float, 4U> environmentGround{ 0.08F, 0.075F, 0.065F, 1.0F };
+    std::array<float, 4U> fogParams{};
+    std::array<float, 4U> fogColor{};
     std::array<float, 4U> environmentParams{ 1.0F, 1.0F, 1.0F, 0.0F };
     // The sky light's prefiltered cube (sky_reflection.sh) and u_skyReflectionParams: x 1 when
     // valid, y its last mip.

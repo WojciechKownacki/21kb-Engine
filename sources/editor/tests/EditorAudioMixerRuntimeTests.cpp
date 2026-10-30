@@ -17,6 +17,7 @@
 #include "localization/EditorLocalization.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "rendering/AudioMixerPanelView.hpp"
 #include "scene/audio/EditorAudioMixerAuthoring.hpp"
 
 #include <algorithm>
@@ -165,6 +166,64 @@ void RunEditorAudioMixerRuntimeTests() {
         && row(Property::AudioMixerMeterPeak).meterLevel == runtime.meters.master.channel[0].peak,
         "Editor meters did not distinguish clipped child and attenuated master");
     paintMeter("Effects", 0x00C64040U); paintMeter({}, 0x00309866U);
+    {
+        BITMAPINFO info{}; info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER); info.bmiHeader.biWidth = 600;
+        info.bmiHeader.biHeight = -420; info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32; info.bmiHeader.biCompression = BI_RGB;
+        void* pixels = nullptr;
+        const auto image = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        const auto dc = CreateCompatibleDC(nullptr);
+        Require(image != nullptr && dc != nullptr && pixels != nullptr, "Mixer panel readback surface failed");
+        const auto previous = SelectObject(dc, image);
+        const auto panel = AudioMixerPanelView::Layout({0, 0, 600, 420}, *mixer, runtime, 0U);
+        AudioMixerPanelView::Paint(dc, {0, 0, 600, 420}, MakeEditorDarkTheme(), panel, {}); GdiFlush();
+        const auto* data = static_cast<const std::uint32_t*>(pixels);
+        std::size_t green = 0U, red = 0U;
+        for (std::size_t i = 0U; i < 600U * 420U; ++i) {
+            green += (data[i] & 0xFFFFFFU) == 0x309866U ? 1U : 0U;
+            red += (data[i] & 0xFFFFFFU) == 0xC64040U ? 1U : 0U;
+        }
+        BITMAPFILEHEADER header{}; header.bfType = 0x4D42; header.bfOffBits = sizeof(header) + sizeof(BITMAPINFOHEADER);
+        header.bfSize = header.bfOffBits + 600U * 420U * 4U;
+        std::ofstream output{root / "mixer-panel.bmp", std::ios::binary};
+        output.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        output.write(reinterpret_cast<const char*>(&info.bmiHeader), sizeof(BITMAPINFOHEADER));
+        output.write(static_cast<const char*>(pixels), 600U * 420U * 4U);
+        Require(output.good(), "Mixer panel image did not write");
+        SelectObject(dc, previous); DeleteDC(dc); DeleteObject(image);
+        Require(green > 100U && red >= 200U, "Mixer panel did not paint measured signal and held clipping");
+        pixelsVerified += 2U;
+    }
+    // The docked mixer uses the same hit geometry and authoring path as the Inspector.
+    std::size_t firstBus = 0U;
+    const DockRect panelBounds{0, 0, 600, 420};
+    const auto panelClick = [&](AudioMixerPanelAction action, std::string_view bus, bool bottom = false) {
+        const auto layout = AudioMixerPanelView::Layout(panelBounds, *mixer, Runtime::Query(scene, id), firstBus);
+        const auto control = std::find_if(layout.controls.begin(), layout.controls.end(), [&](const auto& item) {
+            return item.action == action && item.bus == bus;
+        });
+        Require(control != layout.controls.end() && control->enabled, "Mixer panel control is unavailable");
+        Require(AudioMixerPanelView::PointerDown(scene, id, authoring, layout, control->bounds.x + 10,
+            bottom ? control->bounds.y + control->bounds.height - 1 : control->bounds.y + control->bounds.height / 2, firstBus),
+            "Mixer panel pointer did not execute its production action");
+        mixer = View::LoadCached(scene.Assets().Manager(), id); ++actions;
+    };
+    panelClick(AudioMixerPanelAction::Mute, "Output");
+    static_cast<void>(render(1024U));
+    const auto panelMuted = render(1024U);
+    Require(std::all_of(panelMuted.samples.begin(), panelMuted.samples.end(), [](float v) { return v == 0.0F; }),
+        "Mixer strip mute did not silence the actual parent route");
+    Require(history.Undo(kb::editor::EditorCommandHistoryKey::AudioMixerAsset(id.value)), "Mixer strip mute has no Undo");
+    mixer = View::LoadCached(scene.Assets().Manager(), id);
+    panelClick(AudioMixerPanelAction::Gain, "Effects", true);
+    Require(mixer->FindBus("Effects")->volume == 0.0F, "Mixer fader bottom did not author exact silence");
+    Require(history.Undo(kb::editor::EditorCommandHistoryKey::AudioMixerAsset(id.value)), "Mixer strip gain has no Undo");
+    mixer = View::LoadCached(scene.Assets().Manager(), id);
+    Require(bytes() == original, "Mixer panel Undo did not restore exact asset bytes");
+    kb::audio::AudioMixerAsset many;
+    for (int i = 0; i < 20; ++i) many.buses.push_back({.name = "Bus" + std::to_string(i)});
+    auto paged = AudioMixerPanelView::Layout(panelBounds, many, Runtime::Query(scene, id), 999U);
+    Require(paged.first + paged.strips.size() == 21U && paged.strips.back().name == "Bus19", "Mixer paging hides the last bus");
+    static_cast<void>(render(1024U));
     const auto routingBasePcm = render(8192U);
     click(Property::AudioMixerEffectParameter, "Effects", "makeupDb"); inspector.ClearText(); inspector.InsertText("12");
     Require(InspectorAudioMixerAssetInteraction::CommitTextEdit(inspector, *mixer, authoring, id), "Live preview effect edit did not commit through its field"); ++actions;

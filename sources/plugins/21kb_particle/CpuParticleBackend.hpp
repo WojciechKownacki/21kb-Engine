@@ -173,6 +173,8 @@ private:
         std::array<float, kb::scene::kParticleEffectMaxEmitters> emissionFractions{};
         std::array<std::uint8_t, kb::scene::kParticleEffectMaxEmitters> nextBurst{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEmitters> liveParticles{};
+        std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> emissionNanoseconds{};
+        std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> integrationNanoseconds{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEventBindings> bindingEventsThisStep{};
         kb::math::Vec3 beamStart{};  // ends of the beam being born (SpawnExact)
         float beamLifetime = 0.0F;   // one lifetime for every point of that beam
@@ -312,6 +314,7 @@ private:
     void EmitWhileAlive(float fixedDeltaSeconds, std::uint32_t& remainingSpawnBudget) noexcept;
 
     bool warmedUp_ = false;
+    bool profileEmitterWork_ = false;
     kb::math::DVec3 simulationOrigin_{};
     std::uint32_t denseInstanceCount_ = 0U;
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene> slotGenerations_{};

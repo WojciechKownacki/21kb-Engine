@@ -1,4 +1,5 @@
 #include "kb/render/particles/ParticleStripRenderer.hpp"
+#include "scene/submit/SceneMeshCoverageProbe.hpp"
 
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
@@ -75,8 +76,7 @@ ParticleStripSubmitResult ParticleStripRenderer::SubmitDraw(
     bgfx::setTexture(0U, textureSampler_, texture);
     bgfx::setVertexBuffer(0U, vertexBuffer_, 0U, static_cast<std::uint32_t>(lastBuild_.vertices.size()));
     bgfx::setIndexBuffer(indexBuffer_, draw.firstIndex, draw.indexCount);
-    bgfx::setState(ParticleBlendState(draw.blend, draw.depth));
-    bgfx::submit(viewId, program_);
+    SubmitWithSceneCoverage(coverageProbe_, viewId, program_, ParticleBlendState(draw.blend, draw.depth), true);
     result.succeeded = true;
     result.drawCalls = 1U;
     result.submittedIndices = draw.indexCount;

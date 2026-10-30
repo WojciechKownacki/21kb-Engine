@@ -64,14 +64,34 @@ struct SceneTransformPropagationBudget {
     std::size_t maxInspectedEntitiesPerSync = 0U;
 };
 
+struct SceneRuntimeStageTiming {
+    std::string name;
+    std::uint64_t startNanoseconds = 0U;
+    std::uint64_t endNanoseconds = 0U;
+};
+
+struct SceneRuntimeSystemTiming {
+    std::string systemType;
+    std::string phase;
+    std::uint64_t startNanoseconds = 0U;
+    std::uint64_t endNanoseconds = 0U;
+    std::size_t workerIndex = 0U;
+    bool ownerThread = true;
+    std::uint64_t dispatchGroup = 0U;
+    std::uint64_t queueWaitNanoseconds = 0U;
+};
+
 struct SceneRuntimeHotPathReport {
     bool transformHierarchyUsesBatchPath = false;
     bool transformHierarchyUsesKernelContract = false;
     bool transformHierarchyUsesVirtualSceneSystem = true;
     std::uint64_t runtimeUpdateNanoseconds = 0U;
+    std::uint64_t runtimeUpdateStartSteadyNanoseconds = 0U;
     std::uint64_t runtimeTransformSyncNanoseconds = 0U;
     std::uint64_t runtimeFixedCaptureStartNanoseconds = 0U;
     std::uint64_t runtimeFixedCaptureEndNanoseconds = 0U;
+    std::vector<SceneRuntimeStageTiming> runtimeStages;
+    std::vector<SceneRuntimeSystemTiming> sceneSystems;
     std::size_t transformTopologicalBatchCount = 0U;
     std::uint64_t transformTopologicalBatchBuildCount = 0U;
     std::size_t transformRenderProxyUpdateCount = 0U;

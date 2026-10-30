@@ -55,6 +55,12 @@ struct PucLuaDebugVariableSnapshot {
     ScriptValueType type = ScriptValueType::Void;
 };
 
+struct PucLuaDebugEvaluationResult {
+    bool succeeded = false;
+    PucLuaDebugVariableSnapshot value;
+    std::string error;
+};
+
 struct PucLuaDebugFrameSnapshot {
     std::string name;
     std::string chunkName;
@@ -150,6 +156,8 @@ public:
     [[nodiscard]] bool IsDebugPaused() const noexcept;
     // The suspended script's call stack and locals as they are now; invalid when no script is suspended.
     [[nodiscard]] PucLuaDebugPauseSnapshot InspectDebugPause() const;
+    // Evaluate an expression against scalar locals/upvalues in an isolated, bounded state.
+    [[nodiscard]] PucLuaDebugEvaluationResult EvaluateDebugExpression(std::string_view expression, int frame = 0) const;
     // Line hook side: the requested pause that applies to `thread` on the current line, if any.
     [[nodiscard]] std::optional<PucLuaDebugPauseReason> ConsumeRequestedDebugPause(lua_State* thread) noexcept;
     // Line hook side: whether `thread` may yield from the hook to stay suspended at a pause; true marks it as

@@ -1,0 +1,160 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "ImportDiagnostics",
+      "template": "Basic"
+    },
+    {
+      "op": "configure_runtime_rendering",
+      "width": 640,
+      "height": 480
+    },
+    {
+      "op": "create_entity",
+      "id": "probe",
+      "name": "DiagnosticProbe"
+    },
+    {
+      "op": "add_component",
+      "entity": "probe",
+      "component": "Light"
+    },
+    {
+      "op": "add_component",
+      "entity": "probe",
+      "component": "Light"
+    },
+    {
+      "op": "assert_console",
+      "contains": "DiagnosticProbe"
+    },
+    {
+      "op": "assert_console",
+      "contains": "Fix:"
+    },
+    {
+      "op": "set_property",
+      "entity": "probe",
+      "component": "Light",
+      "property": "intensity",
+      "value": 2.0
+    },
+    {
+      "op": "clear_console"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Repair.gltf",
+      "content": "{"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/Repair.gltf",
+      "destination": "/Game/Models",
+      "refused": true
+    },
+    {
+      "op": "assert_console",
+      "contains": "Repair.gltf"
+    },
+    {
+      "op": "assert_console",
+      "contains": "Fix:"
+    },
+    {
+      "op": "write_file",
+      "path": "Source/Repair.gltf",
+      "content": "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],\"materials\":[{\"name\":\"Skin\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},\"metallicFactor\":0.25,\"roughnessFactor\":0.75}}],\"textures\":[{\"source\":0}],\"images\":[{\"uri\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAD0lEQVR4nGP4jwYYSBcAAHg8P8FY7imoAAAAAElFTkSuQmCC\"}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA\"}]}"
+    },
+    {
+      "op": "import_asset",
+      "source": "Source/Repair.gltf",
+      "destination": "/Game/Models",
+      "import_materials": true,
+      "import_textures": true
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Models/Repair.21kb",
+      "min_size": 32
+    },
+    {
+      "op": "clear_console"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Logic/CompileProbe.lua",
+      "content": "function Tick(self, dt)\n local broken =\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "attach_script",
+      "entity": "probe",
+      "asset": "/Game/Logic/CompileProbe.lua"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 2,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_console",
+      "contains": "CompileProbe.lua"
+    },
+    {
+      "op": "assert_console",
+      "contains": "Fix: Correct the Lua source"
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "clear_console"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Logic/CompileProbe.lua",
+      "content": "function Tick(self, dt)\n Log(\"diagnostic-recovery-pass\")\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 4,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_console",
+      "contains": "diagnostic-recovery-pass"
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "recovered",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/ImportDiagnostics.21kbscene"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/post/SceneFogProfile.hpp"
+
 #include "kb/render/post/SceneDisplayCompositeRenderer.hpp"
 
 #include <cstdint>
@@ -52,6 +54,7 @@ struct ScenePostProcessSettings {
     // Exponential height fog: density at the base height falling off per metre above it,
     // lit to its colour; volumetric fog adds the light each light's Volumetric Scattering scatters
     // in it, with its shadows (light shafts).
+    SceneFogProfile fogProfile = SceneFogProfile::Automatic;
     bool fogEnabled = false;
     float fogDensity = 0.02F;
     float fogHeightFalloff = 0.2F;

@@ -26,6 +26,9 @@ struct ParticleEmitterExecutionView {
     std::uint64_t snapshotRevision = 0U;
     std::uint32_t cpuRenderRecords = 0U;
     std::uint64_t cpuRenderBytes = 0U;
+    bool cpuWorkProfiled = false;
+    std::uint64_t cpuEmissionNanoseconds = 0U;
+    std::uint64_t cpuIntegrationNanoseconds = 0U;
 };
 
 enum class ParticleEditorProperty : std::uint16_t {

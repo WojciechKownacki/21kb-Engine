@@ -26,6 +26,8 @@ void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
 void RunSceneUIBuildFrameProfile();
 void RunSceneTransformGoldenTests();
+void WriteImportGoldenFixture(const char* directory);
+void VerifyImportGoldenPackage(const char* filename);
 void VerifyTimelineAudioProject(const char* filename);
 }
 
@@ -107,6 +109,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneSystemParallelTests();
     } else if (suite == "scene-system-parallel-bench") {
         kb::tests::RunSceneSystemParallelBenchmark();
+    } else if (suite == "physics-runtime") {
+        kb::tests::RunPhysicsSceneSystemTests();
     } else if (suite == "physics-one-way") {
         kb::tests::RunPhysicsOneWayOnlyTest();
     } else if (suite == "physics-replay") {
@@ -137,6 +141,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-collections") {
+        kb::tests::RunScriptCollectionsTests();
     } else if (suite == "script-save") {
         kb::tests::RunScriptSaveTests();
     } else if (suite == "script-native-header") {
@@ -284,6 +290,14 @@ void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 int main(int argc, char** argv) {
     if (argc == 3 && std::string_view{argv[1]} == "timeline-project") {
         kb::tests::VerifyTimelineAudioProject(argv[2]); return 0;
+    }
+    if (argc == 3 && std::string_view{argv[1]} == "write-import-golden") {
+        kb::tests::WriteImportGoldenFixture(argv[2]);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 3 && std::string_view{argv[1]} == "import-package-golden") {
+        kb::tests::VerifyImportGoldenPackage(argv[2]);
+        return EXIT_SUCCESS;
     }
     if (argc <= 1) {
         RunAllSuites();

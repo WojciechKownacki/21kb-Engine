@@ -11,6 +11,9 @@ namespace kb::cli {
 [[nodiscard]] int RunBlendSpace2DCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVisualGraphCommand(const ArgumentList& arguments, CommandIo io);
 
+[[nodiscard]] int RunLuaDebugCommand(const ArgumentList& arguments, CommandIo io);
+
+[[nodiscard]] int RunLayoutCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAudioMixerCommand(const ArgumentList& arguments, CommandIo io);

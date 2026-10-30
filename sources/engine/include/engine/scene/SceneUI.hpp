@@ -228,6 +228,7 @@ struct SceneUIFrame {
     // hit-testable nor interactive.
     bool modalActive = false;
     std::int32_t modalSortingOrder = 0;
+    SceneEntity modalCanvas{};
     std::string language;
 
     [[nodiscard]] SceneEntity HitTest(kb::math::Vec2 point) const noexcept;

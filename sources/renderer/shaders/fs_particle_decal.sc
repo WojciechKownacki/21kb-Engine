@@ -15,6 +15,7 @@ void main()
 {
     vec2 screenUv = gl_FragCoord.xy * u_viewTexel.xy;
     float deviceDepth = texture2D(s_particleSceneDepth, screenUv).x;
+    deviceDepth = mix(deviceDepth, deviceDepth * 2.0 - 1.0, u_particleFeatureParams.w);
     float viewDepth = abs(u_particleDepthParams.y / max(abs(deviceDepth - u_particleDepthParams.x), 0.000001));
     vec3 ray = normalize(v_worldPos - u_particleCameraPosition.xyz);
     float along = max(abs(dot(ray, normalize(u_particleCameraBasis[2].xyz))), 0.000001);

@@ -1618,6 +1618,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
     asset_bake::AssetPackWriter& writer,
     std::vector<asset_bake::RuntimeArtifactReference>& references,
     std::size_t& shaderArtifactCount,
+    std::ostream& diagnostics,
     std::string& error) {
     kb::render::RenderMaterialGraphDocument graph = material.graph;
     if (material.graphSourceAssetId != 0U || !material.graphSourceAssetPath.empty()) {
@@ -1661,6 +1662,11 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         kb::render::RenderMaterialCookPayloadBuilder::Build(
             materialForCook, metadata, manager.Registry(), functionLibrary);
     if (!payload.graphBacked) {
+        if (materialForCook.materialType == "builtin.pbr" && materialForCook.desc.subsurfaceFactor > 0.0F &&
+            asset_bake::HasShaderBakeBackend(profile.shaderBackends,asset_bake::ShaderBakeBackend::Essl)) {
+            diagnostics << "material capability fallback: " << metadata.virtualPath.generic_string()
+                << " backend=essl variant=GBuffer; clearcoat takes precedence over subsurface, otherwise scattering uses diffuse tint\n";
+        }
         return true;
     }
     if (!payload.graphCompileSucceeded) {
@@ -1720,10 +1726,22 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         backends.push_back(*mapped);
     }
 
+    const bool portableCustomData = payload.graphShader.reflection.writesShadingModelColor &&
+        std::find(backends.begin(),backends.end(),kb::render::RenderMaterialGraphShaderBackend::Essl)!=backends.end();
+    if (portableCustomData) {
+        diagnostics << "material capability fallback: " << metadata.virtualPath.generic_string()
+            << " backend=essl variant=GBufferCompact; extra scattering color or iris data requires five color attachments\n";
+    }
     for (const std::string_view pass : kb::render::kRenderMaterialGraphScenePasses) {
         if (!kb::render::RenderMaterialGraphCooksScenePass(payload.graphShader.reflection, pass)) {
             continue;
         }
+        auto passBackends=backends;
+        std::erase_if(passBackends,[&](const auto backend) {
+            return !kb::render::RenderMaterialGraphCooksScenePass(payload.graphShader.reflection,pass,
+                backend==kb::render::RenderMaterialGraphShaderBackend::Essl);
+        });
+        if (passBackends.empty()) continue;
         kb::render::RenderMaterialGraphShaderArtifactRequest shaderRequest{};
         shaderRequest.shadercPath = request.shadercPath.generic_string();
         shaderRequest.varyingDefPath = (shaderSources / "varying.def.sc").generic_string();
@@ -1740,7 +1758,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         shaderRequest.shaderPlatform = profile.shaderPlatform;
         shaderRequest.materialTypeVersion = material.materialTypeVersion;
         const kb::render::RenderMaterialGraphShaderArtifactResult cooked =
-            kb::render::CookRenderMaterialGraphShaderArtifact(payload.graphShader, backends, shaderRequest);
+            kb::render::CookRenderMaterialGraphShaderArtifact(payload.graphShader, passBackends, shaderRequest);
         if (!cooked.Succeeded()) {
             error = "material shader cook failed: " + metadata.virtualPath.generic_string() +
                 " pass=" + std::string{ pass };
@@ -2894,6 +2912,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                         writer,
                         entry.artifacts,
                         result.shaderArtifactCount,
+                        diagnostics,
                         error)) {
                     return Failure(std::move(error));
                 }

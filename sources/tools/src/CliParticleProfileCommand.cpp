@@ -311,6 +311,7 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
         for (const auto& diagnostic : scene.ModuleDiagnostics()) io.err << diagnostic << '\n';
         return 1;
     }
+    kb::particles::ParticlePlayback::SetEmitterProfilingEnabled(scene, true);
     if (!MountProjectAssets(scene, projectRoot, error)) { io.err << "error: " << error << '\n'; return 1; }
     const auto* metadata = scene.Assets().Manager().Registry().FindByPath(effect->virtualPath);
     if (metadata == nullptr) { io.err << "error: particle effect was not discovered\n"; return 1; }
@@ -445,6 +446,10 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
             row.Set("emitter_id", Integer(emitter.emitterId));
             row.Set("path", JsonValue::MakeString(gpu ? "gpu" : "cpu"));
             row.Set("reason", JsonValue::MakeString(std::string{kb::particles::ParticleGpuFallbackReasonName(emitter.gpuFallbackReason)}));
+            row.Set("cpu_work_profiled", JsonValue::MakeBool(emitter.cpuWorkProfiled));
+            row.Set("cpu_emission_ns", emitter.cpuWorkProfiled ? Integer(emitter.cpuEmissionNanoseconds) : JsonValue::MakeNull());
+            row.Set("cpu_integration_ns", emitter.cpuWorkProfiled ? Integer(emitter.cpuIntegrationNanoseconds) : JsonValue::MakeNull());
+            row.Set("cpu_work_scope", JsonValue::MakeString("host elapsed emission and force/integration work in last fixed step; excludes shared age/event/snapshot work and GPU execution"));
             row.Set("cpu_render_record_count", JsonValue::MakeNumber(emitter.particleCount));
             row.Set("rejected_by_capacity", JsonValue::MakeNumber(emitter.rejectedByCapacity));
             row.Set("rejected_by_spawn_budget", JsonValue::MakeNumber(emitter.rejectedBySpawnBudget));

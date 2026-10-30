@@ -1,4 +1,5 @@
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "app/EditorHeadlessPopupChecks.hpp"
@@ -358,9 +359,11 @@ FindInspectorHit(
     if (panel == "inspector") return DockPanelKind::Inspector;
     if (panel == "assets") return DockPanelKind::Assets;
     if (panel == "console") return DockPanelKind::Console;
+    if (panel == "audio-mixer") return DockPanelKind::AudioMixer;
     if (panel == "timeline") return DockPanelKind::TimelineEditor;
     if (panel == "blend-space-2d") return DockPanelKind::BlendSpace2DEditor;
     if (panel == "gameplay-graph") return DockPanelKind::GameplayGraphEditor;
+    if (panel == "profiler") return DockPanelKind::Profiler;
     if (panel == "project_settings") {
         return DockPanelKind::ProjectSettings;
     }
@@ -643,7 +646,11 @@ struct EditorHeadlessAutomation::Impl {
             viewport.EndPaintLayout(deltaSeconds);
             const auto stats = viewport.LastSceneSubmitStats();
             if (stats.HasMissingResources() || stats.droppedInstanceCount != 0U) {
-                context.Console().Error("Renderer", "Runtime frame has missing resources or dropped instances.");
+                context.Console().Error("Renderer", "Runtime frame resource failure: mesh bindings=" + std::to_string(stats.missingMeshBindingCount) +
+                    " meshes=" + std::to_string(stats.missingMeshResourceCount) + " vertex formats=" + std::to_string(stats.unsupportedMeshVertexFormatCount) +
+                    " material bindings=" + std::to_string(stats.missingMaterialBindingCount) + " materials=" + std::to_string(stats.missingMaterialResourceCount) +
+                    " texture bindings=" + std::to_string(stats.missingTextureBindingCount) + " textures=" + std::to_string(stats.missingTextureResourceCount) +
+                    " dropped=" + std::to_string(stats.droppedInstanceCount));
                 return false;
             }
             const bool rendered = !renderFailed && runtimeCompositeActive &&
@@ -754,13 +761,17 @@ struct EditorHeadlessAutomation::Impl {
             window, bounds, context.Scene(), settings);
         if (animatorPreviewKey != 0U && context.AnimatorEditorPreviewScene() != nullptr) {
             constexpr RECT previewBounds{ 320, 180, 640, 360 };
-            const std::uint64_t revision = context.AnimatorEditorPreviewRevision();
+            const bool previewTarget = context.AnimatorEditorDebuggingPreview();
+            const std::uint64_t revision = previewTarget ? context.AnimatorEditorPreviewRevision() : context.SceneRenderRevision();
             EditorSceneBgfxViewport::PresentSettings previewSettings{};
             previewSettings.viewportKey = animatorPreviewKey;
-            previewSettings.editorSceneOverlaysEnabled = false;
+            previewSettings.editorSceneOverlaysEnabled = true;
+            const auto debugSnapshot = context.AnimatorEditorDebugSnapshot();
+            const auto* debugInstance = debugSnapshot ? debugSnapshot->Find(context.AnimatorEditorResolvedDebugTarget()) : nullptr;
+            if (debugInstance) previewSettings.physicsDebugLines = AnimatorEditorPanelRenderer::TargetMarkers(*debugInstance);
             previewSettings.sceneRevision = revision;
             previewSettings.sceneDirtyBaseRevision = revision;
-            previewSettings.sceneFullSyncRequired = false;
+            previewSettings.sceneFullSyncRequired = !previewTarget;
             previewSettings.msaaSamples = backendSettings.MsaaSamples();
             previewSettings.shadowPassEnabled = backendSettings.ShadowsEnabled();
             previewSettings.postProcessEnabled = true;
@@ -768,7 +779,7 @@ struct EditorHeadlessAutomation::Impl {
             previewSettings.selectionOutlineEnabled = false;
             previewSettings.gpuDrivenRuntimeDispatchEnabled = backendSettings.GpuDrivenEnabled();
             viewport.Present(
-                window, previewBounds, *context.AnimatorEditorPreviewScene(), previewSettings);
+                window, previewBounds, (context.AnimatorEditorDebuggingPreview() ? *context.AnimatorEditorPreviewScene() : context.Scene()), previewSettings);
         }
         viewport.EndPaintLayout();
         return std::string_view{ viewport.ActiveBackendLabel() } !=
@@ -1947,7 +1958,31 @@ bool EditorHeadlessAutomation::VerifyUINavigationLinks() {
     if (shown().rfind("(missing object #", 0) != 0) return fail("deleted-target-not-reported: " + shown());
     if (!context_.UndoSceneCommand() || shown() != "NavAuditQuit") return fail("undo-delete-failed: " + shown());
     context_.SelectEntity(byName("NavAuditPlay"));
-    Trace("ui_navigation_links", true, "picker-name-clear-invalid-deleted-undo-redo");
+    // Author a modal through the same commands used by the Inspector and check
+    // its focus policy in the editor's live scene, including undo and redo.
+    const auto modal = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    context_.Scene().Entities().SetName(modal, "NavModal");
+    const auto modalButton = context_.CreateUIObject(kb::scene::UIComponentType::Button, modal);
+    context_.Scene().Entities().SetName(modalButton, "NavModalButton");
+    const auto setModal = [&](bool enabled) {
+        return context_.SetUIComponentProperty(byName("NavModal"), kb::scene::UIComponentType::Canvas, "modal", enabled);
+    };
+    const auto update = [&] { return context_.Scene().UI().Update(640.0F, 480.0F, {}, .016F); };
+    if (!modal.IsValid() || !modalButton.IsValid() ||
+        !context_.SetUIComponentProperty(modal, kb::scene::UIComponentType::Canvas, "sortingOrder", std::int32_t{10000}) ||
+        !update() || !context_.Scene().UI().SetFocus(byName("NavAuditPlay")) || !setModal(true) || !update())
+        return fail("modal-authoring-failed");
+    if (context_.Scene().UI().Focused() != byName("NavModalButton") ||
+        context_.Scene().UI().SetFocus(byName("NavAuditPlay"))) return fail("modal-focus-not-trapped");
+    context_.SelectEntity(byName("NavModal"));
+    if (!CaptureInspector("ui-modal-canvas")) return false;
+    if (!setModal(false) || !update() || context_.Scene().UI().Focused() != byName("NavAuditPlay"))
+        return fail("modal-focus-not-restored");
+    if (!context_.UndoSceneCommand() || !update() || !context_.Scene().UI().ModalCanvasActive())
+        return fail("modal-undo-failed");
+    if (!context_.RedoSceneCommand() || !update() || context_.Scene().UI().ModalCanvasActive())
+        return fail("modal-redo-failed");
+    Trace("ui_navigation_links", true, "picker-name-clear-invalid-deleted-undo-redo-modal-focus");
     return true;
 }
 
@@ -2549,7 +2584,7 @@ bool EditorHeadlessAutomation::StepRuntime(
     if (profile) {
         std::ofstream output{artifactRoot_ / "runtime-frames.csv"};
         output.imbue(std::locale::classic());
-        output << "frame,cpu_ms,simulation_ms,render_ms,gpu_delayed_ms,draws,shadow_casters,submitted_meshes,dropped,shadow_draws,missing_resources,fixed_steps,gpu_culling_dispatches,gpu_culling_upload_bytes,runtime_ms,transform_sync_ms,fixed_capture_start_ms,fixed_capture_end_ms,transform_hierarchy_ms,command_lookup_buckets,command_instance_capacity,bgfx_wait_render_ms,bgfx_wait_submit_ms,bgfx_render_cpu_ms,bgfx_gpu_frame\n";
+        output << "frame,processing_wall_ms,simulation_ms,render_ms,gpu_delayed_ms,draws,shadow_casters,submitted_meshes,dropped,shadow_draws,missing_resources,fixed_steps,gpu_culling_dispatches,gpu_culling_upload_bytes,runtime_ms,transform_sync_ms,fixed_capture_start_ms,fixed_capture_end_ms,transform_hierarchy_ms,command_lookup_buckets,command_instance_capacity,bgfx_wait_render_ms,bgfx_wait_submit_ms,bgfx_render_cpu_ms,bgfx_gpu_frame\n";
         for (std::size_t index = 0; index < samples.size(); ++index) {
             output << index;
             for (const double value : samples[index]) output << ',' << value;
@@ -4330,6 +4365,24 @@ void EditorHeadlessAutomation::SnapshotConsole(
                << entry.category << '\t' << entry.message << '\n';
     }
     Trace("snapshot_console", output.good(), path.filename().string());
+}
+
+bool EditorHeadlessAutomation::VerifyParticleControls() {
+    const auto result = EditorHeadlessPopupChecks::VerifyParticleControls(context_, impl_->viewport);
+    Trace("verify_particle_controls", result.succeeded, result.detail);
+    return result.succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyDebuggerInteraction() {
+    const auto result = EditorHeadlessPopupChecks::VerifyDebuggerInteraction(context_, impl_->viewport);
+    Trace("verify_debugger_interaction", result.succeeded, result.detail);
+    return result.succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyWorkspaceControls() {
+    const auto result = EditorHeadlessPopupChecks::VerifyWorkspaceControls(context_, impl_->viewport);
+    Trace("verify_workspace_controls", result.succeeded, result.detail);
+    return result.succeeded;
 }
 
 bool EditorHeadlessAutomation::VerifyToolbarMenuOverlay() {

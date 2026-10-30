@@ -29,6 +29,9 @@ def resize_hidden_player(process, sizes):
     user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.GetWindowDpiAwarenessContext.argtypes = [wintypes.HWND]
+    user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
+    user.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
@@ -50,6 +53,9 @@ def resize_hidden_player(process, sizes):
     require(handles, 'Hidden player window was not created')
     window = handles[0]
     require(not user.IsWindowVisible(window), 'Player unexpectedly displayed its window')
+    require(user.AreDpiAwarenessContextsEqual(user.GetWindowDpiAwarenessContext(window),
+                                              ctypes.c_void_p(-4)),
+            'Windowed player must use per-monitor-v2 DPI awareness')
     # Wait for renderer initialization before changing dimensions.
     time.sleep(.4)
     for width, height in sizes:

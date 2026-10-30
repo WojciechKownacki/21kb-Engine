@@ -360,6 +360,10 @@ void ActivatePanel(
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 2) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
+            } else if (*row == 3) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, DockArea::Center);
+            } else if (*row == 4) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::AudioMixer, DockArea::Center);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {
             // Like Unity's and Unreal's Help menu: the engine's pages in the browser, and About.

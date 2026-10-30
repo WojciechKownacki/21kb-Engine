@@ -163,6 +163,65 @@ void VerifyRuntimeClipboard(HWND window) {
     press(InputKey::C);
     Require(kb::platform::ReadWin32ClipboardText(window) == "unchanged", "Password copy must not expose field contents");
 }
+
+void VerifyRuntimeIme(HWND window) {
+    using namespace kb::scene;
+    using kb::input::InputKey;
+    Scene scene{SceneMode::PrefabPrivate};
+    const auto canvas = scene.Entities().CreateObject({});
+    ApplySceneUIComponents(scene.Components().UI(), canvas.Entity(), BuildUIComponentPreset(UIComponentPreset::Canvas));
+    const auto field = scene.Entities().CreateObject(SceneObjectDesc{.parent = canvas});
+    const auto other = scene.Entities().CreateObject(SceneObjectDesc{.parent = canvas});
+    for (const auto object : {field, other})
+        ApplySceneUIComponents(scene.Components().UI(), object.Entity(), BuildUIComponentPreset(UIComponentPreset::InputField));
+    const auto update = [&] { Require(scene.UI().Update(640.0F, 480.0F, {}, 0.016F), "IME UI update failed"); };
+    update();
+    Require(scene.UI().SetFocus(field.Entity()), "IME fixture focus failed");
+    auto& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    kb::input::Win32InputCollector collector;
+    collector.SynchronizeTextInput(scene, window);
+    const auto message = [&](UINT kind, WPARAM value = 0U) {
+        return collector.HandleWindowMessage(window, kind, value, 0);
+    };
+    const auto tick = [&] { collector.ApplyTextClipboard(scene, window); update(); };
+    message(WM_IME_STARTCOMPOSITION);
+    device.SetKeyDown(InputKey::Tab, true);
+    device.SetKeyDown(InputKey::Enter, true);
+    tick();
+    Require(scene.UI().Focused() == field.Entity() && scene.UI().TextInputState()->text.empty(),
+        "Composition must retain focus without inserting provisional text");
+    Require(!device.IsKeyDown(InputKey::Tab) && !device.IsKeyDown(InputKey::Enter),
+        "IME navigation keys must not reach the runtime");
+    Require(message(WM_IME_CHAR, 0xD83DU) && message(WM_IME_CHAR, 0xDE00U),
+        "Committed surrogate pairs must consume the native message");
+    message(WM_IME_CHAR, L'e');
+    message(WM_IME_CHAR, 0x0301U);
+    message(WM_IME_ENDCOMPOSITION);
+    tick();
+    Require(scene.UI().TextInputState()->text == U"\U0001F600e\u0301", "IME commit must preserve composed Unicode exactly once");
+    tick();
+    Require(scene.UI().TextInputState()->text == U"\U0001F600e\u0301", "IME commit must not replay on the following frame");
+    message(WM_IME_STARTCOMPOSITION);
+    message(WM_IME_CHAR, L'X');
+    Require(scene.UI().SetFocus(other.Entity()), "IME focus switch failed");
+    message(WM_IME_ENDCOMPOSITION);
+    tick();
+    Require(scene.UI().TextInputState()->text.empty(), "A queued IME result must not migrate to another field");
+    message(WM_IME_CHAR, L'Z');
+    tick();
+    Require(scene.UI().TextInputState()->text.empty(), "A late result from canceled composition must not bind to the new field");
+    message(WM_IME_STARTCOMPOSITION);
+    for (unsigned index = 0; index < 1025U; ++index) message(WM_IME_CHAR, L'x');
+    message(WM_IME_ENDCOMPOSITION);
+    tick();
+    Require(scene.UI().TextInputState()->text.empty(), "Oversized IME commits must be rejected without a partial grapheme");
+    message(WM_IME_STARTCOMPOSITION);
+    message(WM_IME_CHAR, L'Y');
+    message(WM_KILLFOCUS);
+    tick();
+    Require(scene.UI().TextInputState()->text.empty(), "Window focus loss must discard pending IME text");
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -179,6 +238,7 @@ int wmain(int argc, wchar_t** argv) {
         Require(clipboard.window != nullptr, "An isolated clipboard station and hidden owner window are required");
         VerifyNativeClipboard(clipboard.window);
         VerifyRuntimeClipboard(clipboard.window);
+        VerifyRuntimeIme(clipboard.window);
         std::cout << "Isolated native and runtime clipboard tests passed\n";
         return 0;
     } catch (const std::exception& error) {

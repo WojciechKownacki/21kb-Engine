@@ -1,6 +1,5 @@
 package com.kbengine.runtime;
 
-import com.google.androidgamesdk.GameActivity;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
@@ -12,7 +11,7 @@ import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.util.Log;
 
-public final class MainActivity extends GameActivity {
+public final class MainActivity extends TextInputActivity {
     private static native void setAudioFocusGranted(boolean granted);
     private AudioManager audioManager;
     private AudioFocusRequest audioRequest;

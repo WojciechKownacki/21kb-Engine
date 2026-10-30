@@ -41,3 +41,9 @@ failures fail the command. The `21kb.input-execution/v1` JSON report distinguish
 requested and completed ticks, simulated seconds, replay and confirmed recording
 writes; logs remain on stderr. MCP `run_scene` exposes the same operation through
 `inputReplay`, `inputRecord` and `report: "input"`.
+
+The report also captures the primary local player's last completed input frame:
+`actions` contains evaluated values, including analog values below a trigger
+threshold; `action_events` contains started, triggered, completed and canceled
+transitions. `action_snapshot_frame` and `action_snapshot_player` identify that
+snapshot. These are sampled before shutdown and do not accumulate a session history.

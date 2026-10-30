@@ -11,6 +11,7 @@
 // The prefiltered sky takes a free builtin stage of graph shaders (they own the stages from 6 up).
 SAMPLERCUBE(s_skyReflection, 3);
 #include "sky_reflection.sh"
+#include "height_fog.sh"
 
 uniform vec4 u_cameraPosition;
 uniform vec4 u_lightDirKind[32];
@@ -112,7 +113,7 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
         return vec3(0.0, 0.0, 0.0);
     }
 
-    vec3 halfVector = normalize(viewDir + lightVector);
+    vec3 halfVector = ((viewDir + lightVector) / max(length(viewDir + lightVector), 0.00001));
     float nDotV = max(dot(normal, viewDir), 0.0001);
     float nDotH = max(dot(normal, halfVector), 0.0);
     float hDotV = max(dot(halfVector, viewDir), 0.0);

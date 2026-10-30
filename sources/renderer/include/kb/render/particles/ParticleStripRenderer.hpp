@@ -6,6 +6,8 @@
 
 namespace kb::render {
 
+class SceneMeshCoverageProbe;
+
 struct ParticleStripSubmitResult {
     bool succeeded = false;
     std::uint32_t drawCalls = 0U;
@@ -15,6 +17,7 @@ struct ParticleStripSubmitResult {
 
 class ParticleStripRenderer final {
 public:
+    void SetCoverageProbe(SceneMeshCoverageProbe* probe) noexcept { coverageProbe_ = probe; }
     [[nodiscard]] bool Initialize();
     void Shutdown() noexcept;
     void Warmup();
@@ -31,6 +34,7 @@ public:
         bgfx::ViewId viewId, std::uint32_t drawIndex, bgfx::TextureHandle texture) noexcept;
 
 private:
+    SceneMeshCoverageProbe* coverageProbe_ = nullptr;
     ParticleStripGeometryBuilder geometryBuilder_;
     ParticleStripBuildResult lastBuild_{};
     bgfx::DynamicVertexBufferHandle vertexBuffer_ = BGFX_INVALID_HANDLE;

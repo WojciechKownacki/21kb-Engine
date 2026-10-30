@@ -534,6 +534,7 @@ RuntimeContentStreamer::RebuildResult RuntimeContentStreamer::RebuildMesh(
         desc.materialSlots = record.materialSlots.data();
         desc.materialSlotCount = static_cast<std::uint32_t>(record.materialSlots.size());
     }
+    const auto creationStarted = std::chrono::steady_clock::now();
     const auto newBytes = MeshPayloadBytes(desc);
     std::uint64_t compositionBytes =
         mesh.vertices.capacity() * sizeof(RenderStaticMeshVertexP3N3UV2) +
@@ -543,6 +544,8 @@ RuntimeContentStreamer::RebuildResult RuntimeContentStreamer::RebuildMesh(
     for (const auto& chunk : mesh.streaming->chunks) compositionBytes += chunk.capacity();
     if (!AdmitRebuild(record, sceneRenderer, newBytes, compositionBytes)) return RebuildResult::Deferred;
     const RenderMeshHandle handle = sceneRenderer.Resources().RegisterMesh(desc);
+    counters_.maxMeshBufferCreationMilliseconds = std::max(counters_.maxMeshBufferCreationMilliseconds,
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - creationStarted).count());
     if (!handle.IsValid()) {
         return RebuildResult::Failed;
     }
@@ -590,9 +593,10 @@ void RuntimeContentStreamer::Rebuild(
     std::ranges::sort(due, [](const Record* lhs, const Record* rhs) {
         return lhs->requestPriority > rhs->requestPriority || (lhs->requestPriority == rhs->requestPriority && lhs->id < rhs->id);
     });
-    std::uint32_t rebuilt = 0U;
-    std::uint64_t uploaded = 0U;
-    std::uint64_t transient = 0U;
+    std::uint32_t& rebuilt = frameRebuilds_;
+    std::uint64_t& uploaded = frameUploadedBytes_;
+    std::uint64_t& transient = frameTransientBytes_;
+    const std::uint64_t previouslyUploaded = uploaded;
     for (Record* record : due) {
         if (rebuilt >= settings_.maxRebuildsPerFrame ||
             (uploaded != 0U && uploaded >= settings_.maxUploadBytesPerFrame) ||
@@ -621,6 +625,11 @@ void RuntimeContentStreamer::Rebuild(
                 break;
             }
         }
+        // Keep the next resource for a fresh frame if it does not fit. The first resource
+        // is indivisible and may exceed the byte limit, but cannot share that frame.
+        if (rebuilt != 0U && requiredBytes > settings_.maxUploadBytesPerFrame - uploaded) {
+            break;
+        }
         std::uint64_t compositionBytes = requiredBytes;
         if (!record->texture) {
             for (std::uint32_t lod = level; lod < record->levelData.size(); ++lod)
@@ -628,10 +637,18 @@ void RuntimeContentStreamer::Rebuild(
         }
         if (!AdmitRebuild(*record, sceneRenderer, requiredBytes, compositionBytes)) continue;
         const std::uint64_t uploadedBefore = uploaded;
+        const auto rebuildStarted = std::chrono::steady_clock::now();
         const RebuildResult result = record->texture ? RebuildTexture(*record, sceneRenderer, textures, level, uploaded)
                                                : RebuildMesh(*record, sceneRenderer, meshes, level, uploaded);
+        counters_.lastRebuildMilliseconds = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - rebuildStarted).count();
+        double& maximum = record->texture ? counters_.maxTextureRebuildMilliseconds : counters_.maxMeshRebuildMilliseconds;
+        maximum = std::max(maximum, counters_.lastRebuildMilliseconds);
         if (result == RebuildResult::Succeeded) {
             const std::uint64_t newBytes = uploaded - uploadedBefore;
+            if (newBytes > settings_.maxUploadBytesPerFrame) {
+                ++counters_.oversizedUploads;
+            }
             transient += record->gpuBytes + newBytes;
             record->gpuBytes = newBytes;
             record->uploadedLevel = level;
@@ -642,7 +659,8 @@ void RuntimeContentStreamer::Rebuild(
             record->rebuildFailed = true;
         }
     }
-    counters_.uploadedBytes += uploaded;
+    counters_.uploadedBytes += uploaded - previouslyUploaded;
+    counters_.peakUploadBytesPerFrame = std::max(counters_.peakUploadBytesPerFrame, uploaded);
     if (transient != 0U) {
         const kb::assets::streaming::StreamingResidencyStats residency = residency_.Stats();
         counters_.peakRebuildTransientBytes = std::max(counters_.peakRebuildTransientBytes, transient);
@@ -664,6 +682,12 @@ void RuntimeContentStreamer::Update(
         materialTextures_.clear();
         materialLessTextures_.clear();
         return;
+    }
+    if (uploadFrame_ != frame.frame) {
+        uploadFrame_ = frame.frame;
+        frameRebuilds_ = 0U;
+        frameUploadedBytes_ = 0U;
+        frameTransientBytes_ = 0U;
     }
     GatherFeedback(frame, sceneRenderer);
     materialTextures_.clear();

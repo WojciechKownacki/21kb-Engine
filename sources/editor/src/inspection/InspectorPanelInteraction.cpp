@@ -3180,6 +3180,14 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     switch (property) {
     case InspectorPropertyId::MeshRendererAdvanced:
         return InspectorDisclosureId::MeshRendererAdvanced;
+    case InspectorPropertyId::CameraAdvanced:
+        return InspectorDisclosureId::CameraAdvanced;
+    case InspectorPropertyId::LightAdvanced:
+        return InspectorDisclosureId::LightAdvanced;
+    case InspectorPropertyId::RigidbodyAdvanced:
+        return InspectorDisclosureId::RigidbodyAdvanced;
+    case InspectorPropertyId::ColliderAdvanced:
+        return InspectorDisclosureId::ColliderAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
     case InspectorPropertyId::UIAnchorPresets:

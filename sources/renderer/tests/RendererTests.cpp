@@ -49,6 +49,7 @@ void RunGpuFrustumCullingTests();
 void RunGpuMeshletSubmissionTests();
 void RunParticleProcessTests(const std::filesystem::path& compiled);
 void RunRenderEffectPluginTests(const std::filesystem::path& manifest);
+void RunScreenUIOverdrawGpuTests();
 void RunSkinnedMeshGpuReadbackTests();
 void RunPrebuiltBackendShaderGpuTests();
 void RunFinalCompositePassTests();
@@ -57,6 +58,8 @@ void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
 void RunAssetImportCatalogCoverageTests();
 void RunGltfExternalResourceTests();
+void VerifyStaticImportGoldenPackage(const char* filename);
+void CaptureRetargetExport(const char* inputPath, const char* outputPrefix, const char* temporalMode);
 void RunMeshReimportTests();
 void RunRuntimeAssetShaderProviderTests();
 void RunRuntimeAssetPackValidationTests();
@@ -66,6 +69,7 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererStreamingLifetimeTests();
 void RunRendererGiResolveTests();
 void RunRendererSkyReflectionTests();
 void RunRendererCommandReuseTests();
@@ -85,7 +89,14 @@ void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend
 void RunRendererParticleMotionPixelsTest(bgfx::RendererType::Enum backend);
 void RunRendererParticleDepthAuthoringTest();
 void RunRendererParticleSortModesTest();
+void RunRendererParticleBlendGoldensTest(bgfx::RendererType::Enum backend);
+void RunRendererAssetDecodeCancellationTest();
+void RunRendererFogProfileTests(bgfx::RendererType::Enum backend);
+void RunRendererMaterialMatrixTests(bgfx::RendererType::Enum backend);
+void RunGraphCompactGBufferTests();
 void RunRendererScreenSpaceEffectTests();
+void RunRendererScreenEffectLifecycleTests();
+void RunRendererDiagnosticsTests();
 void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererParticleVolumetricSnapshotSubmitTest();
 void RunRendererDetachedViewportFinalCompositePixelsTest();
@@ -123,6 +134,21 @@ void RunSuite(const char* name, void (*run)()) {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 5 && std::string_view{argv[1]} == "temporal-export-capture") {
+        kb::render::tests::CaptureRetargetExport(argv[2], argv[3], argv[4]);
+        return EXIT_SUCCESS;
+    }
+
+    if (argc == 4 && std::string_view{argv[1]} == "retarget-export-capture") {
+        kb::render::tests::CaptureRetargetExport(argv[2], argv[3], nullptr);
+        return EXIT_SUCCESS;
+    }
+
+    if (argc == 3 && std::string_view{argv[1]} == "import-package-golden") {
+        kb::render::tests::VerifyStaticImportGoldenPackage(argv[2]);
+        return EXIT_SUCCESS;
+    }
+
     kb::render::tests::InstallRendererAssertionPolicy();
     if (argc == 2 && std::string_view{ argv[1] } == "assert-probe") {
         kb::render::tests::ProbeRendererAssertion();
@@ -198,8 +224,16 @@ int main(int argc, char** argv) {
         kb::render::tests::RunShaderManifestTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-effect-lifecycle") {
+        kb::render::tests::RunRendererScreenEffectLifecycleTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "screen-space") {
         kb::render::tests::RunRendererScreenSpaceEffectTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "renderer-diagnostics") {
+        kb::render::tests::RunRendererDiagnosticsTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {
@@ -210,8 +244,16 @@ int main(int argc, char** argv) {
         kb::render::tests::RunScreenUIDrawBatchTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-overdraw") {
+        kb::render::tests::RunScreenUIOverdrawGpuTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "gltf-external") {
         kb::render::tests::RunGltfExternalResourceTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "material-schema") {
+        kb::render::tests::RunRenderMaterialTypeSchemaTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-reimport") {
@@ -270,8 +312,16 @@ int main(int argc, char** argv) {
         kb::render::tests::RunGraphForwardGpuRenderTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "graph-compact-gbuffer") {
+        kb::render::tests::RunGraphCompactGBufferTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "graph-program-lifetime") {
         kb::render::tests::RunGraphProgramLifetimeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "streaming-lifetime") {
+        kb::render::tests::RunRendererStreamingLifetimeTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "runtime-submit") {
@@ -334,6 +384,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunSceneRenderTargetFormatTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "asset-decode-cancellation") {
+        kb::render::tests::RunRendererAssetDecodeCancellationTest();
+        return 0;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-sort-modes") {
         try {
             kb::render::tests::RunRendererParticleSortModesTest();
@@ -353,7 +407,7 @@ int main(int argc, char** argv) {
         }
     }
     if (argc >= 2 && (std::string_view{argv[1]} == "particle-motion" || std::string_view{argv[1]} == "particle-motion-kernel" ||
-        std::string_view{argv[1]} == "particle-visual-counters")) {
+        std::string_view{argv[1]} == "particle-visual-counters" || std::string_view{argv[1]} == "particle-blend-goldens" || std::string_view{argv[1]} == "fog-profiles" || std::string_view{argv[1]} == "material-matrix")) {
         if ((argc != 2 && argc != 4) || (argc == 4 && std::string_view{argv[2]} != "--backend")) {
             std::fprintf(stderr, "%s expects [--backend d3d11|d3d12|vulkan|opengl]\n", argv[1]);
             return EXIT_FAILURE;
@@ -369,6 +423,16 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "%s received an unsupported backend\n", argv[1]);
                 return EXIT_FAILURE;
             }
+        }
+        if (std::string_view{argv[1]} == "fog-profiles") {
+            kb::render::tests::RunRendererFogProfileTests(backend); return EXIT_SUCCESS;
+        }
+        if (std::string_view{argv[1]} == "material-matrix") {
+            kb::render::tests::RunRendererMaterialMatrixTests(backend); return EXIT_SUCCESS;
+        }
+        if (std::string_view{argv[1]} == "particle-blend-goldens") {
+            kb::render::tests::RunRendererParticleBlendGoldensTest(backend);
+            return EXIT_SUCCESS;
         }
         if (std::string_view{argv[1]} == "particle-visual-counters") {
             kb::render::tests::RunParticleGpuVisualCounterTests(backend);

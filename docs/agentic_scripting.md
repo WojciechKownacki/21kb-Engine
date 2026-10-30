@@ -430,9 +430,83 @@ it does not report a successful rollback. Run batches without concurrent project
 writers. This is recovery from command failures, not isolation from other processes
 or protection against process termination during a write.
 
+## Authoring metrics
+
+Editor automation writes `report.json` with executed actions, assertions,
+failures and workaround operations. Fixture copies and direct file writes are
+listed explicitly. These are scenario operations, not physical mouse clicks or
+results from a study with people.
+
+The map and sprite packaged scenarios also write `authoring-metrics.json` in
+their package artifact directory. It preserves the editor metrics and adds the
+export steps and combined totals. Copying the player and providers into a package
+is counted as external preparation. A failed cook or player check records the
+failed step before the test exits; an unfinished report remains `RUNNING`.
+
+Run `kb_editor_map2d_packaged`, `kb_editor_sprite2d_packaged` and
+`kb_editor_headless_automation_scenario` with CTest, then validate the reports:
+
+```powershell
+python sources/editor/tests/AuthoringMetricsTests.py --ctest ctest --build-root build/release
+```
+
+Use the actual CMake build directory. The validator checks counts against the
+executed scenarios and injects a failed export to verify failure accounting.
+The scenarios cover map and sprite editing, input setup, UI, save and export.
+
 ## Good to know
 
 - Headless runs have no keyboard/gamepad — the agent tests logic; you test controls in
   the editor with Play.
 - After updating the engine, run `kb_cli api --project .` to refresh the API reference.
 - Use PowerShell or cmd for these commands; Git Bash mangles `/Game/...` paths.
+
+## Live Lua debugger
+
+Start the editor with `kb_editor --project Sample.21kbproject --lua-debug-dir DebugSession`
+and enter Play, or run a source/cooked player with
+`kb_game --lua-debug-dir=DebugSession`. The endpoint must be a new directory
+whose parent already exists. Debugging is opt-in and local to the machine;
+use a directory accessible only to the intended local user. No network port opens.
+An orderly shutdown removes the endpoint marker. After a crash, choose a new directory.
+
+The CLI frontend uses the same `21kb.lua-debug/v1` JSON command session in both hosts:
+
+```powershell
+kb_cli debug --endpoint DebugSession --command connect
+kb_cli debug --endpoint DebugSession --command breakpoints --breakpoints points.json
+kb_cli debug --endpoint DebugSession --command status
+kb_cli debug --endpoint DebugSession --command stack
+kb_cli debug --endpoint DebugSession --command locals
+kb_cli debug --endpoint DebugSession --command evaluate --expression "counter + 2" --frame 0
+kb_cli debug --endpoint DebugSession --command step_into
+kb_cli debug --endpoint DebugSession --command step_over
+kb_cli debug --endpoint DebugSession --command step_out
+kb_cli debug --endpoint DebugSession --command continue
+kb_cli debug --endpoint DebugSession --command disconnect
+```
+
+`points.json` is an array such as `[{"chunk":"DebugProbe.lua","line":7}]`.
+Lines are one-based; chunk names match the full source name or its suffix. An empty
+array clears breakpoints. `pause` stops at the next executed Lua line. The coroutine
+yields at a breakpoint, leaving the editor message loop and other behaviours running.
+Stack/locals responses include frame names, chunks, lines and scalar snapshots;
+tables and functions are identified by type. Snapshots cap at 32 frames, 64 locals
+per frame and 512 bytes per local string (long strings have an ellipsis).
+
+The evaluator reads scalar locals and upvalues from the selected zero-based frame.
+It evaluates Lua expressions in an isolated state, without engine functions, global
+libraries or mutable references into the running scene. Limits are 4096 expression
+bytes, 1 MiB evaluation memory and 10000 Lua instructions. Invalid expressions and
+budget exhaustion return JSON errors without resuming or corrupting the paused script.
+Requests are limited to 64 KiB and replies to 8 MiB; each host poll handles at most
+8 requests. CLI failures return a nonzero exit code.
+
+Send `heartbeat` (or any command) at least once per 30 seconds to retain the session.
+After 30 seconds without requests, the host disables breakpoints and releases the
+paused coroutine. Explicit `disconnect` does the same immediately. The endpoint
+supports one shared debugging session; do not drive competing clients simultaneously.
+The editor also polls when its Play transport is paused. Lua steps run when Play is
+running. `kb_editor_lua_debugger_package` verifies CLI commands in the headless editor,
+source player and isolated cooked package, GUI tab/splitter interaction at a breakpoint,
+and recovery after the client stops sending requests.

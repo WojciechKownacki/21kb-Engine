@@ -395,9 +395,12 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .transformHierarchyUsesKernelContract = true,
         .transformHierarchyUsesVirtualSceneSystem = false,
         .runtimeUpdateNanoseconds = state.lastRuntimeUpdateNanoseconds,
+        .runtimeUpdateStartSteadyNanoseconds = state.lastRuntimeUpdateStartSteadyNanoseconds,
         .runtimeTransformSyncNanoseconds = state.lastRuntimeTransformSyncNanoseconds,
         .runtimeFixedCaptureStartNanoseconds = state.lastRuntimeFixedCaptureStartNanoseconds,
         .runtimeFixedCaptureEndNanoseconds = state.lastRuntimeFixedCaptureEndNanoseconds,
+        .runtimeStages = state.lastRuntimeStages,
+        .sceneSystems = state.lastSceneSystems,
         .transformTopologicalBatchCount = state.transformTopology.Levels().size(),
         .transformTopologicalBatchBuildCount = state.transformTopology.BuildCount(),
         .transformRenderProxyUpdateCount = renderProxyCounts.updated,
@@ -506,15 +509,30 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     }
     using Clock = std::chrono::steady_clock;
     const auto updateStart = Clock::now();
+    state.lastRuntimeUpdateStartSteadyNanoseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(updateStart.time_since_epoch()).count());
     const auto nanosecondsSince = [](Clock::time_point start) {
         return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
+    };
+    state.lastRuntimeStages.clear();
+    state.lastSceneSystems.clear();
+    state.nextSceneTraceGroup = 0U;
+    const bool traceStages = state.systemScheduler.ProfilerEnabled();
+    const auto measuredStage = [&](const char* name, auto&& callback) {
+        if (!traceStages) { callback(); return; }
+        const auto begin = Clock::now();
+        callback();
+        const auto end = Clock::now();
+        state.lastRuntimeStages.push_back({name,
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(begin - updateStart).count()),
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - updateStart).count())});
     };
     state.lastRuntimeTransformSyncNanoseconds = 0U;
     state.lastRuntimeFixedCaptureStartNanoseconds = 0U;
     state.lastRuntimeFixedCaptureEndNanoseconds = 0U;
-    const auto synchronizeTransforms = [&state, &nanosecondsSince] {
+    const auto synchronizeTransforms = [&state, &nanosecondsSince, &measuredStage] {
         const auto start = Clock::now();
-        SynchronizeTransformHierarchy(state);
+        measuredStage("transforms.sync", [&] { SynchronizeTransformHierarchy(state); });
         state.lastRuntimeTransformSyncNanoseconds += nanosecondsSince(start);
     };
     ApplyRuntimeCommands(state);
@@ -550,34 +568,34 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.renderProxyUpdateEntityIds.reserve(HierarchyTrackedSlotCount(state));
     kb::ecs::ReserveGeometric(state.renderProxyDirtyTraversalScratch, HierarchyTrackedSlotCount(state));
 
-    SceneStreamingService::Pump(scene);
+    measuredStage("streaming", [&] { SceneStreamingService::Pump(scene); });
     synchronizeTransforms();
-    state.sceneSystemScheduler.BeginFrame(scene, deltaSeconds);
-    state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PreFixed);
+    measuredStage("scene.frame_start", [&] { state.sceneSystemScheduler.BeginFrame(scene, deltaSeconds); });
+    measuredStage("scene.update.pre_fixed", [&] { state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PreFixed); });
 
     if (state.isPlaying && state.requiresFixedStep && fixed.fixedDeltaSeconds > 0.0F && fixed.maxFixedStepsPerFrame > 0U) {
         const float clampedDelta = std::clamp(deltaSeconds, 0.0F, std::max(0.0F, fixed.maxFrameDeltaSeconds));
         state.fixedStepAccumulatorSeconds += clampedDelta;
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
             state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
-            state.sceneSystemScheduler.FixedStepBegin(scene, fixed.fixedDeltaSeconds);
+            measuredStage("scene.fixed.begin", [&] { state.sceneSystemScheduler.FixedStepBegin(scene, fixed.fixedDeltaSeconds); });
             synchronizeTransforms();
             const auto stepStart = Clock::now();
             const auto captureStart = stepStart;
             CaptureFixedStepStart(scene, state);
             state.lastRuntimeFixedCaptureStartNanoseconds += nanosecondsSince(captureStart);
-            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PreSimulation);
-            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PrepareSimulation);
+            measuredStage("scene.fixed.pre_simulation", [&] { state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PreSimulation); });
+            measuredStage("scene.fixed.prepare_simulation", [&] { state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PrepareSimulation); });
             // FixedTick may flush structural/component commands, including
             // local transform changes. Publish hierarchy-derived world poses
             // before the physics plugin synchronizes its bodies.
             synchronizeTransforms();
-            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::Simulation);
+            measuredStage("scene.fixed.simulation", [&] { state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::Simulation); });
             for (const SceneEntity broken : std::exchange(state.pendingJointBreaks, {})) {
                 SceneComponentMutationService::RemoveJoint(scene, broken);
             }
             synchronizeTransforms();
-            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PostSimulation);
+            measuredStage("scene.fixed.post_simulation", [&] { state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PostSimulation); });
             synchronizeTransforms();
             const auto captureEnd = Clock::now();
             CaptureFixedStepEnd(scene, state);
@@ -611,12 +629,13 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     // Variable consumers (notably script Tick/LateTick) run after the fixed
     // loop, so they see this Update call's physics write-back. Producers such
     // as input polling already ran in PreFixed and were visible to FixedTick.
-    state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PostFixed);
-    state.systemScheduler.Update(state.world, deltaSeconds);
-    const bool progressed = state.world.Progress(deltaSeconds);
+    measuredStage("scene.update.post_fixed", [&] { state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PostFixed); });
+    measuredStage("ecs.systems", [&] { state.systemScheduler.Update(state.world, deltaSeconds); });
+    bool progressed = false;
+    measuredStage("ecs.world_progress", [&] { progressed = state.world.Progress(deltaSeconds); });
     synchronizeTransforms();
     PublishRuntimeSnapshot(state);
-    state.sceneSystemScheduler.EndUpdate(scene, deltaSeconds);
+    measuredStage("scene.update_end", [&] { state.sceneSystemScheduler.EndUpdate(scene, deltaSeconds); });
     state.transformUpdatesResetPending = true;
     state.lastRuntimeUpdateNanoseconds = nanosecondsSince(updateStart);
     return progressed;

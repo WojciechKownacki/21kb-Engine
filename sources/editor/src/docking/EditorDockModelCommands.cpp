@@ -62,6 +62,9 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
     for (const DockPanel& panel : panels_.All()) {
         if (DockPanel* restoredPanel = panels_.Find(panel.id); restoredPanel != nullptr) {
             restoredPanel->visible = DockNodeQuery::FindLeafContaining(root_.get(), panel.id) != nullptr;
+            if (restoredPanel->visible && restoredPanel->area == DockArea::Floating) {
+                restoredPanel->area = DockArea::Center;
+            }
         }
     }
     return true;
@@ -78,8 +81,11 @@ void EditorDockModelCommands::ActivatePanel(std::uint32_t panelId) {
 bool EditorDockModelCommands::ClosePanel(std::uint32_t panelId) {
     DockPanel* panel = panels_.Find(panelId);
     const DockNode* leaf = DockNodeQuery::FindLeafContaining(root_.get(), panelId);
-    if (panel == nullptr || leaf == nullptr) {
-        return false;
+    if (panel == nullptr) return false;
+    if (leaf == nullptr) {
+        if (panel->area != DockArea::Floating || !panel->visible) return false;
+        panel->visible = false;
+        return true;
     }
 
     const std::uint32_t leafId = leaf->id;

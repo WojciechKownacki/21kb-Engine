@@ -1,17 +1,23 @@
 #include "scene/systems/SceneSystemScheduler.hpp"
 
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/ecs/World.hpp"
 #include "engine/scene/ParallelSceneSystem.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/StatelessSceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "scene/systems/SceneSystemParallel.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <deque>
 #include <exception>
 #include <limits>
@@ -20,6 +26,7 @@
 #include <span>
 #include <stdexcept>
 #include <unordered_map>
+#include <typeinfo>
 #include <utility>
 #include <typeinfo>
 
@@ -93,6 +100,24 @@ private:
 // never receives a parallel system has no entry and takes the original serial loops.
 
 enum class UpdateKind : std::uint8_t { Update, Fixed };
+using TraceClock = std::chrono::steady_clock;
+
+[[nodiscard]] bool TraceEnabled(Scene& scene) {
+    return SceneAccess::State(scene).systemScheduler.ProfilerEnabled();
+}
+
+void RecordSystemTiming(Scene& scene, SceneSystem& system, const char* phase,
+    TraceClock::time_point begin, TraceClock::time_point end, std::size_t worker, bool ownerThread, std::uint64_t group,
+    std::uint64_t queueWait = 0U) {
+    if (begin == TraceClock::time_point{}) return;
+    auto& state = SceneAccess::State(scene);
+    const auto absolute = [](TraceClock::time_point value) {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(value.time_since_epoch()).count());
+    };
+    const auto origin = state.lastRuntimeUpdateStartSteadyNanoseconds;
+    state.lastSceneSystems.push_back({typeid(system).name(), phase, absolute(begin) - origin,
+        absolute(end) - origin, worker, ownerThread, group, queueWait});
+}
 
 struct SystemAccess final {
     std::vector<std::string> reads;  // sorted, unique
@@ -207,8 +232,8 @@ void InvokeSystem(SceneSystem& system, SceneSystemContext& context, UpdateKind k
 // One system update on a worker thread. Failures are captured here and recorded by the main thread
 // after the group has finished, so the error list keeps registration order.
 struct ParallelSlot final {
-    ParallelSlot(SceneSystem& target, Scene& scene, float deltaSeconds, UpdateKind updateKind)
-        : system(&target), context(scene, deltaSeconds), kind(updateKind) {}
+    ParallelSlot(SceneSystem& target, Scene& scene, float deltaSeconds, UpdateKind updateKind, bool traceEnabled)
+        : system(&target), context(scene, deltaSeconds), kind(updateKind), trace(traceEnabled) {}
 
     SceneSystem* system;
     SceneSystemContext context;
@@ -216,10 +241,17 @@ struct ParallelSlot final {
     bool failed = false;
     bool unknown = false;
     std::string error;
+    bool trace = false;
+    std::size_t worker = 0U;
+    TraceClock::time_point begin{};
+    TraceClock::time_point end{};
+    TraceClock::time_point ready{};
 };
 
-void RunParallelSlot(kb::ecs::WorkerContext, void* data) {
+void RunParallelSlot(kb::ecs::WorkerContext worker, void* data) {
     ParallelSlot& slot = *static_cast<ParallelSlot*>(data);
+    slot.worker = worker.workerIndex;
+    if (slot.trace) slot.begin = TraceClock::now();
     try {
         InvokeSystem(*slot.system, slot.context, slot.kind);
     } catch (const std::exception& error) {
@@ -229,15 +261,19 @@ void RunParallelSlot(kb::ecs::WorkerContext, void* data) {
         slot.failed = true;
         slot.unknown = true;
     }
+    if (slot.trace) slot.end = TraceClock::now();
 }
 
 // Runs `selected` (already in registration order) so that the result equals the serial result:
 // consecutive systems that declared non-conflicting access run together, everything else in order.
 template <typename ErrorSink>
 void RunSelected(ParallelState& state, std::span<SceneSystem* const> selected, UpdateKind kind, Scene& scene, float deltaSeconds,
-    ErrorSink&& recordError) {
+    const char* tracePhase, ErrorSink&& recordError) {
+    const bool trace = TraceEnabled(scene);
+    std::uint64_t traceGroup = 0U;
     const auto runSerial = [&](SceneSystem& system) {
         SceneSystemContext context{ scene, deltaSeconds };
+        const auto begin = trace ? TraceClock::now() : TraceClock::time_point{};
         try {
             InvokeSystem(system, context, kind);
         } catch (const std::exception& error) {
@@ -245,6 +281,7 @@ void RunSelected(ParallelState& state, std::span<SceneSystem* const> selected, U
         } catch (...) {
             recordError(PhaseName(kind), nullptr);
         }
+        RecordSystemTiming(scene, system, tracePhase, begin, trace ? TraceClock::now() : TraceClock::time_point{}, 0U, true, traceGroup);
         ++state.stats.serialSystemRuns;
     };
     const auto accessOf = [&](const SceneSystem* system) -> const SystemAccess* {
@@ -275,9 +312,11 @@ void RunSelected(ParallelState& state, std::span<SceneSystem* const> selected, U
             }
         }
         next += group.size();
+        if (trace) traceGroup = SceneAccess::State(scene).nextSceneTraceGroup++;
 
         if (group.size() >= 2U && state.pool == nullptr) {
-            state.pool = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+            state.pool = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{
+                .workerCount = scene.Runtime().EcsWorld().Config().workerThreadLimit});
         }
         if (group.size() < 2U || state.pool->WorkerCount() < 2U) {
             for (SceneSystem* system : group) {
@@ -290,11 +329,18 @@ void RunSelected(ParallelState& state, std::span<SceneSystem* const> selected, U
         std::vector<kb::ecs::WorkerPoolJob> jobs;
         jobs.reserve(group.size());
         for (SceneSystem* system : group) {
-            slots.emplace_back(*system, scene, deltaSeconds, kind);
+            slots.emplace_back(*system, scene, deltaSeconds, kind, trace);
             jobs.push_back(kb::ecs::WorkerPoolJob{ &RunParallelSlot, &slots.back() });
+        }
+        if (trace) {
+            const auto ready = TraceClock::now();
+            for (auto& slot : slots) slot.ready = ready;
         }
         state.pool->Run(jobs);
         for (const ParallelSlot& slot : slots) {
+            const auto wait = trace ? static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(slot.begin - slot.ready).count()) : 0U;
+            RecordSystemTiming(scene, *slot.system, tracePhase, slot.begin, slot.end, slot.worker, false, traceGroup, wait);
             if (slot.failed) {
                 recordError(PhaseName(kind), slot.unknown ? nullptr : slot.error.c_str());
             }
@@ -457,6 +503,7 @@ void SceneSystemScheduler::EndUpdate(Scene& scene, float deltaSeconds) {
 
 void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase) {
     DispatchScope dispatchScope{ dispatching_ };
+    const char* tracePhase = phase == SceneUpdatePhase::PreFixed ? "scene.update.pre_fixed" : "scene.update.post_fixed";
     if (ParallelState* state = FindState(this); state != nullptr) {
         std::vector<SceneSystem*> selected;
         for (const Entry& entry : systems_) {
@@ -464,15 +511,17 @@ void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds, SceneUpdateP
                 selected.push_back(entry.system.get());
             }
         }
-        RunSelected(*state, selected, UpdateKind::Update, scene, deltaSeconds,
+        RunSelected(*state, selected, UpdateKind::Update, scene, deltaSeconds, tracePhase,
             [this](const char* name, const char* what) { RecordSystemError(name, what); });
         return;
     }
     SceneSystemContext context{ scene, deltaSeconds };
+    const bool trace = TraceEnabled(scene);
     for (const Entry& entry : systems_) {
         if (entry.system->UpdatePhase() != phase) {
             continue;
         }
+        const auto begin = trace ? TraceClock::now() : TraceClock::time_point{};
         try {
             entry.system->OnUpdate(context);
         } catch (const std::exception& error) {
@@ -480,6 +529,8 @@ void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds, SceneUpdateP
         } catch (...) {
             RecordSystemError("OnUpdate", nullptr);
         }
+        RecordSystemTiming(scene, *entry.system, tracePhase, begin, trace ? TraceClock::now() : TraceClock::time_point{}, 0U, true,
+            trace ? SceneAccess::State(scene).nextSceneTraceGroup++ : 0U);
     }
 }
 
@@ -499,6 +550,9 @@ void SceneSystemScheduler::FixedStepBegin(Scene& scene, float fixedDeltaSeconds)
 
 void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds, SceneFixedUpdatePhase phase) {
     DispatchScope dispatchScope{ dispatching_ };
+    const char* tracePhase = phase == SceneFixedUpdatePhase::PreSimulation ? "scene.fixed.pre_simulation" :
+        phase == SceneFixedUpdatePhase::PrepareSimulation ? "scene.fixed.prepare_simulation" :
+        phase == SceneFixedUpdatePhase::Simulation ? "scene.fixed.simulation" : "scene.fixed.post_simulation";
     if (ParallelState* state = FindState(this); state != nullptr) {
         std::vector<SceneSystem*> selected;
         for (const Entry& entry : systems_) {
@@ -506,15 +560,17 @@ void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds, Sc
                 selected.push_back(entry.system.get());
             }
         }
-        RunSelected(*state, selected, UpdateKind::Fixed, scene, fixedDeltaSeconds,
+        RunSelected(*state, selected, UpdateKind::Fixed, scene, fixedDeltaSeconds, tracePhase,
             [this](const char* name, const char* what) { RecordSystemError(name, what); });
         return;
     }
     SceneSystemContext context{ scene, fixedDeltaSeconds };
+    const bool trace = TraceEnabled(scene);
     for (const Entry& entry : systems_) {
         if (entry.system->FixedUpdatePhase() != phase) {
             continue;
         }
+        const auto begin = trace ? TraceClock::now() : TraceClock::time_point{};
         try {
             entry.system->OnFixedUpdate(context);
         } catch (const std::exception& error) {
@@ -522,6 +578,8 @@ void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds, Sc
         } catch (...) {
             RecordSystemError("OnFixedUpdate", nullptr);
         }
+        RecordSystemTiming(scene, *entry.system, tracePhase, begin, trace ? TraceClock::now() : TraceClock::time_point{}, 0U, true,
+            trace ? SceneAccess::State(scene).nextSceneTraceGroup++ : 0U);
     }
 }
 

@@ -1,4 +1,6 @@
 #pragma once
+#include "kb/editor/docking/DockTypes.hpp"
+
 #include "engine/ui/UITheme.hpp"
 
 #include "engine/assets/Map2DAsset.hpp"
@@ -304,6 +306,11 @@ public:
     // installed scene system produced to the Console, so a behaviour that
     // silently fails to run during play surfaces a reason instead of nothing.
     void SurfaceScriptDiagnostics();
+    static void ConfigureLuaDebugger(std::filesystem::path directory);
+    [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& directory, std::string& error);
+    void PollLuaDebugger();
+    [[nodiscard]] bool LuaDebuggerPaused() const;
+
     // Single production play-mode update path shared by the visible editor
     // loop and deterministic automation. Input collection remains owned by
     // the host, but system execution, fault surfacing, diagnostics, render
@@ -569,6 +576,9 @@ public:
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] kb::assets::AssetId AudioMixerPanelAsset() const;
+    [[nodiscard]] std::size_t AudioMixerPanelFirst() const noexcept { return audioMixerPanelFirst_; }
+    [[nodiscard]] bool AudioMixerPanelPointer(DockRect content, int x, int y);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
     // Create > Post-Process Profile and Create > Import Preset (EditorSceneContextPostProcess.cpp).
     [[nodiscard]] bool CreatePostProcessProfileAsset(const std::filesystem::path& virtualFolder);
@@ -1623,6 +1633,7 @@ private:
     std::string graphShaderCacheRoot_;
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
+    std::size_t audioMixerPanelFirst_ = 0U;
     EditorCommandStack commandStack_;
     EditorCommandStack playModeDocumentCommands_;
     // The scene document's undo history, selection and unsaved state, kept aside while a prefab is edited.

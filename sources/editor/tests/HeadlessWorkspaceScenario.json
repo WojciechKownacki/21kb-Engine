@@ -1,18 +1,171 @@
 {
   "schema": "21kb.editor-automation/v1",
   "steps": [
-    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector", "Project Files", "Console"], "hidden": ["Project Settings"], "fits_width": 1600, "fits_height": 960},
-    {"op": "workspace_save", "slot": "default"},
-    {"op": "workspace_float", "panel": "Console", "x": 300, "y": 200, "width": 800, "height": 400},
-    {"op": "workspace_close", "panel": "Project Files"},
-    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector", "Console"], "hidden": ["Project Files"], "floating": ["Console"], "differs_from_slot": "default", "fits_width": 1600, "fits_height": 960},
-    {"op": "workspace_save", "slot": "arranged", "file": "Saved/Layouts/arranged.layout"},
-    {"op": "assert_file", "path": "Saved/Layouts/arranged.layout"},
-    {"op": "assert_workspace", "fits_width": 1024, "fits_height": 600},
-    {"op": "assert_workspace", "fits_width": 3840, "fits_height": 2160},
-    {"op": "workspace_reset"},
-    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector", "Project Files", "Console"], "same_as_slot": "default", "fits_width": 1600, "fits_height": 960},
-    {"op": "workspace_restore", "file": "Saved/Layouts/arranged.layout"},
-    {"op": "assert_workspace", "visible": ["Hierarchy", "Scene View", "Inspector"], "hidden": ["Project Files"], "same_as_slot": "arranged", "fits_width": 1600, "fits_height": 960}
+    {
+      "op": "configure_runtime_rendering",
+      "width": 640,
+      "height": 480
+    },
+    {
+      "op": "assert_workspace",
+      "visible": [
+        "Hierarchy",
+        "Scene View",
+        "Inspector",
+        "Project Files",
+        "Console"
+      ],
+      "hidden": [
+        "Project Settings"
+      ],
+      "fits_width": 1600,
+      "fits_height": 960
+    },
+    {
+      "op": "workspace_save",
+      "slot": "default"
+    },
+    {
+      "op": "workspace_float",
+      "panel": "Console",
+      "x": 300,
+      "y": 200,
+      "width": 800,
+      "height": 400
+    },
+    {
+      "op": "workspace_close",
+      "panel": "Project Files"
+    },
+    {
+      "op": "assert_workspace",
+      "visible": [
+        "Hierarchy",
+        "Scene View",
+        "Inspector",
+        "Console"
+      ],
+      "hidden": [
+        "Project Files"
+      ],
+      "floating": [
+        "Console"
+      ],
+      "differs_from_slot": "default",
+      "fits_width": 1600,
+      "fits_height": 960
+    },
+    {
+      "op": "workspace_save",
+      "slot": "arranged"
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/Layouts/arranged.kblayout"
+    },
+    {
+      "op": "assert_workspace",
+      "fits_width": 1024,
+      "fits_height": 600
+    },
+    {
+      "op": "assert_workspace",
+      "fits_width": 3840,
+      "fits_height": 2160
+    },
+    {
+      "op": "workspace_reset"
+    },
+    {
+      "op": "assert_workspace",
+      "visible": [
+        "Hierarchy",
+        "Scene View",
+        "Inspector",
+        "Project Files",
+        "Console"
+      ],
+      "same_as_slot": "default",
+      "fits_width": 1600,
+      "fits_height": 960
+    },
+    {
+      "op": "workspace_restore",
+      "slot": "arranged"
+    },
+    {
+      "op": "assert_workspace",
+      "visible": [
+        "Hierarchy",
+        "Scene View",
+        "Inspector",
+        "Console"
+      ],
+      "hidden": [
+        "Project Files"
+      ],
+      "same_as_slot": "arranged",
+      "fits_width": 1600,
+      "fits_height": 960,
+      "floating": [
+        "Console"
+      ]
+    },
+    {
+      "op": "workspace_restore",
+      "slot": "arranged"
+    },
+    {
+      "op": "workspace_close",
+      "panel": "Console"
+    },
+    {
+      "op": "assert_workspace",
+      "hidden": [
+        "Console"
+      ]
+    },
+    {
+      "op": "workspace_restore",
+      "slot": "default"
+    },
+    {
+      "op": "assert_workspace",
+      "visible": [
+        "Console",
+        "Project Files"
+      ],
+      "same_as_slot": "default"
+    },
+    {
+      "op": "create_scene",
+      "name": "Controls",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "Object",
+      "name": "Object"
+    },
+    {
+      "op": "select_entity",
+      "entity": "Object"
+    },
+    {
+      "op": "assert_workspace_controls"
+    },
+    {
+      "op": "verify_toolbar_menu_overlay"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "real-controls",
+      "width": 480,
+      "height": 700
+    },
+    {
+      "op": "assert_no_errors"
+    }
   ]
 }

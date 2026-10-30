@@ -611,6 +611,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
+    if (const auto content = EditorPanelContentResolver::Resolve(
+            DockPanelKind::AudioMixer, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        content.has_value() && PointInRect(*content, x, y)) {
+        static_cast<void>(sceneContext_.AudioMixerPanelPointer(
+            {content->left, content->top, content->right - content->left, content->bottom - content->top}, x, y));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     if (const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::ParticleEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         particleEditorContent.has_value() && PointInRect(*particleEditorContent, x, y)) {

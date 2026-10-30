@@ -3,13 +3,13 @@ package com.kbengine.controllertests;
 import android.os.Bundle;
 import android.view.WindowManager;
 import android.view.MotionEvent;
-import com.google.androidgamesdk.GameActivity;
+import com.kbengine.runtime.TextInputActivity;
 import com.kbengine.runtime.WindowLayout;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.graphics.Insets;
 
-public final class ControllerActivity extends GameActivity {
+public final class ControllerActivity extends TextInputActivity {
     static { System.loadLibrary("kb_controller_tests"); }
 
     public boolean dispatchControllerMotion(MotionEvent event) {

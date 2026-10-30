@@ -780,6 +780,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/rendering/AudioMixerPanelView.cpp
     src/rendering/InspectorAudioMixerAssetView.cpp
     src/rendering/InspectorSceneAudioView.cpp
     src/rendering/EditorOverlayPopupWindow.cpp
@@ -1343,7 +1344,10 @@ if(BUILD_TESTING)
         src/rendering/MaterialEditorPanelLayout.cpp
         src/rendering/material_graph/EditorMaterialGraphPinPresentation.cpp
         src/rendering/EditorTexturePreviewService.cpp
-        src/rendering/InspectorAudioMixerAssetView.cpp
+        src/rendering/gdi/GdiRectPainter.cpp
+        src/rendering/gdi/GdiFramePainter.cpp
+        src/rendering/AudioMixerPanelView.cpp
+    src/rendering/InspectorAudioMixerAssetView.cpp
         src/rendering/InspectorSceneAudioView.cpp
         src/rendering/EditorBgfxBackendSelector.cpp
         src/rendering/HeroIconGdiplusRuntime.cpp
@@ -1663,137 +1667,148 @@ if(BUILD_TESTING)
     add_test(NAME kb_editor_script_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests> script-editor)
     set_tests_properties(kb_editor_script_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-    add_test(NAME kb_editor_user_widget_headless
+    add_test(NAME kb_editor_input_rebind_headless
         COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUserWidgetScenario.json"
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessInputRebindScenario.json"
             --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-UI-UserWidget")
-    set_tests_properties(kb_editor_user_widget_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
-    add_test(NAME kb_editor_play_history_headless
+            --selftest-task "SELFTEST-Input-Rebind")
+    set_tests_properties(kb_editor_input_rebind_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;input" TIMEOUT 120
+        FIXTURES_SETUP input_rebind_project)
+    if(Python3_EXECUTABLE)
+        add_test(NAME kb_cli_input_rebind_restart
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/sources/tools/tests/InputRebindRestartTests.py"
+                --cli "$<TARGET_FILE:kb_cli>"
+                --project "${CMAKE_BINARY_DIR}/SelfTest/SELFTEST-Input-Rebind/workspace")
+        set_tests_properties(kb_cli_input_rebind_restart PROPERTIES
+            LABELS "cli;runtime;input" TIMEOUT 120 FIXTURES_REQUIRED input_rebind_project)
+    endif()
+    add_test(NAME kb_editor_input_actions_headless
         COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPlayHistoryScenario.json"
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessInputActionsScenario.json"
             --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Play-History")
-    set_tests_properties(kb_editor_play_history_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;scene" TIMEOUT 180)
-    add_test(NAME kb_editor_ui_component_catalog_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIComponentCatalogScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-UI-Catalog")
-    set_tests_properties(kb_editor_ui_component_catalog_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
-    add_test(NAME kb_editor_ui_theme_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/UIThemeWorkflowScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-UI-Theme")
-    set_tests_properties(kb_editor_ui_theme_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui" TIMEOUT 180)
-    add_test(NAME kb_editor_localization_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLocalizationScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Localization")
-    set_tests_properties(kb_editor_localization_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui" TIMEOUT 180)
-    add_test(NAME kb_editor_ui_anchors_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIAnchorsScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-UI-Anchors")
-    set_tests_properties(kb_editor_ui_anchors_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
-    add_test(NAME kb_editor_world_partition_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorldPartitionScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-World-Partition")
-    set_tests_properties(kb_editor_world_partition_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;world" TIMEOUT 180)
-    add_test(NAME kb_editor_post_process_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPostProcessScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Post-Process")
-    set_tests_properties(kb_editor_post_process_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;rendering" TIMEOUT 180)
-    add_test(NAME kb_editor_material_preview_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessMaterialPreviewScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Material-Preview")
-    set_tests_properties(kb_editor_material_preview_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;rendering;material" TIMEOUT 300)
-    add_test(NAME kb_editor_navigation_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNavigationScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Navigation")
-    set_tests_properties(kb_editor_navigation_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;navigation" TIMEOUT 180)
-    # File > New Scene: templates, refused names, startup scene, reopening the last scene, Play without saving.
-    add_test(NAME kb_editor_new_scene_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNewSceneScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-New-Scene")
-    set_tests_properties(kb_editor_new_scene_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
-    # The dock workspace from the command line: float and close panels, save the arrangement to a file, reset to the default,
-    # restore the file, and check at several window sizes that no panel is lost.
-    add_test(NAME kb_editor_workspace_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorkspaceScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Workspace")
-    set_tests_properties(kb_editor_workspace_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;docking" TIMEOUT 180)
-    # A changed source replaces an imported model in place; an edited material is kept or replaced as told, and the reimport can be undone.
-    add_test(NAME kb_editor_asset_reimport_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/AssetReimportScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-AssetReimport")
-    set_tests_properties(kb_editor_asset_reimport_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets" TIMEOUT 180)
-
-    # Every editor language, one after another: each panel's texts fit where they are drawn.
-    add_test(NAME kb_editor_languages_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLanguagesScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Languages")
-    set_tests_properties(kb_editor_languages_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;localization" TIMEOUT 600)
-
-    add_test(
-        NAME kb_editor_headless_automation_scenario
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAutomationScenario.json"
-            --selftest-root
-            "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task
-            "SELFTEST-002-External-Scenario"
-    )
-    add_test(
-        NAME kb_editor_map2d_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DAutomationScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Map2D")
-    set_tests_properties(kb_editor_map2d_headless PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d" TIMEOUT 180)
-    add_test(NAME kb_editor_map2d_component
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DComponentScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-Map2D-Component")
-    set_tests_properties(kb_editor_map2d_component PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;map2d" TIMEOUT 180)
-    if(Python3_EXECUTABLE AND TARGET kb_game AND TARGET kb_cooker)
+            --selftest-task "SELFTEST-Input-Actions")
+    set_tests_properties(kb_editor_input_actions_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;input" TIMEOUT 120
+        FIXTURES_SETUP input_actions_project)
+    if(Python3_EXECUTABLE)
+        add_test(NAME kb_editor_content_streaming_workflow
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ContentStreamingWorkflowTests.py"
+                --renderer-tests $<TARGET_FILE:kb_renderer_tests>
+                --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                --test-root "${CMAKE_BINARY_DIR}/content_streaming_tests")
+        set_tests_properties(kb_editor_content_streaming_workflow PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets;streaming" TIMEOUT 240 RUN_SERIAL TRUE)
+        add_test(NAME kb_editor_asset_async_workflow
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/AssetAsyncWorkflowTests.py"
+                --engine-tests $<TARGET_FILE:kb_engine_tests> --renderer-tests $<TARGET_FILE:kb_renderer_tests>
+                --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                --test-root "${CMAKE_BINARY_DIR}/asset_async_tests")
+        set_tests_properties(kb_editor_asset_async_workflow PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets;async" TIMEOUT 240 RUN_SERIAL TRUE)
+        add_test(NAME kb_editor_scene_lifetime_workflow
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/AssetAsyncWorkflowTests.py"
+                --scene-lifetime --engine-tests $<TARGET_FILE:kb_engine_tests> --renderer-tests $<TARGET_FILE:kb_renderer_tests>
+                --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                --test-root "${CMAKE_BINARY_DIR}/scene_lifetime_tests")
+        set_tests_properties(kb_editor_scene_lifetime_workflow PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets;streaming" TIMEOUT 240 RUN_SERIAL TRUE)
+        add_test(NAME kb_editor_workspace_cli
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/WorkspaceCliTests.py"
+                --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                --test-root "${CMAKE_BINARY_DIR}/workspace_cli_tests")
+        set_tests_properties(kb_editor_workspace_cli PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;docking;tools" TIMEOUT 180)
+        add_test(NAME kb_editor_authoring_transaction_parity
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/AuthoringTransactionParityTests.py"
+                --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                --test-root "${CMAKE_BINARY_DIR}/authoring_parity_tests")
+        set_tests_properties(kb_editor_authoring_transaction_parity PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;authoring" TIMEOUT 180)
+        if(TARGET kb_game AND TARGET kb_cooker)
+            if(TARGET bgfx::shaderc)
+                add_test(NAME kb_editor_import_diagnostics_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ImportDiagnosticsWorkflowTests.py"
+                        --engine-tests $<TARGET_FILE:kb_engine_tests> --renderer-tests $<TARGET_FILE:kb_renderer_tests>
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/import_diagnostics_tests")
+                set_tests_properties(kb_editor_import_diagnostics_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets;packaged" TIMEOUT 300 RUN_SERIAL TRUE)
+                if(MSVC AND TARGET kb_ecs_workload_benchmark AND TARGET kb_ecs_resource_handle_tests)
+                    add_test(NAME kb_editor_ecs_storage_workflow
+                        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/EcsStorageWorkflowTests.py"
+                            --benchmark $<TARGET_FILE:kb_ecs_workload_benchmark>
+                            --resource-tests $<TARGET_FILE:kb_ecs_resource_handle_tests>
+                            --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                            --compiler "${CMAKE_CXX_COMPILER}" --engine-root "${CMAKE_SOURCE_DIR}"
+                            --test-root "${CMAKE_BINARY_DIR}/ecs_storage_tests")
+                    set_tests_properties(kb_editor_ecs_storage_workflow PROPERTIES
+                        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;ecs;lifecycle" TIMEOUT 300 RUN_SERIAL TRUE)
+                    add_test(NAME kb_editor_ecs_profiler_workflow
+                        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/EcsProfilerWorkflowTests.py"
+                            --benchmark $<TARGET_FILE:kb_ecs_worker_scaling_benchmark>
+                            --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                            --test-root "${CMAKE_BINARY_DIR}/ecs_profiler_tests")
+                    set_tests_properties(kb_editor_ecs_profiler_workflow PROPERTIES
+                        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;ecs;profiler" TIMEOUT 300 RUN_SERIAL TRUE)
+                endif()
+                add_test(NAME kb_editor_post_process_validation
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PostProcessValidationWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --test-root "${CMAKE_BINARY_DIR}/post_process_tests")
+                set_tests_properties(kb_editor_post_process_validation PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;postprocess" TIMEOUT 180 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_animation_retarget_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/AnimationRetargetWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --renderer-tests $<TARGET_FILE:kb_renderer_tests> --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAnimatorWorkflowScenario.json"
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/retarget_tests")
+                set_tests_properties(kb_editor_animation_retarget_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;animation;packaged" TIMEOUT 240 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_lua_debugger_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/LuaDebuggerWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/LuaDebuggerScenario.json"
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/lua_debugger_tests")
+                set_tests_properties(kb_editor_lua_debugger_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;script;packaged" TIMEOUT 240 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_particle_authoring_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticleAuthoringWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/particle_authoring_tests")
+                set_tests_properties(kb_editor_particle_authoring_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;particle;packaged" TIMEOUT 240)
+            endif()
+            add_test(NAME kb_editor_prefab_lifecycle_package
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PrefabLifecyclePackagedTests.py"
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                    --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/prefab_lifecycle_tests")
+            set_tests_properties(kb_editor_prefab_lifecycle_package PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;prefab;packaged" TIMEOUT 180)
             add_test(NAME kb_editor_map2d_visual_package
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DVisualTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
@@ -1874,13 +1889,192 @@ if(BUILD_TESTING)
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/tilephysics_workflow_tests")
             set_tests_properties(kb_editor_tilephysics_workflow_package PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaging" TIMEOUT 240)
+        endif()
         add_test(NAME kb_cli_map2d_authoring
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/sources/tools/tests/Map2DAuthoringTests.py"
                 --cli "$<TARGET_FILE:kb_cli>"
                 --image "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/map2d/Tiles.png"
                 --test-root "${CMAKE_BINARY_DIR}/map2d_authoring_tests")
         set_tests_properties(kb_cli_map2d_authoring PROPERTIES LABELS "cli;map2d;authoring" TIMEOUT 120)
+        add_test(NAME kb_cli_input_actions_report
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/sources/tools/tests/InputActionsReportTests.py"
+                --cli "$<TARGET_FILE:kb_cli>"
+                --project "${CMAKE_BINARY_DIR}/SelfTest/SELFTEST-Input-Actions/workspace")
+        set_tests_properties(kb_cli_input_actions_report PROPERTIES
+            LABELS "cli;runtime;input" TIMEOUT 120 FIXTURES_REQUIRED input_actions_project)
     endif()
+    add_test(NAME kb_editor_physics_workflow_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPhysicsWorkflowScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Physics-Workflow")
+    set_tests_properties(kb_editor_physics_workflow_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;physics" TIMEOUT 180)
+    add_test(NAME kb_editor_animator_workflow_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAnimatorWorkflowScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Animator-Workflow")
+    set_tests_properties(kb_editor_animator_workflow_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;animation" TIMEOUT 180)
+    add_test(NAME kb_editor_user_widget_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUserWidgetScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-UserWidget")
+    set_tests_properties(kb_editor_user_widget_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_play_history_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPlayHistoryScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Play-History")
+    set_tests_properties(kb_editor_play_history_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;scene" TIMEOUT 180)
+    add_test(NAME kb_editor_ui_component_catalog_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIComponentCatalogScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-Catalog")
+    set_tests_properties(kb_editor_ui_component_catalog_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_ui_theme_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/UIThemeWorkflowScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-Theme")
+    set_tests_properties(kb_editor_ui_theme_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui" TIMEOUT 180)
+    add_test(NAME kb_editor_localization_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLocalizationScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Localization")
+    set_tests_properties(kb_editor_localization_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui" TIMEOUT 180)
+    add_test(NAME kb_editor_ui_anchors_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIAnchorsScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-Anchors")
+    set_tests_properties(kb_editor_ui_anchors_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_world_partition_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorldPartitionScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-World-Partition")
+    set_tests_properties(kb_editor_world_partition_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;world" TIMEOUT 180)
+    add_test(NAME kb_editor_post_process_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPostProcessScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Post-Process")
+    set_tests_properties(kb_editor_post_process_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;rendering" TIMEOUT 180)
+    add_test(NAME kb_editor_material_preview_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessMaterialPreviewScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Material-Preview")
+    set_tests_properties(kb_editor_material_preview_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;rendering;material" TIMEOUT 300)
+    add_test(NAME kb_editor_navigation_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNavigationScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Navigation")
+    set_tests_properties(kb_editor_navigation_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;navigation" TIMEOUT 180)
+    # File > New Scene: templates, refused names, startup scene, reopening the last scene, Play without saving.
+    add_test(NAME kb_editor_new_scene_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNewSceneScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-New-Scene")
+    set_tests_properties(kb_editor_new_scene_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    # The dock workspace from the command line: float and close panels, save the arrangement to a file, reset to the default,
+    # restore the file, and check at several window sizes that no panel is lost.
+    add_test(NAME kb_editor_component_search_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/ComponentSearchScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-ComponentSearch")
+    set_tests_properties(kb_editor_component_search_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;inspector" TIMEOUT 180)
+    add_test(NAME kb_editor_audio_mixer_panel_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/AudioMixerPanelScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-AudioMixerPanel")
+    set_tests_properties(kb_editor_audio_mixer_panel_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;audio" TIMEOUT 180)
+    add_test(NAME kb_editor_shared_asset_workflow_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/SharedAssetWorkflowScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-SharedAssetWorkflow")
+    set_tests_properties(kb_editor_shared_asset_workflow_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets" TIMEOUT 180)
+    add_test(NAME kb_editor_prefab_workflow_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/PrefabWorkflowScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-PrefabWorkflow")
+    set_tests_properties(kb_editor_prefab_workflow_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;prefab" TIMEOUT 180)
+    add_test(NAME kb_editor_workspace_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorkspaceScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Workspace")
+    set_tests_properties(kb_editor_workspace_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;docking" TIMEOUT 180)
+    # A changed source replaces an imported model in place; an edited material is kept or replaced as told, and the reimport can be undone.
+    add_test(NAME kb_editor_asset_reimport_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/AssetReimportScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-AssetReimport")
+    set_tests_properties(kb_editor_asset_reimport_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets" TIMEOUT 180)
+
+    # Every editor language, one after another: each panel's texts fit where they are drawn.
+    add_test(NAME kb_editor_languages_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLanguagesScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Languages")
+    set_tests_properties(kb_editor_languages_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;localization" TIMEOUT 600)
+
+    add_test(
+        NAME kb_editor_headless_automation_scenario
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAutomationScenario.json"
+            --selftest-root
+            "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task
+            "SELFTEST-002-External-Scenario"
+    )
+    add_test(
+        NAME kb_editor_map2d_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DAutomationScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D")
+    set_tests_properties(kb_editor_map2d_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d" TIMEOUT 180)
+    add_test(NAME kb_editor_map2d_component
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DComponentScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D-Component")
+    set_tests_properties(kb_editor_map2d_component PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;map2d" TIMEOUT 180)
     add_test(NAME kb_editor_map2d_lighting
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DLightingScenario.json"
@@ -1947,6 +2141,23 @@ if(BUILD_TESTING)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
         set_tests_properties(kb_editor_scene3d_parity_packaged PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;rendering" TIMEOUT 600)
+        if(TARGET kb_cli AND TARGET bgfx::shaderc)
+            add_test(NAME kb_editor_native_image_regression
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/sources/game/tests/RendererImageWorkflowTests.py
+                    --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                    --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                    --engine-root ${CMAKE_SOURCE_DIR} --test-root ${CMAKE_BINARY_DIR}/native_image_tests
+                    --shaderc $<TARGET_FILE:bgfx::shaderc>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin>
+                    --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_basic_lighting_plugin>
+                    --plugin $<TARGET_FILE:kb_ai_plugin>
+                    --plugin $<TARGET_FILE:kb_21kb_particle_plugin>
+                    --plugin $<TARGET_FILE:kb_world2d_plugin>)
+            set_tests_properties(kb_editor_native_image_regression PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;rendering;golden"
+                ENVIRONMENT "CMAKE_BUILD_PARALLEL_LEVEL=2" TIMEOUT 900)
+        endif()
     endif()
     set_tests_properties(
         kb_editor_headless_automation_scenario

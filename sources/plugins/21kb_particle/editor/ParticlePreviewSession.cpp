@@ -272,6 +272,7 @@ ParticleEditorResult ParticlePreviewSession::Tick(float wallDeltaSeconds) {
     }
     if (requiresGpu_ && kb::particles::ParticlePlayback::RenderCapabilities(*scene_).gpuVisualAvailability !=
             kb::particles::ParticleGpuVisualAvailability::Ready) return {};
+    kb::particles::ParticlePlayback::SetEmitterProfilingEnabled(*scene_, true);
     if (!scene_->Runtime().Update(wallDeltaSeconds)) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
                  .message = "particle preview runtime update failed" };

@@ -1177,6 +1177,7 @@ void TickVisualStress(EditorApplicationState& state) {
 }
 
 void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
+    state.sceneContext.PollLuaDebugger();
     // LIB-153: the editor is the host that owns the physical XInput devices, so it owns
     // the haptics actuator too. Function-local static: one process-wide backend whose
     // destructor (and the not-playing branch below) silences every motor - leaving Play
@@ -1211,6 +1212,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const auto runtimeStart = std::chrono::steady_clock::now();
     state.sceneViewport.PrepareParticleScene(state.sceneContext.Scene());
     const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);
+    state.inputCollector.SynchronizeTextInput(state.sceneContext.Scene(), state.window);
     const auto runtimeEnd = std::chrono::steady_clock::now();
     if (VisualStressEnabled()) {
         StressFrameStages().sceneUpdateMs = std::chrono::duration<double, std::milli>(
@@ -1354,8 +1356,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
             state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::TimelineEditor);
     }
     const bool audioMetersChanged = EditorAudioMixerRuntime::ShouldRefresh(state.sceneContext.Scene());
-    if (audioMetersChanged) EditorWindowInvalidator::InvalidateDockPanel(
-        state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Inspector);
+    if (audioMetersChanged) {
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Inspector);
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::AudioMixer);
+    }
     if (audioPreviewChanged) {
         EditorWindowInvalidator::InvalidateDockPanel(
             state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Assets);

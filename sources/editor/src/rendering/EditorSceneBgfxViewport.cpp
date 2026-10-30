@@ -147,6 +147,12 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "UI frame refused";
     case render::SceneRenderDiagnosticKind::UITextUnavailable:
         return "UI text unavailable";
+    case render::SceneRenderDiagnosticKind::ShadowLightLimit:
+        return "local shadow light limit reached; remaining lights render without shadows";
+    case render::SceneRenderDiagnosticKind::MaterialShadingFallback:
+        return "four-target material fallback: extra scattering color or iris data omitted; builtin clearcoat takes precedence over subsurface";
+    case render::SceneRenderDiagnosticKind::GiBoundingBoxFallback:
+        return "GI uses solid bounds for meshes without CPU triangles; prepare a mesh GI proxy";
     case render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected:
         return "GPU particle update rejected";
     }

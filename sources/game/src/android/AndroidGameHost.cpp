@@ -1,4 +1,5 @@
 #include "GameProjectRuntime.hpp"
+#include "GameProjectLighting.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
 #include "RuntimeSceneFrameSync.hpp"
@@ -576,6 +577,9 @@ private:
             generation << "lifecycle renderer-ready generation=" << rendererGeneration_
                        << " resolution=" << surface_.Width() << 'x' << surface_.Height();
             LogInfo(generation.str());
+            std::ostringstream lightingDiagnostics;
+            kb::game::ApplyGameProjectLighting(renderer_, projectRuntime_, lightingDiagnostics);
+            LogInfo(lightingDiagnostics.str());
             if (!HasRequiredTextureCapabilities()) {
                 std::ostringstream message;
                 message << "profile=" << targetProfileId_
@@ -670,11 +674,21 @@ private:
         if (app_.activity == nullptr) return;
         const auto field = visible && scene_ != nullptr ? scene_->UI().TextInputState() : std::nullopt;
         visible = field.has_value();
-        if (imeVisibleRequested_ == visible && (!visible || imeField_ == field->entity)) return;
+        bool multiline = false;
+        if (field) {
+            for (const auto& element : scene_->UI().Frame().elements)
+                if (element.entity == field->entity && element.inputField)
+                    multiline = element.inputField->multiline &&
+                        element.inputField->contentType == kb::scene::UIInputContentType::Standard;
+        }
+        if (imeVisibleRequested_ == visible && (!visible ||
+            (imeField_ == field->entity && imeMultiline_ == multiline))) return;
         imeVisibleRequested_ = visible;
+        imeMultiline_ = multiline;
         app_.textInputState = 0;
         if (visible) {
             imeField_ = field->entity;
+            kb::game::ConfigureAndroidTextInput(app_.activity, multiline);
             kb::game::SetAndroidTextInputState(app_.activity, field->text, field->caret, field->selectionAnchor);
             GameActivity_showSoftInput(
                 app_.activity, GAMEACTIVITY_SHOW_SOFT_INPUT_IMPLICIT);
@@ -721,6 +735,13 @@ private:
             return;
         }
         const bool submitted = renderSceneSync_.Submit(*scene_, renderer_);
+        if (!renderer_.LastSceneDiagnostics().events.empty()) {
+            std::ostringstream materialDiagnostics;
+            kb::game::ReportGameMaterialFallbacks(renderer_, reportedMaterialShadingFallback_,
+                reportedGraphProgramFallback_, materialDiagnostics);
+            const std::string message = materialDiagnostics.str();
+            if (!message.empty()) LogInfo(message);
+        }
         renderer_.EndFrame();
         if (!submitted) {
             LogError("renderer could not submit the scene");
@@ -879,7 +900,10 @@ private:
     bool tickClockReady_ = false;
     bool scriptShutdownDispatched_ = false;
     bool firstFrameReported_ = false;
+    bool reportedMaterialShadingFallback_ = false;
+    bool reportedGraphProgramFallback_ = false;
     bool imeVisibleRequested_ = false;
+    bool imeMultiline_ = false;
     bool imeWasVisible_ = false;
     bool imeDismissed_ = false;
     kb::scene::SceneEntity imeField_{};

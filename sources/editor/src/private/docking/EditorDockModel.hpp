@@ -25,6 +25,7 @@ public:
     [[nodiscard]] EditorDockModelCommands Commands() noexcept;
 
 private:
+    friend class EditorWorkspaceArrangement;
     DockPanelCollection panels_;
     std::unique_ptr<DockNode> root_;
     std::uint32_t nextNodeId_ = 1;

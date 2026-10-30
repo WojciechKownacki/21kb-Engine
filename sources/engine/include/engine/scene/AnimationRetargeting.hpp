@@ -26,6 +26,17 @@ struct SkeletonBoneMapping {
 // source bone has that name).
 [[nodiscard]] SkeletonBoneMapping MapSkeletonBones(const SkeletonAsset& source, const SkeletonAsset& target);
 
+// A saved mapping is tied to the complete rest poses and bone order of both rigs.
+// -1 leaves a target bone in its reference pose; other values index the source rig.
+struct AnimationRetargetProfile {
+    std::uint64_t sourceSignature = 0U;
+    std::uint64_t targetSignature = 0U;
+    std::vector<std::int32_t> sourceOfTarget;
+};
+[[nodiscard]] AnimationRetargetProfile MakeAnimationRetargetProfile(const SkeletonAsset& source, const SkeletonAsset& target);
+[[nodiscard]] std::string SerializeAnimationRetargetProfile(const AnimationRetargetProfile& profile);
+[[nodiscard]] std::optional<AnimationRetargetProfile> ParseAnimationRetargetProfile(std::string_view text);
+
 struct AnimationRetargetReport {
     std::size_t mappedBones = 0U;
     std::size_t targetBones = 0U;
@@ -43,5 +54,11 @@ struct AnimationRetargetReport {
     const AnimationClip& clip, const SkeletonAsset& source,
     const SkeletonAsset& target, std::uint64_t targetSkeletonAssetId, std::uint64_t targetCompatibilitySignature,
     AnimationRetargetReport* report = nullptr, std::string* error = nullptr);
+
+// Explicit profiles reject stale rig signatures and out-of-range mappings before sampling.
+[[nodiscard]] std::optional<AnimationClip> RetargetAnimationClip(
+    const AnimationClip& clip, const SkeletonAsset& source, const SkeletonAsset& target,
+    std::uint64_t targetSkeletonAssetId, std::uint64_t targetCompatibilitySignature,
+    const AnimationRetargetProfile& profile, AnimationRetargetReport* report = nullptr, std::string* error = nullptr);
 
 } // namespace kb::scene

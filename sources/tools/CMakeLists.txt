@@ -5,8 +5,10 @@ add_library(kb_cli_core STATIC
     src/CliSkeletonCommands.cpp
     src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp
+    src/CliLuaDebugCommand.cpp
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
+    src/CliLayoutCommands.cpp
     src/CliCommon.cpp
     src/CliDispatch.cpp
     src/CliEntityCommands.cpp
@@ -33,6 +35,18 @@ add_library(kb_cli_core STATIC
 target_include_directories(kb_cli_core PUBLIC src/private)
 
 target_link_libraries(kb_cli_core PUBLIC kb_engine)
+# Workspace files use the editor's existing portable layout and settings code.
+target_include_directories(kb_cli_core PRIVATE ../editor/src/private ../editor/include)
+target_sources(kb_cli_core PRIVATE
+    ../editor/src/settings/EditorConfigurationStore.cpp
+    ../editor/src/settings/EditorPanelSessionText.cpp
+    ../editor/src/settings/EditorLayoutLibrary.cpp
+    ../editor/src/docking/DefaultDockWorkspace.cpp
+    ../editor/src/docking/DockLayoutSerializer.cpp
+    ../editor/src/docking/DockNodeFactory.cpp
+    ../editor/src/docking/DockGeometry.cpp
+    ../editor/src/localization/EditorLocalization.cpp)
+
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
 # Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.
 if(KB_BUILD_RENDERER)

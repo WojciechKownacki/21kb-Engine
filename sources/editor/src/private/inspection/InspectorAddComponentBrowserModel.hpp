@@ -42,6 +42,8 @@ public:
         std::string_view query,
         const PluginEnabledPredicate& pluginEnabled);
 
+    [[nodiscard]] static std::string_view Description(const std::vector<AddComponentRow>& rows, int index) noexcept;
+
     [[nodiscard]] static int TotalHeight(int rowCount, int rowHeightPx) noexcept;
     // Largest valid scroll offset so the last row can reach the list bottom.
     [[nodiscard]] static int MaxScroll(int rowCount, int rowHeightPx, int listHeightPx) noexcept;

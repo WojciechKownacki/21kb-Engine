@@ -168,6 +168,8 @@ def main() -> None:
                 "composition remains uncommitted, repeated identical commits are retained",
                 "editor action submits once and OS Back reaches native cancellation once",
                 "keyboard reopens, selection replacement and deletion preserve surrounding text",
+                "selection-only updates preserve reversed UTF-16 emoji endpoints",
+                "multiline IME configuration preserves line breaks, combining marks and supplementary characters",
                 "paste beyond 64 scalars and deletion to an empty snapshot"]
     except Exception as error:
         report["error"] = str(error)

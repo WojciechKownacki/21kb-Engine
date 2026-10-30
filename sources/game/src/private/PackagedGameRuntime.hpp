@@ -67,6 +67,9 @@ private:
     kb::script::ScriptModule* script_ = nullptr;
     bool scriptActive_ = false;
     bool runtimeClean_ = true;
+    bool lightingApplied_ = false;
+    bool reportedMaterialShadingFallback_ = false;
+    bool reportedGraphProgramFallback_ = false;
     RuntimeSceneFrameSync renderSceneSync_;
 };
 

@@ -38,6 +38,19 @@ public:
 
     // Recreates the textures when the extent or format changes (which also drops the history).
     [[nodiscard]] bool Ensure(RenderExtent extent, bgfx::TextureFormat::Enum format);
+    struct FrameOwner {
+        std::uint64_t scene = 0U;
+        std::uint64_t viewport = 0U;
+        std::uint64_t camera = 0U;
+        std::uint32_t effects = 0U;
+        bool cameraOverride = false;
+        bool orthographic = false;
+        [[nodiscard]] bool operator==(const FrameOwner&) const noexcept = default;
+    };
+    // Invalidate sampled radiance independently of TAA, without reallocating targets.
+    void BeginFrame(FrameOwner owner, std::uint64_t frame, bool cameraCut) noexcept;
+    void Reset() noexcept;
+    void ReleaseScene(std::uint64_t scene) noexcept;
     void Shutdown() noexcept;
     [[nodiscard]] SceneGiBinding Binding() const noexcept;
 
@@ -62,6 +75,8 @@ private:
     std::uint32_t readIndex_ = 0U;
     bool captured_ = false;
     bool hasAccum_ = false;
+    FrameOwner owner_{};
+    std::uint64_t lastFrame_ = 0U;
 };
 
 } // namespace kb::render

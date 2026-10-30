@@ -632,6 +632,7 @@ class FrameBuilder {
             if (canvas != nullptr && canvas->modal && (!found || element.canvasSortingOrder > order)) {
                 found = true;
                 order = element.canvasSortingOrder;
+                frame_.modalCanvas = element.canvas;
             }
         }
         if (!found)
@@ -3058,47 +3059,77 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         state.uiFrame = std::move(clampedFrame);
         presentationDirty = false;
     }
-    const SceneEntity focusBeforeModal = state.uiFocused;
-    if (state.uiFocused.IsValid()) {
-        const SceneUIFrameElement* focused = Find(state.uiFrame, state.uiFocused);
-        if (focused == nullptr || !focused->interactionEnabled)
-            ClearFocus();
+    std::array<SceneEntity, 4U> focusBeforeModal{state.uiFocused,
+        state.uiPlayers[0].focused, state.uiPlayers[1].focused, state.uiPlayers[2].focused};
+    if (state.uiDropdownList) {
+        const auto* owner = Find(state.uiFrame, state.uiDropdownList->dropdown);
+        if (owner != nullptr && !owner->interactionEnabled)
+            focusBeforeModal[0] = state.uiDropdownList->dropdown;
     }
-    // A modal canvas appearing takes focus into itself and remembers where it was; going away gives it back.
-    if (state.uiFrame.modalActive != state.uiModalActive) {
-        if (state.uiFrame.modalActive) {
-            state.uiModalRestoreFocus = focusBeforeModal;
-            if (state.uiDropdownList) {
-                const auto* owner = Find(state.uiFrame, state.uiDropdownList->dropdown);
-                if (owner != nullptr && owner->canvasSortingOrder < state.uiFrame.modalSortingOrder)
-                    state.uiModalRestoreFocus = state.uiDropdownList->dropdown;
-            }
-            if (!state.uiFocused.IsValid()) {
-                const SceneUIFrameElement* first = nullptr;
-                for (const SceneUIFrameElement& element : state.uiFrame.elements)
-                    if (element.interactionEnabled && element.canvasSortingOrder >= state.uiFrame.modalSortingOrder &&
-                        (first == nullptr || element.traversalOrder < first->traversalOrder))
-                        first = &element;
-                if (first != nullptr)
-                    static_cast<void>(SetFocus(first->entity));
-            }
+    const auto setPlayerFocus = [&](std::size_t player, SceneEntity target) {
+        if (player == 0U) {
+            if (target.IsValid()) static_cast<void>(SetFocus(target));
+            else ClearFocus();
         } else {
-            const SceneEntity restore = state.uiModalRestoreFocus;
-            state.uiModalRestoreFocus = {};
-            if (restore.IsValid() && !state.uiFocused.IsValid())
-                static_cast<void>(SetFocus(restore));
+            auto& focused = state.uiPlayers[player - 1U].focused;
+            if (focused == target) return;
+            if (focused.IsValid()) Queue(state, scene_, SceneUIEventType::Blurred, focused);
+            focused = target;
+            if (focused.IsValid()) Queue(state, scene_, SceneUIEventType::Focused, focused);
         }
-        state.uiModalActive = state.uiFrame.modalActive;
+    };
+    const auto usable = [&](SceneEntity entity, std::size_t player) {
+        const auto* element = Find(state.uiFrame, entity);
+        return element != nullptr && element->interactionEnabled &&
+            (player == 0U || NavigableBy(*element, static_cast<std::int32_t>(player)));
+    };
+    for (std::size_t player = 0U; player < focusBeforeModal.size(); ++player) {
+        const auto focused = player == 0U ? state.uiFocused : state.uiPlayers[player - 1U].focused;
+        if (focused.IsValid() && !usable(focused, player)) setPlayerFocus(player, {});
     }
-    for (SceneState::UIPlayerFocus& player : state.uiPlayers) {
-        const SceneUIFrameElement* focused = Find(state.uiFrame, player.focused);
-        if (player.focused.IsValid() && (focused == nullptr || !focused->interactionEnabled)) {
-            Queue(state, scene_, SceneUIEventType::Blurred, player.focused);
-            player.focused = {};
+    const SceneEntity currentModal = state.uiFrame.modalCanvas;
+    const SceneEntity previousModal = state.uiModalFocusStack.empty() ? SceneEntity{} : state.uiModalFocusStack.back().canvas;
+    if (currentModal != previousModal) {
+        const auto previous = std::ranges::find(state.uiModalFocusStack, currentModal, &SceneState::UIModalFocus::canvas);
+        if (!currentModal.IsValid() || previous != state.uiModalFocusStack.end()) {
+            std::array<SceneEntity, 4U> restore{};
+            while (!state.uiModalFocusStack.empty() && state.uiModalFocusStack.back().canvas != currentModal) {
+                restore = state.uiModalFocusStack.back().restore;
+                state.uiModalFocusStack.pop_back();
+            }
+            for (std::size_t player = 0U; player < restore.size(); ++player)
+                if (usable(restore[player], player)) setPlayerFocus(player, restore[player]);
+        } else {
+            state.uiModalFocusStack.push_back({currentModal, focusBeforeModal});
         }
     }
-    if (state.uiPressed.IsValid() && Find(state.uiFrame, state.uiPressed) == nullptr)
-        state.uiPressed = {};
+    // Each player's focus stays within the globally modal layer. A modal with no
+    // controls for that player blocks gameplay without borrowing another player's focus.
+    if (currentModal.IsValid() || previousModal.IsValid()) {
+        for (std::size_t player = 0U; player < focusBeforeModal.size(); ++player) {
+            const auto focused = player == 0U ? state.uiFocused : state.uiPlayers[player - 1U].focused;
+            if (usable(focused, player)) continue;
+            for (const auto& element : state.uiFrame.elements) {
+                if (element.interactionEnabled && NavigableBy(element, static_cast<std::int32_t>(player))) {
+                    setPlayerFocus(player, element.entity);
+                    break;
+                }
+            }
+        }
+    }
+    if (state.uiPressed.IsValid()) {
+        const auto* pressed = Find(state.uiFrame, state.uiPressed);
+        if (pressed == nullptr || !pressed->interactionEnabled) {
+            Queue(state, scene_, SceneUIEventType::Canceled, state.uiPressed);
+            state.uiPressed = {};
+            state.uiPressedLink.clear();
+            state.uiPressedLinkSource.clear();
+            state.uiPressedLinkInstance = 0U;
+            state.uiDragged = {};
+            state.uiDragging = false;
+            state.uiTouchCapture.reset();
+        }
+    }
     if (!input.touchPoints.empty() || state.uiTouchCapture.has_value()) {
         const bool focused = input.pointerAvailable;
         input.pointerAvailable = false;

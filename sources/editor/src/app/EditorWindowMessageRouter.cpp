@@ -1,3 +1,4 @@
+#include "windowing/EditorDisplayRecovery.hpp"
 #include "app/EditorWindowMessageRouter.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "app/EditorKeyState.hpp"
@@ -485,9 +486,20 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.sceneViewport.SetHostSurfaceSuspended(messageWindow, false);
         }
         return EditorWindowResizeHandler::HandleSize(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows, context_.sceneViewport);
+    case WM_MOVE:
+        if (const auto id = context_.floatingWindows.Queries().PanelId(messageWindow); id != 0U) {
+            RECT rect{};
+            if (GetWindowRect(messageWindow, &rect)) context_.dockModel.Commands().MoveFloatingPanel(id, rect.left, rect.top);
+        }
+        return 0;
+    case WM_DISPLAYCHANGE:
+        RecoverNativeWindow(messageWindow);
+        for (const auto floating : context_.floatingWindows.Queries().Windows()) RecoverNativeWindow(floating);
+        return 0;
     case WM_DPICHANGED:
+        RecoverNativeWindow(messageWindow, reinterpret_cast<const RECT*>(lparam));
         context_.sceneViewport.NotifyHostDpiChanged(messageWindow);
-        return DefWindowProcW(messageWindow, message, wparam, lparam);
+        return 0;
     case WM_ACTIVATEAPP:
         if (wparam == FALSE) {
             // Native scene surfaces are WS_CHILD and therefore cannot escape

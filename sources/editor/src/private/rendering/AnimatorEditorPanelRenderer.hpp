@@ -25,6 +25,8 @@ public:
     }
     [[nodiscard]] static std::optional<std::uint64_t> GraphStateAt(
         const RECT& content, const kb::scene::AnimatorController& controller, int x, int y) noexcept;
+    [[nodiscard]] static std::vector<kb::render::PhysicsDebugLine> TargetMarkers(
+        const kb::scene::AnimatorDebugInstanceSnapshot& debug);
     void Paint(
         HDC dc,
         HWND host,

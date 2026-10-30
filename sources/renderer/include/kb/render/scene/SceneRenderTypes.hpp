@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/post/SceneFogProfile.hpp"
+
 #include "kb/render/frame/RenderPassKind.hpp"
 #include "kb/render/particles/ParticleGpuUpdateFailure.hpp"
 #include "kb/render/resources/RenderResources.hpp"
@@ -360,6 +362,7 @@ struct SceneRenderLightingConfig {
     bool volumetricLightingEnabled = false;
     // Exponential height fog (ScenePostProcessSettings): density at fogBaseHeight, its falloff per
     // metre above it and the colour it lights to; volumetric fog scatters the lights in it.
+    SceneFogProfile fogProfile = SceneFogProfile::Automatic;
     bool fogEnabled = false;
     float fogDensity = 0.02F;
     float fogHeightFalloff = 0.2F;
@@ -429,14 +432,28 @@ enum class SceneRenderMeshPassMode : std::uint8_t {
     OpaqueAndTransparent,
 };
 
+struct SceneMeshCoverageMetric {
+    bool available = false;
+    std::uint64_t frame = 0U;
+    std::uint64_t passingSamples = 0U;
+    std::uint64_t particleSamples = 0U;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    std::uint32_t measuredDraws = 0U;
+    std::uint32_t particleDraws = 0U;
+};
+
 struct SceneRenderSubmitStats {
+    // Resolved fog profile, and 0=off / 1=height / 2=height plus volumetric march.
+    std::uint32_t fogProfile = 0;
+    std::uint32_t fogMode = 0;
     std::uint32_t visibleMeshCount = 0;
     std::uint32_t visibleDrawGroupCount = 0;
     std::uint32_t culledInstanceCount = 0;
     std::uint32_t submittedMeshCount = 0;
     std::uint32_t submittedDrawGroupCount = 0;
     std::uint32_t submittedDrawCallCount = 0;
-    // G-buffer draws of graph materials that write the model colour (the custom data target).
+    // G-buffer draws that write model color/layer data to the optional fifth target.
     std::uint32_t shadingModelColorDrawCallCount = 0;
     // Motion vector instances drawn with an uploaded previous model (draws with an instance that moved).
     std::uint32_t motionVectorMovedInstanceCount = 0;
@@ -507,6 +524,10 @@ struct SceneRenderSubmitStats {
     std::uint32_t localReflectionProbeCount = 0;
     std::uint32_t parallaxCorrectedProbeCount = 0;
     std::uint32_t globalIlluminationMode = 0;
+    std::uint32_t giGeometryMeshCount = 0;
+    std::uint32_t giBoundingBoxMeshCount = 0;
+    std::uint32_t selectedShadowLightCount = 0;
+    std::uint32_t droppedShadowLightCount = 0;
     std::uint32_t shadowCasterCount = 0;
     std::uint32_t submittedShadowCasterCount = 0;
     std::uint32_t submittedShadowDrawCallCount = 0;
@@ -606,6 +627,9 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // written and their pixels keep the camera motion.
     MotionVectorGpuInstancesUnsupported,
     ParticleGpuUpdateRejected,
+    ShadowLightLimit,
+    GiBoundingBoxFallback,
+    MaterialShadingFallback,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -735,6 +759,8 @@ struct SceneRenderDiagnostics {
         lhs.environmentLightingMode = rhs.environmentLightingMode;
         lhs.environmentLightingSampleCount = rhs.environmentLightingSampleCount;
     }
+    lhs.fogProfile = rhs.fogProfile != 0U ? rhs.fogProfile : lhs.fogProfile;
+    lhs.fogMode = rhs.fogMode > lhs.fogMode ? rhs.fogMode : lhs.fogMode;
     lhs.reflectionProbeCount += rhs.reflectionProbeCount;
     lhs.localReflectionProbeCount += rhs.localReflectionProbeCount;
     lhs.parallaxCorrectedProbeCount += rhs.parallaxCorrectedProbeCount;
@@ -745,6 +771,10 @@ struct SceneRenderDiagnostics {
     lhs.shadowMapSize = rhs.shadowMapSize != 0U ? rhs.shadowMapSize : lhs.shadowMapSize;
     lhs.shadowFilterSampleCount = rhs.shadowFilterSampleCount != 0U ? rhs.shadowFilterSampleCount : lhs.shadowFilterSampleCount;
     lhs.shadowLightEntityId = rhs.shadowLightEntityId != 0U ? rhs.shadowLightEntityId : lhs.shadowLightEntityId;
+    lhs.giGeometryMeshCount += rhs.giGeometryMeshCount;
+    lhs.giBoundingBoxMeshCount += rhs.giBoundingBoxMeshCount;
+    lhs.selectedShadowLightCount += rhs.selectedShadowLightCount;
+    lhs.droppedShadowLightCount += rhs.droppedShadowLightCount;
     lhs.shadowMapAllocationBytes = rhs.shadowMapAllocationBytes != 0U ? rhs.shadowMapAllocationBytes : lhs.shadowMapAllocationBytes;
     lhs.missingMeshBindingCount += rhs.missingMeshBindingCount;
     lhs.missingMeshResourceCount += rhs.missingMeshResourceCount;

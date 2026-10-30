@@ -18,6 +18,20 @@ void Require(bool condition, const char* message) {
 int main() {
     try {
         using namespace kb::scene;
+        kb::input::InputDeviceState committed;
+        const std::string longCommit = std::string(63U, 'x') + "e\xCC\x81\xF0\x9F\x98\x80";
+        Require(kb::game::AppendWebCommittedText(committed, longCommit) && committed.TextInput().size() == 66U &&
+            committed.TextInput()[64U] == U'\u0301' && committed.TextInput()[65U] == U'\U0001F600',
+            "Long IME transactions must preserve combining marks and supplementary characters");
+        committed.ClearTextInput();
+        Require(kb::game::AppendWebCommittedText(committed,
+            std::string(kb::input::InputDeviceState::kMaxTextInputCodePoints - 1U, 'x')),
+            "Text capacity fixture failed");
+        Require(!kb::game::AppendWebCommittedText(committed, "e\xCC\x81") &&
+            committed.TextInput().size() == kb::input::InputDeviceState::kMaxTextInputCodePoints - 1U,
+            "A full input buffer must reject an entire grapheme without appending its base");
+        Require(!kb::game::AppendWebCommittedText(committed, "\xED\xA0\x80"),
+            "Malformed committed text must not enter the input snapshot");
         Scene scene{SceneMode::PrefabPrivate};
         const auto canvas = scene.Entities().CreateObject();
         ApplySceneUIComponents(scene.Components().UI(), canvas.Entity(), BuildUIComponentPreset(UIComponentPreset::Canvas));
@@ -54,6 +68,12 @@ int main() {
         Require(paste(""), "Cut rejected");
         tick();
         Require(content().empty(), "Cut did not remove selection");
+        Require(paste(std::string(1022U, 'x') + "e\xCC\x81"), "Byte-limit paste rejected");
+        tick();
+        Require(content() == std::string(1022U, 'x'), "Storage limits must reject the whole trailing grapheme");
+        selectAll();
+        Require(paste(""), "Byte-limit fixture cleanup failed");
+        tick();
         auto config = *scene.Components().UI().TryGet<UIInputField>(field.Entity());
         config.characterLimit = 1U;
         scene.Components().UI().Set(field.Entity(), config);

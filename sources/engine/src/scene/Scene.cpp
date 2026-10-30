@@ -249,9 +249,11 @@ const kb::input::InputSubsystem* Scene::TryGetInput(kb::input::LocalUserId user)
 }
 
 void Scene::EvaluateAllLocalUserInput(float deltaSeconds) {
+    state_->inputSubsystem.SetGameplayInputBlocked(state_->uiFrame.modalActive);
     state_->inputSubsystem.Evaluate(deltaSeconds);
     const kb::input::InputDeviceState& sharedDevice = state_->inputSubsystem.DeviceState();
     for (auto& [id, subsystem] : state_->secondaryInputSubsystems) {
+        subsystem.SetGameplayInputBlocked(state_->uiFrame.modalActive);
         subsystem.EvaluateWithDeviceState(sharedDevice, deltaSeconds);
     }
 }
