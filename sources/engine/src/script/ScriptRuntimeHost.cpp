@@ -19,6 +19,7 @@
 #include "engine/script/ScriptSharedVisualGraphBindings.hpp"
 
 #include <memory>
+#include <algorithm>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -101,6 +102,144 @@ struct ScriptRuntimeHostState final {
     std::vector<std::string> pendingSceneSystemDiagnostics;
     std::unordered_set<std::string> reportedSceneSystemDiagnostics;
 };
+
+struct ScriptRuntimeHost::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
+    std::weak_ptr<ScriptRuntimeHostState> lifetime;
+    kb::scene::SceneSystemHandle systemHandle;
+    bool installed = false;
+    ScriptSharedState shared;
+    decltype(ScriptEventBus::subscriptions_) subscriptions;
+    decltype(ScriptEventBus::deferredEmits_) deferred;
+    decltype(ScriptEventBus::observations_) observations;
+    std::vector<std::pair<std::shared_ptr<ScriptEventObservation>, std::uint64_t>> sequences;
+    EventSubscriptionHandle nextHandle = 1U;
+    ScriptEventBusTelemetrySnapshot telemetry;
+    ScriptRuntimeFrameSettings frameSettings;
+    ScriptExecutionBudgetSettings budget;
+    decltype(ScriptRuntimeHostState::pendingSceneSystemDiagnostics) pendingDiagnostics;
+    decltype(ScriptRuntimeHostState::reportedSceneSystemDiagnostics) reportedDiagnostics;
+    bool disableFailing = false;
+    decltype(ScriptRuntimeSceneSystem::lifecycleRecords_) lifecycle;
+    ScriptRuntimeFrameSettings systemFrameSettings;
+    float accumulator = 0.0F;
+    std::uint64_t gameplaySequence = 0U;
+    ScriptRuntimeExecutionResult lastResult;
+    ScriptRuntimeAssetPrepareResult lastPrepareResult;
+    std::vector<kb::scene::PendingCollisionEvent> collisionScratch;
+    std::unique_ptr<kb::core::RuntimeStateSnapshot> lua;
+    [[nodiscard]] std::size_t PayloadBytes() const noexcept override { return lua->PayloadBytes(); }
+};
+
+bool ScriptRuntimeHost::ValidateCheckpointBoundary(std::string& error) const {
+    const auto& bus = state_->runtime.Events();
+    if (bus.emitDepth_ != 0U) { error = "Script host checkpoint requires an idle event bus"; return false; }
+    bool nonLua = false;
+    state_->scene.Components().Behaviours().ForEach([](kb::scene::SceneEntity,
+        const kb::scene::BehaviourComponent& behaviour, void* data) {
+        if (behaviour.backend != kb::scene::BehaviourBackend::Lua) *static_cast<bool*>(data) = true;
+    }, &nonLua);
+    if (nonLua) { error = "Script host checkpoint requires state providers for non-Lua behaviours"; return false; }
+    for (const auto& subscription : bus.subscriptions_) {
+        bool managed = false;
+        for (const auto& [key, handles] : state_->luaRuntime.eventSubscriptionHandles_) {
+            static_cast<void>(key);
+            managed = managed || std::find(handles.begin(), handles.end(), subscription.handle) != handles.end();
+        }
+        if (!managed) { error = "Script host checkpoint cannot capture external native event callback state"; return false; }
+    }
+    error.clear();
+    return true;
+}
+
+std::unique_ptr<kb::core::RuntimeStateSnapshot> ScriptRuntimeHost::CaptureRuntimeState(std::string& error) {
+    if (!ValidateCheckpointBoundary(error)) return {};
+    auto snapshot = std::make_unique<RuntimeSnapshot>();
+    snapshot->lua = state_->luaRuntime.CaptureRuntimeStateImpl(error, true);
+    if (!snapshot->lua) return {};
+    snapshot->lifetime = state_;
+    snapshot->systemHandle = sceneSystemHandle_;
+    snapshot->installed = state_->installedSceneSystem != nullptr;
+    snapshot->shared = state_->runtime.SharedState();
+    const auto& bus = state_->runtime.Events();
+    snapshot->subscriptions = bus.subscriptions_;
+    snapshot->deferred = bus.deferredEmits_;
+    snapshot->observations = bus.observations_;
+    for (const auto& [name, recipients] : bus.observations_) {
+        static_cast<void>(name);
+        for (const auto& [recipient, weak] : recipients) {
+            static_cast<void>(recipient);
+            if (auto observation = weak.lock()) snapshot->sequences.emplace_back(observation, observation->sequence_);
+        }
+    }
+    snapshot->nextHandle = bus.nextHandle_;
+    snapshot->telemetry = bus.telemetry_;
+    snapshot->frameSettings = state_->frameSettings;
+    snapshot->budget = state_->executionBudgetSettings;
+    snapshot->pendingDiagnostics = state_->pendingSceneSystemDiagnostics;
+    snapshot->reportedDiagnostics = state_->reportedSceneSystemDiagnostics;
+    snapshot->disableFailing = state_->disableFailingBehaviours;
+    if (snapshot->installed) {
+        const auto& system = state_->installedSceneSystem->System();
+        snapshot->lifecycle = system.lifecycleRecords_;
+        snapshot->systemFrameSettings = system.frameSettings_;
+        snapshot->accumulator = system.fixedAccumulatorSeconds_;
+        snapshot->gameplaySequence = system.lastGameplayEventSequence_;
+        snapshot->lastResult = system.lastResult_;
+        snapshot->lastPrepareResult = system.lastPrepareResult_;
+        snapshot->collisionScratch = system.collisionEventScratch_;
+    }
+    error.clear();
+    return snapshot;
+}
+
+bool ScriptRuntimeHost::ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const {
+    const auto* snapshot = dynamic_cast<const RuntimeSnapshot*>(&state);
+    if (snapshot == nullptr || snapshot->lifetime.lock() != state_) {
+        error = "Script host snapshot belongs to another host lifetime"; return false;
+    }
+    if (snapshot->systemHandle != sceneSystemHandle_ || snapshot->installed != (state_->installedSceneSystem != nullptr)) {
+        error = "Script host scene-system lifetime changed since capture"; return false;
+    }
+    return ValidateCheckpointBoundary(error) && state_->luaRuntime.ValidateRuntimeStateImpl(*snapshot->lua, error, true);
+}
+
+bool ScriptRuntimeHost::RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) {
+    if (!ValidateRuntimeState(state, error)) return false;
+    const auto& snapshot = static_cast<const RuntimeSnapshot&>(state);
+    // Copy callback owners before destroying the future branch. Their registry
+    // references are restored by the heap image, never recreated in another slot.
+    auto subscriptions = snapshot.subscriptions;
+    auto deferred = snapshot.deferred;
+    auto observations = snapshot.observations;
+    auto shared = snapshot.shared;
+    auto& bus = state_->runtime.Events();
+    bus.subscriptions_.clear();
+    if (!state_->luaRuntime.RestoreRuntimeStateImpl(*snapshot.lua, error, true)) return false;
+    bus.subscriptions_ = std::move(subscriptions);
+    bus.deferredEmits_ = std::move(deferred);
+    bus.observations_ = std::move(observations);
+    for (const auto& [observation, sequence] : snapshot.sequences) observation->sequence_ = sequence;
+    bus.nextHandle_ = std::max(bus.nextHandle_, snapshot.nextHandle);
+    bus.telemetry_ = snapshot.telemetry;
+    state_->runtime.SharedState() = std::move(shared);
+    state_->frameSettings = snapshot.frameSettings;
+    state_->executionBudgetSettings = snapshot.budget;
+    state_->pendingSceneSystemDiagnostics = snapshot.pendingDiagnostics;
+    state_->reportedSceneSystemDiagnostics = snapshot.reportedDiagnostics;
+    state_->disableFailingBehaviours = snapshot.disableFailing;
+    if (snapshot.installed) {
+        auto& system = state_->installedSceneSystem->System();
+        system.lifecycleRecords_ = snapshot.lifecycle;
+        system.frameSettings_ = snapshot.systemFrameSettings;
+        system.fixedAccumulatorSeconds_ = snapshot.accumulator;
+        system.lastGameplayEventSequence_ = snapshot.gameplaySequence;
+        system.lastResult_ = snapshot.lastResult;
+        system.lastPrepareResult_ = snapshot.lastPrepareResult;
+        system.collisionEventScratch_ = snapshot.collisionScratch;
+    }
+    error.clear();
+    return true;
+}
 
 namespace {
 

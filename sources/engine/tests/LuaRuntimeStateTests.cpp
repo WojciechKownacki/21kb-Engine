@@ -6,6 +6,11 @@
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/modules/EngineModuleExports.hpp"
 #include "engine/script/ScriptSharedState.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 
 #include <chrono>
 #include <algorithm>
@@ -15,6 +20,8 @@
 #include <vector>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <array>
 
 namespace {
 constexpr kb::assets::AssetId kAsset{7201U};
@@ -231,6 +238,91 @@ void RunHistoryBudget() {
         "Lua VM did not recover after allocation refusal");
     std::cout << "Lua history admission and execution memory budget passed\n";
 }
+
+void RunHostContinuation() {
+    const auto root = std::filesystem::temp_directory_path() / ("kb-host-state-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root / "Assets");
+    {
+        std::ofstream source{root / "Assets/State.lua"};
+        source << R"(
+local count = 0
+local read, write
+local callback = function(event)
+    write("total", (read("total") or 0) + event.args.amount)
+end
+function Created(self)
+    read, write = GetShared, SetShared
+    write("created", (read("created") or 0) + 1)
+    Events.Subscribe("Pulse", callback)
+end
+function Tick(self, dt)
+    while true do
+        count = count + 1
+        write("steps", count)
+        write("random", math.random(1000000))
+        Events.EmitDeferred("Pulse", {amount=count})
+        coroutine.yield()
+    end
+end
+)";
+    }
+    std::unique_ptr<kb::core::RuntimeStateSnapshot> detached;
+    {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        kb::scene::Scene scene{std::move(descriptor)};
+        kb::tests::Require(scene.Assets().MountProject(root) && scene.Assets().Discover()==1U, "Host state fixture mount failed");
+        const auto* metadata=scene.Assets().Manager().Registry().FindByPath("/Game/State.lua");
+        kb::tests::Require(metadata!=nullptr, "Host state script metadata missing");
+        kb::script::ScriptRuntimeHost host{scene};
+        kb::tests::Require(host.Succeeded() && host.AssetPreparer().PrepareAsset(metadata->id).Succeeded()
+            && host.InstallSceneSystem(), "Host state fixture initialization failed");
+        std::string error;
+        auto empty=host.CaptureRuntimeState(error);
+        kb::tests::Require(empty!=nullptr, "Empty host capture failed");
+        const auto entity=scene.Entities().CreateEntity();
+        scene.Components().Behaviours().Set(entity, {.behaviourAssetId=metadata->id.value,
+            .backend=kb::scene::BehaviourBackend::Lua, .enabled=true});
+        auto observation=host.Runtime().Events().Observe("Pulse");
+        auto frame=[&] {
+            kb::tests::Require(scene.Runtime().Update(0.01F), "Host state frame failed");
+            const auto* result=host.InstalledSceneSystemLastResult();
+            const auto* prepared=host.InstalledSceneSystemLastPrepareResult();
+            if (result && !result->Succeeded()) for(const auto& diagnostic:result->diagnostics) std::cerr<<diagnostic.message<<'\n';
+            kb::tests::Require(result && result->Succeeded() && prepared && prepared->Succeeded(), "Host continuation emitted diagnostics");
+            auto value=[&](const char* name) {const auto v=host.SharedState().Get(name);return v?v->AsInt():0;};
+            return std::array<std::int64_t,5>{value("created"),value("steps"),value("total"),value("random"),
+                static_cast<std::int64_t>(observation->Sequence())};
+        };
+        static_cast<void>(frame());
+        auto future=host.CaptureRuntimeState(error);
+        kb::tests::Require(future!=nullptr, "Subscribed host capture failed");
+        kb::tests::Require(host.LuaRuntime().CaptureRuntimeState(error)==nullptr, "Standalone VM silently captured host events");
+        kb::tests::Require(host.RestoreRuntimeState(*empty,error), "Host empty branch restore failed");
+        observation=host.Runtime().Events().Observe("Pulse");
+        static_cast<void>(frame());
+        future.reset();
+        const auto afterRelease=frame();
+        kb::tests::Require(afterRelease[0]==1 && afterRelease[1]==2 && afterRelease[2]==1,
+            "Releasing a future callback removed the current registry reference or lifecycle repeated");
+        auto baseline=host.CaptureRuntimeState(error);
+        kb::tests::Require(baseline!=nullptr && host.LuaRuntime().SuspendedCoroutineCount()==1U, "Host suspended capture failed");
+        std::vector<std::array<std::int64_t,5>> expected;
+        for(int i=0;i<60;++i) expected.push_back(frame());
+        kb::tests::Require(host.RestoreRuntimeState(*baseline,error), "Host subscribed branch restore failed");
+        for(const auto& values:expected) kb::tests::Require(values==frame(), "Host event/shared/coroutine replay differs");
+        const auto native=host.Runtime().Events().Subscribe("External",[](const kb::script::ScriptEvent&){});
+        kb::tests::Require(host.CaptureRuntimeState(error)==nullptr && !error.empty(), "Host silently skipped external callback state");
+        static_cast<void>(host.Runtime().Events().Unsubscribe(native));
+        detached=host.CaptureRuntimeState(error);
+        kb::tests::Require(detached!=nullptr, "Host detached image capture failed");
+        static_cast<void>(observation);
+    }
+    detached.reset();
+    std::filesystem::remove_all(root);
+    std::cout<<"Lua host lifecycle/shared/deferred subscription/coroutine60-frame replay and detached history passed\n";
+}
 }
 
 int main() {
@@ -238,5 +330,6 @@ int main() {
     RunThreadStateAndLifetime();
     RunSuspendedCoroutineReplay();
     RunHistoryBudget();
+    RunHostContinuation();
     RunOldModuleRejection();
 }

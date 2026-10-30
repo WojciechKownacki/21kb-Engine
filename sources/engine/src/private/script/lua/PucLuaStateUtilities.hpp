@@ -8,6 +8,7 @@ extern "C" {
 #include <cstdint>
 #include <string>
 #include <memory>
+#include <unordered_map>
 
 namespace kb::script {
 
@@ -16,6 +17,7 @@ class ScriptExecutionContext;
 struct PucLuaStateLifetime {
     lua_State* state = nullptr;
     ScriptExecutionContext* activeContext = nullptr;
+    std::unordered_map<int, const void*> eventReferenceOwners;
 };
 
 class PucLuaExecutionContextScope final {

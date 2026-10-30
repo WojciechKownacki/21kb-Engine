@@ -64,5 +64,21 @@ configured Lua memory budget includes that history. It excludes C++ runtime cata
 system allocator overhead and process RSS, so it is not total world history memory.
 Releasing images frees their copies and any dead blocks no remaining image needs.
 
-Engine module ABI 19 requires rebuilding C++ modules after the runtime allocator
-change; an older module is rejected before its factory runs.
+## Lua host state
+
+`ScriptRuntimeHost` coordinates its Lua image with shared values, Lua subscription
+owners, deferred events, observation sequences and the installed script system's
+lifecycle records, frame settings and dispatch state. Restore discards future
+callbacks before rewinding the VM. Registry reference ownership is restored with
+the image, so releasing another history branch cannot unreference a callback in
+the current branch. Subscription handles remain monotonic across restores.
+
+The host must be idle and its installed scene-system lifetime must match. Current
+support rejects non-Lua behaviours and external native subscriptions whose captured
+state has no provider. Snapshot destruction is safe after the host closes. Host
+`PayloadBytes()` currently reports the Lua allocation payload only, excluding host
+container storage. The caller must still coordinate ECS, scene clocks, timers,
+tasks and other providers. File writes and external services are not rewound.
+
+Engine module ABI 20 requires rebuilding C++ modules after the host interface and
+runtime state changes; an older module is rejected before its factory runs.

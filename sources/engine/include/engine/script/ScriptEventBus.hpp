@@ -130,6 +130,7 @@ public:
 
 private:
     friend class ScriptEventBus;
+    friend class ScriptRuntimeHost;
     std::uint64_t sequence_ = 0U;
 };
 
@@ -331,6 +332,7 @@ public:
 
 private:
     friend class ScriptRuntime;
+    friend class ScriptRuntimeHost;
 
     struct ObservationNameHasher {
         using is_transparent = void;

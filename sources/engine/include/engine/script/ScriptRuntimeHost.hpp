@@ -56,10 +56,13 @@ struct ScriptRuntimeHostOptions {
     bool installSceneSystem = false;
 };
 
-class ScriptRuntimeHost final {
+class ScriptRuntimeHost final : public kb::core::IRuntimeStateProvider {
 public:
     explicit ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostOptions options = {});
     ~ScriptRuntimeHost();
+    [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override;
+    [[nodiscard]] bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const override;
+    [[nodiscard]] bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) override;
 
     ScriptRuntimeHost(const ScriptRuntimeHost&) = delete;
     ScriptRuntimeHost& operator=(const ScriptRuntimeHost&) = delete;
@@ -125,6 +128,8 @@ public:
     [[nodiscard]] const kb::visual::VisualGraphDebugSession& VisualGraphDebugger() const noexcept;
 
 private:
+    struct RuntimeSnapshot;
+    [[nodiscard]] bool ValidateCheckpointBoundary(std::string& error) const;
     void RegisterDefaultBackends();
     void AddDiagnostic(std::string message);
 

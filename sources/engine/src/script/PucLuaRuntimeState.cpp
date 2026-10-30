@@ -15,6 +15,8 @@ struct PucLuaScriptRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapsh
     decltype(exposedVariables_) exposedVariables;
     decltype(instanceVariables_) instanceVariables;
     decltype(coroutineRefs_) coroutines;
+    decltype(eventSubscriptionHandles_) subscriptions;
+    decltype(PucLuaStateLifetime::eventReferenceOwners) eventReferenceOwners;
     decltype(debugSettings_) debugSettings;
     decltype(lastDebugPause_) lastDebugPause;
     decltype(debugStepMode_) stepMode = DebugStepMode::Run;
@@ -35,12 +37,16 @@ std::size_t PucLuaScriptRuntime::LuaMemoryOwnedBytes() const noexcept {
 }
 
 std::unique_ptr<kb::core::RuntimeStateSnapshot> PucLuaScriptRuntime::CaptureRuntimeState(std::string& error) {
+    return CaptureRuntimeStateImpl(error, false);
+}
+
+std::unique_ptr<kb::core::RuntimeStateSnapshot> PucLuaScriptRuntime::CaptureRuntimeStateImpl(std::string& error, bool coordinatedHost) {
     error.clear();
     if (state_ == nullptr || !memoryBudget_->arena) { error = "Lua state is unavailable"; return {}; }
     if (memoryBudget_->protectedDepth != 0U || stateLifetime_->activeContext != nullptr) {
         error = "Lua checkpoints require a completed execution boundary"; return {};
     }
-    if (!eventSubscriptionHandles_.empty()) {
+    if (!coordinatedHost && !eventSubscriptionHandles_.empty()) {
         error = "Lua event subscriptions require a coordinated script-host snapshot"; return {};
     }
     auto snapshot = std::make_unique<RuntimeSnapshot>();
@@ -51,6 +57,8 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> PucLuaScriptRuntime::CaptureRunt
     snapshot->exposedVariables = exposedVariables_;
     snapshot->instanceVariables = instanceVariables_;
     snapshot->coroutines = coroutineRefs_;
+    snapshot->subscriptions = eventSubscriptionHandles_;
+    snapshot->eventReferenceOwners = stateLifetime_->eventReferenceOwners;
     snapshot->debugSettings = debugSettings_;
     snapshot->lastDebugPause = lastDebugPause_;
     snapshot->stepMode = debugStepMode_;
@@ -69,6 +77,10 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> PucLuaScriptRuntime::CaptureRunt
 }
 
 bool PucLuaScriptRuntime::ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const {
+    return ValidateRuntimeStateImpl(state, error, false);
+}
+
+bool PucLuaScriptRuntime::ValidateRuntimeStateImpl(const kb::core::RuntimeStateSnapshot& state, std::string& error, bool coordinatedHost) const {
     const auto* snapshot = dynamic_cast<const RuntimeSnapshot*>(&state);
     if (snapshot == nullptr || snapshot->lifetime.lock() != stateLifetime_ || state_ == nullptr) {
         error = "Lua snapshot belongs to a different VM lifetime"; return false;
@@ -76,7 +88,7 @@ bool PucLuaScriptRuntime::ValidateRuntimeState(const kb::core::RuntimeStateSnaps
     if (memoryBudget_->protectedDepth != 0U || stateLifetime_->activeContext != nullptr) {
         error = "Lua checkpoints require a completed execution boundary"; return false;
     }
-    if (!eventSubscriptionHandles_.empty()) {
+    if (!coordinatedHost && !eventSubscriptionHandles_.empty()) {
         error = "Lua event subscriptions require a coordinated script-host restore"; return false;
     }
     error.clear();
@@ -84,7 +96,11 @@ bool PucLuaScriptRuntime::ValidateRuntimeState(const kb::core::RuntimeStateSnaps
 }
 
 bool PucLuaScriptRuntime::RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) {
-    if (!ValidateRuntimeState(state, error)) return false;
+    return RestoreRuntimeStateImpl(state, error, false);
+}
+
+bool PucLuaScriptRuntime::RestoreRuntimeStateImpl(const kb::core::RuntimeStateSnapshot& state, std::string& error, bool coordinatedHost) {
+    if (!ValidateRuntimeStateImpl(state, error, coordinatedHost)) return false;
     const auto& snapshot = static_cast<const RuntimeSnapshot&>(state);
     if (!memoryBudget_->arena->Restore(*snapshot.heap, error)) return false;
     scripts_ = snapshot.scripts;
@@ -92,6 +108,8 @@ bool PucLuaScriptRuntime::RestoreRuntimeState(const kb::core::RuntimeStateSnapsh
     exposedVariables_ = snapshot.exposedVariables;
     instanceVariables_ = snapshot.instanceVariables;
     coroutineRefs_ = snapshot.coroutines;
+    eventSubscriptionHandles_ = snapshot.subscriptions;
+    stateLifetime_->eventReferenceOwners = snapshot.eventReferenceOwners;
     debugSettings_ = snapshot.debugSettings;
     lastDebugPause_ = snapshot.lastDebugPause;
     debugStepMode_ = snapshot.stepMode;

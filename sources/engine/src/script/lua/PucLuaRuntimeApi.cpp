@@ -12,6 +12,12 @@
 
 namespace kb::script {
 
+std::shared_ptr<PucLuaStateLifetime> PucLuaRuntimeApi::Lifetime(lua_State* state) noexcept {
+    if (state == nullptr) return {};
+    auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    return runtime != nullptr ? runtime->stateLifetime_ : nullptr;
+}
+
 PucLuaStateLifetime* PucLuaRuntimeApi::ContextSlot(lua_State* state) noexcept {
     if (state == nullptr) return nullptr;
     auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
