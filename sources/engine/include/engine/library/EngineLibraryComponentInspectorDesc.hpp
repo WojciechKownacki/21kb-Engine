@@ -34,30 +34,15 @@ struct LibraryComponentInspectorFieldDesc {
 struct LibraryComponentInspectorDesc {
     std::string_view componentName;
     std::string_view displayName;
-    // A coarse UI grouping (e.g. "Rendering", "Scripting") an inspector
-    // panel could use to bucket components into sections/tabs — not a
-    // concept that exists anywhere else in kb::library or kb::script today.
+    // Presentation grouping, such as "Rendering" or "Scripting".
     std::string_view category;
     std::vector<LibraryComponentInspectorFieldDesc> fields;
 };
 
-// LIB-084: this registry lives entirely in kb::engine (sources/engine/),
-// which has zero dependency on sources/editor/ (confirmed: kb_editor links
-// kb_engine, never the reverse) — so exposing this metadata here can never
-// make the editor a condition of the runtime. Nothing in sources/editor/'s
-// existing, hand-written inspector UI (InspectorComponentCatalog,
-// Inspector*TextBuilder classes) consumes this yet; wiring the real editor
-// panel to this catalog instead of its own hardcoded strings is a separate,
-// later task, deliberately out of scope here (this task is "expose the
-// metadata", not "make the editor use it").
-//
-// Covers exactly the 6 components LIB-076/077 already catalog (Transform/
-// Visibility/Camera/Light/MeshRenderer/Behaviour) and, within each, exactly
-// the fields kb::script::ScriptSceneComponentApi::ComponentProperties()
-// already lists (37 total) — RunComponentInspectorDescCatalogTest
-// cross-checks both component and field coverage against those two
-// existing sources of truth at runtime, so this cannot silently drift out
-// of sync with them.
+// Engine-owned presentation metadata, independent of the editor. The editor's
+// generic component inspector consumes FindField labels and tooltips.
+// RunComponentInspectorDescCatalogTest cross-checks component and field coverage
+// against ScriptSceneComponentApi, including compatibility aliases.
 class EngineLibraryComponentInspectorRegistry final {
 public:
     EngineLibraryComponentInspectorRegistry() = delete;

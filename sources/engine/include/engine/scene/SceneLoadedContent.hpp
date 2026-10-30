@@ -37,8 +37,7 @@ struct SceneStreamingStats {
 // queue — see SceneLoadedContent::DrainPendingLifecycleEvents. This is the
 // raw payload kb::script::ScriptRuntimeSceneSystem turns into a real
 // ScriptEvent broadcast once per frame; it is deliberately NOT itself a
-// subscription/event-bus mechanism (LIB-105's Events.Subscribe is not yet
-// implemented) — any currently-alive, enabled behaviour receives the
+// subscription/event-bus mechanism — any currently-alive, enabled behaviour receives the
 // broadcast, the same untargeted-broadcast semantics every other
 // DispatchEvent call in this engine already has.
 struct SceneLifecycleEventRecord {

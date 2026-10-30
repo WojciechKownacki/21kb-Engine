@@ -80,8 +80,8 @@ using NativeEventSubscriptionCallback = std::function<void(const ScriptEvent&)>;
 // InputComponent::localUser — the engine's existing local-player identity
 // used by per-player Input. An owner without InputComponent cannot match a
 // player filter. `std::nullopt` means no player constraint, so value 0
-// remains available for the primary local player. Remote/network player
-// identity remains part of LIB-195's future gameplay lifecycle.
+// remains available for the primary local player. This filter uses local-user
+// identity rather than a remote network peer id.
 // `channel` is different in kind: it is
 // NOT derived from the owner entity, but compared directly against the
 // channel the SUBSCRIPTION itself declared at Subscribe time (see

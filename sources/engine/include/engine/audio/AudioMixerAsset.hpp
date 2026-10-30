@@ -15,7 +15,7 @@ inline constexpr const char* kAudioMixerAssetType = "AudioMixer";
 // NOT authored - it always exists as the backend engine's endpoint, exactly like
 // miniaudio's own ma_engine endpoint, so an empty mixer still plays everything at unity).
 // `volume` is a linear gain, `mute` silences the whole subtree. Bus names are single
-// whitespace-free tokens - a constraint of the flat one-line-per-record text format below,
+// whitespace-free tokens - a constraint of the text format in AudioMixerAssetIO.hpp,
 // enforced by validation at save/load time rather than silently mangled.
 struct AudioMixerBus {
     std::string name;

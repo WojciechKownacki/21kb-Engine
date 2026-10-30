@@ -54,11 +54,8 @@ struct LibraryModuleDesc {
     bool capability = true;
     // LIB-028: why capability is false, for the startup report
     // (EngineLibraryModule::InstallModules's report/FormatStartupReport).
-    // Empty for every module in Catalog() today (every module's backend is
-    // unconditionally compiled into this build, per Catalog()'s own
-    // comment) — populated only by a future module whose backend can
-    // genuinely be absent (an optional plugin, a platform-specific
-    // subsystem). Ignored when capability is true.
+    // Explains an unavailable backend or platform capability. Ignored when
+    // capability is true.
     std::string disabledReason;
     std::vector<std::string> dependencies;
     bool (*Register)(kb::script::ScriptRuntimeHost&) = nullptr;
