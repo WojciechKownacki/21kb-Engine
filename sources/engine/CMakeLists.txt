@@ -2036,6 +2036,13 @@ if(BUILD_TESTING)
 
     kb_apply_quality_gates(kb_native_script_test_plugin)
 
+    add_executable(kb_kernel_simd_tests tests/KernelSimdTests.cpp)
+    target_include_directories(kb_kernel_simd_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_features(kb_kernel_simd_tests PRIVATE cxx_std_20)
+    kb_apply_quality_gates(kb_kernel_simd_tests)
+    add_test(NAME kb_kernel_simd_tests COMMAND kb_kernel_simd_tests)
+    set_tests_properties(kb_kernel_simd_tests PROPERTIES TIMEOUT 30 LABELS "ecs;simd;contract")
+
     add_executable(kb_engine_tests
         tests/EcsComponentApiTests.cpp
         tests/EcsCommandBufferTests.cpp
