@@ -42,6 +42,7 @@ if(KB_BUILD_RENDERER)
         src/CliMaterialCommands.cpp
         src/CliMaterialGraphCommands.cpp
         src/CliPostProcessCommands.cpp
+        src/CliParticleProcessCommands.cpp
         src/CliRenderEffectCommands.cpp
         src/CliParticleCommands.cpp
         src/CliParticleProfileCommand.cpp

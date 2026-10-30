@@ -28,6 +28,7 @@ otherwise; the other backends are not run by CI.
 | Heightmap terrain | terrain editor | yes | yes | yes | `ctest:kb_terrain_editor_tests` | Undo, cook, collision, chunk borders, RAM of a large terrain |
 | World partition and HLOD | scene settings | yes | yes | yes | `selector:world-hlod` | Long travel, teleport, cancelled loads, hitch limits |
 | GPU particles | effect asset, `kb_cli vfx-*` | yes | yes | yes | `ctest:kb_renderer_particle_motion`, `ctest:kb_renderer_particle_contact_death`, `ctest:kb_renderer_particle_depth_collision`, `ctest:kb_21kb_particle_cpu_backend_tests`, `ctest:kb_game_particle_gpu_package` | Backends other than Direct3D 11 in CTest; GPU flipbook, mesh emission, collision events |
+| Custom GPU particle simulation | `.kbpsim` process asset, output inspector, `kb_cli particle-process-cook`, `vfx-set` | yes | yes | yes | `selector:particle-process` | Contract v1: billboard state; other outputs and CPU policies are rejected. GPU proof uses Direct3D 11. |
 | GPU culling and meshlet indirect submission | cooked mesh metadata | yes | opt-in | yes | `selector:gpu-frustum-culling`, `selector:gpu-meshlet-submission` | D3D11 camera-edge identity/image parity and CPU/GPU costs verified; other backend runtime checks remain |
 | Native compute/render effects | public plugin API and manifest | exported bundle | yes | native library and compiled shader variants | `selector:render-effect-plugin` | D3D11 external module workflow; other native target libraries and runtime backends remain |
 

@@ -382,6 +382,7 @@ add_library(kb_renderer STATIC
     src/gi/SceneGiResolvePass.cpp
     src/gi/SceneGiUniforms.cpp
     src/gi/SceneGiVoxelGrid.cpp
+    src/particles/ParticleProcessCook.cpp
     src/particles/ParticleGpuEmitterSimulation.cpp
     src/particles/ParticleGpuReadback.cpp
     src/shadow/PointShadowPassPlanner.hpp
@@ -893,6 +894,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/GraphForwardGpuRenderTests.cpp
         tests/RendererCapabilityReportTests.cpp
         tests/RendererRuntimeSubmitTests.cpp
+        tests/ParticleProcessTests.cpp
         tests/ParticleGpuMotionTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp

@@ -36,7 +36,7 @@ enum class ParticleEditorProperty : std::uint16_t {
     OutputAntiAliasing, OutputAlignment, FlipbookColumns, FlipbookRows,
     FlipbookFramesPerSecond, FlipbookLooping, OutputVelocityScale, OutputMinimumLength,
     OutputPointDiameter, ModulePayload,
-    FlipbookStartFrame, FlipbookFrameCount,
+    FlipbookStartFrame, FlipbookFrameCount, CustomProcessPath,
 };
 
 enum class ParticleEditorPropertyWidget : std::uint8_t {
@@ -77,7 +77,7 @@ struct ParticleEditorPropertyRow {
 }
 
 [[nodiscard]] constexpr bool IsParticleEditorOutputProperty(ParticleEditorProperty property) noexcept {
-    return property >= ParticleEditorProperty::OutputBlend && property <= ParticleEditorProperty::OutputPointDiameter;
+    return property == ParticleEditorProperty::CustomProcessPath || (property >= ParticleEditorProperty::OutputBlend && property <= ParticleEditorProperty::OutputPointDiameter);
 }
 
 struct ParticleOutputChoiceRow {

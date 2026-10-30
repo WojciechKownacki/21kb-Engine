@@ -2684,7 +2684,7 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
         eventActions = true;
     }
     // Death positions come from the closed form, which needs a free-flying world-space particle.
-    return eventActions && (collisionPlane || forces || local) ? Reason::EventMotion : Reason::None;
+    return eventActions && (collisionPlane || forces || local || emitter.customProcessAssetId != 0U) ? Reason::EventMotion : Reason::None;
 }
 
 namespace {
@@ -2754,6 +2754,7 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
     // An authored plane has no screen-depth semantics. Depth collision is a separate,
     // explicit renderer capability and must not depend on the presence of a plane.
     params.sceneDepthCollision = emitter.screenDepthCollision;
+    params.customProcessAssetId = emitter.customProcessAssetId;
     params.localSpace = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
     params.acceleration = acceleration;
     params.drag = drag;

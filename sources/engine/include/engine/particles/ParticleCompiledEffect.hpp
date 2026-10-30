@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 9U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 10U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -63,6 +63,7 @@ struct ParticleCompiledEmitter {
     std::uint64_t materialAssetId = 0U;
     std::uint64_t meshAssetId = 0U;
     std::uint64_t textureAtlasAssetId = 0U;
+    std::uint64_t customProcessAssetId = 0U;
     std::uint64_t shapeMeshAssetId = 0U;  // Mesh spawn shape
     float meshLodBias = 0.0F;
     bool meshCastsShadow = false;

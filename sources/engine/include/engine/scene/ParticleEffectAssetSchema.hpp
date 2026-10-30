@@ -386,6 +386,8 @@ struct ParticleEmitterAsset {
     bool absolutePosition = false;
     // Optional visual response to the available GPU scene depth; independent of collision planes.
     bool screenDepthCollision = false;
+    // Optional compiled GPU process (contract v1); requires GpuVisualRequired.
+    ParticleAssetReference customProcess;
     ParticleSpawnAsset spawn;
     std::vector<ParticleModuleAsset> modules;
     ParticleOutputAsset output;

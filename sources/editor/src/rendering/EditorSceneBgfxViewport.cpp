@@ -438,6 +438,10 @@ void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     TrackPaintHost(parent);
 }
 
+void EditorSceneBgfxViewport::PrepareParticleScene(const kb::scene::Scene& scene) noexcept {
+    if (renderer_.IsInitialized()) renderer_.PrepareParticleScene(const_cast<kb::scene::Scene&>(scene));
+}
+
 void EditorSceneBgfxViewport::ReleaseScene(
     const kb::scene::Scene& scene) noexcept {
     renderer_.ReleaseScene(scene);

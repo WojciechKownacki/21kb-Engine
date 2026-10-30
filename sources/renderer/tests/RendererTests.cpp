@@ -47,6 +47,7 @@ void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
 void RunGpuFrustumCullingTests();
 void RunGpuMeshletSubmissionTests();
+void RunParticleProcessTests(const std::filesystem::path& compiled);
 void RunRenderEffectPluginTests(const std::filesystem::path& manifest);
 void RunSkinnedMeshGpuReadbackTests();
 void RunPrebuiltBackendShaderGpuTests();
@@ -247,6 +248,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-pass-program-selection") {
         kb::render::tests::RunSceneMeshPassProgramSelectionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 3 && std::string_view{ argv[1] } == "particle-process") {
+        kb::render::tests::RunParticleProcessTests(std::filesystem::path{argv[2]});
         return EXIT_SUCCESS;
     }
     if (argc == 3 && std::string_view{ argv[1] } == "render-effect-plugin") {

@@ -2495,6 +2495,10 @@ bgfx::TextureHandle Renderer::TransparentDepthCopy(bgfx::ViewId viewId, const Re
 }
 
 void Renderer::PrepareParticleScene(kb::scene::Scene& scene) noexcept {
+    if (particleRenderSynchronizer_ != nullptr && sceneRenderer_ != nullptr) {
+        particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
+        static_cast<void>(particleRenderSynchronizer_->Prepare(scene));
+    }
     if (sceneRenderer_ != nullptr) sceneRenderer_->PrepareGpuParticleConsumer(scene);
 }
 

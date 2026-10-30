@@ -484,6 +484,7 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             selected->output.depthTest ? "true" : "false"), selected->output.depthTest);
         AddToggle(addProperty(ParticleEditorProperty::OutputDepthWrite, std::string{ ParticleText("particle.property.depth_write", "Depth write") },
             selected->output.depthWrite ? "true" : "false"), selected->output.depthWrite);
+        addProperty(ParticleEditorProperty::CustomProcessPath, "Custom simulation (.kbpsim)", selected->customProcess.virtualPath);
         AddToggle(addProperty(ParticleEditorProperty::OutputScreenDepthCollision,
             std::string{ParticleText("particle.property.screen_depth_collision", "Screen depth collision (GPU)")},
             selected->screenDepthCollision ? "true" : "false"), selected->screenDepthCollision);

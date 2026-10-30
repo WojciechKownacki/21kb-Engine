@@ -16,6 +16,7 @@
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
+#include "engine/particles/ParticleProcessAsset.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
@@ -2842,6 +2843,17 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             });
             ++result.meshArtifactCount;
         } else {
+            if (metadata.type == kb::particles::kParticleProcessAssetType) {
+                const auto process = kb::particles::DecodeParticleProcessAsset(fileBytes, error);
+                if (!process) return Failure("particle process could not be validated: " + virtualPath + "\n" + error);
+                for (std::uint32_t index = 0U; index < asset_bake::kShaderBakeBackendCount; ++index) {
+                    const auto backend = static_cast<asset_bake::ShaderBakeBackend>(index);
+                    if (!asset_bake::HasShaderBakeBackend(profile.shaderBackends, backend)) continue;
+                    const auto mapped = MaterialBackend(backend);
+                    if (!mapped || !process->programs.contains(std::string{kb::render::RenderMaterialGraphShaderBackendName(*mapped)}))
+                        return Failure("particle process lacks a shader variant required by target " + std::string{profile.identifier} + ": " + virtualPath);
+                }
+            }
             // Preserve editable runtime data for procedural terrain and tilemap chunks.
             if (entry.sourceExtension == kb::assets::kTerrainAssetExtension && !kb::assets::TerrainAssetIO::Load(fileBytes, &error)) {
                 return Failure("terrain could not be validated for cooking: " + virtualPath + "\n" + error);

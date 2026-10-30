@@ -1,4 +1,5 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "RenderShaderCompilerProcess.hpp"
 #include "kb/render/SceneGBufferContract.hpp"
 
 #include "engine/platform/FileSystemPath.hpp"
@@ -845,6 +846,11 @@ void AppendMaterialGraphTangentBasis(std::string& wrapper) {
 }
 
 } // namespace
+
+int detail::RunRenderShaderCompilerProcess(const std::filesystem::path& compiler,
+    const std::vector<std::string>& arguments, const std::filesystem::path& diagnostics) {
+    return RunShaderCompilerHidden(compiler, arguments, diagnostics);
+}
 
 std::string_view RenderMaterialGraphShaderBackendName(RenderMaterialGraphShaderBackend backend) noexcept {
     switch (backend) {

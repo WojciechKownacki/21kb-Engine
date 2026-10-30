@@ -121,6 +121,7 @@ public:
     void SetHostSurfaceSuspended(HWND host, bool suspended) noexcept;
     void SetAllHostSurfacesSuspended(bool suspended) noexcept;
     void NotifyHostDpiChanged(HWND host) noexcept;
+    void PrepareParticleScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     [[nodiscard]] std::uint32_t RendererCompletedFrame() const noexcept;
     [[nodiscard]] render::SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;

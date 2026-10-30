@@ -18,6 +18,7 @@
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
+#include "engine/particles/ParticleProcessAsset.hpp"
 #include "engine/scene/AiBehaviourAssetLoader.hpp"
 #include "engine/scene/SkeletonAssetLoader.hpp"
 #include "engine/scene/SkeletalMeshAssetLoader.hpp"
@@ -140,6 +141,7 @@ Scene::Scene(
     static_cast<void>(registeredImportedAssetLoader);
     static_cast<void>(registeredPhysicsLayersLoader);
     static_cast<void>(registeredParticleEffectLoader);
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::particles::ParticleProcessAssetLoader>()));
     static_cast<void>(registeredAiBehaviourLoader);
     static_cast<void>(registeredSkeletonLoader);
     static_cast<void>(registeredSkeletalMeshLoader);

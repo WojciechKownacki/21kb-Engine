@@ -24,6 +24,7 @@ struct ParticleCompilerCapabilities {
     bool beam = true;
     bool volumetric = true;
     bool decal = true;
+    bool customProcess = true;
 
     [[nodiscard]] std::uint64_t StableKey() const noexcept;
 };

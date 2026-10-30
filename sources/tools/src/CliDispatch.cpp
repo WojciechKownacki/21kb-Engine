@@ -222,6 +222,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
                  --project <dir> --effect /Game/<path>.kbvfx
+  particle-process-cook  Compile a particle simulation: --source <file.particle.sc> --output <file.kbpsim> [--profile all]
   render-effect-run  Run a native compute effect in a hidden renderer: --manifest <effect.kbfx> [--frames 8] (Windows)
   render-effect-export  Export a native compute effect and compiled shader variants: --manifest <effect.kbfx> --output <directory>
   renderer-info  Print the graphics backend a hidden bgfx host selects as JSON: capabilities, limits,
@@ -534,6 +535,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"post-process-new", &RunPostProcessNewCommand, CliCommandKind::Normal, true, {}},
     {"post-process-set", &RunPostProcessSetCommand, CliCommandKind::Normal, true, {}},
     {"scene-post-process", &RunScenePostProcessCommand, CliCommandKind::Normal, true, {}},
+    {"particle-process-cook", &RunParticleProcessCookCommand, CliCommandKind::Normal, true, {}},
     {"render-effect-run", &RunRenderEffectRunCommand, CliCommandKind::Normal, true, {}},
     {"render-effect-export", &RunRenderEffectExportCommand, CliCommandKind::Normal, true, {}},
     {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}},
@@ -550,6 +552,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"post-process-new", nullptr, CliCommandKind::Normal, false, {}},
     {"post-process-set", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-post-process", nullptr, CliCommandKind::Normal, false, {}},
+    {"particle-process-cook", nullptr, CliCommandKind::Normal, false, {}},
     {"render-effect-run", nullptr, CliCommandKind::Normal, false, {}},
     {"render-effect-export", nullptr, CliCommandKind::Normal, false, {}},
     {"renderer-info", nullptr, CliCommandKind::Normal, false, {}},

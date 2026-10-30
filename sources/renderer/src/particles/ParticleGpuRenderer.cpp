@@ -2,6 +2,7 @@
 
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
@@ -398,7 +399,7 @@ void ParticleGpuRenderer::SyncGpuEmitters(
     gpuEmitterSyncedFrame_[sceneId] = frameIndex;
     kb::particles::ParticlePlayback::DrainGpuEmitterCommands(scene, gpuEmitterCommandScratch_);
     gpuEmitters_.SetRenderOrigin(sceneId, renderOrigin);
-    gpuEmitters_.Apply(sceneId, gpuEmitterCommandScratch_);
+    gpuEmitters_.Apply(sceneId, gpuEmitterCommandScratch_, &scene.Assets().Manager());
     gpuEmitters_.Advance(sceneId, frameDeltaSeconds);
     gpuEmitterDispatchPending_[sceneId] = true;
 }

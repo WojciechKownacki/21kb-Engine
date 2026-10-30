@@ -86,7 +86,7 @@ portable results for comparison across hosts; Linux and ARM execution evidence i
 still required before claiming qualification on those hosts. The CLI/Lua workflow
 also checks synchronous Jolt constant-velocity motion against its numeric golden
 with absolute position/velocity tolerance `0.001`; this is a bound for that simple
-scenario only. Engine module ABI 24 requires providers to be rebuilt with the
+scenario only. Engine module ABI 25 requires providers to be rebuilt with the
 scene execution policy.
 
 ## Declared access validation

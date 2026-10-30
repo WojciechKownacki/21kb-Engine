@@ -1209,6 +1209,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const auto collectStart = std::chrono::steady_clock::now();
     state.inputCollector.Collect(state.sceneContext.Scene(), state.window);
     const auto runtimeStart = std::chrono::steady_clock::now();
+    state.sceneViewport.PrepareParticleScene(state.sceneContext.Scene());
     const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);
     const auto runtimeEnd = std::chrono::steady_clock::now();
     if (VisualStressEnabled()) {
@@ -1319,6 +1320,9 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (animationPreviewCameraChanged || animationPreviewPlaybackChanged) {
         state.sceneViewport.RequestPresent();
     }
+    state.sceneViewport.PrepareParticleScene(state.sceneContext.Scene());
+    if (const auto* preview = state.sceneContext.ParticleEditorPreviewScene())
+        state.sceneViewport.PrepareParticleScene(*preview);
     const bool particlePanelVisible = ParticleEditorPanelIsVisible(state);
     const bool particlePreviewChanged =
         particlePanelVisible && state.sceneContext.TickParticleEditorPreview(deltaSeconds);
