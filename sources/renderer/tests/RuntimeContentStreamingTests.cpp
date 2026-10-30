@@ -11,6 +11,7 @@
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/RendererMemory.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
 #include "kb/render/bake/TextureBaker.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -42,8 +43,6 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <d3d11.h>
-#include <dxgi1_4.h>
 #undef small
 #undef far
 #endif
@@ -602,6 +601,7 @@ void PackagedTexturesAndMeshesStreamUnderTheBudget() {
 // The pieces of a streaming run that the tests below share: a packaged texture and mesh with only their tails
 // resident, a streamer that tracks them, and a loop that updates it frame by frame.
 struct StreamingRig {
+    const Renderer* renderer = nullptr;
     SceneRenderer sceneRenderer;
     RenderTextureHandle textureHandle{};
     RenderMeshHandle meshHandle{};
@@ -647,9 +647,12 @@ void WithStreamingRig(const RuntimeContentStreamingSettings& settings, bool unmo
     config.allowHeadlessNoop = true;
     config.preferredBgfxRendererType = static_cast<std::int32_t>(hardware ? bgfx::RendererType::Direct3D11 : bgfx::RendererType::Noop);
     Renderer renderer;
+    Require(!kb::render::ProcessGpuMemoryBytes(renderer), "GPU reading must be unavailable before initialization");
     Require(renderer.Initialize(surface, &config), "The headless renderer did not initialize");
+    if (!hardware) Require(!kb::render::ProcessGpuMemoryBytes(renderer), "Noop must not report estimated GPU bytes as measured");
     {
         StreamingRig rig;
+        rig.renderer = &renderer;
         const kb::assets::AssetMetadata textureMetadata = MetadataOf(fixture.texture);
         const kb::assets::AssetMetadata meshMetadata = MetadataOf(fixture.mesh);
         RenderTextureAssetLoader textureLoader{ hardware ? bgfx::RendererType::Direct3D11 : bgfx::RendererType::Noop };
@@ -689,6 +692,7 @@ void WithStreamingRig(const RuntimeContentStreamingSettings& settings, bool unmo
     }
     renderer.Shutdown();
     if (!unmountPackBeforeStreaming) fixture.pack->Unmount();
+    Require(!kb::render::ProcessGpuMemoryBytes(renderer), "GPU reading must be unavailable after shutdown");
     std::filesystem::remove_all(root, error);
 }
 
@@ -734,25 +738,10 @@ void UploadLimitsSpreadRebuildsWithoutStarving() {
 // one) is not measured; the transient limit does not spread the rebuilds of one frame; or the measured peak with the
 // transient bytes falls below the resident bytes.
 #if defined(_WIN32)
-[[nodiscard]] std::uint64_t ProcessGpuBytes() {
-    Require(bgfx::getRendererType() == bgfx::RendererType::Direct3D11, "GPU memory measurement requires D3D11");
-    auto* device = static_cast<ID3D11Device*>(bgfx::getInternalData()->context);
-    IDXGIDevice* dxgi = nullptr;
-    Require(SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi))), "DXGI device unavailable");
-    IDXGIAdapter* adapter = nullptr;
-    const auto adapterResult = dxgi->GetAdapter(&adapter);
-    dxgi->Release();
-    Require(SUCCEEDED(adapterResult), "DXGI adapter unavailable");
-    IDXGIAdapter3* memoryAdapter = nullptr;
-    const auto memoryResult = adapter->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&memoryAdapter));
-    adapter->Release();
-    Require(SUCCEEDED(memoryResult), "Per-process GPU memory query unavailable");
-    DXGI_QUERY_VIDEO_MEMORY_INFO local{}, shared{};
-    const auto localResult = memoryAdapter->QueryVideoMemoryInfo(0U, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local);
-    const auto sharedResult = memoryAdapter->QueryVideoMemoryInfo(0U, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &shared);
-    memoryAdapter->Release();
-    Require(SUCCEEDED(localResult) && SUCCEEDED(sharedResult), "Per-process GPU memory measurement failed");
-    return local.CurrentUsage + shared.CurrentUsage;
+[[nodiscard]] std::uint64_t ProcessGpuBytes(const Renderer& renderer) {
+    const auto bytes = kb::render::ProcessGpuMemoryBytes(renderer);
+    Require(bytes.has_value(), "Per-process GPU memory measurement failed");
+    return *bytes;
 }
 
 void HardwareRebuildMemoryPeak() {
@@ -760,11 +749,11 @@ void HardwareRebuildMemoryPeak() {
     WithStreamingRig(RuntimeContentStreamingSettings{.budgetBytes = budget, .meshMaxScreenErrorPixels = 1.0e-6F},
         false, [](StreamingRig& rig) {
             for (unsigned frame = 0U; frame < 8U; ++frame) bgfx::frame();
-            const auto baseline = ProcessGpuBytes();
+            const auto baseline = ProcessGpuBytes(*rig.renderer);
             auto peak = baseline;
             std::uint64_t pendingPeak = 0U, retiredPeak = 0U;
             const auto sample = [&](const RuntimeContentStreamingStats& stats) {
-                peak = std::max(peak, ProcessGpuBytes());
+                peak = std::max(peak, ProcessGpuBytes(*rig.renderer));
                 pendingPeak = std::max(pendingPeak, rig.sceneRenderer.Resources().PendingUploadBytes());
                 retiredPeak = std::max(retiredPeak, stats.pendingGpuReleaseBytes);
                 Require(stats.peakAdmittedRebuildBytes <= budget,

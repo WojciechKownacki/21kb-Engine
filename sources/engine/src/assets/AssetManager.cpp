@@ -894,6 +894,7 @@ void AssetManager::PumpAsyncLoads() {
             asyncLoadErrors_[assetId] = prepared->result.error.empty() ? "Asset loader failed" : std::move(prepared->result.error);
             continue;
         }
+        TrackAssetMemory(prepared->result.asset, prepared->result.residentBytes);
         cache_[assetId] = CachedAsset{
             .retained = policy == AssetUnloadPolicy::Retain ? prepared->result.asset : std::shared_ptr<void>{},
             .weak = prepared->result.asset,
@@ -944,6 +945,31 @@ std::uint64_t AssetManager::LoadGeneration(AssetId id) const noexcept {
 bool AssetManager::IsLoaded(AssetId id) const noexcept {
     const auto cached = cache_.find(id.value);
     return cached != cache_.end() && !cached->second.weak.expired();
+}
+
+void AssetManager::TrackAssetMemory(const std::shared_ptr<void>& payload, std::optional<std::uint64_t> bytes) {
+    if (++memoryPublications_ % 128U == 0U) {
+        std::erase_if(memoryAllocations_, [](const auto& row) { return row.first.expired(); });
+    }
+    memoryAllocations_[payload] = bytes;
+}
+
+AssetManager::AssetMemoryStats AssetManager::MemoryUsage() {
+    AssetMemoryStats stats;
+    for (auto entry = memoryAllocations_.begin(); entry != memoryAllocations_.end();) {
+        if (entry->first.expired()) {
+            entry = memoryAllocations_.erase(entry);
+            continue;
+        }
+        if (entry->second) {
+            stats.payloadBytes += *entry->second;
+            ++stats.measuredPayloads;
+        } else {
+            ++stats.unmeasuredPayloads;
+        }
+        ++entry;
+    }
+    return stats;
 }
 
 std::size_t AssetManager::LoadedCount() const noexcept {
@@ -1128,6 +1154,7 @@ void AssetManager::Clear() noexcept {
 
 std::shared_ptr<void> AssetManager::LoadUntyped(AssetId id, std::type_index expectedType) {
     return AssetRuntimeLoadService::LoadUntyped(
+        *this,
         id,
         expectedType,
         registry_,

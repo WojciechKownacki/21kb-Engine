@@ -9,6 +9,7 @@
 namespace kb::assets {
 
 std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
+    AssetManager& manager,
     AssetId id,
     std::type_index expectedType,
     const AssetRegistry& registry,
@@ -86,6 +87,7 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         return {};
     }
 
+    manager.TrackAssetMemory(result.asset, result.residentBytes);
     cache[id.value] = AssetManager::CachedAsset{
         .retained = policy == AssetUnloadPolicy::Retain ? result.asset : std::shared_ptr<void>{},
         .weak = result.asset,

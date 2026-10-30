@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -163,6 +164,7 @@ public:
         asyncLoads_.erase(id.value);
         asyncLoadErrors_.erase(id.value);
         std::shared_ptr<void> erased = loader->RetainPayload(std::move(payload));
+        TrackAssetMemory(erased, std::nullopt);
         cache_[id.value] = CachedAsset{
             .retained = erased,
             .weak = erased,
@@ -261,6 +263,14 @@ public:
     [[nodiscard]] std::uint64_t LoadGeneration(AssetId id) const noexcept;
     [[nodiscard]] bool IsLoaded(AssetId id) const noexcept;
     [[nodiscard]] std::size_t LoadedCount() const noexcept;
+    struct AssetMemoryStats {
+        std::uint64_t payloadBytes = 0U;
+        std::size_t measuredPayloads = 0U;
+        std::size_t unmeasuredPayloads = 0U;
+    };
+    // Published payloads still held by the cache or external handles, including after Unload().
+    // Pending decoder work is excluded. Unknown payload sizes are counted explicitly.
+    [[nodiscard]] AssetMemoryStats MemoryUsage();
 
     // LIB-158: the number of live strong holders (AssetHandle<T>/AssetRef<T>)
     // of a cached asset's payload — 0 if the asset is not cached or its
@@ -328,6 +338,10 @@ public:
 private:
     friend class AssetDiscoveryService;
     friend class AssetRuntimeLoadService;
+
+    void TrackAssetMemory(const std::shared_ptr<void>& payload, std::optional<std::uint64_t> bytes);
+    std::map<std::weak_ptr<void>, std::optional<std::uint64_t>, std::owner_less<std::weak_ptr<void>>> memoryAllocations_;
+    std::uint32_t memoryPublications_ = 0U;
 
     struct CachedAsset {
         // Strong reference the cache itself holds — present only under

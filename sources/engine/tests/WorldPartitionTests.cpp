@@ -141,7 +141,7 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override { return typeid(int); }
     [[nodiscard]] std::vector<std::string> Extensions() const override { return { ".obj" }; }
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest&) override {
-        return { .asset = std::make_shared<int>(1), .error = {} };
+        return { .asset = std::make_shared<int>(1), .error = {}, .residentBytes = sizeof(int) };
     }
 };
 
@@ -717,6 +717,7 @@ void RunBudgetTests() {
 void RunMemoryReportTests() {
     WorldFixture fixture = BuildFixtureWorld("memory", false);
     Check(WorldCellBuilder::Build(fixture.descriptor, nullptr).succeeded, "memory world must build");
+    std::ofstream{fixture.root / "Measured.obj", std::ios::binary} << std::string(512U, 'x');
     StreamingHarness harness = MountWorld(fixture, true);
     WorldPartitionRuntime runtime = harness.Runtime();
     std::uint64_t scriptBytes = 10'000U;
@@ -726,6 +727,13 @@ void RunMemoryReportTests() {
     runtime.ConfigureBudget({ .maxLoadRequestsPerFrame = 8U, .maxPendingLoads = 8U, .maxResidentBytes = 1ULL << 30U, .maxMillisecondsPerFrame = 50.0 });
     const WorldMemoryReport empty = runtime.MemoryReport();
     Check(empty.estimatedResidentBytes == 0U && empty.samples == 0U && empty.measuredBytes == 0U && empty.errorRatio == 0.0, "an empty world reports nothing resident");
+    const auto measuredAsset = harness.scene->Assets().Manager().Load<int>("/Game/Measured.obj");
+    Check(measuredAsset.IsLoaded(), "load a measured payload before world streaming");
+    const auto measuredOnly = runtime.MemoryReport().categories[static_cast<std::size_t>(WorldMemoryKind::AssetsCpu)];
+    Check(measuredOnly.source == WorldMemorySource::Measured && measuredOnly.bytes == sizeof(int) && measuredOnly.knownPayloadBytes == sizeof(int),
+        "complete loader coverage measures decoded bytes rather than file size");
+    const auto unmeasuredAsset = harness.scene->Assets().Manager().Load<WorldDescriptor>("/Game/Worlds/Forest.21kbworld");
+    Check(unmeasuredAsset.IsLoaded(), "load an explicitly uninstrumented descriptor for partial coverage");
     const std::uint64_t source = runtime.AddSource({ .position = { 50.0, 0.0, 50.0 }, .loadRadius = 120.0, .unloadRadius = 180.0, .priority = 0 });
     Settle(harness);
     // The host's script heap and graphics memory grew as the cells loaded.
@@ -737,7 +745,9 @@ void RunMemoryReportTests() {
             report.residentUnits == runtime.Stats().loadedUnits, "the report carries the budget and what it charged for the resident cells");
     Check(category(WorldMemoryKind::Instances).source == WorldMemorySource::Measured && category(WorldMemoryKind::Instances).bytes > 0U,
         "the instances are read from the scene's ECS storage");
-    Check(category(WorldMemoryKind::AssetsCpu).source == WorldMemorySource::Estimated, "assets are estimated from the files of the loaded assets");
+    Check(category(WorldMemoryKind::AssetsCpu).source == WorldMemorySource::Estimated &&
+        category(WorldMemoryKind::AssetsCpu).knownPayloadBytes >= sizeof(int) + sizeof(WorldCellIndex) && category(WorldMemoryKind::AssetsCpu).unmeasuredPayloads > 0U,
+        "incomplete loader coverage retains an explicit file estimate alongside measured payload bytes");
     Check(category(WorldMemoryKind::Scripts).source == WorldMemorySource::Measured && category(WorldMemoryKind::Scripts).bytes == 40'000U &&
             category(WorldMemoryKind::Gpu).source == WorldMemorySource::Measured && category(WorldMemoryKind::Gpu).bytes == 2'000'000U &&
             category(WorldMemoryKind::Gpu).baselineBytes == 3'000'000U, "host probes count growth since the world was placed");
@@ -771,6 +781,14 @@ void RunMemoryReportTests() {
         static_cast<unsigned long long>(category(WorldMemoryKind::AssetsCpu).bytes),
         report.estimatedResidentBytes == 0U ? 0.0 : static_cast<double>(category(WorldMemoryKind::Instances).bytes) / static_cast<double>(report.estimatedResidentBytes),
         report.samples);
+
+    // Late host allocations must update the range even when no cell count changes.
+    gpuBytes += 1'000'000U;
+    const WorldMemoryReport late = runtime.MemoryReport();
+    Check(late.residentUnits == report.residentUnits && late.errorRatio > report.errorRatio &&
+            late.maximumErrorRatio == late.errorRatio && late.samples > report.samples,
+        "late memory growth at fixed residency updates the sampled error range");
+    gpuBytes -= 1'000'000U;
 
     // Moving the source away unloads the cells: what the instances hold goes down with them.
     const std::uint64_t instancesLoaded = category(WorldMemoryKind::Instances).bytes;

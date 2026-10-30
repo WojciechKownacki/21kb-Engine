@@ -4904,15 +4904,26 @@ void RunWorldMemoryCliTests() {
         return nullptr;
     };
     Require(kind("instances") != nullptr && kind("instances")->Find("source")->AsString() == "measured" && kind("instances")->Find("bytes")->AsNumber() > 0.0, "the instances are measured");
-    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "estimated", "the assets are estimated from file sizes");
+    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "measured", "the published world index payload is measured");
+    const auto* assets = kind("assets_cpu");
+    Require(assets->Find("known_payload_bytes") != nullptr && assets->Find("known_payload_bytes")->GetKind() == kb::core::JsonValue::Kind::Number &&
+            assets->Find("known_payload_bytes")->AsNumber() > 0.0 &&
+            assets->Find("known_payload_bytes")->AsNumber() == assets->Find("bytes")->AsNumber() &&
+            assets->Find("unmeasured_payloads") != nullptr && assets->Find("unmeasured_payloads")->AsNumber(-1.0) == 0.0 &&
+            assets->Find("baseline_unmeasured_payloads") != nullptr && assets->Find("baseline_unmeasured_payloads")->GetKind() == kb::core::JsonValue::Kind::Number,
+        "complete published payload coverage must report its decoded bytes and zero unknown payloads");
     Require(kind("scripts") != nullptr && kind("scripts")->Find("source")->AsString() == "measured", "the script heap is measured");
-    Require(kind("physics")->Find("source")->AsString() == "unavailable" && kind("physics")->Find("bytes")->IsNull() &&
-            kind("gpu")->Find("source")->AsString() == "unavailable" && memory->Find("has_unavailable_kinds")->AsBool(),
-        "kinds this host cannot read are unavailable, not zero");
-    Require(memory->Find("has_estimated_kinds")->AsBool() &&
-            memory->Find("estimated_bytes")->AsNumber() == kind("assets_cpu")->Find("bytes")->AsNumber() &&
-            memory->Find("measured_bytes")->AsNumber() == kind("instances")->Find("bytes")->AsNumber() + kind("scripts")->Find("bytes")->AsNumber(),
-        "estimated asset bytes are excluded from measured totals");
+    Require(kind("physics")->Find("source")->AsString() == "measured" &&
+            kind("physics")->Find("bytes")->GetKind() == kb::core::JsonValue::Kind::Number &&
+            kind("gpu")->Find("source")->AsString() == "unavailable" && kind("gpu")->Find("bytes")->IsNull() &&
+            memory->Find("has_unavailable_kinds")->AsBool(),
+        "physics allocator bytes are measured while the graphics-free host reports GPU unavailable: " + ran.out);
+    Require(!memory->Find("has_estimated_kinds")->AsBool() &&
+            memory->Find("estimated_bytes")->AsNumber() == 0.0 &&
+            memory->Find("measured_bytes")->AsNumber() == kind("instances")->Find("bytes")->AsNumber() +
+                kind("scripts")->Find("bytes")->AsNumber() + assets->Find("bytes")->AsNumber() +
+                kind("physics")->Find("bytes")->AsNumber(),
+        "measured published payload bytes are included once in measured totals");
     Require(memory->Find("samples")->AsNumber() >= 1.0 && memory->Find("minimum_error_ratio")->AsNumber() > 0.0 &&
             memory->Find("minimum_error_ratio")->AsNumber() <= memory->Find("maximum_error_ratio")->AsNumber(), "the error ratio was sampled");
     const CliRun refused = RunCliProgram({ "run", "--project", project, "--report", "bogus" });

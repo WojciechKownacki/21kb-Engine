@@ -94,6 +94,9 @@ struct AssetLoadRequest {
 struct AssetLoadResult {
     std::shared_ptr<void> asset{};
     std::string error;
+    // Immutable decoded payload object plus owned buffer capacities; excludes allocator overhead,
+    // shared ownership blocks, loader caches and GPU allocations. Empty means not instrumented.
+    std::optional<std::uint64_t> residentBytes{};
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return asset != nullptr && error.empty();

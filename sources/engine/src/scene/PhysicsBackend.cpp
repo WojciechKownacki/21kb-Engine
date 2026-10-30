@@ -32,6 +32,11 @@ void PhysicsBackend::UnregisterBackend(Scene& scene, IPhysicsBackend& backend) n
     }
 }
 
+std::optional<std::uint64_t> PhysicsBackend::MemoryUsageBytes(Scene& scene) noexcept {
+    if (auto* backend = FindBackend(scene)) return backend->MemoryUsageBytes();
+    return std::nullopt;
+}
+
 bool PhysicsBackend::HasBackend(Scene& scene) noexcept {
     return FindBackend(scene) != nullptr;
 }

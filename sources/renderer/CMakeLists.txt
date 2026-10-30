@@ -130,6 +130,7 @@ add_library(kb_renderer STATIC
     src/bake/TextureBakedPayload.cpp
     src/DisplayConfig.cpp
     src/Renderer.cpp
+    src/RendererMemory.cpp
     src/RendererCapabilityReport.cpp
     src/renderer/RendererExposureSubmitter.cpp
     src/renderer/RendererExposureSubmitter.hpp
@@ -853,6 +854,15 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     add_test(NAME kb_asset_loading_tests COMMAND kb_asset_loading_tests)
     set_tests_properties(kb_asset_loading_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "assets;concurrency;packaging")
+
+    add_executable(kb_content_streaming_tests
+        tests/RuntimeContentStreamingTestMain.cpp tests/RuntimeContentStreamingTests.cpp)
+    target_link_libraries(kb_content_streaming_tests PRIVATE kb_renderer kb_renderer_bake)
+    kb_apply_quality_gates(kb_content_streaming_tests)
+    kb_target_copy_bgfx_runtime_shaders(kb_content_streaming_tests)
+    add_test(NAME kb_content_streaming_tests COMMAND kb_content_streaming_tests)
+    set_tests_properties(kb_content_streaming_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "renderer;streaming;memory")
 
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp

@@ -1,5 +1,6 @@
 #include "JoltPhysicsSceneSystem.hpp"
 #include "JoltStaticBodyBatchCache.hpp"
+#include "JoltMemoryTelemetry.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/SceneAssets.hpp"
 
@@ -169,6 +170,7 @@ public:
         std::lock_guard lock{ mutex_ };
         if (instanceCount_ == 0U && !registered_) {
             JPH::RegisterDefaultAllocator();
+            memory::Install();
             if (JPH::Factory::sInstance == nullptr) {
                 JPH::Factory::sInstance = new JPH::Factory();
             }
@@ -1226,6 +1228,8 @@ public:
     // ObjectVsBroadPhaseLayerFilter above), so this is safe to call at any
     // point in Impl's lifetime, before or after Init/bodies exist - no
     // re-Init of physicsSystem_ needed.
+    std::optional<std::uint64_t> MemoryUsageBytes() const noexcept override { return memory::Read(); }
+
     bool ConfigureLayers(const kb::scene::PhysicsLayersAsset& layers) noexcept override {
         JoinStep();
         for (std::uint32_t a = 0U; a < kb::scene::kPhysicsLayerCount; ++a) {

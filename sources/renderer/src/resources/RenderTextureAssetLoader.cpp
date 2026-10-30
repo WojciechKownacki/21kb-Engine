@@ -991,9 +991,13 @@ kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::Ass
             .error = error.empty() ? "Render texture asset load failed" : std::move(error),
         };
     }
+    const std::uint64_t residentBytes = sizeof(RenderTextureAssetData) + texture->rgba8.capacity() +
+        (texture->gpuBlocks ? texture->gpuBlocks->blocks.capacity() : 0U) +
+        (texture->streaming ? texture->streaming->streamedLevelBytes.capacity() * sizeof(std::uint32_t) : 0U);
     return kb::assets::AssetLoadResult{
         .asset = std::make_shared<RenderTextureAssetData>(std::move(*texture)),
         .error = {},
+        .residentBytes = residentBytes,
     };
 }
 

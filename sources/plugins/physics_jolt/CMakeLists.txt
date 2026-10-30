@@ -29,3 +29,10 @@ if(NOT KB_BUILD_PROVIDER_MODULES_AS_DLL)
 endif()
 
 kb_apply_quality_gates(kb_physics_jolt_plugin)
+
+if(BUILD_TESTING AND NOT DISABLE_CUSTOM_ALLOCATOR)
+    add_executable(kb_physics_memory_tests tests/MemoryTelemetryTests.cpp)
+    target_link_libraries(kb_physics_memory_tests PRIVATE Jolt)
+    kb_apply_quality_gates(kb_physics_memory_tests)
+    add_test(NAME kb_physics_memory_tests COMMAND $<TARGET_FILE:kb_physics_memory_tests>)
+endif()

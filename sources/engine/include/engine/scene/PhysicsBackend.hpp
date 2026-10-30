@@ -6,6 +6,7 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -93,6 +94,8 @@ inline constexpr std::uint32_t kPhysicsAllLayers = 0x7FFFFFFFU;
 class IPhysicsBackend {
 public:
     virtual ~IPhysicsBackend() = default;
+    // Backend allocator requests still resident, possibly shared across scenes; no estimate when unavailable.
+    [[nodiscard]] virtual std::optional<std::uint64_t> MemoryUsageBytes() const noexcept { return std::nullopt; }
 
     // These Rigidbody controls are defined for a live Dynamic body only.
     // Kinematic motion has the separate MoveKinematic contract below, while
@@ -305,6 +308,7 @@ public:
     static void RegisterBackend(Scene& scene, IPhysicsBackend& backend);
     static void UnregisterBackend(Scene& scene, IPhysicsBackend& backend) noexcept;
     [[nodiscard]] static bool HasBackend(Scene& scene) noexcept;
+    [[nodiscard]] static std::optional<std::uint64_t> MemoryUsageBytes(Scene& scene) noexcept;
     static void RaycastAll(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
         kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept;
 

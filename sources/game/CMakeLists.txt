@@ -280,6 +280,13 @@ set_target_properties(kb_game PROPERTIES
 # a sibling build directory, so it is staged beside the runtime executable - on
 # every build, so a rebuilt provider replaces the copy even when kb_game does not relink.
 add_dependencies(kb_game kb_21kb_particle_plugin)
+# Runtime providers share engine structures with the host and must match its build.
+foreach(_kb_game_provider IN ITEMS kb_physics_jolt_plugin kb_audio_miniaudio_plugin
+        kb_basic_lighting_plugin kb_ai_plugin kb_world2d_plugin)
+    if(TARGET ${_kb_game_provider})
+        add_dependencies(kb_game ${_kb_game_provider})
+    endif()
+endforeach()
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
     add_custom_target(kb_game_stage_particle_plugin
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:kb_game>

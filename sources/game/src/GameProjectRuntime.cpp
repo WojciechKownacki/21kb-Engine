@@ -756,6 +756,11 @@ bool LoadGameProjectScene(
             err << '\n';
             return false;
         }
+        // Instantiation has transferred the scene data to its runtime owners.
+        // Retain the decoded document only while an external handle still needs it,
+        // matching the lifetime of documents loaded by scene streaming.
+        static_cast<void>(scene.Assets().Manager().SetUnloadPolicy(
+            metadata->id, kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced));
         loadedScenePath = runtime.IsPackaged()
             ? std::filesystem::path{ runtime.sceneReference }
             : metadata->physicalPath;

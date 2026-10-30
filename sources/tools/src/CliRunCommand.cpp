@@ -268,6 +268,9 @@ struct DiagnosticPrinter {
         row.Set("bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.bytes)));
         row.Set("baseline_bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.baselineBytes)));
         row.Set("note", JsonValue::MakeString(category.note));
+        row.Set("known_payload_bytes", JsonValue::MakeNumber(static_cast<double>(category.knownPayloadBytes)));
+        row.Set("unmeasured_payloads", JsonValue::MakeNumber(static_cast<double>(category.unmeasuredPayloads)));
+        row.Set("baseline_unmeasured_payloads", JsonValue::MakeNumber(static_cast<double>(category.baselineUnmeasuredPayloads)));
         categories.Append(std::move(row));
     }
     auto report = JsonValue::MakeObject();

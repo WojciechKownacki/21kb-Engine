@@ -21,10 +21,12 @@
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/RendererMemory.hpp"
 #include "kb/render/scene/SceneLightingQuality.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
 
@@ -156,7 +158,21 @@ struct GameFrameProfile {
     float renderCameraY = 0.0F;
     float renderCameraZ = 0.0F;
     bool renderCameraValid = false;
+    kb::world::WorldMemoryReport worldMemory{};
 };
+
+std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::WorldMemoryReport& report) {
+    output << ',' << report.budgetBytes << ',' << report.estimatedResidentBytes << ',' << report.residentUnits
+           << ',' << report.measuredBytes << ',' << report.estimatedBytes << ',' << report.errorRatio;
+    for (const auto& category : report.categories) {
+        output << ',' << static_cast<unsigned>(category.source) << ',';
+        if (category.source != kb::world::WorldMemorySource::Unavailable) output << category.bytes;
+        output << ',';
+        if (category.source != kb::world::WorldMemorySource::Unavailable) output << category.baselineBytes;
+    }
+    const auto& assets = report.categories[static_cast<std::size_t>(kb::world::WorldMemoryKind::AssetsCpu)];
+    return output << ',' << assets.knownPayloadBytes << ',' << assets.unmeasuredPayloads << ',' << assets.baselineUnmeasuredPayloads;
+}
 
 [[nodiscard]] bool HasPrefix(std::wstring_view value, std::wstring_view prefix) noexcept {
     return value.size() >= prefix.size() && value.substr(0U, prefix.size()) == prefix;
@@ -533,6 +549,8 @@ int RunGame(const GameOptions& options) {
     staticModules.push_back(std::move(scriptModuleOwner));
 
     kb::scene::Scene scene{ std::move(projectRuntime.descriptor), std::move(staticModules) };
+    kb::world::WorldPartitionRuntime{scene}.SetMemoryProbe(kb::world::WorldMemoryKind::Gpu,
+        [&renderer] { return kb::render::ProcessGpuMemoryBytes(renderer); });
     const bool scriptActive = scene.IsModuleActive("Script");
     if (scriptActive && (!scriptModule->Succeeded() || scriptModule->Host() == nullptr)) {
         std::cerr << "kb_game: script module initialization failed\n";
@@ -542,6 +560,12 @@ int RunGame(const GameOptions& options) {
         return EXIT_FAILURE;
     }
 
+    if (scriptActive) {
+        kb::world::WorldPartitionRuntime{scene}.SetMemoryProbe(kb::world::WorldMemoryKind::Scripts,
+            [scriptModule]() -> std::optional<std::uint64_t> {
+                return static_cast<std::uint64_t>(scriptModule->Host()->LuaRuntime().LuaMemoryUsedBytes());
+            });
+    }
     std::filesystem::path scenePath;
     std::size_t discoveredAssets = 0U;
     if (scriptActive && projectRuntime.IsPackaged()) {
@@ -603,7 +627,7 @@ int RunGame(const GameOptions& options) {
             return EXIT_FAILURE;
         }
         profileOutput.imbue(std::locale::classic());
-        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes,transform_ms,scene_sync_ms,transform_inspected,transform_updated,mesh_command_reuse,scene_entities,streaming_operations,streaming_ms,render_camera_x,render_camera_y,render_camera_z,render_camera_valid\n";
+        profileOutput << "frame,cpu_ms,simulation_ms,render_ms,begin_submit_ms,end_frame_ms,gpu_delayed_ms,bgfx_wait_render_ms,bgfx_wait_submit_ms,draws,shadow_casters,submitted_meshes,dropped,missing_resources,fixed_steps,exposure_readback_submitted,exposure_sample_available,width,height,wall_frame_ms,visible_meshes,culled_instances,scene_lights,submitted_lights,skipped_lights,light_capacity,lighting_path,shadow_draws,instance_upload_bytes,transform_ms,scene_sync_ms,transform_inspected,transform_updated,mesh_command_reuse,scene_entities,streaming_operations,streaming_ms,render_camera_x,render_camera_y,render_camera_z,render_camera_valid,world_budget_bytes,world_cell_estimate_bytes,world_resident_units,world_measured_bytes,world_estimated_bytes,world_error_ratio,world_cpu_source,world_cpu_bytes,world_cpu_baseline_bytes,world_instances_source,world_instances_bytes,world_instances_baseline_bytes,world_scripts_source,world_scripts_bytes,world_scripts_baseline_bytes,world_physics_source,world_physics_bytes,world_physics_baseline_bytes,world_gpu_source,world_gpu_bytes,world_gpu_baseline_bytes,world_known_payload_bytes,world_unmeasured_payloads,world_baseline_unmeasured_payloads\n";
         profileRows.reserve(options.frameLimit);
     }
     kb::input::Win32XInputHapticsBackend hapticsBackend;
@@ -771,6 +795,7 @@ int RunGame(const GameOptions& options) {
                 .renderCameraY = renderCamera.ray.origin.y,
                 .renderCameraZ = renderCamera.ray.origin.z,
                 .renderCameraValid = renderCamera.valid,
+                .worldMemory = kb::world::WorldPartitionRuntime{scene}.MemoryReport(),
             });
         }
         if (!submitted) {
@@ -869,7 +894,8 @@ int RunGame(const GameOptions& options) {
                           << row.transformInspected << ',' << row.transformUpdated << ',' << row.meshCommandReuseCount << ','
                           << row.sceneEntities << ',' << row.streamingOperations << ',' << row.streamingMilliseconds << ','
                           << row.renderCameraX << ',' << row.renderCameraY << ',' << row.renderCameraZ << ','
-                          << row.renderCameraValid << '\n';
+                          << row.renderCameraValid;
+            WriteWorldMemoryProfile(profileOutput, row.worldMemory) << '\n';
         }
         profileOutput.flush();
         if (!profileOutput) {

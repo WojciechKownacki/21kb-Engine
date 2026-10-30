@@ -5,6 +5,7 @@
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -596,6 +597,8 @@ namespace {
             readings[kind] = memory.probes[kind]();
         }
     }
+    constexpr std::size_t kPhysics = static_cast<std::size_t>(WorldMemoryKind::Physics);
+    if (!memory.probes[kPhysics]) readings[kPhysics] = scene::PhysicsBackend::MemoryUsageBytes(scene);
     constexpr std::size_t kAssets = static_cast<std::size_t>(WorldMemoryKind::AssetsCpu);
     constexpr std::size_t kInstances = static_cast<std::size_t>(WorldMemoryKind::Instances);
     if (!memory.probes[kInstances]) {
@@ -632,6 +635,9 @@ namespace {
 
 void TakeMemoryBaseline(scene::Scene& scene, WorldMemoryState& memory) {
     memory.baseline = ReadMemory(scene, memory);
+    const auto assets = scene.Assets().Manager().MemoryUsage();
+    memory.baselineAssetPayloadBytes = assets.payloadBytes;
+    memory.baselineUnmeasuredAssetPayloads = assets.unmeasuredPayloads;
     memory.baselineTaken = true;
 }
 
@@ -642,25 +648,40 @@ void TakeMemoryBaseline(scene::Scene& scene, WorldMemoryState& memory) {
     report.estimatedResidentBytes = estimatedResident;
     report.residentUnits = residentUnits;
     const auto readings = ReadMemory(scene, memory);
+    const auto assetMemory = scene.Assets().Manager().MemoryUsage();
     static constexpr const char* kNotes[kWorldMemoryKindCount] = {
         "the size of the files of the loaded assets; decoded size is not measured",
         "the scene's ECS storage in use",
         "the script runtime's heap",
-        "the physics world",
+        "resident physics backend allocator requests, including shared worlds; excludes allocator overhead",
         "graphics resources",
     };
     for (std::size_t kind = 0U; kind < kWorldMemoryKindCount; ++kind) {
         WorldMemoryCategory& category = report.categories[kind];
         category.kind = static_cast<WorldMemoryKind>(kind);
-        const bool available = readings[kind].has_value() && memory.baseline[kind].has_value();
-        category.source = SourceOf(memory, kind, available);
+        const bool assetReading = kind == static_cast<std::size_t>(WorldMemoryKind::AssetsCpu) && !memory.probes[kind];
+        const bool completeAssetReading = assetReading && assetMemory.unmeasuredPayloads == 0U && memory.baselineUnmeasuredAssetPayloads == 0U;
+        if (assetReading) {
+            category.knownPayloadBytes = assetMemory.payloadBytes > memory.baselineAssetPayloadBytes
+                ? assetMemory.payloadBytes - memory.baselineAssetPayloadBytes : 0U;
+            category.unmeasuredPayloads = assetMemory.unmeasuredPayloads;
+            category.baselineUnmeasuredPayloads = memory.baselineUnmeasuredAssetPayloads;
+        }
+        const bool available = completeAssetReading || (readings[kind].has_value() && memory.baseline[kind].has_value());
+        category.source = completeAssetReading ? WorldMemorySource::Measured : SourceOf(memory, kind, available);
         category.note = available ? kNotes[kind] : std::string{ kNotes[kind] } + " (no reading in this host)";
         if (!available) {
             report.hasUnavailableKinds = true;
             continue;
         }
-        category.baselineBytes = *memory.baseline[kind];
-        category.bytes = *readings[kind] > *memory.baseline[kind] ? *readings[kind] - *memory.baseline[kind] : 0U;
+        if (completeAssetReading) {
+            category.baselineBytes = memory.baselineAssetPayloadBytes;
+            category.bytes = category.knownPayloadBytes;
+            category.note = "published decoded CPU payload objects and buffer capacities; excludes allocator overhead, loader caches and pending decoding";
+        } else {
+            category.baselineBytes = *memory.baseline[kind];
+            category.bytes = *readings[kind] > *memory.baseline[kind] ? *readings[kind] - *memory.baseline[kind] : 0U;
+        }
         if (category.source == WorldMemorySource::Measured) {
             report.measuredBytes += category.bytes;
         } else {
@@ -740,13 +761,7 @@ void WorldStreamingService::Synchronize(scene::Scene& scene, std::span<const Wor
     stats.residentBytes = resident;
     stats.milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
     state.stats = stats;
-    // Each time the set of resident cells settles, compare what they hold with what the budget charged for them.
-    if (state.memory.baselineTaken && stats.loadingUnits == 0U && stats.unloadingUnits == 0U && stats.loadedUnits != state.memory.sampledLoadedUnits) {
-        state.memory.sampledLoadedUnits = stats.loadedUnits;
-        if (resident > 0U) {
-            RecordMemorySample(state.memory, BuildMemoryReport(scene, state, resident, stats.loadedUnits).errorRatio);
-        }
-    }
+
 }
 
 void WorldStreamingService::Shutdown(scene::Scene& scene) noexcept {
@@ -927,6 +942,11 @@ void WorldPartitionRuntime::SetMemoryProbe(WorldMemoryKind kind, WorldMemoryProb
     // A probe set after the baseline was taken counts growth from now: it cannot know what was in memory before.
     if (state.memory.baselineTaken) {
         state.memory.baseline[index] = state.memory.probes[index] ? state.memory.probes[index]() : ReadMemory(scene_, state.memory)[index];
+        if (kind == WorldMemoryKind::AssetsCpu) {
+            const auto assets = scene_.Assets().Manager().MemoryUsage();
+            state.memory.baselineAssetPayloadBytes = assets.payloadBytes;
+            state.memory.baselineUnmeasuredAssetPayloads = assets.unmeasuredPayloads;
+        }
     }
 }
 
@@ -935,7 +955,16 @@ WorldMemoryReport WorldPartitionRuntime::MemoryReport() {
     if (!state.memory.baselineTaken) {
         TakeMemoryBaseline(scene_, state.memory);
     }
-    return BuildMemoryReport(scene_, state, state.stats.residentBytes, state.stats.loadedUnits);
+    WorldMemoryReport report = BuildMemoryReport(scene_, state, state.stats.residentBytes, state.stats.loadedUnits);
+    // Assets and host allocations can finish after cell instantiation. Sample the
+    // requested reading, including changes while the resident cell count stays fixed.
+    if (state.stats.loadingUnits == 0U && state.stats.unloadingUnits == 0U && report.estimatedResidentBytes > 0U) {
+        RecordMemorySample(state.memory, report.errorRatio);
+        report.minimumErrorRatio = state.memory.minimumRatio;
+        report.maximumErrorRatio = state.memory.maximumRatio;
+        report.samples = state.memory.samples;
+    }
+    return report;
 }
 
 WorldStreamingStats WorldPartitionRuntime::Stats() const {

@@ -249,6 +249,47 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     kb::tests::Require(output.good(), "Asset runtime test file could not be written");
 }
 
+void RunAssetMemoryLifetimeTest() {
+    class MemoryLoader final : public kb::assets::IAssetLoader {
+    public:
+        std::string_view Type() const noexcept override { return "Memory"; }
+        std::type_index PayloadType() const noexcept override { return typeid(std::vector<std::uint8_t>); }
+        std::vector<std::string> Extensions() const override { return {".memory"}; }
+        kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest&) override {
+            auto payload = std::make_shared<std::vector<std::uint8_t>>(256U, 42U);
+            return {.asset = payload, .residentBytes = sizeof(*payload) + payload->capacity()};
+        }
+    };
+    ResetTestRoot();
+    WriteTextFile(TestRoot() / "Sync.memory", "payload");
+    WriteTextFile(TestRoot() / "Async.memory", "payload");
+    WriteTextFile(TestRoot() / "Unknown.txt", "unknown");
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<MemoryLoader>()) &&
+        manager.RegisterLoader(std::make_unique<TextAssetLoader>()) && manager.Mounts().Mount("Game", TestRoot()), "Memory fixture loaders and mount");
+    static_cast<void>(manager.DiscoverMountedAssets());
+    auto sync = manager.Load<std::vector<std::uint8_t>>("/Game/Sync.memory");
+    auto unknown = manager.Load<std::string>("/Game/Unknown.txt");
+    kb::tests::Require(sync.IsLoaded() && unknown.IsLoaded(), "Memory fixture payloads load");
+    const auto bytes = sizeof(*sync) + sync->capacity();
+    auto stats = manager.MemoryUsage();
+    kb::tests::Require(stats.payloadBytes == bytes && stats.measuredPayloads == 1U && stats.unmeasuredPayloads == 1U,
+        "Only instrumented payloads contribute bytes; missing readings remain explicit");
+    const auto* metadata = manager.Registry().FindByPath("/Game/Async.memory");
+    kb::tests::Require(metadata && manager.RequestLoadAsync(metadata->id), "Queue measured payload asynchronously");
+    SpinUntil([&] { return manager.IsLoaded(metadata->id); }, [&] { manager.PumpAsyncLoads(); });
+    auto async = manager.AcquireLoaded<std::vector<std::uint8_t>>(metadata->id);
+    kb::tests::Require(async.IsLoaded() && manager.MemoryUsage().payloadBytes == bytes + sizeof(*async) + async->capacity(),
+        "Async publication preserves loader memory readings");
+    kb::tests::Require(manager.Unload(sync.Id()) && manager.Unload(async.Id()) && manager.Unload(unknown.Id()), "Remove all memory fixture cache entries");
+    stats = manager.MemoryUsage();
+    kb::tests::Require(stats.measuredPayloads == 2U && stats.unmeasuredPayloads == 1U, "External handles keep unloaded payload memory resident");
+    sync = {}; async = {}; unknown = {};
+    stats = manager.MemoryUsage();
+    kb::tests::Require(stats.payloadBytes == 0U && stats.measuredPayloads == 0U && stats.unmeasuredPayloads == 0U,
+        "Final handle release removes both measured and unknown payloads");
+}
+
 void RunAssetManagerDiscoveryCacheAndManifestTest() {
     ResetTestRoot();
 
@@ -2931,6 +2972,7 @@ namespace kb::tests {
 void RunAssetRuntimeTests() {
     RunCollisionMeshAssetTest();
     RunAssetDiscoveryHashCompatibilityTest();
+    RunAssetMemoryLifetimeTest();
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunSingleAssetRefreshTest();
     RunAssetManagerRuntimePublicationTest();

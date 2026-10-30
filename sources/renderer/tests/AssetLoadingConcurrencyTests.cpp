@@ -138,6 +138,9 @@ void CheckPayload(kb::assets::AssetManager& manager, const Asset& asset) {
         Require(texture.IsLoaded() && texture->width == kSide && texture->height == kSide, "Texture dimensions changed");
         const auto& pixels = texture->gpuBlocks ? texture->gpuBlocks->blocks : texture->rgba8;
         Require(pixels.size() == static_cast<std::size_t>(kSide) * kSide * 4U, "Texture payload size changed");
+        const auto memory = manager.MemoryUsage();
+        Require(memory.measuredPayloads > 0U && memory.payloadBytes >= sizeof(*texture) + pixels.capacity(),
+            "Loose and packaged texture loads must report their decoded CPU payload memory");
         for (std::size_t pixel = 0U; pixel < pixels.size(); pixel += 4U)
             Require(pixels[pixel] == 32U + asset.group * 17U && pixels[pixel + 1U] == 64U + asset.group * 9U &&
                 pixels[pixel + 2U] == 96U + asset.group * 3U && pixels[pixel + 3U] == 255U, "Concurrent texture payloads mixed");
@@ -145,6 +148,9 @@ void CheckPayload(kb::assets::AssetManager& manager, const Asset& asset) {
         const auto mesh = manager.AcquireLoaded<kb::render::RenderMeshAssetData>(asset.metadata.id);
         Require(mesh.IsLoaded(), manager.AsyncLoadError(asset.metadata.id).c_str());
         Require(mesh.IsLoaded() && !mesh->tangentVertices.empty() && !mesh->sections.empty(), "Mesh payload disappeared");
+        const auto memory = manager.MemoryUsage();
+        Require(memory.measuredPayloads > 0U && memory.payloadBytes >= sizeof(*mesh) +
+            mesh->tangentVertices.capacity() * sizeof(mesh->tangentVertices[0]), "Mesh CPU geometry memory must be measured");
         for (const auto& vertex : mesh->tangentVertices)
             Require(vertex.y >= static_cast<float>(asset.group) - 0.0001F &&
                 vertex.y <= static_cast<float>(asset.group + 1U) + 0.0001F, "Concurrent mesh payloads mixed");
@@ -185,6 +191,9 @@ void LoadBatch(const fs::path& assetsRoot, const std::shared_ptr<bake::RuntimeAs
     }
     const double milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
     for (const auto& asset : assets) CheckPayload(manager, asset);
+    const auto memory = manager.MemoryUsage();
+    Require(memory.measuredPayloads == assets.size() && memory.unmeasuredPayloads == 0U,
+        "Every loaded texture and mesh must contribute a decoded memory reading");
     const auto stats = manager.AsyncLoadConcurrency();
     Require(profile.peak == (serialized ? 1U : 2U) && stats.peakSimultaneousLoads == profile.peak,
         "Actual decoder concurrency does not match the loader contract");
