@@ -63,6 +63,7 @@ struct MeshDrawCommand {
     // `instances` then holds one placeholder that only identifies the source.
     bgfx::DynamicVertexBufferHandle gpuInstanceBuffer = BGFX_INVALID_HANDLE;
     std::uint32_t gpuInstanceCount = 0U;
+    bool gpuFrustumCull = false;
     // Nonzero only for a successfully validated, retained instance list.
     std::uint64_t instanceRevision = 0U;
     std::uint64_t sourceBatchId = 0U;

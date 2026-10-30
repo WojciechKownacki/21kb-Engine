@@ -1,4 +1,5 @@
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+#include "kb/render/scene/SceneGpuDrivenCullingPass.hpp"
 
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 #include "renderer/RendererDebugLog.hpp"
@@ -244,8 +245,12 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                 static_cast<std::uint32_t>(command.instances.size()));
             continue;
         }
-        const bool gpuInstances = bgfx::isValid(command.gpuInstanceBuffer);
-        const std::uint32_t instanceCount = gpuInstances ? command.gpuInstanceCount : static_cast<std::uint32_t>(command.instances.size());
+        const auto culled = command.gpuFrustumCull && desc.gpuCulling != nullptr
+            ? desc.gpuCulling->Compact(desc.viewId, command, desc.camera) : SceneGpuCulledDraw{};
+        const bool compacted = culled.IsValid();
+        if (command.gpuFrustumCull && !compacted) ++desc.stats.gpuDrivenFallbackCount;
+        const bool gpuInstances = compacted || bgfx::isValid(command.gpuInstanceBuffer);
+        const std::uint32_t instanceCount = compacted ? static_cast<std::uint32_t>(command.instances.size()) : gpuInstances ? command.gpuInstanceCount : static_cast<std::uint32_t>(command.instances.size());
         const std::uint32_t availableInstances = gpuInstances ? instanceCount
             : bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());
         const bool selectionPass = IsSelectionPass(desc.pass);
@@ -315,7 +320,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
         }
 
         if (gpuInstances) {
-            bgfx::setInstanceDataBuffer(command.gpuInstanceBuffer, 0U, submittedInstances);
+            bgfx::setInstanceDataBuffer(compacted ? culled.instances : command.gpuInstanceBuffer, 0U, submittedInstances);
         } else if (usesOverflowBuffer) {
             bgfx::setInstanceDataBuffer(overflowBuffer, 0U, submittedInstances);
         } else {
@@ -428,8 +433,16 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                     << " backend=" << resolution.key.backend;
             WriteRendererDebugLog("mesh_draw", message.str());
         }
-        bgfx::setState(command.state);
-        bgfx::submit(desc.viewId, program);
+        if (compacted) {
+            bgfx::setState(command.state);
+            bgfx::submit(desc.viewId, program, culled.indirect, 0U, 1U);
+            desc.stats.gpuCullingDispatchCount += 2U;
+            desc.stats.gpuDrivenBufferCapacity += culled.capacity;
+            desc.stats.gpuDrivenUploadBytes += culled.uploadBytes;
+        } else {
+            bgfx::setState(command.state);
+            bgfx::submit(desc.viewId, program);
+        }
 
         desc.stats.submittedMeshCount += submittedInstances;
         ++desc.stats.submittedDrawCallCount;

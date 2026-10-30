@@ -11,6 +11,10 @@ namespace {
 constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "cs_hzb_downsample.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "cs_hzb_seed.sc", .stage = ShaderStage::Compute, .required = false},
+    ShaderManifestEntry{.name = "cs_instance_compact.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::GpuDrivenCulling)},
+    ShaderManifestEntry{.name = "cs_instance_compact_clear.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::GpuDrivenCulling)},
     ShaderManifestEntry{.name = "cs_instance_cull.sc", .stage = ShaderStage::Compute,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::GpuDrivenCulling)},
     ShaderManifestEntry{.name = "cs_instance_cull_clear.sc", .stage = ShaderStage::Compute,

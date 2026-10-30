@@ -144,6 +144,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .resourceValidation = desc.resourceValidation,
         .terrainLayersOnly = desc.terrainLayersOnly,
         .batchCommandCache = batchCache,
+        .gpuDrivenSupport = desc.gpuDrivenSupport,
     }, result);
     SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
     result.meshBatchScratch.clear();

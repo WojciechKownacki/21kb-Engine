@@ -478,6 +478,8 @@ endif()
 set(KB_RENDERER_SHADER_MANIFEST
     cs_hzb_downsample.sc
     cs_hzb_seed.sc
+    cs_instance_compact.sc
+    cs_instance_compact_clear.sc
     cs_instance_cull.sc
     cs_instance_cull_clear.sc
     cs_instance_cull_finalize.sc
@@ -677,6 +679,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         TYPE COMPUTE
         SHADERS
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_clear.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_compact.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_compact_clear.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_finalize.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
@@ -871,6 +875,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/MeshReimportTests.cpp
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
+        tests/GpuFrustumCullingTests.cpp
         tests/RendererTestSupport.hpp
         tests/FinalCompositePassTests.cpp
         tests/PostProcessChainTests.cpp

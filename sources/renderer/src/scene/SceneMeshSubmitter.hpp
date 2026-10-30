@@ -76,6 +76,7 @@ public:
     void ResetGraphMaterialDrawStats() const noexcept { passResources_.ResetGraphMaterialDrawStats(); }
     [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept { return passResources_.GraphMaterialDrawStats(); }
     void EndFrame(std::uint64_t frameIndex) const {
+        gpuDrivenCullingPass_.EndFrame();
         instanceBuffers_.EndFrame();
         passResources_.EndFrame(frameIndex);
     }
@@ -87,7 +88,6 @@ private:
     SceneMeshPassResources passResources_;
     SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
     mutable SceneMeshInstanceBufferPool instanceBuffers_;
-    mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
     mutable MeshPipelineBuildResult gpuMeshScratch_;
     mutable std::vector<MeshDrawCommand> gpuMeshCommandScratch_;

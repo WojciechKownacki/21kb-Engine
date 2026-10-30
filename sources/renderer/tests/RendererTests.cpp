@@ -44,6 +44,7 @@ void RunGraphShaderArtifactCacheTests();
 void RunGraphShaderNodeCookTests(std::uint32_t shard, std::uint32_t shardCount);
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
+void RunGpuFrustumCullingTests();
 void RunSkinnedMeshGpuReadbackTests();
 void RunPrebuiltBackendShaderGpuTests();
 void RunFinalCompositePassTests();
@@ -243,6 +244,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-pass-program-selection") {
         kb::render::tests::RunSceneMeshPassProgramSelectionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "gpu-frustum-culling") {
+        kb::render::tests::RunGpuFrustumCullingTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "graph-forward-gpu") {

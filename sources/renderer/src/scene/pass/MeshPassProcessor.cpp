@@ -325,9 +325,16 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
                     ? instance.boundsOverride
                     : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
+                const bool gpuFrustumCull = meshResource != nullptr &&
+                    (meshResource->gpuCullingEnabled || meshResource->indirectDrawsEnabled) &&
+                    desc.gpuDrivenSupport.computeCullingSupported && desc.gpuDrivenSupport.indirectDrawSupported &&
+                    desc.gpuDrivenSupport.runtimeGpuDispatchSupported &&
+                    desc.maxDrawCommands == 0U && desc.maxVisibleInstances == 0U &&
+                    (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::GBuffer ||
+                     desc.pass == MeshPassType::Depth || desc.pass == MeshPassType::ShadowDepth);
                 while (clusterIndex < batch.visibilityClusters.size() &&
                     batch.visibilityClusters[clusterIndex].firstInstance < instanceIndex) ++clusterIndex;
-                if (clusterIndex < batch.visibilityClusters.size() &&
+                if (!gpuFrustumCull && clusterIndex < batch.visibilityClusters.size() &&
                     batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
                     localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
                     !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides &&
@@ -349,7 +356,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 const RenderBoundsSphere worldBounds = MeshPipelineVisibility::GrowBounds(
                     MeshPipelineVisibility::TransformBounds(localBounds, instance.model), boundsMargin);
                 const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
-                if (!MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {
+                if (!gpuFrustumCull && !MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {
                     ++culledForSection;
                     continue;
                 }
@@ -448,6 +455,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     drawCommandIndex = static_cast<std::uint32_t>(writeCommandCount);
                     ++writeCommandCount;
                 }
+                command->gpuFrustumCull = gpuFrustumCull;
                 MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, meshResource, meshletRange);
                 lastCommandKey = commandKey;
                 lastCommandIndex = drawCommandIndex;
