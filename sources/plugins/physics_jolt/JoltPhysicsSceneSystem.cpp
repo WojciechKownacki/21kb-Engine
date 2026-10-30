@@ -3534,6 +3534,21 @@ JoltPhysicsSceneSystem::JoltPhysicsSceneSystem(JoltPhysicsSceneSystemSettings se
 
 JoltPhysicsSceneSystem::~JoltPhysicsSceneSystem() = default;
 
+std::unique_ptr<kb::core::RuntimeStateSnapshot> JoltPhysicsSceneSystem::CaptureRuntimeState(std::string& error) {
+    if (!impl_) { error = "Physics scene system has no runtime implementation"; return {}; }
+    return impl_->CaptureRuntimeState(error);
+}
+
+bool JoltPhysicsSceneSystem::ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const {
+    if (!impl_) { error = "Physics scene system has no runtime implementation"; return false; }
+    return impl_->ValidateRuntimeState(state, error);
+}
+
+bool JoltPhysicsSceneSystem::RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) {
+    if (!impl_) { error = "Physics scene system has no runtime implementation"; return false; }
+    return impl_->RestoreRuntimeState(state, error);
+}
+
 JoltPhysicsSceneSystem::JoltPhysicsSceneSystem(JoltPhysicsSceneSystem&&) noexcept = default;
 
 JoltPhysicsSceneSystem& JoltPhysicsSceneSystem::operator=(JoltPhysicsSceneSystem&&) noexcept = default;

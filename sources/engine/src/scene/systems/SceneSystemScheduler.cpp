@@ -3,6 +3,7 @@
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/ParallelSceneSystem.hpp"
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/StatelessSceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "scene/systems/SceneSystemParallel.hpp"
 
@@ -18,8 +19,29 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <typeinfo>
 
 namespace kb::scene {
+
+bool SceneSystemScheduler::CollectRuntimeStateProviders(std::vector<RuntimeStateBinding>& output, std::string& error) const {
+    output.clear();
+    if (dispatching_) { error = "Scene checkpoints require a completed system dispatch boundary"; return false; }
+    std::vector<RuntimeStateBinding> bindings;
+    bindings.reserve(systems_.size());
+    for (const auto& entry : systems_) {
+        auto* provider = dynamic_cast<kb::core::IRuntimeStateProvider*>(entry.system.get());
+        if (provider == nullptr && dynamic_cast<const IStatelessSceneSystem*>(entry.system.get()) == nullptr) {
+            error = "Scene system at index " + std::to_string(bindings.size()) + " (" + typeid(*entry.system).name()
+                + ") does not declare runtime checkpoint state ownership";
+            return false;
+        }
+        bindings.emplace_back(entry.handle, provider);
+    }
+    output = std::move(bindings);
+    error.clear();
+    return true;
+}
+
 namespace {
 
 [[nodiscard]] std::uint64_t AllocateSchedulerLifetime() {

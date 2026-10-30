@@ -373,6 +373,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
+    include/engine/scene/StatelessSceneSystem.hpp
     include/engine/scene/ParallelSceneSystem.hpp
     include/engine/scene/SceneSystemHandle.hpp
     include/engine/scene/SceneSystemContext.hpp
@@ -854,6 +855,7 @@ add_library(kb_engine STATIC
     src/scene/SceneTagCatalog.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
+    src/scene/SceneRuntimeState.cpp
     src/scene/SceneRenderProxyComponentMask.cpp
     src/scene/SceneState.cpp
     src/scene/SceneTaskService.cpp

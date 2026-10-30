@@ -80,5 +80,40 @@ state has no provider. Snapshot destruction is safe after the host closes. Host
 container storage. The caller must still coordinate ECS, scene clocks, timers,
 tasks and other providers. File writes and external services are not rewound.
 
-Engine module ABI 20 requires rebuilding C++ modules after the host interface and
-runtime state changes; an older module is rejected before its factory runs.
+## Scene coordination
+
+`SceneRuntime::CaptureRuntimeState` captures every installed scene-system provider
+before copying native ECS columns and side-storage payloads, entity identities,
+backend names, tags/relations,
+hierarchy, scene value state, timers, fixed interpolation samples, translation
+residuals and pending runtime commands. Every installed scene system must implement
+`IRuntimeStateProvider` or explicitly declare `IStatelessSceneSystem` when all their
+mutable data belongs to the scene. Built-in input, UI, gameplay, animation, timeline,
+navigation and content dispatchers declare this contract. Their scene-owned data
+must be captured or explicitly rejected as unsupported active state. Unknown systems cause a
+diagnostic instead of an incomplete checkpoint. The installed Lua host and Jolt
+scene systems expose their providers.
+
+Restore replaces the native entity/component set, detaches future hierarchy links
+before deletion, restores scene metadata and clocks, invalidates borrowed caches,
+and then restores providers against those ECS definitions. Frame/fixed-step counters
+and elapsed time rewind explicitly; published snapshot revisions and issued handles
+remain monotonic. System handles and the scene lifetime must match. Validation checks
+that boundary and topology; provider definition validation happens during restore,
+after ECS replacement. Restore captures a backup and attempts rollback on failure;
+the error reports whether rollback succeeded. Allocation failure can also prevent
+rollback, so this is not an unconditional transaction guarantee.
+
+Active animation, timelines, prefab/content streaming, polygon navigation, native
+tasks, asynchronous script asset loads, audio, particles, 2D runtimes and arbitrary
+ECS systems still require their
+own coordinated state providers. Checkpoint capture currently refuses these active
+subsystems and terminated worlds. Their support remains incomplete. Asset manager
+configuration and arbitrary external callbacks/services are not rewound.
+`PayloadBytes()` counts native column/entity metadata and provider payloads, excluding
+scene container capacities, retained resources and system allocator overhead. Process
+memory measurements include those costs but also allocator caching and other process
+activity; neither number alone describes every history allocation.
+
+Engine module ABI 21 requires rebuilding C++ modules after the scene/provider
+interface changes; an older module is rejected before its factory runs.

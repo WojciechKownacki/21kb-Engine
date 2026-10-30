@@ -41,10 +41,19 @@ namespace {
     return apiPins;
 }
 
-class ScriptRuntimeHostSceneSystem final : public kb::scene::SceneSystem {
+class ScriptRuntimeHostSceneSystem final : public kb::scene::SceneSystem, public kb::core::IRuntimeStateProvider {
 public:
-    explicit ScriptRuntimeHostSceneSystem(std::shared_ptr<ScriptRuntimeHostState> state);
+    ScriptRuntimeHostSceneSystem(std::shared_ptr<ScriptRuntimeHostState> state, ScriptRuntimeHost& owner);
     ~ScriptRuntimeHostSceneSystem() override;
+    [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override {
+        return owner_.CaptureRuntimeState(error);
+    }
+    [[nodiscard]] bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const override {
+        return owner_.ValidateRuntimeState(state, error);
+    }
+    [[nodiscard]] bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) override {
+        return owner_.RestoreRuntimeState(state, error);
+    }
 
     void OnCreate(kb::scene::SceneSystemContext& context) override;
     void OnFrameStart(kb::scene::SceneSystemContext& context) override;
@@ -62,6 +71,7 @@ private:
     void DisableFailingBehaviour(const ScriptDiagnostic& diagnostic);
 
     std::shared_ptr<ScriptRuntimeHostState> state_;
+    ScriptRuntimeHost& owner_;
     ScriptRuntimeSceneSystem system_;
 };
 
@@ -243,8 +253,9 @@ bool ScriptRuntimeHost::RestoreRuntimeState(const kb::core::RuntimeStateSnapshot
 
 namespace {
 
-ScriptRuntimeHostSceneSystem::ScriptRuntimeHostSceneSystem(std::shared_ptr<ScriptRuntimeHostState> state)
+ScriptRuntimeHostSceneSystem::ScriptRuntimeHostSceneSystem(std::shared_ptr<ScriptRuntimeHostState> state, ScriptRuntimeHost& owner)
     : state_(std::move(state))
+    , owner_(owner)
     , system_(state_->runtime, state_->assetPreparer) {
     system_.SetFrameSettings(state_->frameSettings);
     state_->installedSceneSystem = this;
@@ -399,7 +410,7 @@ bool ScriptRuntimeHost::InstallSceneSystem() {
     if (!Succeeded()) {
         return false;
     }
-    sceneSystemHandle_ = state_->scene.Runtime().AddSceneSystem(std::make_unique<ScriptRuntimeHostSceneSystem>(state_));
+    sceneSystemHandle_ = state_->scene.Runtime().AddSceneSystem(std::make_unique<ScriptRuntimeHostSceneSystem>(state_, *this));
     sceneSystemInstalled_ = sceneSystemHandle_.IsValid();
     return sceneSystemInstalled_;
 }
