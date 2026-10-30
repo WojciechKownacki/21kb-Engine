@@ -36,6 +36,9 @@ and never needs a rebuild, and the packaged game runs them in the same sandbox a
 code that must be as fast as the engine and can use any library, with a toolchain to install and a
 module to build; Visual Graph for logic drawn as nodes. Nothing in the engine requires them.
 
+Use `kb_cli graph` to author and validate [gameplay graphs](gameplay_graphs.md).
+Use `kb_cli blend-space` to author and sample [two-axis animation assets](blend_space_2d.md).
+
 A first game from the template, with every step available to `kb_cli`:
 
 1. `kb_cli init-agent --project <dir>` writes `PlayerController.lua` (moves the object from the input

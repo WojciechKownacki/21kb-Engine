@@ -309,7 +309,33 @@ void TestModuleMetadataAndLifecycle() {
     }
 }
 
+void TestBuildFingerprintRejectedBeforeCreate() {
+    const std::pair<const char*, const char*> fixtures[] = {
+        {KB_ENGINE_ABI_VARIANT_1_PATH, "unsupported engine module ABI version"},
+        {KB_ENGINE_ABI_VARIANT_2_PATH, "incompatible compiler version"},
+        {KB_ENGINE_ABI_VARIANT_3_PATH, "incompatible metadata size"},
+        {KB_ENGINE_ABI_VARIANT_4_PATH, "incompatible runtime mode"},
+        {KB_ENGINE_ABI_VARIANT_5_PATH, "incompatible build fingerprint layout"},
+    };
+    const auto marker = std::filesystem::temp_directory_path() / "21kb_build_fingerprint_create.marker";
+    std::filesystem::remove(marker);
+    const ScopedEnvironmentVariable environment{"KB_OLD_ENGINE_MODULE_ABI_CREATE_MARKER", marker.string()};
+    for (const auto& [path, expected] : fixtures) {
+        Require(std::filesystem::is_regular_file(path), "ABI fixture missing");
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        descriptor.plugins.push_back({.name = "Tests.OldEngineModuleAbi", .binaryPath = path, .enabled = true});
+        kb::scene::Scene scene{std::move(descriptor)};
+        Require(!scene.IsModuleActive("Tests.OldEngineModuleAbi"), "incompatible module activated");
+        Require(std::ranges::any_of(scene.ModuleDiagnostics(), [expected](const std::string& diagnostic) {
+            return diagnostic.find(expected) != std::string::npos;
+        }), "missing specific build mismatch diagnostic");
+        Require(!std::filesystem::exists(marker), "incompatible plugin factory was called");
+    }
+}
+
 void TestOldEngineModuleAbiRejectedBeforeCreate() {
+    TestBuildFingerprintRejectedBeforeCreate();
     const std::filesystem::path pluginPath = KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH;
     Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath),
         "old ABI module fixture is missing");

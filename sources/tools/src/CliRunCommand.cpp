@@ -5,6 +5,7 @@
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputRecording.hpp"
 #include "engine/ecs/SystemSchedulerTraceExport.hpp"
+#include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldTelemetryExport.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -83,9 +84,11 @@ namespace {
     auto scheduler = JsonValue::MakeObject();
     scheduler.Set("scope", JsonValue::MakeString("ECS world scheduler, last simulated frame; the physics and render stages have their own schedulers and are not in this trace"));
     scheduler.Set("frame_index", JsonValue::MakeNumber(static_cast<double>(trace.frameIndex)));
+    scheduler.Set("dispatch_mode", JsonValue::MakeString(trace.frameCounters.lastWorkerDispatchMode));
     scheduler.Set("frame_wall_ns", JsonValue::MakeNumber(static_cast<double>(trace.frameDurationNanoseconds)));
-    scheduler.Set("cpu_time_ns", JsonValue::MakeNumber(static_cast<double>(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace))));
-    scheduler.Set("cpu_time_basis", JsonValue::MakeString("sum of the durations of all systems over all workers; not wall time and may exceed frame_wall_ns"));
+    scheduler.Set("cpu_time_ns", JsonValue::MakeNull());
+    scheduler.Set("system_elapsed_sum_ns", JsonValue::MakeNumber(static_cast<double>(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace))));
+    scheduler.Set("cpu_time_basis", JsonValue::MakeString("CPU time is unavailable; system_elapsed_sum_ns sums elapsed system durations and can include waiting, and is not wall time for the frame"));
     scheduler.Set("worker_count", JsonValue::MakeNumber(static_cast<double>(trace.workers.size())));
     auto systems = JsonValue::MakeArray();
     for (const kb::ecs::SystemSchedulerTraceEvent& event : trace.events) {
@@ -93,6 +96,7 @@ namespace {
         entry.Set("name", JsonValue::MakeString(event.systemName));
         entry.Set("stage", JsonValue::MakeNumber(static_cast<double>(event.stageIndex)));
         entry.Set("worker", JsonValue::MakeNumber(static_cast<double>(event.workerIndex)));
+        entry.Set("chunk_jobs", JsonValue::MakeNumber(static_cast<double>(event.chunkJobsCount)));
         entry.Set("start_ns", JsonValue::MakeNumber(static_cast<double>(event.startTimeNanoseconds)));
         entry.Set("end_ns", JsonValue::MakeNumber(static_cast<double>(event.endTimeNanoseconds)));
         entry.Set("duration_ns", JsonValue::MakeNumber(static_cast<double>(event.durationNanoseconds)));
@@ -114,8 +118,9 @@ namespace {
     }
     critical.Set("systems", std::move(names));
     critical.Set("wall_ns", JsonValue::MakeNumber(static_cast<double>(path.wallNanoseconds)));
-    critical.Set("busy_ns", JsonValue::MakeNumber(static_cast<double>(path.busyNanoseconds)));
-    critical.Set("basis", JsonValue::MakeString("from the system that finished last, the dependency that finished last of each system; wall_ns includes waits, busy_ns does not"));
+    critical.Set("busy_ns", JsonValue::MakeNull());
+    critical.Set("system_elapsed_sum_ns", JsonValue::MakeNumber(static_cast<double>(path.busyNanoseconds)));
+    critical.Set("basis", JsonValue::MakeString("dependency path by completion time; elapsed system durations may include waiting and are not measured CPU busy time"));
     scheduler.Set("critical_path", std::move(critical));
     return scheduler;
 }
@@ -290,6 +295,13 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     }
 
     int frames = 60;
+    std::optional<kb::ecs::SystemSchedulerParallelismMode> ecsParallelism;
+    if (const auto option = arguments.Option("--ecs-parallelism")) {
+        if (*option == "systems") ecsParallelism = kb::ecs::SystemSchedulerParallelismMode::SystemStages;
+        else if (*option == "chunks") ecsParallelism = kb::ecs::SystemSchedulerParallelismMode::QueryChunks;
+        else if (*option == "combined") ecsParallelism = kb::ecs::SystemSchedulerParallelismMode::SystemsAndChunks;
+        else { io.err << "error: --ecs-parallelism expects systems, chunks, or combined\n"; return 1; }
+    }
     if (const std::optional<std::string> framesOption = arguments.Option("--frames"); framesOption.has_value()) {
         const std::optional<int> parsed = ParseInt(*framesOption);
         if (!parsed.has_value() || *parsed < 1) {
@@ -454,6 +466,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     const std::string inputMappingContext = projectSettings.found && projectSettings.Succeeded()
         ? projectSettings.settings.inputMappingContext : loadedProject.legacySettings.inputMappingContext;
     kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
+    if (ecsParallelism) scene.Runtime().SetEcsParallelismMode(*ecsParallelism);
     // A headless run is a determinism tool: scripts see each physics step in the update that ran it.
     kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
     if (!scene.ModuleDiagnostics().empty()) {

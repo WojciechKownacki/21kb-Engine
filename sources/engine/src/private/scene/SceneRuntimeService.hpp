@@ -49,6 +49,8 @@ public:
     static void SetTimeScale(Scene& scene, float scale) noexcept;
     [[nodiscard]] static bool EnqueueCommand(Scene& scene, SceneRuntimeCommand command);
     static void SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept;
+    static void SetEcsParallelismMode(Scene& scene, kb::ecs::SystemSchedulerParallelismMode mode) noexcept;
+    [[nodiscard]] static kb::ecs::SystemSchedulerParallelismMode EcsParallelismMode(const Scene& scene) noexcept;
     [[nodiscard]] static bool EcsProfilerEnabled(const Scene& scene) noexcept;
     [[nodiscard]] static const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace(const Scene& scene) noexcept;
     [[nodiscard]] static SceneRuntimeHotPathReport HotPathReport(const Scene& scene) noexcept;

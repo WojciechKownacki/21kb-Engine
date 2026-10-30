@@ -342,6 +342,7 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
+                 [--ecs-parallelism systems|chunks|combined]
                Replay uses recorded per-tick durations and controller slots; --frames
                may select a prefix. --dt and audio probes cannot override replay timing.
                Recording captures input before each completed tick, including a partial

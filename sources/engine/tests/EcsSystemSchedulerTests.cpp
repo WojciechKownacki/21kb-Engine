@@ -8,11 +8,14 @@
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/SystemSchedulerTraceExport.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <span>
@@ -122,6 +125,79 @@ private:
     std::uint64_t entitiesProcessed_ = 0;
     std::uint64_t bytesTouched_ = 0;
 };
+
+class GraphIntegrationSystem final : public kb::ecs::System {
+public:
+    GraphIntegrationSystem(std::string name, kb::ecs::SystemAccess access, std::function<void(kb::ecs::WorkerPool*)> work)
+        : name_(std::move(name)), access_(std::move(access)), work_(std::move(work)) {}
+    std::string_view Name() const noexcept override { return name_; }
+    kb::ecs::SystemAccess DeclareAccess(kb::ecs::World&) const override { return access_; }
+    void SetExecutionWorkerPool(kb::ecs::WorkerPool* pool) noexcept override { pool_ = pool; }
+    void OnUpdate(kb::ecs::World&, float) override { work_(pool_); }
+private:
+    std::string name_;
+    kb::ecs::SystemAccess access_;
+    std::function<void(kb::ecs::WorkerPool*)> work_;
+    kb::ecs::WorkerPool* pool_ = nullptr;
+};
+
+void RunGraphSchedulerIntegrationTest() {
+    const auto run = [](bool parallel, std::size_t workers) {
+        kb::ecs::World world;
+        kb::ecs::SystemScheduler scheduler{{.profilerEnabled = true, .parallelExecutionEnabled = parallel,
+            .parallelismMode = kb::ecs::SystemSchedulerParallelismMode::SystemsAndChunks,
+            .workerPool = {.workerCount = workers, .collectDispatchTelemetry = true}}};
+        std::array<std::array<int, 64>, 2> values{};
+        std::atomic<int> completed{0};
+        const auto owner = std::this_thread::get_id();
+        for (int i = 0; i < 2; ++i) {
+            scheduler.Add(std::make_unique<GraphIntegrationSystem>("Producer" + std::to_string(i), kb::ecs::SystemAccess{},
+                [&, i](kb::ecs::WorkerPool* pool) {
+                    auto chunk = [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& part) {
+                        for (std::size_t n = part.begin; n < part.begin + part.count; ++n) values[i][n] = int(n) + i;
+                    };
+                    if (pool) pool->ParallelForChunks(64, i ? 7 : 3, chunk);
+                    else for (int n = 0; n < 64; ++n) values[i][n] = n + i;
+                    ++completed;
+                }), world);
+        }
+        kb::ecs::SystemAccess dependent; dependent.After("Producer0"); dependent.After("Producer1");
+        scheduler.Add(std::make_unique<GraphIntegrationSystem>("Consumer", std::move(dependent), [&](kb::ecs::WorkerPool*) {
+            kb::tests::Require(completed.load() == 2, "graph consumer ran before its dependencies");
+            for (std::size_t n = 0; n < 64; ++n) values[0][n] += values[1][n];
+        }), world);
+        kb::ecs::SystemAccess barrier; barrier.RequireSyncPoint(kb::ecs::SystemSyncPoint::StructuralChanges);
+        scheduler.Add(std::make_unique<GraphIntegrationSystem>("Barrier", std::move(barrier), [&](kb::ecs::WorkerPool* pool) {
+            kb::tests::Require(std::this_thread::get_id() == owner && !pool, "sync point must run on owner thread");
+            kb::tests::Require(values[0][63] == 127, "sync point ran before graph completion");
+        }), world);
+        scheduler.Update(world, 0.0F);
+        if (parallel) kb::tests::Require(scheduler.LastProfilerTrace().frameCounters.lastWorkerDispatchMode == "job_graph", "runtime graph trace missing");
+        scheduler.Shutdown(world);
+        return values;
+    };
+    const auto serial = run(false, 1);
+    for (auto workers : {1U, 2U, 4U}) kb::tests::Require(run(true, workers) == serial, "graph scheduler result differs from serial");
+}
+
+void RunGraphSceneRuntimeTest() {
+    kb::ecs::WorldConfig config; config.workerThreadLimit = 2;
+    kb::scene::Scene scene{config};
+    auto runtime = scene.Runtime();
+    runtime.SetEcsParallelismMode(kb::ecs::SystemSchedulerParallelismMode::SystemsAndChunks);
+    runtime.SetEcsProfilerEnabled(true);
+    std::atomic<int> total{0};
+    runtime.AddSystem(std::make_unique<GraphIntegrationSystem>("RuntimeChunks", kb::ecs::SystemAccess{},
+        [&](kb::ecs::WorkerPool* pool) {
+            kb::tests::Require(pool != nullptr, "scene runtime did not enable graph execution");
+            pool->ParallelForChunks(73, 5, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                total.fetch_add(static_cast<int>(chunk.count));
+            });
+        }));
+    kb::tests::Require(runtime.Update(0.016F), "scene runtime update failed");
+    kb::tests::Require(total == 73 && runtime.LastEcsProfilerTrace().frameCounters.lastWorkerDispatchMode == "job_graph",
+        "scene runtime did not execute and trace its graph");
+}
 
 [[nodiscard]] kb::ecs::SystemAccess ReadPosition(kb::ecs::World& world) {
     kb::ecs::SystemAccess access;
@@ -894,6 +970,8 @@ void RunSystemFusionPlannerReducesChunkPassesTest() {
 }
 
 void RunEcsSystemSchedulerTests() {
+    RunGraphSceneRuntimeTest();
+    RunGraphSchedulerIntegrationTest();
     RunSystemFusionPlannerReducesChunkPassesTest();
     RunExplicitOrderingReordersSystemsTest();
     RunReadWriteDependencyCycleTest();

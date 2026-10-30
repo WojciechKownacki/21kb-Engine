@@ -11,23 +11,15 @@
 #include <ostream>
 
 namespace kb::net {
-bool ParseWebSceneClientSettings(std::string_view json, SceneClientOptions& options, std::string& url) {
-    if (json.size() > 8192U) return false;
-    kb::core::JsonValue root;
-    std::string error;
-    if (!kb::core::JsonValue::Parse(json, root, error) || root.GetKind() != kb::core::JsonValue::Kind::Object) return false;
-    const auto* endpoint = root.Find("url");
+namespace {
+bool ParseSessionIdentity(const kb::core::JsonValue& root, SceneClientOptions& parsed) {
     const auto* id = root.Find("clientId");
     const auto* key = root.Find("key");
-    if (!endpoint || !id || !key || endpoint->GetKind() != kb::core::JsonValue::Kind::String ||
+    if (!id || !key ||
         id->GetKind() != kb::core::JsonValue::Kind::String || key->GetKind() != kb::core::JsonValue::Kind::String) return false;
-    SceneClientOptions parsed;
     const auto& text = id->AsString();
     const auto converted = std::from_chars(text.data(), text.data() + text.size(), parsed.clientId);
     if (converted.ec != std::errc{} || converted.ptr != text.data() + text.size() || parsed.clientId == 0U) return false;
-    const auto& address = endpoint->AsString();
-    if (address.size() > 2048U || (!address.starts_with("ws://") && !address.starts_with("wss://")) ||
-        address.find_first_of("\r\n") != std::string::npos || address.find('\0') != std::string::npos) return false;
     const auto& hex = key->AsString();
     if (hex.size() != 64U) return false;
     for (std::size_t i = 0; i < parsed.key.size(); ++i) {
@@ -42,7 +34,7 @@ bool ParseWebSceneClientSettings(std::string_view json, SceneClientOptions& opti
     }
     if (const auto* extent = root.Find("worldExtent")) {
         const double value = extent->AsNumber(-1.0);
-        if (!std::isfinite(value) || value <= 0.0 || value > 1.0e9) return false;
+        if (!std::isfinite(value) || value <= 0.0 || value > 1.0e7) return false;
         parsed.worldExtent = static_cast<float>(value);
     }
     if (const auto* attempts = root.Find("reconnectAttempts")) {
@@ -50,9 +42,55 @@ bool ParseWebSceneClientSettings(std::string_view json, SceneClientOptions& opti
         if (!std::isfinite(value) || value < 0.0 || value > 10.0 || std::floor(value) != value) return false;
         parsed.reconnectAttempts = static_cast<std::uint32_t>(value);
     }
+    return true;
+}
+} // namespace
+
+bool ParseWebSceneClientSettings(std::string_view json, SceneClientOptions& options, std::string& url) {
+    if (json.size() > 8192U) return false;
+    kb::core::JsonValue root;
+    std::string error;
+    if (!kb::core::JsonValue::Parse(json, root, error) || root.GetKind() != kb::core::JsonValue::Kind::Object) return false;
+    const auto* endpoint = root.Find("url");
+    if (!endpoint || endpoint->GetKind() != kb::core::JsonValue::Kind::String) return false;
+    const auto& address = endpoint->AsString();
+    if (address.size() > 2048U || (!address.starts_with("ws://") && !address.starts_with("wss://")) ||
+        address.find_first_of("\r\n") != std::string::npos || address.find('\0') != std::string::npos) return false;
+    SceneClientOptions parsed;
+    if (!ParseSessionIdentity(root, parsed)) return false;
     parsed.server = Endpoint::Loopback(1U);
     options = std::move(parsed);
     url = address;
+    return true;
+}
+
+bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& options) {
+    if (json.size() > 8192U) return false;
+    kb::core::JsonValue root;
+    std::string error;
+    if (!kb::core::JsonValue::Parse(json, root, error) || root.GetKind() != kb::core::JsonValue::Kind::Object) return false;
+    const auto* address = root.Find("address");
+    const auto* port = root.Find("port");
+    if (!address || address->GetKind() != kb::core::JsonValue::Kind::String || !port) return false;
+    const double number = port->AsNumber(-1.0);
+    if (!std::isfinite(number) || number < 1.0 || number > 65535.0 || std::floor(number) != number) return false;
+    const std::string& text = address->AsString();
+    std::uint32_t ipv4 = 0U;
+    std::size_t start = 0U;
+    for (std::size_t index = 0U; index < 4U; ++index) {
+        const std::size_t end = index == 3U ? text.size() : text.find('.', start);
+        if (end == std::string::npos || end <= start) return false;
+        unsigned int octet = 0U;
+        const auto value = std::from_chars(text.data() + start, text.data() + end, octet);
+        if (value.ec != std::errc{} || value.ptr != text.data() + end || octet > 255U) return false;
+        ipv4 = (ipv4 << 8U) | octet;
+        start = end + 1U;
+    }
+    if (ipv4 == 0U || ipv4 == UINT32_MAX) return false;
+    SceneClientOptions parsed;
+    if (!ParseSessionIdentity(root, parsed)) return false;
+    parsed.server = Endpoint{ipv4, static_cast<std::uint16_t>(number)};
+    options = std::move(parsed);
     return true;
 }
 
@@ -117,18 +155,19 @@ SceneClient::~SceneClient() = default;
 bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
     auto& s = *impl_;
     if (!s.initialized) {
-        if (s.options.clientId == 0U || !s.factory || !std::isfinite(s.options.worldExtent) ||
-            s.options.worldExtent <= 0.0F || s.options.token.size() > 1024U || s.options.reconnectAttempts > 10U) {
+        if (s.options.clientId == 0U || !s.factory || !SceneTransformCodec{s.options.worldExtent}.Valid() ||
+            s.options.token.size() > 1024U || s.options.reconnectAttempts > 10U) {
             diagnostics << "network: invalid session settings\n";
             return false;
         }
         s.components = MakeSceneReplicationRegistry(s.options.worldExtent);
+        if (!s.components) { diagnostics << "network: replication registry rejected\n"; return false; }
         DefineStandardRpcs(s.rpcs);
         std::string error;
         if (!s.script.Freeze(s.rpcs, error)) { diagnostics << "network: RPC registry rejected\n"; return false; }
         s.initialized = true;
-        if (!s.Connect(now, diagnostics)) return false;
     }
+    if (!s.client && !s.Connect(now, diagnostics)) return false;
     if (s.disconnected) {
         if (s.refused || s.retries >= s.options.reconnectAttempts) return true;
         if (now < s.reconnectAt) return true;

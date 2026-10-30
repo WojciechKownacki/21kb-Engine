@@ -200,6 +200,14 @@ void SceneRuntime::SetEcsProfilerEnabled(bool enabled) noexcept {
     SceneRuntimeService::SetEcsProfilerEnabled(scene_, enabled);
 }
 
+void SceneRuntime::SetEcsParallelismMode(kb::ecs::SystemSchedulerParallelismMode mode) noexcept {
+    SceneRuntimeService::SetEcsParallelismMode(scene_, mode);
+}
+
+kb::ecs::SystemSchedulerParallelismMode SceneRuntime::EcsParallelismMode() const noexcept {
+    return SceneRuntimeService::EcsParallelismMode(scene_);
+}
+
 bool SceneRuntime::EcsProfilerEnabled() const noexcept {
     return SceneRuntimeService::EcsProfilerEnabled(scene_);
 }

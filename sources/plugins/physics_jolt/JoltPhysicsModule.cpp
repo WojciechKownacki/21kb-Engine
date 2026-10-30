@@ -46,6 +46,8 @@ void JoltPhysicsModule::OnSceneDetach(kb::scene::Scene& scene) {
 } // namespace kb::physics_jolt
 
 #if !defined(KB_ENGINE_MODULE_STATIC_LINK)
+KB_EXPORT_ENGINE_MODULE_BUILD_FINGERPRINT
+
 extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
     return kb::modules::kEngineModuleAbiVersion;
 }

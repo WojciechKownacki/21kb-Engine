@@ -715,6 +715,7 @@ add_library(kb_engine STATIC
     src/ecs/SystemScheduler.cpp
     src/ecs/SystemSchedulerTraceExport.cpp
     src/ecs/WorkerPool.cpp
+    src/ecs/WorkerPoolGraphExecutor.cpp
     src/ecs/TagStorage.cpp
     src/ecs/TagTypeRegistry.cpp
     src/ecs/TypeEntityCache.cpp
@@ -2004,6 +2005,15 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_21kb_particle_stage2_tests PRIVATE
         "KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH=\"$<TARGET_FILE:kb_engine_old_abi_test_plugin>\""
     )
+    foreach(variant RANGE 1 5)
+        add_library(kb_engine_abi_variant_${variant} SHARED tests/OldEngineModuleAbiPlugin.cpp)
+        target_include_directories(kb_engine_abi_variant_${variant} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_definitions(kb_engine_abi_variant_${variant} PRIVATE KB_TEST_ABI_VARIANT=${variant})
+        kb_apply_quality_gates(kb_engine_abi_variant_${variant})
+        add_dependencies(kb_21kb_particle_stage2_tests kb_engine_abi_variant_${variant})
+        target_compile_definitions(kb_21kb_particle_stage2_tests PRIVATE
+            "KB_ENGINE_ABI_VARIANT_${variant}_PATH=\"$<TARGET_FILE:kb_engine_abi_variant_${variant}>\"")
+    endforeach()
     add_test(NAME kb_21kb_particle_stage2_tests COMMAND $<TARGET_FILE:kb_21kb_particle_stage2_tests>)
     set_tests_properties(kb_21kb_particle_stage2_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_21kb_particle_stage2_tests)
@@ -2342,6 +2352,15 @@ if(BUILD_TESTING)
         tests/EcsSystemSchedulerTests.cpp
         tests/EcsWorkerPoolTests.cpp
     )
+    if(WIN32)
+        add_library(kb_ecs_graph_module_fixture SHARED tests/EcsGraphModuleFixture.cpp)
+        target_link_libraries(kb_ecs_graph_module_fixture PRIVATE kb_engine)
+        add_executable(kb_ecs_graph_project_fixture tests/EcsGraphProjectFixture.cpp)
+        target_link_libraries(kb_ecs_graph_project_fixture PRIVATE kb_engine)
+        add_dependencies(kb_ecs_scheduler_correctness_tests kb_ecs_graph_module_fixture)
+        target_compile_definitions(kb_ecs_scheduler_correctness_tests PRIVATE
+            "KB_ECS_GRAPH_MODULE_PATH=\"$<TARGET_FILE:kb_ecs_graph_module_fixture>\"")
+    endif()
     set_tests_properties(kb_ecs_scheduler_correctness_tests PROPERTIES LABELS "ecs;scheduler;correctness;single-thread;multi-thread")
 
     kb_add_ecs_test_target(kb_ecs_deterministic_replay_tests

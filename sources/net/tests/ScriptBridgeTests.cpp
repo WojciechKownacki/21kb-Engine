@@ -3,6 +3,7 @@
 // an entity as replicated, reacts to connections, spawns and calls, and calls back.
 
 #include "engine/scene/Scene.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/gameplay/AbilityAsset.hpp"
 #include "engine/scene/SceneGameplay.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -409,6 +410,19 @@ void TestRuntimeGuards() {
         Require(kb::script::ScriptNetApi::Attached(scene) == &runtime, "the runtime did not attach itself");
     }
     Require(kb::script::ScriptNetApi::Attached(scene) == nullptr, "the runtime did not detach itself");
+    {
+        SceneClientOptions options;
+        options.clientId = 7U;
+        options.worldExtent = 1.0e8F;
+        bool transportCreated = false;
+        SceneClient client(scene, options, [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
+            transportCreated = true; return nullptr;
+        });
+        std::ostringstream diagnostics;
+        Require(!client.Update(0U, diagnostics) && !transportCreated &&
+            diagnostics.str().find("invalid session settings") != std::string::npos,
+            "unsupported codec extent reached transport/replication initialization");
+    }
     static_cast<void>(project);
 }
 
@@ -435,10 +449,14 @@ void TestSceneClientLifecycle() {
     std::ostringstream diagnostics;
     std::uint64_t now = 0U;
     std::size_t connections = 0U;
+    std::size_t transportAttempts = 0U;
     {
-        SceneClient client(clientScene, options, [&](std::string&) {
+        SceneClient client(clientScene, options, [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
+            if (++transportAttempts == 1U) return nullptr;
             return network.CreateTransport(Endpoint::Loopback(nextPort++));
         });
+        Require(!client.Update(now, diagnostics) && transportAttempts == 1U,
+            "initial transport creation failure was not reported");
         const auto step = [&] {
             now += 10U;
             network.Advance(now);
@@ -452,7 +470,8 @@ void TestSceneClientLifecycle() {
             Require(client.Update(now, diagnostics), diagnostics.str());
         };
         for (int i = 0; i < 200; ++i) step();
-        Require(connections == 1U && clientScene.Entities().Count() == 1U, "initial scene replica missing");
+        Require(transportAttempts == 2U && connections == 1U && clientScene.Entities().Count() == 1U,
+            "scene client did not recover and replicate after transport creation failed");
         host.Disconnect(7U);
         bool cleared = false;
         for (int i = 0; i < 400; ++i) {
@@ -479,6 +498,56 @@ void TestWebSessionSettings() {
         "fractional reconnect count accepted");
     Require(!ParseWebSceneClientSettings(valid.substr(0, valid.size()-1) + ",\"token\":\"" + std::string(1025, 'a') + "\"}", options, url),
         "oversized runtime token accepted");
+    Require(!ParseWebSceneClientSettings(valid.substr(0, valid.size()-1) + ",\"worldExtent\":10000001}", options, url),
+        "unsupported replication codec extent accepted");
+}
+
+void TestNativeSessionSettings() {
+    using kb::core::JsonValue;
+    auto settings = JsonValue::MakeObject();
+    settings.Set("address", JsonValue::MakeString("127.0.0.1"));
+    settings.Set("port", JsonValue::MakeNumber(27015));
+    settings.Set("clientId", JsonValue::MakeString("18446744073709551615"));
+    settings.Set("key", JsonValue::MakeString(std::string(64, '1')));
+    settings.Set("token", JsonValue::MakeString("session-token"));
+    settings.Set("worldExtent", JsonValue::MakeNumber(2000));
+    settings.Set("reconnectAttempts", JsonValue::MakeNumber(2));
+    SceneClientOptions options;
+    Require(ParseNativeSceneClientSettings(settings.Dump(), options) && options.clientId == UINT64_MAX &&
+        options.server == Endpoint::Loopback(27015) && options.token == "session-token" &&
+        options.worldExtent == 2000.0F && options.reconnectAttempts == 2U && options.key[0] == 0x11U,
+        "native runtime settings lost endpoint or credentials");
+    const auto expected = options;
+    const auto reject = [&](std::string_view json) {
+        Require(!ParseNativeSceneClientSettings(json, options), "invalid native settings accepted");
+        Require(options.clientId == expected.clientId && options.key == expected.key && options.server == expected.server &&
+            options.token == expected.token && options.worldExtent == expected.worldExtent &&
+            options.reconnectAttempts == expected.reconnectAttempts, "invalid settings modified the active session");
+    };
+    for (const char* address : {"", "localhost", "127.0.0", "127.0.0.1.2", "256.0.0.1", "-1.0.0.1", "127.0.0.1 ", "0.0.0.0", "255.255.255.255"}) {
+        auto invalid = settings; invalid.Set("address", JsonValue::MakeString(address)); reject(invalid.Dump());
+    }
+    for (const double port : {0.0, -1.0, 1.5, 65536.0}) {
+        auto invalid = settings; invalid.Set("port", JsonValue::MakeNumber(port)); reject(invalid.Dump());
+    }
+    const auto rejectField = [&](std::string name, JsonValue value) {
+        auto invalid = settings; invalid.Set(std::move(name), std::move(value)); reject(invalid.Dump());
+    };
+    rejectField("port", JsonValue::MakeString("27015"));
+    rejectField("clientId", JsonValue::MakeNumber(7));
+    rejectField("clientId", JsonValue::MakeString("18446744073709551616"));
+    rejectField("key", JsonValue::MakeString(std::string(64, 'g')));
+    rejectField("token", JsonValue::MakeString(std::string(1025, 'x')));
+    rejectField("worldExtent", JsonValue::MakeNumber(0));
+    rejectField("worldExtent", JsonValue::MakeNumber(10000001));
+    rejectField("reconnectAttempts", JsonValue::MakeNumber(1.5));
+    reject(std::string(8193, ' '));
+    reject("{}"); reject("[]");
+    for (const double port : {1.0, 65535.0}) {
+        auto boundary = settings; boundary.Set("port", JsonValue::MakeNumber(port));
+        Require(ParseNativeSceneClientSettings(boundary.Dump(), options) && options.server.port == static_cast<std::uint16_t>(port),
+            "valid UDP port boundary rejected");
+    }
 }
 
 } // namespace
@@ -488,6 +557,7 @@ int main() {
         { "runtime-guards", &TestRuntimeGuards },
         { "scene-client-lifecycle", &TestSceneClientLifecycle },
         { "web-session-settings", &TestWebSessionSettings },
+        { "native-session-settings", &TestNativeSessionSettings },
         { "scripts-over-the-network", &TestScriptsOverTheNetwork },
         { "authoritative-script-ability", &TestAuthoritativeScriptAbility },
     };

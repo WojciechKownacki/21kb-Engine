@@ -190,11 +190,11 @@ flowchart LR
 ## Build
 
 ```powershell
-cmake -S . -B build/dev -G "Visual Studio 18 2026" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
-cmake --build build/dev --config Release --target kb_editor --parallel 4
+cmake -S . -B build/dev -G "Visual Studio 17 2022" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
+cmake --build build/dev --config Release --target kb_editor --parallel 2
 ```
 
-Requires CMake 3.27 or newer and an MSVC toolchain; CI uses Visual Studio 2026 with the generator above. The configure step downloads
+Requires CMake 3.27 or newer and Visual Studio 2022 with the C++ workload. The configure step downloads
 Lua, Zstandard, Monocypher and Recast. The editor is written to `build/dev/bin/Release/kb_editor.exe`.
 Linux builds the headless engine and tools only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the test commands.
 

@@ -20,6 +20,10 @@ struct SceneClientOptions {
 [[nodiscard]] bool ParseWebSceneClientSettings(std::string_view json,
     SceneClientOptions& options, std::string& url);
 
+// Runtime-only UDP settings: literal IPv4 address, numeric port and the same
+// string identity/session credentials as the browser client. Failure leaves options unchanged.
+[[nodiscard]] bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& options);
+
 // Attach before the first script update. Update after scripts have registered
 // their RPCs; subsequent updates pump replication and bounded reconnects.
 class SceneClient final {

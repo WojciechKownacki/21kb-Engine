@@ -17,6 +17,7 @@
 namespace kb::ecs {
 
 class System;
+enum class SystemSchedulerParallelismMode;
 struct SystemSchedulerTrace;
 class World;
 
@@ -236,6 +237,8 @@ public:
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
     void SetEcsProfilerEnabled(bool enabled) noexcept;
+    void SetEcsParallelismMode(kb::ecs::SystemSchedulerParallelismMode mode) noexcept;
+    [[nodiscard]] kb::ecs::SystemSchedulerParallelismMode EcsParallelismMode() const noexcept;
     [[nodiscard]] bool EcsProfilerEnabled() const noexcept;
     [[nodiscard]] const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace() const noexcept;
     [[nodiscard]] SceneRuntimeHotPathReport HotPathReport() const noexcept;

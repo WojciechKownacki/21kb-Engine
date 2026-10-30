@@ -1,3 +1,5 @@
+#include "engine/ecs/JobGraph.hpp"
+#include <functional>
 #include "engine/ecs/SystemScheduler.hpp"
 
 #include <algorithm>
@@ -112,6 +114,12 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
         RebuildExecutionOrder();
     }
 
+    if (parallelExecutionEnabled_ && parallelismMode_ == SystemSchedulerParallelismMode::SystemsAndChunks &&
+        schedulingMode_ != SystemSchedulingMode::Deterministic) {
+        UpdateGraph(world, deltaSeconds);
+        return;
+    }
+
     std::vector<std::uint64_t> systemEndTimes;
     std::chrono::steady_clock::time_point frameStart;
     const bool instrumentationEnabled = InstrumentationEnabled();
@@ -119,6 +127,7 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
         BeginProfilerTrace();
         systemEndTimes.assign(systems_.size(), 0);
         frameStart = std::chrono::steady_clock::now();
+        lastTrace_.frameStartSteadyNanoseconds = ToNanoseconds(frameStart.time_since_epoch());
     }
 
     std::vector<SystemExecutionSample> executionSamples;
@@ -216,6 +225,79 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
     }
 }
 
+void SystemScheduler::UpdateGraph(World& world, float deltaSeconds) {
+    const bool instrument = InstrumentationEnabled();
+    const auto frameStart = std::chrono::steady_clock::now();
+    if (instrument) {
+        BeginProfilerTrace();
+        lastTrace_.frameStartSteadyNanoseconds = ToNanoseconds(frameStart.time_since_epoch());
+    }
+    auto& pool = RuntimeWorkerPool();
+    std::vector<SystemExecutionSample> samples(systems_.size());
+    std::vector<std::uint64_t> endTimes(systems_.size());
+    std::vector<std::size_t> stageBySystem(systems_.size());
+    for (std::size_t stage = 0; stage < executionStages_.size(); ++stage)
+        for (auto index : executionStages_[stage].systems) stageBySystem[index] = stage;
+    const auto execute = [&](std::size_t index, WorkerContext worker, bool barrier) {
+        auto& entry = systems_[index];
+        if (instrument) entry.system->ResetProfilerCounters();
+        const auto begin = std::chrono::steady_clock::now();
+        auto guard = runtimeAccessValidationEnabled_
+            ? accessValidator_.Acquire(entry.system->Name(), entry.access, worker.workerIndex)
+            : RuntimeAccessValidator::Guard{};
+        entry.system->SetExecutionWorkerPool(barrier ? nullptr : &pool);
+        try { entry.system->OnUpdate(world, deltaSeconds); }
+        catch (...) { entry.system->SetExecutionWorkerPool(nullptr); throw; }
+        entry.system->SetExecutionWorkerPool(nullptr);
+        if (instrument) {
+            const auto end = std::chrono::steady_clock::now();
+            endTimes[index] = ToNanoseconds(end - frameStart);
+            samples[index] = {index, worker.workerIndex, 1U, ToNanoseconds(begin - frameStart),
+                endTimes[index], entry.system->ProfilerCounters()};
+        }
+    };
+    std::vector<std::size_t> segment;
+    bool graphExecuted = false;
+    const auto flush = [&] {
+        if (segment.empty()) return;
+        JobGraph graph;
+        std::vector<std::size_t> localIndex(systems_.size(), systems_.size());
+        for (auto index : segment) localIndex[index] = graph.AddJob();
+        for (auto index : segment) for (auto dependency : reverseDependencyGraph_[index]) {
+            if (localIndex[dependency] != systems_.size()) graph.AddDependency(localIndex[dependency], localIndex[index]);
+        }
+        std::vector<std::function<void(WorkerContext)>> callbacks;
+        callbacks.reserve(segment.size());
+        for (auto index : segment) callbacks.emplace_back([&, index](WorkerContext worker) { execute(index, worker, false); });
+        std::vector<WorkerPoolJob> jobs;
+        jobs.reserve(callbacks.size());
+        for (auto& callback : callbacks) jobs.push_back({[](WorkerContext worker, void* context) {
+            (*static_cast<std::function<void(WorkerContext)>*>(context))(worker);
+        }, &callback});
+        const auto result = pool.RunGraph(std::move(graph), jobs);
+        graphExecuted = true;
+        if (result.cancelledJobs != 0U) throw std::runtime_error("system graph execution was cancelled");
+        if (instrument) ++lastTrace_.frameCounters.parallelStageCount;
+        segment.clear();
+    };
+    for (auto index : executionOrder_) {
+        if (systems_[index].access.HasSyncPoint()) {
+            flush();
+            execute(index, {0U, pool.WorkerCount()}, true);
+        } else segment.push_back(index);
+    }
+    flush();
+    if (instrument) {
+        for (auto index : executionOrder_) {
+            const auto& sample = samples[index];
+            TraceSystemExecution(index, stageBySystem[index], sample.workerIndex, sample.jobsCount,
+                sample.startTimeNanoseconds, sample.endTimeNanoseconds, sample.profilerCounters, endTimes, reverseDependencyGraph_);
+        }
+        EndProfilerTrace(ToNanoseconds(std::chrono::steady_clock::now() - frameStart));
+        if (graphExecuted) lastTrace_.frameCounters.lastWorkerDispatchMode = "job_graph";
+    }
+}
+
 void SystemScheduler::Shutdown(World& world) {
     const SchedulerOperation operation{operationActive_};
     for (auto it = systems_.rbegin(); it != systems_.rend(); ++it) {
@@ -244,6 +326,14 @@ void SystemScheduler::SetSchedulingMode(SystemSchedulingMode mode) noexcept {
 
 SystemSchedulingMode SystemScheduler::SchedulingMode() const noexcept {
     return schedulingMode_;
+}
+
+void SystemScheduler::SetParallelismMode(SystemSchedulerParallelismMode mode) noexcept {
+    parallelismMode_ = mode;
+}
+
+SystemSchedulerParallelismMode SystemScheduler::ParallelismMode() const noexcept {
+    return parallelismMode_;
 }
 
 std::vector<std::string> SystemScheduler::ExecutionOrderSnapshot() const {

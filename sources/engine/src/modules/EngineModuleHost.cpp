@@ -130,6 +130,24 @@ private:
         loaded.library.Reset();
         return nullptr;
     }
+    const auto* build = static_cast<const EngineModuleBuildFingerprint*>(
+        loaded.library.FindSymbol(kEngineModuleBuildSymbol, diagnostics, "engine module plugin"));
+    if (build == nullptr) {
+        diagnostics.push_back("plugin '" + path.string() + "' has no build fingerprint; rebuild with the engine SDK");
+        return nullptr;
+    }
+    if (build->size != sizeof(EngineModuleBuildFingerprint) || build->revision != 1U) {
+        diagnostics.push_back("plugin '" + path.string() + "' has incompatible build fingerprint layout");
+        return nullptr;
+    }
+    for (std::size_t index = 0; index < kEngineModuleBuildFields.size(); ++index) {
+        if (build->fields[index] != kEngineModuleBuildFingerprint.fields[index]) {
+            diagnostics.push_back("plugin '" + path.string() + "' has incompatible " +
+                kEngineModuleBuildFields[index] + " (plugin " + std::to_string(build->fields[index]) +
+                ", engine " + std::to_string(kEngineModuleBuildFingerprint.fields[index]) + "); rebuild with the engine SDK");
+            return nullptr;
+        }
+    }
     const char* exportedName = moduleName();
     if (exportedName == nullptr || exportedName[0] == '\0') {
         diagnostics.push_back("plugin '" + path.string() + "' exported an empty engine module name");
@@ -371,37 +389,53 @@ void EngineModuleHost::LoadPreparedModules(kb::ecs::World& world) {
     active_ = ResolveOrder(entries, diagnostics_);
 
     // Loading is a transaction: a module that throws from OnLoad or OnEnable undoes the steps that already completed
-    // (disable the enabled ones, unload the loaded ones, newest first), leaves the host unloaded with a diagnostic that
+    // (including a partially completed failing step, newest first), leaves the host unloaded with a diagnostic that
     // names the module and the step, and lets the next Load start again from a clean state.
     EngineModuleContext context{ world, project_ };
     std::size_t loadedCount = 0U;
     std::size_t enabledCount = 0U;
     const char* step = "OnLoad";
-    IEngineModule* failing = nullptr;
+    std::string failingName;
+    const auto moduleName = [&](IEngineModule* module) -> const std::string& {
+        return std::ranges::find_if(entries, [module](const ResolveEntry& entry) {
+            return entry.module == module;
+        })->metadata.name;
+    };
     try {
         for (IEngineModule* module : active_) {
-            failing = module;
-            module->OnLoad(context);
+            failingName = moduleName(module);
             ++loadedCount;
+            module->OnLoad(context);
         }
         step = "OnEnable";
         for (IEngineModule* module : active_) {
-            failing = module;
-            module->OnEnable();
+            failingName = moduleName(module);
             ++enabledCount;
+            module->OnEnable();
         }
         return;
     } catch (const std::exception& error) {
-        diagnostics_.push_back("module '" + failing->Metadata().name + "' failed in " + step + ": " + error.what() + "; loading was rolled back");
+        diagnostics_.push_back("module '" + failingName + "' failed in " + step + ": " + error.what() + "; loading was rolled back");
     } catch (...) {
-        diagnostics_.push_back("module '" + failing->Metadata().name + "' failed in " + step + " with an unknown error; loading was rolled back");
+        diagnostics_.push_back("module '" + failingName + "' failed in " + step + " with an unknown error; loading was rolled back");
     }
-    for (std::size_t index = enabledCount; index > 0U; --index) {
-        try { active_[index - 1U]->OnDisable(); } catch (...) {}
-    }
-    for (std::size_t index = loadedCount; index > 0U; --index) {
-        try { active_[index - 1U]->OnUnload(); } catch (...) {}
-    }
+    const auto undo = [&](std::size_t count, const char* undoStep, auto operation) {
+        for (std::size_t index = count; index > 0U; --index) {
+            IEngineModule* module = active_[index - 1U];
+            const auto entry = std::ranges::find_if(entries, [module](const ResolveEntry& candidate) {
+                return candidate.module == module;
+            });
+            try {
+                (module->*operation)();
+            } catch (const std::exception& error) {
+                diagnostics_.push_back("module '" + entry->metadata.name + "' failed during rollback " + undoStep + ": " + error.what());
+            } catch (...) {
+                diagnostics_.push_back("module '" + entry->metadata.name + "' failed during rollback " + undoStep + " with an unknown error");
+            }
+        }
+    };
+    undo(enabledCount, "OnDisable", &IEngineModule::OnDisable);
+    undo(loadedCount, "OnUnload", &IEngineModule::OnUnload);
     active_.clear();
     loaded_ = false;
 }

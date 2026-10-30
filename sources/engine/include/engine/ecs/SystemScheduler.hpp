@@ -24,6 +24,7 @@ enum class SystemSchedulingMode {
 enum class SystemSchedulerParallelismMode {
     SystemStages,
     QueryChunks,
+    SystemsAndChunks,
 };
 
 struct SystemSchedulerConfig {
@@ -67,6 +68,9 @@ public:
 
     void SetSchedulingMode(SystemSchedulingMode mode) noexcept;
     [[nodiscard]] SystemSchedulingMode SchedulingMode() const noexcept;
+    // Configure between updates on the owner thread.
+    void SetParallelismMode(SystemSchedulerParallelismMode mode) noexcept;
+    [[nodiscard]] SystemSchedulerParallelismMode ParallelismMode() const noexcept;
     [[nodiscard]] std::vector<std::string> ExecutionOrderSnapshot() const;
     void SetDebugTraceEnabled(bool enabled) noexcept;
     [[nodiscard]] bool DebugTraceEnabled() const noexcept;
@@ -96,6 +100,7 @@ private:
         const std::vector<std::size_t>& order,
         const std::vector<std::vector<std::size_t>>& graph) const;
     void RebuildExecutionOrder();
+    void UpdateGraph(World& world, float deltaSeconds);
     void BeginDebugTrace();
     void EndDebugTrace(std::uint64_t frameDurationNanoseconds);
     void BeginProfilerTrace();

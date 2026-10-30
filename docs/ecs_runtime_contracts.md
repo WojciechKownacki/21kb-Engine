@@ -178,3 +178,23 @@ for a system to write: a system that only reads the scene during its update and 
 as commands, played back in registration order after the group (the ECS `CommandBuffer` already has
 lanes and a defined playback order, see above). AI thinking and the gameplay senses are read heavy and
 would be the first candidates; they need splitting into a read part and a write part first.
+
+## Dependency graph execution
+
+`SystemSchedulerParallelismMode::SystemsAndChunks` is an opt-in execution mode
+for ECS systems. Dependencies release graph successors as they complete; sync
+points execute on the scheduler's owner thread. A system can synchronously submit
+jobs, batches or chunks to its execution pool, whose workers help while waiting.
+Nested graph dispatch and asynchronous submissions to that same pool are rejected.
+Graph dispatch from a regular worker callback on the same pool is also rejected.
+Configure the scene scheduler between updates using `SceneRuntime::SetEcsParallelismMode`.
+For headless runs, `kb_cli run --ecs-parallelism combined` selects the same mode;
+`systems` and `chunks` select the existing alternatives. Without the option the
+scene's configured mode is preserved.
+
+The `job_graph` trace mode identifies a graph that actually ran. In this mode the
+worker-pool dispatch counters describe the worker pump dispatch, not the number of
+graph nodes or chunk jobs. Pump active time includes time spent waiting for work;
+system event durations include time spent waiting for nested work and can include
+helping another system's chunks. These durations are elapsed time, not measured
+thread CPU time or a reliable measure of worker utilization.

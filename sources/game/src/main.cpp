@@ -4,6 +4,7 @@
 #include "ParticleRuntimeDiagnostics.hpp"
 #include "GameScriptLog.hpp"
 #include "GameRuntimeDiagnostics.hpp"
+#include "kb/net/SceneClient.hpp"
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputRecording.hpp"
@@ -64,6 +65,7 @@ constexpr std::uint32_t kDefaultWindowHeight = 720U;
 
 struct GameOptions {
     std::filesystem::path projectPath;
+    std::filesystem::path networkConfigPath;
     std::string sceneOverride;
     std::uint32_t width = kDefaultWindowWidth;
     std::uint32_t height = kDefaultWindowHeight;
@@ -93,6 +95,7 @@ Usage: kb_game [options]
 
   --project=<dir|Name.21kbproject>  project to run (default: the game beside this executable)
   --scene=/Game/<path>.21kbscene    start scene (default: the project's startup map)
+  --network-config=<file.json>     connect using runtime UDP session settings
   --width=<64..8192> --height=<64..8192>  window size
   --fullscreen                      primary monitor, native resolution
   --headless                        render without showing the window (needs --frames)
@@ -243,6 +246,12 @@ constexpr std::array<std::wstring_view, 9U> kDevelopmentSwitches{
                 return false;
             }
             options.frameLimit = frames;
+        } else if (HasPrefix(argument, L"--network-config=")) {
+            if (!options.networkConfigPath.empty() || argument.size() == 17U) {
+                std::cerr << "kb_game: --network-config expects one settings file\n";
+                return false;
+            }
+            options.networkConfigPath = std::wstring{argument.substr(17U)};
         } else if (HasPrefix(argument, L"--width=")) {
             if (!ParseWindowExtent(argument.substr(8U), options.width)) {
                 std::cerr << "kb_game: --width expects 64..8192 pixels\n";
@@ -398,6 +407,23 @@ constexpr std::array<std::wstring_view, 9U> kDevelopmentSwitches{
 }
 
 int RunGame(const GameOptions& options) {
+    std::optional<kb::net::SceneClientOptions> networkOptions;
+    if (!options.networkConfigPath.empty()) {
+        std::ifstream input(options.networkConfigPath, std::ios::binary);
+        std::array<char, 8193U> content{};
+        if (!input) {
+            std::cerr << "kb_game: network settings file could not be opened\n";
+            return EXIT_FAILURE;
+        }
+        input.read(content.data(), static_cast<std::streamsize>(content.size()));
+        kb::net::SceneClientOptions parsed;
+        if (input.bad() || !kb::net::ParseNativeSceneClientSettings(
+                std::string_view{content.data(), static_cast<std::size_t>(input.gcount())}, parsed)) {
+            std::cerr << "kb_game: invalid network settings\n";
+            return EXIT_FAILURE;
+        }
+        networkOptions = std::move(parsed);
+    }
     kb::input::InputRecording inputReplay;
     if (!options.inputReplayPath.empty()) {
         auto loaded = kb::input::ReadInputRecording(options.inputReplayPath);
@@ -527,6 +553,11 @@ int RunGame(const GameOptions& options) {
     if (!LoadGameProjectScene(projectRuntime, scene, scenePath, discoveredAssets, std::cerr)) {
         return EXIT_FAILURE;
     }
+    std::unique_ptr<kb::net::SceneClient> network;
+    if (networkOptions) {
+        network = std::make_unique<kb::net::SceneClient>(scene, std::move(*networkOptions),
+            [](std::string& error) { return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0,0,0,0,0), error); });
+    }
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
     std::cout << "kb_game: project=" << kb::game::NarrowForDiagnostics(projectRuntime.projectRoot)
               << " scene=" << kb::game::NarrowForDiagnostics(scenePath)
@@ -641,6 +672,11 @@ int RunGame(const GameOptions& options) {
             static_cast<float>(window.Height())));
         renderSceneSync.BeforeUpdate(scene);
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
+        if (network && !network->Update(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()), std::cerr)) {
+            reportError("network session update failed");
+            break;
+        }
         for (std::string& error : kb::game::DrainGameRuntimeErrors(
                  scene, scriptActive ? scriptModule : nullptr)) {
             reportError(std::move(error));
@@ -803,6 +839,7 @@ int RunGame(const GameOptions& options) {
         reportError(std::move(error));
     }
     hapticsBackend.StopAll();
+    network.reset();
     kb::input::InputHaptics::UnregisterBackend(scene, hapticsBackend);
     renderer.ReleaseScene(scene);
     renderer.Shutdown();

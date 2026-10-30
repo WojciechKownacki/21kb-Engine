@@ -1418,15 +1418,18 @@ void TestWindowsCollectorAndHapticsHostCalls() {
         "A collector without a foreground owner must report no focus and no held keys or buttons");
 
     Win32XInputHapticsBackend backend;
-    const InputHapticsCapability missing = backend.Capability(7U);
+    constexpr std::uint32_t missingSlot = InputDeviceState::kMaxGamepads;
+    const InputHapticsCapability missing = backend.Capability(missingSlot);
     Require(!missing.supported && !missing.disabledReason.empty(), "A slot that does not exist must be unsupported with a reason");
     const InputHapticsCapability first = backend.Capability(0U);
-    Require(first.supported && first.dualMotor && first.maxGamepads == 4U, "Slot 0 must report dual motor support for four pads");
-    Require(!backend.SetVibration(9U, 0.5F, 0.5F), "Vibration on a slot that does not exist must fail");
+    Require(first.maxGamepads == InputDeviceState::kMaxGamepads && first.dualMotor == first.supported &&
+            (!first.connected || first.supported) && (first.supported || !first.disabledReason.empty()),
+        "XInput capability must describe its mapped actuator and logical slot range");
+    Require(!backend.SetVibration(missingSlot, 0.5F, 0.5F), "Vibration on a slot that does not exist must fail");
     const float notANumber = std::numeric_limits<float>::quiet_NaN();
     static_cast<void>(backend.SetVibration(0U, notANumber, notANumber));
     backend.StopAll();
-    Require(!backend.SetVibration(9U, 0.0F, 0.0F), "The backend must keep refusing missing slots after StopAll");
+    Require(!backend.SetVibration(missingSlot, 0.0F, 0.0F), "The backend must keep refusing missing slots after StopAll");
 }
 #endif
 

@@ -1604,6 +1604,21 @@ if(BUILD_TESTING)
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
             set_tests_properties(kb_editor_gameplay_graph_workflow_package PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;gameplay;graph;packaging" TIMEOUT 1200)
+            if(TARGET kb_ecs_graph_module_fixture AND TARGET kb_ecs_graph_project_fixture)
+                add_test(NAME kb_editor_ecs_graph_workflow_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/EcsGraphWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --module $<TARGET_FILE:kb_ecs_graph_module_fixture>
+                        --project-tool $<TARGET_FILE:kb_ecs_graph_project_fixture>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
+                        --test-root "${CMAKE_BINARY_DIR}/ecs_graph_workflow_tests"
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
+                set_tests_properties(kb_editor_ecs_graph_workflow_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;ecs;modules;packaging" TIMEOUT 1200)
+            endif()
         endif()
     endif()
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

@@ -29,6 +29,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -71,6 +74,10 @@ struct ModuleProbe {
     int attachCount = 0;
     int detachCount = 0;
     std::vector<std::string> unloadOrder;
+    std::set<std::string> registrations;
+    std::map<std::string, std::function<void()>> callbacks;
+    int callbackCalls = 0;
+    bool failCleanup = false;
 };
 
 class ProbeSystem final : public kb::ecs::System {
@@ -180,15 +187,27 @@ public:
         return kb::modules::EngineModuleMetadata{ name_, 1U, dependencies_, Phase::Default };
     }
     void OnLoad(kb::modules::EngineModuleContext&) override {
+        probe_.registrations.insert(name_);
         if (fault_ != nullptr && *fault_ == Fault::Load) throw std::runtime_error("load exploded");
         probe_.loadOrder.push_back(name_);
     }
     void OnEnable() override {
+        probe_.callbacks.emplace(name_, [this] { ++probe_.callbackCalls; });
         if (fault_ != nullptr && *fault_ == Fault::Enable) throw std::runtime_error("enable exploded");
         ++probe_.enableCount;
     }
-    void OnDisable() override { ++probe_.disableCount; probe_.unloadOrder.push_back("disable:" + name_); }
-    void OnUnload() override { ++probe_.unloadCount; probe_.unloadOrder.push_back("unload:" + name_); }
+    void OnDisable() override {
+        probe_.callbacks.erase(name_);
+        ++probe_.disableCount;
+        probe_.unloadOrder.push_back("disable:" + name_);
+        if (probe_.failCleanup) throw std::runtime_error("disable cleanup failed");
+    }
+    void OnUnload() override {
+        probe_.registrations.erase(name_);
+        ++probe_.unloadCount;
+        probe_.unloadOrder.push_back("unload:" + name_);
+        if (probe_.failCleanup) throw std::runtime_error("unload cleanup failed");
+    }
 private:
     std::string name_;
     std::vector<std::string> dependencies_;
@@ -197,13 +216,16 @@ private:
 };
 
 void RunModuleLoadRollsBackOnFailureTest() {
+    for (const bool failCleanup : {false, true}) {
     for (const FaultyModule::Fault kind : { FaultyModule::Fault::Load, FaultyModule::Fault::Enable }) {
         ModuleProbe probe;
+        probe.failCleanup = failCleanup;
         FaultyModule::Fault fault = kind;
         kb::scene::Scene scene;
         EngineModuleHost host{ kb::project::ProjectDescriptor{} };
         host.Add(std::make_unique<FaultyModule>("First", std::vector<std::string>{}, probe, nullptr));
         host.Add(std::make_unique<FaultyModule>("Second", std::vector<std::string>{ "First" }, probe, &fault));
+        host.Add(std::make_unique<FaultyModule>("Third", std::vector<std::string>{ "Second" }, probe, nullptr));
         host.Load(scene.Runtime().EcsWorld());
         const bool inLoad = kind == FaultyModule::Fault::Load;
         kb::tests::Require(host.ActiveCount() == 0U && !host.IsActive("First") && !host.IsActive("Second"), "a failed load must leave no module active");
@@ -213,21 +235,41 @@ void RunModuleLoadRollsBackOnFailureTest() {
                               line.find(inLoad ? "load exploded" : "enable exploded") != std::string::npos);
         }
         kb::tests::Require(named, "the diagnostic must name the module, the step and the cause");
+        kb::tests::Require(probe.registrations.empty() && probe.callbacks.empty(),
+            "rollback must remove registrations and callbacks including partial failing initialization");
+        if (failCleanup) {
+            kb::tests::Require(std::ranges::any_of(host.Diagnostics(), [](const std::string& line) {
+                return line.find("module 'Second' failed during rollback OnUnload: unload cleanup failed") != std::string::npos;
+            }), "rollback failures must name the module, cleanup step and cause");
+            if (!inLoad) {
+                kb::tests::Require(std::ranges::any_of(host.Diagnostics(), [](const std::string& line) {
+                    return line.find("failed during rollback OnDisable: disable cleanup failed") != std::string::npos;
+                }), "enable rollback failures must be reported too");
+            }
+        }
         if (inLoad) {
-            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "unload:First" }, "only the module that had loaded is unloaded");
+            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "unload:Second", "unload:First" }, "every started load is undone, including the partial failing step");
         } else {
-            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "disable:First", "unload:Second", "unload:First" },
+            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "disable:Second", "disable:First", "unload:Third", "unload:Second", "unload:First" },
                 "the enabled module is disabled and the loaded modules are unloaded, newest first");
         }
         // The fault is fixed: the next Load works from a clean state.
         fault = FaultyModule::Fault::None;
+        probe.failCleanup = false;
         probe.loadOrder.clear();
         host.Load(scene.Runtime().EcsWorld());
-        kb::tests::Require(host.ActiveCount() == 2U && host.IsActive("First") && host.IsActive("Second") &&
-                probe.loadOrder == std::vector<std::string>{ "First", "Second" },
+        kb::tests::Require(host.ActiveCount() == 3U && host.IsActive("First") && host.IsActive("Second") && host.IsActive("Third") &&
+                probe.loadOrder == std::vector<std::string>{ "First", "Second", "Third" },
             "after the fault is fixed the modules load again, in dependency order");
+        kb::tests::Require(probe.registrations.size() == 3U && probe.callbacks.size() == 3U, "retry must recreate every registration exactly once");
+        for (const auto& [name, callback] : probe.callbacks) {
+            static_cast<void>(name);
+            callback();
+        }
+        kb::tests::Require(probe.callbackCalls == 3, "retried callbacks must remain functional");
         host.Unload();
-        kb::tests::Require(host.ActiveCount() == 0U, "an unload after a successful retry leaves nothing active");
+        kb::tests::Require(host.ActiveCount() == 0U && probe.registrations.empty() && probe.callbacks.empty(), "an unload after a successful retry leaves nothing active");
+    }
     }
 }
 

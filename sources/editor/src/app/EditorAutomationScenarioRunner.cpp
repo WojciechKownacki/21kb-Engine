@@ -6194,6 +6194,21 @@ int EditorAutomationScenarioRunner::Run(
 
     const std::filesystem::path absoluteArtifacts =
         std::filesystem::absolute(artifactRoot);
+    std::filesystem::path sourceProject;
+    if (const auto* initial = root.Find("initial_project"); initial != nullptr) {
+        if (initial->GetKind() != JsonValue::Kind::String || !initialPlugins.empty()) {
+            WriteFailureArtifact(absoluteArtifacts, "initial_project must be a path and cannot override initial_plugins");
+            return 1;
+        }
+        sourceProject = std::filesystem::weakly_canonical(std::filesystem::absolute(
+            scenarioPath.parent_path() / std::filesystem::path{ initial->AsString() }));
+        const auto artifacts = std::filesystem::weakly_canonical(absoluteArtifacts);
+        if (!std::filesystem::is_regular_file(sourceProject) || sourceProject.extension() != ".21kbproject" ||
+            IsInside(sourceProject.parent_path(), artifacts) || IsInside(artifacts, sourceProject)) {
+            WriteFailureArtifact(absoluteArtifacts, "initial_project must name a separate project descriptor");
+            return 1;
+        }
+    }
     std::error_code artifactError;
     std::filesystem::remove_all(
         absoluteArtifacts, artifactError);
@@ -6211,8 +6226,17 @@ int EditorAutomationScenarioRunner::Run(
         if (!copy.good()) return 1;
     }
 
-    const std::filesystem::path projectFile =
+    std::filesystem::path projectFile =
         absoluteArtifacts / "workspace" / "Project.21kbproject";
+    if (!sourceProject.empty()) {
+        std::filesystem::copy(sourceProject.parent_path(), absoluteArtifacts / "workspace",
+            std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, artifactError);
+        if (artifactError) {
+            WriteFailureArtifact(absoluteArtifacts, "initial project copy failed: " + artifactError.message());
+            return 1;
+        }
+        projectFile = absoluteArtifacts / "workspace" / sourceProject.filename();
+    }
     const ScopedProjectFile projectScope{projectFile};
     if (!initialPlugins.empty()) {
         kb::project::ProjectDescriptor descriptor;

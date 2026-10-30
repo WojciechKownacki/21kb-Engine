@@ -361,6 +361,14 @@ void SceneRuntimeService::SetEcsProfilerEnabled(Scene& scene, bool enabled) noex
     SceneAccess::State(scene).systemScheduler.SetProfilerEnabled(enabled);
 }
 
+void SceneRuntimeService::SetEcsParallelismMode(Scene& scene, kb::ecs::SystemSchedulerParallelismMode mode) noexcept {
+    SceneAccess::State(scene).systemScheduler.SetParallelismMode(mode);
+}
+
+kb::ecs::SystemSchedulerParallelismMode SceneRuntimeService::EcsParallelismMode(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).systemScheduler.ParallelismMode();
+}
+
 bool SceneRuntimeService::EcsProfilerEnabled(const Scene& scene) noexcept {
     return SceneAccess::State(scene).systemScheduler.ProfilerEnabled();
 }

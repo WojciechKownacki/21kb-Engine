@@ -3298,7 +3298,7 @@ void RunStreamFocusRuntimeTest() {
 
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 19U + kb::scene::SceneUIEventCatalog().size(),
+    kb::tests::Require(catalog.size() == 20U + kb::scene::SceneUIEventCatalog().size(),
         "Engine21kbLibrary event schema registry must catalog every built-in event emitted by the engine");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
@@ -3312,7 +3312,7 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     }
 
     const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed",
-        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker" };
+        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnControllerColliderHit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker", "OnTimelineEvent" };
     for (const std::string& name : expectedNames) {
         kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
     }
@@ -3483,7 +3483,7 @@ void RunComponentInspectorDescCatalogTest() {
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 857U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (857, including the collision mesh and the compatibility aliases) across all components");
+    kb::tests::Require(fieldsChecked == 858U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (858, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
