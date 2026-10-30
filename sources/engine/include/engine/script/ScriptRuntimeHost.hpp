@@ -128,14 +128,10 @@ public:
     [[nodiscard]] const kb::visual::VisualGraphDebugSession& VisualGraphDebugger() const noexcept;
 
 private:
-    struct RuntimeSnapshot;
-    [[nodiscard]] bool ValidateCheckpointBoundary(std::string& error) const;
     void RegisterDefaultBackends();
     void AddDiagnostic(std::string message);
 
     std::shared_ptr<ScriptRuntimeHostState> state_;
-    kb::scene::SceneSystemHandle sceneSystemHandle_{};
-    bool sceneSystemInstalled_ = false;
     std::vector<std::string> diagnostics_;
     std::vector<kb::library::EngineLibraryModuleReportEntry> libraryStartupReport_;
 };

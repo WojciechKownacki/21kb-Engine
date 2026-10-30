@@ -323,6 +323,57 @@ end
     std::filesystem::remove_all(root);
     std::cout<<"Lua host lifecycle/shared/deferred subscription/coroutine60-frame replay and detached history passed\n";
 }
+
+void RunHostFacadeDestruction() {
+    const auto root=std::filesystem::temp_directory_path()/("kb-host-facade-"+
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root/"Assets");
+    {
+        std::ofstream file{root/"Assets/State.lua"};
+        file<<R"(
+local ticks=0
+function Tick(self, dt)
+    ticks=ticks+1
+    if ticks==1 then CallFunction("ReleaseHost", {}) end
+    SetShared("ticks",ticks)
+end
+)";
+    }
+    std::unique_ptr<kb::core::RuntimeStateSnapshot> detached;
+    {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault=true;
+        kb::scene::Scene scene{std::move(descriptor)};
+        kb::tests::Require(scene.Assets().MountProject(root) && scene.Assets().Discover()==1U,"Host facade fixture mount failed");
+        const auto* script=scene.Assets().Manager().Registry().FindByPath("/Game/State.lua");
+        kb::tests::Require(script!=nullptr,"Host facade fixture metadata missing");
+        const auto entity=scene.Entities().CreateEntity();
+        scene.Components().Behaviours().Set(entity,{.behaviourAssetId=script->id.value,.backend=kb::scene::BehaviourBackend::Lua});
+        auto host=std::make_unique<kb::script::ScriptRuntimeHost>(scene);
+        auto* runtime=&host->Runtime();
+        kb::tests::Require(host->RegisterFunction({.signature={.name="ReleaseHost",.description="Release the script host facade during dispatch"},
+            .callback=[&host](const kb::script::ScriptFunctionCallContext&,std::span<const kb::script::ScriptFunctionArgument>) {
+                host.reset();return kb::script::ScriptFunctionCallResult{.executed=true};
+            }}),"Host facade release callback registration failed");
+        kb::tests::Require(host->InstallSceneSystem(),"Host facade system install failed");
+        const auto systemCount=scene.Runtime().SceneSystemCount();
+        kb::tests::Require(scene.Runtime().Update(0.01F) && !host && scene.Runtime().SceneSystemCount()==systemCount,
+            "Host facade was not destroyed during active dispatch");
+        kb::tests::Require(runtime->SharedState().Get("ticks")->AsInt()==1,"Runtime state did not outlive the facade");
+        std::string error;
+        auto image=scene.Runtime().CaptureRuntimeState(error);
+        kb::tests::Require(image!=nullptr,"Scene provider retained an expired host facade");
+        kb::tests::Require(scene.Runtime().Update(0.01F) && runtime->SharedState().Get("ticks")->AsInt()==2,
+            "Facade-free script state did not continue");
+        kb::tests::Require(scene.Runtime().RestoreRuntimeState(*image,error) && scene.Runtime().Update(0.01F)
+            && runtime->SharedState().Get("ticks")->AsInt()==2,"Facade-free scene checkpoint did not replay");
+        detached=scene.Runtime().CaptureRuntimeState(error);
+        kb::tests::Require(detached!=nullptr,"Facade-free detached capture failed");
+    }
+    detached.reset();
+    std::filesystem::remove_all(root);
+    std::cout<<"Host facade destruction during dispatch and shared state checkpoint passed\n";
+}
 }
 
 int main() {
@@ -331,5 +382,6 @@ int main() {
     RunSuspendedCoroutineReplay();
     RunHistoryBudget();
     RunHostContinuation();
+    RunHostFacadeDestruction();
     RunOldModuleRejection();
 }

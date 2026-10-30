@@ -171,6 +171,8 @@ class SceneRuntime {
 public:
     explicit SceneRuntime(Scene& scene) noexcept;
     [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error);
+    [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeDeltaState(
+        const kb::core::RuntimeStateSnapshot& baseline, std::string& error);
     [[nodiscard]] bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const;
     [[nodiscard]] bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error);
 

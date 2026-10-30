@@ -23,6 +23,17 @@
 
 namespace kb::scene {
 
+SceneSystemScheduler::RuntimeStateOperation::RuntimeStateOperation(bool& active) : active_(active) {
+    if (active_) throw std::logic_error("Scene system dispatch or checkpoint is already active");
+    active_ = true;
+}
+
+SceneSystemScheduler::RuntimeStateOperation::~RuntimeStateOperation() { active_ = false; }
+
+SceneSystemScheduler::RuntimeStateOperation SceneSystemScheduler::BeginRuntimeStateOperation() {
+    return RuntimeStateOperation{dispatching_};
+}
+
 bool SceneSystemScheduler::CollectRuntimeStateProviders(std::vector<RuntimeStateBinding>& output, std::string& error) const {
     output.clear();
     if (dispatching_) { error = "Scene checkpoints require a completed system dispatch boundary"; return false; }

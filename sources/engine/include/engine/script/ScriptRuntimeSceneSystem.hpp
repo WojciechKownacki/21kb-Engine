@@ -48,6 +48,7 @@ public:
 
 private:
     friend class ScriptRuntimeHost;
+    friend struct ScriptRuntimeHostState;
     struct BehaviourLifecycleKey {
         std::uint64_t entityId = 0;
         std::uint64_t assetId = 0;

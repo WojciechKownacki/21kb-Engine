@@ -181,6 +181,7 @@ private:
     friend class PucLuaEventsApi;
     friend class PucLuaRuntimeApi;
     friend class ScriptRuntimeHost;
+    friend struct ScriptRuntimeHostState;
     struct RuntimeSnapshot;
     [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeStateImpl(std::string& error, bool coordinatedHost);
     [[nodiscard]] bool ValidateRuntimeStateImpl(const kb::core::RuntimeStateSnapshot& state, std::string& error, bool coordinatedHost) const;

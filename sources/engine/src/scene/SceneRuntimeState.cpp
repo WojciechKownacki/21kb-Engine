@@ -82,7 +82,8 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
         std::vector<std::byte> bytes;
     };
     std::uint64_t sceneId = 0U;
-    kb::ecs::ChunkedWorldSnapshot world;
+    std::shared_ptr<const kb::ecs::ChunkedWorldSnapshot> world;
+    std::optional<kb::ecs::ChunkedWorldDeltaSnapshot> delta;
     SceneValues values;
     std::vector<EntityMetadata> entities;
     std::vector<SceneTransformResidual> residuals;
@@ -94,36 +95,43 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
 
     bool Apply(Scene& scene, std::span<const SceneSystemScheduler::RuntimeStateBinding> bindings, std::string& error) const {
         auto& state = SceneAccess::State(scene);
-        auto current = state.world.CaptureChunkedSnapshot();
-        std::unordered_set<kb::ecs::Entity::IdType> targetIds;
-        targetIds.reserve(entities.size());
-        for (const auto& metadata : entities) targetIds.insert(metadata.entity.Id());
-        kb::ecs::ChunkedWorldDeltaSnapshot delta;
-        delta.entityCount = world.entityCount;
-        delta.componentTypes = current.componentTypes;
-        for (const auto& type : world.componentTypes) {
-            if (std::none_of(delta.componentTypes.begin(), delta.componentTypes.end(), [&](const auto& t) { return t.id == type.id; }))
-                delta.componentTypes.push_back(type);
+        const auto replaceNative = [&](const kb::ecs::ChunkedWorldSnapshot& full) {
+            auto current = state.world.CaptureChunkedSnapshot();
+            std::unordered_set<kb::ecs::Entity::IdType> targetIds;
+            targetIds.reserve(full.entityCount);
+            for (const auto& chunk : full.chunks) for (const auto id : chunk.entityIds) targetIds.insert(id);
+            kb::ecs::ChunkedWorldDeltaSnapshot delta;
+            delta.entityCount = full.entityCount;
+            delta.componentTypes = current.componentTypes;
+            for (const auto& type : full.componentTypes) {
+                if (std::none_of(delta.componentTypes.begin(), delta.componentTypes.end(), [&](const auto& t) { return t.id == type.id; }))
+                    delta.componentTypes.push_back(type);
+            }
+            std::vector<kb::ecs::Entity> currentEntities;
+            currentEntities.reserve(current.entityCount);
+            for (const auto& chunk : current.chunks) for (const auto id : chunk.entityIds) {
+                currentEntities.emplace_back(id);
+                if (!targetIds.contains(id)) delta.destroyedEntityIds.push_back(id);
+            }
+            delta.chunks.reserve(full.chunks.size());
+            for (const auto& chunk : full.chunks) delta.chunks.push_back({
+                .archetypeIndex=chunk.archetypeIndex, .chunkIndex=chunk.chunkIndex, .fullArchetype=true,
+                .entityIds=chunk.entityIds, .components=chunk.components});
+            // Detach before destroying future parents: a restored child may survive
+            // under another parent, and must not be cascade-deleted with the future one.
+            for (const auto entity : currentEntities) state.world.SetName(entity, {});
+            state.world.ClearParents(currentEntities);
+            for (const auto entity : currentEntities) {
+                for (const auto id : MetadataIds(state.world, entity))
+                    ecs_remove_id(state.world.NativeHandle(), kb::ecs::FlecsEntityId(entity), id);
+            }
+            if (!state.world.ApplyChunkedDeltaSnapshot(delta)) { error = "Exact native ECS checkpoint restore failed"; return false; }
+            return true;
+        };
+        if (!replaceNative(*world)) return false;
+        if (delta && !state.world.ApplyChunkedDeltaSnapshot(*delta)) {
+            error = "Native ECS scene delta restore failed"; return false;
         }
-        std::vector<kb::ecs::Entity> currentEntities;
-        currentEntities.reserve(current.entityCount);
-        for (const auto& chunk : current.chunks) for (const auto id : chunk.entityIds) {
-            currentEntities.emplace_back(id);
-            if (!targetIds.contains(id)) delta.destroyedEntityIds.push_back(id);
-        }
-        delta.chunks.reserve(world.chunks.size());
-        for (const auto& chunk : world.chunks) delta.chunks.push_back({
-            .archetypeIndex=chunk.archetypeIndex, .chunkIndex=chunk.chunkIndex, .fullArchetype=true,
-            .entityIds=chunk.entityIds, .components=chunk.components});
-        // Detach before destroying future parents: a restored child may survive
-        // under another parent, and must not be cascade-deleted with the future one.
-        for (const auto entity : currentEntities) state.world.SetName(entity, {});
-        state.world.ClearParents(currentEntities);
-        for (const auto entity : currentEntities) {
-            for (const auto id : MetadataIds(state.world, entity))
-                ecs_remove_id(state.world.NativeHandle(), kb::ecs::FlecsEntityId(entity), id);
-        }
-        if (!state.world.ApplyChunkedDeltaSnapshot(delta)) { error = "Exact native ECS checkpoint restore failed"; return false; }
         for (const auto& value : sideValues) kb::ecs::WorldInternalAccess::SetComponent(
             state.world, value.entity, value.component, value.bytes.size(), value.bytes.data());
         for (const auto& metadata : entities) {
@@ -199,6 +207,7 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> SceneRuntime::CaptureRuntimeStat
     if (!CheckBoundary(state, error)) return {};
     std::vector<SceneSystemScheduler::RuntimeStateBinding> bindings;
     if (!state.sceneSystemScheduler.CollectRuntimeStateProviders(bindings, error)) return {};
+    const auto operation = state.sceneSystemScheduler.BeginRuntimeStateOperation();
     auto snapshot = std::make_unique<RuntimeSnapshot>();
     snapshot->sceneId = scene_.Id();
     // Providers finish pending simulation before ECS and scene values are copied.
@@ -209,9 +218,9 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> SceneRuntime::CaptureRuntimeStat
         snapshot->payload += captured->PayloadBytes();
         snapshot->providers.push_back({handle, std::move(captured)});
     }
-    snapshot->world = state.world.CaptureChunkedSnapshot();
-    snapshot->entities.reserve(snapshot->world.entityCount);
-    for (const auto& chunk : snapshot->world.chunks) {
+    snapshot->world = std::make_shared<const kb::ecs::ChunkedWorldSnapshot>(state.world.CaptureChunkedSnapshot());
+    snapshot->entities.reserve(snapshot->world->entityCount);
+    for (const auto& chunk : snapshot->world->chunks) {
         snapshot->payload += chunk.entityIds.size() * sizeof(kb::ecs::Entity::IdType);
         for (const auto& column : chunk.components) snapshot->payload += column.data.size();
         for (const auto id : chunk.entityIds) {
@@ -223,7 +232,7 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> SceneRuntime::CaptureRuntimeStat
             metadata.ids = MetadataIds(state.world, entity);
             std::unordered_set<kb::ecs::ComponentId> captured;
             for (const auto& column : chunk.components) captured.insert(column.componentId);
-            for (const auto& type : snapshot->world.componentTypes) {
+            for (const auto& type : snapshot->world->componentTypes) {
                 if (captured.contains(type.id) || !kb::ecs::UsesNativeSideStorage(type.storageClass)) continue;
                 const auto* data = static_cast<const std::byte*>(kb::ecs::WorldInternalAccess::TryGetComponent(state.world, entity, type.id));
                 if (!data) continue;
@@ -256,6 +265,32 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> SceneRuntime::CaptureRuntimeStat
     return snapshot;
 }
 
+std::unique_ptr<kb::core::RuntimeStateSnapshot> SceneRuntime::CaptureRuntimeDeltaState(
+    const kb::core::RuntimeStateSnapshot& baseline, std::string& error) {
+    if (!ValidateRuntimeState(baseline, error)) return {};
+    const auto& base = static_cast<const RuntimeSnapshot&>(baseline);
+    if (base.delta) { error = "Scene delta capture requires a full checkpoint baseline"; return {}; }
+    auto captured = CaptureRuntimeState(error);
+    if (!captured) return {};
+    auto& snapshot = static_cast<RuntimeSnapshot&>(*captured);
+    // The provider boundary has already completed; native capture is read-only.
+    auto delta = SceneAccess::State(scene_).world.CaptureChunkedDeltaSnapshot(*base.world);
+    for (const auto& chunk : snapshot.world->chunks) {
+        snapshot.payload -= chunk.entityIds.size() * sizeof(kb::ecs::Entity::IdType);
+        for (const auto& column : chunk.components) snapshot.payload -= column.data.size();
+    }
+    snapshot.payload += delta.destroyedEntityIds.size() * sizeof(kb::ecs::Entity::IdType);
+    for (const auto& chunk : delta.chunks) {
+        snapshot.payload += chunk.entityIds.size() * sizeof(kb::ecs::Entity::IdType);
+        for (const auto& column : chunk.components) snapshot.payload += column.data.size();
+    }
+    snapshot.delta = std::move(delta);
+    // Retain just the immutable native baseline, independently of its providers.
+    snapshot.world = base.world;
+    error.clear();
+    return captured;
+}
+
 bool SceneRuntime::ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& source, std::string& error) const {
     const auto* snapshot = dynamic_cast<const RuntimeSnapshot*>(&source);
     if (!snapshot || snapshot->sceneId != scene_.Id()) { error = "Scene checkpoint belongs to another scene lifetime"; return false; }
@@ -282,6 +317,7 @@ bool SceneRuntime::RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& sou
     auto& state = SceneAccess::State(scene_);
     if (!state.sceneSystemScheduler.CollectRuntimeStateProviders(bindings, error)) return false;
     const auto& snapshot = static_cast<const RuntimeSnapshot&>(source);
+    const auto operation = state.sceneSystemScheduler.BeginRuntimeStateOperation();
     try { if (snapshot.Apply(scene_, bindings, error)) return true; }
     catch (const std::exception& exception) { error = exception.what(); }
     const auto failure = error;

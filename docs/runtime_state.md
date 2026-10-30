@@ -115,5 +115,20 @@ scene container capacities, retained resources and system allocator overhead. Pr
 memory measurements include those costs but also allocator caching and other process
 activity; neither number alone describes every history allocation.
 
-Engine module ABI 21 requires rebuilding C++ modules after the scene/provider
+`CaptureRuntimeDeltaState(fullBaseline, error)` retains the immutable native baseline
+and captures changed native chunks together with the complete target metadata,
+side-storage values and provider images. Restore replaces native columns with the
+baseline, applies the delta, and only then publishes target scene/provider state.
+The original full checkpoint may be released after capture; its provider images
+are not retained by the delta. Delta capture requires a full baseline from the same
+scene and system lifetimes. Payload accounting excludes the retained native baseline;
+count that shared baseline once when measuring a history.
+
+Capture, restore and rollback hold the scene-system dispatch boundary. A provider
+cannot remove its own system, register another system or recursively capture the
+same scene while the coordinator is calling it. The installed script provider owns
+shared host state directly. Destroying the host facade during dispatch therefore
+leaves the scheduler-owned state valid until the system itself is removed.
+
+Engine module ABI 22 requires rebuilding C++ modules after the scene/provider
 interface changes; an older module is rejected before its factory runs.

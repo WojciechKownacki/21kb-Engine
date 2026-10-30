@@ -25,6 +25,8 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <stdexcept>
 #if defined(_WIN32)
 #include <Windows.h>
 #include <Psapi.h>
@@ -204,8 +206,11 @@ class FaultStateSystem final : public kb::scene::SceneSystem, public kb::core::I
 public:
     int value = 0;
     bool failNextRestore = false;
+    std::function<void()> captureProbe;
+    std::function<void()> restoreProbe;
     void OnUpdate(kb::scene::SceneSystemContext&) override { ++value; }
     std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override {
+        if(captureProbe) captureProbe();
         auto state=std::make_unique<State>();state->owner=this;state->value=value;error.clear();return state;
     }
     bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& snapshot,std::string& error) const override {
@@ -214,13 +219,14 @@ public:
         error.clear();return true;
     }
     bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& snapshot,std::string& error) override {
+        if(restoreProbe) restoreProbe();
         if(!ValidateRuntimeState(snapshot,error)) return false;
         if(failNextRestore) {value=-999;failNextRestore=false;error="Injected restore failure";return false;}
         value=static_cast<const State&>(snapshot).value;return true;
     }
 };
 
-void RunSceneContinuation(bool pipelined) {
+void RunSceneContinuation(bool pipelined, bool useDelta = false) {
     const auto root = std::filesystem::temp_directory_path() / ("kb-scene-state-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(root / "Assets");
@@ -292,7 +298,20 @@ end
         kb::tests::Require(host.Succeeded() && host.InstallSceneSystem(), "Scene host installation failed");
         auto faultOwner=std::make_unique<FaultStateSystem>();
         auto* fault=faultOwner.get();
-        static_cast<void>(scene.Runtime().AddSceneSystem(std::move(faultOwner)));
+        const auto faultHandle=scene.Runtime().AddSceneSystem(std::move(faultOwner));
+        bool captureGuarded=false;
+        bool restoreGuarded=false;
+        fault->captureProbe=[&] {
+            try { static_cast<void>(scene.Runtime().AddSceneSystem(std::make_unique<UnknownStateSystem>())); }
+            catch(const std::logic_error&) { captureGuarded=true; }
+            std::string nestedError;
+            kb::tests::Require(!scene.Runtime().CaptureRuntimeState(nestedError) && !nestedError.empty(),
+                "Provider capture reentered the scene checkpoint");
+        };
+        fault->restoreProbe=[&] {
+            restoreGuarded=!scene.Runtime().RemoveSceneSystem(faultHandle);
+            kb::tests::Require(restoreGuarded,"Provider restore removed its own active system");
+        };
         const auto timer=scene.Timers().Repeat(0.037F, body.Entity());
         kb::tests::Require(timer!=0U, "Scene timer fixture failed");
         auto tick=[&](int index) {
@@ -307,9 +326,23 @@ end
         scene.Input().MutableDeviceState().SetKeyDown(kb::input::InputKey::W,true);
         kb::tests::Require(scene.Runtime().EnqueueCommand({.kind=kb::scene::SceneRuntimeCommandKind::SetTimeScale, .timeScale=0.75F}), "Queued source command failed");
         std::string error;
+        kb::scene::SceneObject baseOnly;
+        kb::scene::SceneObject deltaOnly;
+        if(useDelta) baseOnly=scene.Entities().CreateObject({.name="BaseOnly"});
         auto snapshot=scene.Runtime().CaptureRuntimeState(error);
         if(!snapshot) std::cerr<<"Scene capture: "<<error<<'\n';
         kb::tests::Require(snapshot!=nullptr, "Coordinated scene capture failed");
+        kb::tests::Require(captureGuarded,"Provider capture changed scheduler topology");
+        if(useDelta) {
+            scene.Entities().Destroy(baseOnly);
+            deltaOnly=scene.Entities().CreateObject({.name="DeltaOnly"});
+            for(int i=0;i<3;++i) tick(i);
+            auto delta=scene.Runtime().CaptureRuntimeDeltaState(*snapshot,error);
+            kb::tests::Require(delta!=nullptr,"Coordinated scene delta capture failed");
+            snapshot=std::move(delta); // The native baseline must outlive its original provider image.
+            kb::tests::Require(!scene.Runtime().CaptureRuntimeDeltaState(*snapshot,error) && !error.empty(),
+                "Scene accepted a delta as a full baseline");
+        }
         struct Sample {
             std::array<double,12> simulation;
             std::array<std::int64_t,7> script;
@@ -362,6 +395,9 @@ end
         const auto restoreUs=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-started).count();
         if(!restored) std::cerr<<"Scene restore: "<<error<<'\n';
         kb::tests::Require(restored, "Coordinated scene restore failed");
+        kb::tests::Require(restoreGuarded,"Provider restore did not hold scheduler ownership");
+        if(useDelta) kb::tests::Require(!scene.Entities().IsAlive(baseOnly) && scene.Entities().IsAlive(deltaOnly),
+            "Scene delta did not restore structural identity changes");
         kb::tests::Require(scene.Input().DeviceState().IsKeyDown(kb::input::InputKey::W), "Scene-owned device state did not restore");
         kb::tests::Require(scene.Entities().IsAlive(body) && !scene.Entities().IsAlive(futureParent)
             && !scene.Entities().IsAlive(extra) && child.Parent().Entity()==parent.Entity()
@@ -388,21 +424,24 @@ end
         }
         const auto before=PrivateBytes();
         std::vector<std::unique_ptr<kb::core::RuntimeStateSnapshot>> history;
-        std::size_t payload=0U;
+        auto historyBase=useDelta ? scene.Runtime().CaptureRuntimeState(error) : nullptr;
+        kb::tests::Require(!useDelta || historyBase!=nullptr,"Scene history baseline capture failed");
+        std::size_t payload=historyBase ? historyBase->PayloadBytes() : 0U;
         for(int i=0;i<32;++i) {
-            auto image=scene.Runtime().CaptureRuntimeState(error);
+            auto image=useDelta ? scene.Runtime().CaptureRuntimeDeltaState(*historyBase,error) : scene.Runtime().CaptureRuntimeState(error);
             kb::tests::Require(image!=nullptr,"Scene history capture failed");
+            if(useDelta) kb::tests::Require(image->PayloadBytes()<historyBase->PayloadBytes(),"Unchanged native scene delta retained full column payload");
             payload+=image->PayloadBytes();history.push_back(std::move(image));
         }
-        const auto after=PrivateBytes();history.clear();const auto released=PrivateBytes();
+        const auto after=PrivateBytes();history.clear();historyBase.reset();const auto released=PrivateBytes();
         const auto unknown=scene.Runtime().AddSceneSystem(std::make_unique<UnknownStateSystem>());
         kb::tests::Require(!scene.Runtime().CaptureRuntimeState(error) && !error.empty(), "Scene silently skipped a system without state provider");
         kb::tests::Require(!scene.Runtime().RestoreRuntimeState(*snapshot,error), "Scene accepted changed system topology");
         static_cast<void>(scene.Runtime().RemoveSceneSystem(unknown));
         detached=scene.Runtime().CaptureRuntimeState(error);
         kb::tests::Require(detached!=nullptr,"Detached coordinated scene capture failed");
-        std::cout<<"Scene continuation pipelined="<<pipelined<<" replay_frames=60 restore_us="<<restoreUs
-            <<" history_images=32 measured_payload_bytes="<<payload<<" process_private_before="<<before
+        std::cout<<"Scene continuation pipelined="<<pipelined<<" delta="<<useDelta<<" replay_frames=60 restore_us="<<restoreUs
+            <<" history_images=32 retained_full_baselines="<<useDelta<<" measured_payload_bytes="<<payload<<" process_private_before="<<before
             <<" process_private_with_history="<<after<<" process_private_after_release="<<released<<'\n';
     }
     detached.reset();
@@ -416,4 +455,6 @@ int main() {
     RunDetachedLifetime();
     RunSceneContinuation(false);
     RunSceneContinuation(true);
+    RunSceneContinuation(false,true);
+    RunSceneContinuation(true,true);
 }
