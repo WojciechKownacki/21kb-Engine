@@ -1253,7 +1253,7 @@ add_library(kb_engine STATIC
     src/script/lua/PucLuaValueBridge.cpp
     src/script/PucLuaScriptRuntime.cpp
     src/script/PucLuaRuntimeState.cpp
-    src/script/lua/PucLuaStateGraph.cpp
+    src/script/lua/PucLuaMemoryArena.cpp
     src/script/AudioShooterDemoProjectFiles.cpp
     src/script/ScriptAgentProjectFiles.cpp
     src/script/ScriptApiCatalog.cpp

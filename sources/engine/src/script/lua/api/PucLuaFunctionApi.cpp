@@ -1,4 +1,5 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
 #include "engine/assets/AssetId.hpp"
 
 #include "engine/scene/PhysicsBackend.hpp"
@@ -29,7 +30,7 @@ namespace kb::script {
 namespace {
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return PucLuaRuntimeApi::ContextFromUpvalue(state);
 }
 
 [[nodiscard]] std::vector<ScriptFunctionArgument> ArgumentsFromTable(lua_State* state, int index) {
@@ -3515,8 +3516,8 @@ int SetClosureTrampoline(lua_State* state) {
     return PucLuaSafeInvoke(state, function);
 }
 
-void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
-    lua_pushlightuserdata(state, &context);
+void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext&) {
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushlightuserdata(state, reinterpret_cast<void*>(function));
     lua_pushcclosure(state, &SetClosureTrampoline, 2);
     lua_setfield(state, -2, name);
@@ -3780,11 +3781,11 @@ void AttachCatalogModuleTables(lua_State* state, int environmentIndex, ScriptExe
 } // namespace
 
 void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaCallFunction>, 1);
     lua_setfield(state, environmentIndex, "CallFunction");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaLog>, 1);
     lua_setfield(state, environmentIndex, "Log");
 

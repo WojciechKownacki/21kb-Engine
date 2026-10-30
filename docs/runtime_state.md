@@ -43,20 +43,26 @@ and rejection of incompatible provider lifetimes and authored definitions.
 
 ## Lua VM state
 
-`PucLuaScriptRuntime` implements the same optional provider interface. It captures
-reachable script/module tables, cycles and shared aliases, function upvalues,
-the standard math library RNG state, and exposed instance values. Retained Lua
-references preserve object identities; a weak VM lifetime makes detached snapshot
-destruction safe after the VM closes. Capture and restore use protected calls,
-pause automatic garbage collection and bound graph depth, object count and payload.
+`PucLuaScriptRuntime` implements the same optional provider interface. At a completed
+execution boundary it copies every live Lua allocation and pins its address until
+the image is released. Restore copies those bytes back, including suspended thread
+stacks, instruction state, closures, tables, registry, garbage collector and standard
+library RNG/iterator userdata. It also restores the script/module code catalog,
+coroutine references, exposed values and debugger state. Retained API closures use
+the current execution context when a coroutine resumes in another frame.
 
-Capture rejects coroutine instruction state, opaque userdata without a codec and
-host-managed event subscriptions. Restore also rejects changed script/module code
-catalogs or another VM lifetime. These refusals must be handled by the caller;
-this VM snapshot does not capture script-host lifecycle, shared state or event
-queues. Lua payload accounting measures captured values, excluding retained VM
-object storage and container capacity. It is not a total history memory measure.
+Images belong to one live VM in the same process. They cannot serialize external
+native resources referenced by light userdata or extensions. Capture and restore
+reject execution in progress and host-managed event subscriptions. This VM snapshot
+does not capture script-host lifecycle, shared state or event queues. A weak VM
+lifetime rejects use after close; the image owns its allocator storage so detached
+image destruction remains safe.
 
-The added C++ runtime interface and lifetime member change the public Lua runtime
-layout. Engine module ABI 18 requires rebuilding C++ modules; an older module is
-rejected before its factory runs.
+`PayloadBytes()` reports copied Lua allocation bytes. `LuaMemoryOwnedBytes()` reports
+allocator capacities, block headers, retained dead blocks and image storage; the
+configured Lua memory budget includes that history. It excludes C++ runtime catalogs,
+system allocator overhead and process RSS, so it is not total world history memory.
+Releasing images frees their copies and any dead blocks no remaining image needs.
+
+Engine module ABI 19 requires rebuilding C++ modules after the runtime allocator
+change; an older module is rejected before its factory runs.

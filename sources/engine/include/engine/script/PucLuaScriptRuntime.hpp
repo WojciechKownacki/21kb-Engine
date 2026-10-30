@@ -135,6 +135,8 @@ public:
     [[nodiscard]] bool HasActiveExecutionBudget() const noexcept;
     // Bytes the Lua state currently holds, counted by its bounded allocator.
     [[nodiscard]] std::size_t LuaMemoryUsedBytes() const noexcept;
+    // Allocator block capacities/headers and checkpoint image storage, not process RSS.
+    [[nodiscard]] std::size_t LuaMemoryOwnedBytes() const noexcept;
     [[nodiscard]] const PucLuaDebugSettings& DebugSettings() const noexcept;
     void RequestBreakOnNextLine() noexcept;
     void RequestStepInto() noexcept;
@@ -177,6 +179,7 @@ public:
 
 private:
     friend class PucLuaEventsApi;
+    friend class PucLuaRuntimeApi;
     struct RuntimeSnapshot;
 
     [[nodiscard]] ScriptBackendExecutionResult ExecuteFunction(

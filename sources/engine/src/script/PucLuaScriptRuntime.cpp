@@ -5,7 +5,7 @@
 #include "script/lua/PucLuaSandboxEnvironment.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
-#include "script/lua/PucLuaStateGraph.hpp"
+#include "script/lua/PucLuaMemoryArena.hpp"
 
 extern "C" {
 #include <lauxlib.h>
@@ -646,6 +646,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     std::string_view functionName,
     ScriptExecutionContext& context,
     const ScriptEvent* event) {
+    PucLuaExecutionContextScope activeContext{state_, context};
     ScriptBackendExecutionResult result{};
     const kb::assets::AssetId assetId{ behaviour.behaviourAssetId };
     const InstanceKey instanceKey{

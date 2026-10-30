@@ -104,6 +104,7 @@ void BindSubscriberExecutionApi(const std::shared_ptr<SubscriberInvocation>& inv
 }
 
 void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, const ScriptEvent& event) {
+    PucLuaExecutionContextScope activeContext{invocation->state, invocation->context};
     PucLuaStackGuard stack{ invocation->state };
     lua_rawgeti(invocation->state, LUA_REGISTRYINDEX, invocation->ref);
     BindSubscriberExecutionApi(invocation);
@@ -127,7 +128,7 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
 }
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return PucLuaRuntimeApi::ContextFromUpvalue(state);
 }
 
 [[nodiscard]] kb::scene::SceneEntity OptionalEntityArg(lua_State* state, int index) {
@@ -308,29 +309,29 @@ int LuaEventsEmitDeferred(lua_State* state) {
 
 } // namespace
 
-void PucLuaEventsApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context, const PucLuaScriptRuntime& runtime) {
+void PucLuaEventsApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext&, const PucLuaScriptRuntime& runtime) {
     lua_createtable(state, 0, 5);
     const int tableIndex = lua_gettop(state);
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushlightuserdata(state, const_cast<void*>(static_cast<const void*>(&runtime)));
     lua_pushlightuserdata(state, runtime.state_);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsSubscribe>, 3);
     lua_setfield(state, tableIndex, "Subscribe");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsUnsubscribe>, 1);
     lua_setfield(state, tableIndex, "Unsubscribe");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsEmit>, 1);
     lua_setfield(state, tableIndex, "Emit");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsEmitDeferred>, 1);
     lua_setfield(state, tableIndex, "EmitDeferred");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsBroadcast>, 1);
     lua_setfield(state, tableIndex, "Broadcast");
 
