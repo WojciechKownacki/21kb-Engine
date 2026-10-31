@@ -6,6 +6,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
+#include "engine/project/ProjectManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
@@ -40,6 +41,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -437,6 +439,96 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     console_.Info("Project", "Reloaded scene with current project plugin settings.");
     UpgradePrefabLinksOnSave(loaded.document);
     CompleteLoadedUIComponents();
+    return true;
+}
+
+bool EditorSceneContext::ReloadSceneAfterExternalChange() {
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
+        return false;
+    }
+    EditorPlayModeSelectionSnapshot paths;
+    paths.CaptureAuthoredHierarchy(*scene_);
+    paths.CaptureSelection(hierarchySelection_);
+
+    // New or removed plugins and modules need a scene built with them: the whole project reloads.
+    const kb::project::ProjectDescriptorReadResult onDisk = kb::project::ProjectManager::LoadProject(ProjectFile());
+    const auto plugins = [](const kb::project::ProjectDescriptor& descriptor) {
+        std::vector<std::pair<std::string, bool>> enabled;
+        for (const kb::project::ProjectPluginReference& plugin : descriptor.plugins) enabled.emplace_back(plugin.name, plugin.enabled);
+        for (const kb::project::ProjectModuleDescriptor& module : descriptor.modules) enabled.emplace_back(module.name, true);
+        return enabled;
+    };
+    if (worldPartition_.IsOpen() || currentScenePath_.empty() || (onDisk.succeeded && plugins(onDisk.descriptor) != plugins(project_))) {
+        if (onDisk.succeeded) project_ = onDisk.descriptor;
+        if (!ReloadSceneFromProject()) return false;
+        paths.Restore(*scene_, hierarchySelection_);
+        return true;
+    }
+
+    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
+    if (!loaded.succeeded) {
+        console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string() +
+            (loaded.error.empty() ? std::string{} : ": " + loaded.error));
+        return false;
+    }
+    // Assets the tool added become known, and changed ones load again from their files.
+    static_cast<void>(scene_->Assets().Discover());
+    scene_->Assets().Manager().ClearRuntimeCache();
+    ReleaseRenderedSceneResources();
+
+    // Puts a document into the open scene with the scene's history set aside meanwhile, then lets
+    // the earlier undo steps and the selection follow the objects still there (same place in the
+    // hierarchy, same name), as leaving Play does.
+    const auto apply = [this](const kb::scene::SceneDocument& document) {
+        EditorPlayModeSelectionSnapshot before;
+        before.CaptureAuthoredHierarchy(*scene_);
+        before.CaptureSelection(hierarchySelection_);
+        std::unordered_map<std::uint64_t, std::string> names;
+        for (std::vector<kb::scene::SceneEntity> pending = scene_->Hierarchy().RootEntities(); !pending.empty();) {
+            const kb::scene::SceneEntity entity = pending.back();
+            pending.pop_back();
+            names.emplace(entity.Id(), scene_->Entities().Name(entity));
+            for (const kb::scene::SceneEntity child : scene_->Hierarchy().ChildEntities(entity)) pending.push_back(child);
+        }
+        scene_->History().Commit();
+        kb::scene::SceneHistorySnapshot history = scene_->History().Suspend();
+        const bool loaded = kb::scene::SceneDocumentService::LoadIntoScene(*scene_, document);
+        std::vector<kb::scene::SceneEntityRemap> remap = before.RecreatedEntities(*scene_);
+        std::erase_if(remap, [&](const kb::scene::SceneEntityRemap& entry) {
+            const auto name = names.find(entry.from.Id());
+            return name == names.end() || name->second != scene_->Entities().Name(entry.to);
+        });
+        const bool resumed = scene_->History().Resume(history, remap);
+        commandStack_.RemapEntities(EditorCommandHistoryKey::Scene(), remap);
+        if (!loaded || !resumed) return false;
+        EditorSceneAudioSettingsService::PrepareDocument(*scene_);
+        before.Restore(*scene_, hierarchySelection_);
+        ReleaseRenderedSceneResources();
+        CompleteLoadedUIComponents();
+        return true;
+    };
+    class ExternalChangeCommand final : public IEditorCommand {
+    public:
+        ExternalChangeCommand(std::function<bool(const kb::scene::SceneDocument&)> apply, kb::scene::SceneDocument before, kb::scene::SceneDocument after)
+            : apply_(std::move(apply)), before_(std::move(before)), after_(std::move(after)) {}
+        [[nodiscard]] std::string_view Label() const noexcept override { return "Agent changes"; }
+        [[nodiscard]] bool Execute() override { return apply_(after_); }
+        [[nodiscard]] bool Undo() override { return apply_(before_); }
+        [[nodiscard]] bool Redo() override { return apply_(after_); }
+
+    private:
+        std::function<bool(const kb::scene::SceneDocument&)> apply_;
+        kb::scene::SceneDocument before_;
+        kb::scene::SceneDocument after_;
+    };
+    kb::scene::SceneDocument current = kb::scene::SceneDocumentService::Capture(*scene_, SceneDocumentName(currentScenePath_));
+    if (!ExecuteSceneCommand(std::make_unique<ExternalChangeCommand>(apply, std::move(current), loaded.document))) {
+        console_.Error("Project", "Scene could not be rebuilt from " + currentScenePath_.generic_string() + ".");
+        return false;
+    }
+    AdvanceSceneDocumentGeneration();
+    // The open scene is what its file says now; undoing the step makes it differ again.
+    ClearSceneDocumentDirty();
     return true;
 }
 

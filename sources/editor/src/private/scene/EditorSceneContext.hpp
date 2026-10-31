@@ -330,6 +330,11 @@ public:
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] kb::scene::SceneEntity PlayCameraEntity() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();
+    // After a tool outside the editor (an agent, kb_cli) changed the project: the scene is read
+    // from its file into the open scene as one undoable step, the selection and the undo history
+    // stay, and new or changed assets are picked up. A change to the project's plugins or modules
+    // reloads the whole project as ReloadSceneFromProject, keeping the selection.
+    [[nodiscard]] bool ReloadSceneAfterExternalChange();
     // A new, unsaved Untitled scene filled from `sceneTemplate`.
     [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution, kb::scene::SceneTemplate sceneTemplate);
     // File > New Scene: writes `folder`/`name`.21kbscene from the template, opens it and, when asked,

@@ -657,10 +657,10 @@ void PumpAgentPanel(EditorApplicationState& state) {
         InvalidatePanelKind(state, DockPanelKind::Agent);
         return;
     }
-    // A full project reload: the scene from its file and every asset mounted again, so materials,
-    // textures and scripts the agent changed or added show too, not only the scene.
-    if (state.sceneContext.ReloadSceneFromProject()) {
-        agent.Add(EditorAgentEntryKind::Info, "Reloaded the scene and assets with the agent's changes.");
+    // The scene from its file as one undoable step, with the selection and undo history kept, and
+    // the materials, textures and scripts the agent changed or added picked up too.
+    if (state.sceneContext.ReloadSceneAfterExternalChange()) {
+        agent.Add(EditorAgentEntryKind::Info, "Reloaded the scene and assets with the agent's changes (Ctrl+Z undoes them).");
     }
     state.sceneViewport.RequestPresent();
     InvalidateRect(state.window, nullptr, FALSE);

@@ -40,6 +40,8 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "engine/scene/SceneTemplates.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -2893,6 +2895,8 @@ ReadScriptValue(
             if (found.IsValid()) return {false, "entity name is ambiguous"};
             found = row.entity;
         }
+        // "exists": false asserts that no entity has the name.
+        if (!BoolMember(step, "exists", error, false).value_or(true)) return {!found.IsValid(), found.IsValid() ? "present" : "absent"};
         if (!found.IsValid()) return {false, "entity name not found"};
         state.entities.insert_or_assign(*alias, EntityAlias{found, *name});
         return {true, *name};
@@ -4858,6 +4862,22 @@ ReadScriptValue(
         return {
             state.context.ReloadSceneFromProject(),
             "project scene reloaded" };
+    }
+
+    // What an agent or kb_cli does to the saved scene while the editor is open.
+    if (*operation == "external_add_entity") {
+        const auto name = StringMember(step, "name", error);
+        if (!name) return { false, error };
+        const std::filesystem::path path = state.context.CurrentScenePath();
+        kb::scene::Scene external{ state.context.Project() };
+        kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(path);
+        if (!loaded.succeeded || !kb::scene::SceneDocumentService::LoadIntoScene(external, loaded.document)) return { false, "scene file could not be read" };
+        static_cast<void>(external.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = std::string{ *name } }));
+        return { kb::scene::SceneDocumentService::Save(external, path, loaded.document.name), path.string() };
+    }
+
+    if (*operation == "reload_after_external_change") {
+        return { state.context.ReloadSceneAfterExternalChange(), "scene reloaded after an external change" };
     }
 
     if (*operation == "undo") {
