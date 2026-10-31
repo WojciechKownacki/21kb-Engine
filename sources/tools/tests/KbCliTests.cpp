@@ -4927,6 +4927,13 @@ void RunWorldMemoryCliTests() {
     const CliRun placed = RunCliProgram({ "component", "set", "--project", project, "--entity", "Holder", "--type", "ContentInstance", "--set", "assetId=" + worldId, "--set", "kind=3" });
     Require(placed.exitCode == 0, "placing the world failed: " + placed.out + placed.err);
     Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Streamer", "--position", "100,0,50" }).exitCode == 0, "adding the streamer failed");
+    // --look-at turns forward (+Z) toward a point or an entity: no angles worked out by hand.
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Eye", "--look-at", "0,-10,10" }).exitCode == 0, "adding an aimed entity failed");
+    const CliRun pitched = RunCliProgram({ "entity", "show", "--project", project, "--name", "Eye" });
+    Require(Contains(pitched.out, "rotation=45,0,0"), "--look-at below and ahead must pitch down 45 degrees: " + pitched.out);
+    const CliRun aimed = RunCliProgram({ "entity", "set", "--project", project, "--name", "Eye", "--look-at", "Streamer" });
+    Require(aimed.exitCode == 0 && Contains(aimed.out, "rotation=0,63.4349,0"), "--look-at an entity must turn toward it: " + aimed.out + aimed.err);
+    Require(RunCliProgram({ "entity", "remove", "--project", project, "--name", "Eye" }).exitCode == 0, "removing the aimed entity failed");
     Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Streamer", "--type", "StreamFocus" }).exitCode == 0, "adding the stream focus failed");
     Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Streamer", "--type", "StreamFocus", "--set", "outerRadius=300.0", "--set", "innerRadius=250.0" }).exitCode == 0, "setting the stream focus failed");
 

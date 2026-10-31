@@ -219,4 +219,17 @@ std::string FormatCliNumber(double value) {
     return code == std::errc{} ? std::string{ buffer, end } : std::to_string(value);
 }
 
+std::optional<kb::math::Vec3> ParseVec3(std::string_view text) {
+    std::array<float, 3> values{};
+    for (std::size_t index = 0U; index < values.size(); ++index) {
+        const std::size_t comma = text.find(',');
+        const std::string_view part = text.substr(0, comma);
+        const auto [end, code] = std::from_chars(part.data(), part.data() + part.size(), values[index]);
+        if (code != std::errc{} || end != part.data() + part.size() || !std::isfinite(values[index])) return std::nullopt;
+        if ((comma == std::string_view::npos) != (index + 1U == values.size())) return std::nullopt;
+        text = comma == std::string_view::npos ? std::string_view{} : text.substr(comma + 1U);
+    }
+    return kb::math::Vec3{ values[0], values[1], values[2] };
+}
+
 } // namespace kb::cli

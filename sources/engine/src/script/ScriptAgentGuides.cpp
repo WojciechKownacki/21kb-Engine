@@ -23,20 +23,22 @@ kb_cli entity add --project . --create Sphere --name RedBall --position 0,5,0 --
   Light, Spot Light, Area Light, Camera, Environment, Particle System, Audio Source, Audio
   Listener, UI items (Canvas, Text, Button, ...). Shapes come with a Mesh Renderer and a Collider.
 - `--position x,y,z`, `--rotation x,y,z` (degrees; forward is +Z, `90,0,0` faces straight
-  down), `--scale x,y,z`, `--parent <Name>`.
+  down), `--scale x,y,z`, `--parent <Name>`, `--look-at x,y,z|<Name>` (aims forward at a point
+  or an object: cameras, spot lights).
 - `--color` makes `/Game/Materials/<Name>.kbmat`; `--material /Game/...kbmat` uses an existing
   one instead. `--body Static|Dynamic|Kinematic` adds a Rigidbody.
 - More material fields: `kb_cli material-new --project . --name Gold --set "Base Color=#D4AF37" --set Metallic=1 --set Roughness=0.3`,
   later `material-set --material /Game/Materials/Gold.kbmat --set ...`. Fields: Base Color,
   Roughness, Metallic, Emissive Color, Emissive Strength, Normal Scale, Occlusion Strength,
   Alpha Cutoff, and textures (Base Color Texture, Normal Texture, ... = `/Game/Textures/x.png`).
+- Move, turn or aim later: `kb_cli entity set --project . --name "Main Camera" --position 0,4,-8 --look-at RedBall`.
 - Change anything later: `kb_cli component set --project . --entity RedBall --type Transform --set localPosition=0,3,0`
   (any component: `--type MeshRenderer --set material=/Game/Materials/Gold.kbmat`,
   `--type Light --set intensity=8 --set range=10`).
 - Read the scene: `kb_cli scene-list --project .` gives every object with its position
   (`@ x,y,z`); `kb_cli entity show --project . --name RedBall` gives one object's transform and
   every component value.
-- A camera from above: `kb_cli entity add --project . --create Camera --name TopCamera --position 0,12,0 --rotation 90,0,0`,
+- A camera from above: `kb_cli entity add --project . --create Camera --name TopCamera --position 0,12,0 --look-at 0,0,0`,
   then `component set --entity TopCamera --type Camera --set primary=true` and the old camera
   `primary=false`.
 - Remove or rename: `entity remove --name RedBall`, `entity rename --name RedBall --to Ball`.

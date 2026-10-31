@@ -672,6 +672,43 @@ void ListProperties(std::string_view component, std::ostream& out) {
     return 0;
 }
 
+// --position, --rotation, --scale, then --look-at: turns the entity's forward (+Z) toward a point
+// "x,y,z" or another entity, keeping +Y up - aiming a camera or a light without working out angles.
+[[nodiscard]] bool ApplyTransformOptions(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const ArgumentList& arguments, CommandIo io) {
+    for (const auto& [option, property] : { std::pair{ "--position", "localPosition" }, std::pair{ "--rotation", "rotation" },
+             std::pair{ "--scale", "localScale" } }) {
+        if (const std::optional<std::string> value = arguments.Option(option); value.has_value() &&
+            !ApplySetting(scene, entity, "Transform", std::string{ property } + "=" + *value, io)) {
+            return false;
+        }
+    }
+    const std::optional<std::string> lookAt = arguments.Option("--look-at");
+    if (!lookAt.has_value()) return true;
+    scene.Runtime().SynchronizeTransforms();
+    std::optional<kb::math::Vec3> target = ParseVec3(*lookAt);
+    if (!target.has_value()) {
+        const std::optional<kb::scene::SceneEntity> other = FindEntity(scene, *lookAt, io);
+        if (!other.has_value()) return false;
+        target = scene.Transforms().Get(*other).worldPosition;
+    }
+    const kb::scene::TransformComponent self = scene.Transforms().Get(entity);
+    const kb::math::Vec3 forward = *target - self.worldPosition;
+    if (kb::math::Length(forward) < 1e-4F) {
+        io.err << "error: --look-at " << *lookAt << " is where the entity stands; give a point it can face\n";
+        return false;
+    }
+    // Straight down or up has no "up" from +Y; keep the image's top toward +Z then, as rotation 90,0,0 does.
+    const bool vertical = std::abs(forward.y) > 0.999F * kb::math::Length(forward);
+    const kb::math::Vec3 up = vertical ? kb::math::Vec3{ 0.0F, 0.0F, forward.y < 0.0F ? 1.0F : -1.0F } : kb::math::Vec3{ 0.0F, 1.0F, 0.0F };
+    kb::math::Quat rotation = kb::math::LookRotation(forward, up);
+    if (const kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity); parent.IsValid()) {
+        rotation = kb::math::Inverse(scene.Transforms().Get(parent).worldRotation) * rotation;
+    }
+    const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(rotation);
+    return ApplySetting(scene, entity, "Transform",
+        "rotation=" + FormatCliNumber(degrees.x) + ',' + FormatCliNumber(degrees.y) + ',' + FormatCliNumber(degrees.z), io);
+}
+
 [[nodiscard]] int EntityAdd(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> create = arguments.Option("--create");
     const kb::scene::SceneCreateItem* createItem = create.has_value() ? kb::scene::SceneCreateMenu::Find(*create) : nullptr;
@@ -773,13 +810,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
             return 1;
         }
     }
-    for (const auto& [option, property] : { std::pair{ "--position", "localPosition" }, std::pair{ "--rotation", "rotation" },
-             std::pair{ "--scale", "localScale" } }) {
-        if (const std::optional<std::string> value = arguments.Option(option); value.has_value() &&
-            !ApplySetting(scene, entity, "Transform", std::string{ property } + "=" + *value, io)) {
-            return 1;
-        }
-    }
+    if (!ApplyTransformOptions(scene, entity, arguments, io)) return 1;
     // A shape, its material and its physics in one command instead of three.
     std::string added = "added entity '" + *name + "'";
     if (material.has_value()) {
@@ -823,6 +854,25 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (!entity.has_value()) return 1;
     session->scene->Entities().Destroy(*entity);
     return Saved(*session, "removed entity '" + *name + "' and its children", io);
+}
+
+// entity set: moves, turns, scales or aims an existing entity in one command.
+[[nodiscard]] int EntitySet(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!name.has_value()) {
+        io.err << "error: entity set requires --name <Name> and any of --position, --rotation, --scale, --look-at\n";
+        return 1;
+    }
+    std::optional<SceneSession> session = OpenScene(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *name, io);
+    if (!entity.has_value() || !ApplyTransformOptions(scene, *entity, arguments, io)) return 1;
+    const kb::scene::TransformComponent transform = scene.Transforms().Get(*entity);
+    const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(transform.localRotation);
+    return Saved(*session, "set '" + *name + "': localPosition=" + FormatCliNumber(transform.localPosition.x) + ',' +
+        FormatCliNumber(transform.localPosition.y) + ',' + FormatCliNumber(transform.localPosition.z) + " rotation=" +
+        FormatCliNumber(degrees.x) + ',' + FormatCliNumber(degrees.y) + ',' + FormatCliNumber(degrees.z), io);
 }
 
 [[nodiscard]] int EntityRename(const ArgumentList& arguments, CommandIo io) {
@@ -1668,12 +1718,13 @@ int RunEntityCommand(const ArgumentList& arguments, CommandIo io) {
     const std::vector<std::string>& positionals = arguments.Positionals();
     const std::string action = positionals.empty() ? std::string{} : positionals.front();
     if (action == "add") return EntityAdd(arguments, io);
+    if (action == "set") return EntitySet(arguments, io);
     if (action == "remove") return EntityRemove(arguments, io);
     if (action == "rename") return EntityRename(arguments, io);
     if (action == "attach") return EntityAttach(arguments, io);
     if (action == "detach") return EntityDetach(arguments, io);
     if (action == "show") return EntityShow(arguments, io);
-    io.err << "error: entity expects add, remove, rename, attach, detach or show\n";
+    io.err << "error: entity expects add, set, remove, rename, attach, detach or show\n";
     return 1;
 }
 

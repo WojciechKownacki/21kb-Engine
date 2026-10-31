@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/math/EngineMath.hpp"
+
 #include <array>
 #include <filesystem>
 #include <optional>
@@ -76,6 +78,8 @@ private:
 // A number as kb_cli prints it: at most four decimals, no trailing zeros and no "-0", so it can be
 // pasted back into --set or --position (1, 0.5, -2.25).
 [[nodiscard]] std::string FormatCliNumber(double value);
+// "x,y,z" as three finite numbers; nullopt for anything else.
+[[nodiscard]] std::optional<kb::math::Vec3> ParseVec3(std::string_view text);
 
 // Finds an asset by virtual path ("/Game/...") or by physical file path.
 [[nodiscard]] const kb::assets::AssetMetadata* FindAssetByFlexiblePath(

@@ -272,6 +272,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                      [--create <Item>] [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
                      [--color #RRGGBB (a new material named after it) | --material /Game/<path>.kbmat]
                      [--body Static|Dynamic|Kinematic (adds a Rigidbody)]
+                     [--look-at x,y,z|<Entity> (turns forward, +Z, toward it; for cameras and lights)]
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
@@ -281,6 +282,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  Existing scripts and input contexts are preserved; a new project gets Move/Jump
                  bindings. --physics 3d selects the legacy CharacterController and scripts.
                  see docs/world_2d_presets.md)
+                 set --project <dir> [--scene <path>] --name <Name> [--position x,y,z]
+                     [--rotation x,y,z] [--scale x,y,z] [--look-at x,y,z|<Entity>]
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
                         [--occurrence <n>]

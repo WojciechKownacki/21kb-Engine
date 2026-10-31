@@ -21,7 +21,7 @@ namespace {
 
 constexpr std::string_view kProtocolVersion = "2024-11-05";
 constexpr std::string_view kServerVersion = "0.1.0";
-constexpr std::string_view kEntityActions[]{"add", "remove", "rename", "attach", "detach", "show"};
+constexpr std::string_view kEntityActions[]{"add", "set", "remove", "rename", "attach", "detach", "show"};
 constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
 constexpr std::string_view kSceneTemplates[]{"Basic", "Empty"};
 constexpr std::string_view kYesNo[]{"yes", "no"};
@@ -180,7 +180,7 @@ thread_local bool tDiscovery = false;
         });
     if (command.name == "entity") return MakeToolDescriptor(command.mcpTool,
         "Creates, edits and shows entities. add with create, color and body makes a coloured shape with physics in one call; "
-        "show prints an entity's transform and every component value.", {
+        "set moves, turns or aims one (lookAt); show prints an entity's transform and every component value.", {
             ToolProperty{"action", "string", "Entity operation.", true, "", kEntityActions},
             ToolProperty{"name", "string", "Entity name or hierarchy path (add: defaults to the created item).", false, "--name"},
             ToolProperty{"scene", "string", "Scene path; defaults to the startup scene.", false, "--scene"},
@@ -191,6 +191,7 @@ thread_local bool tDiscovery = false;
             ToolProperty{"position", "string", "Position x,y,z.", false, "--position"},
             ToolProperty{"rotation", "string", "Rotation in degrees x,y,z.", false, "--rotation"},
             ToolProperty{"scale", "string", "Scale x,y,z.", false, "--scale"},
+            ToolProperty{"lookAt", "string", "Turn forward (+Z) toward a point x,y,z or an entity, e.g. a camera at the player.", false, "--look-at"},
             ToolProperty{"color", "string", "add: a colour #RRGGBB for a new material named after the entity.", false, "--color"},
             ToolProperty{"material", "string", "add: an existing material, /Game/....kbmat.", false, "--material"},
             ToolProperty{"body", "string", "add: a Rigidbody of this type (Static, Dynamic, Kinematic).", false, "--body"},
