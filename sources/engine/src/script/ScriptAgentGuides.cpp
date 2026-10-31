@@ -65,6 +65,9 @@ kb_cli run --project . --frames 120
   `center=x,y,z`, `trigger`, `friction`, `restitution` (bounce, 0..1). An entity has one
   Collider: change it with `component set`, not `component add`.
 - Something that never moves (a floor) needs no Rigidbody, only its Collider.
+- A slope: a Cube tilted about Z, e.g. `--create Cube --name Ramp --position 0,2,0 --rotation 0,0,-20 --scale 8,0.4,3`,
+  with the ball above its high end (`-3,4.2,0`). The new scene's floor `Plane` is 10x10; a ball that
+  rolls on leaves it, so widen it first: `entity set --name Plane --scale 3,1,3`.
 - Character movement: `entity add --create Capsule --name Hero`, `component add --entity Hero --type CharacterController`,
   then a controller script (guide `scripts`); 2D players: `--create "Top Down Player"` or `"Platformer Player"`.
 - Scripts: `function OnCollisionEnter(self, event)` (the other entity is `event.args.other`);
