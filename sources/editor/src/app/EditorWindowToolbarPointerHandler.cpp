@@ -16,6 +16,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
 #include <filesystem>
@@ -354,11 +355,17 @@ void ActivatePanel(
                         ". Reopen the editor to apply.");
                 sceneViewport.RequestPresent();
             } else if (*row == 1) {
+                if (sceneContext.ProjectSettings().SelectedCategory() >= static_cast<int>(ProjectSettingsCategory::EditorGeneral)) {
+                    static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Inputs)));
+                }
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 2) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
+                // Editor Settings and Plugins are pages of the one Settings window.
+                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::EditorGeneral)));
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 3) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Plugins, DockArea::Right);
+                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Plugins)));
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 4) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, DockArea::Center);
             } else if (*row == 5) {

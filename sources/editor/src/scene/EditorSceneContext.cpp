@@ -1915,7 +1915,8 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
         || IsMaterialGraphNodeRenameEditing()
         || IsMaterialGraphConstantInlineEditing()
         || IsMaterialEditorFindFocused()
-        || console_.Filter().IsFocused();
+        || console_.Filter().IsFocused()
+        || projectSettings_.Search().IsFocused();
 }
 
 bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {

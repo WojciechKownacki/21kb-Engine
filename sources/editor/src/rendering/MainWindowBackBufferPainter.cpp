@@ -216,7 +216,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->dockDrag,
         *paintContext->playMode,
         *paintContext->shellInteraction,
-        nullptr);
+        nullptr,
+        // The graphics API the viewport actually runs on once it has started; until then the setting.
+        paintContext->sceneViewport != nullptr && paintContext->sceneViewport->RendererInitialized()
+            ? paintContext->sceneViewport->ActiveBackendLabel()
+            : EditorRenderBackendLabel(paintContext->renderBackendSettings->Backend()));
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
     PaintAutosaveNotification(
         paint.dc,

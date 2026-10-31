@@ -11,8 +11,14 @@ namespace {
 constexpr int kPadding = 16;
 constexpr int kHeaderHeight = 46;
 constexpr int kSidebarWidth = 190;
-constexpr int kCategoryTopInset = 8;
+constexpr int kSearchInset = 8;
+constexpr int kSearchHeight = 28;
+// Categories start below the search box.
+constexpr int kCategoryTopInset = kSearchInset + kSearchHeight + 6;
 constexpr int kCategoryRowHeight = 30;
+constexpr int kGroupCaptionHeight = 24;
+// Every setting carries a one-line description under its row.
+constexpr int kDescriptionHeight = 16;
 constexpr int kSectionHeaderHeight = 26;
 constexpr int kRowHeight = 34;
 constexpr int kRowGap = 6;
@@ -29,7 +35,13 @@ constexpr int kQualityButtonWidth = 72;
 constexpr int kQualityButtonGap = 6;
 
 [[nodiscard]] int RowTopAfter(const RECT& row) noexcept {
-    return row.bottom + kRowGap;
+    return row.bottom + kDescriptionHeight + kRowGap;
+}
+
+// How many group captions sit above the category at `index`.
+[[nodiscard]] int CaptionsAbove(int index) noexcept {
+    return 1 + (index >= ProjectSettingsPanelLayout::kEditorGroupStart ? 1 : 0) +
+        (index >= ProjectSettingsPanelLayout::kPluginsGroupStart ? 1 : 0);
 }
 
 [[nodiscard]] RECT CheckboxForRow(int left, int rowTop) noexcept {
@@ -44,6 +56,8 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
 
     rects.sidebar = RECT{ content.left, rects.header.bottom, content.left + kSidebarWidth, content.bottom };
     rects.divider = RECT{ rects.sidebar.right, rects.header.bottom, rects.sidebar.right + 1, content.bottom };
+    rects.searchField = RECT{ rects.sidebar.left + kSearchInset, rects.sidebar.top + kSearchInset,
+        rects.sidebar.right - kSearchInset, rects.sidebar.top + kSearchInset + kSearchHeight };
     rects.content = RECT{ rects.divider.right, rects.header.bottom, content.right, content.bottom };
 
     // Inputs page content, laid out relative to the right pane.
@@ -56,7 +70,7 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.mappingLabel = RECT{ left, row1Top, left + kLabelWidth, row1Top + kRowHeight };
     rects.mappingField = RECT{ left + kLabelWidth, row1Top, right, row1Top + kRowHeight };
 
-    const int row2Top = row1Top + kRowHeight + kRowGap;
+    const int row2Top = RowTopAfter(rects.mappingLabel);
     rects.enabledLabel = RECT{ left, row2Top, left + kLabelWidth, row2Top + kRowHeight };
     const int checkTop = row2Top + (kRowHeight - kCheckboxSize) / 2;
     rects.enabledCheckbox = RECT{ left + kLabelWidth, checkTop, left + kLabelWidth + kCheckboxWidth, checkTop + kCheckboxSize };
@@ -67,13 +81,13 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.backendDx12Button = RECT{ rects.backendAutoButton.right + 6, graphicsRowTop + 3, rects.backendAutoButton.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
     rects.backendVulkanButton = RECT{ rects.backendDx12Button.right + 6, graphicsRowTop + 3, rects.backendDx12Button.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
 
-    const int lightingPathRowTop = graphicsRowTop + kRowHeight + kRowGap;
+    const int lightingPathRowTop = RowTopAfter(rects.backendLabel);
     rects.lightingPathLabel = RECT{ left, lightingPathRowTop, left + kLabelWidth, lightingPathRowTop + kRowHeight };
     rects.lightingPathForwardButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
     rects.lightingPathForwardPlusButton = RECT{ rects.lightingPathForwardButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
     rects.lightingPathDeferredButton = RECT{ rects.lightingPathForwardPlusButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardPlusButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
 
-    const int postRowTop = lightingPathRowTop + kRowHeight + kRowGap;
+    const int postRowTop = RowTopAfter(rects.lightingPathLabel);
     rects.postProcessLabel = RECT{ left, postRowTop, left + kLabelWidth, postRowTop + kRowHeight };
     rects.postProcessCheckbox = CheckboxForRow(left, postRowTop);
 
@@ -112,7 +126,7 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     const int levelsWidth = std::max(0, right - left - kQualityLabelWidth);
     const int buttonWidth = std::clamp((levelsWidth - 4 * kQualityButtonGap) / 5, 24, kQualityButtonWidth);
     for (int row = 0; row < 4; ++row) {
-        const int rowTop = sectionTop + kSectionHeaderHeight + kRowGap + row * (kRowHeight + kRowGap);
+        const int rowTop = sectionTop + kSectionHeaderHeight + kRowGap + row * (kRowHeight + kDescriptionHeight + kRowGap);
         rects.qualityLabel[row] = RECT{ left, rowTop, left + kQualityLabelWidth, rowTop + kRowHeight };
         for (int level = 0; level < 5; ++level) {
             const int buttonLeft = left + kQualityLabelWidth + level * (buttonWidth + kQualityButtonGap);
@@ -123,8 +137,18 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
 }
 
 RECT ProjectSettingsPanelLayout::CategoryRow(const RECT& sidebar, int index) noexcept {
-    const int top = sidebar.top + kCategoryTopInset + (index * kCategoryRowHeight);
+    const int top = sidebar.top + kCategoryTopInset + CaptionsAbove(index) * kGroupCaptionHeight + (index * kCategoryRowHeight);
     return RECT{ sidebar.left + 6, top, sidebar.right - 6, top + kCategoryRowHeight };
+}
+
+RECT ProjectSettingsPanelLayout::GroupCaption(const RECT& sidebar, int group) noexcept {
+    const int first = group == 0 ? 0 : (group == 1 ? kEditorGroupStart : kPluginsGroupStart);
+    const int bottom = CategoryRow(sidebar, first).top;
+    return RECT{ sidebar.left + 12, bottom - kGroupCaptionHeight, sidebar.right - 8, bottom };
+}
+
+RECT ProjectSettingsPanelLayout::DescriptionRect(const ProjectSettingsPanelLayoutRects& rects, const RECT& label) noexcept {
+    return RECT{ label.left, label.bottom - 6, rects.content.right - kPadding, label.bottom - 6 + kDescriptionHeight };
 }
 
 RECT ProjectSettingsPanelLayout::MappingFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept {

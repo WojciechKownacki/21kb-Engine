@@ -10,7 +10,7 @@
 
 namespace kb::editor {
 
-void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport) const {
+void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport, std::string_view graphicsApiLabel) const {
     const DockLayout layout = dockModel.Queries().BuildLayout(
         width,
         height,
@@ -51,10 +51,7 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int wi
     }
 
     toolbarRenderer.PaintMenu(dc, GdiDrawing::ToRect(layout.menu), theme, shellInteraction);
-    // The graphics API the viewport actually runs on once it has started; until then the setting.
-    toolbarRenderer.PaintStatusBar(dc, GdiDrawing::ToRect(layout.statusBar), theme, sceneContext, playMode,
-        sceneViewport != nullptr && sceneViewport->RendererInitialized() ? sceneViewport->ActiveBackendLabel()
-                                                                         : EditorRenderBackendLabel(renderBackendSettings.Backend()));
+    toolbarRenderer.PaintStatusBar(dc, GdiDrawing::ToRect(layout.statusBar), theme, sceneContext, playMode, graphicsApiLabel);
 }
 
 } // namespace kb::editor

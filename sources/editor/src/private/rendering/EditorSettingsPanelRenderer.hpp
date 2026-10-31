@@ -47,6 +47,9 @@ public:
         const RECT& content,
         int x,
         int y) noexcept;
+    // The panel rectangle whose settings page lands exactly on `page`: its title bar and
+    // category column fall outside, so another window can show just the page.
+    [[nodiscard]] static RECT ContentForPage(const RECT& page) noexcept;
     // The language field, where the Language list opens below.
     [[nodiscard]] static RECT LanguageField(const RECT& content) noexcept;
     // The category shown on the right (the panel's own view state, not saved).

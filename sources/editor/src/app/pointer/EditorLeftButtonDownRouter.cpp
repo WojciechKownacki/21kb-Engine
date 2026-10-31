@@ -6,6 +6,8 @@
 
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
+#include "rendering/EditorSettingsPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
@@ -2171,6 +2173,25 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (panelHit.inProjectSettingsPanel) {
+        // The Editor and Plugins pages of Settings are those panels' own content: their controllers
+        // take the click, the Editor page through the panel rectangle that puts its page here.
+        if (const std::optional<RECT> page = ProjectSettingsPanelRenderer::EmbeddedPage(*panelHit.projectSettingsContent, sceneContext_);
+            page.has_value() && PointInRect(*page, x, y)) {
+            sceneContext_.ProjectSettings().Search().Focus(false);
+            bool handled = false;
+            if (static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Plugins) {
+                EditorPluginsPointerController pluginsPointer(sceneContext_);
+                handled = pluginsPointer.HandlePointerDown(*page, x, y);
+            } else {
+                EditorSettingsPointerController editorSettingsPointer(sceneContext_, dockModel_, floatingWindows_);
+                handled = editorSettingsPointer.HandlePointerDown(messageWindow, EditorSettingsPanelRenderer::ContentForPage(*page), x, y);
+            }
+            if (handled) {
+                sceneViewport_.RequestPresent();
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
         if (projectSettingsPointer.HandlePointerDown(
                 *panelHit.projectSettingsContent,

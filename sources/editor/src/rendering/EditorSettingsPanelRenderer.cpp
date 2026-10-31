@@ -137,23 +137,7 @@ void DrawOptionButton(
     const char* label,
     bool selected,
     bool enabled = true) {
-    const COLORREF fill =
-        selected ? Color(theme.accent) :
-        Color(enabled ? theme.chrome : theme.background);
-    const COLORREF border =
-        selected ? Color(theme.accent) :
-        Color(enabled ? theme.borderPanel : theme.borderChrome);
-    const COLORREF text =
-        Color(selected ? theme.textPrimary : (enabled ? theme.textSecondary : theme.textDisabled));
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    DrawText(
-        dc,
-        {rect.left + 8, rect.top, rect.right - 8, rect.bottom},
-        label,
-        text,
-        12,
-        selected ? FW_SEMIBOLD : FW_NORMAL,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    EditorDialogStyle::PaintOptionButton(dc, rect, theme, label, selected, enabled);
 }
 
 void DrawCheckbox(HDC dc, const RECT& rect, const EditorTheme& theme, bool checked) {
@@ -323,6 +307,10 @@ EditorSettingsHit EditorSettingsPanelRenderer::HitTest(
         }
     }
     return {};
+}
+
+RECT EditorSettingsPanelRenderer::ContentForPage(const RECT& page) noexcept {
+    return RECT{ page.left - kSidebarWidth - 1, page.top - kHeaderHeight, page.right, page.bottom };
 }
 
 RECT EditorSettingsPanelRenderer::LanguageField(const RECT& content) noexcept {

@@ -4068,7 +4068,7 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
                             profile.dimensions.logicalWidth,
                             profile.dimensions.logicalHeight, dockModel,
                             theme, metrics, context_, settings, nullptr,
-                            nullptr, playMode, shellInteraction, nullptr);
+                            nullptr, playMode, shellInteraction, nullptr, EditorRenderBackendLabel(settings.Backend()));
                         return;
                     }
 

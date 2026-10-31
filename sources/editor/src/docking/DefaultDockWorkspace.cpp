@@ -14,7 +14,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     case DockPanelKind::Inspector: return std::string{ EditorText("panel.inspector", "Inspector") };
     case DockPanelKind::Assets: return std::string{ EditorText("panel.assets", "Project Files") };
     case DockPanelKind::Console: return std::string{ EditorText("panel.console", "Console") };
-    case DockPanelKind::ProjectSettings: return std::string{ EditorText("panel.projectSettings", "Project Settings") };
+    case DockPanelKind::ProjectSettings: return std::string{ EditorText("panel.settings", "Settings") };
     case DockPanelKind::ScriptEditor: return std::string{ EditorText("panel.scriptEditor", "Script Editor") };
     case DockPanelKind::Plugins: return std::string{ EditorText("panel.plugins", "Plugins") };
     case DockPanelKind::MaterialEditor: return std::string{ EditorText("panel.materialEditor", "Material Editor") };

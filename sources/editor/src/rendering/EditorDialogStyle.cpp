@@ -317,6 +317,25 @@ void EditorDialogStyle::PaintCheckbox(
         Color(enabled ? theme.textPrimary : theme.textDisabled), 1);
 }
 
+void EditorDialogStyle::PaintOptionButton(
+    HDC dc,
+    const RECT& bounds,
+    const EditorTheme& theme,
+    std::string_view label,
+    bool selected,
+    bool enabled) {
+    constexpr int radius = 6;
+    if (selected) {
+        FillRound(dc, bounds, Blend(Color(theme.toolbarButton), RGB(55, 119, 142), 50), RGB(86, 172, 205), radius);
+        GdiDrawing::FillRectColor(dc, RECT{bounds.left + 3, bounds.top + 1, bounds.right - 3, bounds.top + 2}, RGB(85, 150, 174));
+    } else {
+        FillRound(dc, bounds, Color(enabled ? theme.chrome : theme.background), Color(enabled ? theme.borderPanel : theme.borderChrome), radius);
+    }
+    const COLORREF text = selected ? RGB(235, 250, 255) : Color(enabled ? theme.textSecondary : theme.textDisabled);
+    PaintText(dc, RECT{bounds.left + 8, bounds.top, bounds.right - 8, bounds.bottom}, label, text, 12,
+        selected ? FW_SEMIBOLD : FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 void EditorDialogStyle::PaintSwitch(
     HDC dc,
     const RECT& bounds,

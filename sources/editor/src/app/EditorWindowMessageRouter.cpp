@@ -10,6 +10,7 @@
 #include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "app/EditorBuildGameInputHandler.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "app/EditorAssetBrowserInputHandler.hpp"
@@ -63,8 +64,8 @@ void CancelAnimationPreviewCameraNavigation(EditorWindowMessageContext& context)
     context.sceneViewport.RequestPresent();
 }
 
-// Typing into the Console's filter field. Every change starts the list from its top again,
-// because the old scroll position belongs to a different list.
+// After the Console's filter text changes the list starts from its top again, because the old
+// scroll position belongs to a different list.
 void RefreshConsoleFilter(EditorWindowMessageContext& context, HWND messageWindow) noexcept {
     context.sceneContext.Console().SetListScrollRow(0, 0);
     InvalidateRect(messageWindow, nullptr, FALSE);
@@ -73,40 +74,59 @@ void RefreshConsoleFilter(EditorWindowMessageContext& context, HWND messageWindo
     }
 }
 
-[[nodiscard]] bool HandleConsoleFilterChar(EditorWindowMessageContext& context, HWND messageWindow, WPARAM key) {
-    EditorHierarchySearchState& filter = context.sceneContext.Console().Filter();
-    if (!filter.IsFocused()) {
+// After the Settings search text changes, a page with nothing that matches gives way to the
+// first page that has something.
+void RefreshSettingsSearch(EditorWindowMessageContext& context, HWND messageWindow) {
+    EditorProjectSettingsState& settings = context.sceneContext.ProjectSettings();
+    const std::string_view query = settings.Search().Query();
+    if (!ProjectSettingsPanelRenderer::CategoryMatches(settings.SelectedCategory(), query)) {
+        if (const std::optional<int> first = ProjectSettingsPanelRenderer::FirstMatchingCategory(query); first.has_value()) {
+            static_cast<void>(settings.SelectCategory(*first));
+        }
+    }
+    InvalidateRect(messageWindow, nullptr, FALSE);
+    if (messageWindow != context.mainWindow) {
+        InvalidateRect(context.mainWindow, nullptr, FALSE);
+    }
+}
+
+// A focused search box takes the characters typed; `changed` runs after each edit of its text.
+template <typename Changed>
+[[nodiscard]] bool HandleSearchFieldChar(EditorHierarchySearchState& field, WPARAM key, Changed&& changed) {
+    if (!field.IsFocused()) {
         return false;
     }
     if (key >= 0x20U) {
-        filter.AppendAscii(static_cast<wchar_t>(key));
-        RefreshConsoleFilter(context, messageWindow);
+        field.AppendAscii(static_cast<wchar_t>(key));
+        changed();
     }
     // Control characters arrive here too (Backspace, Enter, Esc); WM_KEYDOWN acts on those.
     return true;
 }
 
-[[nodiscard]] bool HandleConsoleFilterKeyDown(EditorWindowMessageContext& context, HWND messageWindow, WPARAM key) {
-    EditorHierarchySearchState& filter = context.sceneContext.Console().Filter();
-    if (!filter.IsFocused()) {
+// Editing keys of a focused search box: Backspace, Esc (the first empties it, the second leaves
+// it), Enter (leaves it) and the clipboard shortcuts.
+template <typename Changed>
+[[nodiscard]] bool HandleSearchFieldKeyDown(EditorHierarchySearchState& field, HWND owner, WPARAM key, Changed&& changed) {
+    if (!field.IsFocused()) {
         return false;
     }
     switch (EditorTextInputShortcuts::Resolve(key)) {
     case EditorTextInputShortcut::SelectAll:
-        filter.SelectAll();
+        field.SelectAll();
         return true;
     case EditorTextInputShortcut::Copy:
-        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(messageWindow, filter.Query()));
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, field.Query()));
         return true;
     case EditorTextInputShortcut::Cut:
-        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(messageWindow, filter.Query()));
-        filter.Clear();
-        RefreshConsoleFilter(context, messageWindow);
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, field.Query()));
+        field.Clear();
+        changed();
         return true;
     case EditorTextInputShortcut::Paste:
-        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(messageWindow); text.has_value()) {
-            filter.Insert(*text);
-            RefreshConsoleFilter(context, messageWindow);
+        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
+            field.Insert(*text);
+            changed();
         }
         return true;
     case EditorTextInputShortcut::None:
@@ -114,25 +134,24 @@ void RefreshConsoleFilter(EditorWindowMessageContext& context, HWND messageWindo
     }
     switch (key) {
     case VK_BACK:
-        filter.Backspace();
+        field.Backspace();
         break;
     case VK_ESCAPE:
-        // The first Esc empties the field, the second leaves it.
-        if (filter.Query().empty()) {
-            filter.Focus(false);
+        if (field.Query().empty()) {
+            field.Focus(false);
         } else {
-            filter.Clear();
+            field.Clear();
         }
         break;
     case VK_RETURN:
-        filter.Focus(false);
+        field.Focus(false);
         break;
     default:
         // Plain keys belong to the field (Delete must not delete the selected object), while
         // Ctrl shortcuts such as Ctrl+S still reach the editor.
         return (GetKeyState(VK_CONTROL) & 0x8000) == 0;
     }
-    RefreshConsoleFilter(context, messageWindow);
+    changed();
     return true;
 }
 
@@ -655,7 +674,10 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_CHAR:
-        if (HandleConsoleFilterChar(context_, messageWindow, wparam)) {
+        if (HandleSearchFieldChar(context_.sceneContext.Console().Filter(), wparam,
+                [&] { RefreshConsoleFilter(context_, messageWindow); }) ||
+            HandleSearchFieldChar(context_.sceneContext.ProjectSettings().Search(), wparam,
+                [&] { RefreshSettingsSearch(context_, messageWindow); })) {
             return 0;
         }
         if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleCharacter(static_cast<wchar_t>(wparam))) {
@@ -771,7 +793,10 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.sceneViewport.RequestPresent();
             return 0;
         }
-        if (HandleConsoleFilterKeyDown(context_, messageWindow, wparam)) {
+        if (HandleSearchFieldKeyDown(context_.sceneContext.Console().Filter(), messageWindow, wparam,
+                [&] { RefreshConsoleFilter(context_, messageWindow); }) ||
+            HandleSearchFieldKeyDown(context_.sceneContext.ProjectSettings().Search(), messageWindow, wparam,
+                [&] { RefreshSettingsSearch(context_, messageWindow); })) {
             return 0;
         }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
