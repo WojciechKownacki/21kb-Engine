@@ -86,6 +86,8 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::DisclosureCollapsed();
     case HeroIconKind::DisclosureExpanded:
         return HeroIconAssets::DisclosureExpanded();
+    case HeroIconKind::Sun:
+        return HeroIconAssets::Sun();
     case HeroIconKind::CheckCircle:
         return HeroIconAssets::CheckCircle();
     case HeroIconKind::XCircle:

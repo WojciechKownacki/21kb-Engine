@@ -45,6 +45,7 @@ enum class HeroIconKind : std::uint8_t {
     PlatformServer,
     DisclosureCollapsed,
     DisclosureExpanded,
+    Sun,
     CheckCircle,
     XCircle,
     Warning,

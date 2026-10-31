@@ -1,6 +1,7 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/BlendSpace2DEditorState.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
+#include "engine/scene/SceneAssetUsers.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
@@ -1903,6 +1904,26 @@ bool EditorSceneContext::IsHierarchySearchFocused() const noexcept {
 
 bool EditorSceneContext::IsHierarchyRenaming() const noexcept {
     return hierarchyRenameEntity_.IsValid() && scene_->Entities().IsAlive(hierarchyRenameEntity_);
+}
+
+bool EditorSceneContext::RefreshAssetUsers() {
+    const std::uint64_t revision = SceneRenderRevision();
+    const std::uint64_t generation = SceneDocumentGeneration();
+    if (revision == assetUsersRevision_ && generation == assetUsersGeneration_) {
+        return false;
+    }
+    assetUsersRevision_ = revision;
+    assetUsersGeneration_ = generation;
+    EditorAssetUsers users;
+    for (kb::scene::SceneAssetUser& user : kb::scene::CollectSceneAssetUsers(kb::scene::SceneDocumentService::Capture(*scene_, "AssetUsers"))) {
+        users[user.assetId].push_back(std::move(user.objectName));
+    }
+    if (users == assetUsers_) {
+        return false;
+    }
+    assetUsers_ = std::move(users);
+    ++assetUsersVersion_;
+    return true;
 }
 
 bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {

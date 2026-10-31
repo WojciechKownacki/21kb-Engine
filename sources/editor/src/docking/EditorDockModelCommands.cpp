@@ -5,6 +5,7 @@
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockNodeFactory.hpp"
 #include "docking/DockNodeQuery.hpp"
+#include "docking/EditorDockModelQueries.hpp"
 #include "docking/DockPanelDocking.hpp"
 #include "docking/DockTreeMutation.hpp"
 #include "docking/DockSplitterResizer.hpp"
@@ -27,11 +28,20 @@ namespace {
 
 } // namespace
 
-EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId) noexcept
+EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId, bool& drawerCollapsed) noexcept
     : panels_(panels)
     , root_(root)
     , nextNodeId_(nextNodeId)
-    , maximizedLeafId_(maximizedLeafId) {}
+    , maximizedLeafId_(maximizedLeafId)
+    , drawerCollapsed_(drawerCollapsed) {}
+
+bool EditorDockModelCommands::SetDrawerCollapsed(bool collapsed) noexcept {
+    if (drawerCollapsed_ == collapsed) {
+        return false;
+    }
+    drawerCollapsed_ = collapsed;
+    return true;
+}
 
 void EditorDockModelCommands::ResetWorkspace() {
     panels_.Reset(DefaultDockWorkspace{}.CreatePanels());
@@ -76,6 +86,11 @@ std::string EditorDockModelCommands::SerializeWorkspace() const {
 
 void EditorDockModelCommands::ActivatePanel(std::uint32_t panelId) {
     DockLeafPanelOrder::Activate(root_.get(), panelId);
+    // Choosing a tab of the collapsed drawer opens it.
+    const DockNode* leaf = DockNodeQuery::FindLeafContaining(root_.get(), panelId);
+    if (drawerCollapsed_ && leaf != nullptr && leaf->id == EditorDockModelQueries::DrawerLeafId(panels_, root_.get())) {
+        drawerCollapsed_ = false;
+    }
 }
 
 bool EditorDockModelCommands::ClosePanel(std::uint32_t panelId) {
@@ -161,6 +176,10 @@ bool EditorDockModelCommands::ActivatePanelKind(DockPanelKind kind, DockArea fal
     panel->visible = true;
     leaf->activePanelId = panel->id;
     maximizedLeafId_ = 0;
+    // Opening a drawer panel from a menu or the status bar opens the drawer with it.
+    if (leaf->id == EditorDockModelQueries::DrawerLeafId(panels_, root_.get())) {
+        drawerCollapsed_ = false;
+    }
     return true;
 }
 

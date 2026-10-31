@@ -278,6 +278,18 @@ static constexpr std::array<HeroIconPath, 3> kWarning{
     HeroIconPath{ "M12 9V13", false },
     HeroIconPath{ "M12 17H12.01", false },
 };
+// Lucide "sun" (ISC).
+static constexpr std::array<HeroIconPath, 9> kSun{
+    HeroIconPath{ "M12 16A4 4 0 1 0 12 8A4 4 0 0 0 12 16Z", false },
+    HeroIconPath{ "M12 2V4", false },
+    HeroIconPath{ "M12 20V22", false },
+    HeroIconPath{ "M4.93 4.93L6.34 6.34", false },
+    HeroIconPath{ "M17.66 17.66L19.07 19.07", false },
+    HeroIconPath{ "M2 12H4", false },
+    HeroIconPath{ "M20 12H22", false },
+    HeroIconPath{ "M6.34 17.66L4.93 19.07", false },
+    HeroIconPath{ "M19.07 4.93L17.66 6.34", false },
+};
 // Platform marks and the dedicated-server glyph, vendored rather than drawn. Brand marks
 // name a build target here, which is what they are for. Sources and licences are recorded
 // in third_party/devicon and third_party/fluentui-system-icons.
@@ -491,6 +503,10 @@ HeroIconGlyph HeroIconAssets::DisclosureCollapsed() noexcept {
 
 HeroIconGlyph HeroIconAssets::DisclosureExpanded() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDisclosureExpanded } };
+}
+
+HeroIconGlyph HeroIconAssets::Sun() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kSun }, .strokeWidth = 2.0F };
 }
 
 HeroIconGlyph HeroIconAssets::CheckCircle() noexcept {

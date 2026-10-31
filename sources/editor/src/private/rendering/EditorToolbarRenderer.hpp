@@ -82,7 +82,8 @@ public:
     // The open menu's dropdown at the dropdown and row rectangles `menu` holds.
     void PaintMenuDropdown(HDC dc, const EditorMenuRects& menu, const EditorTheme& theme, const EditorShellInteractionState& interaction) const;
     void PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, const EditorShellInteractionState& interaction) const;
-    void PaintStatusBar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, std::string_view backendLabel) const;
+    // `drawerCollapsed` adds the reminder that Ctrl+Space opens the collapsed bottom drawer.
+    void PaintStatusBar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, std::string_view backendLabel, bool drawerCollapsed) const;
 #endif
 
 private:

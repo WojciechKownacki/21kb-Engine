@@ -40,9 +40,11 @@ void AppendRect(std::ostringstream& out, const RECT& rect) {
     const RECT& content,
     const EditorAssetBrowserState& state,
     kb::assets::AssetManager& manager,
-    const EditorMeshThumbnailService& meshThumbnails) {
+    const EditorMeshThumbnailService& meshThumbnails,
+    std::uint64_t assetUsersVersion) {
     std::ostringstream out;
     AppendRect(out, content);
+    out << "users=" << assetUsersVersion << ';';
     // A thumbnail landing must repaint the retained panel surface, otherwise the tile keeps its stand-in
     // until something else happens to invalidate it.
     out << "matThumbs=" << EditorMaterialThumbnailCache().Revision()
@@ -178,7 +180,8 @@ void PaintProjectFilesBase(
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
     kb::assets::AssetManager& manager,
-    EditorMeshThumbnailService& meshThumbnails) {
+    EditorMeshThumbnailService& meshThumbnails,
+    const EditorAssetUsers& users) {
     const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(content, state.TreeWidth());
 
     ScopedFont bodyFont{ 13, FW_NORMAL };
@@ -190,7 +193,7 @@ void PaintProjectFilesBase(
 
     ProjectFilesToolbarRenderer::Paint(dc, layout, theme, state);
     ProjectFilesTreeRenderer::Paint(dc, layout, theme, state, treeFolders);
-    ProjectFilesAssetViewRenderer::Paint(dc, layout, theme, state, manager, meshThumbnails, childFolders, assets);
+    ProjectFilesAssetViewRenderer::Paint(dc, layout, theme, state, manager, meshThumbnails, childFolders, assets, users);
     RECT splitterLine{ layout.tree.right, layout.tree.top, layout.tree.right + 1, layout.bottomBar.top };
     GdiDrawing::FillRectColor(
         dc,
@@ -215,17 +218,17 @@ void ProjectFilesPanelRenderer::Paint(HDC dc, const RECT& content, const RECT& o
 
     const int width = Width(content);
     const int height = Height(content);
-    const std::string signature = BuildProjectFilesSignature(content, state, manager, meshThumbnails);
+    const std::string signature = BuildProjectFilesSignature(content, state, manager, meshThumbnails, sceneContext.AssetUsersVersion());
     ProjectFilesRetainedSurface& surface = RetainedSurface();
     if (!surface.Matches(width, height, signature)) {
         HDC cachedDc = surface.BeginRender(dc, width, height, signature);
         if (cachedDc != nullptr) {
             const int savedDc = SaveDC(cachedDc);
             SetViewportOrgEx(cachedDc, -content.left, -content.top, nullptr);
-            PaintProjectFilesBase(cachedDc, content, theme, state, manager, meshThumbnails);
+            PaintProjectFilesBase(cachedDc, content, theme, state, manager, meshThumbnails, sceneContext.AssetUsers());
             RestoreDC(cachedDc, savedDc);
         } else {
-            PaintProjectFilesBase(dc, content, theme, state, manager, meshThumbnails);
+            PaintProjectFilesBase(dc, content, theme, state, manager, meshThumbnails, sceneContext.AssetUsers());
         }
     }
     surface.Blit(dc, content);

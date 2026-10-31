@@ -3,6 +3,7 @@
 #include "docking/DockGeometry.hpp"
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockModelQueries.hpp"
+#include "docking/DockNodeFinder.hpp"
 
 #include <algorithm>
 
@@ -76,10 +77,25 @@ namespace {
 
 } // namespace
 
-EditorDockModelQueries::EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId) noexcept
+EditorDockModelQueries::EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId, bool drawerCollapsed) noexcept
     : panels_(panels)
     , root_(root)
-    , maximizedLeafId_(maximizedLeafId) {}
+    , maximizedLeafId_(maximizedLeafId)
+    , drawerCollapsed_(drawerCollapsed) {}
+
+std::uint32_t EditorDockModelQueries::DrawerLeafId(const DockPanelCollection& panels, const DockNode* root) noexcept {
+    for (const DockPanel& panel : panels.All()) {
+        if (panel.kind == DockPanelKind::Assets) {
+            const DockNode* leaf = DockNodeFinder::FindLeafContaining(root, panel.id);
+            return leaf != nullptr ? leaf->id : 0U;
+        }
+    }
+    return 0U;
+}
+
+bool EditorDockModelQueries::DrawerCollapsed() const noexcept {
+    return drawerCollapsed_ && DrawerLeafId(panels_, root_) != 0U;
+}
 
 const std::vector<DockPanel>& EditorDockModelQueries::Panels() const noexcept {
     return panels_.All();
@@ -102,7 +118,8 @@ DockLayout EditorDockModelQueries::BuildLayout(
     int tabMinWidth,
     int tabWidth,
     int splitterSize) const {
-    DockLayout layout = DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, statusBarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize);
+    DockLayout layout = DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, statusBarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize,
+        drawerCollapsed_ ? DrawerLeafId(panels_, root_) : 0U);
     if (maximizedLeafId_ == 0) {
         return layout;
     }

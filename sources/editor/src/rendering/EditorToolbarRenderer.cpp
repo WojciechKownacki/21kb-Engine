@@ -387,7 +387,8 @@ void EditorToolbarRenderer::PaintStatusBar(
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
     const EditorPlayModeState& playMode,
-    std::string_view backendLabel) const {
+    std::string_view backendLabel,
+    bool drawerCollapsed) const {
     if (rect.right <= rect.left || rect.bottom <= rect.top) {
         return;
     }
@@ -430,6 +431,9 @@ void EditorToolbarRenderer::PaintStatusBar(
     item(bar.warnings, HeroIconKind::Warning, warnings > 0U ? warning : dim,
         EditorLocalization::Format("statusBar.warnings", "{count} warnings", { { "count", std::to_string(warnings) } }),
         warnings > 0U ? warning : secondary);
+    if (drawerCollapsed) {
+        DrawStatusText(dc, bar.backend, EditorText("statusBar.drawerHint", "Ctrl+Space  Project Files / Console"), secondary, DT_LEFT);
+    }
     DrawStatusText(dc, bar.backend, backendLabel, dim, DT_RIGHT);
 }
 

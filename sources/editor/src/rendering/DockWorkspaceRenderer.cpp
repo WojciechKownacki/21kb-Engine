@@ -51,7 +51,8 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int wi
     }
 
     toolbarRenderer.PaintMenu(dc, GdiDrawing::ToRect(layout.menu), theme, shellInteraction);
-    toolbarRenderer.PaintStatusBar(dc, GdiDrawing::ToRect(layout.statusBar), theme, sceneContext, playMode, graphicsApiLabel);
+    toolbarRenderer.PaintStatusBar(dc, GdiDrawing::ToRect(layout.statusBar), theme, sceneContext, playMode, graphicsApiLabel,
+        dockModel.Queries().DrawerCollapsed());
 }
 
 } // namespace kb::editor

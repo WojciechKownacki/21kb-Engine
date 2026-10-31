@@ -584,6 +584,43 @@ void InvalidateStatusBarOnChange(EditorApplicationState& state) noexcept {
     InvalidateRect(state.window, &bar, FALSE);
 }
 
+// A window too short for the default arrangement - a laptop screen - collapses the bottom drawer
+// to its tabs so the scene keeps its height; growing past the line opens it again. Only the
+// crossing counts, so Ctrl+Space decides in between.
+void UpdateDrawerForWindowHeight(EditorApplicationState& state) noexcept {
+    constexpr LONG kCompactWindowHeight = 820;
+    RECT client{};
+    if (state.window == nullptr || IsIconic(state.window) != 0 || GetClientRect(state.window, &client) == 0) {
+        return;
+    }
+    const bool compact = client.bottom - client.top < kCompactWindowHeight;
+    if (compact == state.compactWindow) {
+        return;
+    }
+    state.compactWindow = compact;
+    if (state.dockModel.Commands().SetDrawerCollapsed(compact)) {
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+    }
+}
+
+// The "Used by" column of Project Files follows the scene a few times a second, and only while the
+// list view shows it outside play mode and drags: capturing the scene is not free.
+void RefreshAssetUsersForList(EditorApplicationState& state) {
+    if (state.sceneContext.AssetBrowser().ViewMode() != EditorAssetViewMode::List || state.playMode.IsPlaying() ||
+        state.sceneContext.Gizmo().IsDragging() || state.sceneContext.HasActiveViewportCameraNavigation()) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - state.lastAssetUsersRefresh < std::chrono::milliseconds{ 300 }) {
+        return;
+    }
+    state.lastAssetUsersRefresh = now;
+    if (state.sceneContext.RefreshAssetUsers()) {
+        InvalidatePanelKind(state, DockPanelKind::Assets);
+    }
+}
+
 // Whether a visible Scene View has Realtime on and may draw every frame. Only while the editor
 // is the application in front: behind another window it would spend the GPU on frames nobody
 // watches, so it pauses there and its counter falls back to IDLE.
@@ -1648,6 +1685,8 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         }
         nextEditorFrame = currentTick + editorFrameInterval;
         InvalidateStatusBarOnChange(state);
+        UpdateDrawerForWindowHeight(state);
+        RefreshAssetUsersForList(state);
 
         if (state.playMode.IsPaused()) {
             if (state.window != nullptr) {

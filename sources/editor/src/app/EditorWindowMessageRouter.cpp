@@ -722,6 +722,16 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             }
             return 0;
         }
+        if (wparam == VK_SPACE && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
+            !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
+            // Slides the bottom drawer (Project Files, Console) open or back to its tab strip.
+            const bool collapsed = context_.dockModel.Queries().DrawerCollapsed();
+            if (context_.dockModel.Commands().SetDrawerCollapsed(!collapsed)) {
+                context_.sceneViewport.RequestPresent();
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (wparam == 'R' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
             !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
             // Realtime for every Scene View, as the toolbar button sets it for one.

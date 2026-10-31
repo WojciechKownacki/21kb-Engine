@@ -17,6 +17,7 @@
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/components/CategoryHeader.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
@@ -179,11 +180,37 @@ void DrawGraphText(HDC dc, RECT rect, std::string_view text, COLORREF color, int
     kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
+// A toolbar command; an emphasized one (a toggle that is on, Save with changes to save) takes
+// the editor's selected style.
 void DrawCommandButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool emphasized) {
-    const COLORREF fill = GdiDrawing::ToColorRef(emphasized ? theme.accent : theme.chrome);
-    const COLORREF border = GdiDrawing::ToColorRef(emphasized ? theme.accent : theme.borderPanel);
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, GdiDrawing::ToColorRef(emphasized ? theme.textPrimary : theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    EditorDialogStyle::PaintOptionButton(dc, rect, theme, label, emphasized);
+}
+
+// One of the preview choices (shape, lighting, quality): its category icon, the current value
+// and a chevron, so the value reads as something to pick rather than a bare word.
+void DrawPreviewChoice(HDC dc, const RECT& rect, const EditorTheme& theme, HeroIconKind icon, std::string_view value) {
+    EditorDialogStyle::PaintOptionButton(dc, rect, theme, {}, false);
+    constexpr int iconSize = 13;
+    const int iconTop = static_cast<int>(rect.top) + (static_cast<int>(rect.bottom - rect.top) - iconSize) / 2;
+    HeroIconPainter::Draw(dc, RECT{ rect.left + 8, iconTop, rect.left + 8 + iconSize, iconTop + iconSize }, icon,
+        GdiDrawing::ToColorRef(theme.textDisabled), 1);
+    constexpr int chevronSize = 10;
+    const int chevronTop = static_cast<int>(rect.top) + (static_cast<int>(rect.bottom - rect.top) - chevronSize) / 2;
+    HeroIconPainter::Draw(dc, RECT{ rect.right - 8 - chevronSize, chevronTop, rect.right - 8, chevronTop + chevronSize },
+        HeroIconKind::ChevronDown, GdiDrawing::ToColorRef(theme.textSecondary), 1);
+    DrawText(dc, RECT{ rect.left + 8 + iconSize + 5, rect.top, rect.right - 8 - chevronSize - 4, rect.bottom }, value,
+        GdiDrawing::ToColorRef(theme.textSecondary), 11, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+// The open material by its file name, as its tab names any other asset editor.
+[[nodiscard]] std::string MaterialTitle(const EditorSceneContext& sceneContext) {
+    const kb::assets::AssetId id = sceneContext.MaterialEditor().OpenAssetId();
+    const kb::assets::AssetMetadata* metadata = id.IsValid() ? sceneContext.Scene().Assets().Manager().Registry().Find(id) : nullptr;
+    if (metadata != nullptr) {
+        const std::string filename = metadata->virtualPath.filename().string();
+        return filename.empty() ? metadata->name : filename;
+    }
+    return std::string{ EditorText("panel.materialEditor", "Material Editor") };
 }
 
 void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext, bool dirty, bool infoVisible) {
@@ -195,14 +222,14 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
         const int dividerY = layout.compactToolbar ? content.top + 70 : content.top + 40;
         GdiDrawing::FillRectColor(dc, RECT{ layout.header.left + 8, dividerY, layout.header.right - 8, dividerY + 1 }, GdiDrawing::ToColorRef(theme.borderChrome));
     }
-    const std::string title = std::string{ EditorText("panel.materialEditor", "Material Editor") } + (dirty ? "  *" : "");
+    const std::string title = MaterialTitle(sceneContext) + (dirty ? "  *" : "");
     DrawText(dc, layout.title, title, dirty ? RGB(242, 193, 103) : GdiDrawing::ToColorRef(theme.textPrimary), 14, FW_SEMIBOLD);
     DrawText(dc, RECT{content.left + 10, layout.header.bottom - kAssetEditScopeHeight, content.right - 10, layout.header.bottom},
         AssetEditScopeText(), GdiDrawing::ToColorRef(theme.textSecondary), 11, FW_NORMAL);
     DrawCommandButton(dc, layout.infoButton, theme, EditorText("materialEditor.info", "Info"), infoVisible);
-    DrawCommandButton(dc, layout.previewPrimitiveButton, theme, MaterialEditorPanelRenderer::PreviewPrimitiveLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
-    DrawCommandButton(dc, layout.previewSceneButton, theme, MaterialEditorPanelRenderer::PreviewSceneLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
-    DrawCommandButton(dc, layout.previewQualityButton, theme, MaterialEditorPanelRenderer::PreviewQualityLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel), false);
+    DrawPreviewChoice(dc, layout.previewPrimitiveButton, theme, HeroIconKind::Cube, MaterialEditorPanelRenderer::PreviewPrimitiveLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind));
+    DrawPreviewChoice(dc, layout.previewSceneButton, theme, HeroIconKind::Sun, MaterialEditorPanelRenderer::PreviewSceneLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset));
+    DrawPreviewChoice(dc, layout.previewQualityButton, theme, HeroIconKind::AdjustmentsHorizontal, MaterialEditorPanelRenderer::PreviewQualityLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel));
     DrawCommandButton(dc, layout.previewNormalButton, theme, EditorText("materialEditor.normalDebug", "Normal"), sceneContext.MaterialPreviewNormalDebugViewEnabled());
     DrawCommandButton(dc, layout.previewNodeButton, theme, EditorText("materialEditor.nodePreview", "Node"), sceneContext.MaterialPreviewNodePreviewEnabled());
     DrawCommandButton(dc, layout.applyButton, theme, layout.compactToolbar ? EditorText("common.apply", "Apply")

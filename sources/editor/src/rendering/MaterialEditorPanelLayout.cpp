@@ -55,6 +55,8 @@ MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT&
     // Each button is as wide as its widest label in the editor's language (11 pt, 8 px each side),
     // never narrower than the width it was drawn for in English.
     constexpr int kLabelPadding = 18;
+    // The three preview choices carry a category icon before the value and a chevron after it.
+    constexpr int kPreviewChoiceRoom = 30;
     const auto fit = [](int minimum, std::initializer_list<std::string_view> labels) noexcept {
         return FitTextWidth(minimum, labels, 11, FW_NORMAL, kLabelPadding);
     };
@@ -90,9 +92,9 @@ MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT&
         layout.applyButton = RECT{ layout.saveButton.left - buttonGap - fit(118, { applyLabel }), buttonTop, layout.saveButton.left - buttonGap, buttonBottom };
         layout.previewNodeButton = RECT{ layout.applyButton.left - buttonGap - fit(58, { nodeLabel }), buttonTop, layout.applyButton.left - buttonGap, buttonBottom };
         layout.previewNormalButton = RECT{ layout.previewNodeButton.left - buttonGap - fit(70, { normalLabel }), buttonTop, layout.previewNodeButton.left - buttonGap, buttonBottom };
-        layout.previewQualityButton = RECT{ layout.previewNormalButton.left - buttonGap - fit(62, qualityLabels), buttonTop, layout.previewNormalButton.left - buttonGap, buttonBottom };
-        layout.previewSceneButton = RECT{ layout.previewQualityButton.left - buttonGap - fit(62, sceneLabels), buttonTop, layout.previewQualityButton.left - buttonGap, buttonBottom };
-        layout.previewPrimitiveButton = RECT{ layout.previewSceneButton.left - buttonGap - fit(66, primitiveLabels), buttonTop, layout.previewSceneButton.left - buttonGap, buttonBottom };
+        layout.previewQualityButton = RECT{ layout.previewNormalButton.left - buttonGap - fit(62, qualityLabels) - kPreviewChoiceRoom, buttonTop, layout.previewNormalButton.left - buttonGap, buttonBottom };
+        layout.previewSceneButton = RECT{ layout.previewQualityButton.left - buttonGap - fit(62, sceneLabels) - kPreviewChoiceRoom, buttonTop, layout.previewQualityButton.left - buttonGap, buttonBottom };
+        layout.previewPrimitiveButton = RECT{ layout.previewSceneButton.left - buttonGap - fit(66, primitiveLabels) - kPreviewChoiceRoom, buttonTop, layout.previewSceneButton.left - buttonGap, buttonBottom };
         layout.infoButton = RECT{ layout.previewPrimitiveButton.left - buttonGap - fit(54, { infoLabel }), buttonTop, layout.previewPrimitiveButton.left - buttonGap, buttonBottom };
         layout.title = RECT{ content.left + MaterialEditorPanelMetrics::Padding, content.top, layout.infoButton.left - 10, content.top + layout.headerHeight };
     } else if (width >= 600) {
@@ -100,9 +102,9 @@ MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT&
         int previewCursor = content.left + std::max(154, MaterialEditorPanelMetrics::Padding + titleWidth + 10);
         layout.title = RECT{ content.left + MaterialEditorPanelMetrics::Padding, content.top, previewCursor - 10, content.top + 42 };
         layout.infoButton = placeButton(previewCursor, previewTop, fit(48, { infoLabel }), buttonGap);
-        layout.previewPrimitiveButton = placeButton(previewCursor, previewTop, fit(58, primitiveLabels), buttonGap);
-        layout.previewSceneButton = placeButton(previewCursor, previewTop, fit(54, sceneLabels), buttonGap);
-        layout.previewQualityButton = placeButton(previewCursor, previewTop, fit(54, qualityLabels), buttonGap);
+        layout.previewPrimitiveButton = placeButton(previewCursor, previewTop, fit(58, primitiveLabels) + kPreviewChoiceRoom, buttonGap);
+        layout.previewSceneButton = placeButton(previewCursor, previewTop, fit(54, sceneLabels) + kPreviewChoiceRoom, buttonGap);
+        layout.previewQualityButton = placeButton(previewCursor, previewTop, fit(54, qualityLabels) + kPreviewChoiceRoom, buttonGap);
         layout.previewNormalButton = placeButton(previewCursor, previewTop, fit(60, { normalLabel }), buttonGap);
         layout.previewNodeButton = placeButton(previewCursor, previewTop, fit(48, { nodeLabel }), buttonGap);
         int actionCursor = content.left + MaterialEditorPanelMetrics::Padding;
@@ -116,9 +118,9 @@ MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT&
         int previewCursor = content.left + MaterialEditorPanelMetrics::Padding;
         const int previewTop = content.top + 38;
         layout.infoButton = placeButton(previewCursor, previewTop, fit(42, { infoLabel }), 4);
-        layout.previewPrimitiveButton = placeButton(previewCursor, previewTop, fit(52, primitiveLabels), 4);
-        layout.previewSceneButton = placeButton(previewCursor, previewTop, fit(46, sceneLabels), 4);
-        layout.previewQualityButton = placeButton(previewCursor, previewTop, fit(46, qualityLabels), 4);
+        layout.previewPrimitiveButton = placeButton(previewCursor, previewTop, fit(52, primitiveLabels) + kPreviewChoiceRoom, 4);
+        layout.previewSceneButton = placeButton(previewCursor, previewTop, fit(46, sceneLabels) + kPreviewChoiceRoom, 4);
+        layout.previewQualityButton = placeButton(previewCursor, previewTop, fit(46, qualityLabels) + kPreviewChoiceRoom, 4);
         layout.previewNormalButton = placeButton(previewCursor, previewTop, fit(52, { normalLabel }), 4);
         layout.previewNodeButton = placeButton(previewCursor, previewTop, fit(42, { nodeLabel }), 4);
         int actionCursor = content.left + MaterialEditorPanelMetrics::Padding;

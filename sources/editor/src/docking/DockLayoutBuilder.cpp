@@ -17,12 +17,14 @@ DockLayout DockLayoutBuilder::Build(
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
-    int splitterSize) const {
+    int splitterSize,
+    std::uint32_t collapsedLeafId) const {
     const DockLayoutBuildSettings settings{
         .tabStripHeight = tabStripHeight,
         .tabMinWidth = tabMinWidth,
         .tabWidth = tabWidth,
         .splitterSize = splitterSize,
+        .collapsedLeafId = collapsedLeafId,
     };
 
     DockLayout layout{};

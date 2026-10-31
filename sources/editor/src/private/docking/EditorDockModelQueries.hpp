@@ -12,7 +12,12 @@ namespace kb::editor {
 
 class EditorDockModelQueries {
 public:
-    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId) noexcept;
+    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId, bool drawerCollapsed) noexcept;
+
+    // The drawer is the leaf holding Project Files (with the Console beside it by default); 0
+    // when Project Files is floating or closed.
+    [[nodiscard]] static std::uint32_t DrawerLeafId(const DockPanelCollection& panels, const DockNode* root) noexcept;
+    [[nodiscard]] bool DrawerCollapsed() const noexcept;
 
     [[nodiscard]] const std::vector<DockPanel>& Panels() const noexcept;
     [[nodiscard]] std::vector<DockPanel> PanelsInArea(DockArea area) const;
@@ -26,6 +31,7 @@ private:
     const DockPanelCollection& panels_;
     const DockNode* root_ = nullptr;
     std::uint32_t maximizedLeafId_ = 0;
+    bool drawerCollapsed_ = false;
 };
 
 } // namespace kb::editor

@@ -18,6 +18,7 @@
 
 #include "kb/editor/theme/EditorTheme.hpp"
 
+#include <chrono>
 #include <cstdint>
 
 #if defined(_WIN32)
@@ -60,6 +61,10 @@ struct EditorApplicationState {
     std::uint64_t lastStatusConsoleEntrySequence = 0U;
     std::uint64_t lastStatusConsoleEntryCount = 0U;
     bool lastStatusRendererInitialized = false;
+    // Whether the window was last too short for the bottom drawer to stay open.
+    bool compactWindow = false;
+    // When the "Used by" column of Project Files last looked at the scene.
+    std::chrono::steady_clock::time_point lastAssetUsersRefresh{};
     bool running = false;
 #endif
 };

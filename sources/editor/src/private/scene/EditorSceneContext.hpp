@@ -27,6 +27,7 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetUsers.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
@@ -277,6 +278,12 @@ public:
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
+    // Which objects of the open scene use each asset, for the "Used by" column of Project Files.
+    // RefreshAssetUsers recomputes it when the scene changed and returns whether it changed;
+    // the version moves with every change so a retained panel image knows to repaint.
+    bool RefreshAssetUsers();
+    [[nodiscard]] const EditorAssetUsers& AssetUsers() const noexcept { return assetUsers_; }
+    [[nodiscard]] std::uint64_t AssetUsersVersion() const noexcept { return assetUsersVersion_; }
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
     [[nodiscard]] bool SceneRenderStructuralDirty() const noexcept;
@@ -1617,6 +1624,10 @@ private:
     std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
+    EditorAssetUsers assetUsers_;
+    std::uint64_t assetUsersVersion_ = 0U;
+    std::uint64_t assetUsersRevision_ = ~std::uint64_t{ 0U };
+    std::uint64_t assetUsersGeneration_ = ~std::uint64_t{ 0U };
     EditorConfiguration editorConfig_;
     EditorPluginsState plugins_;
     bool particleProviderMigrationResolved_ = false;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/EditorAssetBrowserLayout.hpp"
+#include "assets/EditorAssetUsers.hpp"
 #include "kb/editor/assets/EditorAssetBrowserTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 
@@ -22,7 +23,8 @@ public:
         const EditorTheme& theme,
         const EditorAssetBrowserState& state,
         const std::vector<EditorAssetFolderRow>& folders,
-        const std::vector<EditorAssetItemRow>& assets);
+        const std::vector<EditorAssetItemRow>& assets,
+        const EditorAssetUsers& users);
 };
 
 #endif
