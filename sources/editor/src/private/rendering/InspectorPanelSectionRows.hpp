@@ -469,8 +469,11 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
         const ScopedGdiObject selectedFont(dc, valueFont.handle);
         Text(dc, Shrink(valueRect, 8, 0, 28, 0), classified ? value : EditorText("inspector.none", "None"),
             classified ? Color(theme.textPrimary) : Color(theme.textDisabled));
-        Text(dc, Rect(valueRect.right - 25, valueRect.top, valueRect.right - 5, valueRect.bottom), open ? "^" : "v",
-            Color(theme.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        constexpr int chevronSize = 12;
+        const int chevronLeft = static_cast<int>(valueRect.right) - 15 - chevronSize / 2;
+        const int chevronTop = CenteredY(valueRect, chevronSize);
+        HeroIconPainter::Draw(dc, Rect(chevronLeft, chevronTop, chevronLeft + chevronSize, chevronTop + chevronSize),
+            HeroIconKind::ChevronDown, Color(open ? theme.textPrimary : theme.textSecondary), 1);
     }
 }
 

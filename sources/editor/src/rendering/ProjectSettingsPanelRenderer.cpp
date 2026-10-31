@@ -3,6 +3,8 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/HeroIconKind.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -95,7 +97,11 @@ void DrawCategorySidebar(HDC dc, const ProjectSettingsPanelLayoutRects& rects, c
 void DrawSelectorBox(HDC dc, const RECT& box, const EditorTheme& theme, const std::string& display, bool isNone, bool open) {
     GdiDrawing::DrawSharpFrame(dc, box, Color(theme.chrome), Color(open ? theme.accent : theme.borderPanel));
     DrawText(dc, RECT{ box.left + 8, box.top, box.right - 22, box.bottom }, display.c_str(), Color(isNone ? theme.textDisabled : theme.textPrimary), 12);
-    DrawText(dc, RECT{ box.right - 20, box.top, box.right - 4, box.bottom }, open ? "^" : "v", Color(theme.textSecondary), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    constexpr int chevronSize = 12;
+    const int chevronLeft = static_cast<int>(box.right) - 12 - chevronSize / 2;
+    const int chevronTop = static_cast<int>(box.top) + (static_cast<int>(box.bottom - box.top) - chevronSize) / 2;
+    HeroIconPainter::Draw(dc, RECT{ chevronLeft, chevronTop, chevronLeft + chevronSize, chevronTop + chevronSize },
+        HeroIconKind::ChevronDown, Color(open ? theme.textPrimary : theme.textSecondary), 1);
 }
 
 void DrawOptionButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool selected, bool enabled = true) {

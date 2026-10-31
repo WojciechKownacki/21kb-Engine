@@ -3,6 +3,8 @@
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/HeroIconKind.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -248,8 +250,12 @@ void EditorSettingsPanelRenderer::Paint(
         GdiDrawing::DrawSharpFrame(dc, rects.languageField, Color(theme.background), Color(theme.borderPanel));
         DrawText(dc, {rects.languageField.left + 8, rects.languageField.top, rects.languageField.right - 24, rects.languageField.bottom},
             std::string{ current != nullptr ? current->nativeName : std::string_view{ "English" } }.c_str(), Color(theme.textPrimary), 12);
-        DrawText(dc, {rects.languageField.right - 22, rects.languageField.top, rects.languageField.right - 6, rects.languageField.bottom},
-            "v", Color(theme.textSecondary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        constexpr int chevronSize = 12;
+        const int chevronLeft = static_cast<int>(rects.languageField.right) - 14 - chevronSize / 2;
+        const int chevronTop = static_cast<int>(rects.languageField.top) +
+            (static_cast<int>(rects.languageField.bottom - rects.languageField.top) - chevronSize) / 2;
+        HeroIconPainter::Draw(dc, RECT{chevronLeft, chevronTop, chevronLeft + chevronSize, chevronTop + chevronSize},
+            HeroIconKind::ChevronDown, Color(theme.textSecondary), 1);
         DrawText(dc, rects.languageHint,
             EditorLocalization::Format("editorSettings.languageHint", "{count} languages - applies at once",
                 { { "count", std::to_string(EditorLocalization::Languages().size()) } }).c_str(),

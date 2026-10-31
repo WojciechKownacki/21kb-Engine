@@ -907,7 +907,9 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyAddComponentSear
             }
         }
         const ClientPixels painted = CaptureClient(browser);
-        const RECT help{client.left + 8, client.bottom - 70, client.right - 8, client.bottom - 6};
+        // A popup narrower than its default width gives the help text a taller band (see AddComponentHelpRect).
+        const int helpHeight = client.right - client.left < 240 ? 112 : 70;
+        const RECT help{client.left + 8, client.bottom - helpHeight, client.right - 8, client.bottom - 6};
         if (painted.BrightPixelsIn(help, 130) < 80 ||
             InspectorPanelRenderer::HitTestAddComponentOverlay(client, sceneContext, help.left + 10, help.bottom - 10).property ==
                 InspectorPropertyId::AddComponentOption) {
