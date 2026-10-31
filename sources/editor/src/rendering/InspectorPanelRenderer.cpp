@@ -2481,9 +2481,11 @@ void PaintPhysicsSection(
             section.Field(field.label, field.value, fieldProperty, index);
         }
     }
-    int bottom = section.Bottom();
     if (showFitButton && !inspector.IsCollapsed(sectionId)) {
-        const RECT button = ColliderFitButtonRect(Rect(content.left, bottom, content.right, bottom + kFieldRowHeight));
+        // The action row belongs to the card: reserving it inside the section keeps the button
+        // within the card's outline, at the row the hit test expects after the fields.
+        const RECT actionRow = section.Reserve(kFieldRowHeight + kDividerHeight);
+        const RECT button = ColliderFitButtonRect(Rect(actionRow.left, actionRow.top, actionRow.right, actionRow.top + kFieldRowHeight));
         const bool hovered = fitEnabled && inspector.IsHovered(InspectorHitKind::TextField, sectionId, InspectorPropertyId::ColliderFitToMesh);
         const COLORREF fill = !fitEnabled ? Rgb(30, 33, 38) : (hovered ? BlendColor(Color(theme.accent), Rgb(0, 0, 0), 15) : Rgb(38, 43, 50));
         const COLORREF border = fitEnabled ? Color(theme.accent) : Rgb(52, 58, 66);
@@ -2495,9 +2497,8 @@ void PaintPhysicsSection(
         const COLORREF textColor = fitEnabled ? Color(theme.textPrimary) : Rgb(96, 104, 116);
         HeroIconPainter::Draw(dc, Rect(button.left + 14, iconTop, button.left + 14 + iconSize, iconTop + iconSize), HeroIconKind::Cube, textColor, 1);
         Text(dc, Rect(button.left + 14 + iconSize, button.top, button.right - 10, button.bottom), EditorText("inspector.collider.fitToMesh", "Fit to Mesh"), textColor, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        bottom += kFieldRowHeight + kDividerHeight;
     }
-    y = bottom + kSectionGap;
+    y = section.Bottom() + kSectionGap;
 }
 
 [[nodiscard]] std::size_t AliveSelectionCount(const kb::scene::Scene& scene, std::span<const kb::scene::SceneEntity> selected) noexcept {
