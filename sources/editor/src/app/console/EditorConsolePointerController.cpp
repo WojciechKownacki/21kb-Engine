@@ -28,16 +28,16 @@ namespace {
     }
     const int targetRow = console.ListScrollRow() + (y - list.top) / rowHeight;
     int row = 0;
-    for (const EditorConsoleEntry& entry : console.Entries()) {
-        if (!console.Accepts(entry.level)) {
-            continue;
-        }
+    std::uint64_t sequence = 0;
+    ForEachEditorConsoleRow(console, [&](const EditorConsoleRow& visible) noexcept {
         if (row == targetRow) {
-            return entry.sequence;
+            sequence = visible.entry->sequence;
+            return false;
         }
         ++row;
-    }
-    return 0;
+        return true;
+    });
+    return sequence;
 }
 
 [[nodiscard]] EditorConsoleButton ConsoleButtonAt(const EditorConsoleLayoutRects& layout, int x, int y) noexcept {
@@ -187,6 +187,12 @@ bool EditorConsolePointerController::HandlePointerDown(const RECT& content, int 
     const EditorConsoleLayoutRects hit = ResolveEditorConsoleLayout(content, console);
     const EditorConsoleDetailScrollMetrics scroll = ResolveEditorConsoleDetailScrollMetrics(hit.detailTextArea, console);
     const EditorConsoleListScrollMetrics listScroll = ResolveEditorConsoleListScrollMetrics(hit.listRows, console);
+    // A click in the filter field starts typing there; anywhere else in the Console ends it.
+    const bool inFilter = PointInRect(hit.filterField, x, y);
+    console.Filter().Focus(inFilter);
+    if (inFilter) {
+        return true;
+    }
     if (PointInRect(hit.infoButton, x, y)) {
         console.ToggleInfo();
         return true;

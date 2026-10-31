@@ -4,6 +4,7 @@
 #include "docking/EditorDockModel.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
+#include "console/EditorConsoleLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/components/CategoryHeader.hpp"
@@ -339,6 +340,34 @@ void RunFloatingWindowControlHitTest() {
     kb::editor::tests::Require(hitTester.HitTest(metrics, clientWidth, restore.x + 1, restore.y + 1) == kb::editor::FloatingWindowControlKind::MaximizeRestore, "Maximize/restore control hit test failed");
     kb::editor::tests::Require(hitTester.HitTest(metrics, clientWidth, close.x + 1, close.y + 1) == kb::editor::FloatingWindowControlKind::Close, "Close control hit test failed");
     kb::editor::tests::Require(hitTester.HitTest(metrics, clientWidth, close.x + close.width, close.y + 1) == kb::editor::FloatingWindowControlKind::None, "Control hit test should reject the exclusive right edge");
+}
+
+void RunConsoleFilterAndRepeatCollapseTest() {
+    kb::editor::EditorConsoleState console;
+    console.Info("Scene", "Undo");
+    console.Info("Scene", "Undo");
+    console.Info("Scene", "Undo");
+    console.Warning("Assets", "Texture missing");
+    console.Info("Scene", "Undo");
+    std::vector<std::uint32_t> repeats;
+    kb::editor::ForEachEditorConsoleRow(console, [&repeats](const kb::editor::EditorConsoleRow& row) {
+        repeats.push_back(row.repeat);
+        return true;
+    });
+    kb::editor::tests::Require(repeats == std::vector<std::uint32_t>{ 3U, 1U, 1U },
+        "Identical consecutive Console entries should collapse into one row with their count");
+    kb::editor::tests::Require(kb::editor::EditorConsoleAcceptedEntryCount(console) == 3,
+        "The Console list should count collapsed rows, not entries");
+    console.Filter().SetQuery("TEXTURE");
+    kb::editor::tests::Require(kb::editor::EditorConsoleAcceptedEntryCount(console) == 1,
+        "The Console text filter should match messages without regard to case");
+    console.Filter().SetQuery("assets");
+    kb::editor::tests::Require(kb::editor::EditorConsoleAcceptedEntryCount(console) == 1,
+        "The Console text filter should also match the category");
+    console.Filter().Clear();
+    console.ToggleInfo();
+    kb::editor::tests::Require(kb::editor::EditorConsoleAcceptedEntryCount(console) == 1,
+        "The Console level toggles should still apply with the text filter empty");
 }
 
 void RunMainToolbarTransportButtonsAreVerticallyCenteredTest() {
@@ -1435,6 +1464,7 @@ void RunEditorDockingTests() {
     RunSplitterAndFloatingResizeTest();
     RunFloatingWindowControlHitTest();
     RunMainToolbarTransportButtonsAreVerticallyCenteredTest();
+    RunConsoleFilterAndRepeatCollapseTest();
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();

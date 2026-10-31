@@ -1914,7 +1914,8 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
         || Inspector().IsTextEditing()
         || IsMaterialGraphNodeRenameEditing()
         || IsMaterialGraphConstantInlineEditing()
-        || IsMaterialEditorFindFocused();
+        || IsMaterialEditorFindFocused()
+        || console_.Filter().IsFocused();
 }
 
 bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {

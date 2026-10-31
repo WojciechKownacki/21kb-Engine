@@ -209,12 +209,29 @@ void DrawConsoleToolbar(HDC dc, const EditorConsoleLayoutRects& layout, const Ed
     DrawPill(dc, layout.infoButton, theme, EditorConsoleLevel::Info, console.Count(EditorConsoleLevel::Info), console.ShowInfo());
     DrawPill(dc, layout.warningButton, theme, EditorConsoleLevel::Warning, console.Count(EditorConsoleLevel::Warning), console.ShowWarnings());
     DrawPill(dc, layout.errorButton, theme, EditorConsoleLevel::Error, console.Count(EditorConsoleLevel::Error), console.ShowErrors());
+    if (layout.filterField.right > layout.filterField.left) {
+        const bool focused = console.Filter().IsFocused();
+        const std::string_view query = console.Filter().Query();
+        GdiDrawing::DrawSharpFrame(dc, layout.filterField, Color(theme.chrome), Color(focused ? theme.accent : theme.borderPanel));
+        constexpr int iconSize = 12;
+        const int iconTop = static_cast<int>(layout.filterField.top) + (static_cast<int>(layout.filterField.bottom - layout.filterField.top) - iconSize) / 2;
+        HeroIconPainter::Draw(dc, RECT{ layout.filterField.left + 7, iconTop, layout.filterField.left + 7 + iconSize, iconTop + iconSize },
+            HeroIconKind::MagnifyingGlass, Color(theme.textDisabled), 1);
+        const RECT text{ layout.filterField.left + 25, layout.filterField.top, layout.filterField.right - 6, layout.filterField.bottom };
+        if (query.empty() && !focused) {
+            DrawText(dc, text, EditorText("console.filterPlaceholder", "Filter messages"), Color(theme.textDisabled), 12);
+        } else {
+            // The caret is the field's only sign of focus besides its border.
+            const std::string shown = std::string{ query } + (focused ? "|" : "");
+            DrawText(dc, text, shown.c_str(), Color(theme.textPrimary), 12);
+        }
+    }
     DrawButton(dc, layout.copyLineButton, theme, EditorText("console.copyLine", "Copy Line"), console.HoveredButton() == EditorConsoleButton::CopyLine, console.PressedButton() == EditorConsoleButton::CopyLine);
     DrawButton(dc, layout.saveLogButton, theme, EditorText("console.saveLog", "Save Log"), console.HoveredButton() == EditorConsoleButton::SaveLog, console.PressedButton() == EditorConsoleButton::SaveLog);
     DrawButton(dc, layout.clearButton, theme, EditorText("console.clear", "Clear"), console.HoveredButton() == EditorConsoleButton::Clear, console.PressedButton() == EditorConsoleButton::Clear);
 }
 
-void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorConsoleEntry& entry, int visibleIndex, bool selected) {
+void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorConsoleEntry& entry, std::uint32_t repeat, int visibleIndex, bool selected) {
     const bool zebra = (visibleIndex & 1) != 0;
     GdiDrawing::FillRectColor(dc, row, selected ? Blend(Color(theme.panel), Color(theme.accent), 16) : RowBackground(theme, entry.level, zebra));
     if (selected) {
@@ -228,9 +245,18 @@ void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorCons
     GdiDrawing::FillRectColor(dc, category, Color(theme.chrome));
     DrawText(dc, EditorConsoleInsetRect(category, 6, 0), entry.category.c_str(), Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
+    LONG messageRight = row.right - 10;
+    if (repeat > 1U) {
+        // How many identical entries this row stands for.
+        const std::string count = "\xC3\x97" + std::to_string(repeat);
+        const RECT badge{ row.right - 62, row.top + 3, row.right - 10, row.bottom - 3 };
+        GdiDrawing::FillRectColor(dc, badge, Color(theme.chrome));
+        DrawText(dc, badge, count.c_str(), Color(theme.textSecondary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        messageRight = badge.left - 8;
+    }
     {
         const CutTextDataScope logMessage;
-        DrawText(dc, RECT{ row.left + 230, row.top, row.right - 10, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
+        DrawText(dc, RECT{ row.left + 230, row.top, messageRight, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
     }
 
     GdiDrawing::FillRectColor(dc, RECT{ row.left, row.bottom - 1, row.right, row.bottom }, Color(theme.borderChrome));
@@ -292,24 +318,21 @@ void DrawConsolePanel(HDC dc, const RECT& content, const EditorTheme& theme, con
     const int lastVisible = firstVisible + scroll.visibleRows + 1;
     int rowIndex = 0;
     int accepted = 0;
-    int acceptedIndex = 0;
-    for (const EditorConsoleEntry& entry : console.Entries()) {
-        if (!console.Accepts(entry.level)) {
-            continue;
+    ForEachEditorConsoleRow(console, [&](const EditorConsoleRow& visible) {
+        const int index = accepted++;
+        if (index < firstVisible) {
+            return true;
         }
-        ++accepted;
-        if (acceptedIndex < firstVisible) {
-            ++acceptedIndex;
-            continue;
-        }
-        if (acceptedIndex >= lastVisible) {
-            break;
+        if (index >= lastVisible) {
+            return false;
         }
         RECT row{ layout.listRows.left, layout.listRows.top + rowIndex * rowHeight, layout.listRows.right, layout.listRows.top + (rowIndex + 1) * rowHeight };
-        DrawConsoleRow(dc, row, theme, entry, rowIndex, console.SelectedSequence() == entry.sequence);
+        const std::uint64_t selected = console.SelectedSequence();
+        DrawConsoleRow(dc, row, theme, *visible.entry, visible.repeat, rowIndex,
+            selected != 0U && selected >= visible.firstSequence && selected <= visible.entry->sequence);
         ++rowIndex;
-        ++acceptedIndex;
-    }
+        return true;
+    });
 
     if (accepted == 0) {
         DrawText(dc, layout.listRows, console.Entries().empty() ? EditorText("console.emptyReady", "Console is ready. No log entries yet.")
