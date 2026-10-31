@@ -220,6 +220,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAssetCopy.hpp
     include/engine/scene/AIBrainDecisionSnapshot.hpp
     include/engine/scene/SceneAssetMeta.hpp
+    include/engine/scene/SceneAssetUsers.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
     include/engine/scene/SceneCameraComponents.hpp
     include/engine/scene/SceneComponentQueries.hpp
@@ -884,6 +885,7 @@ add_library(kb_engine STATIC
     src/scene/asset/io/SceneAssetMetaWriter.cpp
     src/scene/asset/io/SceneAssetReader.cpp
     src/scene/asset/io/SceneAssetWriter.cpp
+    src/scene/asset/SceneAssetUsers.cpp
     src/scene/assets/SceneAssetLoader.cpp
     src/scene/assets/ScenePrefabGuidAssetIndex.cpp
     src/scene/components/SceneCameraApi.cpp

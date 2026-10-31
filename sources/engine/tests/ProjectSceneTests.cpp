@@ -11,6 +11,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/SceneAssetUsers.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -513,6 +514,29 @@ void RunProjectDescriptorRejectsChecksumMismatchTest() {
     output << "#tampered\n";
     output.close();
     Require(!kb::project::ProjectManager::LoadProject(projectFile).succeeded, "Project descriptor accepted mismatched integrity metadata");
+}
+
+void RunSceneAssetUsersTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity crate = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Crate" });
+    const kb::scene::SceneEntity barrel = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Barrel" });
+    scene.Components().MeshRenderers().Set(crate, kb::scene::MeshRendererComponent{ .meshAssetId = 41, .materialAssetId = 42 });
+    scene.Components().MeshRenderers().Set(barrel, kb::scene::MeshRendererComponent{ .meshAssetId = 43, .materialAssetId = 42 });
+    const std::vector<kb::scene::SceneAssetUser> users =
+        kb::scene::CollectSceneAssetUsers(kb::scene::SceneDocumentService::Capture(scene, "Users"));
+    const auto usersOf = [&users](std::uint64_t assetId) {
+        std::vector<std::string> names;
+        for (const kb::scene::SceneAssetUser& user : users) {
+            if (user.assetId == assetId) {
+                names.push_back(user.objectName);
+            }
+        }
+        return names;
+    };
+    Require(usersOf(42) == std::vector<std::string>{ "Crate", "Barrel" }, "A material shared by two objects should list both as its users");
+    Require(usersOf(41) == std::vector<std::string>{ "Crate" } && usersOf(43) == std::vector<std::string>{ "Barrel" },
+        "Each mesh should list only the object that renders it");
+    Require(usersOf(0).empty(), "An empty asset slot should not count as a use");
 }
 
 void RunSceneDocumentRoundTripTest() {
@@ -1829,6 +1853,7 @@ void RunProjectSceneTests() {
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
+    RunSceneAssetUsersTest();
     RunProjectPathBudgetTest();
     RunSceneDocumentRoundTripTest();
     RunSceneRadianceEmitterReflectionSerializationTest();
