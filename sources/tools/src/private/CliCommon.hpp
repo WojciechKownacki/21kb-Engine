@@ -40,6 +40,9 @@ public:
     [[nodiscard]] const std::vector<std::string>& Positionals() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Errors() const noexcept;
     [[nodiscard]] std::vector<std::string> UnknownOptions(std::span<const std::string_view> allowed) const;
+    // A copy with an option set to one value (added when missing), or with every value of it removed.
+    [[nodiscard]] ArgumentList WithOption(std::string_view name, std::string value) const;
+    [[nodiscard]] ArgumentList WithoutOption(std::string_view name) const;
 
 private:
     std::vector<std::pair<std::string, std::string>> options_;

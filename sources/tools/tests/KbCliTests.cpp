@@ -4366,6 +4366,39 @@ void RunInputActionAndPrefabTests() {
         "the placed prefab must be in the scene where it was put: " + listedScene.out);
 }
 
+// The shortcuts agents use: many entities at once, 2D physics in one command with named types,
+// a key held during a run, and where scripted objects moved.
+void RunSceneShortcutTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const CliRun stack = RunCliProgram({"entity", "add", "--project", root, "--create", "Cube", "--name", "Crate", "--position", "0,0.5,0",
+        "--count", "3", "--offset", "0,1,0"});
+    Require(stack.exitCode == 0 && Contains(stack.out, "added 3 entities Crate1..Crate3"), "--count must add a stack: " + stack.out + stack.err);
+    const CliRun third = RunCliProgram({"entity", "show", "--project", root, "--name", "Crate3"});
+    Require(Contains(third.out, "localPosition=0,2.5,0"), "--offset must place each one further: " + third.out);
+
+    // A new project has the 2D plugin on.
+    const std::filesystem::path parent = TestRoot().parent_path();
+    std::filesystem::remove_all(parent / "Shortcuts2D");
+    Require(RunCliProgram({"new", "--parent", parent.string(), "--name", "Shortcuts2D"}).exitCode == 0, "the 2D project must be created");
+    const std::string project2D = (parent / "Shortcuts2D").string();
+    const CliRun platform = RunCliProgram({"entity", "add", "--project", project2D, "--create", "Cube", "--name", "Ledge", "--scale", "4,1,1", "--body2d", "Static"});
+    Require(platform.exitCode == 0 && Contains(platform.out, "Static Body 2D and a Box Collider 2D"), "--body2d must add 2D physics: " + platform.out + platform.err);
+    Require(RunCliProgram({"component", "set", "--project", project2D, "--entity", "Ledge", "--type", "Collider2D", "--set", "shape=Circle"}).exitCode == 0,
+        "a 2D collider shape must be settable by name");
+    std::filesystem::remove_all(parent / "Shortcuts2D");
+
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua",
+        "function Tick(self, dt)\n    if Input.Pressed(\"Jump\") then Log(\"jumped\") end\n    Transform.Translate(self.entity, 1 * dt, 0, 0)\nend\n");
+    Require(RunCliProgram({"input-action", "new", "--project", root, "--name", "Jump", "--key", "Space"}).exitCode == 0, "the Jump action must be made");
+    Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene", "--node", "Player",
+        "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "the script must attach");
+    const CliRun pressed = RunCliProgram({"run", "--project", root, "--frames", "10", "--press", "Space@5"});
+    Require(pressed.exitCode == 0 && Contains(pressed.out + pressed.err, "jumped") && Contains(pressed.out, "moved: Player"),
+        "--press must reach the script and run must report where a scripted object moved: " + pressed.out + pressed.err);
+    Require(RunCliProgram({"run", "--project", root, "--frames", "5", "--press", "Spcae@2"}).exitCode == 1, "an unknown key in --press must be refused");
+}
+
 void RunPlaybackStopTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -5265,6 +5298,7 @@ int main(int argc, char** argv) {
     RunPlaybackStopTests();
     RunLuaFunctionTableTests();
     RunInputActionAndPrefabTests();
+    RunSceneShortcutTests();
     RunInputRecordingCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();

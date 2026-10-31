@@ -710,7 +710,39 @@ void ListProperties(std::string_view component, std::ostream& out) {
         "rotation=" + FormatCliNumber(degrees.x) + ',' + FormatCliNumber(degrees.y) + ',' + FormatCliNumber(degrees.z), io);
 }
 
+[[nodiscard]] int EntityAdd(const ArgumentList& arguments, CommandIo io);
+
+// --count 10 --offset 0,1,0: a row, a stack or a tower in one command - Name1..Name10, each one
+// offset further from --position.
+[[nodiscard]] int EntityAddMany(const ArgumentList& arguments, CommandIo io) {
+    const std::string countText = arguments.Option("--count").value_or("");
+    int count = 0;
+    const auto [end, code] = std::from_chars(countText.data(), countText.data() + countText.size(), count);
+    const std::optional<kb::math::Vec3> offset = ParseVec3(arguments.Option("--offset").value_or("0,1,0"));
+    const std::optional<kb::math::Vec3> start = ParseVec3(arguments.Option("--position").value_or("0,0,0"));
+    const std::optional<std::string> name = arguments.Option("--name").has_value() ? arguments.Option("--name") : arguments.Option("--create");
+    if (code != std::errc{} || end != countText.data() + countText.size() || count < 1 || count > 1000 || !offset || !start || !name) {
+        io.err << "error: --count expects 1..1000 with --name (or --create), and --offset/--position x,y,z\n";
+        return 1;
+    }
+    const ArgumentList single = arguments.WithoutOption("--count").WithoutOption("--offset");
+    std::ostringstream quiet;
+    for (int index = 0; index < count; ++index) {
+        const kb::math::Vec3 at = *start + *offset * static_cast<float>(index);
+        const ArgumentList one = single.WithOption("--name", *name + std::to_string(index + 1))
+            .WithOption("--position", FormatCliNumber(at.x) + ',' + FormatCliNumber(at.y) + ',' + FormatCliNumber(at.z));
+        if (EntityAdd(one, CommandIo{ .out = quiet, .err = io.err }) != 0) {
+            io.err << "error: stopped at " << *name << index + 1 << "; the ones before it were added\n";
+            return 1;
+        }
+    }
+    io.out << "added " << count << " entities " << *name << "1.." << *name << count << " from " << arguments.Option("--position").value_or("0,0,0")
+           << " every " << arguments.Option("--offset").value_or("0,1,0") << '\n';
+    return 0;
+}
+
 [[nodiscard]] int EntityAdd(const ArgumentList& arguments, CommandIo io) {
+    if (arguments.Option("--count").has_value()) return EntityAddMany(arguments, io);
     const std::optional<std::string> create = arguments.Option("--create");
     const kb::scene::SceneCreateItem* createItem = create.has_value() ? kb::scene::SceneCreateMenu::Find(*create) : nullptr;
     const auto* uiPreset = create.has_value() && createItem == nullptr
@@ -840,6 +872,24 @@ void ListProperties(std::string_view component, std::ostream& out) {
         }
         added += std::string{ material.has_value() ? " and a " : " with a " } + *body + " Rigidbody";
     }
+    // 2D physics (Box2D): a Body 2D and a Collider 2D whose 1x1 box (a circle for a Sphere, a
+    // capsule for a Capsule) follows the entity's scale - a platform is --scale 5,1,1 --body2d Static.
+    if (const std::optional<std::string> body2D = arguments.Option("--body2d"); body2D.has_value()) {
+        const std::string shape = create == std::optional<std::string>{ "Sphere" } ? "Circle" : create == std::optional<std::string>{ "Capsule" } ? "Capsule" : "Box";
+        for (const char* component : { "Body2D", "Collider2D" }) {
+            if (kb::scene::SceneComponentAuthoring::Has(scene, entity, component)) continue;
+            const kb::scene::SceneComponentAddResult result = kb::scene::SceneComponentAuthoring::Add(scene, entity, component, session->descriptor);
+            if (result.status != kb::scene::SceneComponentAddStatus::Added) {
+                const kb::scene::SceneComponentAddAdvice advice = kb::scene::SceneComponentAuthoring::AddAdvice(result.status, result.kind, component, *name);
+                io.err << "error: " << advice.cause << ". Fix: " << advice.commandLineRemedy << '\n';
+                return 1;
+            }
+        }
+        if (!ApplySetting(scene, entity, "Body2D", "type=" + *body2D, io) || !ApplySetting(scene, entity, "Collider2D", "shape=" + shape, io)) {
+            return 1;
+        }
+        added += " with a " + *body2D + " Body 2D and a " + shape + " Collider 2D";
+    }
     return Saved(*session, added, io);
 }
 
@@ -955,7 +1005,32 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (!session.has_value()) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *name, io);
-    if (!entity.has_value() || !ApplyTransformOptions(scene, *entity, arguments, io)) return 1;
+    if (!entity.has_value()) return 1;
+    // --parent <Name> moves it under another entity, --parent none to the scene root, as dragging it
+    // in the Hierarchy does.
+    if (const std::optional<std::string> parentName = arguments.Option("--parent"); parentName.has_value()) {
+        kb::scene::SceneEntity parent{};
+        if (*parentName != "none") {
+            const std::optional<kb::scene::SceneEntity> found = FindEntity(scene, *parentName, io);
+            if (!found.has_value()) return 1;
+            parent = *found;
+        }
+        for (kb::scene::SceneEntity above = parent; above.IsValid(); above = scene.Hierarchy().Parent(above)) {
+            if (above == *entity) {
+                io.err << "error: '" << *name << "' cannot go under itself or one of its children\n";
+                return 1;
+            }
+        }
+        if (!NameFreeUnder(scene, parent, scene.Entities().Name(*entity))) {
+            io.err << "error: an entity named '" << scene.Entities().Name(*entity) << "' is already there; rename one first\n";
+            return 1;
+        }
+        if (!scene.Hierarchy().SetParent(*entity, parent)) {
+            io.err << "error: '" << *name << "' could not be moved under '" << *parentName << "'\n";
+            return 1;
+        }
+    }
+    if (!ApplyTransformOptions(scene, *entity, arguments, io)) return 1;
     const kb::scene::TransformComponent transform = scene.Transforms().Get(*entity);
     const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(transform.localRotation);
     return Saved(*session, "set '" + *name + "': localPosition=" + FormatCliNumber(transform.localPosition.x) + ',' +

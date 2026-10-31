@@ -80,6 +80,18 @@ const std::vector<std::string>& ArgumentList::Errors() const noexcept {
     return errors_;
 }
 
+ArgumentList ArgumentList::WithOption(std::string_view name, std::string value) const {
+    ArgumentList copy = WithoutOption(name);
+    copy.options_.emplace_back(std::string{ name }, std::move(value));
+    return copy;
+}
+
+ArgumentList ArgumentList::WithoutOption(std::string_view name) const {
+    ArgumentList copy = *this;
+    std::erase_if(copy.options_, [name](const auto& option) { return option.first == name; });
+    return copy;
+}
+
 std::vector<std::string> ArgumentList::UnknownOptions(std::span<const std::string_view> allowed) const {
     std::vector<std::string> unknown;
     const auto check = [&](const std::string& name) {

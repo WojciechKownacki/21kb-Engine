@@ -32,6 +32,9 @@ kb_cli entity add --project . --create Sphere --name RedBall --position 0,5,0 --
   Roughness, Metallic, Emissive Color, Emissive Strength, Normal Scale, Occlusion Strength,
   Alpha Cutoff, and textures (Base Color Texture, Normal Texture, ... = `/Game/Textures/x.png`).
 - Move, turn or aim later: `kb_cli entity set --project . --name "Main Camera" --position 0,4,-8 --look-at RedBall`.
+- `--parent` makes positions, rotation and scale relative to the parent: a child of a scaled object is
+  scaled too. Build an object from parts under an unscaled empty entity (`entity add --name Table`), each
+  part with its own `--scale`; `entity set --name Leg1 --parent none` moves one back to the root.
 - Change anything later: `kb_cli component set --project . --entity RedBall --type Transform --set localPosition=0,3,0`
   (any component: `--type MeshRenderer --set material=/Game/Materials/Gold.kbmat`,
   `--type Light --set intensity=8 --set range=10`).
@@ -68,8 +71,14 @@ kb_cli run --project . --frames 120
 - A slope: a Cube tilted about Z, e.g. `--create Cube --name Ramp --position 0,2,0 --rotation 0,0,-20 --scale 8,0.4,3`,
   with the ball above its high end (`-3,4.2,0`). The new scene's floor `Plane` is 10x10; a ball that
   rolls on leaves it, so widen it first: `entity set --name Plane --scale 3,1,3`.
-- Character movement: `entity add --create Capsule --name Hero`, `component add --entity Hero --type CharacterController`,
-  then a controller script (guide `scripts`); 2D players: `--create "Top Down Player"` or `"Platformer Player"`.
+- A stack or a row in one command: `entity add --create Cube --name Crate --position 0,0.5,0 --count 10 --offset 0,1,0 --body Dynamic`
+  makes Crate1..Crate10.
+- A character that walks: `entity add --create Capsule --name Hero --position 0,1,0`, `component add --entity Hero --type CharacterController`,
+  `input-action new --name Move --type Axis2D --key W=+y --key S=-y --key D=+x --key A=-x` and in its script
+  `local m = Input.Vector2("Move"); Physics.CharacterMove(self.entity, m.x * 5, m.y * 5)` (X and Z speed). One that
+  follows it: `local t = Transform.GetPosition(World.FindByName("Hero"))`, then CharacterMove toward `t` and
+  stop (CharacterMove 0, 0) closer than 1.5 m - characters collide, so one that keeps walking pushes the other.
+  2D players: `--create "Top Down Player"` or `"Platformer Player"`.
 - Scripts: `function OnCollisionEnter(self, event)` (the other entity is `event.args.other`);
   raycasts and forces: `api_reference` topic `Physics`.
 )md";
@@ -200,7 +209,7 @@ kb_cli ai show --project . --entity Goblin
   `event.args`.
 )md";
 
-constexpr std::string_view kMaps2D = R"md(# 2D tile maps
+constexpr std::string_view kMaps2D = R"md(# 2D maps and platformers
 
 A World 2D Map is a tile map: grounds with automatic borders, sprites as items, floors -50..50
 (0 is the ground floor).
@@ -222,6 +231,17 @@ kb_cli map2d info --project . --map /Game/Maps/World.kbmap2d
 - Tile (x, y) of a flat map lies at X = x + 0.5 - width/2, Z = height/2 - y - 0.5 relative to its
   entity; floor z is z * 3 m up.
 - 2D players: `kb_cli entity add --project . --create "Platformer Player"` or `"Top Down Player"`.
+
+A 2D platformer without a tile map: the player preset, then platforms in the X/Y plane with 2D
+physics, each one command (its Collider 2D follows `--scale`, so leave its size at 1x1):
+
+```
+kb_cli entity add --project . --create "Platformer Player" --position 0,2,0
+kb_cli entity add --project . --create Cube --name Ground --position 10,-0.5,0 --scale 40,1,1 --color "#4C8C3A" --body2d Static
+kb_cli entity add --project . --create Cube --name Platform1 --position 6,1.5,0 --scale 4,0.5,1 --body2d Static
+```
+
+The preset's camera follows the player; `run` prints where the player moved.
 )md";
 
 constexpr std::string_view kVerify = R"md(# Checking your work
@@ -235,6 +255,9 @@ kb_cli scene-list --project . --scene Assets/Scenes/Main.21kbscene   # what the 
 ```
 
 - `run` prints script logs, events and errors; a change is done when it ends with `0 diagnostics`.
+- `run` ends with `moved:` lines: where each dynamic body, character and scripted object went.
+- A key press for a script: `run --press Space@30` holds Space at frame 30 (`--press E@10+20` for
+  20 frames); the `moved:` and log lines show what it did.
 - `run --report input` or `--report particles` prints a versioned report for those systems.
 - Scenes, projects and assets are binary: change them only through `kb_cli` or the kb-engine
   tools, never by editing or parsing the files.
@@ -291,7 +314,7 @@ constexpr std::array<ScriptAgentGuide, 9> kGuides{ {
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },
     { "characters-and-animation", "Characters and animation", "Import a character, state machines, blends, sockets and weapons.", kCharacters },
     { "combat-and-ai", "Combat and AI", "Abilities, health and teams, AI brains from presets and rules.", kCombatAndAi },
-    { "maps-2d", "2D tile maps", "Tile maps with grounds, borders, objects and floors; 2D players.", kMaps2D },
+    { "maps-2d", "2D maps and platformers", "Tile maps with grounds, borders, objects and floors; 2D players and platforms with 2D physics.", kMaps2D },
     { "ui-audio-particles", "UI, sound and particles", "On-screen text and buttons, sounds that play, particle effects.", kUiAudioParticles },
     { "water-and-look", "Water, sky, fog and post-processing", "Translucent water, sky colour, fog, bloom and other post effects.", kWaterAndLook },
     { "verify", "Checking your work", "Validate scripts and run scenes headless before you finish.", kVerify },

@@ -381,6 +381,8 @@ constexpr std::array<std::string_view, 6> kLightKindNames{ "Directional", "Point
 constexpr std::array<std::string_view, 2> kLightMobilityNames{ "Movable", "Static" };
 constexpr std::array<std::string_view, 6> kTickGroupNames{ "Input", "Gameplay", "Physics", "Animation", "Camera", "Presentation" };
 constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
+constexpr std::array<std::string_view, 3> kBody2DTypeNames{ "Static", "Kinematic", "Dynamic" };
+constexpr std::array<std::string_view, 3> kCollider2DShapeNames{ "Box", "Circle", "Capsule" };
 constexpr std::array<std::string_view, 4> kAnimatorRootMotionOwnerNames{ "None", "Animator", "CharacterController", "Rigidbody" };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -449,7 +451,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kSprite2DPropertyDesc
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true, kBody2DTypeNames },
     ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "linearDamping", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float, true },
@@ -463,7 +465,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kCollider2DPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true, kCollider2DShapeNames },
     ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float, true },

@@ -167,6 +167,7 @@ thread_local bool tDiscovery = false;
         {
             ToolProperty{ "scene", "string", "Scene path; defaults to the startup scene.", false, "--scene" },
             ToolProperty{ "frames", "integer", "Frame count (default 60).", false, "--frames" },
+            ToolProperty{ "press", "string", "Hold a key during the run to test input: Space@30 (frame 30) or E@10+20 (20 frames).", false, "--press" },
             ToolProperty{ "dt", "number", "Delta seconds per frame (default 1/60).", false, "--dt" },
             ToolProperty{ "report", "string", "A versioned report: particles, input, audio, ai or ecs.", false, "--report" },
             ToolProperty{ "inputReplay", "string", "Recording file to replay with its per-tick durations.", false, "--input-replay" },
@@ -195,6 +196,9 @@ thread_local bool tDiscovery = false;
             ToolProperty{"color", "string", "add: a colour #RRGGBB for a new material named after the entity.", false, "--color"},
             ToolProperty{"material", "string", "add: an existing material, /Game/....kbmat.", false, "--material"},
             ToolProperty{"body", "string", "add: a Rigidbody of this type (Static, Dynamic, Kinematic).", false, "--body"},
+            ToolProperty{"body2d", "string", "add: 2D physics, a Body 2D of this type (Static, Kinematic, Dynamic) and a Collider 2D following the scale.", false, "--body2d"},
+            ToolProperty{"count", "integer", "add: this many entities Name1..NameN, each offset further (a stack, a row).", false, "--count"},
+            ToolProperty{"offset", "string", "add with count: the step between them x,y,z (default 0,1,0).", false, "--offset"},
             ToolProperty{"occurrence", "integer", "One-based index when names are ambiguous.", false, "--occurrence"},
         });
     if (command.name == "component") return MakeToolDescriptor(command.mcpTool,

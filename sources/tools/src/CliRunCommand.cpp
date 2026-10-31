@@ -5,6 +5,8 @@
 
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputRecording.hpp"
+#include "engine/input/InputKey.hpp"
+#include "engine/input/InputDeviceState.hpp"
 #include "engine/ecs/SystemSchedulerTraceExport.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/World.hpp"
@@ -35,6 +37,7 @@
 #include "engine/world/WorldPartitionRuntime.hpp"
 
 #include <filesystem>
+#include <charconv>
 #include <deque>
 #include <array>
 #include <algorithm>
@@ -303,17 +306,24 @@ struct BodyPosition {
     kb::scene::SceneEntity entity{};
     std::string name;
     kb::math::DVec3 position{};
+    // A body physics moves is reported at rest too; a character or a scripted object only when it moved.
+    bool physics = false;
 };
 
-[[nodiscard]] std::vector<BodyPosition> DynamicBodyPositions(kb::scene::Scene& scene) {
+// What can move during a run: dynamic bodies (3D and 2D), characters and objects with a behaviour.
+[[nodiscard]] std::vector<BodyPosition> MovableEntityPositions(kb::scene::Scene& scene) {
     std::vector<BodyPosition> bodies;
     std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    const auto components = scene.Components();
     while (!pending.empty() && bodies.size() < 64U) {
         const kb::scene::SceneEntity entity = pending.back();
         pending.pop_back();
-        const kb::scene::RigidbodyComponent* body = scene.Components().Rigidbodies().TryGet(entity);
-        if (body != nullptr && body->bodyType == kb::scene::RigidbodyBodyType::Dynamic) {
-            bodies.push_back({ entity, scene.Entities().Name(entity), scene.Transforms().WorldTranslation(entity) });
+        const kb::scene::RigidbodyComponent* body = components.Rigidbodies().TryGet(entity);
+        const kb::scene::Body2DComponent* body2D = components.Bodies2D().TryGet(entity);
+        const bool physics = (body != nullptr && body->bodyType == kb::scene::RigidbodyBodyType::Dynamic) || (body2D != nullptr && body2D->type == 2);
+        if (physics || components.CharacterControllers().TryGet(entity) != nullptr || components.CharacterControllers2D().TryGet(entity) != nullptr ||
+            components.Behaviours().TryGet(entity) != nullptr) {
+            bodies.push_back({ entity, scene.Entities().Name(entity), scene.Transforms().WorldTranslation(entity), physics });
         }
         for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
             pending.push_back(child);
@@ -336,6 +346,7 @@ void PrintBodyMovement(kb::scene::Scene& scene, const std::vector<BodyPosition>&
         const kb::math::DVec3 end = scene.Transforms().WorldTranslation(start.entity);
         const double distance = std::sqrt((end.x - start.position.x) * (end.x - start.position.x) +
             (end.y - start.position.y) * (end.y - start.position.y) + (end.z - start.position.z) * (end.z - start.position.z));
+        if (distance < 0.005 && !start.physics) continue;
         out << "moved: " << start.name << ' ' << text(start.position) << " -> " << text(end)
             << (distance < 0.005 ? " (at rest)" : "") << '\n';
     }
@@ -451,6 +462,35 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
         playbackSeconds = 0.0;
         for (int i = 0; i < frames; ++i) playbackSeconds += inputReplay[static_cast<std::size_t>(i)].deltaSeconds;
+    }
+    // --press Space@30 or --press E@10+20: the key is held from that frame for that many frames
+    // (one by default), so a script reacting to a key can be checked without a recording.
+    struct KeyPress {
+        kb::input::InputKey key = kb::input::InputKey::None;
+        int first = 0;
+        int count = 1;
+    };
+    std::vector<KeyPress> presses;
+    for (const std::string& text : arguments.Options("--press")) {
+        const std::size_t at = text.find('@');
+        const std::size_t plus = text.find('+', at == std::string::npos ? 0U : at);
+        KeyPress press;
+        press.key = kb::input::ParseInputKey(std::string_view{ text }.substr(0, at));
+        const auto number = [&](std::size_t from, std::size_t to, int& out) {
+            if (from >= text.size() || from >= to) return false;
+            const auto [end, code] = std::from_chars(text.data() + from, text.data() + std::min(to, text.size()), out);
+            return code == std::errc{} && end == text.data() + std::min(to, text.size()) && out >= 1;
+        };
+        if (press.key == kb::input::InputKey::None || at == std::string::npos || !number(at + 1U, plus, press.first) ||
+            (plus != std::string::npos && !number(plus + 1U, text.size(), press.count))) {
+            io.err << "error: --press expects <Key>@<frame>[+<frames>], e.g. --press Space@30 or --press E@10+20 (keys: A..Z, Space, Enter, MouseLeft, ...)\n";
+            return 1;
+        }
+        presses.push_back(press);
+    }
+    if (!presses.empty() && inputReplayPath) {
+        io.err << "error: --press and --input-replay both drive the input; use one\n";
+        return 1;
     }
     if (inputRecordPath && static_cast<std::uint32_t>(frames) > kb::input::InputAssetFormat::MaxRecordingFrameCount) {
         io.err << "error: frame count exceeds the input recording limit\n";
@@ -711,7 +751,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     if (ecsReport != nullptr) {
         scene.Runtime().SetEcsProfilerEnabled(true);
     }
-    const std::vector<BodyPosition> bodiesAtStart = DynamicBodyPositions(scene);
+    const std::vector<BodyPosition> bodiesAtStart = MovableEntityPositions(scene);
     const auto playbackStarted = std::chrono::steady_clock::now();
     int stopCode = 0;
     std::string stopReason = "completed";
@@ -755,6 +795,10 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
         if (inputReplayPath)
             kb::input::ApplyInputFrame(scene.Input().MutableDeviceState(), inputReplay[static_cast<std::size_t>(frame - 1)]);
+        for (const KeyPress& press : presses) {
+            if (frame == press.first) scene.Input().MutableDeviceState().SetKeyDown(press.key, true);
+            if (frame == press.first + press.count) scene.Input().MutableDeviceState().SetKeyDown(press.key, false);
+        }
         if (viewport) {
             scene.Input().MutableDeviceState().SetPointerViewportExtent(
                 static_cast<std::uint32_t>(viewport->first), static_cast<std::uint32_t>(viewport->second));

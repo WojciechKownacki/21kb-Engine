@@ -273,6 +273,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                      [--color #RRGGBB (a new material named after it) | --material /Game/<path>.kbmat]
                      [--body Static|Dynamic|Kinematic (adds a Rigidbody)]
                      [--look-at x,y,z|<Entity> (turns forward, +Z, toward it; for cameras and lights)]
+                     [--body2d Static|Kinematic|Dynamic (2D physics: a Body 2D and a Collider 2D that follows --scale)]
+                     [--count <n> [--offset x,y,z] (n entities Name1..Name<n>, each offset further; default 0,1,0)]
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
@@ -283,7 +285,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  bindings. --physics 3d selects the legacy CharacterController and scripts.
                  see docs/world_2d_presets.md)
                  set --project <dir> [--scene <path>] --name <Name> [--position x,y,z]
-                     [--rotation x,y,z] [--scale x,y,z] [--look-at x,y,z|<Entity>]
+                     [--rotation x,y,z] [--scale x,y,z] [--look-at x,y,z|<Entity>] [--parent <Name>|none]
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
                         [--occurrence <n>]
@@ -379,6 +381,7 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai|determinism] [--pcm-frames <n>]
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
+                 [--press <Key>@<frame>[+<frames>] ... (holds a key: --press Space@30, --press E@10+20)]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
                  [--workers <1..64>] [--ecs-history <1..256> with --report ecs]
                  [--ecs-parallelism systems|chunks|combined] [--deterministic]
