@@ -1269,6 +1269,7 @@ add_library(kb_engine STATIC
     src/script/ScriptAgentProjectFiles.cpp
     src/script/ScriptApiCatalog.cpp
     src/script/ScriptApiExport.cpp
+    src/script/ScriptAgentGuides.cpp
     src/script/ScriptApiNameCollector.cpp
     src/script/ScriptApiNameRegistry.cpp
     src/script/ScriptApiDeclarationParser.cpp

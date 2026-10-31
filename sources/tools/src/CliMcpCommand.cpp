@@ -57,7 +57,7 @@ struct ToolProperty {
             for (const auto choice : property.choices) choices.Append(JsonValue::MakeString(std::string{choice}));
             descriptor.Set("enum", std::move(choices));
         }
-        if (property.name == "format") descriptor.Set("default", JsonValue::MakeString("markdown"));
+        if (property.name == "topic") descriptor.Set("default", JsonValue::MakeString("index"));
         if (property.name == "inputReplay" || property.name == "inputRecord")
             descriptor.Set("x-project-file", JsonValue::MakeBool(true));
         if (property.type == "array") {
@@ -120,9 +120,18 @@ struct ToolProperty {
             ToolProperty{"yParameter","string","Distinct Float parameter bound to the Y axis; created if missing.",false,"--y-param"},
         });
     if (command.name == "api") return MakeToolDescriptor(command.mcpTool,
-        "Returns the 21kb Engine script API reference (functions, components, lifecycle events).",
+        "Returns one page of the 21kb Engine script API: without arguments the index of function groups and components; "
+        "with topic a group (Physics), one function (Physics.Raycast) or a component (Rigidbody); with search the topics matching the text. "
+        "Ask for the one function or component you are about to use.",
         {
-            ToolProperty{ "format", "string", "Output format: 'markdown' (default) or 'json'.", false, "--print" },
+            ToolProperty{ "topic", "string", "A group, function or component name, or 'index'.", false, "--topic" },
+            ToolProperty{ "search", "string", "Words to find in function and component names and descriptions.", false, "--search" },
+        });
+    if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
+        "Returns a short how-to for one kind of task, with the kb_cli commands that do it: objects-and-materials, physics, scripts, "
+        "characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
+        {
+            ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },
         });
     if (command.name == "import") return MakeToolDescriptor(command.mcpTool,
         "Imports an external source asset into a project's runtime asset format and registers it.",
@@ -202,10 +211,25 @@ struct ToolProperty {
     return JsonValue::MakeNull();
 }
 
+// Runs any kb_cli command for the bound project, so an agent reaches every operation the guides
+// describe (materials, animation, maps, abilities) and not only the ones with a tool of their own.
+constexpr std::string_view kCliToolName = "kb_cli";
+
+[[nodiscard]] JsonValue MakeCliToolDescriptor() {
+    return MakeToolDescriptor(kCliToolName,
+        "Runs one kb_cli command for this project, as in the guides: args are the words after kb_cli, for example "
+        "[\"material-new\", \"--name\", \"Red\", \"--set\", \"Base Color=#E03C31\"]. The project is filled in; a --project in args is replaced. "
+        "A command with no options prints its usage.",
+        {
+            ToolProperty{ "args", "array", "The command and its options, one word per item.", true, "" },
+        });
+}
+
 [[nodiscard]] JsonValue MakeToolList() {
     auto tools = JsonValue::MakeArray();
     for (const auto& command : CliCommandCatalog())
         if (command.available && !command.mcpTool.empty()) tools.Append(MakeCommandToolDescriptor(command));
+    tools.Append(MakeCliToolDescriptor());
     return tools;
 }
 
@@ -304,14 +328,45 @@ struct ToolCallOutcome {
     const std::string& projectRoot) {
     if (const auto error = ValidateToolArguments(toolName, toolArguments); !error.empty())
         return {.isError = true, .text = error};
+    if (toolName == kCliToolName) {
+        const JsonValue* args = toolArguments->Find("args");
+        std::vector<std::string> words;
+        for (std::size_t index = 0U; index < args->Size(); ++index) {
+            const std::string& word = args->At(index)->AsString();
+            if (word == "kb_cli" && words.empty()) continue;
+            if (word == "--project") {
+                ++index;
+                continue;
+            }
+            words.push_back(word);
+        }
+        if (words.empty()) return {.isError = true, .text = "args must name a command"};
+        const CliCommandDescriptor* target = FindCliCommand(words.front());
+        if (target == nullptr) return {.isError = true, .text = "unknown kb_cli command: " + words.front()};
+        if (target->kind == CliCommandKind::Mcp) return {.isError = true, .text = "the mcp command cannot run inside the MCP server"};
+        // Commands about the project get it; the ones that make a project or describe kb_cli do not take it.
+        const bool takesProject = !projectRoot.empty() && target->kind == CliCommandKind::Normal && words.front() != "new";
+        if (takesProject) words.insert(words.begin() + 1, { "--project", projectRoot });
+        std::ostringstream captured;
+        std::istringstream noInput;
+        int exitCode = 1;
+        try {
+            exitCode = RunCli(words, noInput, {.out = captured, .err = captured});
+        } catch (const std::exception& error) {
+            captured << "error: " << error.what() << '\n';
+        } catch (...) {
+            captured << "error: unexpected tool failure\n";
+        }
+        return {.isError = exitCode != 0, .text = captured.str()};
+    }
     const CliCommandDescriptor* command = nullptr;
     for (const auto& entry : CliCommandCatalog())
         if (entry.available && entry.mcpTool == toolName) { command = &entry; break; }
     if (command == nullptr) return {.isError = true, .text = "unknown tool: " + std::string{toolName}};
-    if (projectRoot.empty() && command->name != "api" && command->name != "schema")
+    if (projectRoot.empty() && command->name != "api" && command->name != "schema" && command->name != "guide")
         return {.isError = true, .text = "this tool requires a bound project"};
     std::vector<std::string> words{std::string{command->name}};
-    if (!projectRoot.empty()) words.insert(words.end(), {"--project", projectRoot});
+    if (!projectRoot.empty() && command->name != "guide") words.insert(words.end(), {"--project", projectRoot});
     const auto descriptor = MakeCommandToolDescriptor(*command);
     const auto* properties = descriptor.Find("inputSchema")->Find("properties");
     for (std::size_t index = 0U; index < properties->Size(); ++index) {

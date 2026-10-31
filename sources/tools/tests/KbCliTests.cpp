@@ -3449,7 +3449,7 @@ void RunMcpCommandTests() {
     input += '\n';
     input += R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"Assets/Scenes/Main.21kbscene","frames":2}}})";
     input += '\n';
-    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"format":"json"}}})";
+    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"topic":"Input"}}})";
     input += '\n';
 
     std::istringstream in{ input };
@@ -4494,10 +4494,13 @@ void RunCommandCatalogTests() {
     };
     const auto listed = mcp(R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})");
     const auto* descriptors = listed.Find("result")->Find("tools");
-    Require(descriptors->Size() == tools.size() && tools.size() >= 11U, "MCP must discover all registered authoring tools");
-    for (std::size_t index = 0U; index < descriptors->Size(); ++index)
-        Require(std::ranges::find(tools, descriptors->At(index)->Find("name")->AsString()) != tools.end(),
+    // Plus kb_cli, which runs any catalog command for the bound project rather than adding one.
+    Require(descriptors->Size() == tools.size() + 1U && tools.size() >= 11U, "MCP must discover all registered authoring tools and the command runner");
+    for (std::size_t index = 0U; index < descriptors->Size(); ++index) {
+        const std::string& name = descriptors->At(index)->Find("name")->AsString();
+        Require(name == "kb_cli" || std::ranges::find(tools, name) != tools.end(),
             "MCP discovery must not invent operations outside the CLI catalog");
+    }
     const auto call = [&](std::string_view name, std::string_view arguments, bool succeeds = true) {
         const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
             std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
@@ -4515,6 +4518,25 @@ void RunCommandCatalogTests() {
     call("entity_edit", R"({"action":"add","name":"Outside","scene":"../Outside.21kbscene"})", false);
     call("script_create", R"({"name":"Outside","language":"lua","folder":"../Outside"})", false);
     call("scene_create", R"({"name":"Outside","project":"../Other"})", false);
+    // The command runner reaches catalog commands without tools of their own, with the bound
+    // project filled in over any --project an agent passes, and refuses to nest the server.
+    call("kb_cli", R"({"args":["scene-new","--name","RunnerScene","--template","Empty"]})");
+    call("kb_cli", R"({"args":["entity","add","--project","../Elsewhere","--scene","/Game/Scenes/RunnerScene.21kbscene","--name","Runner"]})");
+    call("kb_cli", R"({"args":["mcp"]})", false);
+    call("kb_cli", R"({"args":["no-such-command"]})", false);
+    call("kb_cli", R"({"args":[]})", false);
+    // Reference and guides come a page at a time: never the whole API in one answer.
+    const auto page = [&](std::string_view name, std::string_view arguments) {
+        const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
+            std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
+        Require(response.Find("result") && !response.Find("result")->Find("isError")->AsBool(), "Reference tool failed: " + response.Dump());
+        return response.Find("result")->Find("content")->At(0)->Find("text")->AsString();
+    };
+    const std::string index = page("api_reference", "{}");
+    Require(Contains(index, "# 21kb Engine script API") && index.size() < 24U * 1024U, "api_reference without a topic must return the small index");
+    Require(Contains(page("api_reference", R"({"topic":"Physics.Raycast"})"), "# Physics.Raycast"), "api_reference must return one function page");
+    Require(Contains(page("api_reference", R"({"search":"raycast"})"), "Physics.Raycast"), "api_reference must find topics by text");
+    Require(Contains(page("guide", R"({"topic":"objects-and-materials"})"), "material-new"), "guide must return one how-to");
     Require(RunCliProgram({"scene-new", "--project", root, "--name", "CliScene", "--template", "Empty"}).exitCode == 0 &&
         RunCliProgram({"entity", "add", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--name", "Probe", "--position", "1,2,3"}).exitCode == 0 &&
         RunCliProgram({"component", "set", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--entity", "Probe", "--type", "Transform",

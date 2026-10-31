@@ -193,8 +193,20 @@ The binary lands in `build\bin\Debug\kb_cli.exe`.
 kb_cli init-agent --project <project dir>
 ```
 
-This adds `AGENTS.md` (instructions the agent reads automatically) and an API reference
-with editor autocompletion support.
+This adds `AGENTS.md`, a short page the agent reads automatically (and `CLAUDE.md`, which
+imports it for Claude Code), Lua stubs for editor autocompletion, and two folders the agent reads
+one page at a time, so a request stays small:
+
+- `.kb/docs/` holds how-to guides, one per kind of task (objects and materials, physics,
+  scripts, characters and animation, combat and AI, 2D maps, checking your work), each with the
+  commands that do it.
+- `.kb/api/` holds the script API as small pages: `README.md` lists the function groups and
+  components, and every group, function and component has a page of its own.
+
+Over MCP the same pages come from `api_reference` (a `topic` such as `Physics.Raycast` or
+`Rigidbody`, or a `search` text; without either, the index) and `guide`; the `kb_cli` tool runs
+any other command for the project. In a terminal: `kb_cli api --topic <name>`,
+`kb_cli api --search <text>`, `kb_cli guide --topic <name>` and `kb_cli help <command>`.
 
 **In VS Code:**
 
@@ -245,7 +257,9 @@ scene in the editor and press Play.
 | Command | Purpose |
 |---|---|
 | `kb_cli init-agent --project <dir>` | prepare a project for AI agents |
-| `kb_cli api --project <dir>` | refresh the API reference after engine updates |
+| `kb_cli api --project <dir>` | refresh the API reference pages after engine updates |
+| `kb_cli api --topic <name>` / `--search <text>` | print one page of the API reference, or the topics matching a text |
+| `kb_cli guide [--topic <name>]` | print one how-to guide, or the list of them |
 | `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites) |
 | `kb_cli script-build --project <dir> [--script <path>]` | build the project's C++ scripts |
 | `kb_cli validate <file.lua>` | check a script for errors |

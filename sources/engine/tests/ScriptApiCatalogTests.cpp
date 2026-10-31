@@ -10,6 +10,9 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 #include <system_error>
@@ -215,7 +218,32 @@ void RunAgentProjectFilesTest() {
     kb::tests::Require(std::filesystem::exists(TestRoot() / "AGENTS.md"), "AGENTS.md was not created");
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".luarc.json"), ".luarc.json was not created");
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "kb.lua"), "Lua stubs were not created");
-    kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "script_api.md"), "API markdown was not created");
+    // The reference is small pages an agent reads one at a time, plus how-to guides; no single
+    // file holds the whole surface.
+    const std::filesystem::path apiRoot = TestRoot() / ".kb" / "api";
+    kb::tests::Require(std::filesystem::exists(apiRoot / "README.md"), "API reference index was not created");
+    kb::tests::Require(!std::filesystem::exists(apiRoot / "script_api.md"), "the single-file API reference must no longer be written");
+    kb::tests::Require(std::filesystem::exists(apiRoot / "components" / "Rigidbody.md"), "a component reference page was not created");
+    kb::tests::Require(std::filesystem::exists(apiRoot / "functions" / "Physics.md"), "a function group reference page was not created");
+    std::size_t largestPage = 0U;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(apiRoot)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".md") {
+            largestPage = std::max<std::size_t>(largestPage, static_cast<std::size_t>(entry.file_size()));
+        }
+    }
+    kb::tests::Require(largestPage > 0U && largestPage < 24U * 1024U, "every API reference page must stay small enough to read on its own");
+    kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "docs" / "README.md") &&
+                            std::filesystem::exists(TestRoot() / ".kb" / "docs" / "objects-and-materials.md"),
+        "the how-to guides were not created");
+    kb::tests::Require(std::filesystem::exists(TestRoot() / "CLAUDE.md"), "CLAUDE.md was not created");
+    {
+        std::ifstream agents(TestRoot() / "AGENTS.md", std::ios::binary);
+        const std::string text{ std::istreambuf_iterator<char>(agents), std::istreambuf_iterator<char>() };
+        kb::tests::Require(text.size() < 4096U, "AGENTS.md must stay short: it is read with every request");
+    }
+    const std::optional<std::string> raycast = kb::script::ScriptApiExport::ToReferenceTopic(catalog, "physics.raycast");
+    kb::tests::Require(raycast.has_value() && raycast->starts_with("# Physics.Raycast"), "an API topic must resolve one function without regard to case");
+    kb::tests::Require(!kb::script::ScriptApiExport::ToReferenceTopic(catalog, "NoSuchTopic").has_value(), "an unknown API topic must resolve to nothing");
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "script_api.json"), "API JSON was not created");
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "manifest.json"), "API manifest was not created");
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "authoring_hints.json"), "API authoring hints were not created");

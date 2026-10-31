@@ -17,200 +17,53 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabHandle.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/script/ScriptAgentGuides.hpp"
 #include "engine/script/ScriptApiExport.hpp"
 #include "script/AudioShooterDemoProjectFiles.hpp"
 
 #include <fstream>
+#include <iterator>
 #include <system_error>
 
 namespace kb::script {
 
 namespace {
 
-constexpr std::string_view kAgentsTemplate = R"md(# AGENTS.md — working in this 21kb Engine project
+constexpr std::string_view kAgentsTemplate = R"md(# AGENTS.md - working in this 21kb Engine project
 
-This is a game project for the 21kb Engine. Read this file before writing gameplay code.
+This is a 21kb Engine game project. Keep every request small: read this file, then only the one
+guide or API page your task needs. Never read whole folders or the machine files listed below.
 
-## Recommended first script
+## Where things are
 
-Start with Lua. The engine uses entities and components (ECS): a behaviour is attached
-to an entity and reads or changes its components. A hierarchy parent is an entity
-relationship, not a separate kind of scene object. C++ and Visual Graph are advanced
-alternatives; the Lua starter does not require either toolchain.
+- How-to guides, one per kind of task: `.kb/docs/README.md` lists them (objects and materials,
+  physics, scripts, characters and animation, combat and AI, 2D maps, checking your work).
+  kb-engine tool: `guide` with the guide's name as `topic`.
+- Script API, one page per function group, function and component: `.kb/api/README.md` is the
+  index. kb-engine tool: `api_reference` with a `topic` (`Physics`, `Physics.Raycast`,
+  `Rigidbody`) or a `search` text.
+- `Assets/` holds the game, mounted as `/Game/`; `Assets/Scenes/Main.21kbscene` is the startup
+  scene. Lua scripts (`*.lua`) are plain text; edit them directly.
+- Machine files for tools and editors, not for reading: `.kb/api/script_api.json`,
+  `.kb/api/authoring_hints.json`, `.kb/api/manifest.json`, `.kb/api/kb.lua`.
 
-After `kb_cli init-agent --project .`, run this example from the project folder:
+## Rules
 
-```sh
-kb_cli entity add --project . --name TemplatePlayer
-kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node TemplatePlayer --script /Game/Logic/PlayerController.lua
-kb_cli validate --project . Assets/Logic/PlayerController.lua
-kb_cli run --project . --scene Assets/Scenes/Main.21kbscene --frames 2 --report input
-```
-
-The run prints a versioned execution report. The controller needs a `Move` input
-action and bindings to move; a headless run does not invent keyboard input. Use
-`--input-replay <recording>` to reproduce input. The Top Down Player and Platformer
-Player presets provision their input mappings and character controllers.
-
-Use `kb_cli commands` for this build's available operations and MCP aliases, and
-`.kb/api/script_api.json` for the current API. Export support depends on the target's
-installed SDK and player build. A successful headless run validates this host; it
-does not establish input, rendering or persistence on every export platform.
-
-## Project layout
-
-- `<Name>.21kbproject` — binary project descriptor. Never edit by hand; use the editor or `kb_cli`.
-- `Assets/` — all game content, mounted as virtual root `/Game/`.
-  - `Assets/Scenes/*.21kbscene` — scenes (binary; inspect/modify with `kb_cli scene-list` / `kb_cli scene-attach`).
-  - `Assets/**/*.lua` — Lua behaviour scripts (plain text, edit freely).
-  - `Assets/**/*.kbgraph` — visual-graph behaviours (line-based text format).
-- `.kb/api/` — generated API reference and Lua stubs. Regenerate with `kb_cli api --project .` after engine updates.
-- `.luarc.json` — Lua Language Server configuration pointing at the stubs; keep it so completion and diagnostics work.
-
-## Writing a behaviour script
-
-A behaviour is a `.lua` file under `Assets/`. Implement lifecycle hooks as global functions named exactly
-after the lifecycle event, each receiving `(self, dt)`:
-
-```lua
--- @expose speed Float = 6.0
-
-function Ready(self, dt)
-    Log("spawned entity " .. tostring(self.entity))
-end
-
-function Tick(self, dt)
-    local move = Input.Vector2("Move")
-    local x = self:GetProperty("Transform", "localPosition.x")
-    self:SetProperty("Transform", "localPosition.x", x + move.x * self:GetVariable("speed") * dt)
-end
-
-function DoorOpened(self, event) -- custom event handler, receives (self, event)
-    Log(event.args.door)
-end
-```
-
-Lifecycle order: Created, Activated, Ready, then per frame FixedTick (fixed step), Tick, LateTick,
-BeforeRender, AfterRender; Deactivated and Destroyed on teardown.
-
-- Full API reference: `.kb/api/script_api.md` (functions, components, properties, types).
-- The sandbox has no `io`, `os`, `require`, or `load`. Use `Import("Module.Name")` for `-- @import` modules.
-- `-- @expose <name> <Type> [= default]` declares inspector-editable variables; read them with `self:GetVariable`.
-
-## Attaching a behaviour to a scene entity
-
-Scenes are binary. Do not edit them with a text editor. Use the CLI:
-
-```
-kb_cli scene-list   --project . --scene Assets/Scenes/Main.21kbscene
-kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node Player --script /Game/Logic/PlayerController.lua
-```
-
-## Shipped gameplay samples
-
-`kb_cli init-agent` also provisions four runnable controller scripts under
-`Assets/Samples/`: `ThirdPersonController.lua`, `TopDownController.lua`,
-`PlatformerController.lua`, and `SimpleShooterController.lua`. They use the
-same Input, Physics, Transform, World, and prefab APIs as ordinary gameplay
-scripts. Add the documented components, attach one script to a player entity,
-and bind its named input actions before entering Play Mode.
-
-It also provisions a complete `Assets/Scenes/AudioShooterDemo.21kbscene`.
-Open it and enter Play Mode: the ship flies with its camera, Space fires cube
-projectiles and a spatial one-shot, and looping ship/beacon sources demonstrate
-2D playback and distance attenuation.
-
-## Characters, fights and AI from the command line
-
-Everything below is one `kb_cli` call per line; `kb_cli <command>` alone prints its options.
-
-```
-# A character from Blender (glTF/GLB or FBX, skinned mesh or animations only): Skeleton,
-# Skeletal Mesh and one Animation Clip per action, named <file>_<action>.
-kb_cli import --project . --destination /Game/Characters Hero.glb
-kb_cli entity add --project . --name Hero
-kb_cli component set --project . --entity Hero --type MeshRenderer --set mesh=/Game/Characters/Hero.kbskeletalmesh
-
-# Its state machine: one state per clip, a speed blend, transitions; check before use.
-kb_cli animator new --project . --name Hero --clip /Game/Characters/Hero_Idle.kbanim --clip /Game/Characters/Hero_Run.kbanim
-kb_cli animator locomotion --project . --controller /Game/Animation/Hero.kbanimcontroller --parameter Speed --clip 0=/Game/Characters/Hero_Idle.kbanim --clip 4=/Game/Characters/Hero_Run.kbanim
-kb_cli animator check --project . --controller /Game/Animation/Hero.kbanimcontroller --character /Game/Characters/Hero.kbskeletalmesh
-kb_cli component add --project . --entity Hero --type Animator --set controller=/Game/Animation/Hero.kbanimcontroller
-# Clips of another rig (Mixamo, Unreal, Rigify) play too: bones are matched by name and role and
-# retargeted; `animator check --character` shows how many bones follow each clip.
-
-# A sword in the right hand: a socket (or any bone name; hand_r finds hand.R).
-kb_cli skeleton show --project . --skeleton /Game/Characters/Hero.kbskeletalmesh
-kb_cli skeleton socket add --project . --skeleton /Game/Characters/Hero.kbskeletalmesh --name weapon_r --bone hand_r --rotation 0,0,90
-kb_cli entity add --project . --name Sword --create Cube
-kb_cli entity attach --project . --name Sword --to Hero --socket weapon_r --scale 0.05,0.8,0.05
-
-# Fights: an ability, a Combatant (health, mana, resistances, team, senses, 8 ability slots).
-# Teams 1 (players) and 2 (monsters) are enemies; 0 is nobody's.
-kb_cli ability new --project . --name Fireball --set damageType=Fire --set amount=40 --set range=12 --set radius=3 --set manaCost=10 --set animatorTrigger=Cast
-kb_cli component add --project . --entity Hero --type Combatant --set team=1 --set maximumHealth=200 --set maximumMana=50 --set ability1=/Game/Abilities/Fireball.kbability
-
-# A whole AI in one line: Combatant + AI Brain from a preset (Melee, Ranged, Guard, Coward, Wanderer).
-kb_cli entity add --project . --name Goblin --create Capsule --position 0,1,8
-kb_cli ai make --project . --entity Goblin --preset Melee --health 60
-kb_cli ai rule --project . --entity Goblin --rule 4 --when HealthBelowPercent=20 --do Flee
-kb_cli ai show --project . --entity Goblin
-```
-
-The AI Brain is a list of up to 8 rules, "when <condition> do <action>", checked from the top
-(conditions: Always SeesEnemy KnowsEnemy EnemyCloserThan EnemyFartherThan HealthBelowPercent
-ManaAbovePercent AbilityReady FarFromHome; actions: Idle Wander ReturnHome Chase UseAbility
-KeepDistance Flee). It moves along the navigation mesh with a NavAgent, straight without one, and
-drives the Animator: float `Speed`, triggers `Attack`, `Hit`, `Die`, bool `Dead`.
-
-Scripts and C++ see the same: `Gameplay.ApplyDamage`, `Gameplay.Heal`, `Gameplay.UseAbility`,
-`Gameplay.Health` (fractions for health bars), `Gameplay.NearestEnemy`, `Animator.Socket`,
-`Animator.AttachToSocket`; in C++ `scene.Gameplay()` (also `DrainEvents()` for damage, deaths and
-sightings) and `scene.Animators()`. A combatant's script receives its fights as callbacks with the
-details in `event.args` (`other`, `amount`, `damageType`, `ability`): `OnDamaged`, `OnHealed`,
-`OnDeath`, `OnRevived`, `OnAbilityUsed`, `OnEnemySpotted`, `OnEnemyLost`.
-
-)md"
-R"md(## 2D tile maps from the command line
-
-A World 2D Map (plugin "World, 2D Map Editor", on by default) is a tile map in the style of
-Remere's Map Editor: grounds with automatic borders, sprites as items, floors -50..50 (0 is the
-ground floor). In the editor: Add Component > World 2D Map, then Open Map Editor. The same from
-here, one `kb_cli` call per line:
-
-```
-# The map entity: a .kbmap2d file, its Mesh Renderer and a Map Camera (orthographic, from above,
-# framing the client box) that Play looks through. --orientation wall hangs it like a picture.
-kb_cli map2d new --project . --name World --size 64x64 --view 15x11
-# Sprite sheets (PNG, cells row by row from 0) go into Assets/2D Map Sprites/<Category>: every
-# folder is a palette category (Ground, Nature, Houses...).
-# A ground with its twelve edge pieces from a 3x3 island and a 2x2 hole of the sheet; a higher
-# --z draws its edges onto lower grounds and empty tiles.
-kb_cli map2d ground new --project . --name Grass --texture "/Game/2D Map Sprites/Ground/terrain.png" --island 16 --hole 19 --z 30
-kb_cli map2d ground new --project . --name Dirt --texture "/Game/2D Map Sprites/Ground/terrain.png" --tiles 0,1 --weights 3,1 --z 10
-# An object of several tiles (a tree, a house), placed in one click with its bottom middle tile on --at.
-kb_cli map2d object new --project . --name Oak --texture "/Game/2D Map Sprites/Nature/trees.png" --cell 0 --size 2x2
-kb_cli map2d palette --project .
-kb_cli map2d fill --project . --map /Game/Maps/World.kbmap2d --ground Dirt --at 0,0
-kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --ground Grass --at 10,10 --to 20,14
-kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --object Oak --at 14,12
-kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --sprite "/Game/2D Map Sprites/Nature/trees.png" --cell 7 --at 12,12
-kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --ground Grass --at 5,5,1   # floor 1
-kb_cli map2d info --project . --map /Game/Maps/World.kbmap2d
-```
-
-Tile (x, y) of a flat map lies at X = x + 0.5 - width/2, Z = height/2 - y - 0.5 (in tiles, row 0
-north at +Z) relative to its entity; floor z is z * 3 m up.
-
-## Verifying your work (always do this before finishing)
-
-```
-kb_cli validate --project . Assets/Logic/PlayerController.lua   # syntax + sandbox check
-kb_cli run --project . --scene Assets/Scenes/Main.21kbscene --frames 120   # headless run; prints Log output, events, script errors
-```
-
-A change is done only when `validate` reports OK and `run` finishes without script diagnostics.
+- Change scenes, entities, components, materials and other assets only with `kb_cli` (the
+  kb-engine `kb_cli` tool runs any command for this project). Scenes, the project file and
+  assets are binary: never edit or parse them.
+- `kb_cli <command>` with no options prints that command's options.
+- Finish with `kb_cli validate --project . <script>` for every script you wrote and
+  `kb_cli run --project . --frames 120`; the work is done when it ends with `0 diagnostics`.
 )md";
+
+// The AGENTS.md this engine wrote before the guides and the split API reference, recognised
+// by its exact bytes (FNV-1a 64) so an untouched copy is brought up to date while one a person
+// edited is kept.
+constexpr std::string_view kPreviousAgentsTemplateHash = "6927ba90de51399a";
+
+// Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
+constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";
 
 // LIB-013: the minimal PlayerController template AGENTS.md's own worked
 // example already references (`--script /Game/Logic/PlayerController.lua`)
@@ -692,13 +545,51 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         return result;
     }
 
+    // The reference an agent reads is split into small pages (an index, one page per function
+    // group, function and component) and the how-to guides sit beside it, so a request reads
+    // only what it needs. Both folders are regenerated whole, and the single-file reference
+    // older versions wrote is removed.
+    const std::filesystem::path docsRoot = projectRoot / ".kb" / "docs";
+    std::filesystem::remove(apiRoot / "script_api.md", errorCode);
+    std::filesystem::remove_all(apiRoot / "functions", errorCode);
+    std::filesystem::remove_all(apiRoot / "components", errorCode);
+    std::filesystem::remove_all(docsRoot, errorCode);
+    for (const ScriptApiReferencePage& page : ScriptApiExport::ToReferencePages(catalog)) {
+        const std::filesystem::path path = apiRoot / std::filesystem::path{ std::u8string{ reinterpret_cast<const char8_t*>(page.path.data()), page.path.size() } };
+        std::filesystem::create_directories(path.parent_path(), errorCode);
+        if (!WriteTextFile(path, page.content, result.error)) {
+            return result;
+        }
+    }
+    std::filesystem::create_directories(docsRoot, errorCode);
+    if (!WriteTextFile(docsRoot / "README.md", ScriptAgentGuides::Index(), result.error)) {
+        return result;
+    }
+    for (const ScriptAgentGuide& guide : ScriptAgentGuides::All()) {
+        if (!WriteTextFile(docsRoot / (std::string{ guide.name } + ".md"), std::string{ guide.body }, result.error)) {
+            return result;
+        }
+    }
+    result.writtenFiles.push_back(apiRoot / "README.md");
+    result.writtenFiles.push_back(docsRoot / "README.md");
+
+    // An AGENTS.md this engine wrote and nobody changed since is brought up to date.
+    const std::filesystem::path agentsPath = projectRoot / "AGENTS.md";
+    if (std::ifstream existing(agentsPath, std::ios::binary); existing.is_open()) {
+        const std::string content{ std::istreambuf_iterator<char>(existing), std::istreambuf_iterator<char>() };
+        existing.close();
+        if (kb::library::ComputeApiManifestHash(content) == kPreviousAgentsTemplateHash) {
+            std::filesystem::remove(agentsPath, errorCode);
+        }
+    }
+
     const GeneratedFile files[] = {
         { apiRoot / "kb.lua", ScriptApiExport::ToLuaStubs(catalog), true, false },
-        { apiRoot / "script_api.md", referenceMarkdown, true, false },
         { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true, false },
         { apiRoot / "manifest.json", kb::library::ToJson(manifest), true, false },
         { apiRoot / "authoring_hints.json", kb::library::ToAuthoringHintsJson(manifest), true, false },
-        { projectRoot / "AGENTS.md", std::string{ kAgentsTemplate }, false, false },
+        { agentsPath, std::string{ kAgentsTemplate }, false, false },
+        { projectRoot / "CLAUDE.md", std::string{ kClaudeTemplate }, false, false },
         { projectRoot / ".luarc.json", std::string{ kLuarcTemplate }, false, false },
         // Write-once like AGENTS.md/.luarc.json: a game author's edits to
         // their own PlayerController.lua must never be clobbered by a later

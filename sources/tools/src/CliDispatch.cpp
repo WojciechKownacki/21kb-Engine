@@ -295,8 +295,15 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  (vectors at once: --set localPosition=0,2,-8; Transform rotation in
                  degrees: --set rotation=35,30,0)
   schema       List components and their properties.
-  api          Generate the script API contract (Lua stubs, Markdown, JSON).
+  api          Generate the script API contract (Lua stubs, reference pages, JSON),
+               or print one page of it: a group, function or component by --topic,
+               the index with --topic index, or topics matching --search text.
                  --project <dir> | --out <dir> | --print markdown|json|lua
+                 | --topic <name> | --search <text>
+  guide        Print a short how-to for one kind of task (objects and materials,
+               physics, scripts, characters, combat and AI, 2D maps, checking your
+               work); without --topic, the list of guides.
+                 [--topic <name>]
   api-check    Compare the current API surface against a committed baseline
                and fail on breaking changes (CI compatibility gate).
                  --baseline <path> [--project <dir>] [--update-baseline]
@@ -485,6 +492,32 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
+// `help <command>`: only that command's lines of the usage text (its row and the indented
+// lines under it), so asking about one command does not print all of them.
+void PrintCommandUsage(std::ostream& output, std::string_view command) {
+    std::string usage;
+    for (const auto part : kUsageParts) usage += part;
+    std::istringstream lines{ usage };
+    std::string block;
+    bool inside = false;
+    for (std::string line; std::getline(lines, line);) {
+        const bool commandRow = line.size() > 2U && line[0] == ' ' && line[1] == ' ' && line[2] != ' ';
+        if (commandRow) {
+            if (inside) break;
+            const std::string_view name = std::string_view{ line }.substr(2U, line.find(' ', 2U) - 2U);
+            inside = name == command;
+        } else if (inside && line.find_first_not_of(' ') == std::string::npos) {
+            break;
+        }
+        if (inside) block += line + '\n';
+    }
+    if (block.empty()) {
+        PrintUsage(output);
+        return;
+    }
+    output << block;
+}
+
 constexpr std::array<std::string_view, 16> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
     "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic" };
@@ -504,6 +537,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, ""},
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
     {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference"},
+    {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
     {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
@@ -600,7 +634,10 @@ std::optional<int> RunNamedCommand(
             return RunCli(words, in, target);
         });
     case CliCommandKind::Mcp: return RunMcpCommand(arguments, in, io);
-    case CliCommandKind::Help: PrintUsage(io.out); return 0;
+    case CliCommandKind::Help:
+        if (!arguments.Positionals().empty()) PrintCommandUsage(io.out, arguments.Positionals().front());
+        else PrintUsage(io.out);
+        return 0;
     case CliCommandKind::Catalog: {
         using kb::core::JsonValue;
         auto result = JsonValue::MakeObject();
