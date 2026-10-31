@@ -593,12 +593,20 @@ void ListProperties(std::string_view component, std::ostream& out) {
     return true;
 }
 
+// The scene as the project names it (/Game/Scenes/Main.21kbscene): short, and the same on every
+// machine, unlike the file's place on disk.
+[[nodiscard]] std::string ProjectScenePath(const std::filesystem::path& path) {
+    const std::string text = path.generic_string();
+    const std::size_t assets = text.rfind("/Assets/");
+    return assets == std::string::npos ? text : "/Game/" + text.substr(assets + 8U);
+}
+
 [[nodiscard]] int Saved(SceneSession& session, std::string_view what, CommandIo io) {
     if (!session.Save()) {
         io.err << "error: scene " << session.path.generic_string() << " could not be written\n";
         return 1;
     }
-    io.out << what << " (" << session.path.generic_string() << ")\n";
+    io.out << what << " (" << ProjectScenePath(session.path) << ")\n";
     return 0;
 }
 
@@ -682,6 +690,16 @@ void ListProperties(std::string_view component, std::ostream& out) {
              std::pair{ "--scale", "localScale" } }) {
         if (const std::optional<std::string> value = arguments.Option(option); value.has_value() &&
             !ApplySetting(scene, entity, "Transform", std::string{ property } + "=" + *value, io)) {
+            return 1;
+        }
+    }
+    // A shape and its material in one command instead of two.
+    if (const std::optional<std::string> material = arguments.Option("--material"); material.has_value()) {
+        if (scene.Components().MeshRenderers().TryGet(entity) == nullptr) {
+            io.err << "error: --material needs an entity with a Mesh Renderer (a shape from --create)\n";
+            return 1;
+        }
+        if (!ApplySetting(scene, entity, "MeshRenderer", "material=" + *material, io)) {
             return 1;
         }
     }
@@ -1476,6 +1494,20 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
         }
         io.err << "error: no component called '" << *wanted << "'; schema without --component lists them all\n";
         return 1;
+    }
+    // Every component with every property is long; by default the names, one component's
+    // properties on request (--component), or all of them with --all.
+    if (!arguments.Flag("--all")) {
+        io.out << "Components (their properties: component_schema with component, or kb_cli schema --component <Name>):";
+        for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+            io.out << ' ' << kind.id;
+        }
+        io.out << "\nentity add --create items:";
+        for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) io.out << " '" << item.id << '\'';
+        for (const auto& preset : kb::scene::UIComponentPresetCatalog()) io.out << " '" << preset.name << '\'';
+        io.out << " 'Platformer Player' 'Top Down Player'\n";
+        io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+        return 0;
     }
     io.out << "Transform: rotation (degrees x,y,z)";
     ListProperties("Transform", io.out);

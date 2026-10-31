@@ -21,6 +21,8 @@
 #include "engine/script/ScriptApiExport.hpp"
 #include "script/AudioShooterDemoProjectFiles.hpp"
 
+#include <algorithm>
+#include <array>
 #include <fstream>
 #include <iterator>
 #include <system_error>
@@ -36,9 +38,10 @@ guide or API page your task needs. Never read whole folders or the machine files
 
 ## Where things are
 
-- How-to guides, one per kind of task: `.kb/docs/README.md` lists them (objects and materials,
-  physics, scripts, characters and animation, combat and AI, 2D maps, checking your work).
-  kb-engine tool: `guide` with the guide's name as `topic`.
+- How-to guides with the commands for one kind of task; read the one you need with the
+  kb-engine `guide` tool (its name as `topic`) or from `.kb/docs/<name>.md`:
+  `objects-and-materials` (shapes, lights, materials), `physics`, `scripts` (Lua behaviours),
+  `characters-and-animation`, `combat-and-ai`, `maps-2d`, `verify` (checking your work).
 - Script API, one page per function group, function and component: `.kb/api/README.md` is the
   index. kb-engine tool: `api_reference` with a `topic` (`Physics`, `Physics.Raycast`,
   `Rigidbody`) or a `search` text.
@@ -53,15 +56,15 @@ guide or API page your task needs. Never read whole folders or the machine files
   kb-engine `kb_cli` tool runs any command for this project). Scenes, the project file and
   assets are binary: never edit or parse them.
 - `kb_cli help <command>` prints one command's options; `component_schema` with a `component`
-  lists that component's properties.
+  lists that component's properties, without one only the component names.
+- Independent commands (several materials, several objects) can be sent together.
 - Finish with `kb_cli validate --project . <script>` for every script you wrote and
   `kb_cli run --project . --frames 120`; the work is done when it ends with `0 diagnostics`.
 )md";
 
-// The AGENTS.md this engine wrote before the guides and the split API reference, recognised
-// by its exact bytes (FNV-1a 64) so an untouched copy is brought up to date while one a person
-// edited is kept.
-constexpr std::string_view kPreviousAgentsTemplateHash = "6927ba90de51399a";
+// The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
+// (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
+constexpr std::array<std::string_view, 3> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
 constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";
@@ -579,7 +582,7 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
     if (std::ifstream existing(agentsPath, std::ios::binary); existing.is_open()) {
         const std::string content{ std::istreambuf_iterator<char>(existing), std::istreambuf_iterator<char>() };
         existing.close();
-        if (kb::library::ComputeApiManifestHash(content) == kPreviousAgentsTemplateHash) {
+        if (std::ranges::find(kPreviousAgentsTemplateHashes, kb::library::ComputeApiManifestHash(content)) != kPreviousAgentsTemplateHashes.end()) {
             std::filesystem::remove(agentsPath, errorCode);
         }
     }

@@ -268,6 +268,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
   entity       Add or remove a scene entity (the project's startup scene unless --scene).
                  add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
                      [--create <Item>] [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
+                     [--material /Game/<path>.kbmat (a shape's material, at once)]
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
@@ -294,7 +295,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                      --type <Component> [--set name=value ...]
                  (vectors at once: --set localPosition=0,2,-8; Transform rotation in
                  degrees: --set rotation=35,30,0)
-  schema       List components and their properties.
+  schema       List the components, one component's properties, or everything.
+                 [--component <Name> | --all]
   api          Generate the script API contract (Lua stubs, reference pages, JSON),
                or print one page of it: a group, function or component by --topic,
                the index with --topic index, or topics matching --search text.
@@ -518,9 +520,9 @@ void PrintCommandUsage(std::ostream& output, std::string_view command) {
     output << block;
 }
 
-constexpr std::array<std::string_view, 16> kFlagNames{
+constexpr std::array<std::string_view, 17> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
-    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic" };
+    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all" };
 
 #if KB_CLI_RENDERER
 constexpr bool kRendererAvailable = true;

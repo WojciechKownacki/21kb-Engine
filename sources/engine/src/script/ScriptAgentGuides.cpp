@@ -13,13 +13,15 @@ Every line is one `kb_cli` command run from the project folder (through the kb-e
 tool, pass the words after `kb_cli` as `args`; the project is filled in for you). Commands work
 on the startup scene unless you add `--scene <path>`.
 
-A red cube three metres up:
+A red cube three metres up: the material first, then the shape with it.
 
 ```
-kb_cli entity add --project . --create Cube --name RedCube --position 0,3,0
 kb_cli material-new --project . --name Red --set "Base Color=#E03C31" --set Roughness=0.4
-kb_cli component set --project . --entity RedCube --type MeshRenderer --set material=/Game/Materials/Red.kbmat
+kb_cli entity add --project . --create Cube --name RedCube --position 0,3,0 --material /Game/Materials/Red.kbmat
 ```
+
+Several objects and materials: make every material first, then every object with its
+`--material`; independent commands can go out together.
 
 - `--create` makes what the editor's Create menu makes: Cube, Sphere, Capsule, Cylinder, Cone,
   Plane, Quad, Directional Light, Point Light, Spot Light, Area Light, Camera, Environment,
@@ -31,6 +33,8 @@ kb_cli component set --project . --entity RedCube --type MeshRenderer --set mate
   Normal Scale, Occlusion Strength, Alpha Cutoff. A colour is `#RRGGBB` or linear `r,g,b` (0..1).
   Textures: Base Color Texture, Normal Texture, Metallic Roughness Texture, Occlusion Texture,
   Emissive Texture, each an image of the project (`/Game/Textures/Albedo.png`) or `none`.
+- Give an existing object a material:
+  `kb_cli component set --project . --entity RedCube --type MeshRenderer --set material=/Game/Materials/Red.kbmat`.
 - Change a material later: `kb_cli material-set --project . --material /Game/Materials/Red.kbmat --set Metallic=1`;
   print it: `kb_cli material-show --project . --material /Game/Materials/Red.kbmat`.
 - A light: `kb_cli entity add --project . --create "Point Light" --position 0,4,0`, then
