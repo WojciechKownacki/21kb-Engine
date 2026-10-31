@@ -117,6 +117,28 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
 
 A script is done when `validate` says OK and `kb_cli run --project . --frames 120` reports no
 script diagnostics.
+
+## C++ scripts
+
+`kb_cli script-new --project . --name Spinner --language cpp` makes `/Game/Scripts/Spinner.native`
+and its source `Source/NativeScripts/Spinner/Spinner.cpp`; `kb_cli script-build --project .`
+compiles it (Play and `run` build it too), `scene-attach` attaches the `.native` asset. The same
+functions are called by name, inputs by name, results read with `Output`:
+
+```cpp
+static void Tick(kb::script::ScriptExecutionContext* context) {
+    using kb::script::ScriptFunctionArgument; using kb::script::ScriptValue;
+    const ScriptValue self{ context->Self().Id(), kb::script::ScriptValueType::Entity };
+    const std::array turn{ ScriptFunctionArgument{ "entity", self }, ScriptFunctionArgument{ "x", ScriptValue{ 0.0F } },
+        ScriptFunctionArgument{ "y", ScriptValue{ 90.0F * context->DeltaSeconds() } }, ScriptFunctionArgument{ "z", ScriptValue{ 0.0F } } };
+    static_cast<void>(context->CallFunction("Transform.Rotate", turn)); // degrees
+    const std::array who{ ScriptFunctionArgument{ "entity", self } };
+    const float yaw = context->CallFunction("Transform.Rotation", who).Output("y")->AsFloat();
+}
+```
+
+Register each hook in `kb_register_native_scripts` with `ScriptLifecycleEvent::Tick` (the
+generated file shows `Ready`). A failed call returns `errors` (a missing input names it).
 )md";
 
 constexpr std::string_view kCharacters = R"md(# Characters and animation

@@ -652,6 +652,10 @@ namespace {
         out += " returns " + LuaBindingReturnSummary(catalog, *binding);
     }
     out += ".\n";
+    // A C++ script calls the same function by name (guide `scripts` has a full example).
+    out += "C++: `context->CallFunction(\"" + function.name + "\", arguments)`, the inputs as `ScriptFunctionArgument`s by name";
+    if (!function.outputs.empty()) out += "; `result.Output(\"" + function.outputs.back().name + "\")`";
+    out += ".\n";
     return out;
 }
 
