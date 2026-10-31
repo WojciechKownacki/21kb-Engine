@@ -171,6 +171,10 @@ int LuaAudioPlay(lua_State* state) {
         if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
             std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
             arguments.insert(arguments.end(), options.begin(), options.end());
+        } else if (const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("Audio.Play") : nullptr;
+                   signature != nullptr && lua_gettop(state) >= 2) {
+            // Play(clip, volume, pitch, ...): the inputs in order.
+            arguments = ArgumentsBySignature(state, *signature);
         }
     }
 
@@ -515,6 +519,9 @@ int LuaAudioConfigureOcclusion(lua_State* state) {
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
         arguments.insert(arguments.end(), options.begin(), options.end());
+    } else if (const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("Audio.ConfigureOcclusion") : nullptr;
+               signature != nullptr && lua_gettop(state) >= 2) {
+        arguments = ArgumentsBySignature(state, *signature); // the inputs in order
     }
     const ScriptFunctionCallResult result = context->CallFunction("Audio.ConfigureOcclusion", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -1402,17 +1409,9 @@ int LuaWorldSpawn(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    std::vector<ScriptFunctionArgument> arguments;
-    if (lua_istable(state, 1) != 0) {
-        arguments = ArgumentsFromTable(state, 1);
-    } else if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
-        std::size_t length = 0;
-        const char* name = luaL_tolstring(state, 1, &length);
-        arguments.push_back(Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "", name != nullptr ? length : std::size_t{ 0 } } }));
-        if (name != nullptr) {
-            lua_pop(state, 1);
-        }
-    }
+    // Every input by position (name, prefab, parent, x, y, z, ...) or one table by name.
+    const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("World.Spawn") : nullptr;
+    const std::vector<ScriptFunctionArgument> arguments = signature != nullptr ? ArgumentsBySignature(state, *signature) : std::vector<ScriptFunctionArgument>{};
     const ScriptFunctionCallResult result = context->CallFunction("World.Spawn", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "world spawn failed");
@@ -2231,7 +2230,7 @@ int LuaPhysicsMoveKinematic(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const std::vector<ScriptFunctionArgument> arguments{
+    std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
         Arg("targetX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
         Arg("targetY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
@@ -2241,6 +2240,7 @@ int LuaPhysicsMoveKinematic(lua_State* state) {
         Arg("rotationZ", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 7, 0.0)) }),
         Arg("rotationW", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 8, 1.0)) }),
     };
+    if (lua_isnoneornil(state, 9) == 0) arguments.push_back(Arg("deltaSeconds", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 9)) }));
     const ScriptFunctionCallResult result = context->CallFunction("Physics.MoveKinematic", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;
@@ -2599,6 +2599,7 @@ int LuaPhysicsOverlapBox(lua_State* state) {
             Arg("halfExtentsZ", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 6, 0.5)) }),
             Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 7, PushShapeQueryLayerMaskDefault())) }),
         };
+        if (lua_isnoneornil(state, 8) == 0) arguments.push_back(Arg("skip", ScriptValue{ CheckEntityArg(state, 8), ScriptValueType::Entity }));
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapBox", arguments);
     if (!result.Succeeded()) {
@@ -2631,6 +2632,7 @@ int LuaPhysicsOverlapCapsule(lua_State* state) {
             Arg("height", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 5, 2.0)) }),
             Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 6, PushShapeQueryLayerMaskDefault())) }),
         };
+        if (lua_isnoneornil(state, 7) == 0) arguments.push_back(Arg("skip", ScriptValue{ CheckEntityArg(state, 7), ScriptValueType::Entity }));
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapCapsule", arguments);
     if (!result.Succeeded()) {
