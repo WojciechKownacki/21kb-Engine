@@ -207,6 +207,9 @@ Scene::~Scene() {
     state_->transformRootQueryCache.reset();
     if (moduleHost_ != nullptr) {
         state_->world.ReleaseUnusedQueryPlans();
+        // A released payload's weak references still point at its control block, whose
+        // destructor can live in the module. Drop them before the module unmaps.
+        static_cast<void>(state_->assets.PruneUnreferenced());
         moduleHost_->Unload();
     }
 }

@@ -1029,6 +1029,7 @@ std::size_t AssetManager::PruneUnreferenced() noexcept {
             ++it;
         }
     }
+    std::erase_if(memoryAllocations_, [](const auto& row) { return row.first.expired(); });
     return removed;
 }
 
@@ -1145,6 +1146,8 @@ void AssetManager::Clear() noexcept {
     generatedAssets_.clear();
     mounts_.Clear();
     runtimePack_.reset();
+    // Before the loaders: a plugin's payloads keep their control blocks in that plugin.
+    memoryAllocations_.clear();
     loaders_.clear();
     lastError_.clear();
     cachedVirtualFolders_.clear();
