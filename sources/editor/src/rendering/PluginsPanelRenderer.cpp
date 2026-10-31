@@ -43,6 +43,11 @@ constexpr int kCategoryColumnRight = 430;
     return { content.right - 154, content.top + 9, content.right - 86, content.top + 33 };
 }
 
+// Shown in the header while plugin changes wait for the scene to be rebuilt.
+[[nodiscard]] RECT ReloadSceneRect(const RECT& content) noexcept {
+    return { content.right - 124, content.top + 9, content.right - 14, content.top + 33 };
+}
+
 [[nodiscard]] RECT ProviderCancelRect(const RECT& content) noexcept {
     return { content.right - 78, content.top + 9, content.right - 10, content.top + 33 };
 }
@@ -156,7 +161,10 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
         DrawText(dc, ProviderCancelRect(content), EditorText("common.cancel", "Cancel"), Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else if (sceneContext.Plugins().HasPendingReload()) {
         const RECT header = HeaderRect(content);
-        DrawText(dc, RECT{ header.left + 110, header.top, header.right - kPadding, header.bottom }, EditorText("plugins.pendingReload", "Pending scene reload"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        const RECT reload = ReloadSceneRect(content);
+        DrawText(dc, RECT{ header.left + 110, header.top, reload.left - 10, header.bottom }, EditorText("plugins.pendingReload", "Pending scene reload"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        GdiDrawing::DrawSharpFrame(dc, reload, Color(theme.accent), Color(theme.accent));
+        DrawText(dc, reload, EditorText("plugins.reloadScene", "Reload Scene"), Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -253,6 +261,9 @@ PluginsPanelRenderer::Hit PluginsPanelRenderer::HitTest(const RECT& content, con
         if (PointInRect(add, x, y)) return { .kind = PluginsPanelHitKind::ParticleProviderAdd, .rect = add };
         const RECT cancel = ProviderCancelRect(content);
         if (PointInRect(cancel, x, y)) return { .kind = PluginsPanelHitKind::ParticleProviderCancel, .rect = cancel };
+    } else if (sceneContext.Plugins().HasPendingReload()) {
+        const RECT reload = ReloadSceneRect(content);
+        if (PointInRect(reload, x, y)) return { .kind = PluginsPanelHitKind::ReloadScene, .rect = reload };
     }
     const RECT thumb = ScrollbarThumbRect(content, sceneContext);
     if (PointInRect(thumb, x, y)) {

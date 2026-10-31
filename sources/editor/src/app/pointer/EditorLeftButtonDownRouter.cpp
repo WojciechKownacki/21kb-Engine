@@ -2194,7 +2194,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inPluginsPanel) {
         EditorPluginsPointerController pluginsPointer(sceneContext_);
-        static_cast<void>(pluginsPointer.HandlePointerDown(*panelHit.pluginsContent, x, y));
+        if (pluginsPointer.HandlePointerDown(*panelHit.pluginsContent, x, y)) {
+            // A plugin change or a scene reload can change what the viewport draws.
+            sceneViewport_.RequestPresent();
+        }
         if (sceneContext_.Plugins().IsScrollbarDragging()) {
             SetCapture(messageWindow);
         }
