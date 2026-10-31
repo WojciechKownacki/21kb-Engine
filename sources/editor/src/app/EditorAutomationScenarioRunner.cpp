@@ -41,6 +41,8 @@
 #include "app/EditorPlayModeState.hpp"
 #include "engine/scene/SceneTemplates.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "agent/EditorAgentPanelState.hpp"
+#include "app/agent/EditorAgentPanelController.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -4878,6 +4880,43 @@ ReadScriptValue(
 
     if (*operation == "reload_after_external_change") {
         return { state.context.ReloadSceneAfterExternalChange(), "scene reloaded after an external change" };
+    }
+
+    // A request to an installed agent, as the agent bar sends it: open documents saved, the agent
+    // run to its answer, and the scene reloaded when it changed the project.
+    if (*operation == "agent_request") {
+        const auto agentName = StringMember(step, "agent", error);
+        const auto text = StringMember(step, "text", error);
+        if (!agentName || !text) return { false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        panel.Prepare();
+        int chosen = -1;
+        for (std::size_t index = 0; index < panel.Agents().size(); ++index) {
+            if (panel.Agents()[index].name == *agentName) chosen = static_cast<int>(index);
+        }
+        if (chosen < 0) return { false, "agent not installed: " + std::string{ *agentName } };
+        panel.SelectAgent(chosen);
+        panel.SetInput(std::string{ *text });
+        if (!state.context.CurrentScenePath().empty() && !state.context.SaveOpenDocuments()) return { false, "open documents could not be saved" };
+        if (!panel.Send(EditorAgentPanelController::Workspace())) return { false, "agent request was not sent" };
+        bool projectChanged = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes{ 15 };
+        while (panel.AnyRunning() && std::chrono::steady_clock::now() < deadline) {
+            bool changed = false;
+            static_cast<void>(panel.Pump(changed));
+            projectChanged = projectChanged || changed;
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        }
+        bool changed = false;
+        static_cast<void>(panel.Pump(changed));
+        projectChanged = projectChanged || changed;
+        if (panel.AnyRunning()) return { false, "agent did not finish in 15 minutes" };
+        const auto& entries = panel.Active().entries;
+        std::string last = entries.empty() ? std::string{} : entries.back().text.substr(0, 300);
+        if (panel.Active().sawError) return { false, "agent reported an error: " + last };
+        if (projectChanged && !state.context.ReloadSceneAfterExternalChange()) return { false, "scene was not reloaded" };
+        state.automation.Trace("agent_request", true, std::string{ projectChanged ? "changed " : "unchanged " } + last);
+        return { true, last };
     }
 
     if (*operation == "undo") {

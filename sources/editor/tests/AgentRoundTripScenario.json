@@ -1,0 +1,28 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "create_scene", "name": "AgentRoundTrip", "template": "Basic" },
+    { "op": "create_entity", "id": "keep", "name": "Kept" },
+    { "op": "select_entity", "entity": "keep" },
+    { "op": "save_scene" },
+    { "op": "agent_request", "agent": "Claude Code", "text": "Add a red sphere named Ball with dynamic physics at height 3 to the open scene." },
+    { "op": "bind_entity", "id": "kept", "name": "Kept" },
+    { "op": "bind_entity", "id": "ball", "name": "Ball" },
+    { "op": "assert_selected_entity", "entity": "kept" },
+    { "op": "assert_component", "entity": "ball", "component": "Rigidbody" },
+    { "op": "assert_current_scene", "path": "Assets/Scenes/AgentRoundTrip.21kbscene", "dirty": false },
+    { "op": "undo" },
+    { "op": "bind_entity", "id": "gone", "name": "Ball", "exists": false },
+    { "op": "redo" },
+    { "op": "bind_entity", "id": "ball", "name": "Ball" },
+    { "op": "save_scene" },
+    { "op": "agent_request", "agent": "Codex", "text": "Add a blue cube named Crate with dynamic physics at position 2,3,0 to the open scene." },
+    { "op": "bind_entity", "id": "crate", "name": "Crate" },
+    { "op": "bind_entity", "id": "ball", "name": "Ball" },
+    { "op": "assert_component", "entity": "crate", "component": "Rigidbody" },
+    { "op": "undo" },
+    { "op": "bind_entity", "id": "gone", "name": "Crate", "exists": false },
+    { "op": "bind_entity", "id": "ball", "name": "Ball" },
+    { "op": "assert_no_errors" }
+  ]
+}
