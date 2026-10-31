@@ -52,7 +52,8 @@ guide or API page your task needs. Never read whole folders or the machine files
 - Change scenes, entities, components, materials and other assets only with `kb_cli` (the
   kb-engine `kb_cli` tool runs any command for this project). Scenes, the project file and
   assets are binary: never edit or parse them.
-- `kb_cli <command>` with no options prints that command's options.
+- `kb_cli help <command>` prints one command's options; `component_schema` with a `component`
+  lists that component's properties.
 - Finish with `kb_cli validate --project . <script>` for every script you wrote and
   `kb_cli run --project . --frames 120`; the work is done when it ends with `0 diagnostics`.
 )md";

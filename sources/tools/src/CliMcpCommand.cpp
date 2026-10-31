@@ -171,7 +171,8 @@ struct ToolProperty {
             ToolProperty{ "safeArea", "string", "Nonnegative LEFT,TOP,RIGHT,BOTTOM safe-area insets in viewport pixels.", false, "--safe-area" },
         });
     if (command.name == "schema") return MakeToolDescriptor(command.mcpTool,
-        "Lists component properties and authoring presets.", {
+        "Lists one component's properties when component is given; without it, every component and the create presets.", {
+            ToolProperty{ "component", "string", "A component name, for example Rigidbody or MeshRenderer.", false, "--component" },
         });
     if (command.name == "entity") return MakeToolDescriptor(command.mcpTool,
         "Creates and edits entities through the same scene authoring commands as the CLI.", {
@@ -219,7 +220,7 @@ constexpr std::string_view kCliToolName = "kb_cli";
     return MakeToolDescriptor(kCliToolName,
         "Runs one kb_cli command for this project, as in the guides: args are the words after kb_cli, for example "
         "[\"material-new\", \"--name\", \"Red\", \"--set\", \"Base Color=#E03C31\"]. The project is filled in; a --project in args is replaced. "
-        "A command with no options prints its usage.",
+        "[\"help\", \"<command>\"] prints one command's options.",
         {
             ToolProperty{ "args", "array", "The command and its options, one word per item.", true, "" },
         });

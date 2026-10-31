@@ -1458,7 +1458,25 @@ int RunAiCommand(const ArgumentList& arguments, CommandIo io) {
 }
 
 int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
-    static_cast<void>(arguments);
+    // One component's properties when asked for (by name or display name): what an agent needs
+    // before setting them, without every other component.
+    if (const std::optional<std::string> wanted = arguments.Option("--component"); wanted.has_value()) {
+        const std::string_view name = kb::scene::SceneComponentAuthoring::CanonicalName(*wanted);
+        for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+            if (kind.id != name && kind.displayName != *wanted) continue;
+            io.out << kind.id;
+            if (kind.displayName != kind.id) io.out << " (" << kind.displayName << ')';
+            if (!kind.requiredPlugin.empty()) io.out << " [plugin " << kind.requiredPlugin << ']';
+            io.out << ':';
+            ListProperties(kind.id, io.out);
+            io.out << '\n';
+            if (kind.id == "Transform") io.out << "Transform rotation is in degrees: --set rotation=x,y,z\n";
+            if (kind.id == "MeshRenderer") io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+            return 0;
+        }
+        io.err << "error: no component called '" << *wanted << "'; schema without --component lists them all\n";
+        return 1;
+    }
     io.out << "Transform: rotation (degrees x,y,z)";
     ListProperties("Transform", io.out);
     io.out << "\nMeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
