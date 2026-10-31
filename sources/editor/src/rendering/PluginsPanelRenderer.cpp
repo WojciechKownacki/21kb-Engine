@@ -23,9 +23,9 @@ constexpr int kScrollbarWidth = 12;
 constexpr int kScrollbarInset = 3;
 constexpr int kScrollbarMinThumb = 24;
 constexpr int kPluginColumnLeft = 30;
-constexpr int kPluginColumnRight = 230;
-constexpr int kStatusColumnRight = 330;
-constexpr int kCategoryColumnRight = 430;
+constexpr int kPluginColumnRight = 250;
+constexpr int kStatusColumnRight = 350;
+constexpr int kCategoryColumnRight = 450;
 
 [[nodiscard]] COLORREF Color(EditorColor color) noexcept {
     return GdiDrawing::ToColorRef(color);

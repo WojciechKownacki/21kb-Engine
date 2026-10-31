@@ -52,13 +52,14 @@ MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT&
         cursor = rect.right + gap;
         return rect;
     };
-    // Each button is as wide as its widest label in the editor's language (11 pt, 8 px each side),
+    // Each button is as wide as its widest label in the editor's language (12 pt, as
+    // EditorDialogStyle::PaintOptionButton draws it, 8 px each side),
     // never narrower than the width it was drawn for in English.
     constexpr int kLabelPadding = 18;
     // The three preview choices carry a category icon before the value and a chevron after it.
     constexpr int kPreviewChoiceRoom = 30;
     const auto fit = [](int minimum, std::initializer_list<std::string_view> labels) noexcept {
-        return FitTextWidth(minimum, labels, 11, FW_NORMAL, kLabelPadding);
+        return FitTextWidth(minimum, labels, 12, FW_NORMAL, kLabelPadding);
     };
     using Primitive = EditorMaterialPreviewPrimitiveKind;
     using Lighting = EditorMaterialPreviewLightingPreset;
