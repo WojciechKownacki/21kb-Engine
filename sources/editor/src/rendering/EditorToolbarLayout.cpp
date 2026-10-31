@@ -34,7 +34,7 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 
 // How many of those rows each menu actually shows. Layout counts zero here: its
 // length comes from the project, not from the build.
-constexpr std::array<int, 6> kDropdownRowCounts{ 5, 3, 0, 6, 11, 4 };
+constexpr std::array<int, 6> kDropdownRowCounts{ 5, 3, 0, 7, 11, 4 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -374,13 +374,14 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
         return rows[static_cast<std::size_t>(row)];
     }
     case EditorMenuCommand::Options: {
-        const std::array<std::string_view, 6> rows{
+        const std::array<std::string_view, 7> rows{
             EditorText("menu.options.renderer", "Renderer"),
             EditorText("menu.options.projectSettings", "Project Settings"),
             EditorText("menu.options.editorSettings", "Editor Settings"),
             EditorText("menu.edit.plugins", "Plugins"),
             EditorText("panel.profiler", "Profiler"),
             EditorText("inspector.audioMixer.subtitle", "Audio Mixer"),
+            EditorText("menu.options.agent", "AI Agent"),
         };
         return rows[static_cast<std::size_t>(row)];
     }
@@ -429,7 +430,7 @@ HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) 
         return pick(std::array{ HeroIconKind::Undo, HeroIconKind::Redo, HeroIconKind::Duplicate });
     case EditorMenuCommand::Options:
         return pick(std::array{ HeroIconKind::Monitor, HeroIconKind::AdjustmentsHorizontal,
-            HeroIconKind::WrenchScrewdriver, HeroIconKind::Plug, HeroIconKind::Activity, HeroIconKind::SpeakerWave });
+            HeroIconKind::WrenchScrewdriver, HeroIconKind::Plug, HeroIconKind::Activity, HeroIconKind::SpeakerWave, HeroIconKind::Bolt });
     case EditorMenuCommand::World:
         return pick(std::array{ HeroIconKind::Camera, HeroIconKind::Download, HeroIconKind::Upload,
             HeroIconKind::WrenchScrewdriver, HeroIconKind::Grid, HeroIconKind::Map,
@@ -449,6 +450,9 @@ HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) 
 std::string_view EditorToolbarLayout::DropdownShortcut(EditorMenuCommand menu, int row) noexcept {
     if (menu == EditorMenuCommand::File && row == 2) {
         return "Ctrl+S";
+    }
+    if (menu == EditorMenuCommand::Options && row == 6) {
+        return "Ctrl+K";
     }
     if (menu == EditorMenuCommand::Edit) {
         switch (row) {
@@ -473,7 +477,7 @@ bool EditorToolbarLayout::DropdownStartsGroup(EditorMenuCommand menu, int row) n
     case EditorMenuCommand::File:
         return row == 2 || row == 4;
     case EditorMenuCommand::Options:
-        return row == 1 || row == 4;
+        return row == 1 || row == 4 || row == 6;
     case EditorMenuCommand::World:
         return row == 3 || row == 6 || row == 9;
     case EditorMenuCommand::Help:

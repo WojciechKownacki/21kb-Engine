@@ -25,6 +25,7 @@ struct EditorPanelPointerHitContext {
     std::optional<RECT> projectSettingsContent;
     std::optional<RECT> editorSettingsContent;
     std::optional<RECT> pluginsContent;
+    std::optional<RECT> agentContent;
     std::optional<EditorResolvedPanelContent> sceneContent;
     bool inAssetPanel = false;
     bool inInspectorPanel = false;
@@ -33,6 +34,7 @@ struct EditorPanelPointerHitContext {
     bool inProjectSettingsPanel = false;
     bool inEditorSettingsPanel = false;
     bool inPluginsPanel = false;
+    bool inAgentPanel = false;
 };
 
 class EditorPanelPointerHitContextResolver {

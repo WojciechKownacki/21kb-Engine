@@ -604,6 +604,38 @@ void UpdateDrawerForWindowHeight(EditorApplicationState& state) noexcept {
     }
 }
 
+// The Agent panel: finds the agents the first time it is shown, moves what the agent wrote into
+// the conversation, and when a request ends shows the agent's work - the scene and the project's
+// assets read back from disk, unless you edited the scene meanwhile.
+void PumpAgentPanel(EditorApplicationState& state) {
+    EditorAgentPanelState& agent = state.sceneContext.AgentPanel();
+    if (EditorPanelContentResolver::Resolve(DockPanelKind::Agent, state.window, state.window, state.dockModel, state.floatingWindows, state.metrics).has_value()) {
+        agent.Prepare();
+    }
+    bool finished = false;
+    if (agent.Pump(finished)) {
+        InvalidatePanelKind(state, DockPanelKind::Agent);
+    }
+    if (!finished || !agent.ChangedProject()) {
+        return;
+    }
+    if (state.sceneContext.SceneDocumentDirty()) {
+        agent.Add(EditorAgentEntryKind::Info, "The scene has edits made while the agent worked, so it was not reloaded. Save or reopen it to see both.");
+        InvalidatePanelKind(state, DockPanelKind::Agent);
+        return;
+    }
+    const std::filesystem::path scene = state.sceneContext.CurrentScenePath();
+    std::error_code error;
+    const bool reloaded = !scene.empty() && std::filesystem::exists(scene, error)
+        ? state.sceneContext.OpenScene(scene)
+        : state.sceneContext.ReloadSceneFromProject();
+    if (reloaded) {
+        agent.Add(EditorAgentEntryKind::Info, "Reloaded the scene and assets with the agent's changes.");
+    }
+    state.sceneViewport.RequestPresent();
+    InvalidateRect(state.window, nullptr, FALSE);
+}
+
 // The "Used by" column of Project Files follows the scene a few times a second, and only while the
 // list view shows it outside play mode and drags: capturing the scene is not free.
 void RefreshAssetUsersForList(EditorApplicationState& state) {
@@ -1687,6 +1719,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         InvalidateStatusBarOnChange(state);
         UpdateDrawerForWindowHeight(state);
         RefreshAssetUsersForList(state);
+        PumpAgentPanel(state);
 
         if (state.playMode.IsPaused()) {
             if (state.window != nullptr) {
@@ -1731,6 +1764,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 EditorAudioAssetPreview::HasActivePreview() ||
                 state.sceneContext.AssetImportInProgress() ||
                 state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
+                state.sceneContext.AgentPanel().Running() || state.sceneContext.AgentPanel().CheckingAccount() ||
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {

@@ -831,6 +831,11 @@ add_executable(kb_editor WIN32
     src/rendering/BuildGamePanelModel.cpp
     src/rendering/BuildGamePanelRenderer.cpp
     src/rendering/PluginsPanelRenderer.cpp
+    src/rendering/AgentPanelRenderer.cpp
+    src/agent/EditorAgentCatalog.cpp
+    src/agent/EditorAgentProcess.cpp
+    src/agent/EditorAgentPanelState.cpp
+    src/app/agent/EditorAgentPanelController.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
     src/rendering/EditorSettingsPanelRenderer.cpp

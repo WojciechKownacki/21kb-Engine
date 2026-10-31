@@ -10,6 +10,7 @@
 #include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
+#include "app/agent/EditorAgentPanelController.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "app/EditorBuildGameInputHandler.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
@@ -674,6 +675,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_CHAR:
+        if (EditorAgentPanelController{ context_.sceneContext }.HandleChar(wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (HandleSearchFieldChar(context_.sceneContext.Console().Filter(), wparam,
                 [&] { RefreshConsoleFilter(context_, messageWindow); }) ||
             HandleSearchFieldChar(context_.sceneContext.ProjectSettings().Search(), wparam,
@@ -720,6 +726,15 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
                 context_.sceneViewport.RequestPresent();
                 InvalidateRect(context_.mainWindow, nullptr, FALSE);
             }
+            return 0;
+        }
+        if (wparam == 'K' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
+            // From anywhere: the Agent panel comes forward (its drawer opens) with the request box ready.
+            static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+            context_.sceneContext.AgentPanel().Prepare();
+            context_.sceneContext.AgentPanel().FocusInput(true);
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
         }
         if (wparam == VK_SPACE && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
@@ -801,6 +816,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         if (HandleMaterialGraphShortcut(messageWindow, context_, wparam)) {
             context_.sceneViewport.RequestPresent();
+            return 0;
+        }
+        if (EditorAgentPanelController{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
         }
         if (HandleSearchFieldKeyDown(context_.sceneContext.Console().Filter(), messageWindow, wparam,

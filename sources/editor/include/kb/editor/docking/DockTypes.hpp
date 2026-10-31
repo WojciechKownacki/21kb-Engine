@@ -37,6 +37,8 @@ enum class DockPanelKind : std::uint8_t {
     TimelineEditor,
     BlendSpace2DEditor,
     GameplayGraphEditor,
+    // Requests to a command-line AI agent that works on the project with the engine's tools.
+    Agent,
 };
 
 enum class DockSplitAxis : std::uint8_t {

@@ -205,6 +205,27 @@ with editor autocompletion support.
 <agent-cli> mcp add kb-engine -- <path>\kb_cli.exe mcp --project <project dir>
 ```
 
+**In the editor:** the **Agent** panel (Options > AI Agent, or `Ctrl+K` from anywhere) sends a
+request to a command-line agent installed on this computer and shows its answer, the engine
+tools it used and the files it changed. When the agent changed the project, the editor reloads
+the scene and the assets; unsaved scene edits are saved before a request is sent.
+
+- **Agents.** The panel lists every supported CLI it finds on `PATH`: Claude Code, Codex,
+  Gemini CLI, Qwen Code and Grok, plus "Codex + Ollama (local)" when Ollama is installed.
+  Claude Code and Codex get the engine's MCP tools on each run without any setup; for the
+  others, **Connect engine tools** registers them once.
+- **Accounts.** The panel never signs in itself: an agent runs with the account its own
+  configuration folder is signed in to. Each extra folder next to the default one becomes a
+  profile of its own (`~/.claude-work` runs Claude Code with `CLAUDE_CONFIG_DIR` set to it,
+  `~/.codex-work` runs Codex with `CODEX_HOME`). The header shows the signed-in account; for a
+  profile that is not signed in, clicking the note copies the sign-in command for a terminal.
+- **Your own agent.** *Add your own agent...* in the agent menu opens
+  `%LOCALAPPDATA%\21kb\Agents.json`. Each entry names a `command`, its `arguments`
+  (`{prompt}` for the request, otherwise it goes to standard input; `{project}`, `{kbcli}`
+  and `{mcpconfig}` for the project folder, kb_cli and an MCP configuration file), optional
+  `environment` variables, an optional `connect` command and the `output` format (`plain`,
+  `claude` or `codex`). Choose *Refresh* after saving.
+
 ## How to work
 
 - **You** create scenes, nodes, and assets in the engine editor.

@@ -1937,7 +1937,8 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
         || IsMaterialGraphConstantInlineEditing()
         || IsMaterialEditorFindFocused()
         || console_.Filter().IsFocused()
-        || projectSettings_.Search().IsFocused();
+        || projectSettings_.Search().IsFocused()
+        || agentPanel_.InputFocused();
 }
 
 bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {

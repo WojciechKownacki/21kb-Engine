@@ -24,6 +24,7 @@
 #include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
+#include "rendering/AgentPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/EditorSettingsPanelRenderer.hpp"
@@ -448,6 +449,9 @@ void PanelContentRenderer::Paint(
     case DockPanelKind::Console:
         DrawConsolePanel(dc, content, theme, sceneContext.Console());
         ConsoleDetailTextOverlay::Sync(sceneViewportHost, content, sceneContext.Console());
+        break;
+    case DockPanelKind::Agent:
+        AgentPanelRenderer::Paint(dc, content, theme, sceneContext.AgentPanel());
         break;
     case DockPanelKind::Scene:
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);

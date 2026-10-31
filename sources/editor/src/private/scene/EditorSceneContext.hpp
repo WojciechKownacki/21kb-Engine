@@ -28,6 +28,7 @@
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "assets/EditorAssetUsers.hpp"
+#include "agent/EditorAgentPanelState.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
@@ -249,6 +250,8 @@ public:
     [[nodiscard]] MaterialEditorState& MaterialEditor() noexcept;
     [[nodiscard]] const MaterialEditorState& MaterialEditor() const noexcept;
     [[nodiscard]] EditorConsoleState& Console() noexcept;
+    [[nodiscard]] EditorAgentPanelState& AgentPanel() noexcept { return agentPanel_; }
+    [[nodiscard]] const EditorAgentPanelState& AgentPanel() const noexcept { return agentPanel_; }
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
@@ -1625,6 +1628,7 @@ private:
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
     EditorAssetUsers assetUsers_;
+    EditorAgentPanelState agentPanel_;
     std::uint64_t assetUsersVersion_ = 0U;
     std::uint64_t assetUsersRevision_ = ~std::uint64_t{ 0U };
     std::uint64_t assetUsersGeneration_ = ~std::uint64_t{ 0U };

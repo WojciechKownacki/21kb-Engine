@@ -7,6 +7,7 @@
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/AgentPanelRenderer.hpp"
 #include "rendering/BuildGamePanelLayout.hpp"
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "app/project_files/EditorProjectFilesMouseWheelController.hpp"
@@ -259,6 +260,15 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     EditorInspectorPointerController inspectorPointer(sceneContext_);
     if (inspectorContent.has_value() && inspectorPointer.HandleMouseWheel(*inspectorContent, x, y, wheelDelta)) {
         EditorWindowInvalidator::InvalidatePanel(messageWindow_, *inspectorContent);
+        return true;
+    }
+
+    // The agent conversation scrolls three lines a notch, up into older messages.
+    if (const std::optional<RECT> agentContent = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        agentContent.has_value() && x >= agentContent->left && x < agentContent->right && y >= agentContent->top && y < agentContent->bottom) {
+        EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+        agent.ScrollBy(wheelDelta / WHEEL_DELTA * 54, AgentPanelRenderer::MaximumScroll(*agentContent, agent));
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *agentContent);
         return true;
     }
 

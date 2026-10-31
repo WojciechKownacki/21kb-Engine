@@ -25,6 +25,7 @@
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/panels/EditorPanelPointerHitContext.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
+#include "app/agent/EditorAgentPanelController.hpp"
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
@@ -591,6 +592,18 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
+
+    // The agent's request box keeps the keyboard only until a click elsewhere, which gives the
+    // keys back to the editor (W/E/R, Delete, shortcuts).
+    if (!panelHit.inAgentPanel && sceneContext_.AgentPanel().InputFocused()) {
+        sceneContext_.AgentPanel().FocusInput(false);
+        EditorWindowInvalidator::InvalidateDockPanel(mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Agent);
+    }
+    if (panelHit.inAgentPanel) {
+        static_cast<void>(EditorAgentPanelController{ sceneContext_ }.HandlePointerDown(messageWindow, *panelHit.agentContent, x, y));
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
 
     if (const auto content=EditorPanelContentResolver::Resolve(DockPanelKind::GameplayGraphEditor,messageWindow,mainWindow_,dockModel_,floatingWindows_,metrics_); content && PointInRect(*content,x,y)) {
         static_cast<void>(GameplayGraphEditorPanel::PointerDown(messageWindow,{content->left,content->top,content->right-content->left,content->bottom-content->top},x,y,sceneContext_));

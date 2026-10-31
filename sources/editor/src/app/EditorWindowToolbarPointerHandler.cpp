@@ -370,6 +370,11 @@ void ActivatePanel(
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, DockArea::Center);
             } else if (*row == 5) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::AudioMixer, DockArea::Center);
+            } else if (*row == 6) {
+                // The same as Ctrl+K: the Agent panel with its request box ready.
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Agent, DockArea::Bottom);
+                sceneContext.AgentPanel().Prepare();
+                sceneContext.AgentPanel().FocusInput(true);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {
             // Like Unity's and Unreal's Help menu: the engine's pages in the browser, and About.
