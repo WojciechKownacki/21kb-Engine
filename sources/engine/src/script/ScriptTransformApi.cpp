@@ -10,6 +10,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <span>
@@ -281,6 +282,34 @@ ScriptFunctionCallResult GetLocalRotation(const ScriptFunctionCallContext& conte
     }
     const kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
     return RotationResult(true, transform.localRotation);
+}
+
+// The local rotation in degrees - the numbers the Inspector and kb_cli show.
+ScriptFunctionCallResult GetRotation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    const bool found = Alive(context, entity);
+    const kb::math::Vec3 degrees = found ? kb::math::ToEulerDegrees(context.scene->Transforms().Get(entity).localRotation) : kb::math::Vec3{};
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ found } },
+            ScriptFunctionArgument{ "x", ScriptValue{ degrees.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ degrees.y } },
+            ScriptFunctionArgument{ "z", ScriptValue{ degrees.z } },
+        },
+    };
+}
+
+ScriptFunctionCallResult SetRotation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return BoolResult("moved", false);
+    }
+    kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+    transform.localRotation = kb::math::FromEulerDegrees(
+        { FloatArg(arguments, "x", 0.0F), FloatArg(arguments, "y", 0.0F), FloatArg(arguments, "z", 0.0F) });
+    context.scene->Transforms().Set(entity, transform);
+    return BoolResult("moved", true);
 }
 
 ScriptFunctionCallResult SetLocalRotation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -614,12 +643,12 @@ ScriptFunctionCallResult Rotate(const ScriptFunctionCallContext& context, std::s
         return BoolResult("moved", false);
     }
     kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
-    const kb::math::Quat delta = kb::math::Normalize(kb::math::Quat{
-        FloatArg(arguments, "x", 0.0F),
-        FloatArg(arguments, "y", 0.0F),
-        FloatArg(arguments, "z", 0.0F),
-        FloatArg(arguments, "w", 1.0F),
-    });
+    // Without w the three values are degrees (pitch, yaw, roll), as people write a turn.
+    const bool quaternion = std::ranges::any_of(arguments, [](const ScriptFunctionArgument& argument) { return argument.name == "w"; });
+    const kb::math::Vec3 degrees{ FloatArg(arguments, "x", 0.0F), FloatArg(arguments, "y", 0.0F), FloatArg(arguments, "z", 0.0F) };
+    const kb::math::Quat delta = quaternion
+        ? kb::math::Normalize(kb::math::Quat{ degrees.x, degrees.y, degrees.z, FloatArg(arguments, "w", 1.0F) })
+        : kb::math::FromEulerDegrees(degrees);
     transform.localRotation = kb::math::Normalize(transform.localRotation * delta);
     context.scene->Transforms().Set(entity, transform);
     return BoolResult("moved", true);
@@ -862,6 +891,24 @@ bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
         &SetLocalRotation) && ok;
+    ok = RegisterFunction(host, "Transform.Rotation",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        },
+        &GetRotation) && ok;
+    ok = RegisterFunction(host, "Transform.SetRotation",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
+        &SetRotation) && ok;
     ok = RegisterFunction(host, "Transform.LocalScale",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         {
@@ -955,7 +1002,7 @@ bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {
             ScriptFunctionPin{ "x", ScriptValueType::Float, true },
             ScriptFunctionPin{ "y", ScriptValueType::Float, true },
             ScriptFunctionPin{ "z", ScriptValueType::Float, true },
-            ScriptFunctionPin{ "w", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "w", ScriptValueType::Float, false },
         },
         { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
         &Rotate) && ok;

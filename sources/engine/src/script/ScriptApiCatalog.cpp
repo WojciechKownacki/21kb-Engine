@@ -341,7 +341,7 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
         catalog.components.push_back(std::move(component));
     }
 
-    catalog.luaBindings.reserve(kLuaBindings.size());
+    catalog.luaBindings.reserve(kLuaBindings.size() + catalog.functions.size());
     for (const ScriptApiCatalogLuaBindingDefinition& binding : LuaBindingDefinitions()) {
         catalog.luaBindings.push_back(ScriptApiCatalogLuaBinding{
             .tableName = std::string{ binding.tableName },
@@ -351,8 +351,34 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
             .returnPin = std::string{ binding.returnPin },
         });
     }
+    // The runtime installs every other "Table.Name" function as Table.Name too (CallFunction's result shape).
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        const std::string_view table = GenericLuaTable(function.name);
+        if (table.empty()) continue;
+        const std::string_view luaName = std::string_view{ function.name }.substr(table.size() + 1U);
+        if (std::ranges::any_of(LuaBindingDefinitions(), [&](const ScriptApiCatalogLuaBindingDefinition& binding) {
+                return binding.functionName == function.name || (binding.tableName == table && binding.luaName == luaName);
+            })) {
+            continue;
+        }
+        catalog.luaBindings.push_back(ScriptApiCatalogLuaBinding{
+            .tableName = std::string{ table },
+            .luaName = std::string{ luaName },
+            .functionName = function.name,
+        });
+    }
 
     return catalog;
+}
+
+std::string_view ScriptApiCatalog::GenericLuaTable(std::string_view functionName) noexcept {
+    const std::size_t dot = functionName.find('.');
+    if (dot == std::string_view::npos || dot == 0U || dot + 1U == functionName.size() ||
+        functionName.find('.', dot + 1U) != std::string_view::npos) {
+        return {};
+    }
+    const std::string_view table = functionName.substr(0, dot);
+    return table == "Task" ? std::string_view{} : table;
 }
 
 const char* ToString(ScriptApiCatalogLuaReturnKind kind) noexcept {

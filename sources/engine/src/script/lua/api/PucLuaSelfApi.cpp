@@ -1,4 +1,5 @@
 #include "script/lua/api/PucLuaSelfApi.hpp"
+#include "script/lua/PucLuaArguments.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
 
 #include "engine/script/PucLuaSafeCall.hpp"
@@ -27,7 +28,7 @@ int LuaSelfHasComponent(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const char* componentName = luaL_checkstring(state, 2);
+    const char* componentName = PucLuaCheckString(state, 2);
     lua_pushboolean(state, ScriptSceneComponentApi::HasComponent(context->GetScene(), context->Self(), componentName) ? 1 : 0);
     return 1;
 }
@@ -39,8 +40,8 @@ int LuaSelfGetProperty(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* componentName = luaL_checkstring(state, 2);
-    const char* propertyName = luaL_checkstring(state, 3);
+    const char* componentName = PucLuaCheckString(state, 2);
+    const char* propertyName = PucLuaCheckString(state, 3);
     const ScriptSceneComponentPropertyResult result = ScriptSceneComponentApi::GetProperty(context->GetScene(), context->Self(), componentName, propertyName);
     if (!result.succeeded) {
         lua_pushnil(state);
@@ -58,8 +59,8 @@ int LuaSelfSetProperty(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* componentName = luaL_checkstring(state, 2);
-    const char* propertyName = luaL_checkstring(state, 3);
+    const char* componentName = PucLuaCheckString(state, 2);
+    const char* propertyName = PucLuaCheckString(state, 3);
     const ScriptValue value = PucLuaValueBridge::FromLua(state, 4);
     const ScriptSceneComponentMutationResult result = ScriptSceneComponentApi::SetProperty(context->GetScene(), context->Self(), componentName, propertyName, value);
     lua_pushboolean(state, result.succeeded ? 1 : 0);
@@ -77,7 +78,7 @@ int LuaSelfGetVariable(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     const std::span<const PucLuaExposedVariableInstance> variables =
         runtime == nullptr ? std::span<const PucLuaExposedVariableInstance>{} : runtime->InstanceVariables(context->Self(), context->Asset());
@@ -98,7 +99,7 @@ int LuaSelfSetVariable(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     if (runtime == nullptr) {
         lua_pushboolean(state, 0);
@@ -135,7 +136,7 @@ int LuaInspectorIndex(lua_State* state) {
         lua_pushnil(state);
         return 1;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     const std::span<const PucLuaExposedVariableInstance> variables =
         runtime == nullptr ? std::span<const PucLuaExposedVariableInstance>{} : runtime->InstanceVariables(context->Self(), context->Asset());
@@ -158,7 +159,7 @@ int LuaInspectorNewIndex(lua_State* state) {
     if (context == nullptr) {
         return 0;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     if (runtime != nullptr) {
         static_cast<void>(runtime->SetInstanceVariable(context->Self(), context->Asset(), variableName, PucLuaValueBridge::FromLua(state, 3)));

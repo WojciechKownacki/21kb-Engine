@@ -1,10 +1,17 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptLifecycle.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
+#include <map>
+#include <set>
 #include <sstream>
 
 namespace kb::cli {
@@ -23,6 +30,68 @@ namespace {
     return true;
 }
 
+struct UnknownCall {
+    std::size_t line = 0;
+    std::string call;
+    std::string closest;
+};
+
+// Table.Name( where Table is an engine API table without Name: at run time that is a call to nil.
+// Comments and string literals are skipped; tables the engine does not define (a script's own
+// modules, a plugin not loaded here) are not judged.
+[[nodiscard]] std::vector<UnknownCall> FindUnknownApiCalls(std::string_view source, const kb::script::ScriptApiCatalog& catalog) {
+    std::map<std::string, std::set<std::string>, std::less<>> tables;
+    for (const kb::script::ScriptApiCatalogLuaBinding& binding : catalog.luaBindings) {
+        if (!binding.tableName.empty()) tables[binding.tableName].insert(binding.luaName);
+    }
+    const auto word = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; };
+    std::vector<UnknownCall> found;
+    std::size_t line = 1;
+    for (std::size_t at = 0; at < source.size();) {
+        const char c = source[at];
+        if (c == '\n') { ++line; ++at; continue; }
+        if (source.compare(at, 2, "--") == 0) {
+            const bool block = source.compare(at + 2U, 2, "[[") == 0;
+            const std::size_t end = block ? source.find("]]", at) : source.find('\n', at);
+            if (end == std::string_view::npos) break;
+            line += static_cast<std::size_t>(std::count(source.begin() + static_cast<std::ptrdiff_t>(at), source.begin() + static_cast<std::ptrdiff_t>(end), '\n'));
+            at = block ? end + 2U : end;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            for (++at; at < source.size() && source[at] != c && source[at] != '\n'; ++at) if (source[at] == '\\') ++at;
+            ++at;
+            continue;
+        }
+        if (!word(c) || (at > 0U && (word(source[at - 1U]) || source[at - 1U] == '.' || source[at - 1U] == ':'))) { ++at; continue; }
+        std::size_t end = at;
+        while (end < source.size() && word(source[end])) ++end;
+        const std::string_view table = source.substr(at, end - at);
+        const auto known = tables.find(table);
+        if (known == tables.end() || end >= source.size() || source[end] != '.') { at = end; continue; }
+        std::size_t nameEnd = end + 1U;
+        while (nameEnd < source.size() && word(source[nameEnd])) ++nameEnd;
+        std::size_t paren = nameEnd;
+        while (paren < source.size() && (source[paren] == ' ' || source[paren] == '\t')) ++paren;
+        const std::string name{ source.substr(end + 1U, nameEnd - end - 1U) };
+        if (paren < source.size() && source[paren] == '(' && !name.empty() && !known->second.contains(name)) {
+            std::string closest;
+            std::size_t best = 3;
+            for (const std::string& candidate : known->second) {
+                // Same letters ignoring case, or a near spelling, is worth naming.
+                std::string a = candidate, b = name;
+                std::ranges::transform(a, a.begin(), [](unsigned char x) { return static_cast<char>(std::tolower(x)); });
+                std::ranges::transform(b, b.begin(), [](unsigned char x) { return static_cast<char>(std::tolower(x)); });
+                const std::size_t distance = a == b ? 0U : (a.starts_with(b) || b.starts_with(a) ? 2U : 3U);
+                if (distance < best) { best = distance; closest = candidate; }
+            }
+            found.push_back(UnknownCall{ line, std::string{ table } + '.' + name, closest.empty() ? closest : std::string{ table } + '.' + closest });
+        }
+        at = nameEnd;
+    }
+    return found;
+}
+
 } // namespace
 
 int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
@@ -33,6 +102,9 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
 
     const std::filesystem::path projectRoot = arguments.Option("--project").value_or("");
     kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::scene::Scene scene;
+    const kb::script::ScriptRuntimeHost host{ scene };
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
     std::uint64_t nextAssetId = 1U;
     int failures = 0;
 
@@ -52,6 +124,15 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
             path.filename().string());
         if (!loaded.succeeded) {
             io.err << "FAIL " << positional << ": " << loaded.error << '\n';
+            ++failures;
+            continue;
+        }
+        if (const std::vector<UnknownCall> unknown = FindUnknownApiCalls(source, catalog); !unknown.empty()) {
+            for (const UnknownCall& call : unknown) {
+                io.err << "FAIL " << positional << ':' << call.line << ": " << call.call << " does not exist";
+                if (!call.closest.empty()) io.err << "; did you mean " << call.closest << '?';
+                io.err << " (kb_cli api --topic " << call.call.substr(0, call.call.find('.')) << " lists the functions)\n";
+            }
             ++failures;
             continue;
         }

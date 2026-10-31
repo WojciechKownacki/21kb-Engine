@@ -4314,6 +4314,32 @@ end
     }
 }
 
+// Every registered function is Group.Name(...) in Lua, Rotate takes degrees, a bad argument is a
+// script error rather than a crash, and validate names a function that does not exist.
+void RunLuaFunctionTableTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua", R"(
+function Tick(self, dt)
+    Transform.Rotate(self.entity, 0, 30, 0)
+    local r = Transform.Rotation(self.entity)
+    Log(string.format('rotation %.1f %.1f %.1f', r.x, r.y, r.z))
+    Log('clamp ' .. tostring(Math.Clamp(5, 0, 1)))
+    Log('bad argument ' .. tostring(pcall(Transform.SetPosition, self.entity)))
+end
+)");
+    Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "the Lua table fixture must attach");
+    const CliRun ran = RunCliProgram({"run", "--project", root, "--frames", "1"});
+    Require(ran.exitCode == 0 && Contains(ran.out + ran.err, "rotation 0.0 30.0 0.0") && Contains(ran.out + ran.err, "clamp 1") &&
+            Contains(ran.out + ran.err, "bad argument false"),
+        "Lua must reach every registered function, turn by degrees and survive a bad argument: " + ran.out + ran.err);
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Typo.lua", "function Tick(self, dt)\n    Transform.rotate(self.entity, 0, 1, 0)\nend\n");
+    const CliRun checked = RunCliProgram({"validate", "--project", root, "Assets/Logic/Typo.lua"});
+    Require(checked.exitCode == 1 && Contains(checked.err, "Typo.lua:2: Transform.rotate does not exist; did you mean Transform.Rotate?"),
+        "validate must name a function that does not exist: " + checked.out + checked.err);
+}
+
 void RunPlaybackStopTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -5211,6 +5237,7 @@ int main(int argc, char** argv) {
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlaybackStopTests();
+    RunLuaFunctionTableTests();
     RunInputRecordingCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();

@@ -1,4 +1,5 @@
 #include "script/lua/api/PucLuaEventsApi.hpp"
+#include "script/lua/PucLuaArguments.hpp"
 
 #include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -132,7 +133,7 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
     if (lua_gettop(state) < index || lua_isnoneornil(state, index) != 0) {
         return kb::scene::SceneEntity{};
     }
-    const lua_Integer id = luaL_checkinteger(state, index);
+    const lua_Integer id = PucLuaCheckInteger(state, index);
     if (id < 0) {
         return kb::scene::SceneEntity{};
     }
@@ -146,7 +147,7 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
     if (lua_gettop(state) < index || lua_isnoneornil(state, index) != 0) {
         return {};
     }
-    return luaL_checkstring(state, index);
+    return PucLuaCheckString(state, index);
 }
 
 [[nodiscard]] std::string OptionalFilterTableStringField(lua_State* state, int tableIndex, const char* field) {
@@ -186,10 +187,9 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
     filter.sceneId = OptionalFilterTableIntegerField(state, index, "scene");
     lua_getfield(state, index, "player");
     if (lua_isnoneornil(state, -1) == 0) {
-        const lua_Integer player = luaL_checkinteger(state, -1);
+        const lua_Integer player = PucLuaCheckInteger(state, -1);
         if (player < 0 || static_cast<lua_Unsigned>(player) > std::numeric_limits<std::uint32_t>::max()) {
-            static_cast<void>(luaL_error(state, "event recipient filter player must be a non-negative 32-bit integer"));
-            return {};
+            PucLuaRaise("event recipient filter player must be a non-negative 32-bit integer");
         }
         filter.playerId = static_cast<std::uint32_t>(player);
     }
@@ -205,8 +205,8 @@ int LuaEventsSubscribe(lua_State* state) {
         lua_pushinteger(state, static_cast<lua_Integer>(kInvalidEventSubscriptionHandle));
         return 1;
     }
-    const char* eventName = luaL_checkstring(state, 1);
-    luaL_checktype(state, 2, LUA_TFUNCTION);
+    const char* eventName = PucLuaCheckString(state, 1);
+    PucLuaCheckType(state, 2, LUA_TFUNCTION);
     // A behaviour-local subscription naturally belongs to the executing
     // entity when the owner argument is omitted. Passing explicit nil keeps
     // the existing unowned/global subscription semantics.
@@ -240,7 +240,7 @@ int LuaEventsSubscribe(lua_State* state) {
 
 int LuaEventsUnsubscribe(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    const lua_Integer handleValue = luaL_checkinteger(state, 1);
+    const lua_Integer handleValue = PucLuaCheckInteger(state, 1);
     const bool unsubscribed = context != nullptr && context->Events() != nullptr && handleValue > 0 &&
         context->Events()->Unsubscribe(static_cast<EventSubscriptionHandle>(handleValue));
     lua_pushboolean(state, unsubscribed ? 1 : 0);
@@ -260,7 +260,7 @@ int LuaEventsUnsubscribe(lua_State* state) {
 
 int LuaEventsEmit(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    const char* eventName = luaL_checkstring(state, 1);
+    const char* eventName = PucLuaCheckString(state, 1);
     if (context == nullptr || context->Events() == nullptr) {
         lua_pushinteger(state, 0);
         return 1;
@@ -275,7 +275,7 @@ int LuaEventsEmit(lua_State* state) {
 
 int LuaEventsBroadcast(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    const char* eventName = luaL_checkstring(state, 1);
+    const char* eventName = PucLuaCheckString(state, 1);
     if (context == nullptr || context->Events() == nullptr) {
         lua_pushinteger(state, 0);
         return 1;
@@ -289,7 +289,7 @@ int LuaEventsBroadcast(lua_State* state) {
 
 int LuaEventsEmitDeferred(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    const char* eventName = luaL_checkstring(state, 1);
+    const char* eventName = PucLuaCheckString(state, 1);
     if (context == nullptr || context->Events() == nullptr) {
         lua_pushboolean(state, 0);
         return 1;

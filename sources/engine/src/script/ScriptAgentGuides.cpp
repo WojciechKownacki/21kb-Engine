@@ -98,8 +98,12 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
   `self:GetVariable`.
 - Component properties: `self:GetProperty(component, property)` / `self:SetProperty(...)`; each
   component's properties are an `api_reference` topic (for example `Transform`).
-- Engine functions are grouped (`Input`, `Physics`, `Transform`, `World`, `Audio`, ...): ask
-  `api_reference` for a group, then for the one function you call.
+- Engine functions are grouped (`Input`, `Physics`, `Transform`, `World`, `Audio`, `Gameplay`,
+  `Animator`, `Math`, `Timer`, ...): ask `api_reference` for a group, then for the one function
+  you call. Every function is `Group.Name(inputs in order)`, e.g. `Transform.Rotate(self.entity, 0, 90 * dt, 0)`
+  (degrees), `Transform.SetRotation(e, 0, 45, 0)`, `Physics.AddImpulse(e, 0, 5, 0)`; several
+  outputs come back as a table (`Transform.Rotation(e).y`). `validate` flags a function that
+  does not exist.
 - The sandbox has no `io`, `os`, `require` or `load`; share code with `-- @import` modules and
   `Import("Module.Name")`.
 - Ready-made controllers live in `Assets/Samples/` (third person, top down, platformer,
@@ -133,8 +137,8 @@ kb_cli entity attach --project . --name Sword --to Hero --socket weapon_r --scal
 
 - Clips of another rig (Mixamo, Unreal, Rigify) play too: bones are matched by name and role;
   `animator check --character` shows how many bones follow each clip.
-- Scripts drive animation with `CallFunction("Animator.<Function>", { name = value, ... })`;
-  the functions are `api_reference` topic `Animator`.
+- Scripts drive animation with `Animator.<Function>(inputs in order)`; the functions are
+  `api_reference` topic `Animator`.
 )md";
 
 constexpr std::string_view kCombatAndAi = R"md(# Combat and AI
@@ -158,8 +162,8 @@ kb_cli ai show --project . --entity Goblin
   FarFromHome. Actions: Idle Wander ReturnHome Chase UseAbility KeepDistance Flee. It walks the
   navigation mesh with a NavAgent and drives the Animator (float `Speed`, triggers `Attack`,
   `Hit`, `Die`, bool `Dead`).
-- Scripts call the gameplay functions by name with named inputs:
-  `CallFunction("Gameplay.ApplyDamage", { target = enemy, amount = 10 })`; the functions are
+- Scripts call the gameplay functions directly, inputs in order or one table by name:
+  `Gameplay.ApplyDamage({ target = enemy, amount = 10 })`; the functions are
   `api_reference` topic `Gameplay`. A combatant's script receives `OnDamaged`, `OnHealed`,
   `OnDeath`, `OnRevived`, `OnAbilityUsed`, `OnEnemySpotted`, `OnEnemyLost` with details in
   `event.args`.

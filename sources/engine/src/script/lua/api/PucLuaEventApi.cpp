@@ -1,4 +1,5 @@
 #include "script/lua/api/PucLuaEventApi.hpp"
+#include "script/lua/PucLuaArguments.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
 
 #include "engine/script/PucLuaSafeCall.hpp"
@@ -26,7 +27,7 @@ int LuaEmit(lua_State* state) {
     if (context == nullptr) {
         return 0;
     }
-    const char* eventName = luaL_checkstring(state, 1);
+    const char* eventName = PucLuaCheckString(state, 1);
     std::vector<ScriptEventArgument> arguments;
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         arguments = PucLuaEventApi::ArgumentsFromTable(state, 2);
@@ -40,12 +41,12 @@ int LuaEmitTo(lua_State* state) {
     if (context == nullptr) {
         return 0;
     }
-    const lua_Integer targetId = luaL_checkinteger(state, 1);
+    const lua_Integer targetId = PucLuaCheckInteger(state, 1);
     if (targetId < 0) {
-        return luaL_argerror(state, 1, "target entity id must be non-negative");
+        PucLuaRaise("bad argument #1 (target entity id must be non-negative)");
     }
     const auto target = kb::scene::SceneEntity{ static_cast<std::uint64_t>(targetId) };
-    const char* eventName = luaL_checkstring(state, 2);
+    const char* eventName = PucLuaCheckString(state, 2);
     std::vector<ScriptEventArgument> arguments;
     if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
         arguments = PucLuaEventApi::ArgumentsFromTable(state, 3);

@@ -1,4 +1,5 @@
 #include "script/lua/api/PucLuaModuleApi.hpp"
+#include "script/lua/PucLuaArguments.hpp"
 
 #include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -24,7 +25,7 @@ int LuaImport(lua_State* state) {
         lua_pushliteral(state, "lua runtime is not available");
         return 2;
     }
-    const char* moduleName = luaL_checkstring(state, 1);
+    const char* moduleName = PucLuaCheckString(state, 1);
     std::string error;
     if (!runtime->PushModuleForImport(moduleName, error)) {
         lua_pushnil(state);
