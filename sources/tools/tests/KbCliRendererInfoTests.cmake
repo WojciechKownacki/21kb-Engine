@@ -34,9 +34,13 @@ foreach(request auto d3d11)
     if(NOT schema STREQUAL "21kb.renderer-info/v1" OR NOT selected STREQUAL "Direct3D 11" OR NOT compute OR fell_back)
         message(FATAL_ERROR "renderer-info --backend ${request} reported a wrong host: ${info_output}")
     endif()
-    # The capability report states what the renderer does not do instead of leaving it out.
+    # The capability report states what the renderer does not do instead of leaving it out, and
+    # names no fallback for what it does.
     string(JSON indirect GET "${info_output}" features gpu_driven_indirect_submit)
-    if(indirect OR reasons LESS 1 OR NOT info_output MATCHES "indirect submit is not implemented")
+    if(indirect AND info_output MATCHES "indirect submit is not implemented")
+        message(FATAL_ERROR "renderer-info lists a fallback for the indirect submit it supports: ${info_output}")
+    endif()
+    if(NOT indirect AND (reasons LESS 1 OR NOT info_output MATCHES "indirect submit is not implemented"))
         message(FATAL_ERROR "renderer-info must list the missing indirect submit: ${info_output}")
     endif()
 endforeach()
