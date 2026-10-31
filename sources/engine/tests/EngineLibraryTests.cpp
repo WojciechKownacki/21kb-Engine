@@ -3158,12 +3158,12 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::tests::Require(restoredStroke != nullptr && restoredStroke->meshAssetId == 904U && restoredStroke->materialAssetId == 905U &&
                             restoredStroke->mode == kb::scene::SpaceStrokeMode::Cable && kb::tests::NearlyEqual(restoredStroke->width, 0.25F) &&
                             kb::tests::NearlyEqual(restoredStroke->cableSag, 1.5F) && restoredStroke->splineSegments == 12U && restoredStroke->enabled,
-        "Engine21kbLibrary component registry: Kreska przestrzenna must survive real save/load with its curve render policy");
+        "Engine21kbLibrary component registry: Line Renderer must survive real save/load with its curve render policy");
     const kb::scene::HistoryRibbonComponent* restoredRibbon = target.Components().HistoryRibbons().TryGet(restored);
     kb::tests::Require(restoredRibbon != nullptr && restoredRibbon->meshAssetId == 906U && restoredRibbon->materialAssetId == 907U &&
                             kb::tests::NearlyEqual(restoredRibbon->lifetimeSeconds, 2.0F) && kb::tests::NearlyEqual(restoredRibbon->width, 0.3F) &&
                             kb::tests::NearlyEqual(restoredRibbon->sampleIntervalSeconds, 0.1F) && restoredRibbon->enabled,
-        "Engine21kbLibrary component registry: Wstęga historii must survive real save/load with its sampling policy");
+        "Engine21kbLibrary component registry: Trail Renderer must survive real save/load with its sampling policy");
     const kb::scene::ParticleEffectComponent* restoredParticleEffect = target.Components().ParticleEffects().TryGet(restored);
     kb::tests::Require(restoredParticleEffect != nullptr && restoredParticleEffect->effectAssetId == 908U &&
                             restoredParticleEffect->deterministicSeed == 123456U &&
@@ -3509,9 +3509,8 @@ void RunComponentInspectorDescCatalogTest() {
     const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
     const std::vector<kb::library::LibraryComponentInspectorDesc>& catalog = kb::library::EngineLibraryComponentInspectorRegistry::Catalog();
 
-    // Older names still accepted: 3D Radiance Emitter (Light) and the first Polish names of
-    // Line Renderer, Trail Renderer and Lens Flare.
-    constexpr std::size_t compatibilityAliasCount = 4U;
+    // Older name still accepted: 3D Radiance Emitter (Light).
+    constexpr std::size_t compatibilityAliasCount = 1U;
     kb::tests::Require(catalog.size() + compatibilityAliasCount == scriptComponentNames.size(),
         "Engine21kbLibrary component inspector catalog plus its compatibility aliases must cover exactly the components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
 
@@ -3547,14 +3546,13 @@ void RunComponentInspectorDescCatalogTest() {
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
     // 3D Radiance Emitter remains a public compatibility alias for Light and
-    // intentionally reuses the canonical inspector metadata for its 16 fields; the
-    // older names of Line Renderer (10), Trail Renderer (9) and Lens Flare (7) do too.
+    // intentionally reuses the canonical inspector metadata for its 16 fields.
     // WorldBackdrop grew eleven procedural sky fields (Unity Skybox/Procedural).
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 864U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (864, including text rendering, themes, collision mesh and compatibility aliases) across all components");
+    kb::tests::Require(fieldsChecked == 838U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (838, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

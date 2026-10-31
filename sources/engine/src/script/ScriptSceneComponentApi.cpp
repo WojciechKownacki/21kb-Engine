@@ -317,7 +317,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 51> kComponentNames{
+constexpr std::array<std::string_view, 48> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -366,10 +366,6 @@ constexpr std::array<std::string_view, 51> kComponentNames{
     "SocketAttachment",
     "Combatant",
     "AIBrain",
-    // Older names, still accepted (SceneComponentAuthoring::CanonicalName).
-    "Kreska przestrzenna",
-    "Wst\xC4\x99" "ga historii",
-    "Echo soczewki",
 };
 
 // Value names of Int enum properties, in value order (tools accept them in place of numbers).
