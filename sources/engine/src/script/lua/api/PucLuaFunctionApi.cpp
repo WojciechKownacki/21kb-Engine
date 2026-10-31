@@ -54,6 +54,28 @@ namespace {
     return arguments;
 }
 
+// The Lua arguments as the signature's inputs: in order, or one table of them by name. A nil
+// argument leaves its input out, so an optional one keeps its default.
+[[nodiscard]] std::vector<ScriptFunctionArgument> ArgumentsBySignature(lua_State* state, const ScriptFunctionSignature& signature) {
+    const int count = lua_gettop(state);
+    const bool named = count == 1 && lua_istable(state, 1) != 0;
+    std::vector<ScriptFunctionArgument> arguments;
+    for (std::size_t index = 0; index < signature.inputs.size(); ++index) {
+        const ScriptFunctionPin& input = signature.inputs[index];
+        if (named) lua_getfield(state, 1, input.name.c_str());
+        else if (static_cast<int>(index) < count) lua_pushvalue(state, static_cast<int>(index) + 1);
+        else break;
+        if (!lua_isnil(state, -1)) {
+            ScriptValue value = input.type == ScriptValueType::Double && lua_type(state, -1) == LUA_TNUMBER
+                ? ScriptValue{ static_cast<double>(lua_tonumber(state, -1)) }
+                : PucLuaValueBridge::FromLua(state, -1);
+            arguments.push_back(ScriptFunctionArgument{ .name = input.name, .value = std::move(value) });
+        }
+        lua_pop(state, 1);
+    }
+    return arguments;
+}
+
 int LuaCallFunction(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -1572,13 +1594,10 @@ int LuaWorldInstantiatePrefab(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    std::vector<ScriptFunctionArgument> arguments;
-    if (lua_istable(state, 1) != 0) {
-        arguments = ArgumentsFromTable(state, 1);
-    } else {
-        const char* prefab = PucLuaCheckString(state, 1);
-        arguments.push_back(Arg("prefab", ScriptValue{ std::string{ prefab != nullptr ? prefab : "" } }));
-    }
+    // Every input by position (prefab, parameters, parent, x, y, z, ...) or one table by name.
+    if (lua_istable(state, 1) == 0) static_cast<void>(PucLuaCheckString(state, 1));
+    const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("World.InstantiatePrefab") : nullptr;
+    const std::vector<ScriptFunctionArgument> arguments = signature != nullptr ? ArgumentsBySignature(state, *signature) : std::vector<ScriptFunctionArgument>{};
     const ScriptFunctionCallResult result = context->CallFunction("World.InstantiatePrefab", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "prefab instantiate failed");
@@ -1594,13 +1613,10 @@ int LuaWorldSpawnGeometrySwarm(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    std::vector<ScriptFunctionArgument> arguments;
-    if (lua_istable(state, 1) != 0) {
-        arguments = ArgumentsFromTable(state, 1);
-    } else {
-        const char* prefab = PucLuaCheckString(state, 1);
-        arguments.push_back(Arg("prefab", ScriptValue{ std::string{ prefab != nullptr ? prefab : "" } }));
-    }
+    // Every input by position (prefab, parameters, parent, x, y, z, ...) or one table by name.
+    if (lua_istable(state, 1) == 0) static_cast<void>(PucLuaCheckString(state, 1));
+    const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("World.SpawnGeometrySwarm") : nullptr;
+    const std::vector<ScriptFunctionArgument> arguments = signature != nullptr ? ArgumentsBySignature(state, *signature) : std::vector<ScriptFunctionArgument>{};
     const ScriptFunctionCallResult result = context->CallFunction("World.SpawnGeometrySwarm", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "geometry swarm spawn failed");
@@ -3796,20 +3812,7 @@ int CallGenericFunction(lua_State* state) {
     }
     const int count = lua_gettop(state);
     const bool named = count == 1 && lua_istable(state, 1) != 0;
-    std::vector<ScriptFunctionArgument> arguments;
-    for (std::size_t index = 0; index < signature->inputs.size(); ++index) {
-        const ScriptFunctionPin& input = signature->inputs[index];
-        if (named) lua_getfield(state, 1, input.name.c_str());
-        else if (static_cast<int>(index) < count) lua_pushvalue(state, static_cast<int>(index) + 1);
-        else break;
-        if (!lua_isnil(state, -1)) {
-            ScriptValue value = input.type == ScriptValueType::Double && lua_type(state, -1) == LUA_TNUMBER
-                ? ScriptValue{ static_cast<double>(lua_tonumber(state, -1)) }
-                : PucLuaValueBridge::FromLua(state, -1);
-            arguments.push_back(ScriptFunctionArgument{ .name = input.name, .value = std::move(value) });
-        }
-        lua_pop(state, 1);
-    }
+    const std::vector<ScriptFunctionArgument> arguments = ArgumentsBySignature(state, *signature);
     if (!named && static_cast<std::size_t>(count) > signature->inputs.size()) {
         lua_pushfstring(state, "%s takes %d arguments, got %d", functionName, static_cast<int>(signature->inputs.size()), count);
         return -1;

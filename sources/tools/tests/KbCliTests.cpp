@@ -4340,6 +4340,32 @@ end
         "validate must name a function that does not exist: " + checked.out + checked.err);
 }
 
+// input-action makes an action and binds keys in the project's context; prefab saves an entity
+// and places copies that keep its behaviour.
+void RunInputActionAndPrefabTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const CliRun fire = RunCliProgram({"input-action", "new", "--project", root, "--name", "Fire", "--key", "Space", "--key", "MouseLeft"});
+    Require(fire.exitCode == 0 && Contains(fire.out, "Fire (Bool): Space, MouseLeft"), "input-action new must bind the keys: " + fire.out + fire.err);
+    const CliRun move = RunCliProgram({"input-action", "new", "--project", root, "--name", "Move", "--type", "Axis2D",
+        "--key", "W=+y", "--key", "S=-y", "--key", "D=+x", "--key", "A=-x"});
+    Require(move.exitCode == 0 && Contains(move.out, "W=+y, S=-y, D=+x, A=-x"), "an axis action must bind keys with directions: " + move.out + move.err);
+    Require(RunCliProgram({"input-action", "new", "--project", root, "--name", "Bad", "--key", "Spcae"}).exitCode == 1,
+        "an unknown key must be refused");
+    const CliRun listed = RunCliProgram({"input-action", "list", "--project", root});
+    Require(Contains(listed.out, "Fire (Bool): Space, MouseLeft") && Contains(listed.out, "Move (Axis2D)"), "input-action list must show the bindings: " + listed.out);
+
+    Require(RunCliProgram({"entity", "add", "--project", root, "--create", "Cube", "--name", "Crate"}).exitCode == 0, "adding the crate failed");
+    const CliRun saved = RunCliProgram({"prefab", "new", "--project", root, "--from-entity", "Crate"});
+    Require(saved.exitCode == 0 && std::filesystem::exists(TestRoot() / "Assets" / "Prefabs" / "Crate.kbprefab"),
+        "prefab new must write the prefab: " + saved.out + saved.err);
+    const CliRun placed = RunCliProgram({"prefab", "place", "--project", root, "--prefab", "/Game/Prefabs/Crate.kbprefab", "--name", "Crate2", "--position", "3,0,0"});
+    Require(placed.exitCode == 0, "prefab place failed: " + placed.out + placed.err);
+    const CliRun listedScene = RunCliProgram({"scene-list", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene"});
+    Require(Contains(listedScene.out, "Crate2 components: MeshRenderer") && Contains(listedScene.out, "@ 3,0,0"),
+        "the placed prefab must be in the scene where it was put: " + listedScene.out);
+}
+
 void RunPlaybackStopTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -5238,6 +5264,7 @@ int main(int argc, char** argv) {
     RunRunCommandTests();
     RunPlaybackStopTests();
     RunLuaFunctionTableTests();
+    RunInputActionAndPrefabTests();
     RunInputRecordingCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();

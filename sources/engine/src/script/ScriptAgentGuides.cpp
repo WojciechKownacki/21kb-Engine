@@ -42,6 +42,9 @@ kb_cli entity add --project . --create Sphere --name RedBall --position 0,5,0 --
   then `component set --entity TopCamera --type Camera --set primary=true` and the old camera
   `primary=false`.
 - Remove or rename: `entity remove --name RedBall`, `entity rename --name RedBall --to Ball`.
+- Reuse an object: `kb_cli prefab new --project . --from-entity Crate` saves `/Game/Prefabs/Crate.kbprefab`;
+  `prefab place --prefab /Game/Prefabs/Crate.kbprefab --name Crate2 --position 3,0,0` adds a copy,
+  and a script spawns one with `World.InstantiatePrefab("/Game/Prefabs/Crate.kbprefab", nil, nil, x, y, z)`.
 )md";
 
 constexpr std::string_view kPhysics = R"md(# Physics
@@ -94,6 +97,9 @@ kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node RedC
 kb_cli validate --project . Assets/Scripts/Spinner.lua
 ```
 
+- Keys and buttons are input actions: `kb_cli input-action new --project . --name Fire --key Space --key MouseLeft`
+  (`--type Axis2D --key W=+y --key S=-y --key D=+x --key A=-x` for movement); scripts read
+  `Input.Pressed("Fire")` and `Input.Vector2("Move")`; `input-action list` shows what exists.
 - `-- @expose <name> <Type> [= default]` makes a variable editable in the Inspector; read it with
   `self:GetVariable`.
 - Component properties: `self:GetProperty(component, property)` / `self:SetProperty(...)`; each

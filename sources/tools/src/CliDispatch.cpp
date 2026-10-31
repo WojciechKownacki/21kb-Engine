@@ -356,6 +356,21 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  --project <dir> --scene <path> --node <name> --script <path>
                  [--tick-group <group>] [--execution-order <n>] [--disabled] [--replace]
                (an entity runs one behaviour; --replace swaps a different one out)
+  input-action Create an input action and bind keys in the project's input context
+               (made and set when the project has none), as the Input Actions window.
+                 new --project <dir> --name <Name> [--type Bool|Float|Axis2D|Axis3D]
+                     --key <Key> [--key <Key> ...]
+                 list --project <dir>
+               (keys: A..Z, Space, Enter, LeftShift, ArrowUp, MouseLeft, GamepadFaceBottom, ...;
+               an axis key names its direction: --key W=+y --key S=-y --key D=+x --key A=-x;
+               scripts read Input.Pressed("Fire"), Input.Value(...) or Input.Vector2("Move"))
+  prefab       Save an entity as a prefab, or place one in a scene.
+                 new --project <dir> [--scene <path>] --from-entity <Name> [--name <Prefab>]
+                     [--folder Assets/Prefabs]
+                 place --project <dir> [--scene <path>] --prefab /Game/<path>.kbprefab
+                     [--name <Name>] [--parent <Name>] [--position x,y,z] [--rotation x,y,z]
+                     [--scale x,y,z] [--look-at x,y,z|<Entity>]
+               (scripts spawn copies with World.InstantiatePrefab)
 )",
 R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on errors,
@@ -607,6 +622,8 @@ constexpr CliCommandDescriptor kCommands[]{
     {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script"},
     {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list"},
     {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach"},
+    {"input-action", &RunInputActionCommand, CliCommandKind::Normal, true, {}},
+    {"prefab", &RunPrefabCommand, CliCommandKind::Normal, true, {}},
     {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}},
     {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
     {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},

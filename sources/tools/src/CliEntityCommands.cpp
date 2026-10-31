@@ -46,6 +46,7 @@
 #include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "engine/scene/SceneSprite2DComponents.hpp"
@@ -854,6 +855,93 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (!entity.has_value()) return 1;
     session->scene->Entities().Destroy(*entity);
     return Saved(*session, "removed entity '" + *name + "' and its children", io);
+}
+
+// prefab new: saves an entity and its children as /Game/Prefabs/<Name>.kbprefab and links the
+// entity to it, as the editor's Create Prefab; scripts then spawn copies with World.InstantiatePrefab.
+[[nodiscard]] int PrefabNew(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> entityName = arguments.Option("--from-entity");
+    if (!entityName.has_value()) {
+        io.err << "error: prefab new requires --from-entity <Name> [--name <PrefabName>] [--folder Assets/Prefabs]\n";
+        return 1;
+    }
+    std::optional<SceneSession> session = OpenScene(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
+    if (!entity.has_value()) return 1;
+    const std::string name = arguments.Option("--name").value_or(scene.Entities().Name(*entity));
+    if (const std::string error = kb::assets::AssetFileNameError(name); !error.empty()) {
+        io.err << "error: '" << name << "' cannot name a prefab: " << error << ". Pass --name.\n";
+        return 1;
+    }
+    const std::filesystem::path root = Utf8Path(arguments.Option("--project").value_or(""));
+    const std::string folder = arguments.Option("--folder").value_or("Assets/Prefabs");
+    const std::filesystem::path file = root / Utf8Path(folder) / Utf8Path(name + ".kbprefab");
+    std::error_code error;
+    if (std::filesystem::exists(file, error)) {
+        io.err << "error: " << ProjectScenePath(file) << " already exists; pass another --name\n";
+        return 1;
+    }
+    std::filesystem::create_directories(file.parent_path(), error);
+    if (!scene.Prefabs().CreateAsset(scene.Entities().Object(*entity), name, file).IsValid()) {
+        io.err << "error: the prefab could not be written: " << scene.Assets().Manager().LastError() << '\n';
+        return 1;
+    }
+    return Saved(*session, "saved '" + *entityName + "' as prefab " + ProjectScenePath(file) +
+        " and linked it; place more with prefab place, spawn with World.InstantiatePrefab", io);
+}
+
+// prefab place: adds an instance of a prefab to the scene, as dragging it into the Scene View.
+[[nodiscard]] int PrefabPlace(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> prefab = arguments.Option("--prefab");
+    if (!prefab.has_value()) {
+        io.err << "error: prefab place requires --prefab /Game/<path>.kbprefab [--name <Name>] [--parent <Name>] [--position x,y,z] ...\n";
+        return 1;
+    }
+    std::optional<SceneSession> session = OpenScene(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    static_cast<void>(scene.Assets().Discover());
+    const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(*prefab));
+    const std::optional<std::filesystem::path> file = metadata != nullptr && metadata->physicalPath.extension() == ".kbprefab"
+        ? std::optional{ metadata->physicalPath } : std::nullopt;
+    if (!file.has_value()) {
+        io.err << "error: no prefab " << *prefab << " in the project\n";
+        return 1;
+    }
+    kb::scene::SceneObject parent{};
+    if (const std::optional<std::string> parentName = arguments.Option("--parent"); parentName.has_value()) {
+        const std::optional<kb::scene::SceneEntity> found = FindEntity(scene, *parentName, io);
+        if (!found.has_value()) return 1;
+        parent = scene.Entities().Object(*found);
+    }
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Load(*file);
+    const kb::scene::ScenePrefabInstance instance = handle.IsValid()
+        ? scene.Prefabs().Instantiate(handle, kb::scene::ScenePrefabInstantiationSettings{ .parent = parent }) : kb::scene::ScenePrefabInstance{};
+    if (instance.Empty()) {
+        io.err << "error: " << *prefab << " could not be placed: " << scene.Assets().Manager().LastError() << '\n';
+        return 1;
+    }
+    const kb::scene::SceneEntity entity = instance.RootObject().Entity();
+    if (const std::optional<std::string> name = arguments.Option("--name"); name.has_value()) {
+        if (!NameFreeUnder(scene, scene.Hierarchy().Parent(entity), *name)) {
+            io.err << "error: an entity named '" << *name << "' already exists there. Pass another --name.\n";
+            return 1;
+        }
+        scene.Entities().SetName(entity, *name);
+    }
+    if (!ApplyTransformOptions(scene, entity, arguments, io)) return 1;
+    return Saved(*session, "placed " + *prefab + " as '" + scene.Entities().Name(entity) + "'", io);
+}
+
+[[nodiscard]] int RunPrefabAction(const ArgumentList& arguments, CommandIo io) {
+    const std::vector<std::string>& positionals = arguments.Positionals();
+    const std::string action = positionals.empty() ? std::string{} : positionals.front();
+    if (action == "new") return PrefabNew(arguments, io);
+    if (action == "place") return PrefabPlace(arguments, io);
+    io.err << "error: prefab expects new or place\n";
+    return 1;
 }
 
 // entity set: moves, turns, scales or aims an existing entity in one command.
@@ -1726,6 +1814,10 @@ int RunEntityCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "show") return EntityShow(arguments, io);
     io.err << "error: entity expects add, set, remove, rename, attach, detach or show\n";
     return 1;
+}
+
+int RunPrefabCommand(const ArgumentList& arguments, CommandIo io) {
+    return RunPrefabAction(arguments, io);
 }
 
 int RunComponentCommand(const ArgumentList& arguments, CommandIo io) {
