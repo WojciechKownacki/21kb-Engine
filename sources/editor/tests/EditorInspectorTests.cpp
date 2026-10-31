@@ -1338,8 +1338,9 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
             normalTextureParameter->expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Linear &&
             normalTextureParameter->enabled,
         "KBMAT-0003: Material Editor parameter model should expose supported texture slots");
-    const kb::editor::MaterialEditorParameter* clearcoatParameter = findEditorParameter("clearcoatFactor");
-    kb::editor::tests::Require(clearcoatParameter != nullptr && !clearcoatParameter->enabled,
+    // Clearcoat is evaluated now; transmission is still parsed and ignored by the built-in type.
+    const kb::editor::MaterialEditorParameter* transmissionParameter = findEditorParameter("transmissionFactor");
+    kb::editor::tests::Require(transmissionParameter != nullptr && !transmissionParameter->enabled,
         "KBMAT-0003: unsupported advanced parameters should remain visible but disabled");
     kb::editor::tests::Require(!materialEditor.InfoPanelVisible(), "Material Editor info panel should be hidden by default");
     kb::editor::tests::Require(materialEditor.ToggleInfoPanel(), "Material Editor info panel toggle should report a state change");
@@ -2590,7 +2591,7 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     const kb::editor::MaterialEditorPanelDetailsRows details = kb::editor::MaterialEditorPanelRenderer::DetailsRows(materialEditor.Parameters(), 1U);
     kb::editor::tests::Require(details.title.find("Selected Node #1") != std::string::npos, "Material Editor details should describe selected graph node context");
     kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("baseColor") != std::string::npos && row.find(" = ") != std::string::npos; }), "Material Editor details should expose metadata-driven baseColor parameter with default value");
-    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("clearcoatFactor") != std::string::npos && row.find("disabled") != std::string::npos; }), "Material Editor details should expose unsupported advanced rows as disabled");
+    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("transmissionFactor") != std::string::npos && row.find("disabled") != std::string::npos; }), "Material Editor details should expose unsupported advanced rows as disabled");
     kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Base Color") != std::string::npos && row.find("sRGB") != std::string::npos; }), "Material Editor details should expose metadata-driven Base Color texture slot");
     kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Normal") != std::string::npos && row.find("Linear") != std::string::npos; }), "Material Editor details should expose metadata-driven texture color policy");
 }
