@@ -1,4 +1,5 @@
 #include "platform/win32/EditorMap2DWindow.hpp"
+#include "rendering/gdi/EditorTextMeasure.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "localization/EditorLocalization.hpp"
 
@@ -2447,10 +2448,14 @@ void PaintMeshRendererSection(
 // for Float and (click-to-cycle) Enum fields. The section header carries the "×"
 // remove affordance like Script/Mesh Renderer. Every editable row shares one
 // InspectorPropertyId::PhysicsField id; the row index identifies the field.
-// The centred "Fit to Mesh" button rect within a collider-section action row.
-[[nodiscard]] RECT ColliderFitButtonRect(RECT row) noexcept {
-    const int margin = std::min(48, static_cast<int>(row.right - row.left) / 5);
-    return Rect(row.left + margin, row.top + 2, row.right - margin, row.bottom - 2);
+// The Collider's Fit action reads like any other row: its name in the label column and, at the
+// right end of the value column, a button as wide as its own label.
+[[nodiscard]] RECT ColliderFitButtonRect(RECT row) {
+    const int valueLeft = InspectorLabelColumnRight(row);
+    const int right = static_cast<int>(row.right) - kRowPadX;
+    const int labelWidth = MeasureTextWidth(EditorText("inspector.collider.fitToMesh", "Fit to Mesh"), 12, FW_SEMIBOLD);
+    const int width = std::clamp(labelWidth + 28, 0, std::max(0, right - valueLeft));
+    return Rect(right - width, row.top + 4, right, row.bottom - 4);
 }
 
 void PaintPhysicsSection(
@@ -2485,18 +2490,18 @@ void PaintPhysicsSection(
         // The action row belongs to the card: reserving it inside the section keeps the button
         // within the card's outline, at the row the hit test expects after the fields.
         const RECT actionRow = section.Reserve(kFieldRowHeight + kDividerHeight);
-        const RECT button = ColliderFitButtonRect(Rect(actionRow.left, actionRow.top, actionRow.right, actionRow.top + kFieldRowHeight));
+        const RECT row = Rect(actionRow.left, actionRow.top, actionRow.right, actionRow.top + kFieldRowHeight);
+        {
+            ScopedFont labelFont(12, FW_SEMIBOLD);
+            const ScopedGdiObject selectedLabelFont(dc, labelFont.handle);
+            Text(dc, Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom),
+                EditorText("inspector.collider.fit", "Fit"), Color(fitEnabled ? theme.textSecondary : theme.textDisabled));
+        }
+        // Hover lights it like a chosen option; without a mesh to fit to it stays disabled.
         const bool hovered = fitEnabled && inspector.IsHovered(InspectorHitKind::TextField, sectionId, InspectorPropertyId::ColliderFitToMesh);
-        const COLORREF fill = !fitEnabled ? Rgb(30, 33, 38) : (hovered ? BlendColor(Color(theme.accent), Rgb(0, 0, 0), 15) : Rgb(38, 43, 50));
-        const COLORREF border = fitEnabled ? Color(theme.accent) : Rgb(52, 58, 66);
-        DrawFrame(dc, button, fill, border);
-        ScopedFont buttonFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedButtonFont(dc, buttonFont.handle);
-        const int iconSize = 13;
-        const int iconTop = button.top + (static_cast<int>(button.bottom - button.top) - iconSize) / 2;
-        const COLORREF textColor = fitEnabled ? Color(theme.textPrimary) : Rgb(96, 104, 116);
-        HeroIconPainter::Draw(dc, Rect(button.left + 14, iconTop, button.left + 14 + iconSize, iconTop + iconSize), HeroIconKind::Cube, textColor, 1);
-        Text(dc, Rect(button.left + 14 + iconSize, button.top, button.right - 10, button.bottom), EditorText("inspector.collider.fitToMesh", "Fit to Mesh"), textColor, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EditorDialogStyle::PaintOptionButton(dc, ColliderFitButtonRect(row), theme,
+            EditorText("inspector.collider.fitToMesh", "Fit to Mesh"), hovered, fitEnabled);
+        DrawDivider(dc, row.left, row.right, row.bottom);
     }
     y = section.Bottom() + kSectionGap;
 }
