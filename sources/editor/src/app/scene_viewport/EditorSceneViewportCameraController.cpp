@@ -71,7 +71,7 @@ constexpr DWORD kToolbarFpsRefreshMs = 250U;
     const DockLayout layout = dockModel.Queries().BuildLayout(
         client.right - client.left,
         client.bottom - client.top,
-        metrics.menuHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

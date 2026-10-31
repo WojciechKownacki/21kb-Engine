@@ -110,6 +110,7 @@ public:
     // graphs render through their cooked GPU program instead of the CPU PBR fallback (MAT-31).
     void SetGraphShaderCacheRoot(std::string root);
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
+    [[nodiscard]] bool RendererInitialized() const noexcept;
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;

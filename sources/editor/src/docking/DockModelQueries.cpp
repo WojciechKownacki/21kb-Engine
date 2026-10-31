@@ -11,11 +11,12 @@ DockLayout DockModelQueries::BuildLayout(
     int clientWidth,
     int clientHeight,
     int menuHeight,
+    int statusBarHeight,
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
     int splitterSize) {
-    return DockLayoutBuilder{}.Build(root, clientWidth, clientHeight, menuHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize);
+    return DockLayoutBuilder{}.Build(root, clientWidth, clientHeight, menuHeight, statusBarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize);
 }
 
 DockHit DockModelQueries::HitTest(const DockLayout& layout, int x, int y) {

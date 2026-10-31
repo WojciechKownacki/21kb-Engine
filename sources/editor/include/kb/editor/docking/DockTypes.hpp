@@ -114,6 +114,7 @@ struct DockLayout {
     DockRect menu{};
     DockRect toolbar{};
     DockRect workspace{};
+    DockRect statusBar{};
     std::vector<DockLeafLayout> leaves{};
     std::vector<DockPanelLayout> panels{};
     std::vector<DockSplitterLayout> splitters{};

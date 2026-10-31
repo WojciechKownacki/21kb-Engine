@@ -261,6 +261,23 @@ static constexpr std::array<HeroIconPath, 3> kMonitor{
     HeroIconPath{ "M8 21H16", false },
     HeroIconPath{ "M12 17V21", false },
 };
+// Lucide "circle-check" (ISC).
+static constexpr std::array<HeroIconPath, 2> kCheckCircle{
+    HeroIconPath{ "M12 22A10 10 0 1 0 12 2A10 10 0 0 0 12 22Z", false },
+    HeroIconPath{ "M9 12L11 14L15 10", false },
+};
+// Lucide "circle-x" (ISC).
+static constexpr std::array<HeroIconPath, 3> kXCircle{
+    HeroIconPath{ "M12 22A10 10 0 1 0 12 2A10 10 0 0 0 12 22Z", false },
+    HeroIconPath{ "M15 9L9 15", false },
+    HeroIconPath{ "M9 9L15 15", false },
+};
+// Lucide "triangle-alert" (ISC).
+static constexpr std::array<HeroIconPath, 3> kWarning{
+    HeroIconPath{ "M21.73 18L13.73 4A2 2 0 0 0 10.27 4L2.27 18A2 2 0 0 0 4 21H20A2 2 0 0 0 21.73 18Z", false },
+    HeroIconPath{ "M12 9V13", false },
+    HeroIconPath{ "M12 17H12.01", false },
+};
 // Platform marks and the dedicated-server glyph, vendored rather than drawn. Brand marks
 // name a build target here, which is what they are for. Sources and licences are recorded
 // in third_party/devicon and third_party/fluentui-system-icons.
@@ -474,6 +491,18 @@ HeroIconGlyph HeroIconAssets::DisclosureCollapsed() noexcept {
 
 HeroIconGlyph HeroIconAssets::DisclosureExpanded() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDisclosureExpanded } };
+}
+
+HeroIconGlyph HeroIconAssets::CheckCircle() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCheckCircle }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::XCircle() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kXCircle }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Warning() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kWarning }, .strokeWidth = 2.0F };
 }
 
 HeroIconGlyph HeroIconAssets::Undo() noexcept {

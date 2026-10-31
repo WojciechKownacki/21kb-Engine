@@ -203,7 +203,7 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
     return dockModel.Queries().BuildLayout(
         client.right - client.left,
         client.bottom - client.top,
-        metrics.menuHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
@@ -593,6 +593,11 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     }
 
     if (HandleSaveLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, shellInteraction)) {
+        return true;
+    }
+
+    if (EditorToolbarRenderer::HitTestStatusBarConsole(EditorToolbarRenderer::ResolveStatusBar(ToRect(layout->statusBar)), x, y)) {
+        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Console, DockArea::Bottom);
         return true;
     }
 

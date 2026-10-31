@@ -167,7 +167,7 @@ public:
         GetClientRect(window_, &client);
         return dockModel_.Queries().BuildLayout(
             client.right - client.left, client.bottom - client.top,
-            metrics_.menuHeight, metrics_.tabStripHeight,
+            metrics_.menuHeight, metrics_.statusBarHeight, metrics_.tabStripHeight,
             metrics_.tabMinWidth, metrics_.tabWidth, metrics_.splitterSize);
     }
 

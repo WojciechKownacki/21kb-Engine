@@ -23,6 +23,7 @@ public:
     [[nodiscard]] static EditorMenuRects ResolveMenu(
         const RECT& rect, EditorMenuCommand openMenu, int rowCount) noexcept;
     [[nodiscard]] static EditorToolbarRects ResolveToolbar(const RECT& rect) noexcept;
+    [[nodiscard]] static EditorStatusBarRects ResolveStatusBar(const RECT& rect) noexcept;
     // Right edge of the last menu title in the top bar `rect`; the toolbar starts past it.
     [[nodiscard]] static int MenuTitlesRight(const RECT& rect) noexcept;
     [[nodiscard]] static EditorMenuCommand HitTestMenu(const EditorMenuRects& rects, int x, int y) noexcept;

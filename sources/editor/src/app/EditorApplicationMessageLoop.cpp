@@ -195,7 +195,7 @@ constexpr int kMaxMessagesPerPump = 128;
     return state.dockModel.Queries().BuildLayout(
         client.right - client.left,
         client.bottom - client.top,
-        state.metrics.menuHeight,
+        state.metrics.menuHeight, state.metrics.statusBarHeight,
         state.metrics.tabStripHeight,
         state.metrics.tabMinWidth,
         state.metrics.tabWidth,
@@ -559,6 +559,29 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         presented = scenePresented || previewPresented || presented;
     }
     return presented;
+}
+
+// The status bar counts the Console's errors and warnings and names the graphics API once the
+// viewport has started. Whatever logs - a script, an import, play mode - repaints only the bar,
+// and only when one of those actually changed.
+void InvalidateStatusBarOnChange(EditorApplicationState& state) noexcept {
+    const std::vector<EditorConsoleEntry>& entries = state.sceneContext.Console().Entries();
+    const std::uint64_t sequence = entries.empty() ? 0U : entries.back().sequence;
+    const std::uint64_t count = static_cast<std::uint64_t>(entries.size());
+    const bool rendererInitialized = state.sceneViewport.RendererInitialized();
+    if (sequence == state.lastStatusConsoleEntrySequence && count == state.lastStatusConsoleEntryCount &&
+        rendererInitialized == state.lastStatusRendererInitialized) {
+        return;
+    }
+    state.lastStatusConsoleEntrySequence = sequence;
+    state.lastStatusConsoleEntryCount = count;
+    state.lastStatusRendererInitialized = rendererInitialized;
+    RECT client{};
+    if (state.window == nullptr || GetClientRect(state.window, &client) == 0) {
+        return;
+    }
+    const RECT bar{ client.left, std::max(client.top, client.bottom - state.metrics.statusBarHeight), client.right, client.bottom };
+    InvalidateRect(state.window, &bar, FALSE);
 }
 
 // Whether a visible Scene View has Realtime on and may draw every frame. Only while the editor
@@ -1624,6 +1647,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 40.0);
         }
         nextEditorFrame = currentTick + editorFrameInterval;
+        InvalidateStatusBarOnChange(state);
 
         if (state.playMode.IsPaused()) {
             if (state.window != nullptr) {

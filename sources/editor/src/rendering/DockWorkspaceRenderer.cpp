@@ -14,7 +14,7 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int wi
     const DockLayout layout = dockModel.Queries().BuildLayout(
         width,
         height,
-        metrics.menuHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
@@ -32,6 +32,10 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int wi
     }
 
     toolbarRenderer.PaintMenu(dc, GdiDrawing::ToRect(layout.menu), theme, shellInteraction);
+    // The graphics API the viewport actually runs on once it has started; until then the setting.
+    toolbarRenderer.PaintStatusBar(dc, GdiDrawing::ToRect(layout.statusBar), theme, sceneContext, playMode,
+        sceneViewport != nullptr && sceneViewport->RendererInitialized() ? sceneViewport->ActiveBackendLabel()
+                                                                         : EditorRenderBackendLabel(renderBackendSettings.Backend()));
 }
 
 } // namespace kb::editor

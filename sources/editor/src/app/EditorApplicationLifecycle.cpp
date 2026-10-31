@@ -48,7 +48,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
         RECT client{};
         GetClientRect(state.window, &client);
         const DockLayout layout = state.dockModel.Queries().BuildLayout(
-            client.right, client.bottom, state.metrics.menuHeight,
+            client.right, client.bottom, state.metrics.menuHeight, state.metrics.statusBarHeight,
             state.metrics.tabStripHeight, state.metrics.tabMinWidth, state.metrics.tabWidth,
             state.metrics.splitterSize);
         const DockPanel* targetPanel = nullptr;

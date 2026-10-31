@@ -267,6 +267,10 @@ void EditorSceneBgfxViewport::SetGraphShaderCacheRoot(std::string root) {
     }
 }
 
+bool EditorSceneBgfxViewport::RendererInitialized() const noexcept {
+    return renderer_.IsInitialized();
+}
+
 const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
     if (!renderer_.IsInitialized()) {
         return "Not initialized";

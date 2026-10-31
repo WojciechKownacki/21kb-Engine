@@ -184,6 +184,33 @@ EditorMenuRects EditorToolbarLayout::ResolveMenu(
     return menu;
 }
 
+EditorStatusBarRects EditorToolbarLayout::ResolveStatusBar(const RECT& rect) noexcept {
+    constexpr int inset = 10;
+    constexpr int gap = 16;
+    // Room for the label beside each icon in the editor's font, so a longer translation or a
+    // four-digit count still fits.
+    const auto widthOf = [](std::string_view text) noexcept {
+        return 24 + TextWidth(text, EditorFontCache::UiPointSize);
+    };
+    EditorStatusBarRects bar{};
+    bar.bar = rect;
+    int left = static_cast<int>(rect.left) + inset;
+    const auto next = [&](int width) noexcept {
+        const RECT item{ left, rect.top, std::min(static_cast<int>(rect.right), left + width), rect.bottom };
+        left = item.right + gap;
+        return item;
+    };
+    try {
+        bar.state = next(std::max(widthOf(EditorText("statusBar.ready", "Ready")), widthOf(EditorText("toolbar.playing", "Playing"))));
+        bar.errors = next(widthOf(EditorLocalization::Format("statusBar.errors", "{count} errors", { { "count", "9999" } })));
+        bar.warnings = next(widthOf(EditorLocalization::Format("statusBar.warnings", "{count} warnings", { { "count", "9999" } })));
+    } catch (...) {
+        return bar;
+    }
+    bar.backend = RECT{ std::min(static_cast<int>(rect.right), left), rect.top, static_cast<int>(rect.right) - inset, rect.bottom };
+    return bar;
+}
+
 int EditorToolbarLayout::MenuTitlesRight(const RECT& rect) noexcept {
     return static_cast<int>(ResolveMenu(rect, EditorMenuCommand::None, 0).help.right);
 }

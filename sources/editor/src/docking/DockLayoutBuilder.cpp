@@ -4,6 +4,8 @@
 #include "docking/DockLayoutBuildSettings.hpp"
 #include "docking/DockNodeLayoutBuilder.hpp"
 
+#include <algorithm>
+
 namespace kb::editor {
 
 DockLayout DockLayoutBuilder::Build(
@@ -11,6 +13,7 @@ DockLayout DockLayoutBuilder::Build(
     int clientWidth,
     int clientHeight,
     int menuHeight,
+    int statusBarHeight,
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
@@ -26,7 +29,10 @@ DockLayout DockLayoutBuilder::Build(
     layout.menu = DockGeometry::MakeRect(0, 0, clientWidth, menuHeight);
     // One top bar: the menus on its left, the transport and Save on the rest of the same row.
     layout.toolbar = layout.menu;
-    layout.workspace = DockGeometry::MakeRect(0, menuHeight, clientWidth, clientHeight - menuHeight);
+    // The status bar runs along the window's bottom edge, below every docked panel.
+    const int statusTop = std::max(menuHeight, clientHeight - statusBarHeight);
+    layout.statusBar = DockGeometry::MakeRect(0, statusTop, clientWidth, clientHeight - statusTop);
+    layout.workspace = DockGeometry::MakeRect(0, menuHeight, clientWidth, statusTop - menuHeight);
 
     if (root != nullptr && !layout.workspace.Empty()) {
         DockNodeLayoutBuilder{}.Build(*root, layout.workspace, layout, settings);

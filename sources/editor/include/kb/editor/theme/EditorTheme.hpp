@@ -33,6 +33,8 @@ struct EditorTheme {
 struct EditorMetrics {
     // The single top bar that holds the menus, the transport controls and Save.
     int menuHeight = 40;
+    // Console error and warning counts along the window's bottom edge.
+    int statusBarHeight = 24;
     int floatingChromeHeight = 24;
     int floatingControlWidth = 34;
     int floatingResizeBorder = 6;

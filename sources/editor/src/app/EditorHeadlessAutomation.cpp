@@ -2884,7 +2884,7 @@ EditorHeadlessAutomation::ProfileIdleSceneFrame(std::size_t steps) {
         return dockModel.Queries().BuildLayout(
             client.right - client.left,
             client.bottom - client.top,
-            metrics.menuHeight,
+            metrics.menuHeight, metrics.statusBarHeight,
             metrics.tabStripHeight,
             metrics.tabMinWidth,
             metrics.tabWidth,
@@ -3119,7 +3119,7 @@ EditorHeadlessAutomation::VerifyWorkspaceLayoutPersistence() {
     // it - so the arrangement proves the tree itself made the round trip.
     const EditorMetrics metrics{};
     const DockLayout layout = arranged.Queries().BuildLayout(
-        1600, 960, metrics.menuHeight, metrics.tabStripHeight,
+        1600, 960, metrics.menuHeight, metrics.statusBarHeight, metrics.tabStripHeight,
         metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
     if (layout.splitters.empty()) {
         Trace("assert_workspace_layout_persistence", false, "no-splitters");

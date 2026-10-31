@@ -56,6 +56,10 @@ struct EditorApplicationState {
     std::uint64_t lastPlayConsoleEntrySequence = 0U;
     std::uint64_t lastPlayConsoleEntryCount = 0U;
     std::uint64_t lastPlaySceneRenderRevision = 0U;
+    // The Console as the status bar last showed it; a change repaints the bar's counts.
+    std::uint64_t lastStatusConsoleEntrySequence = 0U;
+    std::uint64_t lastStatusConsoleEntryCount = 0U;
+    bool lastStatusRendererInitialized = false;
     bool running = false;
 #endif
 };

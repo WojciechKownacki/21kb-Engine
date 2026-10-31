@@ -43,7 +43,7 @@ namespace {
     return model.Queries().BuildLayout(
         1280,
         720,
-        metrics.menuHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

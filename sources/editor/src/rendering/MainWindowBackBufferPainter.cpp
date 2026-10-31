@@ -168,7 +168,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     const DockLayout layout = paintContext->dockModel->Queries().BuildLayout(
         paint.width,
         paint.height,
-        paintContext->metrics->menuHeight,
+        paintContext->metrics->menuHeight, paintContext->metrics->statusBarHeight,
         paintContext->metrics->tabStripHeight,
         paintContext->metrics->tabMinWidth,
         paintContext->metrics->tabWidth,
@@ -303,7 +303,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
             GetClientRect(target, &client);
             return client.bottom - client.top;
         }(window),
-        metrics.menuHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

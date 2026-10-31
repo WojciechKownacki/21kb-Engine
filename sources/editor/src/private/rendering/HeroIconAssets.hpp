@@ -48,6 +48,9 @@ public:
     [[nodiscard]] static HeroIconGlyph PlatformServer() noexcept;
     [[nodiscard]] static HeroIconGlyph DisclosureCollapsed() noexcept;
     [[nodiscard]] static HeroIconGlyph DisclosureExpanded() noexcept;
+    [[nodiscard]] static HeroIconGlyph CheckCircle() noexcept;
+    [[nodiscard]] static HeroIconGlyph XCircle() noexcept;
+    [[nodiscard]] static HeroIconGlyph Warning() noexcept;
     [[nodiscard]] static HeroIconGlyph Undo() noexcept;
     [[nodiscard]] static HeroIconGlyph Redo() noexcept;
     [[nodiscard]] static HeroIconGlyph Duplicate() noexcept;
