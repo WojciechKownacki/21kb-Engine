@@ -4,6 +4,7 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
 #include "app/EditorSelfTest.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "scene/EditorSceneContext.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
 #include <exception>
@@ -104,6 +105,9 @@ int RunEditorEntryPoint() {
     if (argv != nullptr) {
         ConfigureProjectFromArguments(argc, argv);
         selfTest = HasSelfTestFlag(argc, argv);
+        if (const auto directory = ArgumentValue(argc, argv, L"--lua-debug-dir")) {
+            kb::editor::EditorSceneContext::ConfigureLuaDebugger(std::filesystem::path{*directory});
+        }
         if (const auto root = ArgumentValue(
                 argc, argv, L"--selftest-root")) {
             selfTestRoot = std::filesystem::path{

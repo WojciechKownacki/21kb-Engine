@@ -7,6 +7,7 @@
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
+#include "rendering/gdi/EditorFontCache.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "localization/EditorLocalization.hpp"
@@ -176,6 +177,17 @@ EditorToolbarRects EditorToolbarRenderer::ResolveToolbar(const RECT& rect) noexc
     return EditorToolbarLayout::ResolveToolbar(rect);
 }
 
+EditorStatusBarRects EditorToolbarRenderer::ResolveStatusBar(const RECT& rect) noexcept {
+    return EditorToolbarLayout::ResolveStatusBar(rect);
+}
+
+bool EditorToolbarRenderer::HitTestStatusBarConsole(const EditorStatusBarRects& rects, int x, int y) noexcept {
+    const auto inside = [x, y](const RECT& rect) noexcept {
+        return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+    };
+    return inside(rects.errors) || inside(rects.warnings);
+}
+
 EditorMenuCommand EditorToolbarRenderer::HitTestMenu(const EditorMenuRects& rects, int x, int y) noexcept {
     return EditorToolbarLayout::HitTestMenu(rects, x, y);
 }
@@ -226,9 +238,10 @@ namespace {
 } // namespace
 
 void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
-    EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::HeaderStrip);
     const EditorMenuRects menu =
         ResolveMenu(rect, interaction.OpenMenu(), interaction.MenuRowCount(interaction.OpenMenu()));
+    // Only the titles' part of the row: the toolbar painted the rest of it.
+    EditorSurfacePainter::Fill(dc, RECT{ rect.left, rect.top, menu.help.right + 4, rect.bottom - 1 }, theme, EditorSurfaceKind::HeaderStrip);
     const COLORREF textPrimary = ThemeColor(theme.textPrimary);
     const COLORREF textSecondary = ThemeColor(theme.textSecondary);
     const COLORREF hoverFill = RGB(34, 39, 48);
@@ -272,6 +285,10 @@ void EditorToolbarRenderer::PaintMenuDropdown(HDC dc, const EditorMenuRects& men
             ? std::string_view{ layoutRow->label }
             : EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row);
         const bool enabled = layoutRow == nullptr || layoutRow->enabled;
+        if (layoutRow == nullptr && row > 0 && EditorToolbarLayout::DropdownStartsGroup(interaction.OpenMenu(), row)) {
+            GdiDrawing::FillRectColor(dc, RECT{ rowRect.left + 10, rowRect.top, rowRect.right - 10, rowRect.top + 1 },
+                ThemeColor(theme.borderChrome));
+        }
         // Every row of the Layout menu carries an icon, the layout in use a tick.
         // Giving one only to that row would indent its label alone and leave the list
         // ragged, because the icon is what the label is measured from.
@@ -280,16 +297,21 @@ void EditorToolbarRenderer::PaintMenuDropdown(HDC dc, const EditorMenuRects& men
             RECT{ rowRect.left + 4, rowRect.top + 1, rowRect.right - 4, rowRect.bottom - 1 },
             theme,
             label,
-            layoutRow != nullptr ? LayoutRowIcon(*layoutRow) : HeroIconKind::RectangleGroup,
+            layoutRow != nullptr ? LayoutRowIcon(*layoutRow) : EditorToolbarLayout::DropdownIcon(interaction.OpenMenu(), row),
             hovered && enabled,
             enabled,
-            layoutRow != nullptr);
+            true,
+            layoutRow != nullptr ? std::string_view{} : EditorToolbarLayout::DropdownShortcut(interaction.OpenMenu(), row));
     }
 }
 
 void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, const EditorShellInteractionState& interaction) const {
-    EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::AppBackground);
+    EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::HeaderStrip);
+    GdiDrawing::FillRectColor(dc, RECT{ rect.left, rect.bottom - 1, rect.right, rect.bottom }, ThemeColor(theme.borderChrome));
     const EditorToolbarRects toolbar = ResolveToolbar(rect);
+    // Every label here is sized in points, so it scales with the monitor like the menus.
+    const ScopedFont statusFont(EditorToolbarLayout::MenuFontSize, FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, statusFont.handle);
 
     const bool isPlaying = playMode.Mode() == EditorPlayMode::Playing;
     const bool isPaused = playMode.Mode() == EditorPlayMode::Paused;
@@ -335,29 +357,84 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
     HeroIconPainter::Draw(dc, iconRect(toolbar.pauseButton, pausePressed), isPaused ? HeroIconKind::Resume : HeroIconKind::Pause, transportActive ? (isPaused ? resumeIcon : (pauseHovered ? pauseHoverIcon : warningIcon)) : disabledIcon, 1);
     HeroIconPainter::Draw(dc, iconRect(toolbar.stopButton, stopPressed), HeroIconKind::TransportStop, transportActive ? (stopHovered ? stopHoverIcon : dangerIcon) : disabledIcon, 1);
 
-    const COLORREF textPrimary = ThemeColor(theme.textPrimary);
     const COLORREF textSecondary = ThemeColor(theme.textSecondary);
     const COLORREF dirtyText = sceneContext.SceneDocumentDirty() ? warningIcon : textSecondary;
-    const LONG centerLeft = toolbar.playButton.left;
-    const LONG centerRight = toolbar.stopButton.right;
     const LONG statusGap = kToolbarStatusGap;
-    const RECT sceneRect{
-        std::max(rect.left, toolbar.saveButton.right + statusGap),
+    // The mode reads right before the transport it describes, the scene right before Save.
+    const RECT modeRect{
+        std::min(toolbar.playButton.left, static_cast<LONG>(EditorToolbarLayout::MenuTitlesRight(rect)) + statusGap),
         rect.top,
-        std::max(rect.left, centerLeft - statusGap),
+        toolbar.playButton.left - statusGap,
         rect.bottom,
     };
-    const RECT modeRect{
-        std::min(rect.right, centerRight + statusGap),
+    const RECT sceneRect{
+        toolbar.stopButton.right + statusGap,
         rect.top,
-        rect.right - statusGap,
+        (toolbar.saveButton.right > toolbar.saveButton.left ? toolbar.saveButton.left : rect.right) - statusGap,
         rect.bottom,
     };
     DrawStatusText(dc, sceneRect,
         EditorLocalization::Format("toolbar.sceneStatus", "{scene} - {status}",
             { { "scene", SceneDisplayName(sceneContext) }, { "status", ScenePersistenceStatus(sceneContext) } }),
-        dirtyText, DT_LEFT);
-    DrawStatusText(dc, modeRect, PlayModeStatus(sceneContext, playMode), playMode.IsPlaying() || playMode.IsPaused() ? textPrimary : textSecondary, DT_RIGHT);
+        dirtyText, DT_RIGHT);
+    DrawStatusText(dc, modeRect, PlayModeStatus(sceneContext, playMode),
+        isPlaying ? success : (isPaused ? warning : textSecondary), DT_RIGHT);
+}
+
+void EditorToolbarRenderer::PaintStatusBar(
+    HDC dc,
+    const RECT& rect,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    const EditorPlayModeState& playMode,
+    std::string_view backendLabel,
+    bool drawerCollapsed) const {
+    if (rect.right <= rect.left || rect.bottom <= rect.top) {
+        return;
+    }
+    GdiDrawing::FillRectColor(dc, rect, ThemeColor(theme.chrome));
+    GdiDrawing::FillRectColor(dc, RECT{ rect.left, rect.top, rect.right, rect.top + 1 }, ThemeColor(theme.borderChrome));
+    const EditorStatusBarRects bar = ResolveStatusBar(rect);
+    const ScopedFont font(EditorFontCache::UiPointSize, FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    const COLORREF success = RGB(63, 194, 123);
+    const COLORREF warning = RGB(224, 165, 54);
+    const COLORREF danger = RGB(232, 88, 88);
+    const COLORREF secondary = ThemeColor(theme.textSecondary);
+    const COLORREF dim = ThemeColor(theme.textDisabled);
+    const auto item = [dc](const RECT& area, HeroIconKind icon, COLORREF iconColor, std::string_view text, COLORREF textColor) {
+        constexpr int iconSize = 14;
+        const int iconTop = static_cast<int>(area.top) + (static_cast<int>(area.bottom - area.top) - iconSize) / 2;
+        HeroIconPainter::Draw(dc, RECT{ area.left, iconTop, area.left + iconSize, iconTop + iconSize }, icon, iconColor, 1);
+        DrawStatusText(dc, RECT{ area.left + iconSize + 6, area.top, area.right, area.bottom }, text, textColor, DT_LEFT);
+    };
+
+    switch (playMode.Mode()) {
+    case EditorPlayMode::Playing:
+        item(bar.state, HeroIconKind::Play, success, EditorText("toolbar.playing", "Playing"), success);
+        break;
+    case EditorPlayMode::Paused:
+        item(bar.state, HeroIconKind::Pause, warning, EditorText("toolbar.paused", "Paused"), warning);
+        break;
+    case EditorPlayMode::Stopped:
+        item(bar.state, HeroIconKind::CheckCircle, success, EditorText("statusBar.ready", "Ready"), secondary);
+        break;
+    }
+
+    const std::uint32_t errors = sceneContext.Console().Count(EditorConsoleLevel::Error);
+    const std::uint32_t warnings = sceneContext.Console().Count(EditorConsoleLevel::Warning);
+    // A count of zero stays quiet; anything else takes the level's colour so it is noticed
+    // without the Console being open.
+    item(bar.errors, HeroIconKind::XCircle, errors > 0U ? danger : dim,
+        EditorLocalization::Format("statusBar.errors", "{count} errors", { { "count", std::to_string(errors) } }),
+        errors > 0U ? danger : secondary);
+    item(bar.warnings, HeroIconKind::Warning, warnings > 0U ? warning : dim,
+        EditorLocalization::Format("statusBar.warnings", "{count} warnings", { { "count", std::to_string(warnings) } }),
+        warnings > 0U ? warning : secondary);
+    if (drawerCollapsed) {
+        DrawStatusText(dc, bar.backend, EditorText("statusBar.drawerHint", "Ctrl+Space  Project Files / Console"), secondary, DT_LEFT);
+    }
+    DrawStatusText(dc, bar.backend, backendLabel, dim, DT_RIGHT);
 }
 
 void EditorToolbarRenderer::PaintTextButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool enabled, bool active, bool hovered, bool pressed, COLORREF glow) const {

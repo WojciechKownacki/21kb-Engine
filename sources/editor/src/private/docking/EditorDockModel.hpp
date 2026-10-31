@@ -25,10 +25,13 @@ public:
     [[nodiscard]] EditorDockModelCommands Commands() noexcept;
 
 private:
+    friend class EditorWorkspaceArrangement;
     DockPanelCollection panels_;
     std::unique_ptr<DockNode> root_;
     std::uint32_t nextNodeId_ = 1;
     std::uint32_t maximizedLeafId_ = 0;
+    // The bottom drawer (the leaf holding Project Files) is shown as its tab strip only.
+    bool drawerCollapsed_ = false;
 };
 
 } // namespace kb::editor

@@ -9,6 +9,8 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <string_view>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -20,7 +22,8 @@ namespace kb::editor {
 class DockWorkspaceRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HWND parent, HDC dc, const RECT& dirty, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport) const;
+    void Paint(HWND parent, HDC dc, const RECT& dirty, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPlayModeState& playMode, // `graphicsApiLabel` names the graphics API for the status bar.
+    const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport, std::string_view graphicsApiLabel) const;
 #endif
 };
 

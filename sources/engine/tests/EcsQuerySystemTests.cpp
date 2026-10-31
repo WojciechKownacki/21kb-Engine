@@ -156,7 +156,7 @@ void RunPersistentQuerySystemTest() {
     kb::tests::Require(counters.destroyed == 1, "ECS query system was not destroyed by scheduler shutdown");
 }
 
-void RunSchedulerQueryChunkParallelismModeTest() {
+void RunSchedulerQueryChunkParallelismModeTest(kb::ecs::SystemSchedulerParallelismMode mode) {
     kb::ecs::World world;
     for (int index = 0; index < 256; ++index) {
         const kb::ecs::Entity entity = world.CreateEntity();
@@ -173,7 +173,7 @@ void RunSchedulerQueryChunkParallelismModeTest() {
     kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{
         .profilerEnabled = true,
         .parallelExecutionEnabled = true,
-        .parallelismMode = kb::ecs::SystemSchedulerParallelismMode::QueryChunks,
+        .parallelismMode = mode,
         .workerPool = workerConfig,
     } };
     scheduler.Add(std::make_unique<ParallelProbeQuerySystem>(running, maxRunning, batches), world);
@@ -182,7 +182,10 @@ void RunSchedulerQueryChunkParallelismModeTest() {
 
     kb::tests::Require(batches.load(std::memory_order_acquire) > 1, "ECS query chunk parallelism test did not split work into batches");
     kb::tests::Require(maxRunning.load(std::memory_order_acquire) > 1, "ECS scheduler did not provide its worker pool to query systems");
-    kb::tests::Require(scheduler.LastProfilerTrace().frameCounters.parallelStageCount == 0U, "ECS query chunk mode should not also run system stages in parallel");
+    if (mode == kb::ecs::SystemSchedulerParallelismMode::QueryChunks)
+        kb::tests::Require(scheduler.LastProfilerTrace().frameCounters.parallelStageCount == 0U, "ECS query chunk mode should not also run system stages in parallel");
+    else
+        kb::tests::Require(scheduler.LastProfilerTrace().frameCounters.lastWorkerDispatchMode == "job_graph", "query system did not execute through the graph");
 
     scheduler.Shutdown(world);
 }
@@ -244,7 +247,8 @@ namespace kb::tests {
 
 void RunEcsQuerySystemTests() {
     RunPersistentQuerySystemTest();
-    RunSchedulerQueryChunkParallelismModeTest();
+    RunSchedulerQueryChunkParallelismModeTest(kb::ecs::SystemSchedulerParallelismMode::QueryChunks);
+    RunSchedulerQueryChunkParallelismModeTest(kb::ecs::SystemSchedulerParallelismMode::SystemsAndChunks);
     RunSchedulerDeterministicQueryChunkModeStaysSerialTest();
 }
 

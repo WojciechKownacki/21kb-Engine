@@ -10,8 +10,7 @@ DockLayout DockMainLayoutResolver::Resolve(HWND mainWindow, const EditorDockMode
     return dockModel.Queries().BuildLayout(
         client.right - client.left,
         client.bottom - client.top,
-        metrics.menuHeight,
-        metrics.toolbarHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

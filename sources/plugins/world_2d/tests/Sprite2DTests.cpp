@@ -134,7 +134,7 @@ int main() {
         auto extent = ExtentOf(mesh);
         Require(Near(extent.minX, -0.5F) && Near(extent.maxX, 0.5F) && Near(extent.minY, 0.0F) && Near(extent.maxY, 1.0F),
             "a 32 pixel sprite at 32 pixels per unit is one unit, standing on its bottom pivot");
-        Require(Near(extent.minU, 32.5F / 64.0F) && Near(extent.maxU, 63.5F / 64.0F), "cell 1 of a 2 by 1 sheet reads the right half of the image");
+        Require(Near(extent.minU, 0.5F) && Near(extent.maxU, 1.0F), "cell 1 of a 2 by 1 sheet reads the right half of the image");
         sprite.pivotY = 0.0F;
         extent = ExtentOf(BuiltMesh(sprite, 64U, 32U, 0U));
         Require(Near(extent.minY, -1.0F) && Near(extent.maxY, 0.0F), "a top pivot hangs the sprite below the origin");
@@ -181,6 +181,21 @@ int main() {
         const auto mesh = manager.AcquireLoaded<kb::render::RenderMeshAssetData>(kb::assets::AssetId{ renderer->meshAssetId });
         Require(mesh.IsLoaded() && !mesh->sections.empty() && mesh->sections.front().bounds.radius > 0.0F, "the visual's mesh has bounds, so it can be picked and culled");
         Require(scene.Hierarchy().Parent(visual) == owner.Entity(), "the visual is a child of the sprite's entity");
+
+        // Sprite and tilemap sorting orders use the same depth unit.
+        for (const bool wall : {true, false}) for (const int order : {-2, 2}) {
+            sprite.wall = wall; sprite.sortingOrder = order;
+            scene.Components().Sprites2D().Set(owner.Entity(), sprite);
+            update(0.0F);
+            const auto ordered = manager.AcquireLoaded<kb::render::RenderMeshAssetData>(kb::assets::AssetId{renderer->meshAssetId});
+            Require(ordered.IsLoaded(), "ordered sprite has geometry");
+            const float expected = order * kb::render::RenderMap2DMeshBuilder::kSortingOrderLift + 2 * kb::render::RenderMap2DMeshBuilder::kLayerLift;
+            for (const auto& vertex : ordered->tangentVertices)
+                Require(std::abs((wall ? -vertex.z : vertex.y) - expected) < 0.0001F, "sprite and map layer sorting use the same depth unit");
+        }
+        sprite.wall = true; sprite.sortingOrder = 0;
+        scene.Components().Sprites2D().Set(owner.Entity(), sprite);
+        update(0.0F);
 
         // Editing does not advance the animation; playing does, and a frame change rebuilds exactly once.
         update(1.0F);

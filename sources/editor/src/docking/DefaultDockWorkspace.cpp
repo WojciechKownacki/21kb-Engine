@@ -14,7 +14,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     case DockPanelKind::Inspector: return std::string{ EditorText("panel.inspector", "Inspector") };
     case DockPanelKind::Assets: return std::string{ EditorText("panel.assets", "Project Files") };
     case DockPanelKind::Console: return std::string{ EditorText("panel.console", "Console") };
-    case DockPanelKind::ProjectSettings: return std::string{ EditorText("panel.projectSettings", "Project Settings") };
+    case DockPanelKind::ProjectSettings: return std::string{ EditorText("panel.settings", "Settings") };
     case DockPanelKind::ScriptEditor: return std::string{ EditorText("panel.scriptEditor", "Script Editor") };
     case DockPanelKind::Plugins: return std::string{ EditorText("panel.plugins", "Plugins") };
     case DockPanelKind::MaterialEditor: return std::string{ EditorText("panel.materialEditor", "Material Editor") };
@@ -25,6 +25,12 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     case DockPanelKind::EditorSettings: return std::string{ EditorText("panel.editorSettings", "Editor Settings") };
     case DockPanelKind::BuildGame: return std::string{ EditorText("panel.buildGame", "Build Game") };
     case DockPanelKind::TilemapEditor: return std::string{ EditorText("panel.tilemap", "2D Map") };
+    case DockPanelKind::AudioMixer: return std::string{ EditorText("inspector.audioMixer.subtitle", "Audio Mixer") };
+    case DockPanelKind::Profiler: return std::string{ EditorText("panel.profiler", "Profiler") };
+    case DockPanelKind::TimelineEditor: return "Timeline";
+    case DockPanelKind::BlendSpace2DEditor: return "BlendSpace2D";
+    case DockPanelKind::GameplayGraphEditor: return "Gameplay Graph";
+    case DockPanelKind::Agent: return std::string{ EditorText("panel.agent", "Agent") };
     case DockPanelKind::Generic: break;
     }
     return {};
@@ -33,11 +39,17 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
 // Each panel starts with its own title; Editor Settings gives them the new one when the language changes.
 std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
     return {
+        DockPanel{ .id = 22, .kind = DockPanelKind::GameplayGraphEditor, .title = PanelTitle(DockPanelKind::GameplayGraphEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 760 } },
+        DockPanel{ .id = 21, .kind = DockPanelKind::BlendSpace2DEditor, .title = PanelTitle(DockPanelKind::BlendSpace2DEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
+        DockPanel{ .id = 20, .kind = DockPanelKind::TimelineEditor, .title = PanelTitle(DockPanelKind::TimelineEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
+        DockPanel{ .id = 19, .kind = DockPanelKind::AudioMixer, .title = PanelTitle(DockPanelKind::AudioMixer), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1000, 640 } },
+        DockPanel{ .id = 18, .kind = DockPanelKind::Profiler, .title = PanelTitle(DockPanelKind::Profiler), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 900, 640 } },
         DockPanel{ .id = 17, .kind = DockPanelKind::TilemapEditor, .title = PanelTitle(DockPanelKind::TilemapEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 720 } },
         DockPanel{ .id = 1, .kind = DockPanelKind::Hierarchy, .title = PanelTitle(DockPanelKind::Hierarchy), .area = DockArea::Left, .floatingRect = DockRect{ 96, 96, 360, 520 } },
         DockPanel{ .id = 2, .kind = DockPanelKind::Scene, .title = PanelTitle(DockPanelKind::Scene), .area = DockArea::Center, .floatingRect = DockRect{ 128, 128, 720, 520 } },
         DockPanel{ .id = 4, .kind = DockPanelKind::Inspector, .title = PanelTitle(DockPanelKind::Inspector), .area = DockArea::Right, .floatingRect = DockRect{ 112, 112, 380, 560 } },
         DockPanel{ .id = 5, .kind = DockPanelKind::Assets, .title = PanelTitle(DockPanelKind::Assets), .area = DockArea::Bottom, .floatingRect = DockRect{ 128, 128, 620, 360 } },
+        DockPanel{ .id = 23, .kind = DockPanelKind::Agent, .title = PanelTitle(DockPanelKind::Agent), .area = DockArea::Bottom, .floatingRect = DockRect{ 160, 160, 720, 420 } },
         DockPanel{ .id = 6, .kind = DockPanelKind::Console, .title = PanelTitle(DockPanelKind::Console), .area = DockArea::Bottom, .floatingRect = DockRect{ 144, 144, 680, 340 } },
         DockPanel{ .id = 7, .kind = DockPanelKind::ProjectSettings, .title = PanelTitle(DockPanelKind::ProjectSettings), .area = DockArea::Right, .visible = false, .floatingRect = DockRect{ 160, 120, 420, 520 } },
         DockPanel{ .id = 8, .kind = DockPanelKind::ScriptEditor, .title = PanelTitle(DockPanelKind::ScriptEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 180, 140, 760, 560 } },
@@ -58,10 +70,12 @@ std::unique_ptr<DockNode> DefaultDockWorkspace::CreateRoot(std::uint32_t& nextNo
     // and dock into their area (center / right) when something opens them: a double click on an asset, or a menu row.
     auto center = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 2 });
     auto right = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 4 });
-    auto bottom = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 5, 6 });
-    auto middle = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.72F, std::move(center), std::move(right));
-    auto top = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.18F, std::move(left), std::move(middle));
-    return DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Vertical, 0.73F, std::move(top), std::move(bottom));
+    auto bottom = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 5, 6, 23 });
+    // The Inspector runs the full height on the right, as in Unity and Unreal, so a long component
+    // list is not cut by the Project Files strip; that strip sits under the Hierarchy and the scene.
+    auto top = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.23F, std::move(left), std::move(center));
+    auto main = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Vertical, 0.69F, std::move(top), std::move(bottom));
+    return DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.78F, std::move(main), std::move(right));
 }
 
 std::uint32_t DefaultDockWorkspace::Next(std::uint32_t& nextNodeId) noexcept {

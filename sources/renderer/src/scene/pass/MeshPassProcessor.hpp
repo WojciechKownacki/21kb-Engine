@@ -25,6 +25,7 @@ struct MeshPassProcessorDesc {
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
     bool terrainLayersOnly = false;
     SceneMeshBatchCommandCache* batchCommandCache = nullptr;
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
 };
 
 class MeshPassProcessor {

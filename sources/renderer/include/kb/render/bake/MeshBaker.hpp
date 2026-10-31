@@ -29,7 +29,7 @@ namespace kb::render::bake {
 // version below re-bakes every mesh and leaves every other baker's cache untouched.
 inline constexpr std::string_view kMeshBakerId = "Mesh";
 // 5: meshoptimizer 1.2 clusters and bounds, which a cache baked by 0.25 does not match.
-inline constexpr std::string_view kMeshBakerVersion = "5";
+inline constexpr std::string_view kMeshBakerVersion = "6";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store, and
 // what a package announces about itself so discovery can ask instead of guessing from .kbpack.

@@ -168,8 +168,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     const DockLayout layout = paintContext->dockModel->Queries().BuildLayout(
         paint.width,
         paint.height,
-        paintContext->metrics->menuHeight,
-        paintContext->metrics->toolbarHeight,
+        paintContext->metrics->menuHeight, paintContext->metrics->statusBarHeight,
         paintContext->metrics->tabStripHeight,
         paintContext->metrics->tabMinWidth,
         paintContext->metrics->tabWidth,
@@ -217,7 +216,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->dockDrag,
         *paintContext->playMode,
         *paintContext->shellInteraction,
-        nullptr);
+        nullptr,
+        // The graphics API the viewport actually runs on once it has started; until then the setting.
+        paintContext->sceneViewport != nullptr && paintContext->sceneViewport->RendererInitialized()
+            ? paintContext->sceneViewport->ActiveBackendLabel()
+            : EditorRenderBackendLabel(paintContext->renderBackendSettings->Backend()));
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
     PaintAutosaveNotification(
         paint.dc,
@@ -304,8 +307,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
             GetClientRect(target, &client);
             return client.bottom - client.top;
         }(window),
-        metrics.menuHeight,
-        metrics.toolbarHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

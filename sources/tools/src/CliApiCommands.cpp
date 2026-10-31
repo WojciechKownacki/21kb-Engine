@@ -6,6 +6,7 @@
 #include "engine/project/ProjectCreator.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/script/ScriptAgentGuides.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptApiExport.hpp"
@@ -15,6 +16,8 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace kb::cli {
 using kb::core::JsonValue;
@@ -227,6 +230,22 @@ int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
+    // One page or a search, never the whole reference: what an agent asks for.
+    if (const std::optional<std::string> search = arguments.Option("--search"); search.has_value()) {
+        io.out << kb::script::ScriptApiExport::SearchReference(built.catalog, *search);
+        return 0;
+    }
+    if (const std::optional<std::string> topic = arguments.Option("--topic"); topic.has_value()) {
+        const std::optional<std::string> page = kb::script::ScriptApiExport::ToReferenceTopic(built.catalog, *topic);
+        if (!page.has_value()) {
+            io.err << "error: the script API has no group, function or component called '" << *topic << "'\n"
+                   << kb::script::ScriptApiExport::SearchReference(built.catalog, *topic);
+            return 1;
+        }
+        io.out << *page;
+        return 0;
+    }
+
     if (printFormat.has_value()) {
         if (*printFormat == "markdown" || *printFormat == "md") {
             io.out << kb::script::ScriptApiExport::ToMarkdown(built.catalog);
@@ -251,21 +270,46 @@ int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
-    const std::pair<const char*, std::string> files[] = {
+    // The reference as small pages (README.md is the index); the single-file reference older
+    // versions wrote is removed with the previous pages.
+    std::error_code removeError;
+    std::filesystem::remove(outputRoot / "script_api.md", removeError);
+    std::filesystem::remove_all(outputRoot / "functions", removeError);
+    std::filesystem::remove_all(outputRoot / "components", removeError);
+    std::vector<std::pair<std::string, std::string>> files{
         { "kb.lua", kb::script::ScriptApiExport::ToLuaStubs(built.catalog) },
-        { "script_api.md", kb::script::ScriptApiExport::ToMarkdown(built.catalog) },
         { "script_api.json", kb::script::ScriptApiExport::ToJson(built.catalog) },
         { "manifest.json", kb::library::ToJson(kb::library::BuildApiManifest(built.catalog)) },
     };
+    const std::vector<kb::script::ScriptApiReferencePage> pages = kb::script::ScriptApiExport::ToReferencePages(built.catalog);
+    for (const kb::script::ScriptApiReferencePage& page : pages) {
+        files.emplace_back(page.path, page.content);
+    }
     for (const auto& [name, content] : files) {
-        const std::filesystem::path path = outputRoot / name;
+        const std::filesystem::path path = outputRoot / std::filesystem::path{ std::u8string{ reinterpret_cast<const char8_t*>(name.data()), name.size() } };
+        std::error_code directoryError;
+        std::filesystem::create_directories(path.parent_path(), directoryError);
         std::string error;
         if (!WriteTextFile(path, content, error)) {
             io.err << "error: " << error << '\n';
             return 1;
         }
-        io.out << "wrote " << path.generic_string() << '\n';
+        if (name.find('/') == std::string::npos) {
+            io.out << "wrote " << path.generic_string() << '\n';
+        }
     }
+    io.out << "wrote " << pages.size() << " reference pages under " << outputRoot.generic_string() << " (README.md is the index)\n";
+    return 0;
+}
+
+int RunGuideCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::string topic = arguments.Option("--topic").value_or(std::string{});
+    const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic(topic);
+    if (!guide.has_value()) {
+        io.err << "error: there is no guide called '" << topic << "'\n" << kb::script::ScriptAgentGuides::Index();
+        return 1;
+    }
+    io.out << *guide;
     return 0;
 }
 

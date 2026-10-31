@@ -14,6 +14,8 @@ public:
     // (SSAO override) and Unreal's post-process volume do: it switches the renderer's SSAO pass
     // on or off and sets its intensity and radius.
     static void ApplyPostProcessAmbientOcclusion(SceneRenderLightingConfig& config, const ScenePostProcessSettings& settings) noexcept;
+    // Resolve target defaults before submission; explicit profiles also allow desktop previews.
+    static void ResolveFogProfile(SceneRenderLightingConfig& config, bgfx::RendererType::Enum backend) noexcept;
     [[nodiscard]] static std::uint32_t ShadowFilterSampleCount(SceneRenderShadowFilter filter) noexcept;
     [[nodiscard]] static std::uint32_t EnvironmentSampleCount(SceneRenderEnvironmentMode mode) noexcept;
 };

@@ -1,0 +1,123 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "Rebind",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "probe",
+      "name": "Probe"
+    },
+    {
+      "op": "create_asset",
+      "id": "move",
+      "type": "input_action",
+      "folder": "/Game/Input"
+    },
+    {
+      "op": "configure_input_action",
+      "asset": "move",
+      "name": "Move",
+      "value_type": "Bool"
+    },
+    {
+      "op": "create_asset",
+      "id": "map",
+      "type": "input_context",
+      "folder": "/Game/Input"
+    },
+    {
+      "op": "configure_input_mapping",
+      "context": "map",
+      "index": 0,
+      "key": "D",
+      "scale": 1.0
+    },
+    {
+      "op": "configure_input_mapping",
+      "context": "map",
+      "index": 1,
+      "key": "E",
+      "scale": 1.0
+    },
+    {
+      "op": "activate_input_context",
+      "asset": "map"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Input/RebindProbe.lua",
+      "content": "local frame = 0\nlocal path = [[{{PROJECT_ROOT}}/Saved/Bindings.profile]]\nfunction Ready(self, dt)\n assert(CallFunction(\"Input.OpenRebindProfile\", {context=\"/Game/Input/NewInputMappingContext.21kbinputcontext\", path=path}).opened)\n assert(CallFunction(\"Input.ResetRebind\", {}).reset)\n assert(CallFunction(\"Input.BeginRebind\", {binding=\"1\"}).started)\nend\nfunction Tick(self, dt)\n frame = frame + 1\n if frame == 1 then assert(CallFunction(\"Input.PollRebind\", {}).state == \"listening\") end\n if frame == 2 then\n  local result = CallFunction(\"Input.PollRebind\", {})\n  assert(result.state == \"conflict\" and result.conflict == \"2\")\n end\n if frame == 3 then assert(CallFunction(\"Input.PollRebind\", {swapConflict=true}).state == \"applied\") end\n if frame == 4 then\n  assert(CallFunction(\"Input.BeginRebind\", {binding=\"1\"}).started)\n  assert(CallFunction(\"Input.CancelRebind\", {}).canceled)\n  assert(CallFunction(\"Input.PollRebind\", {}).state == \"canceled\")\n  assert(CallFunction(\"Input.BeginRebind\", {binding=\"1\"}).started)\n end\n if frame == 5 then\n  assert(CallFunction(\"Input.PollRebind\", {}).state == \"applied\")\n  Log(\"rebind-workflow-pass\")\n end\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "attach_script",
+      "entity": "probe",
+      "asset": "/Game/Input/RebindProbe.lua"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/Rebind.21kbscene"
+    },
+    {
+      "op": "reload_scene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "focus",
+      "focused": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016
+    },
+    {
+      "op": "key",
+      "key": "E",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 2,
+      "dt": 0.016
+    },
+    {
+      "op": "key",
+      "key": "E",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016
+    },
+    {
+      "op": "key",
+      "key": "GamepadFaceTop",
+      "gamepad": 1,
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016
+    },
+    {
+      "op": "assert_console",
+      "contains": "rebind-workflow-pass",
+      "category": "Script",
+      "level": "info"
+    },
+    {
+      "op": "stop"
+    }
+  ]
+}

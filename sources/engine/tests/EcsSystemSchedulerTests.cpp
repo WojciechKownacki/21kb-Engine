@@ -8,11 +8,16 @@
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/SystemSchedulerTraceExport.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneSystem.hpp"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iostream>
 #include <iterator>
 #include <span>
 #include <memory>
@@ -121,6 +126,117 @@ private:
     std::uint64_t entitiesProcessed_ = 0;
     std::uint64_t bytesTouched_ = 0;
 };
+
+class GraphIntegrationSystem final : public kb::ecs::System {
+public:
+    GraphIntegrationSystem(std::string name, kb::ecs::SystemAccess access, std::function<void(kb::ecs::WorkerPool*)> work)
+        : name_(std::move(name)), access_(std::move(access)), work_(std::move(work)) {}
+    std::string_view Name() const noexcept override { return name_; }
+    kb::ecs::SystemAccess DeclareAccess(kb::ecs::World&) const override { return access_; }
+    void SetExecutionWorkerPool(kb::ecs::WorkerPool* pool) noexcept override { pool_ = pool; }
+    void OnUpdate(kb::ecs::World&, float) override { work_(pool_); }
+private:
+    std::string name_;
+    kb::ecs::SystemAccess access_;
+    std::function<void(kb::ecs::WorkerPool*)> work_;
+    kb::ecs::WorkerPool* pool_ = nullptr;
+};
+
+void RunGraphSchedulerIntegrationTest() {
+    const auto run = [](bool parallel, std::size_t workers) {
+        kb::ecs::World world;
+        kb::ecs::SystemScheduler scheduler{{.profilerEnabled = true, .parallelExecutionEnabled = parallel,
+            .parallelismMode = kb::ecs::SystemSchedulerParallelismMode::SystemsAndChunks,
+            .workerPool = {.workerCount = workers, .collectDispatchTelemetry = true}}};
+        std::array<std::array<int, 64>, 2> values{};
+        std::atomic<int> completed{0};
+        const auto owner = std::this_thread::get_id();
+        for (int i = 0; i < 2; ++i) {
+            scheduler.Add(std::make_unique<GraphIntegrationSystem>("Producer" + std::to_string(i), kb::ecs::SystemAccess{},
+                [&, i](kb::ecs::WorkerPool* pool) {
+                    auto chunk = [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& part) {
+                        for (std::size_t n = part.begin; n < part.begin + part.count; ++n) values[i][n] = int(n) + i;
+                    };
+                    if (pool) pool->ParallelForChunks(64, i ? 7 : 3, chunk);
+                    else for (int n = 0; n < 64; ++n) values[i][n] = n + i;
+                    ++completed;
+                }), world);
+        }
+        kb::ecs::SystemAccess dependent; dependent.After("Producer0"); dependent.After("Producer1");
+        scheduler.Add(std::make_unique<GraphIntegrationSystem>("Consumer", std::move(dependent), [&](kb::ecs::WorkerPool*) {
+            kb::tests::Require(completed.load() == 2, "graph consumer ran before its dependencies");
+            for (std::size_t n = 0; n < 64; ++n) values[0][n] += values[1][n];
+        }), world);
+        kb::ecs::SystemAccess barrier; barrier.RequireSyncPoint(kb::ecs::SystemSyncPoint::StructuralChanges);
+        scheduler.Add(std::make_unique<GraphIntegrationSystem>("Barrier", std::move(barrier), [&](kb::ecs::WorkerPool* pool) {
+            kb::tests::Require(std::this_thread::get_id() == owner && !pool, "sync point must run on owner thread");
+            kb::tests::Require(values[0][63] == 127, "sync point ran before graph completion");
+        }), world);
+        scheduler.Update(world, 0.0F);
+        if (parallel) kb::tests::Require(scheduler.LastProfilerTrace().frameCounters.lastWorkerDispatchMode == "job_graph", "runtime graph trace missing");
+        scheduler.Shutdown(world);
+        return values;
+    };
+    const auto serial = run(false, 1);
+    for (auto workers : {1U, 2U, 4U}) kb::tests::Require(run(true, workers) == serial, "graph scheduler result differs from serial");
+}
+
+void RunGraphSceneRuntimeTest() {
+    kb::ecs::WorldConfig config; config.workerThreadLimit = 2;
+    kb::scene::Scene scene{config};
+    auto runtime = scene.Runtime();
+    runtime.SetEcsParallelismMode(kb::ecs::SystemSchedulerParallelismMode::SystemsAndChunks);
+    runtime.SetEcsProfilerEnabled(true);
+    std::atomic<int> total{0};
+    runtime.AddSystem(std::make_unique<GraphIntegrationSystem>("RuntimeChunks", kb::ecs::SystemAccess{},
+        [&](kb::ecs::WorkerPool* pool) {
+            kb::tests::Require(pool != nullptr, "scene runtime did not enable graph execution");
+            pool->ParallelForChunks(73, 5, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                total.fetch_add(static_cast<int>(chunk.count));
+            });
+        }));
+    kb::tests::Require(runtime.Update(0.016F), "scene runtime update failed");
+    kb::tests::Require(total == 73 && runtime.LastEcsProfilerTrace().frameCounters.lastWorkerDispatchMode == "job_graph",
+        "scene runtime did not execute and trace its graph");
+}
+
+void RunSceneRuntimeStageTraceTest() {
+    class FixedProbe final : public kb::scene::SceneSystem {
+    public:
+        explicit FixedProbe(int& count) : count_(count) {}
+        bool RequiresFixedStep() const override { return true; }
+        void OnFixedUpdate(kb::scene::SceneSystemContext&) override { ++count_; }
+    private:
+        int& count_;
+    };
+    kb::scene::Scene scene;
+    auto runtime = scene.Runtime();
+    int fixedSteps = 0;
+    static_cast<void>(runtime.AddSceneSystem(std::make_unique<FixedProbe>(fixedSteps)));
+    runtime.SetEcsProfilerEnabled(true);
+    static_cast<void>(runtime.Update(0.02F));
+    const auto report = runtime.HotPathReport();
+    bool sawFixed = false;
+    std::uint64_t previousEnd = 0;
+    for (const auto& event : report.runtimeStages) {
+        kb::tests::Require(event.startNanoseconds >= previousEnd && event.endNanoseconds >= event.startNanoseconds &&
+            event.endNanoseconds <= report.runtimeUpdateNanoseconds, "runtime stage trace has invalid intervals");
+        previousEnd = event.endNanoseconds;
+        if (event.name == "scene.fixed.simulation") sawFixed = true;
+    }
+    kb::tests::Require(fixedSteps > 0 && sawFixed, "runtime trace omitted the fixed simulation phase");
+    bool sawFixedSystem = false;
+    for (const auto& event : report.sceneSystems) {
+        if (event.systemType.find("FixedProbe") != std::string::npos && event.phase == "scene.fixed.simulation") {
+            sawFixedSystem = event.ownerThread && event.endNanoseconds >= event.startNanoseconds &&
+                event.endNanoseconds <= report.runtimeUpdateNanoseconds;
+        }
+    }
+    kb::tests::Require(sawFixedSystem, "runtime trace omitted the fixed system callback");
+    runtime.SetEcsProfilerEnabled(false);
+    static_cast<void>(runtime.Update(0.0F));
+    kb::tests::Require(runtime.HotPathReport().runtimeStages.empty(), "disabled profiler retained old stage trace");
+}
 
 [[nodiscard]] kb::ecs::SystemAccess ReadPosition(kb::ecs::World& world) {
     kb::ecs::SystemAccess access;
@@ -593,14 +709,22 @@ void RunSchedulerLargeSparseGraphCacheInvalidationTest() {
     scheduler.Update(world, 0.016F);
     kb::tests::Require(scheduler.LastProfilerTrace().events.size() == readerCount,
         "ECS sparse scheduler trace lost systems on the first frame");
+    const auto coldPlan = scheduler.PlanningStats();
+    kb::tests::Require(coldPlan.attempts == 1U && coldPlan.successfulRebuilds == 1U && coldPlan.lastSucceeded &&
+        coldPlan.systemCount == readerCount && coldPlan.edgeCount == 0U && coldPlan.stageCount == 1U,
+        "Scheduler must report the actual sparse planning workload");
     scheduler.Update(world, 0.016F);
+    kb::tests::Require(scheduler.PlanningStats().attempts == 1U && scheduler.PlanningStats().lastWallNanoseconds == coldPlan.lastWallNanoseconds,
+        "A cached frame must not report another plan rebuild");
     kb::tests::Require(scheduler.LastProfilerTrace().events.size() == readerCount &&
         scheduler.LastProfilerTrace().systemCounters.size() == readerCount,
         "ECS sparse scheduler trace changed after reusing the dependency graph");
 
     kb::ecs::SystemAccess writerAccess;
     writerAccess.Write(1);
-    scheduler.Add(std::make_unique<RecordingSystem>("Writer", std::move(writerAccess), executionOrder), world);
+    auto writer = std::make_unique<RecordingSystem>("Writer", std::move(writerAccess), executionOrder);
+    const auto* writerPointer = writer.get();
+    scheduler.Add(std::move(writer), world);
     scheduler.Update(world, 0.016F);
     const kb::ecs::SystemSchedulerTrace& trace = scheduler.LastProfilerTrace();
     kb::tests::Require(trace.events.size() == readerCount + 1U && trace.systemCounters.size() == readerCount + 1U,
@@ -608,11 +732,94 @@ void RunSchedulerLargeSparseGraphCacheInvalidationTest() {
     kb::tests::Require(trace.events.back().systemName == "Writer" &&
         trace.events.back().blockedDependencies.size() == readerCount,
         "ECS scheduler reused stale dependencies after adding a writer");
+    const auto writerPlan = scheduler.PlanningStats();
+    kb::tests::Require(writerPlan.attempts == 2U && writerPlan.edgeCount == readerCount && writerPlan.stageCount == 2U &&
+        scheduler.Remove(writerPointer, world) && scheduler.LastProfilerTrace().events.empty(),
+        "Removing a system must detach its old plan and trace");
+    scheduler.Update(world, 0.016F);
+    const auto removedPlan = scheduler.PlanningStats();
+    kb::tests::Require(removedPlan.attempts == 3U && removedPlan.successfulRebuilds == 3U &&
+        removedPlan.systemCount == readerCount && removedPlan.edgeCount == 0U && removedPlan.stageCount == 1U &&
+        scheduler.LastProfilerTrace().events.size() == readerCount,
+        "Removing a writer must rebuild independent stages without stale edges");
+    std::cout << "scheduler_plan systems=" << readerCount << " cold_ns=" << coldPlan.lastWallNanoseconds
+        << " add_writer_ns=" << writerPlan.lastWallNanoseconds << " remove_writer_ns=" << removedPlan.lastWallNanoseconds << '\n';
 
     scheduler.Shutdown(world);
     scheduler.Update(world, 0.016F);
     kb::tests::Require(scheduler.LastProfilerTrace().events.empty(),
         "ECS scheduler retained stale trace events after shutdown");
+}
+
+void RunSchedulerRemovalLifetimeTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler{{.parallelExecutionEnabled = false}};
+    int destroyed = 0;
+    bool rejectedReentrant = false;
+    struct Probe final : kb::ecs::System {
+        Probe(kb::ecs::SystemScheduler& owner, int& count, bool& rejected, bool throws)
+            : owner(owner), count(count), rejected(rejected), throws(throws) {}
+        kb::ecs::SystemAccess DeclareAccess(kb::ecs::World&) const override { return {}; }
+        void OnUpdate(kb::ecs::World& world, float) override {
+            try { static_cast<void>(owner.Remove(this, world)); }
+            catch (const std::logic_error&) { rejected = true; }
+        }
+        void OnDestroy(kb::ecs::World&) override {
+            ++count;
+            if (throws) throw std::runtime_error("destroy callback failure");
+        }
+        kb::ecs::SystemScheduler& owner;
+        int& count;
+        bool& rejected;
+        bool throws;
+    };
+    auto first = std::make_unique<Probe>(scheduler, destroyed, rejectedReentrant, false);
+    auto* firstPointer = first.get();
+    scheduler.Add(std::move(first), world);
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(rejectedReentrant && destroyed == 0 && !scheduler.Remove(nullptr, world),
+        "A running callback must not destroy its own system or accept a null removal");
+    kb::tests::Require(scheduler.Remove(firstPointer, world) && destroyed == 1, "Owned system must destroy exactly once on removal");
+    auto throwing = std::make_unique<Probe>(scheduler, destroyed, rejectedReentrant, true);
+    auto* throwingPointer = throwing.get();
+    scheduler.Add(std::move(throwing), world);
+    bool failed = false;
+    try { static_cast<void>(scheduler.Remove(throwingPointer, world)); }
+    catch (const std::runtime_error&) { failed = true; }
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(failed && destroyed == 2 && scheduler.ExecutionOrderSnapshot().empty(),
+        "A throwing destroy callback must not retain the removed system or lock the scheduler");
+    scheduler.Shutdown(world);
+    kb::tests::Require(destroyed == 2 && scheduler.PlanningStats().attempts == 0U,
+        "Shutdown must not destroy removed systems again and must reset planning telemetry");
+}
+
+void RunSchedulerRemovedDependencyRecoveryTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler{{.parallelExecutionEnabled = false}};
+    std::vector<std::string> order;
+    auto source = std::make_unique<RecordingSystem>("Source", kb::ecs::SystemAccess{}, order);
+    const auto* sourcePointer = source.get();
+    scheduler.Add(std::move(source), world);
+    kb::ecs::SystemAccess after;
+    after.After("Source");
+    auto dependent = std::make_unique<RecordingSystem>("Dependent", std::move(after), order);
+    const auto* dependentPointer = dependent.get();
+    scheduler.Add(std::move(dependent), world);
+    scheduler.Update(world, 0.0F);
+    order.clear();
+    kb::tests::Require(scheduler.Remove(sourcePointer, world), "Dependency source removal failed");
+    bool rejected = false;
+    try { scheduler.Update(world, 0.0F); }
+    catch (const std::invalid_argument& error) { rejected = std::string_view{error.what()}.find("unknown system") != std::string_view::npos; }
+    kb::tests::Require(rejected && order.empty() && !scheduler.PlanningStats().lastSucceeded &&
+        scheduler.PlanningStats().attempts == 2U && scheduler.PlanningStats().successfulRebuilds == 1U,
+        "A removed explicit dependency must fail before executing any stale plan and report a failed rebuild");
+    kb::tests::Require(scheduler.Remove(dependentPointer, world), "Failed graph must allow removal of the unresolved dependent");
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(scheduler.PlanningStats().lastSucceeded && scheduler.PlanningStats().systemCount == 0U,
+        "A failed planning attempt must permit repair and a subsequent empty update");
+    scheduler.Shutdown(world);
 }
 
 void RunProfilerTraceExportWritesExternalJsonFileTest() {
@@ -802,6 +1009,9 @@ void RunSystemFusionPlannerReducesChunkPassesTest() {
 }
 
 void RunEcsSystemSchedulerTests() {
+    RunSceneRuntimeStageTraceTest();
+    RunGraphSceneRuntimeTest();
+    RunGraphSchedulerIntegrationTest();
     RunSystemFusionPlannerReducesChunkPassesTest();
     RunExplicitOrderingReordersSystemsTest();
     RunReadWriteDependencyCycleTest();
@@ -823,6 +1033,8 @@ void RunEcsSystemSchedulerTests() {
     RunRuntimeAccessValidatorDetectsWriteWriteConflictTest();
     RunProfilerCountersCaptureFrameAndSystemWorkTest();
     RunSchedulerLargeSparseGraphCacheInvalidationTest();
+    RunSchedulerRemovalLifetimeTest();
+    RunSchedulerRemovedDependencyRecoveryTest();
     RunProfilerTraceExportWritesExternalJsonFileTest();
     RunDebugTraceCapturesSystemExecutionTest();
     RunSchedulerCriticalPathTest();

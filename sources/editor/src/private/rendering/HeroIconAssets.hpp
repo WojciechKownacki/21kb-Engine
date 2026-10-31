@@ -48,6 +48,29 @@ public:
     [[nodiscard]] static HeroIconGlyph PlatformServer() noexcept;
     [[nodiscard]] static HeroIconGlyph DisclosureCollapsed() noexcept;
     [[nodiscard]] static HeroIconGlyph DisclosureExpanded() noexcept;
+    [[nodiscard]] static HeroIconGlyph Sun() noexcept;
+    [[nodiscard]] static HeroIconGlyph CheckCircle() noexcept;
+    [[nodiscard]] static HeroIconGlyph XCircle() noexcept;
+    [[nodiscard]] static HeroIconGlyph Warning() noexcept;
+    [[nodiscard]] static HeroIconGlyph Undo() noexcept;
+    [[nodiscard]] static HeroIconGlyph Redo() noexcept;
+    [[nodiscard]] static HeroIconGlyph Duplicate() noexcept;
+    [[nodiscard]] static HeroIconGlyph Plug() noexcept;
+    [[nodiscard]] static HeroIconGlyph Move() noexcept;
+    [[nodiscard]] static HeroIconGlyph Rotate() noexcept;
+    [[nodiscard]] static HeroIconGlyph Scale() noexcept;
+    [[nodiscard]] static HeroIconGlyph Grid() noexcept;
+    [[nodiscard]] static HeroIconGlyph Magnet() noexcept;
+    [[nodiscard]] static HeroIconGlyph Map() noexcept;
+    [[nodiscard]] static HeroIconGlyph Layers() noexcept;
+    [[nodiscard]] static HeroIconGlyph Activity() noexcept;
+    [[nodiscard]] static HeroIconGlyph Download() noexcept;
+    [[nodiscard]] static HeroIconGlyph Upload() noexcept;
+    [[nodiscard]] static HeroIconGlyph Navigation() noexcept;
+    [[nodiscard]] static HeroIconGlyph BookOpen() noexcept;
+    [[nodiscard]] static HeroIconGlyph Info() noexcept;
+    [[nodiscard]] static HeroIconGlyph Flag() noexcept;
+    [[nodiscard]] static HeroIconGlyph Monitor() noexcept;
 };
 
 } // namespace kb::editor

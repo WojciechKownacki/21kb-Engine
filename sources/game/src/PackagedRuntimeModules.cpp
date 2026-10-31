@@ -23,7 +23,10 @@ bool CreatePackagedRuntimeModules(
     PackagedRuntimeModules& output,
     std::string& error,
     std::filesystem::path scriptUserStorageRoot) {
-    error.clear();
+    error = ValidatePackagedRuntimeModuleReferences(descriptor);
+    if (!error.empty()) {
+        return false;
+    }
     PackagedRuntimeModules candidate{};
 
     kb::script::ScriptModuleOptions scriptOptions;
@@ -35,7 +38,7 @@ bool CreatePackagedRuntimeModules(
     candidate.modules.push_back(std::move(script));
 
     for (const kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
-        if (!plugin.enabled) {
+        if (!plugin.enabled || IsPackagedHostModule(plugin.name)) {
             continue;
         }
         const std::optional<PackagedRuntimeModuleKind> kind =

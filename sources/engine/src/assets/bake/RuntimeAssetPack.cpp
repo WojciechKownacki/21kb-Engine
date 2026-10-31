@@ -61,6 +61,7 @@ namespace {
         return meshCount == 1U && asset.artifacts.size() == 1U;
     }
     if (IsTextureAsset(asset)) {
+        if (textureFamilies.contains("rgba8-atlas")) return textureCount == 1U && asset.artifacts.size() == 1U;
         std::size_t requiredFamilies = 0U;
         for (std::uint32_t index = 0U; index < kTextureCompressionFamilyCount; ++index) {
             const auto family = static_cast<TextureCompressionFamily>(index);

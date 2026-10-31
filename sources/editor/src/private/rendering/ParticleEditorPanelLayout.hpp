@@ -93,7 +93,7 @@ struct ParticleEditorPanelLayout {
     RECT materialPicker{};
     RECT meshPicker{};
     RECT texturePicker{};
-    std::array<RECT, 8U> outputChoices{};
+    std::array<RECT, static_cast<std::size_t>(kb::scene::ParticleOutputType::Decal) + 1U> outputChoices{};
     std::size_t outputChoiceCount = 0U;
     RECT propertyHeader{};
     std::array<ParticleEditorPropertyRowLayout, 128U> propertyRows{};

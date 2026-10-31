@@ -7,8 +7,27 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <memory>
+#include <unordered_map>
 
 namespace kb::script {
+
+class PucLuaMemoryArena;
+class ScriptExecutionContext;
+struct PucLuaStateLifetime {
+    lua_State* state = nullptr;
+    ScriptExecutionContext* activeContext = nullptr;
+    std::unordered_map<int, const void*> eventReferenceOwners;
+};
+
+class PucLuaExecutionContextScope final {
+public:
+    PucLuaExecutionContextScope(lua_State* state, ScriptExecutionContext& context) noexcept;
+    ~PucLuaExecutionContextScope();
+private:
+    PucLuaStateLifetime* slot_ = nullptr;
+    ScriptExecutionContext* previous_ = nullptr;
+};
 
 // Allocation accounting for one Lua state, installed as its lua_Alloc. Growth
 // past limitBytes (zero: unlimited) is refused only while protectedDepth is
@@ -21,6 +40,7 @@ struct PucLuaMemoryBudget final {
     std::size_t limitBytes = 0U;
     std::uint32_t protectedDepth = 0U;
     bool limitReached = false;
+    std::shared_ptr<PucLuaMemoryArena> arena;
 
     static void* Allocate(void* userData, void* block, std::size_t oldSize, std::size_t newSize) noexcept;
 };

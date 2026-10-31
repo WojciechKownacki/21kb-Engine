@@ -5910,22 +5910,12 @@ bool EditorSceneContext::ApplyPatchToMaterialEditorWorkingCopy(kb::assets::Asset
         return false;
     }
 
-    const std::uint64_t beforeHash = MaterialWorkingCopyRuntimeContentHash(*materialEditor_.WorkingCopy());
-    kb::render::RenderMaterialAssetData working = *materialEditor_.WorkingCopy();
+    auto before = *materialEditor_.WorkingCopy();
+    const auto selectedNode = materialEditor_.SelectedNodeId();
+    auto working = before;
     edit.Apply(working);
-    const bool runtimeChanged = beforeHash != MaterialWorkingCopyRuntimeContentHash(working);
     materialEditor_.SetWorkingCopy(std::move(working));
-    if (runtimeChanged) {
-        materialEditor_.ClearDiagnostics();
-    }
-    if (runtimeChanged) {
-        SyncMaterialEditorWorkingCopyRuntimePreview();
-        // Re-cook only the open material (below); no scene-wide sceneGraphCookPending_ re-arm - see
-        // RecordMaterialGraphWorkingCopyEdit for why that caused a multi-second per-edit disk stall.
-        RequestOpenMaterialSceneGraphCook();
-        MarkMaterialAssetRenderDirty(id);
-    }
-    return true;
+    return RecordMaterialGraphWorkingCopyEdit(id, std::string{edit.Label()}, std::move(before), selectedNode);
 }
 
 void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {

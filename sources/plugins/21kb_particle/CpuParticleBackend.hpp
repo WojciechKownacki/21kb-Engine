@@ -34,6 +34,8 @@ public:
         std::uint32_t deaths = 0U;
         std::uint32_t collisions = 0U;
         std::uint32_t processedEvents = 0U;
+        std::uint32_t spawnedEffects = 0U;
+        std::uint32_t rejectedEffects = 0U;
     };
 
     CpuParticleBackend() = default;
@@ -160,6 +162,9 @@ private:
     };
 
     struct InstanceRuntime {
+        std::uint8_t externalDepth = 0U;
+        bool autoRelease = false;
+        double lastGpuParticleExpiry = 0.0;
         std::uint32_t compiledEffectIndex = UINT32_MAX;
         std::uint64_t randomState = 0U;
         std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> spawnOrdinals{};
@@ -168,6 +173,8 @@ private:
         std::array<float, kb::scene::kParticleEffectMaxEmitters> emissionFractions{};
         std::array<std::uint8_t, kb::scene::kParticleEffectMaxEmitters> nextBurst{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEmitters> liveParticles{};
+        std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> emissionNanoseconds{};
+        std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> integrationNanoseconds{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEventBindings> bindingEventsThisStep{};
         kb::math::Vec3 beamStart{};  // ends of the beam being born (SpawnExact)
         float beamLifetime = 0.0F;   // one lifetime for every point of that beam
@@ -183,6 +190,16 @@ private:
         std::uint8_t prewarmGroup = UINT8_MAX;
         kb::math::Vec3 position{};
     };
+
+    struct ExternalEffectRequest {
+        std::uint64_t sourceInstanceId = 0U;
+        std::uint64_t effectAssetId = 0U;
+        kb::scene::WorldTransform transform{};
+        std::uint8_t depth = 0U;
+    };
+    void QueueExternalEffect(std::uint32_t denseIndex, std::uint64_t effectAssetId,
+        std::uint32_t count, const InternalEvent& event, std::uint32_t& remainingSpawnBudget) noexcept;
+    void DispatchExternalEffects(kb::scene::Scene& scene);
 
     static constexpr std::uint32_t kInvalidDenseIndex = UINT32_MAX;
     void ReserveParticleStorage(std::size_t capacity);
@@ -297,6 +314,7 @@ private:
     void EmitWhileAlive(float fixedDeltaSeconds, std::uint32_t& remainingSpawnBudget) noexcept;
 
     bool warmedUp_ = false;
+    bool profileEmitterWork_ = false;
     kb::math::DVec3 simulationOrigin_{};
     std::uint32_t denseInstanceCount_ = 0U;
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene> slotGenerations_{};
@@ -330,6 +348,8 @@ private:
 
     std::vector<Command> commands_;
     std::vector<InternalEvent> currentEvents_;
+    std::vector<ExternalEffectRequest> externalEffects_;
+    std::vector<ExternalEffectRequest> externalDispatch_;
     std::vector<InternalEvent> nextEvents_;
     std::vector<InternalEvent> prewarmCurrentEvents_;
     std::vector<InternalEvent> prewarmNextEvents_;

@@ -48,7 +48,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
         RECT client{};
         GetClientRect(state.window, &client);
         const DockLayout layout = state.dockModel.Queries().BuildLayout(
-            client.right, client.bottom, state.metrics.menuHeight, state.metrics.toolbarHeight,
+            client.right, client.bottom, state.metrics.menuHeight, state.metrics.statusBarHeight,
             state.metrics.tabStripHeight, state.metrics.tabMinWidth, state.metrics.tabWidth,
             state.metrics.splitterSize);
         const DockPanel* targetPanel = nullptr;
@@ -125,6 +125,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
         return false;
     }
 
+    static_cast<void>(state.rawMouse.Register(state.window));
     EditorMainWindow::EnableDarkMode(state.window);
     static_cast<void>(state.sceneContext.LoadEditorSettings());
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
@@ -170,6 +171,7 @@ void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 
+    state.rawMouse.Reset();
     if (state.window != nullptr) {
         static_cast<void>(UnregisterTouchWindow(state.window));
         DestroyWindow(state.window);

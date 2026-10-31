@@ -11,6 +11,7 @@
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
@@ -229,11 +230,24 @@ void SceneViewportToolbarRenderer::RecordFrameMilliseconds(double milliseconds) 
     SceneViewportToolbarState::RecordFrameMilliseconds(milliseconds);
 }
 
-void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state) {
+void SceneViewportToolbarRenderer::Paint(
+    HDC dc,
+    const RECT& content,
+    const EditorTheme& theme,
+    const EditorViewportPreviewState& state,
+    EditorTransformToolMode toolMode) {
     const SceneViewportToolbarRects rects = SceneViewportToolbarLayout::Resolve(content, state);
     GdiDrawing::FillRectColor(dc, rects.row, SceneViewportToolbarDrawing::ToolbarRowColor(theme));
 
     SceneViewportToolbarInfoRenderer::PaintFpsCounter(dc, rects.fpsCounter, theme);
+    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.realtimeButton, HeroIconKind::Bolt, theme, state.Realtime());
+    SceneViewportToolbarDrawing::DrawToolButton(
+        dc, rects.moveToolButton, HeroIconKind::Move, "W", theme, toolMode == EditorTransformToolMode::Translate);
+    SceneViewportToolbarDrawing::DrawToolButton(
+        dc, rects.rotateToolButton, HeroIconKind::Rotate, "E", theme, toolMode == EditorTransformToolMode::Rotate);
+    SceneViewportToolbarDrawing::DrawToolButton(
+        dc, rects.scaleToolButton, HeroIconKind::Scale, "R", theme, toolMode == EditorTransformToolMode::Scale);
+    SceneViewportToolbarDrawing::DrawDivider(dc, rects.toolbar, rects.scaleToolButton.right + 7, theme);
 
     SceneViewportToolbarDrawing::DrawValueButton(
         dc,
@@ -242,7 +256,7 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
         EditorViewportRenderProfileLabel(state.RenderProfile()),
         theme);
     SceneViewportToolbarDrawing::DrawDivider(dc, rects.toolbar, rects.renderProfileButton.right + 7, theme);
-    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.gridToggleButton, HeroIconKind::Eye, theme, state.GridVisible());
+    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.gridToggleButton, HeroIconKind::Grid, theme, state.GridVisible());
     SceneViewportToolbarDrawing::DrawValueButton(
         dc,
         rects.gridStepButton,
@@ -250,7 +264,7 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
         EditorViewportGridSpacingLabel(state.GridSpacing()),
         theme);
     SceneViewportToolbarDrawing::DrawDivider(dc, rects.toolbar, rects.gridStepButton.right + 7, theme);
-    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.snapToggleButton, HeroIconKind::Cube, theme, state.SnapEnabled());
+    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.snapToggleButton, HeroIconKind::Magnet, theme, state.SnapEnabled());
     SceneViewportToolbarDrawing::DrawValueButton(
         dc,
         rects.snapStepButton,

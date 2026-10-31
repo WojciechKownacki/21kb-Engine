@@ -1,5 +1,14 @@
 # UI safe areas
 
+The Windows player uses per-monitor DPI awareness in both windowed and fullscreen
+mode. Windowed DPI changes apply the operating system's suggested bounds, then
+resize the render surface and UI through the normal client-size notification.
+Anchors, canvas scaling and pointer hit tests share the resulting client-pixel
+coordinates. `kb_game_window_dpi` checks upward and downward DPI notifications,
+orientation changes and control hit testing in an invisible native window; it
+does not change physical display settings. The packaged UI visual test checks
+rendered pixels after live client-size changes.
+
 Screen-space canvases respect the platform safe area by default. `UICanvas::respectSafeArea`
 can disable this for backgrounds that intentionally extend behind system UI. Insets are
 nonnegative viewport pixels in left, top, right, bottom order. The scene layout clamps

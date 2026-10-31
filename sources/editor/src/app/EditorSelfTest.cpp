@@ -1237,6 +1237,9 @@ void RunCameraInspectorSuite(Report& report) {
         actorRow != cameraRows.end() && actorRow->hasCamera,
         "LIB-135 Camera entity exposes the camera icon in Hierarchy");
 
+    EditorHeadlessAutomation cameraAutomation{context, ArtifactPath("camera-advanced")};
+    report.Check(cameraAutomation.InspectorClickRow(InspectorPropertyId::CameraAdvanced, -1, InspectorHitKind::Row),
+        "Camera advanced settings open through the live Inspector row");
     const std::array<InspectorPropertyId, 11> properties{
         InspectorPropertyId::CameraProjection,
         InspectorPropertyId::CameraVerticalFov,
@@ -5353,6 +5356,61 @@ void RunMaterialEditorGlobalSaveSuite(Report& report) {
         "P0.2 material instance redo restores the last valid byte-identical source");
 }
 
+void RunInspectorBasicAdvancedSuite(Report& report) {
+    struct Case { const char* component; InspectorDisclosureId disclosure; InspectorPropertyId toggle;
+        InspectorPropertyId field; int index; const char* value; };
+    const std::array cases{
+        Case{"Camera", InspectorDisclosureId::CameraAdvanced, InspectorPropertyId::CameraAdvanced, InspectorPropertyId::CameraFarClip, -1, "500"},
+        Case{"Light", InspectorDisclosureId::LightAdvanced, InspectorPropertyId::LightAdvanced, InspectorPropertyId::LightShadowStrength, -1, "0.75"},
+        Case{"Rigidbody", InspectorDisclosureId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyField, 12, "0.25"},
+        Case{"Collider", InspectorDisclosureId::ColliderAdvanced, InspectorPropertyId::ColliderAdvanced, InspectorPropertyId::ColliderField, 10, "0.25"}};
+    for (const auto& test : cases) {
+        EditorSceneContext context;
+        const auto actor = context.CreateHierarchyObject();
+        context.SelectEntity(actor);
+        report.Check(context.AddComponentToEntity(actor, test.component), "Add component with usable defaults");
+        EditorHeadlessAutomation automation{context, ArtifactPath(test.component)};
+        auto find = [&]() {
+            static_cast<void>(context.Inspector().SetScrollOffset(0, 0));
+            const RECT panel = WholeInspector(context);
+            for (int y = panel.top; y < panel.bottom; y += 2)
+                for (int x = panel.left; x < panel.right; x += 8) {
+                    auto hit = InspectorPanelRenderer::HitTest(panel, context, x, y);
+                    const auto expectedKind = test.index < 0 ? InspectorHitKind::FloatField : InspectorHitKind::TextField;
+                    if (hit.kind == expectedKind && hit.property == test.field && (test.index < 0 || hit.index == test.index)) return hit;
+                }
+            return InspectorPanelRenderer::Hit{};
+        };
+        report.Check(!context.Inspector().IsDisclosureExpanded(test.disclosure) && find().kind == InspectorHitKind::None,
+            "Advanced fields start hidden and cannot intercept basic clicks");
+        const int basicHeight = InspectorPanelRenderer::ContentHeight(kContent, context);
+        report.Check(automation.CaptureInspector("basic"), "Capture basic Inspector controls");
+        report.Check(automation.InspectorClickRow(test.toggle, -1, InspectorHitKind::Row), "Open Advanced through live pointer handling");
+        static_cast<void>(context.Inspector().TickDisclosures(1.0F));
+        report.Check(InspectorPanelRenderer::ContentHeight(kContent, context) > basicHeight, "Expanded fields contribute to scroll height");
+        auto hit = find();
+        report.Check(hit.kind != InspectorHitKind::None, "Expanded field is hit-testable");
+        if (hit.kind != InspectorHitKind::None) {
+            const auto point = Center(hit.rect);
+            report.Check(InspectorPanelInteraction::HandlePointerDown(context, hit, point.x, point.y), "Advanced field accepts click");
+            static_cast<void>(InspectorPanelInteraction::HandlePointerUp(context));
+            context.Inspector().ClearText();
+            context.Inspector().InsertText(test.value);
+            report.Check(InspectorPanelInteraction::HandleKeyDown(nullptr, context, static_cast<WPARAM>(0x0D)), "Advanced field commits typed value");
+        }
+        bool changed = false;
+        if (test.disclosure == InspectorDisclosureId::CameraAdvanced) changed = context.Scene().Components().Cameras().TryGet(actor)->farClip == 500.0F;
+        if (test.disclosure == InspectorDisclosureId::LightAdvanced) changed = context.Scene().Components().Lights().TryGet(actor)->shadowStrength == 0.75F;
+        if (test.disclosure == InspectorDisclosureId::RigidbodyAdvanced) changed = context.Scene().Components().Rigidbodies().TryGet(actor)->linearDamping == 0.25F;
+        if (test.disclosure == InspectorDisclosureId::ColliderAdvanced) changed = context.Scene().Components().Colliders().TryGet(actor)->friction == 0.25F;
+        report.Check(changed, "Advanced edit changes the intended runtime property");
+        report.Check(automation.CaptureInspector("advanced"), "Capture expanded Inspector controls");
+        report.Check(automation.InspectorClickRow(test.toggle, -1, InspectorHitKind::Row), "Close Advanced through live pointer handling");
+        report.Check(find().kind == InspectorHitKind::None && InspectorPanelRenderer::ContentHeight(kContent, context) == basicHeight,
+            "Collapsing restores basic geometry and hides advanced hit regions");
+    }
+}
+
 void RunInspectorLightComponentSuite(Report& report) {
     EditorSceneContext context;
     const kb::scene::SceneEntity lightEntity = context.CreateLightObject(kb::scene::LightKind::Point);
@@ -6569,6 +6627,14 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
 // Runs one suite in its own freshly-created scratch project (cwd-based bootstrap),
 // then restores the previous working directory.
 void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Report&)) {
+    // A semicolon-separated filter keeps focused GUI regressions inexpensive.
+    char filter[1024]{};
+    const DWORD filterSize = GetEnvironmentVariableA("KB_EDITOR_SELFTEST_SUITES", filter, sizeof(filter));
+    if (filterSize >= sizeof(filter)) {
+        report.Check(false, "Self-test suite filter exceeds its size limit");
+        return;
+    }
+    if (filterSize != 0U && (";" + std::string{filter} + ";").find(";" + leaf + ";") == std::string::npos) return;
     ++gSuiteCount;
     std::ostringstream numbered;
     numbered << "TEST-" << std::setw(3) << std::setfill('0')
@@ -6719,6 +6785,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "inspector_material_color_rows", &RunInspectorMaterialColorRowsSuite);
     RunSuiteInScratch(report, "inspector_material_preview_surface", &RunInspectorMaterialPreviewSurfaceSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
+    RunSuiteInScratch(report, "inspector_basic_advanced", &RunInspectorBasicAdvancedSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "prefab_inspector", &RunPrefabInspectorSuite);
@@ -6727,6 +6794,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
     gCurrentSuiteArtifactRoot.clear();
+    report.Check(gSuiteCount != 0U, "At least one requested self-test suite ran");
     WriteReport(reportPath, report);
     std::ofstream manifest{
         gSelfTestArtifactRoot / "manifest.txt",

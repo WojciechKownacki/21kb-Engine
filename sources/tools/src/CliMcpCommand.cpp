@@ -26,6 +26,8 @@ constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
 constexpr std::string_view kSceneTemplates[]{"Basic", "Empty"};
 constexpr std::string_view kYesNo[]{"yes", "no"};
 constexpr std::string_view kScriptLanguages[]{"lua", "cpp"};
+constexpr std::string_view kBlendSpaceActions[]{"new", "show", "add", "set", "remove", "sample", "assign"};
+constexpr std::string_view kGraphActions[]{"new","show","catalog","add","remove","move","literal","event","symbol","connect","disconnect","check"};
 
 struct ToolProperty {
     std::string_view name;
@@ -55,7 +57,7 @@ struct ToolProperty {
             for (const auto choice : property.choices) choices.Append(JsonValue::MakeString(std::string{choice}));
             descriptor.Set("enum", std::move(choices));
         }
-        if (property.name == "format") descriptor.Set("default", JsonValue::MakeString("markdown"));
+        if (property.name == "topic") descriptor.Set("default", JsonValue::MakeString("index"));
         if (property.name == "inputReplay" || property.name == "inputRecord")
             descriptor.Set("x-project-file", JsonValue::MakeBool(true));
         if (property.type == "array") {
@@ -64,10 +66,10 @@ struct ToolProperty {
             items.Set("minLength", JsonValue::MakeNumber(1));
             descriptor.Set("items", std::move(items));
         }
-        if (property.type == "string") descriptor.Set("minLength", JsonValue::MakeNumber(1));
+        if (property.type == "string") descriptor.Set("minLength", JsonValue::MakeNumber(property.name == "value" ? 0 : 1));
         if (property.type == "integer") {
-            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "executionOrder" ? std::numeric_limits<int>::min() : 1));
-            descriptor.Set("maximum", JsonValue::MakeNumber(std::numeric_limits<int>::max()));
+            descriptor.Set("minimum", JsonValue::MakeNumber(property.name == "executionOrder" ? std::numeric_limits<int>::min() : property.name == "index" || property.name == "edge" ? 0 : 1));
+            descriptor.Set("maximum", JsonValue::MakeNumber(property.name == "index" ? 255 : std::numeric_limits<int>::max()));
         }
         schemaProperties.Set(std::string{ property.name }, std::move(descriptor));
         if (property.required) {
@@ -87,10 +89,49 @@ struct ToolProperty {
 }
 
 [[nodiscard]] JsonValue MakeCommandToolDescriptor(const CliCommandDescriptor& command) {
+    if (command.name == "graph") return MakeToolDescriptor(command.mcpTool,
+        "Authors gameplay graphs through the shared validated document model and atomic saves; checks provider signatures.", {
+            ToolProperty{"action","string","Graph operation; catalog enumerates node IDs and typed pins.",true,"",kGraphActions},
+            ToolProperty{"graph","string","A .kbgraph path inside the project Assets directory, required except for catalog.",false,"--graph"},
+            ToolProperty{"filter","string","Catalog search text.",false,"--filter"},
+            ToolProperty{"name","string","Name for a new graph.",false,"--name"},
+            ToolProperty{"entry","string","Catalog ID to add.",false,"--entry"},
+            ToolProperty{"node","integer","Node to remove, move or edit.",false,"--node"},
+            ToolProperty{"x","number","Finite node canvas coordinate.",false,"--x"},
+            ToolProperty{"y","number","Finite node canvas coordinate.",false,"--y"},
+            ToolProperty{"value","string","Literal text, lifecycle event or custom node name.",false,"--value"},
+            ToolProperty{"from","integer","Source node ID.",false,"--from"},
+            ToolProperty{"out","string","Source output pin name.",false,"--out"},
+            ToolProperty{"to","integer","Target node ID.",false,"--to"},
+            ToolProperty{"in","string","Target input pin name.",false,"--in"},
+            ToolProperty{"edge","integer","Zero-based edge index to disconnect.",false,"--edge"},
+        });
+    if (command.name == "blend-space") return MakeToolDescriptor(command.mcpTool,
+        "Authors and samples a BlendSpace2D asset with atomic validated edits, or assigns it to a controller state.", {
+            ToolProperty{"action","string","Operation; add requires at/clip; set/remove require index; assign requires controller/state/axis names.",true,"",kBlendSpaceActions},
+            ToolProperty{"space","string","BlendSpace2D asset path inside the project Assets directory.",true,"--space"},
+            ToolProperty{"at","string","Two finite coordinates x,y for add/set/sample.",false,"--at"},
+            ToolProperty{"clip","string","AnimationClip virtual path, physical asset path or stable identity.",false,"--clip"},
+            ToolProperty{"index","integer","Zero-based sample index for set/remove.",false,"--index"},
+            ToolProperty{"controller","string","Animator Controller to edit for assign.",false,"--controller"},
+            ToolProperty{"state","string","Existing controller state to replace for assign.",false,"--state"},
+            ToolProperty{"layer","string","Controller layer, defaulting to its first layer.",false,"--layer"},
+            ToolProperty{"xParameter","string","Float parameter bound to the X axis; created if missing.",false,"--x-param"},
+            ToolProperty{"yParameter","string","Distinct Float parameter bound to the Y axis; created if missing.",false,"--y-param"},
+        });
     if (command.name == "api") return MakeToolDescriptor(command.mcpTool,
-        "Returns the 21kb Engine script API reference (functions, components, lifecycle events).",
+        "Returns one page of the 21kb Engine script API: without arguments the index of function groups and components; "
+        "with topic a group (Physics), one function (Physics.Raycast) or a component (Rigidbody); with search the topics matching the text. "
+        "Ask for the one function or component you are about to use.",
         {
-            ToolProperty{ "format", "string", "Output format: 'markdown' (default) or 'json'.", false, "--print" },
+            ToolProperty{ "topic", "string", "A group, function or component name, or 'index'.", false, "--topic" },
+            ToolProperty{ "search", "string", "Words to find in function and component names and descriptions.", false, "--search" },
+        });
+    if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
+        "Returns a short how-to for one kind of task, with the kb_cli commands that do it: objects-and-materials, physics, scripts, "
+        "characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
+        {
+            ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },
         });
     if (command.name == "import") return MakeToolDescriptor(command.mcpTool,
         "Imports an external source asset into a project's runtime asset format and registers it.",
@@ -130,7 +171,8 @@ struct ToolProperty {
             ToolProperty{ "safeArea", "string", "Nonnegative LEFT,TOP,RIGHT,BOTTOM safe-area insets in viewport pixels.", false, "--safe-area" },
         });
     if (command.name == "schema") return MakeToolDescriptor(command.mcpTool,
-        "Lists component properties and authoring presets.", {
+        "Lists one component's properties when component is given; without it, every component and the create presets.", {
+            ToolProperty{ "component", "string", "A component name, for example Rigidbody or MeshRenderer.", false, "--component" },
         });
     if (command.name == "entity") return MakeToolDescriptor(command.mcpTool,
         "Creates and edits entities through the same scene authoring commands as the CLI.", {
@@ -170,10 +212,25 @@ struct ToolProperty {
     return JsonValue::MakeNull();
 }
 
+// Runs any kb_cli command for the bound project, so an agent reaches every operation the guides
+// describe (materials, animation, maps, abilities) and not only the ones with a tool of their own.
+constexpr std::string_view kCliToolName = "kb_cli";
+
+[[nodiscard]] JsonValue MakeCliToolDescriptor() {
+    return MakeToolDescriptor(kCliToolName,
+        "Runs one kb_cli command for this project, as in the guides: args are the words after kb_cli, for example "
+        "[\"material-new\", \"--name\", \"Red\", \"--set\", \"Base Color=#E03C31\"]. The project is filled in; a --project in args is replaced. "
+        "[\"help\", \"<command>\"] prints one command's options.",
+        {
+            ToolProperty{ "args", "array", "The command and its options, one word per item.", true, "" },
+        });
+}
+
 [[nodiscard]] JsonValue MakeToolList() {
     auto tools = JsonValue::MakeArray();
     for (const auto& command : CliCommandCatalog())
         if (command.available && !command.mcpTool.empty()) tools.Append(MakeCommandToolDescriptor(command));
+    tools.Append(MakeCliToolDescriptor());
     return tools;
 }
 
@@ -238,7 +295,8 @@ struct ToolCallOutcome {
             const auto* value = arguments->Find(key);
             const auto& type = property->Find("type")->AsString();
             if (type == "string") {
-                if (value->GetKind() != JsonValue::Kind::String || value->AsString().empty())
+                if (value->GetKind() != JsonValue::Kind::String ||
+                    (value->AsString().empty() && property->Find("minLength")->AsNumber() > 0))
                     return key + " must be a nonempty string";
                 if (const auto* choices = property->Find("enum")) {
                     bool accepted = false;
@@ -271,14 +329,45 @@ struct ToolCallOutcome {
     const std::string& projectRoot) {
     if (const auto error = ValidateToolArguments(toolName, toolArguments); !error.empty())
         return {.isError = true, .text = error};
+    if (toolName == kCliToolName) {
+        const JsonValue* args = toolArguments->Find("args");
+        std::vector<std::string> words;
+        for (std::size_t index = 0U; index < args->Size(); ++index) {
+            const std::string& word = args->At(index)->AsString();
+            if (word == "kb_cli" && words.empty()) continue;
+            if (word == "--project") {
+                ++index;
+                continue;
+            }
+            words.push_back(word);
+        }
+        if (words.empty()) return {.isError = true, .text = "args must name a command"};
+        const CliCommandDescriptor* target = FindCliCommand(words.front());
+        if (target == nullptr) return {.isError = true, .text = "unknown kb_cli command: " + words.front()};
+        if (target->kind == CliCommandKind::Mcp) return {.isError = true, .text = "the mcp command cannot run inside the MCP server"};
+        // Commands about the project get it; the ones that make a project or describe kb_cli do not take it.
+        const bool takesProject = !projectRoot.empty() && target->kind == CliCommandKind::Normal && words.front() != "new";
+        if (takesProject) words.insert(words.begin() + 1, { "--project", projectRoot });
+        std::ostringstream captured;
+        std::istringstream noInput;
+        int exitCode = 1;
+        try {
+            exitCode = RunCli(words, noInput, {.out = captured, .err = captured});
+        } catch (const std::exception& error) {
+            captured << "error: " << error.what() << '\n';
+        } catch (...) {
+            captured << "error: unexpected tool failure\n";
+        }
+        return {.isError = exitCode != 0, .text = captured.str()};
+    }
     const CliCommandDescriptor* command = nullptr;
     for (const auto& entry : CliCommandCatalog())
         if (entry.available && entry.mcpTool == toolName) { command = &entry; break; }
     if (command == nullptr) return {.isError = true, .text = "unknown tool: " + std::string{toolName}};
-    if (projectRoot.empty() && command->name != "api" && command->name != "schema")
+    if (projectRoot.empty() && command->name != "api" && command->name != "schema" && command->name != "guide")
         return {.isError = true, .text = "this tool requires a bound project"};
     std::vector<std::string> words{std::string{command->name}};
-    if (!projectRoot.empty()) words.insert(words.end(), {"--project", projectRoot});
+    if (!projectRoot.empty() && command->name != "guide") words.insert(words.end(), {"--project", projectRoot});
     const auto descriptor = MakeCommandToolDescriptor(*command);
     const auto* properties = descriptor.Find("inputSchema")->Find("properties");
     for (std::size_t index = 0U; index < properties->Size(); ++index) {

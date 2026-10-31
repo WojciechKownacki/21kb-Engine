@@ -32,6 +32,7 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] std::vector<std::string> BakedAssetTypes() const override;
+    [[nodiscard]] bool AllowsConcurrentLoad() const noexcept override { return true; }
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
     [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
         const kb::assets::AssetMetadata& metadata,

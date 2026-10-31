@@ -53,6 +53,7 @@ from package_contract import (
     verify_unit,
 )
 from elf_trust_anchor import ElfTrustAnchorError, embed_trust_anchor, read_trust_anchor
+from android_bundle import validate_bundle
 from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
 from windows_authenticode import (
     AuthenticodeError,
@@ -232,6 +233,8 @@ def _validate_package_work_roots(
 
 
 def _validate_arguments(args: argparse.Namespace) -> None:
+    if getattr(args, "webgl_fallback", None) is not None and args.target != "WebGPU.wasm32":
+        raise PackagingError("WebGL fallback requires a WebGPU package")
     args.project = _find_project_file(args.project)
     args.engine_root = args.engine_root.expanduser().resolve(strict=True)
     if not (args.engine_root / "CMakeLists.txt").is_file() or not (args.engine_root / "sources").is_dir():
@@ -274,7 +277,16 @@ def _validate_arguments(args: argparse.Namespace) -> None:
             raise PackagingError("crash report upload is available only for Windows packages")
         args.crash_report_url = _validate_crash_report_url(args.crash_report_url)
     _validate_windows_signing(args)
+    android_format = getattr(args, "android_format", "apk")
+    if android_format == "aab" and not args.target.startswith("Android."):
+        raise PackagingError("Android app bundles require an Android target")
     if args.target.startswith("Android."):
+        if android_format == "aab":
+            if getattr(args, "android_bundletool", None) is None:
+                raise PackagingError("Android app bundles require --android-bundletool")
+            args.android_bundletool = _existing_file(args.android_bundletool, "Android bundletool")
+            if args.launch and not os.environ.get("ANDROID_SERIAL", "").strip():
+                raise PackagingError("Android bundle launch requires ANDROID_SERIAL to select the test device")
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
             raise PackagingError("Android application ID is invalid")
         if args.android_version_code <= 0 or args.android_version_code > 2_100_000_000:
@@ -653,8 +665,11 @@ def _build_tool_path(build_root: Path, configuration: str, name: str) -> Path:
 
 
 def _build_targets(cmake: Path, build_root: Path, configuration: str, targets: Sequence[str], engine_root: Path) -> None:
+    jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
+    if jobs and (not jobs.isdecimal() or int(jobs) < 1):
+        raise PackagingError("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
     run_checked(
-        [cmake, "--build", build_root, "--config", configuration, "--target", *targets, "--parallel"],
+        [cmake, "--build", build_root, "--config", configuration, "--target", *targets, "--parallel", *([jobs] if jobs else [])],
         cwd=engine_root,
         timeout_seconds=3600,
         on_line=lambda line: emit_diagnostic("Info", line),
@@ -716,6 +731,7 @@ def _find_optional_build_tool(build_root: Path, configuration: str, name: str) -
         build_root / "bin" / configuration / f"{name}{suffix}",
         build_root / "bin" / f"{name}{suffix}",
         build_root / "third_party" / "bgfx.cmake" / "cmake" / "bgfx" / configuration / f"{name}{suffix}",
+        build_root / "third_party" / "bgfx.cmake" / "cmake" / "bgfx" / f"{name}{suffix}",
     ]
     matches.extend(build_root.glob(f"**/{configuration}/{name}{suffix}"))
     return next((path.resolve(strict=True) for path in matches if path.is_file()), None)
@@ -1099,7 +1115,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     copy_tree_exact(stage, smoke)
     try:
         output = run_checked(
-            [smoke / destination.name, "--frames=1"], cwd=smoke, timeout_seconds=120
+            [smoke / destination.name, "--headless", "--frames=1"], cwd=smoke, timeout_seconds=120
         ).output
         if "frames=1" not in output or "shutdown=clean" not in output or "rendered=1" not in output:
             raise PackagingError("Windows player did not prove one rendered frame and clean shutdown")
@@ -1244,20 +1260,26 @@ def _request_android_signature(
     signed: Path,
     apksigner_jar: Path,
     job: Path,
+    *,
+    package_format: str = "apk",
 ) -> None:
+    if package_format not in ("apk", "aab"):
+        raise PackagingError("Android signing format must be apk or aab")
     request = job / "android-signing-request.json"
     response = job / "android-signing-response.json"
     session = secrets.token_hex(16)
-    request.write_bytes(canonical_json_bytes({
-        "schema": 1,
+    payload = {
+        "schema": 2 if package_format == "aab" else 1,
         "session": session,
         "keystore": str(keystore),
         "keyAlias": alias,
-        "inputApk": str(aligned),
-        "outputApk": str(signed),
         "java": str(_java()),
-        "apksignerJar": str(apksigner_jar),
-    }))
+    }
+    if package_format == "aab":
+        payload.update(format="aab", inputPackage=str(aligned), outputPackage=str(signed))
+    else:
+        payload.update(inputApk=str(aligned), outputApk=str(signed), apksignerJar=str(apksigner_jar))
+    request.write_bytes(canonical_json_bytes(payload))
     if broker is not None:
         run_checked([broker, "--request", request, "--response", response], cwd=job, timeout_seconds=300)
     else:
@@ -1274,7 +1296,7 @@ def _request_android_signature(
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise PackagingError("Android signing broker returned an invalid response") from error
     if value != {"schema": 1, "session": session, "succeeded": True} or not signed.is_file():
-        raise PackagingError("Android signing broker refused or did not create the signed APK")
+        raise PackagingError("Android signing broker refused or did not create the signed package")
 
 
 def _android_adb() -> Path:
@@ -1295,32 +1317,39 @@ def _try_android_force_stop(adb: Path, application_id: str, cwd: Path) -> None:
         emit_diagnostic("Warning", f"Android runtime cleanup failed: {error}")
 
 
-def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path) -> None:
+def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path, *, install: bool = True) -> None:
     try:
-        run_checked([adb, "install", "-r", apk], cwd=apk.parent, timeout_seconds=300)
+        if install:
+            run_checked([adb, "install", "-r", apk], cwd=apk.parent, timeout_seconds=300)
         _android_force_stop(adb, args.android_application_id, apk.parent)
-        run_checked([adb, "logcat", "-c"], cwd=apk.parent, timeout_seconds=30)
+        run_checked([adb, "shell", "input", "keyevent", "KEYCODE_WAKEUP"], cwd=apk.parent, timeout_seconds=30)
         run_checked(
-            [adb, "shell", "monkey", "-p", args.android_application_id, "1"],
+            [adb, "shell", "am", "start", "-W", "-n",
+                f"{args.android_application_id}/com.kbengine.runtime.MainActivity"],
             cwd=apk.parent,
             timeout_seconds=60,
         )
-        expected = runtime_first_frame_observation(args.target)[1]
+        pid = run_checked([adb, "shell", "pidof", args.android_application_id],
+            cwd=apk.parent, timeout_seconds=30).output.strip()
+        if not re.fullmatch(r"[0-9]+", pid):
+            raise PackagingError("Android launch did not identify a single application process")
         deadline = time.monotonic() + 60.0
         latest = ""
         while time.monotonic() < deadline:
             latest = run_checked(
                 [
-                    adb, "logcat", "-d", "-v", "brief", "21kb:I", "AndroidRuntime:E",
+                    adb, "logcat", "-d", f"--pid={pid}", "-v", "brief", "21kb:I", "AndroidRuntime:E",
                     "libc:F", "DEBUG:F", "*:S",
                 ],
                 cwd=apk.parent,
                 timeout_seconds=30,
             ).output
-            if expected in latest:
+            if any(f"profile={args.target}" in line.split() and "first-frame=rendered" in line.split()
+                    for line in latest.splitlines()):
                 return
             if (
                 "required-texture-capability=missing" in latest
+                or "packaged asset pack was not found" in latest
                 or "FATAL EXCEPTION" in latest
                 or "Fatal signal" in latest
             ):
@@ -1334,6 +1363,52 @@ def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path) 
         raise
 
 
+def _finish_android_bundle(args: argparse.Namespace, pack: Path, stage: Path, job: Path,
+                           flavor: str, build_type: str, legal_assets: Path,
+                           build_tools: Path, gradle_wrapper: Path) -> StageResult:
+    output = args.engine_root / "platform/android/app/build/outputs/bundle" / f"{flavor}{build_type}"
+    bundles = sorted(output.glob("*.aab"))
+    if len(bundles) != 1:
+        raise PackagingError(f"Android build produced {len(bundles)} app bundles instead of one in {output}")
+    source = bundles[0]
+    if args.configuration == "Release":
+        unsigned = job / "android-unsigned.aab"
+        signed = job / "android-signed.aab"
+        shutil.copy2(source, unsigned)
+        _request_android_signature(args.android_signing_broker, args.android_keystore,
+            args.android_key_alias, unsigned, signed, _apksigner_jar(build_tools), job, package_format="aab")
+        source = signed
+    destination = stage / f"{args.executable_name}-{flavor}.aab"
+    shutil.copy2(source, destination)
+    validate_bundle(destination, java=_java(), bundletool=args.android_bundletool,
+        profile=args.target, pack=pack, trust_anchor=args.trust_anchor, legal_assets=legal_assets,
+        application_id=args.android_application_id, version_code=args.android_version_code,
+        version_name=args.version, min_sdk=args.android_min_sdk, target_sdk=args.android_target_sdk,
+        debuggable=args.configuration == "Development", asset_delivery=True)
+    tools = (_java(), gradle_wrapper.resolve(strict=True), args.android_bundletool)
+    if not args.launch:
+        return StageResult(tools)
+    serial = os.environ.get("ANDROID_SERIAL", "").strip()
+    if not serial:
+        raise PackagingError("Android bundle launch requires ANDROID_SERIAL")
+    adb = _android_adb()
+    apks = job / "android-local-test.apks"
+    # Local testing uses bundletool's debug APK signing, independently of the
+    # upload signature on the release AAB. The compiled payload stays unchanged.
+    tool = [_java(), "-jar", args.android_bundletool]
+    run_checked([*tool, "build-apks", f"--bundle={destination}", f"--output={apks}",
+        "--local-testing", "--connected-device", f"--device-id={serial}", f"--adb={adb}"],
+        cwd=job, timeout_seconds=300)
+    try:
+        run_checked([*tool, "install-apks", f"--apks={apks}", f"--device-id={serial}", f"--adb={adb}"],
+            cwd=job, timeout_seconds=300)
+        _verify_android_first_frame(args, destination, adb, install=False)
+        return StageResult((*tools, adb), _first_frame_result(args.target, stage), adb)
+    except BaseException:
+        _try_android_force_stop(adb, args.android_application_id, stage)
+        raise
+
+
 def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> StageResult:
     sdk = _android_sdk()
     build_tools = _latest_android_build_tools(sdk)
@@ -1343,7 +1418,8 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         raise PackagingError("Android Gradle wrapper library is missing")
     flavor = "astc" if args.target == "Android.ASTC.arm64" else "etc2"
     build_type = "Debug" if args.configuration == "Development" else "Release"
-    task = f"assemble{flavor.capitalize()}{build_type}"
+    bundle = getattr(args, "android_format", "apk") == "aab"
+    task = f"{'bundle' if bundle else 'assemble'}{flavor.capitalize()}{build_type}"
     validator = _build_tool_path(args.build_root, CONFIGURATIONS[args.configuration], "kb_runtime_asset_pack_validator")
     legal_assets = job / "android-legal-assets"
     legal_assets.mkdir()
@@ -1361,8 +1437,14 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         f"-PkbLegalAssets={legal_assets}",
         f"-PkbMinSdk={args.android_min_sdk}",
         f"-PkbTargetSdk={args.android_target_sdk}",
+        f"-PkbAssetDelivery={str(bundle).lower()}",
         "--no-daemon",
     ]
+    jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
+    if jobs:
+        if not jobs.isdecimal() or int(jobs) < 1:
+            raise PackagingError("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
+        command.append(f"--max-workers={jobs}")
     if args.application_icon is not None:
         command.append(f"-PkbApplicationIcon={args.application_icon}")
     if getattr(args, "trust_anchor", None):
@@ -1373,6 +1455,9 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         timeout_seconds=3600,
         on_line=lambda line: emit_diagnostic("Info", line),
     )
+    if bundle:
+        return _finish_android_bundle(args, pack, stage, job, flavor, build_type,
+            legal_assets, build_tools, gradle_wrapper)
     output_directory = args.engine_root / "platform/android/app/build/outputs/apk" / flavor / build_type.casefold()
     apks = sorted(output_directory.glob("*.apk"))
     if len(apks) != 1:
@@ -1608,6 +1693,13 @@ def _verify_web_first_frame(stage: Path, html_name: str, backend: str, job: Path
         thread.join(timeout=5)
 
 
+def _configure_web_fallback(html_text: str, fallback_url: str) -> str:
+    if "</head>" not in html_text:
+        raise PackagingError("Web HTML shell has no head element for fallback configuration")
+    return html_text.replace("</head>",
+        '<meta name="kb-webgl-fallback" content="' + html.escape(fallback_url, quote=True) + '"></head>', 1)
+
+
 def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     emsdk = _emsdk_root(args)
     ninja = _ninja_for_cmake(cmake)
@@ -1679,6 +1771,7 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
     runtime_error_hook = (
         "<script>"
         "function kbReportRuntimeError(kind,value){"
+        "if(document.documentElement.dataset.kbFallback)return;"
         "const stage=location.hash.slice(1);"
         "const detail=value&&value.stack?value.stack:String(value);"
         "location.hash='kb-error-'+kind+'-'+encodeURIComponent(detail.slice(0,1536))"
@@ -1693,16 +1786,10 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
         "</script>"
     )
     html_text = html_text.replace("</head>", runtime_error_hook + "</head>", 1)
-    module_ready = "      };\n      setStatus('Downloading...');"
-    if module_ready not in html_text:
-        raise PackagingError("Web HTML shell has no supported runtime module definition")
-    html_text = html_text.replace(
-        module_ready,
-        "      };\n"
-        "      Module.onAbort = (reason) => kbReportRuntimeError('abort', new Error(reason));\n"
-        "      setStatus('Downloading...');",
-        1,
-    )
+    fallback = getattr(args, "webgl_fallback", None)
+    if fallback is not None:
+        fallback_url = _stage_web_fallback(args, stage, fallback)
+        html_text = _configure_web_fallback(html_text, fallback_url)
     if args.application_icon is not None:
         icon_suffix = args.application_icon.suffix.casefold()
         if icon_suffix not in (".png", ".ico", ".svg"):
@@ -1726,6 +1813,34 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
         (ninja, emsdk / "upstream/emscripten/emcc.py", chrome),
         _first_frame_result(args.target, stage),
     )
+
+
+def _stage_web_fallback(args: argparse.Namespace, stage: Path, source: Path) -> str:
+    if args.target != "WebGPU.wasm32":
+        raise PackagingError("WebGL fallback requires a WebGPU package")
+    source = source.expanduser().resolve(strict=True)
+    receipt = verify_unit(source)
+    if receipt.get("target") != "WebGL.wasm32":
+        raise PackagingError("WebGL fallback must be a verified WebGL package")
+    inputs = receipt.get("inputs", {})
+    if not isinstance(inputs, dict) or inputs.get("projectSha256") != _project_source_fingerprint(args.project):
+        raise PackagingError("WebGL fallback was built from different project content")
+    product = receipt.get("product", {})
+    name = product.get("executableName") if isinstance(product, dict) else None
+    if not isinstance(name, str) or not _is_safe_executable_name(name, "WebGL.wasm32"):
+        raise PackagingError("WebGL fallback entry point is invalid")
+    if not (source / f"{name}.html").is_file():
+        raise PackagingError("WebGL fallback entry point is missing")
+    destination = stage / "webgl"
+    destination.mkdir()
+    for relative, path in regular_files(source):
+        output = destination.joinpath(*PurePosixPath(relative).parts)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, output)
+    # Reverify the copied bytes so a changing source cannot enter the final package.
+    if verify_unit(destination) != receipt:
+        raise PackagingError("WebGL fallback changed while being staged")
+    return "webgl/" + urllib.parse.quote(f"{name}.html", safe="")
 
 
 def _create_deterministic_tar(
@@ -2249,6 +2364,7 @@ def _source_state(engine_root: Path) -> dict[str, str]:
     """Which engine commit the package was built from and whether the tree had changes the commit does not hold.
 
     "unknown" means git could not answer (no git, not a work tree); it is recorded, never guessed.
+    Untracked sources count as changes; ignored build outputs do not.
     """
     def git(*arguments: str) -> str | None:
         try:
@@ -2261,7 +2377,7 @@ def _source_state(engine_root: Path) -> dict[str, str]:
         return completed.stdout.strip() if completed.returncode == 0 else None
 
     commit = git("rev-parse", "--verify", "HEAD")
-    status = git("status", "--porcelain", "--untracked-files=no")
+    status = git("status", "--porcelain", "--untracked-files=all")
     if commit is None or status is None:
         return {"gitCommit": "unknown", "treeState": "unknown"}
     return {"gitCommit": commit, "treeState": "dirty" if status else "clean"}
@@ -2344,7 +2460,11 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--android-keystore", type=Path)
     parser.add_argument("--android-key-alias", default="")
     parser.add_argument("--android-signing-broker", type=Path)
+    parser.add_argument("--android-format", choices=("apk", "aab"), default="apk")
+    parser.add_argument("--android-bundletool", type=Path)
     parser.add_argument("--emsdk", type=Path)
+    parser.add_argument("--webgl-fallback", type=Path,
+        help="Verified WebGL package of the same project to include with a WebGPU package")
     parser.add_argument("--linux-host")
     parser.add_argument("--linux-user")
     parser.add_argument("--linux-host-key")

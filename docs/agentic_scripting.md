@@ -1,5 +1,31 @@
 # AI-assisted scripting — quick guide
 
+See [empty project to export](first_scene.md) for an executable walkthrough.
+The [feature catalog](feature_catalog.json) links public entry points to their
+verification scopes. `kb_cli api` and `kb_cli schema` expose the current API.
+
+On Windows, prefix any executable command with `--command-timeout-ms 30000`
+and/or `--command-cancel-file <path>` to bound the whole operation, including
+external native build tools. For example:
+
+```sh
+kb_cli --json --command-timeout-ms 30000 script-build --project .
+```
+
+The cancellation file belongs to the caller and is never deleted. A file that
+already exists prevents the command from starting. Timeout returns 124,
+cancellation 130, and a supervisor failure 125; normal completion preserves
+the command's exit code and JSON. Interrupted JSON uses `21kb.cli-result/v1`
+with a `reason` of `timeout`, `cancelled` or `supervisor-error`, retaining
+captured output. Text mode streams both output channels. Supervised JSON
+capture has a combined 16 MiB limit; exceeding it stops the command with 125.
+The supervisor terminates only its own process tree, including descendants
+left behind by a completed command. Completed file writes are not rolled back.
+These executable options precede the command; `run --timeout-ms` continues to
+provide cooperative scene playback interruption with its final report.
+Process supervision is currently supported on Windows; other hosts reject
+these prefix options explicitly.
+
 You open your game project in VS Code, write a prompt like *"create third-person player
 movement and attach a follow camera"*, and the AI agent writes the Lua scripts, wires
 them into the scene, and checks that they work. The engine ships a small tool,
@@ -13,6 +39,9 @@ and never needs a rebuild, and the packaged game runs them in the same sandbox a
 (`script-new --language cpp`) and Visual Graph are options for when a project needs them: C++ for
 code that must be as fast as the engine and can use any library, with a toolchain to install and a
 module to build; Visual Graph for logic drawn as nodes. Nothing in the engine requires them.
+
+Use `kb_cli graph` to author and validate [gameplay graphs](gameplay_graphs.md).
+Use `kb_cli blend-space` to author and sample [two-axis animation assets](blend_space_2d.md).
 
 A first game from the template, with every step available to `kb_cli`:
 
@@ -75,9 +104,17 @@ graphs refuse the copy without modifying the source.
 Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `ipairs`, `pairs`,
 `pcall`, `select`, `tonumber`, `tostring`, `type` and the `coroutine`, `table`, `string`, `math` and
 `utf8` libraries. There is no `os`, `io`, `debug` or `package`, and `load`, `loadfile`, `dofile`,
-`require` and `collectgarbage` do not exist; text chunks only. The only files a script can reach are its
-own save slots (through `Save.*`, with a quota), and the only network access is the `Net.*` API. A
-script cannot start a process.
+`require` and `collectgarbage` do not exist; text chunks only. Persistent writes use `Save.*` and
+`Settings.*` slots under the host's configured user-storage root, with a shared quota. Slot names
+cannot specify filesystem paths. `Import` resolves registered Lua assets, not arbitrary files.
+The shipped Lua API cannot start a process or open a socket. `Net.*` uses the scene's host-created
+network session; offline calls fail instead of opening a connection.
+
+This is the restricted execution contract for project and mod Lua, including unsigned mods when
+the host explicitly allows them. It does not assign permissions or private storage to individual
+mods: scripts in one game share save slots, exposed gameplay APIs and the network session. Signing
+a mod authenticates its publisher; it does not grant extra Lua capabilities. Native host code and
+custom registered functions are trusted and must preserve these boundaries themselves.
 
 Limits, per behaviour call: the instruction budget (`luaInstructionsPerBehaviour`, one million by default; also applied to the
 code at the top of a script while it loads, so a loop there fails the load) and a memory cap per Lua
@@ -156,8 +193,20 @@ The binary lands in `build\bin\Debug\kb_cli.exe`.
 kb_cli init-agent --project <project dir>
 ```
 
-This adds `AGENTS.md` (instructions the agent reads automatically) and an API reference
-with editor autocompletion support.
+This adds `AGENTS.md`, a short page the agent reads automatically (and `CLAUDE.md`, which
+imports it for Claude Code), Lua stubs for editor autocompletion, and two folders the agent reads
+one page at a time, so a request stays small:
+
+- `.kb/docs/` holds how-to guides, one per kind of task (objects and materials, physics,
+  scripts, characters and animation, combat and AI, 2D maps, checking your work), each with the
+  commands that do it.
+- `.kb/api/` holds the script API as small pages: `README.md` lists the function groups and
+  components, and every group, function and component has a page of its own.
+
+Over MCP the same pages come from `api_reference` (a `topic` such as `Physics.Raycast` or
+`Rigidbody`, or a `search` text; without either, the index) and `guide`; the `kb_cli` tool runs
+any other command for the project. In a terminal: `kb_cli api --topic <name>`,
+`kb_cli api --search <text>`, `kb_cli guide --topic <name>` and `kb_cli help <command>`.
 
 **In VS Code:**
 
@@ -167,6 +216,27 @@ with editor autocompletion support.
 ```powershell
 <agent-cli> mcp add kb-engine -- <path>\kb_cli.exe mcp --project <project dir>
 ```
+
+**In the editor:** the **Agent** panel (Options > AI Agent, or `Ctrl+K` from anywhere) sends a
+request to a command-line agent installed on this computer and shows its answer, the engine
+tools it used and the files it changed. When the agent changed the project, the editor reloads
+the scene and the assets; unsaved scene edits are saved before a request is sent.
+
+- **Agents.** The panel lists every supported CLI it finds on `PATH`: Claude Code, Codex,
+  Gemini CLI, Qwen Code and Grok, plus "Codex + Ollama (local)" when Ollama is installed.
+  Claude Code and Codex get the engine's MCP tools on each run without any setup; for the
+  others, **Connect engine tools** registers them once.
+- **Accounts.** The panel never signs in itself: an agent runs with the account its own
+  configuration folder is signed in to. Each extra folder next to the default one becomes a
+  profile of its own (`~/.claude-work` runs Claude Code with `CLAUDE_CONFIG_DIR` set to it,
+  `~/.codex-work` runs Codex with `CODEX_HOME`). The header shows the signed-in account; for a
+  profile that is not signed in, clicking the note copies the sign-in command for a terminal.
+- **Your own agent.** *Add your own agent...* in the agent menu opens
+  `%LOCALAPPDATA%\21kb\Agents.json`. Each entry names a `command`, its `arguments`
+  (`{prompt}` for the request, otherwise it goes to standard input; `{project}`, `{kbcli}`
+  and `{mcpconfig}` for the project folder, kb_cli and an MCP configuration file), optional
+  `environment` variables, an optional `connect` command and the `output` format (`plain`,
+  `claude` or `codex`). Choose *Refresh* after saving.
 
 ## How to work
 
@@ -187,7 +257,9 @@ scene in the editor and press Play.
 | Command | Purpose |
 |---|---|
 | `kb_cli init-agent --project <dir>` | prepare a project for AI agents |
-| `kb_cli api --project <dir>` | refresh the API reference after engine updates |
+| `kb_cli api --project <dir>` | refresh the API reference pages after engine updates |
+| `kb_cli api --topic <name>` / `--search <text>` | print one page of the API reference, or the topics matching a text |
+| `kb_cli guide [--topic <name>]` | print one how-to guide, or the list of them |
 | `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites) |
 | `kb_cli script-build --project <dir> [--script <path>]` | build the project's C++ scripts |
 | `kb_cli validate <file.lua>` | check a script for errors |
@@ -393,9 +465,83 @@ it does not report a successful rollback. Run batches without concurrent project
 writers. This is recovery from command failures, not isolation from other processes
 or protection against process termination during a write.
 
+## Authoring metrics
+
+Editor automation writes `report.json` with executed actions, assertions,
+failures and workaround operations. Fixture copies and direct file writes are
+listed explicitly. These are scenario operations, not physical mouse clicks or
+results from a study with people.
+
+The map and sprite packaged scenarios also write `authoring-metrics.json` in
+their package artifact directory. It preserves the editor metrics and adds the
+export steps and combined totals. Copying the player and providers into a package
+is counted as external preparation. A failed cook or player check records the
+failed step before the test exits; an unfinished report remains `RUNNING`.
+
+Run `kb_editor_map2d_packaged`, `kb_editor_sprite2d_packaged` and
+`kb_editor_headless_automation_scenario` with CTest, then validate the reports:
+
+```powershell
+python sources/editor/tests/AuthoringMetricsTests.py --ctest ctest --build-root build/release
+```
+
+Use the actual CMake build directory. The validator checks counts against the
+executed scenarios and injects a failed export to verify failure accounting.
+The scenarios cover map and sprite editing, input setup, UI, save and export.
+
 ## Good to know
 
 - Headless runs have no keyboard/gamepad — the agent tests logic; you test controls in
   the editor with Play.
 - After updating the engine, run `kb_cli api --project .` to refresh the API reference.
 - Use PowerShell or cmd for these commands; Git Bash mangles `/Game/...` paths.
+
+## Live Lua debugger
+
+Start the editor with `kb_editor --project Sample.21kbproject --lua-debug-dir DebugSession`
+and enter Play, or run a source/cooked player with
+`kb_game --lua-debug-dir=DebugSession`. The endpoint must be a new directory
+whose parent already exists. Debugging is opt-in and local to the machine;
+use a directory accessible only to the intended local user. No network port opens.
+An orderly shutdown removes the endpoint marker. After a crash, choose a new directory.
+
+The CLI frontend uses the same `21kb.lua-debug/v1` JSON command session in both hosts:
+
+```powershell
+kb_cli debug --endpoint DebugSession --command connect
+kb_cli debug --endpoint DebugSession --command breakpoints --breakpoints points.json
+kb_cli debug --endpoint DebugSession --command status
+kb_cli debug --endpoint DebugSession --command stack
+kb_cli debug --endpoint DebugSession --command locals
+kb_cli debug --endpoint DebugSession --command evaluate --expression "counter + 2" --frame 0
+kb_cli debug --endpoint DebugSession --command step_into
+kb_cli debug --endpoint DebugSession --command step_over
+kb_cli debug --endpoint DebugSession --command step_out
+kb_cli debug --endpoint DebugSession --command continue
+kb_cli debug --endpoint DebugSession --command disconnect
+```
+
+`points.json` is an array such as `[{"chunk":"DebugProbe.lua","line":7}]`.
+Lines are one-based; chunk names match the full source name or its suffix. An empty
+array clears breakpoints. `pause` stops at the next executed Lua line. The coroutine
+yields at a breakpoint, leaving the editor message loop and other behaviours running.
+Stack/locals responses include frame names, chunks, lines and scalar snapshots;
+tables and functions are identified by type. Snapshots cap at 32 frames, 64 locals
+per frame and 512 bytes per local string (long strings have an ellipsis).
+
+The evaluator reads scalar locals and upvalues from the selected zero-based frame.
+It evaluates Lua expressions in an isolated state, without engine functions, global
+libraries or mutable references into the running scene. Limits are 4096 expression
+bytes, 1 MiB evaluation memory and 10000 Lua instructions. Invalid expressions and
+budget exhaustion return JSON errors without resuming or corrupting the paused script.
+Requests are limited to 64 KiB and replies to 8 MiB; each host poll handles at most
+8 requests. CLI failures return a nonzero exit code.
+
+Send `heartbeat` (or any command) at least once per 30 seconds to retain the session.
+After 30 seconds without requests, the host disables breakpoints and releases the
+paused coroutine. Explicit `disconnect` does the same immediately. The endpoint
+supports one shared debugging session; do not drive competing clients simultaneously.
+The editor also polls when its Play transport is paused. Lua steps run when Play is
+running. `kb_editor_lua_debugger_package` verifies CLI commands in the headless editor,
+source player and isolated cooked package, GUI tab/splitter interaction at a breakpoint,
+and recovery after the client stops sending requests.

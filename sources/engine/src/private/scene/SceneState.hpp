@@ -4,6 +4,8 @@
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "scene/SceneGameplayService.hpp"
+#include "scene/TimelineAudioPlayback.hpp"
+#include "engine/scene/TimelineSequencePlan.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
@@ -37,6 +39,7 @@
 #include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/TimelineAsset.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/transform/SceneTransformResiduals.hpp"
@@ -108,6 +111,10 @@ struct AnimatorRuntimeState {
     };
     std::vector<Motion> motions;
     std::size_t blendParameterIndex = std::numeric_limits<std::size_t>::max();
+    std::size_t blendParameterYIndex = std::numeric_limits<std::size_t>::max();
+    kb::assets::AssetHandle<BlendSpace2DAsset> blendSpace;
+    std::uint64_t blendSpaceLoadGeneration = 0U;
+    std::optional<BlendSpace2DPlan> blendSpacePlan;
 };
 
 struct AnimatorRuntimeBinding {
@@ -164,11 +171,13 @@ struct AnimatorInstanceSkeleton {
     std::unordered_map<SkeletonBoneId, std::uint32_t> boneIndices;
     std::array<PoseBuffer, 2U> poses;
     std::array<PoseSoa, 2U> stateScratch;
+    PoseSoa motionScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateTouched;
     std::array<std::vector<std::uint8_t>, 2U> motionTouched;
     std::vector<std::string> morphTargetNames;
     std::array<std::vector<float>, 2U> morphWeights;
     std::array<std::vector<float>, 2U> stateMorphScratch;
+    std::vector<float> motionMorphScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateMorphTouched;
     std::uint32_t currentPose = 0U;
     std::uint64_t evaluationCount = 0U;
@@ -221,9 +230,32 @@ struct AnimatorInstance {
 
 using AnimatorRuntimeRecord = AnimatorInstance;
 
+struct TimelineAnimatorControl {
+    std::uint64_t owner = 0;
+    std::optional<AnimatorInstance> previous;
+};
+
 struct TimelineRuntimeBinding {
     SceneEntity target{};
     bool explicitlyBound = false;
+};
+
+struct TimelineRuntimeAnimation {
+    kb::assets::AssetHandle<AnimationClip> asset;
+    std::uint64_t assetLoadGeneration = 0;
+    std::string binding;
+    double startSeconds = 0.0;
+    double endSeconds = 0.0;
+    double sourceOffsetSeconds = 0.0;
+    double rate = 1.0;
+};
+
+struct TimelineRuntimeSegment {
+    TimelineSequenceSegment source;
+    std::uint64_t assetLoadGeneration = 0;
+    std::map<std::string, TimelineRuntimeBinding, std::less<>> bindings;
+    std::vector<TimelineAudioVoice> audioVoices;
+    std::vector<TimelineRuntimeAnimation> animations;
 };
 
 struct TimelineRuntimeRecord {
@@ -235,6 +267,11 @@ struct TimelineRuntimeRecord {
     std::map<std::string, TimelineRuntimeBinding, std::less<>> bindings;
     float timeSeconds = 0.0F;
     bool playing = false;
+    float playbackRate = 1.0F;
+    bool looping = false;
+    std::vector<TimelineRuntimeSegment> segments;
+    std::size_t signalCount = 0;
+    bool audioDiscontinuity = true;
 };
 
 // Derived execution state for ContentInstanceComponent. It deliberately keeps
@@ -298,6 +335,7 @@ public:
     std::uint64_t localizationCatalogGeneration = 0U;
     std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorInstance> animators;
+    std::map<std::uint64_t, TimelineAnimatorControl> timelineAnimatorControls;
     SceneNavigationState navigation;
     std::map<std::uint64_t, SkeletonBindingRuntimePose> skeletonBindingPoses;
     // Clips made for another skeleton, played on a character's own (AnimationRetargeting), keyed by
@@ -335,6 +373,7 @@ public:
     class SceneTilemapRuntime* tilemapRuntime = nullptr;
     class ScenePhysics2DRuntime* physics2DRuntime = nullptr;
     SceneRuntimeFixedStepSettings fixedStepSettings;
+    bool deterministicExecution = false;
     // The delta exposed by Time.FixedDelta. In an installed production
     // ScriptRuntimeSceneSystem this mirrors fixedStepSettings exactly: script
     // FixedTick and physics consume one authoritative accumulator. It remains
@@ -350,6 +389,10 @@ public:
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;
     std::uint64_t lastRuntimeUpdateNanoseconds = 0U;
+    std::uint64_t lastRuntimeUpdateStartSteadyNanoseconds = 0U;
+    std::vector<SceneRuntimeStageTiming> lastRuntimeStages;
+    std::vector<SceneRuntimeSystemTiming> lastSceneSystems;
+    std::uint64_t nextSceneTraceGroup = 0U;
     std::uint64_t lastRuntimeTransformSyncNanoseconds = 0U;
     std::uint64_t lastRuntimeFixedCaptureStartNanoseconds = 0U;
     std::uint64_t lastRuntimeFixedCaptureEndNanoseconds = 0U;
@@ -813,6 +856,7 @@ public:
     PhysicsDebugQueryTrace physicsDebugQueryTrace{};
     kb::particles::IParticleSimulationBackend* particleSimulationBackend = nullptr;
     std::uint64_t particleSimulationBackendEpoch = 0U;
+    bool particleEmitterProfilingEnabled = false;
     kb::particles::ParticleRenderSnapshotChannel particleRenderSnapshots;
     kb::particles::ParticleRenderSnapshotResult lastParticleRenderSnapshotPublication{};
     kb::particles::ParticleGpuVisualStepJournal particleGpuVisualSteps;
@@ -830,17 +874,25 @@ public:
     std::vector<SceneUIEvent> uiEvents;
     SceneEntity uiHovered{};
     SceneEntity uiPressed{};
+    std::string uiPressedLink;
+    std::string uiPressedLinkSource;
+    std::uint32_t uiPressedLinkInstance = 0U;
     SceneEntity uiFocused{};
-    // A modal canvas was shown in the last frame, and the widget that had focus before it appeared.
-    bool uiModalActive = false;
-    SceneEntity uiModalRestoreFocus{};
+    struct UIModalFocus {
+        SceneEntity canvas{};
+        std::array<SceneEntity, 4U> restore{};
+    };
+    std::vector<UIModalFocus> uiModalFocusStack;
     SceneUIInput previousUIInput{};
     std::optional<std::uint32_t> uiTouchCapture;
     SceneEntity uiInertialScrollView{};
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
     std::size_t uiTextCursorByteOffset = 0U;
+    std::size_t uiTextSelectionAnchor = 0U;
+    std::vector<SceneUITextLayout> uiTextLayouts;
     std::optional<SceneUITextInputState> uiPendingTextInput;
+    std::optional<SceneUITextInputState> uiPendingTextReplacement;
     // The dropdown list that is open or fading out: the dropdown it belongs to, the cloned list, the
     // full-screen blocker under it, one cloned item per option in option order, and its fade.
     struct UIDropdownList {

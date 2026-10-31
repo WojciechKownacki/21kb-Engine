@@ -19,7 +19,7 @@ using PucLuaRawFunction = int (*)(lua_State*);
 // function (or by any engine code it calls) that tries to unwind across
 // PUC-Lua's C call frames is undefined behaviour, not a diagnosable
 // failure — ScriptFunctionRegistry::Call already closes this for calls
-// routed through it (Native, Lua's CallFunction, the future Visual Graph
+// routed through it (Native, Lua's CallFunction, the Visual Graph
 // CallNative node), but the ~150 Lua "sugar" functions bound directly by
 // PucLuaFunctionApi/PucLuaSelfApi/PucLuaSharedApi/PucLuaEventApi/
 // PucLuaEventsApi/PucLuaModuleApi call engine code before that choke point

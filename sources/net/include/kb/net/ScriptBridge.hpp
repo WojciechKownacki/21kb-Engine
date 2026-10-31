@@ -42,6 +42,7 @@ public:
     [[nodiscard]] bool Freeze(RpcRegistry& registry, std::string& error);
     void BindServer(ReplicationServer& server);
     void BindClient(ReplicationClient& replication, Client& connection, std::uint64_t playerId);
+    void SetClientAuthorized(bool authorized) noexcept { clientAuthorized_ = authorized; }
     void HandleEvent(const NetEvent& event);
 
     [[nodiscard]] kb::network::ScriptNetMode Mode() const override { return role_ == Role::Server ? kb::network::ScriptNetMode::Server : kb::network::ScriptNetMode::Client; }
@@ -68,6 +69,7 @@ private:
     ReplicationClient* replication_ = nullptr;
     Client* connection_ = nullptr;
     std::uint64_t playerId_ = 0U;
+    bool clientAuthorized_ = true;
 };
 
 } // namespace kb::net

@@ -1,7 +1,13 @@
 #include "scene/EditorSceneContext.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
+#include "engine/scene/SceneAssetUsers.hpp"
+#include "engine/assets/AssetFileName.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
+#include "engine/scene/ScenePlayerPreset.hpp"
+#include <sstream>
 #include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -63,6 +69,7 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
+#include "scene/ui/EditorUIThemeAssets.hpp"
 #include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "scene/EditorHierarchyObjectFactory.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
@@ -111,6 +118,8 @@
 #include "scene/input/EditorInputAssetGateway.hpp"
 #include "scene/input/EditorInputMappingContextAuthoring.hpp"
 #include "scene/audio/EditorAudioMixerAuthoring.hpp"
+#include "rendering/AudioMixerPanelView.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 #include "scene/EditorAssetErrorMessage.hpp"
@@ -298,6 +307,7 @@ void AppendEntityBranchRenderDirty(
     if (!item.error.empty()) {
         message += " (" + item.error + ")";
     }
+    if (!item.Succeeded()) message += " Fix: " + kb::assets::AssetImportRecoveryAdvice(item);
     return message;
 }
 
@@ -459,6 +469,9 @@ void EditorSceneContext::StartUntitledBasicScene() {
 }
 
 EditorSceneContext::~EditorSceneContext() {
+    ClearBlendSpace2DPreview();
+    timelineEditorPreview_.Clear();
+    ClearGameplayGraphPreview();
     if (scene_) EditorMap2DService::ClearPreviews(*scene_);
     if (documentScene_ && scene_ != documentScene_.get()) EditorMap2DService::ClearPreviews(*documentScene_);
     ClearBuildGameSigningPasswords();
@@ -477,6 +490,23 @@ EditorSceneContext::~EditorSceneContext() {
     documentScene_.reset();
     scriptModule_ = nullptr;
     scriptModuleHost_.reset();
+}
+
+namespace {
+std::filesystem::path luaDebugDirectory;
+}
+void EditorSceneContext::ConfigureLuaDebugger(std::filesystem::path directory) {
+    luaDebugDirectory = std::move(directory);
+}
+bool EditorSceneContext::StartLuaDebugger(const std::filesystem::path& directory, std::string& error) {
+    if (!scriptModule_ || !scriptModule_->Host()) { error = "start Play before attaching the debugger"; return false; }
+    return scriptModule_->Host()->StartLuaDebugger(directory, error);
+}
+bool EditorSceneContext::LuaDebuggerPaused() const {
+    return scriptModule_ && scriptModule_->Host() && scriptModule_->Host()->LuaRuntime().IsDebugPaused();
+}
+void EditorSceneContext::PollLuaDebugger() {
+    if (scriptModule_ && scriptModule_->Host()) scriptModule_->Host()->PollLuaDebugger();
 }
 
 void EditorSceneContext::EnsureScriptRuntime() {
@@ -553,6 +583,11 @@ void EditorSceneContext::EnsureScriptRuntime() {
         console_.Error("Scripts", "Script runtime could not be fully initialized; behaviours may not run.");
     } else {
         console_.Info("Scripts", "Script runtime ready for play mode.");
+    }
+    if (!luaDebugDirectory.empty()) {
+        std::string error;
+        if (!StartLuaDebugger(luaDebugDirectory, error)) console_.Error("Debugger", error);
+        else console_.Info("Debugger", "Lua debugger ready; connect with kb_cli debug.");
     }
     SurfaceScriptLibraryStartupReport();
 }
@@ -650,6 +685,7 @@ void EditorSceneContext::SurfaceScriptDiagnostics() {
 }
 
 bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
+    PollLuaDebugger();
     if (!HasPlayModeSceneSession() || !std::isfinite(deltaSeconds) ||
         deltaSeconds < 0.0F) {
         return false;
@@ -669,6 +705,7 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
     const std::span<const kb::scene::SceneEntity> pendingRenderUpdates = runtime.RenderProxyUpdateEntities();
     const std::vector<kb::scene::SceneEntity> preUpdateRenderUpdates{
         pendingRenderUpdates.begin(), pendingRenderUpdates.end() };
+    static_cast<void>(scene_->UI().SetViewport(uiAuthoringViewportSize_.x, uiAuthoringViewportSize_.y));
     static_cast<void>(runtime.Update(deltaSeconds));
     // Ready may create the camera on the first tick of an already attached
     // script module. A destroyed or disabled camera also needs a new selection.
@@ -1111,6 +1148,9 @@ void EditorSceneContext::MarkSceneDocumentDirty() noexcept {
 }
 
 bool EditorSceneContext::SaveOpenDocuments() {
+    if (timelineEditorDocument_.Dirty() && !SaveTimelineEditorAsset()) return false;
+    if (blendSpaceEditor_ && blendSpaceEditor_->document.Dirty() && !SaveBlendSpace2DEditorAsset()) return false;
+    if (gameplayGraphEditor_ && gameplayGraphEditor_->document.Dirty() && !gameplayGraphEditor_->Save(*scene_)) return false;
     LogMaterialGraphDebug(console_, "save-open-documents-request materialOpen=" +
         std::to_string(materialEditor_.OpenAssetId().value) +
         " materialDirty=" + std::string{ materialEditor_.Dirty() ? "true" : "false" } +
@@ -1866,6 +1906,26 @@ bool EditorSceneContext::IsHierarchyRenaming() const noexcept {
     return hierarchyRenameEntity_.IsValid() && scene_->Entities().IsAlive(hierarchyRenameEntity_);
 }
 
+bool EditorSceneContext::RefreshAssetUsers() {
+    const std::uint64_t revision = SceneRenderRevision();
+    const std::uint64_t generation = SceneDocumentGeneration();
+    if (revision == assetUsersRevision_ && generation == assetUsersGeneration_) {
+        return false;
+    }
+    assetUsersRevision_ = revision;
+    assetUsersGeneration_ = generation;
+    EditorAssetUsers users;
+    for (kb::scene::SceneAssetUser& user : kb::scene::CollectSceneAssetUsers(kb::scene::SceneDocumentService::Capture(*scene_, "AssetUsers"))) {
+        users[user.assetId].push_back(std::move(user.objectName));
+    }
+    if (users == assetUsers_) {
+        return false;
+    }
+    assetUsers_ = std::move(users);
+    ++assetUsersVersion_;
+    return true;
+}
+
 bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
     return IsHierarchyRenaming()
         || IsHierarchySearchFocused()
@@ -1875,7 +1935,10 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
         || Inspector().IsTextEditing()
         || IsMaterialGraphNodeRenameEditing()
         || IsMaterialGraphConstantInlineEditing()
-        || IsMaterialEditorFindFocused();
+        || IsMaterialEditorFindFocused()
+        || console_.Filter().IsFocused()
+        || projectSettings_.Search().IsFocused()
+        || agentPanel_.InputFocused();
 }
 
 bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {
@@ -2279,9 +2342,6 @@ bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& v
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    if (PrefabAssetHasSceneInstances(id, "move")) {
-        return false;
-    }
     const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
@@ -2516,8 +2576,22 @@ kb::scene::SceneEntity EditorSceneContext::CreateMenuObject(std::string_view id,
     kb::scene::SceneEntity created{};
     std::string error;
     if (ExecuteSceneCommand("Create " + std::string{ item->name }, [this, item, parent, &created, &error]() {
-            kb::scene::SceneCreateResult result = kb::scene::SceneCreateMenu::Create(*scene_, item->id,
-                EditorHierarchyObjectFactory::MakeUniqueName(*scene_, item->name), project_, parent);
+            const auto name = EditorHierarchyObjectFactory::MakeUniqueName(*scene_, item->name);
+            kb::scene::SceneCreateResult result;
+            if (kb::scene::IsPlayerPreset(item->id)) {
+                std::ostringstream notes, errors;
+                result.entity = kb::scene::AddPlayerPreset(*scene_, EditorProjectPaths::ProjectRoot(), item->id, name, { notes, errors });
+                result.error = errors.str();
+                if (!notes.str().empty()) console_.Info("2D Player", notes.str());
+                if (result.entity.IsValid() && !result.error.empty()) console_.Warning("2D Player", result.error);
+                const auto settings = kb::project::ProjectSettingsStore::Load(
+                    kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()));
+                if (settings.Succeeded()) projectConfig_.inputMappingContext = settings.settings.inputMappingContext;
+                if (result.entity.IsValid() && parent.IsValid() && !scene_->Hierarchy().SetParent(result.entity, parent)) {
+                    scene_->Entities().Destroy(result.entity);
+                    result = { {}, "The player could not be parented" };
+                }
+            } else result = kb::scene::SceneCreateMenu::Create(*scene_, item->id, name, project_, parent);
             if (!result.entity.IsValid()) {
                 error = std::move(result.error);
                 return false;
@@ -2756,6 +2830,24 @@ bool EditorSceneContext::CreateInputAxisAsset(const std::filesystem::path& virtu
 
 bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder) {
     return InputMappingContextAuthoring().Create(virtualFolder);
+}
+
+kb::assets::AssetId EditorSceneContext::AudioMixerPanelAsset() const {
+    const auto selected = assetBrowser_.InspectorAsset();
+    const auto* metadata = scene_->Assets().Manager().Registry().Find(selected);
+    if (metadata != nullptr && metadata->type == kb::audio::kAudioMixerAssetType) return selected;
+    return kb::assets::AssetId{kb::scene::SceneAudioMixerAccess::ActiveMixer(*scene_)};
+}
+
+bool EditorSceneContext::AudioMixerPanelPointer(DockRect content, int x, int y) {
+    const auto id = AudioMixerPanelAsset();
+    const auto asset = ReadAudioMixerAsset(id);
+    if (!asset) return false;
+    // Keep Undo routed to this asset even when the panel follows the active scene mixer.
+    if (!assetBrowser_.SelectAsset(id, scene_->Assets().Manager())) return false;
+    auto authoring = AudioMixerAuthoring();
+    const auto layout = AudioMixerPanelView::Layout(content, *asset, EditorAudioMixerRuntime::Query(*scene_, id), audioMixerPanelFirst_);
+    return AudioMixerPanelView::PointerDown(*scene_, id, authoring, layout, x, y, audioMixerPanelFirst_);
 }
 
 bool EditorSceneContext::CreateAudioMixerAsset(const std::filesystem::path& virtualFolder) {
@@ -4379,6 +4471,13 @@ bool EditorSceneContext::SetUIColor(kb::scene::SceneEntity entity, kb::scene::UI
             return false;
         }
     }
+    std::vector<kb::scene::UIThemePropertyKey> themeKeys;
+    for (int lane = 0; lane < 4; ++lane)
+        themeKeys.push_back({component, std::string{rows[static_cast<std::size_t>(found->groupStart + lane)].name}});
+    if (!EditorUIThemeAssets::MarkLocalOverrides(candidate, themeKeys)) {
+        console_.Warning("Inspector", "The local theme override list is invalid or full.");
+        return false;
+    }
     if (kb::scene::AreUIComponentSetsEqual(current, candidate)) return false;
     return ExecuteSceneCommand("Edit UI Color", [this, entity, candidate = std::move(candidate)]() {
         kb::scene::SynchronizeSceneUIComponents(scene_->Components().UI(), entity, candidate);
@@ -4473,6 +4572,11 @@ bool EditorSceneContext::SetUIComponentProperty(
         console_.Warning("Inspector", "UI property value is invalid.");
         return false;
     }
+    const kb::scene::UIThemePropertyKey themeKey{component, std::string{property}};
+    if (!EditorUIThemeAssets::MarkLocalOverrides(candidate, std::span{&themeKey, 1U})) {
+        console_.Warning("Inspector", "The local theme override list is invalid or full.");
+        return false;
+    }
     const kb::scene::UIComponentSet current =
         kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
     if (kb::scene::AreUIComponentSetsEqual(current, candidate)) return false;
@@ -4555,18 +4659,10 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
         return false;
     }
     if (metadata->type == kb::scene::kAnimatorControllerAssetType) return OpenAnimatorEditorAsset(id);
-    if (metadata->type != kb::scene::kTimelineAssetType) {
-        console_.Error("Asset Editor", "Only Timeline assets use the Script Editor.");
-        return false;
-    }
-    std::filesystem::path path = metadata->physicalPath;
-    if (const std::optional<std::filesystem::path> mounted =
-            scene_->Assets().Manager().Mounts().Resolve(metadata->virtualPath)) {
-        path = *mounted;
-    }
-    scriptEditor_.Open(path, id, metadata->virtualPath.filename().string());
-    console_.Info("Asset Editor", "Opened typed animation/timeline asset: " + metadata->virtualPath.generic_string());
-    return true;
+    if (metadata->type == kb::scene::kTimelineAssetType) return OpenTimelineEditorAsset(id);
+    if (metadata->type == kb::scene::kBlendSpace2DAssetType) return OpenBlendSpace2DEditorAsset(id);
+    console_.Error("Asset Editor", "Select a Timeline or Animator Controller asset.");
+    return false;
 }
 
 bool EditorSceneContext::OpenAnimatorEditorAsset(kb::assets::AssetId id) {
@@ -4615,6 +4711,15 @@ bool EditorSceneContext::OpenAnimatorEditorAsset(kb::assets::AssetId id) {
 
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerState& state : layer.states) {
+            if (!state.blendSpaceReference.empty()) {
+                kb::assets::AssetId spaceId;
+                const auto* spaceMetadata=kb::assets::TryParseAssetId(state.blendSpaceReference,spaceId) && spaceId.IsValid()
+                    ? manager.Registry().Find(spaceId) : manager.Registry().FindByPath(kb::assets::Utf8Path(state.blendSpaceReference));
+                const auto space=spaceMetadata?manager.Load<kb::scene::BlendSpace2DAsset>(spaceMetadata->id):kb::assets::AssetHandle<kb::scene::BlendSpace2DAsset>{};
+                if (!space.IsLoaded() || space->samples.empty() || std::ranges::any_of(space->samples,[&](const auto& sample) { return !validateClip(sample.clipReference); })) {
+                    console_.Error("Animator Editor","BlendSpace2D references a missing or incompatible Animation Clip.");return false;
+                }
+            }
             if (!state.clipReference.empty() && !validateClip(state.clipReference)) {
                 console_.Error("Animator Editor", "Animator Controller references a missing or incompatible Animation Clip.");
                 return false;

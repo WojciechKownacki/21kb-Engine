@@ -121,6 +121,42 @@ jobs:
             build/web-input-results/browser.log
           if-no-files-found: ignore
 
+      - name: Verify browser text editor lifecycle and clipboard transport
+        run: |
+          browser="$(command -v google-chrome || command -v chromium)"
+          build/web-input-tools/bin/python sources/game/tests/web/run_text_bridge_tests.py \
+            --browser "$browser" --output build/web-text-results
+      - name: Keep browser text results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-text-results
+          path: |
+            build/web-text-results/result.json
+            build/web-text-results/browser.log
+          if-no-files-found: ignore
+
+      - name: Build isolated browser save storage
+        run: |
+          cmake -S sources/engine/tests/save_storage -B build/web-save -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/web-save --parallel 2
+      - name: Verify IndexedDB persistence across browser restarts
+        run: |
+          browser="$(command -v google-chrome || command -v chromium)"
+          build/web-input-tools/bin/python sources/engine/tests/save_storage/run_browser_tests.py \
+            --browser "$browser" --directory build/web-save --output build/web-save-results
+      - name: Keep browser save results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-save-results
+          path: |
+            build/web-save-results/result.json
+            build/web-save-results/*-browser.log
+          if-no-files-found: ignore
+
   native-read-batches:
     name: Linux native read batches
     runs-on: ubuntu-24.04
@@ -171,9 +207,9 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "ON"
-            targets: "kb_engine_tests;kb_editor_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests;kb_background_read_tests;kb_test_process_error_tests"
+            targets: "kb_web_text_clipboard_tests;kb_ui_grapheme_tests;kb_engine_tests;kb_win32_clipboard_tests;kb_editor_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests;kb_background_read_tests;kb_test_process_error_tests"
             api_compat_check: "OFF"
-            test_regex: "^(kb_engine_scene_ui|kb_engine_scene_transform_golden|kb_engine_scene_parenting|kb_engine_hierarchy_depth|kb_engine_scene_hierarchy_depth|kb_engine_prefab_hierarchy_depth|kb_engine_ecs_batch_hierarchy_depth|kb_editor_audio_mixer_runtime|kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests|kb_test_process_errors|kb_renderer_assertion_errors|kb_renderer_display_alpha|kb_renderer_graph_program_lifetime|kb_renderer_graph_shader_node_cook_[0-3])$"
+            test_regex: "^(kb_web_text_clipboard|kb_ui_grapheme_conformance|kb_win32_clipboard|kb_engine_scene_ui|kb_engine_scene_transform_golden|kb_engine_scene_parenting|kb_engine_hierarchy_depth|kb_engine_scene_hierarchy_depth|kb_engine_prefab_hierarchy_depth|kb_engine_ecs_batch_hierarchy_depth|kb_editor_audio_mixer_runtime|kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests|kb_test_process_errors|kb_renderer_assertion_errors|kb_renderer_display_alpha|kb_renderer_graph_program_lifetime|kb_renderer_graph_shader_node_cook_[0-3])$"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"
@@ -194,6 +230,9 @@ jobs:
         with:
             submodules: recursive
             fetch-depth: 0
+
+      - name: Verify pinned Unicode tables
+        run: python scripts/generate_grapheme_tables.py --check
 
       - name: Validate changed patch whitespace
         shell: pwsh

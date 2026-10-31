@@ -47,6 +47,9 @@ public:
         Reset();
         if (stats.HasMissingResources() || stats.droppedInstanceCount != 0U ||
             (stats.gpuDrivenFeatureState != SceneGpuDrivenFeatureState::Disabled &&
+             stats.gpuDrivenFeatureState != SceneGpuDrivenFeatureState::ComputeCulling &&
+             stats.gpuDrivenFeatureState != SceneGpuDrivenFeatureState::IndirectDrawSubmit &&
+             stats.gpuDrivenFeatureState != SceneGpuDrivenFeatureState::MeshletSubmit &&
              stats.gpuDrivenFeatureState != SceneGpuDrivenFeatureState::CpuValidationOnly)) return;
         for (const auto& command : commands) {
             if (command.meshResource == nullptr ||

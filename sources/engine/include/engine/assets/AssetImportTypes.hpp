@@ -155,6 +155,7 @@ struct AssetImportResult {
 };
 
 [[nodiscard]] std::string_view ToString(AssetImportCategory category) noexcept;
+[[nodiscard]] std::string AssetImportRecoveryAdvice(const AssetImportItemResult& item);
 [[nodiscard]] std::string_view ToString(AssetImportItemStatus status) noexcept;
 [[nodiscard]] std::string_view RuntimeAssetType(AssetImportCategory category) noexcept;
 

@@ -190,6 +190,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateAudioMixerAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewUITheme: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateUIThemeAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::NewPostProcessProfile: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreatePostProcessProfileAsset(destinationFolder);
@@ -201,6 +205,14 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
     case EditorAssetContextCommand::NewParticleEffect: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateParticleEffectAsset(destinationFolder);
+    }
+    case EditorAssetContextCommand::NewGameplayGraph: {
+        const auto destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateGameplayGraphAsset(destinationFolder);
+    }
+    case EditorAssetContextCommand::NewBlendSpace2D: {
+        const auto destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateBlendSpace2DAsset(destinationFolder);
     }
     case EditorAssetContextCommand::ExtractMaterials:
         if (targetKind == EditorAssetContextTargetKind::Asset) {

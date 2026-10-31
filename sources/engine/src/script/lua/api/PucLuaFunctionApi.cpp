@@ -1,4 +1,6 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
+#include "engine/assets/AssetId.hpp"
 
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/script/PucLuaSafeCall.hpp"
@@ -28,7 +30,7 @@ namespace kb::script {
 namespace {
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return PucLuaRuntimeApi::ContextFromUpvalue(state);
 }
 
 [[nodiscard]] std::vector<ScriptFunctionArgument> ArgumentsFromTable(lua_State* state, int index) {
@@ -384,6 +386,7 @@ int LuaAudioMeterCall(lua_State* state, const char* function, const char* output
 
 int LuaAudioConfigureMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ConfigureMeters", "configured"); }
 int LuaAudioResetMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ResetMeters", "reset"); }
+int LuaAudioDiagnostics(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Diagnostics"); }
 int LuaAudioMeter(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Meter"); }
 
 int LuaAudioSetListenerLocalUser(lua_State* state) {
@@ -3299,6 +3302,16 @@ int LuaTimelinePause(lua_State* state) {
     });
 }
 
+int LuaTimelineSetPlayback(lua_State* state) {
+    luaL_checktype(state, 3, LUA_TBOOLEAN);
+    return LuaTimelineAppliedCall(state, "Timeline.SetPlayback", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+        Arg("rate", ScriptValue{static_cast<float>(luaL_checknumber(state, 2))}),
+        Arg("loop", ScriptValue{lua_toboolean(state, 3) != 0}),
+    });
+}
+
 int LuaTimelineSeek(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Seek", {
         Arg("instance", ScriptValue{
@@ -3385,10 +3398,21 @@ ScriptFunctionCallResult CallLocalization(ScriptExecutionContext& context, const
 int LuaLocalizationSetCatalog(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
-    const lua_Integer catalog = luaL_checkinteger(state, 1);
-    if (catalog < 0) return luaL_error(state, "Localization.SetCatalog requires a non-negative asset id");
+    std::uint64_t catalog = 0U;
+    if (lua_type(state, 1) == LUA_TSTRING) {
+        std::size_t length = 0U;
+        const char* text = lua_tolstring(state, 1, &length);
+        kb::assets::AssetId id;
+        if (!kb::assets::TryParseAssetId(std::string_view{text, length}, id))
+            return luaL_error(state, "Localization.SetCatalog requires a hexadecimal asset id string");
+        catalog = id.value;
+    } else {
+        const lua_Integer value = luaL_checkinteger(state, 1);
+        if (value < 0) return luaL_error(state, "Localization.SetCatalog requires a non-negative asset id or hexadecimal string");
+        catalog = static_cast<std::uint64_t>(value);
+    }
     const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.SetCatalog", {
-        Arg("catalog", ScriptValue{ static_cast<std::uint64_t>(catalog), ScriptValueType::Hash }),
+        Arg("catalog", ScriptValue{ catalog, ScriptValueType::Hash }),
     });
     if (!result.Succeeded()) return PushCallError(state, result, "Localization catalog was rejected");
     lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3454,6 +3478,30 @@ int LuaLocalizationFormatPluralNumber(lua_State* state) {
     return 1;
 }
 
+int LuaLocalizationResolveResource(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    std::uint64_t source = 0U;
+    if (lua_type(state, 1) == LUA_TSTRING) {
+        std::size_t length = 0U;
+        const char* text = lua_tolstring(state, 1, &length);
+        kb::assets::AssetId id;
+        if (!kb::assets::TryParseAssetId(std::string_view{text, length}, id))
+            return luaL_error(state, "Localization.ResolveResource requires a hexadecimal asset id string");
+        source = id.value;
+    } else {
+        const lua_Integer value = luaL_checkinteger(state, 1);
+        if (value < 0) return luaL_error(state, "Localization.ResolveResource requires a non-negative asset id or hexadecimal string");
+        source = static_cast<std::uint64_t>(value);
+    }
+    const auto result = CallLocalization(*context, "Localization.ResolveResource", {
+        Arg("source", ScriptValue{source, ScriptValueType::Hash})});
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization resource lookup failed");
+    const auto output = kb::assets::ToString(kb::assets::AssetId{result.Output("asset")->AsUInt64()});
+    lua_pushlstring(state, output.data(), output.size());
+    return 1;
+}
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -3468,8 +3516,8 @@ int SetClosureTrampoline(lua_State* state) {
     return PucLuaSafeInvoke(state, function);
 }
 
-void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
-    lua_pushlightuserdata(state, &context);
+void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext&) {
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushlightuserdata(state, reinterpret_cast<void*>(function));
     lua_pushcclosure(state, &SetClosureTrampoline, 2);
     lua_setfield(state, -2, name);
@@ -3507,6 +3555,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioDspState,
     &LuaAudioConfigureMeters,
     &LuaAudioResetMeters,
+    &LuaAudioDiagnostics,
     &LuaAudioMeter,
     &LuaAudioSetListenerLocalUser,
     &LuaAudioListenerLocalUser,
@@ -3661,6 +3710,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaTimelineCreate,
     &LuaTimelineRelease,
     &LuaTimelinePlay,
+    &LuaTimelineSetPlayback,
     &LuaTimelinePause,
     &LuaTimelineSeek,
     &LuaTimelineSkip,
@@ -3673,6 +3723,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaLocalizationTranslate,
     &LuaLocalizationFormatPlural,
     &LuaLocalizationFormatPluralNumber,
+    &LuaLocalizationResolveResource,
     &LuaPointerPosition,
     &LuaPointerDelta,
     &LuaPointerButton,
@@ -3730,11 +3781,11 @@ void AttachCatalogModuleTables(lua_State* state, int environmentIndex, ScriptExe
 } // namespace
 
 void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaCallFunction>, 1);
     lua_setfield(state, environmentIndex, "CallFunction");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaLog>, 1);
     lua_setfield(state, environmentIndex, "Log");
 

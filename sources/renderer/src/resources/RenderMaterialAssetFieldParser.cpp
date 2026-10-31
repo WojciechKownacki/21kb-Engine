@@ -201,7 +201,7 @@ bool RenderMaterialAssetFieldParser::IsKnown(std::string_view keyword) noexcept 
         keyword == "layerBlendMode" ||
         keyword == "translucencyBlend" ||
         keyword == "doubleSided" ||
-        keyword == "writesDepth";
+        keyword == "writesDepth" || keyword == "pointSampling";
 }
 
 bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string_view rest, RenderMaterialAssetData& asset) {
@@ -294,6 +294,7 @@ bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string
     if (keyword == "doubleSided") {
         return ParseBool(rest, asset.desc.doubleSided);
     }
+    if (keyword == "pointSampling") return ParseBool(rest, asset.desc.pointSampling);
     if (keyword == "writesDepth") {
         return ParseBool(rest, asset.desc.writesDepth);
     }

@@ -110,6 +110,7 @@ public:
     // graphs render through their cooked GPU program instead of the CPU PBR fallback (MAT-31).
     void SetGraphShaderCacheRoot(std::string root);
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
+    [[nodiscard]] bool RendererInitialized() const noexcept;
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;
@@ -121,6 +122,7 @@ public:
     void SetHostSurfaceSuspended(HWND host, bool suspended) noexcept;
     void SetAllHostSurfacesSuspended(bool suspended) noexcept;
     void NotifyHostDpiChanged(HWND host) noexcept;
+    void PrepareParticleScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     [[nodiscard]] std::uint32_t RendererCompletedFrame() const noexcept;
     [[nodiscard]] render::SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;

@@ -9,6 +9,10 @@ class SceneAnimatorService final {
 public:
     SceneAnimatorService() = delete;
     [[nodiscard]] static bool Attach(Scene& scene, SceneEntity entity, std::uint64_t controllerAssetId);
+    [[nodiscard]] static bool SampleTimelineClip(Scene& scene, SceneEntity entity,
+        std::uint64_t clipAssetId, float sourceTimeSeconds, std::uint64_t timelineOwner);
+    static void ReleaseTimelineClips(Scene& scene, std::uint64_t timelineOwner,
+        std::span<const SceneEntity> retained = {}) noexcept;
     [[nodiscard]] static bool Exists(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::uint64_t Controller(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::span<const AnimatorParameterValue> Parameters(const Scene& scene, SceneEntity entity) noexcept;
@@ -37,6 +41,7 @@ public:
         const AnimatorIkTarget& target) noexcept;
     [[nodiscard]] static bool ClearIkTarget(
         Scene& scene, SceneEntity entity, std::string_view name) noexcept;
+    [[nodiscard]] static std::optional<float> Curve(const Scene& scene, SceneEntity entity, std::string_view name);
     [[nodiscard]] static std::optional<AnimatorStateInfo> State(const Scene& scene, SceneEntity entity, std::string_view layer);
     [[nodiscard]] static std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot(
         const Scene& scene) noexcept;

@@ -24,6 +24,30 @@ struct SceneUITextInputState {
     SceneEntity entity;
     std::u32string text;
     std::size_t caret = 0U;
+    std::optional<std::size_t> selectionAnchor;
+};
+
+// Geometry from the last rendered text layout. Byte offsets remain logical even
+// when the visual order differs. Hosts may publish the same contract without a GPU.
+struct SceneUITextCaretStop {
+    std::uint32_t byteOffset = 0U;
+    float x = 0.0F;
+    float top = 0.0F;
+    float bottom = 0.0F;
+    bool leading = false;
+};
+
+struct SceneUITextLinkRegion {
+    std::array<kb::math::Vec2, 4U> corners{};
+    std::string target;
+    std::uint32_t instance = 0U;
+};
+
+struct SceneUITextLayout {
+    SceneEntity entity;
+    std::string source;
+    std::vector<SceneUITextCaretStop> carets;
+    std::vector<SceneUITextLinkRegion> links;
 };
 
 enum class UIInteractionState : std::uint8_t {
@@ -59,6 +83,12 @@ struct SceneUIInput {
     bool cancelDown = false;
     bool backspaceDown = false;
     bool deleteDown = false;
+    bool extendTextSelection = false;
+    bool selectAllTextDown = false;
+    bool textUpDown = false;
+    bool textDownDown = false;
+    bool textHomeDown = false;
+    bool textEndDown = false;
     float scrollDelta = 0.0F;
     std::span<const char32_t> textInput;
     // Independent device contacts. A begin over UI owns its pointer until release;
@@ -83,6 +113,7 @@ enum class SceneUIEventType : std::uint8_t {
     Dragged,
     DragEnded,
     Dropped,
+    LinkActivated,
 };
 
 struct SceneUIEventDescriptor {
@@ -141,6 +172,7 @@ struct SceneUIFrameElement {
     kb::math::Color interactionTint{};
     bool interactionEnabled = false;
     bool hitTestable = false;
+    std::optional<UISelectable> selectable;
     std::optional<UISprite> sprite;
     std::optional<UIImage> image;
     std::optional<UIRawImage> rawImage;
@@ -166,6 +198,12 @@ struct SceneUIFrameElement {
     // shipped text field looked inert.
     std::uint32_t textCaretByteOffset = 0U;
     bool textCaretVisible = false;
+    std::uint32_t textSelectionBegin = 0U;
+    std::uint32_t textSelectionEnd = 0U;
+    // Language of the resolved text, which may differ from the selected locale.
+    std::string textLanguage;
+    // The selectable's own transition state, retained even when tint is applied to another graphic.
+    kb::math::Color selectableTransitionTint{};
 };
 
 // Why a frame build refused, and which entity caused it. The frame builder is fail-closed:
@@ -190,6 +228,8 @@ struct SceneUIFrame {
     // hit-testable nor interactive.
     bool modalActive = false;
     std::int32_t modalSortingOrder = 0;
+    SceneEntity modalCanvas{};
+    std::string language;
 
     [[nodiscard]] SceneEntity HitTest(kb::math::Vec2 point) const noexcept;
     // The topmost hit that is not `excluded` or inside it - where a dragged widget is being dropped.
@@ -249,6 +289,12 @@ class SceneUIAccess {
     [[nodiscard]] std::optional<SceneUITextInputState> TextInputState() const;
     // Applied during the next UI update using the field's normal validation and events.
     [[nodiscard]] bool QueueTextInputState(SceneUITextInputState input);
+    // Clipboard transfers use the same selection, limits and validation as typing.
+    // Password and PIN fields never expose their selected contents.
+    [[nodiscard]] std::optional<std::u32string> SelectedText() const;
+    [[nodiscard]] bool QueueTextReplacement(std::u32string text);
+    // Replaces previous render feedback; stale source snapshots are ignored by editing.
+    void PublishTextLayouts(std::vector<SceneUITextLayout> layouts);
 
   private:
     Scene& scene_;

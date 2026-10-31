@@ -83,6 +83,8 @@ void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
 }
 
 void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
+    command.gpuFrustumCull = false;
+    command.gpuMeshletDraw = false;
     command.instanceRevision = 0U;
     command.sourceBatchId = 0U;
     command.pass = MeshPassType::BaseOpaque;

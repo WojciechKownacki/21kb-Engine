@@ -175,6 +175,8 @@ void EditorSceneContext::DiscardDirtySceneDocument(std::string_view reason) {
 void EditorSceneContext::SetRenderSceneReleaseHandler(
     std::function<void(const kb::scene::Scene&)> handler) {
     renderSceneReleaseHandler_ = std::move(handler);
+    timelineEditorPreview_.SetReleaseHandler(renderSceneReleaseHandler_);
+    SynchronizeBlendSpace2DReleaseHandler();
     // The material previews render through the same renderer as the main scene.
     for (EditorMaterialPreviewScene* preview : { materialPreviewScene_.get(), inspectorMaterialPreviewScene_.get(), materialThumbnailScene_.get() }) {
         if (preview != nullptr) {
@@ -184,6 +186,9 @@ void EditorSceneContext::SetRenderSceneReleaseHandler(
 }
 
 void EditorSceneContext::ReleaseRenderedSceneResources() {
+    ClearGameplayGraphPreview();
+    ClearBlendSpace2DPreview();
+    ClearTimelineEditorPreview();
     if (renderSceneReleaseHandler_) {
         renderSceneReleaseHandler_(*scene_);
     }
@@ -203,6 +208,8 @@ bool EditorSceneContext::PrepareDirtySceneTransition(std::string_view reason, Ed
 }
 
 bool EditorSceneContext::BeginPlayModeSceneSession() {
+    PauseTimelineEditorPreview();
+    static_cast<void>(PlayBlendSpace2DPreview(false));
     ScopedPlayTransitionTrace trace{"transition=begin phase=total"};
     if (playModeSceneSession_.Active()) {
         return true;

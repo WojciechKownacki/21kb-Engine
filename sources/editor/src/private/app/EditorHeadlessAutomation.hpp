@@ -183,6 +183,9 @@ public:
     // A toolbar menu opened on a real editor window drops down in a popup above the
     // window and its scene viewport, paints its rows and passes clicks back.
     [[nodiscard]] bool VerifyToolbarMenuOverlay();
+    [[nodiscard]] bool VerifyParticleControls();
+    [[nodiscard]] bool VerifyWorkspaceControls();
+    [[nodiscard]] bool VerifyDebuggerInteraction();
     // Clicking the Add Component browser's search box on a real editor window and
     // typing filters the components, whether the keys reach the window or the popup.
     [[nodiscard]] bool VerifyAddComponentSearchInput();
@@ -190,6 +193,8 @@ public:
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
+    [[nodiscard]] bool CaptureTimelinePreview(std::string_view checkpoint);
+    [[nodiscard]] bool CaptureBlendSpace2DPreview(std::string_view checkpoint);
     // The Material Editor's preview of the open material, presented as the panel presents it.
     [[nodiscard]] bool CaptureMaterialPreview(std::string_view checkpoint, int width, int height);
     // The post-process settings the Scene panel's viewport renders with now (its own present

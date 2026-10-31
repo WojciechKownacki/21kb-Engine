@@ -47,7 +47,7 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
 std::uint64_t ParticleCompilerCapabilities::StableKey() const noexcept {
     return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL) |
         (mesh ? 8ULL : 0ULL) | (trail ? 16ULL : 0ULL) | (ribbon ? 32ULL : 0ULL) |
-        (beam ? 64ULL : 0ULL) | (volumetric ? 128ULL : 0ULL) | (decal ? 256ULL : 0ULL);
+        (beam ? 64ULL : 0ULL) | (volumetric ? 128ULL : 0ULL) | (decal ? 256ULL : 0ULL) | (customProcess ? 512ULL : 0ULL);
 }
 
 std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::ValidateCapabilities(
@@ -56,12 +56,6 @@ std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::Validat
     diagnostics.reserve(1U + asset.emitters.size() + asset.eventBindings.size());
     for (std::size_t bindingIndex = 0U; bindingIndex < asset.eventBindings.size(); ++bindingIndex) {
         const auto& binding = asset.eventBindings[bindingIndex];
-        if (binding.action == kb::scene::ParticleEventAction::EmitEffectAsset) {
-            Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-                "effect.eventBinding[" + std::to_string(bindingIndex) + "].action",
-                "external particle effect events are not executable by the current compiler", binding.sourceEmitterId,
-                binding.sourceModuleId);
-        }
         if (binding.sourceModuleId == 0U) continue;
         const auto emitter = std::find_if(asset.emitters.begin(), asset.emitters.end(), [&](const auto& candidate) {
             return candidate.emitterId == binding.sourceEmitterId;
@@ -81,6 +75,10 @@ std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::Validat
     }
     for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
         const auto& emitter = asset.emitters[emitterIndex];
+        if (!emitter.customProcess.Empty() && !request.capabilities.customProcess)
+            Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+                "effect.emitter[" + std::to_string(emitterIndex) + "].customProcess",
+                "custom particle processes are unavailable in the selected capability set", emitter.emitterId);
         if (emitter.screenDepthCollision) {
             diagnostics.push_back({.code = kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
                 .severity = kb::scene::ParticleEffectDiagnosticSeverity::Warning,
@@ -112,7 +110,9 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
     if (kb::scene::ParticleEffectDiagnosticsHaveErrors(capabilities)) return result;
 
     const kb::scene::ParticleEffectDependencyResult dependencies =
-        kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry);
+        request.dependencyLoader
+            ? kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry, request.dependencyLoader)
+            : kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry);
     result.transitiveDependencies = dependencies.transitiveDependencies;
     result.diagnostics.insert(result.diagnostics.end(), dependencies.diagnostics.begin(),
         dependencies.diagnostics.end());
@@ -137,6 +137,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         destination.materialAssetId = Resolve(source.output.material, registry);
         destination.meshAssetId = Resolve(source.output.mesh, registry);
         destination.textureAtlasAssetId = Resolve(source.output.textureAtlas, registry);
+        destination.customProcessAssetId = Resolve(source.customProcess, registry);
         destination.shapeMeshAssetId = Resolve(source.spawn.shapeMesh, registry);
         destination.blendMode = source.output.blend;
         destination.sortMode = source.output.sort;
@@ -354,6 +355,8 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         compiled.eventBindings[index] = {.sourceEmitterIndex = static_cast<std::uint8_t>(sourceEmitter - compiled.emitters.begin()),
             .trigger = source.trigger, .sourceModuleId = source.sourceModuleId,
             .targetEmitterIndex = static_cast<std::uint8_t>(targetEmitter - compiled.emitters.begin()),
+            .targetEffectAssetId = source.action == kb::scene::ParticleEventAction::EmitEffectAsset
+                ? Resolve(source.targetEffect, registry) : 0U,
             .count = source.count, .maxDepth = static_cast<std::uint8_t>(source.maxDepth),
             .perStepBudget = source.perStepBudget, .ratePerSecond = source.ratePerSecond};
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene/EditorHierarchySearchState.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -47,6 +49,11 @@ public:
     [[nodiscard]] EditorConsoleButton PressedButton() const noexcept { return pressedButton_; }
     [[nodiscard]] std::uint32_t Count(EditorConsoleLevel level) const noexcept;
     [[nodiscard]] bool Accepts(EditorConsoleLevel level) const noexcept;
+    // Whether the entry passes both the level toggles and the text filter.
+    [[nodiscard]] bool Shows(const EditorConsoleEntry& entry) const noexcept;
+    // The text filter in the toolbar: case-insensitive, over the message and the category.
+    [[nodiscard]] EditorHierarchySearchState& Filter() noexcept { return filter_; }
+    [[nodiscard]] const EditorHierarchySearchState& Filter() const noexcept { return filter_; }
     [[nodiscard]] static constexpr std::size_t Capacity() noexcept { return kCapacity; }
 
     void ToggleInfo() noexcept { showInfo_ = !showInfo_; }
@@ -82,6 +89,7 @@ private:
     void Decrement(EditorConsoleLevel level) noexcept;
 
     std::vector<EditorConsoleEntry> entries_;
+    EditorHierarchySearchState filter_;
     std::uint64_t nextSequence_ = 0;
     std::uint64_t selectedSequence_ = 0;
     std::uint32_t infoCount_ = 0;

@@ -46,7 +46,7 @@ ScriptFunctionCallResult CrossFade(const ScriptFunctionCallContext& context, std
     return Applied(context.scene->Animators().CrossFade(
         Target(context, arguments), Arg(arguments, "layer")->AsString(), Arg(arguments, "state")->AsString(),
         Arg(arguments, "duration")->AsFloat(), normalized),
-        "Animator.CrossFade received an invalid animator/state/time or an already active transition");
+        "Animator.CrossFade received an invalid animator/state/time");
 }
 
 ScriptFunctionCallResult SetSpeed(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -149,6 +149,13 @@ ScriptFunctionCallResult ClearIkTarget(
         "Animator.ClearIKTarget could not find the active target");
 }
 
+ScriptFunctionCallResult Curve(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("Animator.Curve requires an active scene");
+    const auto value = context.scene->Animators().Curve(Target(context, arguments), Arg(arguments, "name")->AsString());
+    if (!value) return Error("Animator.Curve could not resolve the animator or named curve");
+    return ScriptFunctionCallResult{ .executed = true, .outputs = {{"value", ScriptValue{*value}}}, .errors = {} };
+}
+
 ScriptFunctionCallResult State(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) return Error("Animator.State requires an active scene");
     const auto state = context.scene->Animators().State(Target(context, arguments), Arg(arguments, "layer")->AsString());
@@ -245,6 +252,7 @@ bool ScriptAnimatorApi::Register(ScriptRuntimeHost& host) {
         }), applied, &AttachToSocket) &&
         RegisterFunction(host, "Animator.DetachFromSocket", { { "object", ScriptValueType::Entity, true } }, applied, &DetachFromSocket) &&
         RegisterFunction(host, "Animator.Play", Targeted({ { "layer", ScriptValueType::String, true }, { "state", ScriptValueType::String, true }, { "normalizedTime", ScriptValueType::Float, false } }), applied, &Play) &&
+        RegisterFunction(host, "Animator.Curve", Targeted({ { "name", ScriptValueType::String, true } }), {{ "value", ScriptValueType::Float, true }}, &Curve) &&
         RegisterFunction(host, "Animator.CrossFade", Targeted({ { "layer", ScriptValueType::String, true }, { "state", ScriptValueType::String, true }, { "duration", ScriptValueType::Float, true }, { "normalizedTime", ScriptValueType::Float, false } }), applied, &CrossFade) &&
         RegisterFunction(host, "Animator.SetSpeed", Targeted({ { "speed", ScriptValueType::Float, true } }), applied, &SetSpeed) &&
         RegisterFunction(host, "Animator.Speed", Targeted({}), { { "speed", ScriptValueType::Float, true } }, &Speed) &&

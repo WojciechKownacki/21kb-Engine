@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -272,6 +273,25 @@ void RunSocketAttachmentTest(const std::filesystem::path& root) {
     scene.Animators().DetachFromSocket(loose.Entity());
     Require(!scene.Components().SocketAttachments().Has(loose.Entity()) && scene.Hierarchy().Parent(loose.Entity()) == hero.Entity(),
         "DetachFromSocket must stop following the socket and keep the object where it is");
+    kb::script::ScriptRuntimeHost api{scene};
+    using kb::script::ScriptValue;
+    const kb::script::ScriptFunctionCallContext context{.scene = &scene, .caller = hero.Entity()};
+    const std::vector<kb::script::ScriptFunctionArgument> socketArguments{
+        {"socket", ScriptValue{std::string{"weapon_r"}}}
+    };
+    const auto socket = api.Functions().Call("Animator.Socket", socketArguments, context);
+    Require(socket.executed && socket.Succeeded() && socket.Output("x")->AsFloat() == 11.0F &&
+            socket.Output("y")->AsFloat() == 1.5F, "Animator.Socket API did not return the live world pose");
+    const std::vector<kb::script::ScriptFunctionArgument> attachmentArguments{
+        {"object", ScriptValue{loose.Entity().Id(), kb::script::ScriptValueType::Entity}},
+        {"socket", ScriptValue{std::string{"weapon_r"}}}
+    };
+    const auto attached = api.Functions().Call("Animator.AttachToSocket", attachmentArguments, context);
+    Require(attached.executed && attached.Succeeded() && attached.Output("applied")->AsBool() &&
+            scene.Components().SocketAttachments().Has(loose.Entity()), "Animator.AttachToSocket API did not install attachment");
+    const auto detached = api.Functions().Call("Animator.DetachFromSocket", {attachmentArguments.data(), 1U}, context);
+    Require(detached.executed && detached.Succeeded() && detached.Output("applied")->AsBool() &&
+            !scene.Components().SocketAttachments().Has(loose.Entity()), "Animator.DetachFromSocket API did not remove attachment");
 }
 
 // A Mixamo-named clip on an Unreal-named character twice as tall whose arm bone points another
@@ -359,6 +379,44 @@ void RunAnimationRetargetTest(const std::filesystem::path& root) {
         arm->rotation.z * expected.z + arm->rotation.w * expected.w);
     Require(arm != nullptr && alignment > 0.9999F && std::abs(arm->position.x - 0.4F) < 0.001F,
         "A retargeted bone must turn as the source bone turned in the world and keep its own proportions");
+
+    const auto profile = kb::scene::MakeAnimationRetargetProfile(source, target);
+    std::filesystem::create_directories(root);
+    const auto profileFile = root / "Mapping.kbretarget";
+    { std::ofstream output(profileFile); output << kb::scene::SerializeAnimationRetargetProfile(profile); }
+    const auto loadedProfile = kb::scene::ParseAnimationRetargetProfile(ReadTextFile(profileFile));
+    Require(loadedProfile.has_value() && loadedProfile->sourceOfTarget == profile.sourceOfTarget,
+        "Retarget mapping did not survive save and reload");
+    const auto profiled = kb::scene::RetargetAnimationClip(clip, source, target, 77U, targetSignature, *loadedProfile);
+    Require(profiled.has_value() && profiled->skeletalTracks.size() == retargeted->skeletalTracks.size(),
+        "Saved retarget mapping changed the animated bones");
+    for (std::size_t i = 0; i < profiled->skeletalTracks.size(); ++i) {
+        const auto& a = profiled->skeletalTracks[i].keyframes.back().transform;
+        const auto& b = retargeted->skeletalTracks[i].keyframes.back().transform;
+        Require(a.position.x == b.position.x && a.position.y == b.position.y && a.position.z == b.position.z &&
+            a.rotation.x == b.rotation.x && a.rotation.y == b.rotation.y && a.rotation.z == b.rotation.z &&
+            a.rotation.w == b.rotation.w, "Saved mapping changed retargeted motion");
+    }
+    auto renamedTarget = target;
+    for (auto& bone : renamedTarget.bones) bone.name = "Custom" + std::to_string(bone.id);
+    auto explicitProfile = *loadedProfile;
+    explicitProfile.targetSignature = kb::scene::SkeletonCompatibilitySignature(renamedTarget);
+    Require(kb::scene::RetargetAnimationClip(clip, source, renamedTarget, 77U,
+        explicitProfile.targetSignature, explicitProfile).has_value(),
+        "Explicit retarget mapping still depended on matching bone names");
+    auto staleProfile = *loadedProfile;
+    ++staleProfile.sourceSignature;
+    Require(!kb::scene::RetargetAnimationClip(clip, source, target, 77U, targetSignature, staleProfile),
+        "Stale retarget profile was accepted");
+    staleProfile = *loadedProfile;
+    staleProfile.sourceOfTarget.front() = static_cast<std::int32_t>(source.bones.size());
+    Require(!kb::scene::RetargetAnimationClip(clip, source, target, 77U, targetSignature, staleProfile),
+        "Out-of-range retarget mapping was accepted");
+    Require(!kb::scene::ParseAnimationRetargetProfile("21kb.retarget 2 1 1 1 0") &&
+        !kb::scene::ParseAnimationRetargetProfile("21kb.retarget 1 1 1 2 0") &&
+        !kb::scene::ParseAnimationRetargetProfile("21kb.retarget 1 1 1 1 -2") &&
+        !kb::scene::ParseAnimationRetargetProfile("21kb.retarget 1 1 1 1 0 trailing"),
+        "Malformed retarget profiles must be refused");
 
     // Too little in common: refused, with the numbers.
     kb::scene::SkeletonAsset stranger{};
@@ -497,6 +555,41 @@ void RunCombatGameplayTest(const std::filesystem::path& root) {
     Require(std::abs(scene.Components().Combatants().TryGet(hero)->mana - 9.0F) < 0.01F, "Mana must regenerate per second");
     const kb::scene::DamageOutcome revived = scene.Gameplay().Revive(front);
     Require(revived.applied && health(front) == 50.0F && scene.Gameplay().IsAlive(front), "Revive must bring a combatant back at full health");
+
+    // Exercise the public script provider against the same real scene state.
+    kb::script::ScriptRuntimeHost scriptHost{scene};
+    Require(scriptHost.Succeeded(), "Gameplay API provider failed to install");
+    using kb::script::ScriptFunctionArgument;
+    using kb::script::ScriptValue;
+    const auto entityValue = [](kb::scene::SceneEntity entity) {
+        return ScriptValue{entity.Id(), kb::script::ScriptValueType::Entity};
+    };
+    const auto call = [&](const char* name, std::initializer_list<ScriptFunctionArgument> arguments) {
+        auto result = scriptHost.Functions().Call(name, {arguments.begin(), arguments.size()},
+            kb::script::ScriptFunctionCallContext{.scene = &scene, .caller = hero});
+        Require(result.executed && result.Succeeded(), (std::string{name} + " failed through its public provider").c_str());
+        return result;
+    };
+    Require(call("Gameplay.Health", {{"entity", entityValue(front)}}).Output("health")->AsFloat() == 50.0F,
+        "Gameplay.Health did not read the live combatant");
+    Require(call("Gameplay.IsHostile", {{"other", entityValue(front)}}).Output("hostile")->AsBool() &&
+            !call("Gameplay.IsHostile", {{"other", entityValue(barrel)}}).Output("hostile")->AsBool(),
+        "Gameplay.IsHostile lost the caller or team rules");
+    static_cast<void>(scene.Runtime().Update(2.0F));
+    Require(call("Gameplay.NearestEnemy", {}).Output("enemy")->AsUInt64() == front.Id(),
+        "Gameplay.NearestEnemy did not expose the perceived enemy");
+    const auto used = call("Gameplay.UseAbility", {{"slot", ScriptValue{1}}});
+    Require(used.Output("used")->AsBool() && used.Output("hits")->AsInt() == 2 && health(front) == 30.0F,
+        "Gameplay.UseAbility did not execute the actual ability");
+    Require(call("Gameplay.AbilityCooldown", {{"slot", ScriptValue{1}}}).Output("seconds")->AsFloat() == 2.0F &&
+            !call("Gameplay.UseAbility", {{"slot", ScriptValue{1}}}).Output("used")->AsBool(),
+        "Gameplay ability API did not enforce its cooldown");
+    Require(call("Gameplay.Heal", {{"target", entityValue(front)}, {"amount", ScriptValue{5.0F}}}).Output("applied")->AsBool() &&
+            health(front) == 35.0F, "Gameplay.Heal did not mutate health");
+    Require(call("Gameplay.ApplyDamage", {{"target", entityValue(front)}, {"amount", ScriptValue{100.0F}}}).Output("killed")->AsBool() &&
+            health(front) == 0.0F, "Gameplay.ApplyDamage did not kill the target");
+    Require(call("Gameplay.Revive", {{"target", entityValue(front)}, {"health", ScriptValue{12.0F}}}).Output("applied")->AsBool() &&
+            health(front) == 12.0F, "Gameplay.Revive did not apply the requested health");
 }
 
 void RunAnimationRuntimeTests() {
@@ -972,8 +1065,19 @@ end
         const auto loopEvents = scene.Animators().DrainEvents();
         Require(loopEvents.size() == 1U && loopEvents[0].eventId == kFootstepEvent,
             "Looping animation skipped or duplicated an event while the playhead wrapped");
-        Require(scene.Animators().CrossFade(owner.Entity(), "Root Layer", "Walk State", 0.5F, 0.0F),
-            "Animator CrossFade could not start a named-state transition");
+        kb::script::ScriptRuntimeHost animatorApi{scene};
+        const kb::script::ScriptFunctionCallContext animatorContext{.scene = &scene, .caller = owner.Entity()};
+        const auto speed = animatorApi.Functions().Call("Animator.Speed", {}, animatorContext);
+        Require(speed.executed && speed.Succeeded() && speed.Output("speed")->AsFloat() == scene.Animators().Speed(owner.Entity()),
+            "Animator.Speed API did not read the runtime speed");
+        const std::vector<kb::script::ScriptFunctionArgument> fadeArguments{
+            {"layer", kb::script::ScriptValue{std::string{"Root Layer"}}},
+            {"state", kb::script::ScriptValue{std::string{"Walk State"}}},
+            {"duration", kb::script::ScriptValue{0.5F}}
+        };
+        const auto fade = animatorApi.Functions().Call("Animator.CrossFade", fadeArguments, animatorContext);
+        Require(fade.executed && fade.Succeeded() && fade.Output("applied")->AsBool(),
+            "Animator.CrossFade API could not start a named-state transition");
         static_cast<void>(scene.Runtime().Update(0.25F));
         const auto transition = scene.Animators().State(owner.Entity(), "Root Layer");
         Require(transition.has_value() && transition->transitioning && transition->state == "Walk State" &&
@@ -981,11 +1085,23 @@ end
             "Animator state query did not report the active transition");
         Require(NearlyEqual(scene.Transforms().Get(owner.Entity()).localPosition.x, 2.5F),
             "Animator CrossFade state progressed but did not blend both live poses into the scene transform");
-        Require(scene.Animators().SetBool(owner.Entity(), "Grounded", false) &&
-                scene.Animators().SetInt(owner.Entity(), "Lives", 4) &&
-                scene.Animators().SetFloat(owner.Entity(), "Speed", 7.0F) &&
-                scene.Animators().SetTrigger(owner.Entity(), "Jump"),
-            "Animator typed parameter mutation failed");
+        const auto mutateParameter = [&](const char* function, const char* name, kb::script::ScriptValue value, bool withValue) {
+            std::vector<kb::script::ScriptFunctionArgument> arguments{{"name", kb::script::ScriptValue{std::string{name}}}};
+            if (withValue) arguments.push_back({"value", value});
+            const auto result = animatorApi.Functions().Call(function, arguments, animatorContext);
+            Require(result.executed && result.Succeeded() && result.Output("applied")->AsBool(), function);
+        };
+        mutateParameter("Animator.SetBool", "Grounded", kb::script::ScriptValue{false}, true);
+        mutateParameter("Animator.SetInt", "Lives", kb::script::ScriptValue{4}, true);
+        Require(scene.Animators().SetFloat(owner.Entity(), "Speed", 7.0F), "Animator float parameter mutation failed");
+        mutateParameter("Animator.SetTrigger", "Jump", {}, false);
+        mutateParameter("Animator.ResetTrigger", "Jump", {}, false);
+        Require(!scene.Animators().Parameters(owner.Entity())[3].boolValue, "Animator.ResetTrigger did not clear the pending trigger");
+        mutateParameter("Animator.SetTrigger", "Jump", {}, false);
+        const std::vector<kb::script::ScriptFunctionArgument> stateArguments{{"layer", kb::script::ScriptValue{std::string{"Root Layer"}}}};
+        const auto publicState = animatorApi.Functions().Call("Animator.State", stateArguments, animatorContext);
+        Require(publicState.executed && publicState.Succeeded() && publicState.Output("transitioning")->AsBool() &&
+            publicState.Output("state")->AsString() == "Walk State", "Animator.State did not expose the running transition");
         const auto changedParameters = scene.Animators().Parameters(owner.Entity());
         Require(!changedParameters[0].boolValue && changedParameters[1].intValue == 4 &&
                 NearlyEqual(changedParameters[2].floatValue, 7.0F) && changedParameters[3].boolValue,
@@ -1000,6 +1116,38 @@ end
         Require(automaticTransition.has_value() && automaticTransition->transitioning &&
                 automaticTransition->state == "Run State" && !changedParameters[3].boolValue,
             "Controller transition did not consume bool/int/float conditions and reset its trigger on entry");
+        std::array<float, 6> referenceReplay{};
+        for (int replay = 0; replay < 2; ++replay) {
+            Require(scene.Animators().SetBool(owner.Entity(), "Grounded", true) &&
+                    scene.Animators().SetSpeed(owner.Entity(), 1.0F) &&
+                    scene.Animators().Play(owner.Entity(), "Root Layer", "Walk State") &&
+                    scene.Animators().SeekNormalized(owner.Entity(), 0.0F), "Animator replay reset failed");
+            Require(scene.Animators().CrossFade(owner.Entity(), "Root Layer", "Run State", 1.0F),
+                "Initial replay fade failed");
+            static_cast<void>(scene.Runtime().Update(0.25F));
+            std::array<float, 6> samples{};
+            samples[0] = scene.Transforms().Get(owner.Entity()).localPosition.x;
+            samples[1] = scene.Transforms().Get(arm.Entity()).localPosition.x;
+            Require(scene.Animators().CrossFade(owner.Entity(), "Root Layer", "Walk State", 0.5F),
+                "An explicit crossfade must replace the transition already in progress");
+            static_cast<void>(scene.Runtime().Update(0.25F));
+            const auto interrupted = scene.Animators().State(owner.Entity(), "Root Layer");
+            Require(interrupted && interrupted->transitioning && interrupted->state == "Walk State" &&
+                    interrupted->previousState == "Run State" && NearlyEqual(interrupted->transitionProgress, 0.5F),
+                "Interrupted transition debug state did not expose its new source, target and progress");
+            samples[2] = scene.Transforms().Get(owner.Entity()).localPosition.x;
+            samples[3] = scene.Transforms().Get(arm.Entity()).localPosition.x;
+            static_cast<void>(scene.Runtime().Update(0.25F));
+            samples[4] = scene.Transforms().Get(owner.Entity()).localPosition.x;
+            samples[5] = scene.Transforms().Get(arm.Entity()).localPosition.x;
+            Require(NearlyEqual(samples[0], 3.75F) && NearlyEqual(samples[2], 8.75F) && NearlyEqual(samples[4], 5.0F),
+                "Interrupted crossfade did not advance from the active destination clip into the requested clip");
+            for (std::size_t i = 0; i < samples.size(); ++i) {
+                Require(std::isfinite(samples[i]), "Replay produced a non-finite masked pose");
+                if (replay == 0) referenceReplay[i] = samples[i];
+                else Require(NearlyEqual(samples[i], referenceReplay[i]), "Identical animator replay changed its root or masked child pose");
+            }
+        }
         scene.Runtime().SetPlaying(false);
         scene.Entities().Destroy(owner);
         static_cast<void>(scene.Runtime().Update(0.0F));
@@ -1023,6 +1171,14 @@ end
         static_cast<void>(scene.Runtime().Update(0.75F));
         Require(NearlyEqual(scene.Transforms().Get(rootMotionOwner.Entity()).localPosition.x, 10.0F),
             "Animator-owned root motion did not accumulate the root-track delta through a loop in production runtime");
+        Require(scene.Animators().SetSpeed(rootMotionOwner.Entity(), 2.0F), "Root-motion speed change failed");
+        static_cast<void>(scene.Runtime().Update(0.75F));
+        Require(NearlyEqual(scene.Transforms().Get(rootMotionOwner.Entity()).localPosition.x, 25.0F),
+            "Root motion drifted while changing speed across a clip loop");
+        Require(scene.Animators().SetSpeed(rootMotionOwner.Entity(), 0.5F), "Root-motion slow speed failed");
+        static_cast<void>(scene.Runtime().Update(0.5F));
+        Require(NearlyEqual(scene.Transforms().Get(rootMotionOwner.Entity()).localPosition.x, 27.5F),
+            "Root motion lost its accumulated displacement after another speed change");
         const auto* turnMetadata =
             scene.Assets().Manager().Registry().FindByPath("/Game/Animation/Turn.kbanimcontroller");
         Require(turnMetadata != nullptr, "Root-rotation AnimatorController metadata was not found");
@@ -1256,6 +1412,22 @@ end
                     kb::scene::Vec3{ 3.0F, 2.0F, 1.0F }) <= 0.001F &&
                 std::abs(followerTransform.worldRotation.y - 0.70710678F) <= 0.001F,
             "CopyTransform rig constraint did not consume the typed world target");
+        for (const kb::scene::Vec3 target : { kb::scene::Vec3{10000.0F, 0.0F, 0.0F}, kb::scene::Vec3{} }) {
+            Require(scene.Animators().SetIkTarget(rigOwner.Entity(), "HandTarget",
+                kb::scene::AnimatorIkTarget{ .worldPosition = target, .positionWeight = 0.5F }),
+                "Extreme blended IK target was rejected");
+            static_cast<void>(scene.Runtime().Update(0.125F));
+            for (const auto bone : { upper, lower, hand, look, follower }) {
+                const auto pose = scene.Transforms().Get(bone.Entity());
+                Require(std::isfinite(pose.worldPosition.x) && std::isfinite(pose.worldPosition.y) &&
+                    std::isfinite(pose.worldPosition.z) && std::isfinite(pose.worldRotation.w),
+                    "Multiple constraints blended with animation produced a non-finite pose");
+            }
+            Require(scene.Runtime().DrainSceneSystemErrors().empty(), "Extreme blended IK target caused a runtime error");
+        }
+        Require(scene.Animators().ClearIkTarget(rigOwner.Entity(), "HandTarget"), "IK target removal failed");
+        static_cast<void>(scene.Runtime().Update(0.125F));
+        Require(scene.Runtime().DrainSceneSystemErrors().empty(), "An absent IK target should leave the animated pose available");
         {
             // The same rig ten thousand kilometres out, given double-precision targets, solves as precisely as
             // near the origin (a float position there is only good to a metre).
@@ -1347,12 +1519,30 @@ end
                         .worldRotation = { 0.0F, 0.0F, 0.0F, 0.0F },
                     }),
             "IK target accepted a zero quaternion and silently fabricated a rotation");
-        Require(scene.Animators().ClearIkTarget(rigOwner.Entity(), "CopyTarget") &&
+        const std::vector<kb::script::ScriptFunctionArgument> clearArguments{
+            {"name", kb::script::ScriptValue{std::string{"CopyTarget"}}},
+            {"entity", kb::script::ScriptValue{rigOwner.Entity().Id(), kb::script::ScriptValueType::Entity}}
+        };
+        const auto clearedTarget = rigScriptHost.Functions().Call("Animator.ClearIKTarget", clearArguments,
+            kb::script::ScriptFunctionCallContext{.scene = &scene});
+        Require(clearedTarget.executed && clearedTarget.Succeeded() && clearedTarget.Output("applied")->AsBool() &&
                 !scene.Animators().ClearIkTarget(rigOwner.Entity(), "CopyTarget") &&
                 !scene.Animators().SetIkTarget(
                     rigOwner.Entity(), "Undeclared",
                     kb::scene::AnimatorIkTarget{}),
             "IK target lifecycle accepted an undeclared or already-cleared target");
+        Require(scene.Animators().SetIkTarget(rigOwner.Entity(), "LookTarget",
+            kb::scene::AnimatorIkTarget{ .worldPosition = scene.Transforms().Get(look.Entity()).worldPosition }),
+            "Degenerate aim target could not be supplied for diagnostics");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto aimErrors = scene.Runtime().DrainSceneSystemErrors();
+        Require(std::any_of(aimErrors.begin(), aimErrors.end(), [](const std::string& error) {
+            return error.find("Rig constraint 'Look'") != std::string::npos &&
+                error.find("path 'Look'") != std::string::npos && error.find("coincide") != std::string::npos;
+        }), "Constraint failure omitted its authored bone context");
+        Require(scene.Animators().SetIkTarget(rigOwner.Entity(), "LookTarget",
+            kb::scene::AnimatorIkTarget{ .worldPosition = {0.0F, 0.0F, 5.0F} }),
+            "Aim target could not recover after a diagnosed failure");
         rigController.rigConstraints[2].target = "ReloadedCopyTarget";
         Require(kb::scene::AnimationAssetIO::SaveController(
                     root / "Assets" / "Animation" / "Rig.kbanimcontroller",
@@ -1867,16 +2057,20 @@ end
         };
         instanceClip.morphTracks = {
             { .morphTarget = "Smile", .keyframes = {
-                { .timeSeconds = 0.0F, .weight = 0.0F },
-                { .timeSeconds = 1.0F, .weight = 1.0F },
+                { .timeSeconds = 0.0F, .weight = -std::numeric_limits<float>::max() },
+                { .timeSeconds = 1.0F, .weight = std::numeric_limits<float>::max() },
             } },
         };
+        instanceClip.curves = {{ .name = "FootPlant", .keyframes = {
+            {.timeSeconds = 0.0F, .value = 0.0F}, {.timeSeconds = 1.0F, .value = 4.0F}
+        } }};
         instanceClip.rootMotionMode =
             kb::scene::AnimationRootMotionMode::ExtractFromBone;
         instanceClip.rootMotionBoneId = 700U;
         const std::filesystem::path instanceClipPath = skeletalRoot /
             "Assets" / "Animation" / "Skeletal.kbanim";
         kb::scene::AnimationClip instanceClipB = instanceClip;
+        instanceClipB.curves[0].keyframes[1].value = 8.0F;
         instanceClipB.skeletalTracks[0].keyframes[1].transform.position.x =
             6.0F;
         const std::filesystem::path instanceClipBPath = skeletalRoot /
@@ -2076,7 +2270,8 @@ end
                 sampledSkeleton->hierarchySolveCount == 1U &&
                 sampledSkeleton->morphWeights.targetNames.size() == 1U &&
                 sampledSkeleton->morphWeights.targetNames[0] == "Smile" &&
-                NearlyEqual(sampledSkeleton->morphWeights.currentWeights[0], 0.25F) &&
+                std::isfinite(sampledSkeleton->morphWeights.currentWeights[0]) &&
+                NearlyEqual(sampledSkeleton->morphWeights.currentWeights[0] / std::numeric_limits<float>::max(), -0.5F) &&
                 NearlyEqual(sampledSkeleton->morphWeights.previousWeights[0], 0.0F) &&
                 attachment.has_value() && socket.has_value() &&
                 NearlyEqual(attachment->componentSpace.position.x, 1.0F) &&
@@ -2122,6 +2317,10 @@ end
                     owner.Entity(), "Base", "DirectB", 0.5F, 0.0F),
             "Compact skeletal controller could not start a named transition");
         static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto blendedCurve = scene.Animators().Curve(owner.Entity(), "FootPlant");
+        Require(blendedCurve && NearlyEqual(*blendedCurve, 2.25F) &&
+            !scene.Animators().Curve(owner.Entity(), "Missing").has_value(),
+            "Curve sampling did not combine blend tree, crossfade and weighted layer values");
         const auto transitionedSkeleton =
             scene.Animators().InstanceSkeleton(owner.Entity());
         const auto transitionedState =
@@ -2448,6 +2647,18 @@ end
                 });
             return entity;
         };
+        auto missingBoneController = *loadedSkeletalIkController;
+        missingBoneController.rigConstraints[0].tipBoneId = 999U;
+        Require(kb::scene::AnimationAssetIO::SaveController(skeletalRoot / "Assets" / "Animation" / "MissingRigBone.kbanimcontroller", missingBoneController),
+            "Missing constraint bone fixture could not be saved");
+        static_cast<void>(scene.Assets().Discover());
+        const auto missingBoneOwner = authorConstraintOwner("Missing Rig Bone", controllerIdAt("/Game/Animation/MissingRigBone.kbanimcontroller"));
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto missingRigErrors = scene.Runtime().DrainSceneSystemErrors();
+        Require(std::any_of(missingRigErrors.begin(), missingRigErrors.end(), [](const std::string& error) {
+            return error.find("Rig constraint '") != std::string::npos && error.find("999") != std::string::npos;
+        }), "Missing constraint bone error omitted its bone ID and constraint context");
+        scene.Entities().Destroy(missingBoneOwner);
         const kb::scene::SceneObject ikOwner = authorConstraintOwner(
             "Skeletal IK", controllerIdAt(
                 "/Game/Animation/SkeletalIk.kbanimcontroller"));

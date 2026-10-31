@@ -51,6 +51,11 @@ def author_fixture(args, root, *, script_name="TextFlow", script_source=None):
     component("CanvasRoot/Form/TextEntry", "Text", "fontAssetId=/Game/Fonts/DejaVuSans.21kb")
     component("CanvasRoot/Form/TextEntry", "Selectable", "colorFadeSeconds=0")
     component("CanvasRoot/Form/TextEntry", "Input Field")
+    run(args.cli, "entity", "add", "--project", project, "--name", "OtherEntry", "--parent", "CanvasRoot/Form")
+    component("CanvasRoot/Form/OtherEntry", "Rect Transform", "offsetMin=40,100", "offsetMax=560,180")
+    component("CanvasRoot/Form/OtherEntry", "Text", "fontAssetId=/Game/Fonts/DejaVuSans.21kb")
+    component("CanvasRoot/Form/OtherEntry", "Selectable", "colorFadeSeconds=0")
+    component("CanvasRoot/Form/OtherEntry", "Input Field", "multiline=true", "characterLimit=8")
     run(args.cli, "script-new", "--project", project, "--name", script_name, "--language", "lua")
     shutil.copy2(script_source or Path(__file__).with_name("fixtures") / "TextFlow.lua",
         project / ("Assets/Scripts/" + script_name + ".lua"))
@@ -75,10 +80,18 @@ class TextScenario(TouchScenario):
                 y=layout["top"] + y / layout["dpr"],
                 button="left", buttons=buttons, clickCount=1)
 
-    def key(self, key, code, virtual):
+    def key(self, key, code, virtual, modifiers=0):
+        if modifiers & 2:
+            self.client.call("Input.dispatchKeyEvent", type="keyDown", key="Control", code="ControlLeft",
+                windowsVirtualKeyCode=17, nativeVirtualKeyCode=17, modifiers=2)
+            self.paint()
         for kind in ["keyDown", "keyUp"]:
             self.client.call("Input.dispatchKeyEvent", type=kind, key=key, code=code,
-                windowsVirtualKeyCode=virtual, nativeVirtualKeyCode=virtual)
+                windowsVirtualKeyCode=virtual, nativeVirtualKeyCode=virtual, modifiers=modifiers)
+            self.paint()
+        if modifiers & 2:
+            self.client.call("Input.dispatchKeyEvent", type="keyUp", key="Control", code="ControlLeft",
+                windowsVirtualKeyCode=17, nativeVirtualKeyCode=17)
             self.paint()
 
     def field_picture(self, label):
@@ -120,6 +133,8 @@ class TextScenario(TouchScenario):
         self.paint()
         require(self.states()[-1]["text"] == text, "Uncommitted IME text reached the engine")
         self.report["uncommitted"] = self.states()[-1]
+        self.key("ArrowLeft", "ArrowLeft", 37)
+        require(self.states()[-1]["text"] == text, "IME candidate navigation changed committed text")
         client.call("Input.insertText", text="確定")
         text += "確定"
         self.wait("IME commit reaches native field once", lambda value: value["text"] == text)
@@ -176,6 +191,7 @@ class TextScenario(TouchScenario):
         require(pixels[0][2] > pixels[0][0] + 50,
             "The focused field is outside the actual smaller viewport: " + str(pixels))
         self.click(140, 230)
+        self.key("End", "End", 35)
         client.call("Input.insertText", text="?")
         self.wait("revealed field continues editing", lambda value: value["text"] == text + "!?")
         events = client.evaluate("window.kbTextEvents")
@@ -191,6 +207,53 @@ class TextScenario(TouchScenario):
             for kind in ["input", "beforeinput", "compositionstart", "compositionupdate", "compositionend"]),
             "The actual browser composition event path was not exercised")
         self.report.update(graphics=self.graphics(), finalLayout=dict(self.layout))
+        self.key("a", "KeyA", 65, modifiers=2)
+        self.key("Backspace", "Backspace", 8)
+        self.wait("select all clears the native field", lambda value: value["text"] == "")
+        long_commit = "x" * 63 + "e\u0301" + "👩‍👩‍👧‍👦"
+        client.call("Input.imeSetComposition", text=long_commit,
+            selectionStart=len(long_commit.encode("utf-16-le")) // 2,
+            selectionEnd=len(long_commit.encode("utf-16-le")) // 2)
+        self.paint()
+        require(self.states()[-1]["text"] == "", "Long provisional composition reached the field")
+        client.call("Input.insertText", text=long_commit)
+        self.wait("long composition commits without splitting a grapheme",
+            lambda value: value["text"] == long_commit)
+        self.key("Backspace", "Backspace", 8)
+        self.wait("emoji sequence deletes as one grapheme", lambda value: value["text"] == "x" * 63 + "e\u0301")
+        self.key("Backspace", "Backspace", 8)
+        self.wait("combining mark deletes with its base", lambda value: value["text"] == "x" * 63)
+        self.key("a", "KeyA", 65, modifiers=2)
+        copied = client.evaluate("""(() => {
+            const data = new DataTransfer();
+            document.activeElement.dispatchEvent(new ClipboardEvent('copy',
+                {clipboardData:data,bubbles:true,cancelable:true}));
+            return data.getData('text/plain');
+        })()""")
+        require(copied == "x" * 63, "Browser copy did not read the native selection")
+        client.evaluate("document.activeElement.dispatchEvent(new ClipboardEvent('cut',"
+            "{clipboardData:new DataTransfer(),bubbles:true,cancelable:true}))")
+        self.wait("browser cut removes the native selection", lambda value: value["text"] == "")
+        client.call("Emulation.setDeviceMetricsOverride", width=1100, height=900,
+            deviceScaleFactor=1, mobile=False)
+        client.evaluate("Object.assign(document.querySelector('#canvas').style,{width:'800px',height:'600px'})")
+        self.paint()
+        self.geometry()
+        client.call("Input.imeSetComposition", text="未確定", selectionStart=3, selectionEnd=3)
+        client.evaluate("window.retiredTextControl=document.activeElement")
+        self.click(140, 140)
+        self.wait("another native field receives focus", lambda value: value["focused"] == value["other"])
+        require(self.states()[-1]["otherText"] == "", "Composition leaked into the next field")
+        client.evaluate("retiredTextControl.dispatchEvent(new CompositionEvent('compositionend',{data:'late'}));"
+            "retiredTextControl.dispatchEvent(new InputEvent('input',{inputType:'insertText',data:'stale'}))")
+        self.paint()
+        require(self.states()[-1]["otherText"] == "", "Retired text control accepted a delayed event")
+        pasted = "e\u0301\n😀abcdefghi"
+        client.evaluate("(() => {const data=new DataTransfer();data.setData('text/plain'," + json.dumps(pasted) + ");"
+            "document.activeElement.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));})()")
+        self.wait("multiline paste respects the native grapheme limit",
+            lambda value: value["otherText"] == "e\u0301\n😀abcde")
+        self.report["clipboardTransport"] = "Isolated DataTransfer events through the full cooked engine; system clipboard untouched"
 
 
 if __name__ == "__main__":

@@ -541,6 +541,13 @@ void ScriptRuntimeAssetPreparer::AddDiagnostic(
     kb::assets::AssetId assetId,
     kb::scene::BehaviourBackend backend,
     std::string message) {
+    if (backend == kb::scene::BehaviourBackend::Lua) {
+        message += " Fix: Correct the Lua source at the reported line and save it. Stop and Play again in the editor, or retry kb_cli run --project <project>.";
+    } else if (backend == kb::scene::BehaviourBackend::VisualGraph) {
+        message += " Fix: Correct the reported graph node or connection and save the graph, then retry Play or kb_cli run --project <project>.";
+    } else {
+        message += " Fix: Correct the reported native source or toolchain error, then rebuild and retry Play or kb_cli run --project <project>.";
+    }
     result.diagnostics.push_back(ScriptRuntimeAssetPrepareDiagnostic{
         .assetId = assetId,
         .backend = backend,

@@ -2,6 +2,13 @@
 
 #if defined(_WIN32)
 #include "app/EditorWindowMessageContext.hpp"
+#include "app/EditorKeyState.hpp"
+#include "project/EditorProjectPaths.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
+#include "rendering/DockTabControlGeometry.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
+#include "windowing/EditorDisplayRecovery.hpp"
 #include "app/EditorWindowMessageRouter.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
@@ -19,6 +26,9 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <utility>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -103,9 +113,14 @@ public:
         routing_ = false;
         MainWindowBackBufferPainter::HideAllOverlays();
         floatingWindows_.Lifecycle().Shutdown();
+        // Drain native framebuffer creation before destroying this test host;
+        // the render thread must not create a swap chain for an expired HWND.
+        viewport_.SetHostSurfaceSuspended(window_, true);
+        for (int frame = 0; frame < 3; ++frame) static_cast<void>(viewport_.AdvanceAsyncReadbacks());
         const HWND window = window_;
         window_ = nullptr;
         DestroyWindow(window);
+        for (int frame = 0; frame < 3; ++frame) static_cast<void>(viewport_.AdvanceAsyncReadbacks());
     }
 
     // Runs everything queued for this thread the way the editor's message loop does.
@@ -140,6 +155,9 @@ public:
         return window_;
     }
 
+    [[nodiscard]] EditorPlayMode Mode() const noexcept { return playMode_.Mode(); }
+    [[nodiscard]] EditorDockModel& Dock() noexcept { return dockModel_; }
+
     [[nodiscard]] EditorShellInteractionState& Shell() noexcept {
         return shell_;
     }
@@ -149,7 +167,7 @@ public:
         GetClientRect(window_, &client);
         return dockModel_.Queries().BuildLayout(
             client.right - client.left, client.bottom - client.top,
-            metrics_.menuHeight, metrics_.toolbarHeight, metrics_.tabStripHeight,
+            metrics_.menuHeight, metrics_.statusBarHeight, metrics_.tabStripHeight,
             metrics_.tabMinWidth, metrics_.tabWidth, metrics_.splitterSize);
     }
 
@@ -268,6 +286,22 @@ struct ClientPixels {
     int width = 0;
     int height = 0;
     std::vector<std::uint32_t> pixels;
+
+    [[nodiscard]] bool Save(const std::filesystem::path& path) const {
+        if (pixels.empty()) return false;
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        BITMAPFILEHEADER file{}; file.bfType = 0x4d42;
+        file.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+        file.bfSize = file.bfOffBits + static_cast<DWORD>(pixels.size() * sizeof(std::uint32_t));
+        BITMAPINFOHEADER info{}; info.biSize = sizeof(info); info.biWidth = width; info.biHeight = -height;
+        info.biPlanes = 1; info.biBitCount = 32; info.biCompression = BI_RGB;
+        std::ofstream output(path, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(&file), sizeof(file));
+        output.write(reinterpret_cast<const char*>(&info), sizeof(info));
+        output.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size() * sizeof(std::uint32_t)));
+        return static_cast<bool>(output);
+    }
 
     [[nodiscard]] int BrightPixelsIn(const RECT& rect, int threshold) const noexcept {
         int count = 0;
@@ -405,7 +439,273 @@ void TypeKeys(const EditorWindowUnderTest& editor, HWND target, std::string_view
     return Center(EditorToolbarLayout::MenuRectByCommand(rects, menu));
 }
 
+// Drive the actual modal controls from the same message queue as the editor.
+thread_local bool particleDialogSeen = false;
+LRESULT CALLBACK ParticleDialogInput(int code, WPARAM wparam, LPARAM lparam) {
+    if (code == HCBT_ACTIVATE) {
+        const HWND window = reinterpret_cast<HWND>(wparam);
+        wchar_t name[128]{};
+        GetClassNameW(window, name, 128);
+        if (std::wstring_view{name} == L"KBEditorTextEntryDialog") {
+            particleDialogSeen = true;
+            const HWND edit = FindWindowExW(window, nullptr, L"EDIT", nullptr);
+            SetWindowTextW(edit, L"0,24,0;0.5,96,3;1,48,0");
+            PostMessageW(edit, WM_KEYDOWN, VK_RETURN, 0);
+        } else if (std::wstring_view{name} == L"KBEditorMaterialColorPickerDialog") {
+            particleDialogSeen = true;
+            PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, PointParam(200, 60));
+            PostMessageW(window, WM_LBUTTONUP, 0, PointParam(200, 60));
+            PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, PointParam(280, 375));
+            PostMessageW(window, WM_LBUTTONUP, 0, PointParam(280, 375));
+        }
+    }
+    return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
 } // namespace
+
+EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls(
+    EditorSceneContext& context, EditorSceneBgfxViewport& viewport) {
+    const auto* asset = context.ParticleEditorWorkingAsset();
+    if (!asset || asset->emitters.empty()) return {false, "missing particle document"};
+    const auto assetId = context.ParticleEditorAssetId();
+    const auto emitter = asset->emitters.front().emitterId;
+    static_cast<void>(context.SelectParticleEditorEmitter(emitter));
+    const auto& modules = context.ParticleEditorWorkingAsset()->emitters.front().modules;
+    const auto colorModule = std::find_if(modules.begin(), modules.end(), [](const auto& module) {
+        return module.type == kb::scene::ParticleModuleType::ColorOverLife;
+    });
+    if (colorModule == modules.end()) return {false, "gradient fixture"};
+    const auto color = colorModule->moduleId;
+    if (!context.SaveParticleEditorAsset()) return {false, "save fixture"};
+    std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
+    const auto serialize = [&] { return kb::scene::ParticleEffectAssetIO::Serialize(*context.ParticleEditorWorkingAsset(), diagnostics); };
+    const auto before = serialize();
+    EditorWindowUnderTest editor(context, viewport);
+    if (!editor.Create() || !editor.Dock().Commands().ActivatePanelKind(DockPanelKind::ParticleEditor, DockArea::Center))
+        return {false, "particle panel activation"};
+    auto panel = editor.ActivePanel(DockPanelKind::ParticleEditor);
+    if (!panel) return {false, "particle panel layout"};
+    static_cast<void>(editor.Dock().Commands().ToggleMaximizedLeaf(panel->leafId));
+    const auto layout = [&] {
+        const auto inspector = context.ParticleEditorInspector();
+        return ParticleEditorPanelLayoutResolver::Resolve(ToRect(editor.ActivePanel(DockPanelKind::ParticleEditor)->content),
+            context.ParticleEditorEmitterRows(), context.ParticleEditorWorkspace().ComposerScrollOffset(),
+            GetDpiForWindow(editor.Window()), &inspector, context.ParticleEditorRecipes().size(), &context.ParticleEditorWorkspace());
+    };
+    for (const auto type : {kb::scene::ParticleOutputType::Volumetric, kb::scene::ParticleOutputType::Decal}) {
+        context.SetParticleEditorComposerScrollOffset(0);
+        auto geometry = layout();
+        const auto index = static_cast<std::size_t>(type);
+        if (index >= geometry.outputChoiceCount) return {false, "depth output choice missing"};
+        context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0,
+            geometry.outputChoices[index].top - geometry.composer.top - 40));
+        geometry = layout();
+        editor.Click(editor.Window(), Center(geometry.outputChoices[index]));
+        if (context.ParticleEditorWorkingAsset()->emitters.front().output.type != type)
+            return {false, "depth output click did not change type"};
+        {
+            EditorScriptedKeyScope control(VK_CONTROL);
+            SendMessageW(editor.Window(), WM_KEYDOWN, 'Z', 0);
+            editor.Pump();
+        }
+        if (serialize() != before) return {false, "depth output undo lost serialized fields"};
+    }
+    // Each advertised blend choice must traverse the real chip hit-test and undo routing.
+    static_cast<void>(context.SelectParticleEditorEmitter(emitter));
+    const auto outputInspector = context.ParticleEditorInspector();
+    const auto blendRow = std::find_if(outputInspector.properties.begin(), outputInspector.properties.end(), [](const auto& row) {
+        return row.property == kb::particle_editor::ParticleEditorProperty::OutputBlend;
+    });
+    if (blendRow == outputInspector.properties.end()) return {false, "blend property missing"};
+    const auto blendIndex = static_cast<std::size_t>(blendRow - outputInspector.properties.begin());
+    const auto originalBlend = context.ParticleEditorWorkingAsset()->emitters.front().output.blend;
+    for (unsigned choice = 0U; choice < 6U; ++choice) {
+        context.SetParticleEditorComposerScrollOffset(0);
+        auto geometry = layout();
+        context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0,
+            geometry.propertyRows[blendIndex].bounds.top - geometry.composer.top - 40));
+        geometry = layout();
+        if (geometry.propertyRows[blendIndex].enumChipCount != 6U) return {false, "blend choices missing"};
+        editor.Click(editor.Window(), Center(geometry.propertyRows[blendIndex].enumChips[choice]));
+        if (static_cast<unsigned>(context.ParticleEditorWorkingAsset()->emitters.front().output.blend) != choice)
+            return {false, "real blend chip did not edit output"};
+        if (choice != static_cast<unsigned>(originalBlend)) {
+            EditorScriptedKeyScope control(VK_CONTROL);
+            SendMessageW(editor.Window(), WM_KEYDOWN, 'Z', 0);
+            editor.Pump();
+        }
+        if (serialize() != before) return {false, "blend undo changed other fields"};
+    }
+    const auto editProperty = [&](kb::particle_editor::ParticleEditorPropertyWidget widget) {
+        auto inspector = context.ParticleEditorInspector();
+        const auto row = std::find_if(inspector.properties.begin(), inspector.properties.end(),
+            [widget](const auto& item) { return item.widget == widget; });
+        if (row == inspector.properties.end()) return false;
+        const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
+        context.SetParticleEditorComposerScrollOffset(0);
+        auto geometry = layout();
+        context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0,
+            geometry.propertyRows[index].bounds.top - geometry.composer.top - 40));
+        geometry = layout();
+        const auto point = Center(geometry.propertyRows[index].curvePreview);
+        const auto hit = ParticleEditorPanelLayoutResolver::HitTest(geometry, point.x, point.y);
+        if (hit.action != ParticleEditorPanelAction::EditProperty || hit.propertyIndex != index) return false;
+        particleDialogSeen = false;
+        const HHOOK hook = SetWindowsHookExW(WH_CBT, ParticleDialogInput, nullptr, GetCurrentThreadId());
+        if (!hook) return false;
+        editor.Click(editor.Window(), point);
+        UnhookWindowsHookEx(hook);
+        return particleDialogSeen;
+    };
+    static_cast<void>(context.SelectParticleEditorEmitter(emitter));
+    if (!editProperty(kb::particle_editor::ParticleEditorPropertyWidget::Curve)) return {false, "real curve dialog"};
+    if (context.ParticleEditorWorkingAsset()->emitters.front().spawn.rateOverTime.keyframes.size() != 3U)
+        return {false, "curve control did not change keys"};
+    const auto beforeGradient = serialize();
+    static_cast<void>(context.SelectParticleEditorModule(emitter, color));
+    if (!editProperty(kb::particle_editor::ParticleEditorPropertyWidget::Gradient)) return {false, "real gradient picker"};
+    const auto edited = serialize();
+    if (!before || !edited || edited == before || edited == beforeGradient || !context.ParticleEditorDirty()) return {false, "controls did not edit document"};
+    {
+        EditorScriptedKeyScope control(VK_CONTROL);
+        const auto key = [&](WPARAM value) { SendMessageW(editor.Window(), WM_KEYDOWN, value, 0); editor.Pump(); };
+        key('Z'); key('Z');
+        if (serialize() != before) return {false, "particle Ctrl+Z lost original fields"};
+        key('Y'); key('Y');
+        if (serialize() != edited) return {false, "particle Ctrl+Y lost edited fields"};
+        key('S');
+    }
+    if (context.ParticleEditorDirty()) return {false, "particle Ctrl+S did not save"};
+    if (!context.TickParticleEditorPreview(0.1F) || context.ParticleEditorPreviewRevision() == 0U)
+        return {false, "edited live preview did not advance"};
+    const auto liveColor = [&]() -> std::optional<kb::math::Color> {
+        const auto* scene = context.ParticleEditorPreviewScene();
+        if (!scene) return std::nullopt;
+        for (const auto instance : kb::particles::ParticlePlayback::LiveInstanceIds(*scene)) {
+            const auto particles = kb::particles::ParticlePlayback::LiveParticleStates(*scene, instance);
+            if (!particles.empty()) return particles.front().color;
+        }
+        return std::nullopt;
+    };
+    const auto execution = context.ParticleEditorInspector().execution;
+    if (!execution || !execution->cpuWorkProfiled || execution->cpuRenderRecords == 0U)
+        return {false, "preview did not publish measured emitter integration work"};
+    const auto tinted = liveColor();
+    if (!tinted || tinted->r <= tinted->g + 0.2F) return {false, "gradient did not tint live particles"};
+    context.SetParticleEditorComposerScrollOffset(0);
+    auto geometry = layout();
+    const auto row = std::find_if(geometry.moduleRows.begin(), geometry.moduleRows.begin() + geometry.moduleRowCount,
+        [color](const auto& value) { return value.moduleId == color; });
+    if (row == geometry.moduleRows.begin() + geometry.moduleRowCount) return {false, "module toggle missing"};
+    const auto index = static_cast<std::size_t>(row - geometry.moduleRows.begin());
+    context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0, row->bounds.top - geometry.composer.top - 40));
+    geometry = layout();
+    editor.Click(editor.Window(), Center(geometry.moduleRows[index].enabledToggle));
+    if (!context.TickParticleEditorPreview(0.1F)) return {false, "preview after topology edit"};
+    const auto untinted = liveColor();
+    if (!untinted || untinted->g <= tinted->g + 0.2F) return {false, "module toggle did not change live particles"};
+    {
+        EditorScriptedKeyScope control(VK_CONTROL);
+        SendMessageW(editor.Window(), WM_KEYDOWN, 'Z', 0);
+        editor.Pump();
+    }
+    if (serialize() != edited || context.ParticleEditorDirty()) return {false, "topology undo lost saved document"};
+    editor.Click(editor.Window(), Center(ToRect(DockTabControlGeometry::CloseRect(
+        editor.ActivePanel(DockPanelKind::ParticleEditor)->tab))));
+    if (context.HasParticleEditorAsset() || context.ParticleEditorPreviewScene() != nullptr)
+        return {false, "close retained particle document or preview"};
+    if (!context.OpenParticleEditorAsset(assetId) || serialize() != edited)
+        return {false, "saved curve/gradient fields lost on reopening"};
+    return {true, "real curve and gradient dialogs; Ctrl+Z/Y/S; full document reload; live preview and close"};
+}
+
+EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDebuggerInteraction(
+    EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport) {
+    if (!sceneContext.LuaDebuggerPaused()) return {false, "debugger must be paused"};
+    EditorWindowUnderTest editor(sceneContext, viewport);
+    if (!editor.Create()) return {false, "window creation"};
+    for (const auto& panel : editor.Layout().panels) {
+        if (panel.panelId == 6U) editor.Click(editor.Window(), Center(ToRect(panel.tab)));
+    }
+    if (!editor.ActivePanel(DockPanelKind::Console)) return {false, "console tab during breakpoint"};
+    const auto before = editor.Dock().Commands().SerializeWorkspace();
+    const auto split = editor.Layout().splitters.front();
+    const auto point = Center(ToRect(split.rect));
+    SendMessageW(editor.Window(), WM_LBUTTONDOWN, MK_LBUTTON, PointParam(point.x, point.y));
+    SendMessageW(editor.Window(), WM_MOUSEMOVE, MK_LBUTTON,
+        PointParam(point.x + (split.axis == DockSplitAxis::Horizontal ? 40 : 0),
+                   point.y + (split.axis == DockSplitAxis::Vertical ? 40 : 0)));
+    SendMessageW(editor.Window(), WM_LBUTTONUP, 0, PointParam(point.x, point.y));
+    editor.Pump();
+    return {sceneContext.LuaDebuggerPaused() && before != editor.Dock().Commands().SerializeWorkspace(),
+        "console tab, splitter drag and message pump while Lua remains paused"};
+}
+
+EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyWorkspaceControls(
+    EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport) {
+    EditorWindowUnderTest editor(sceneContext, viewport);
+    if (!editor.Create()) return {false, "window creation"};
+    const auto toolbar = EditorToolbarRenderer::ResolveToolbar(ToRect(editor.Layout().toolbar));
+    editor.Click(editor.Window(), Center(toolbar.stopButton));
+    editor.Click(editor.Window(), Center(toolbar.pauseButton));
+    if (editor.Mode() != EditorPlayMode::Stopped) return {false, "disabled transport activated"};
+    const auto count = sceneContext.HierarchyRows().size();
+    {
+        EditorScriptedKeyScope control(VK_CONTROL);
+        const auto key = [&](WPARAM value) { SendMessageW(editor.Window(), WM_KEYDOWN, value, 0); editor.Pump(); };
+        key('D');
+        if (sceneContext.HierarchyRows().size() != count + 1U) return {false, "Ctrl+D"};
+        key('Z');
+        if (sceneContext.HierarchyRows().size() != count) return {false, "Ctrl+Z"};
+        key('Y');
+        if (sceneContext.HierarchyRows().size() != count + 1U) return {false, "Ctrl+Y"};
+        key('Z');
+        key('S');
+    }
+    for (const auto& panel : editor.Layout().panels) {
+        if (panel.panelId != 6U) continue;
+        editor.Click(editor.Window(), Center(ToRect(panel.tab)));
+    }
+    if (!editor.ActivePanel(DockPanelKind::Console)) return {false, "console tab click"};
+    const auto before = editor.Dock().Commands().SerializeWorkspace();
+    const auto split = editor.Layout().splitters.front();
+    const auto point = Center(ToRect(split.rect));
+    SendMessageW(editor.Window(), WM_LBUTTONDOWN, MK_LBUTTON, PointParam(point.x, point.y));
+    SendMessageW(editor.Window(), WM_MOUSEMOVE, MK_LBUTTON,
+        PointParam(point.x + (split.axis == DockSplitAxis::Horizontal ? 40 : 0),
+                   point.y + (split.axis == DockSplitAxis::Vertical ? 40 : 0)));
+    SendMessageW(editor.Window(), WM_LBUTTONUP, 0, PointParam(point.x, point.y));
+    if (before == editor.Dock().Commands().SerializeWorkspace()) return {false, "splitter drag"};
+    // Synthetic display topology drives the same recovery function used by the
+    // native creation and display-change paths, including negative coordinates.
+    const DockRect dual[]{{-1920, 0, 1920, 1040}, {0, 0, 2560, 1400}};
+    const DockRect single[]{{0, 0, 1280, 720}};
+    auto floated = RecoverDisplayRect({-1800, 200, 900, 640}, dual);
+    if (floated.x != -1800) return {false, "second monitor placement"};
+    floated = RecoverDisplayRect(floated, single);
+    if (floated.x < 0 || floated.y < 0 || floated.x + floated.width > 1280 || floated.y + floated.height > 720)
+        return {false, "removed monitor recovery"};
+    ShowWindow(editor.Window(), SW_HIDE);
+    for (const unsigned dpi : {96U, 144U, 192U}) {
+        RECT suggested{-4000, -3000, -4000 + static_cast<LONG>(1280U * dpi / 96U),
+            -3000 + static_cast<LONG>(720U * dpi / 96U)};
+        SendMessageW(editor.Window(), WM_DPICHANGED, MAKELONG(dpi, dpi), reinterpret_cast<LPARAM>(&suggested));
+        SendMessageW(editor.Window(), WM_DISPLAYCHANGE, 32, 0);
+        RECT actual{};
+        GetWindowRect(editor.Window(), &actual);
+        const auto expected = RecoverNativeDisplayRect({actual.left, actual.top, actual.right - actual.left, actual.bottom - actual.top});
+        if (actual.left != expected.x || actual.top != expected.y || actual.right - actual.left != expected.width)
+            return {false, "native display/DPI recovery"};
+        const auto layout = editor.Layout();
+        for (const auto& panel : editor.Dock().Queries().Panels()) {
+            if (!panel.visible || panel.area == DockArea::Floating) continue;
+            if (!std::ranges::any_of(layout.panels, [&](const auto& entry) { return entry.panelId == panel.id; }))
+                return {false, "panel lost on DPI/resize"};
+        }
+    }
+    return {true, "disabled stop/pause; Ctrl+D/Z/Y/S; tab click; splitter drag; display removal; DPI 96/144/192"};
+}
 
 EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyToolbarMenuOverlay(
     EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport) {
@@ -585,6 +885,41 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyAddComponentSear
         }
     }
 
+    // Use real input and popup painting for everyday and technical names.
+    for (const auto& [query, expected] : {std::pair{"billboard", "Facing Panel"},
+             std::pair{"decal", "Surface Cast"}, std::pair{"facing panel", "Facing Panel"}}) {
+        {
+            EditorScriptedKeyScope control(VK_CONTROL);
+            SendMessageW(browser, WM_KEYDOWN, 'A', 0);
+            editor.Pump();
+        }
+        TypeKeys(editor, browser, query);
+        const auto matches = InspectorAddComponentBrowserModel::Rows({}, Lower(inspector.EditBuffer()), pluginEnabled);
+        if (matches.empty() || matches.front().id != expected ||
+            InspectorAddComponentBrowserModel::Description(matches, 0).empty()) {
+            detail += std::string{"synonym-help-missing:"} + query + ";"; succeeded = false; continue;
+        }
+        for (int y = client.top; y < client.bottom; ++y) {
+            const auto hit = InspectorPanelRenderer::HitTestAddComponentOverlay(client, sceneContext, client.left + 32, y);
+            if (hit.property == InspectorPropertyId::AddComponentOption && hit.index == 0) {
+                SendMessageW(browser, WM_MOUSEMOVE, 0, PointParam(client.left + 32, y + 4));
+                editor.Pump(); break;
+            }
+        }
+        const ClientPixels painted = CaptureClient(browser);
+        // A popup narrower than its default width gives the help text a taller band (see AddComponentHelpRect).
+        const int helpHeight = client.right - client.left < 240 ? 112 : 70;
+        const RECT help{client.left + 8, client.bottom - helpHeight, client.right - 8, client.bottom - 6};
+        if (painted.BrightPixelsIn(help, 130) < 80 ||
+            InspectorPanelRenderer::HitTestAddComponentOverlay(client, sceneContext, help.left + 10, help.bottom - 10).property ==
+                InspectorPropertyId::AddComponentOption) {
+            detail += std::string{"help-not-painted-or-overlaps-list:"} + query + ";"; succeeded = false;
+        }
+        if (!painted.Save(EditorProjectPaths::ProjectRoot() / "Saved" / "Automation" / (std::string{query} + "-help.bmp"))) {
+            detail += "help-capture-failed;"; succeeded = false;
+        }
+    }
+
     inspector.CloseAddComponentBrowser();
     InvalidateRect(editor.Window(), nullptr, FALSE);
     editor.Pump();
@@ -595,7 +930,7 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyAddComponentSear
 
     result.succeeded = succeeded;
     if (succeeded) {
-        detail = "click,type-window,type-popup,filtered";
+        detail = "click,type-window,type-popup,filtered,billboard,decal,technical-name,painted-help";
     }
     return result;
 }

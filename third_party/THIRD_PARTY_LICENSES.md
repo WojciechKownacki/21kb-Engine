@@ -8,6 +8,16 @@ and license text. Packaging builds each player's `THIRD_PARTY_NOTICES.txt`, `Lic
 and CycloneDX SBOM (`sbom.cdx.json`) from it; `scripts/third_party_notices.py --product engine`
 builds the same for the editor and tools. Add a dependency there before it is built into a product.
 
+## libwebsockets
+
+- Repository: https://github.com/warmcat/libwebsockets
+- Version: 4.4.1 (`adc128ca082a3c6fb9d4abbadefc09e3bc736724`)
+- License: MIT with retained BSD notices
+- License file: `third_party/licenses/libwebsockets.txt`
+
+Fetched by CMake for the optional native dedicated-server WebSocket listener.
+Browser clients use the platform WebSocket implementation.
+
 ## bgfx
 
 - Repository: https://github.com/bkaradzic/bgfx
@@ -254,3 +264,34 @@ Compiled only into the editor, the cooker and the shader compiler:
 
 The root `LICENSE` file applies to 21kb-Engine itself. Third-party dependencies
 remain under their own licenses.
+
+## Unicode Character Database and Emoji Data
+
+Unicode 17.0.0 grapheme segmentation uses generated ranges from the Unicode
+Character Database and Emoji Data. The original data, conformance corpus,
+source URLs and SHA-256 hashes are retained in `third_party/unicode` under
+Unicode License V3. Its full notice is included in engine and game packages.
+
+## HarfBuzz
+
+The portable text shaper is vendored from HarfBuzz 14.6.0, commit
+`c7a7457b7385f33178e8cf87615ca077a810bbe7`. The source subset in
+`third_party/harfbuzz` is unmodified and includes the upstream license
+`COPYING` (the upstream Old MIT wording). It is linked into the runtime;
+its complete notice is included in engine and game packages.
+
+## SheenBidi
+
+Unicode bidirectional and script analysis uses SheenBidi 3.0.0, commit
+`cfe430e7375a7845b679adae9d51dac6deaa8858`. The unmodified source and
+headers in `third_party/sheenbidi` retain their Apache-2.0 notices.
+`LICENSE` is included in engine and game packages.
+
+## Text shaping font fixtures
+
+`sources/engine/tests/fixtures/fonts` contains the unmodified Noto Sans Devanagari
+font and its renamed ShapingReference derivative under the SIL Open Font License
+1.1. `noto-font-source.json` records upstream revisions and SHA-256 hashes.
+The same directory contains CaretTest, an independently generated synthetic font
+under the repository MIT license. These test fixtures are covered by the engine
+notice inventory; the standard game payload does not include them.

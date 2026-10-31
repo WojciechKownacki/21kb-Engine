@@ -76,6 +76,8 @@ struct EditorPackageRequest {
     std::string androidLabel;
     std::filesystem::path androidKeystore;
     std::string androidKeyAlias;
+    std::string androidFormat = "apk";
+    std::filesystem::path androidBundletool;
     std::string androidStorePassword;
     std::string androidKeyPassword;
     // Windows Authenticode, Release only: a store certificate by thumbprint, or a PFX

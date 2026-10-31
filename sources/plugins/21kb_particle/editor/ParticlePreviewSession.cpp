@@ -129,6 +129,8 @@ ParticleEditorResult ParticlePreviewSession::Start(
     });
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(*candidate, true);
 
+    requiresGpu_ = asset.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    deferredRestart_ = false;
     scene_ = std::move(candidate);
     assetId_ = assetId;
     virtualPath_ = std::move(virtualPath);
@@ -168,6 +170,12 @@ ParticleEditorResult ParticlePreviewSession::PublishWorkingCopy(
     // instances at the new compiled effect - resetting them only when the change is
     // topologically incompatible. A restart here is therefore additional, and only
     // warranted for edits the running simulation cannot surface by itself.
+    requiresGpu_ = asset.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    if (requiresGpu_ && kb::particles::ParticlePlayback::RenderCapabilities(*scene_).gpuVisualAvailability !=
+            kb::particles::ParticleGpuVisualAvailability::Ready) {
+        deferredRestart_ |= restartLiveInstances;
+        return {};
+    }
     if (!scene_->Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds)) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
                  .message = "particle preview could not compile the published working copy" };
@@ -232,6 +240,12 @@ ParticleEditorResult ParticlePreviewSession::RetargetWorkingCopy(
 
     // The fixed-step component reconciler releases the previous instance and
     // creates the new asset instance with its own deterministic seed.
+    requiresGpu_ = asset.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    if (requiresGpu_ && kb::particles::ParticlePlayback::RenderCapabilities(*scene_).gpuVisualAvailability !=
+            kb::particles::ParticleGpuVisualAvailability::Ready) {
+        deferredRestart_ = true;
+        return {};
+    }
     if (!scene_->Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds)) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
                  .message = "particle preview could not activate the retargeted working copy" };
@@ -256,9 +270,18 @@ ParticleEditorResult ParticlePreviewSession::Tick(float wallDeltaSeconds) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
                  .message = "particle preview tick requires an active session and finite non-negative delta" };
     }
+    if (requiresGpu_ && kb::particles::ParticlePlayback::RenderCapabilities(*scene_).gpuVisualAvailability !=
+            kb::particles::ParticleGpuVisualAvailability::Ready) return {};
+    kb::particles::ParticlePlayback::SetEmitterProfilingEnabled(*scene_, true);
     if (!scene_->Runtime().Update(wallDeltaSeconds)) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
                  .message = "particle preview runtime update failed" };
+    }
+    if (deferredRestart_) {
+        for (const auto id : kb::particles::ParticlePlayback::LiveInstanceIds(*scene_))
+            if (!kb::particles::ParticlePlayback::Restart(*scene_, id).Succeeded())
+                return {.status=ParticleEditorStatus::RuntimeFailure,.message="particle preview deferred restart failed"};
+        deferredRestart_ = false;
     }
     return {};
 }

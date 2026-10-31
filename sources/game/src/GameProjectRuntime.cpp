@@ -126,6 +126,10 @@ void MountInstalledMods(
         return false;
     }
     for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        if (IsPackagedHostModule(plugin.name)) {
+            plugin.binaryPath.clear();
+            continue;
+        }
         if (!plugin.enabled) {
             continue;
         }
@@ -376,6 +380,12 @@ bool ReadMountedGameProjectRuntime(
         return false;
     }
     const kb::assets::bake::RuntimeAssetManifest& manifest = pack->Manifest();
+    if (const std::string moduleError =
+            ValidatePackagedRuntimeModuleReferences(manifest.descriptor);
+        !moduleError.empty()) {
+        err << moduleError << '\n';
+        return false;
+    }
     const std::string sceneReference = sceneOverride.empty()
         ? manifest.settings.defaultMap
         : std::string{ sceneOverride };
@@ -746,6 +756,11 @@ bool LoadGameProjectScene(
             err << '\n';
             return false;
         }
+        // Instantiation has transferred the scene data to its runtime owners.
+        // Retain the decoded document only while an external handle still needs it,
+        // matching the lifetime of documents loaded by scene streaming.
+        static_cast<void>(scene.Assets().Manager().SetUnloadPolicy(
+            metadata->id, kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced));
         loadedScenePath = runtime.IsPackaged()
             ? std::filesystem::path{ runtime.sceneReference }
             : metadata->physicalPath;

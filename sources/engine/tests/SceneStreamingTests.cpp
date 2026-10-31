@@ -10,6 +10,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/SceneStreamingService.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -17,8 +18,120 @@
 #include <fstream>
 #include <iterator>
 #include <thread>
+#include <iostream>
+#include <unordered_map>
+#include "engine/ecs/World.hpp"
 
 namespace kb::tests {
+
+namespace {
+struct StreamingProviderProbe {
+    std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> resources;
+    std::size_t created = 0U;
+    std::size_t activated = 0U;
+    std::size_t removed = 0U;
+    static void Mesh(kb::ecs::Entity entity, kb::ecs::ComponentEventKind event,
+        const kb::scene::MeshRendererComponent*, void* context) {
+        auto& probe = *static_cast<StreamingProviderProbe*>(context);
+        if (event == kb::ecs::ComponentEventKind::Added) {
+            probe.resources.emplace(entity.Id(), std::vector<std::uint8_t>(256U * 1024U, 42U));
+            ++probe.created;
+        } else if (event == kb::ecs::ComponentEventKind::Removed) {
+            probe.resources.erase(entity.Id());
+            ++probe.removed;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    static void Body(kb::ecs::Entity, kb::ecs::ComponentEventKind,
+        const kb::scene::RigidbodyComponent*, void* context) {
+        ++static_cast<StreamingProviderProbe*>(context)->activated;
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+};
+
+void VerifyStreamingProviderBudgetsAndCancellation(const std::filesystem::path& path) {
+    using namespace kb::scene;
+    SceneDocument document;
+    document.name = "Provider streaming";
+    document.guid = "scene:provider-streaming";
+    for (unsigned i = 0; i < 8; ++i) {
+        ScenePrefabNodeDesc node;
+        node.name = "Resource" + std::to_string(i);
+        node.components.meshRenderer = MeshRendererComponent{.meshAssetId = 42U};
+        node.components.rigidbody = RigidbodyComponent{};
+        static_cast<void>(document.worldPrefab.AddNode(std::move(node)));
+    }
+    Require(SceneDocumentService::Save(document, path), "Provider streaming fixture must save");
+    // Cancel while loading, after creation, during activation, and during unload.
+    // The final case completes normally, including every resource callback.
+    for (unsigned phase = 0; phase < 5; ++phase) {
+        StreamingProviderProbe probe;
+        Scene scene;
+        auto& world = SceneAccess::State(scene).world;
+        const auto added = world.ObserveComponent<MeshRendererComponent>(kb::ecs::ComponentEventKind::Added,
+            &StreamingProviderProbe::Mesh, &probe);
+        const auto removed = world.ObserveComponent<MeshRendererComponent>(kb::ecs::ComponentEventKind::Removed,
+            &StreamingProviderProbe::Mesh, &probe);
+        const auto body = world.ObserveComponent<RigidbodyComponent>(kb::ecs::ComponentEventKind::Added,
+            &StreamingProviderProbe::Body, &probe);
+        scene.LoadedContent().ConfigureStreaming({.maxPendingLoads = 2U, .maxOperationsPerFrame = 64U,
+            .maxMillisecondsPerFrame = 0.5F});
+        const auto id = scene.LoadedContent().LoadAsync(path);
+        Require(id != 0U, "Provider streaming must start");
+        if (phase == 0) SceneStreamingService::CancelPending(scene);
+        bool stopped = phase == 0;
+        bool repeatedUnload = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto beforeActivated = probe.activated;
+            const auto beforeRemoved = probe.removed;
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            const auto stats = scene.LoadedContent().StreamingStats();
+            Require(stats.operations <= 64U, "Provider callbacks must preserve the operation budget");
+            Require(probe.activated - beforeActivated <= 1U && probe.removed - beforeRemoved <= 1U,
+                "Time budget must be checked between costly activation/destruction callbacks");
+            if (probe.activated != beforeActivated || probe.removed != beforeRemoved)
+                Require(stats.milliseconds >= 1.0 && stats.overBudgetFrames > 0U,
+                    "An indivisible provider overrun must be included in streaming diagnostics");
+            const auto status = scene.LoadedContent().Status(id);
+            Require(status != SceneLoadStatus::Failed, "Provider streaming unexpectedly failed");
+            if (!stopped && ((phase == 1 && probe.created > 0U && probe.activated == 0U) ||
+                            (phase == 2 && probe.activated > 0U && probe.activated < 8U))) {
+                SceneStreamingService::CancelPending(scene);
+                stopped = true;
+            }
+            if (!stopped && phase >= 3 && status == SceneLoadStatus::Ready) {
+                Require(scene.LoadedContent().UnloadAsync(id), "Completed provider scene must unload");
+                stopped = true;
+            }
+            if (phase == 3 && status == SceneLoadStatus::Unloading && !repeatedUnload) {
+                SceneStreamingService::CancelPending(scene);
+                Require(scene.LoadedContent().UnloadAsync(id), "Repeated unload must be safe");
+                repeatedUnload = true;
+            }
+            if (stopped && (status == SceneLoadStatus::Cancelled || status == SceneLoadStatus::Unknown)) break;
+            std::this_thread::yield();
+        }
+        Require(stopped && (scene.LoadedContent().Status(id) == (phase < 3 ? SceneLoadStatus::Cancelled : SceneLoadStatus::Unknown)),
+            "Cancellation or unload did not reach its correct terminal state");
+        Require(scene.Entities().Count() == 0U && probe.resources.empty() && probe.created == probe.removed &&
+                SceneAccess::State(scene).inactiveEntities.empty(), "Provider resources or staged entities survived cancellation");
+        if (phase != 0) Require(scene.LoadedContent().StreamingStats().overBudgetFrames > 0U,
+            "Slow resource creation must report its indivisible batch overrun");
+        if (phase >= 3) Require(probe.created == 8U && probe.activated == 8U, "The complete provider lifecycle was not exercised");
+        Require(phase != 3 || repeatedUnload, "Cancellation during unload was not exercised");
+        std::cout << "scene_provider_streaming phase=" << phase << " created=" << probe.created
+                  << " activated=" << probe.activated << " removed=" << probe.removed
+                  << " over_budget=" << scene.LoadedContent().StreamingStats().overBudgetFrames
+                  << " longest_ms=" << scene.LoadedContent().StreamingStats().longestFrameMilliseconds << '\n';
+        world.DestroyObserver(added);
+        world.DestroyObserver(removed);
+        world.DestroyObserver(body);
+    }
+    std::filesystem::remove(path);
+}
+}
+
 void RunSceneStreamingTests() {
     using namespace kb::scene;
     SceneDocument document;
@@ -39,6 +152,7 @@ void RunSceneStreamingTests() {
     }
     const auto path = std::filesystem::temp_directory_path() /
         ("kb_stream_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".21kbscene");
+    VerifyStreamingProviderBudgetsAndCancellation(path.string() + ".providers.21kbscene");
     Require(SceneDocumentService::Save(document, path), "Streaming fixture must save");
     Scene privateScene{SceneMode::PrefabPrivate};
     Require(privateScene.LoadedContent().LoadAsync(path) == 0U,
@@ -134,6 +248,7 @@ void RunSceneStreamingTests() {
     auto& manager = scene.Assets().Manager();
     Require(manager.Mounts().Mount("Game", directory) && manager.DiscoverMountedAssets() == 1U,
         "Registered streaming fixture must discover");
+    const auto cacheBaseline = manager.LoadedCount();
     const auto first = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
     const auto second = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
     Require(first != 0U && second != 0U && first != second &&
@@ -146,6 +261,39 @@ void RunSceneStreamingTests() {
     wait(second, SceneLoadStatus::Unknown);
     Require(scene.Entities().Count() == 1U, "Shared streaming instances must release all owned entities");
     const auto registeredId = manager.Registry().FindByPath("/Game/Shared.21kbscene")->id;
+    for (unsigned cycle = 0U; cycle < 16U; ++cycle) {
+        auto retained = manager.Load<SceneDocument>(registeredId);
+        Require(retained.IsLoaded(), "Repeated streaming source must load");
+        const auto weak = manager.WeakHandle<SceneDocument>(registeredId);
+        const auto left = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
+        const auto right = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
+        Require(left != 0U && right != 0U && left != right, "Repeated shared scene loads must start independently");
+        wait(left, SceneLoadStatus::Ready);
+        wait(right, SceneLoadStatus::Ready);
+        Require(manager.AcquireLoaded<SceneDocument>(registeredId).Get() == retained.Get() &&
+            manager.UnloadPolicy(registeredId) == kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced &&
+            manager.LoadedCount() == cacheBaseline + 1U,
+            "Both scene instances must reuse one weakly cached source payload");
+        Require(scene.LoadedContent().UnloadAsync(left), "First shared scene must unload");
+        wait(left, SceneLoadStatus::Unknown);
+        Require(scene.LoadedContent().Exists(right) && scene.Entities().Count() == 515U &&
+            !weak.Expired() && retained->worldPrefab.NodeCount() == 513U,
+            "Unloading one scene must preserve the other instance and external source owner");
+        retained = {};
+        const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while ((!weak.Expired() || manager.LoadedCount() != cacheBaseline) && std::chrono::steady_clock::now() < releaseDeadline) {
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            std::this_thread::yield();
+        }
+        static_cast<void>(manager.PruneUnreferenced());
+        Require(weak.Expired() && manager.LoadedCount() == cacheBaseline && manager.ReferenceCount(registeredId) == 0U,
+            "Retired scene sources must return to the payload baseline after the last external owner releases");
+        Require(scene.LoadedContent().Exists(right) && scene.Entities().Count() == 515U &&
+            scene.LoadedContent().UnloadAsync(right), "A live scene instance must survive releasing its decoded source");
+        wait(right, SceneLoadStatus::Unknown);
+        Require(scene.Entities().Count() == 1U && manager.LoadedCount() == cacheBaseline,
+            "Repeated scene transitions must not accumulate entities or cached payloads");
+    }
     scene.LoadedContent().ConfigureStreaming({.maxPendingLoads = 1U, .maxOperationsPerFrame = 7U, .maxMillisecondsPerFrame = 20.0F});
     const auto cancelledRegistered = scene.LoadedContent().LoadAsync("/Game/Shared.21kbscene");
     Require(cancelledRegistered != 0U && scene.LoadedContent().UnloadAsync(cancelledRegistered),

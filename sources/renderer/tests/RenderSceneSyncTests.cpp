@@ -2963,6 +2963,46 @@ void RunRenderSceneRecordsPreviousModelsPerMotionFrameTest() {
     Require(swarmChecked, "Motion history test lost the swarm instances");
 }
 
+void RunTilemapSortingSurvivesTransformPublicationTest() {
+    for (const bool wall : { false, true }) {
+        for (const bool generated : { false, true }) {
+            kb::scene::Scene scene;
+            const auto owner = scene.Entities().CreateEntity({ .name = "Map" });
+            scene.Components().Grids().Set(owner, { .wall = wall });
+            scene.Components().Tilemaps().Set(owner, { .mapAssetId = 42U });
+            scene.Components().TilemapRenderers().Set(owner, { .sortingOrder = 2 });
+            const auto mesh = generated ? scene.Entities().CreateEntity({ .name = "Chunk", .parent = scene.Entities().Object(owner) }) : owner;
+            scene.Components().MeshRenderers().Set(mesh, { .meshAssetId = 42U, .transient = generated });
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            RenderScene renderScene;
+            EcsRenderSceneSynchronizer synchronizer;
+            synchronizer.Sync(scene, renderScene);
+            const auto check = [&](float y, float z) {
+                const auto* proxy = renderScene.FindMeshByEntity(mesh.Id());
+                Require(proxy && NearlyEqual(proxy->desc.model[13], y) && NearlyEqual(proxy->desc.model[14], z),
+                    "Tilemap sorting offset was lost or applied twice during transform publication");
+            };
+            check(wall ? 0.0F : 1.0F, wall ? -1.0F : 0.0F);
+            synchronizer.PullTransforms(scene, renderScene);
+            check(wall ? 0.0F : 1.0F, wall ? -1.0F : 0.0F);
+            static_cast<void>(renderScene.DrawGroups());
+            kb::scene::WorldTransformAffine3x4 affine{};
+            affine.values[0] = affine.values[4] = affine.values[8] = 2.0F;
+            affine.values[10] = 6.0F;
+            affine.values[11] = 7.0F;
+            const std::array entities{ mesh };
+            const std::array affines{ affine };
+            synchronizer.SyncMeshWorldAffines(renderScene, entities, affines);
+            check(wall ? 6.0F : 8.0F, wall ? 5.0F : 7.0F);
+            kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+            if (!pool.Running()) pool.Start(kb::ecs::WorkerPoolConfig{});
+            synchronizer.SyncMeshWorldAffinesParallel(renderScene, entities, affines, pool);
+            pool.Stop();
+            check(wall ? 6.0F : 8.0F, wall ? 5.0F : 7.0F);
+        }
+    }
+}
+
 void RunSyncMeshWorldAffinesPushesColumnarTransformTest() {
     // H2: the columnar world-affine path pushes a precomputed affine straight into
     // the render instance stream, matching the column-major model layout.
@@ -4166,6 +4206,7 @@ void RunRenderSceneSyncTests() {
     RunSyncFallsBackToResolveForDirtyTransformTest();
     RunUpdateMeshTransformRefreshesInstanceInPlaceTest();
     RunRenderSceneRecordsPreviousModelsPerMotionFrameTest();
+    RunTilemapSortingSurvivesTransformPublicationTest();
     RunSyncMeshWorldAffinesPushesColumnarTransformTest();
     RunSyncMeshWorldAffinesParallelTest();
     RunRenderBridgeTelemetryAggregatesBridgeStatsTest();

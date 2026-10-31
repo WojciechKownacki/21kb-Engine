@@ -1,10 +1,12 @@
 #include "CliCommands.hpp"
 #include "CliAudioJson.hpp"
 #include "CliAudioMeterJson.hpp"
+#include "engine/audio/AudioDiagnostics.hpp"
 
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputRecording.hpp"
 #include "engine/ecs/SystemSchedulerTraceExport.hpp"
+#include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldTelemetryExport.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -18,6 +20,7 @@
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/modules/IEngineModule.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -28,6 +31,7 @@
 #include "engine/world/WorldPartitionRuntime.hpp"
 
 #include <filesystem>
+#include <deque>
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -83,9 +87,11 @@ namespace {
     auto scheduler = JsonValue::MakeObject();
     scheduler.Set("scope", JsonValue::MakeString("ECS world scheduler, last simulated frame; the physics and render stages have their own schedulers and are not in this trace"));
     scheduler.Set("frame_index", JsonValue::MakeNumber(static_cast<double>(trace.frameIndex)));
+    scheduler.Set("dispatch_mode", JsonValue::MakeString(trace.frameCounters.lastWorkerDispatchMode));
     scheduler.Set("frame_wall_ns", JsonValue::MakeNumber(static_cast<double>(trace.frameDurationNanoseconds)));
-    scheduler.Set("cpu_time_ns", JsonValue::MakeNumber(static_cast<double>(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace))));
-    scheduler.Set("cpu_time_basis", JsonValue::MakeString("sum of the durations of all systems over all workers; not wall time and may exceed frame_wall_ns"));
+    scheduler.Set("cpu_time_ns", JsonValue::MakeNull());
+    scheduler.Set("system_elapsed_sum_ns", JsonValue::MakeNumber(static_cast<double>(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace))));
+    scheduler.Set("cpu_time_basis", JsonValue::MakeString("CPU time is unavailable; system_elapsed_sum_ns sums elapsed system durations and can include waiting, and is not wall time for the frame"));
     scheduler.Set("worker_count", JsonValue::MakeNumber(static_cast<double>(trace.workers.size())));
     auto systems = JsonValue::MakeArray();
     for (const kb::ecs::SystemSchedulerTraceEvent& event : trace.events) {
@@ -93,6 +99,7 @@ namespace {
         entry.Set("name", JsonValue::MakeString(event.systemName));
         entry.Set("stage", JsonValue::MakeNumber(static_cast<double>(event.stageIndex)));
         entry.Set("worker", JsonValue::MakeNumber(static_cast<double>(event.workerIndex)));
+        entry.Set("chunk_jobs", JsonValue::MakeNumber(static_cast<double>(event.chunkJobsCount)));
         entry.Set("start_ns", JsonValue::MakeNumber(static_cast<double>(event.startTimeNanoseconds)));
         entry.Set("end_ns", JsonValue::MakeNumber(static_cast<double>(event.endTimeNanoseconds)));
         entry.Set("duration_ns", JsonValue::MakeNumber(static_cast<double>(event.durationNanoseconds)));
@@ -114,8 +121,9 @@ namespace {
     }
     critical.Set("systems", std::move(names));
     critical.Set("wall_ns", JsonValue::MakeNumber(static_cast<double>(path.wallNanoseconds)));
-    critical.Set("busy_ns", JsonValue::MakeNumber(static_cast<double>(path.busyNanoseconds)));
-    critical.Set("basis", JsonValue::MakeString("from the system that finished last, the dependency that finished last of each system; wall_ns includes waits, busy_ns does not"));
+    critical.Set("busy_ns", JsonValue::MakeNull());
+    critical.Set("system_elapsed_sum_ns", JsonValue::MakeNumber(static_cast<double>(path.busyNanoseconds)));
+    critical.Set("basis", JsonValue::MakeString("dependency path by completion time; elapsed system durations may include waiting and are not measured CPU busy time"));
     scheduler.Set("critical_path", std::move(critical));
     return scheduler;
 }
@@ -263,6 +271,9 @@ struct DiagnosticPrinter {
         row.Set("bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.bytes)));
         row.Set("baseline_bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.baselineBytes)));
         row.Set("note", JsonValue::MakeString(category.note));
+        row.Set("known_payload_bytes", JsonValue::MakeNumber(static_cast<double>(category.knownPayloadBytes)));
+        row.Set("unmeasured_payloads", JsonValue::MakeNumber(static_cast<double>(category.unmeasuredPayloads)));
+        row.Set("baseline_unmeasured_payloads", JsonValue::MakeNumber(static_cast<double>(category.baselineUnmeasuredPayloads)));
         categories.Append(std::move(row));
     }
     auto report = JsonValue::MakeObject();
@@ -270,6 +281,8 @@ struct DiagnosticPrinter {
     report.Set("estimated_resident_bytes", JsonValue::MakeNumber(static_cast<double>(memory.estimatedResidentBytes)));
     report.Set("resident_units", JsonValue::MakeNumber(static_cast<double>(memory.residentUnits)));
     report.Set("measured_bytes", JsonValue::MakeNumber(static_cast<double>(memory.measuredBytes)));
+    report.Set("estimated_bytes", JsonValue::MakeNumber(static_cast<double>(memory.estimatedBytes)));
+    report.Set("has_estimated_kinds", JsonValue::MakeBool(memory.hasEstimatedKinds));
     report.Set("has_unavailable_kinds", JsonValue::MakeBool(memory.hasUnavailableKinds));
     report.Set("error_ratio", JsonValue::MakeNumber(memory.errorRatio));
     report.Set("minimum_error_ratio", JsonValue::MakeNumber(memory.minimumErrorRatio));
@@ -281,7 +294,7 @@ struct DiagnosticPrinter {
 
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
     std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr, std::ostream* inputReport = nullptr,
-    std::ostream* aiReport = nullptr) {
+    std::ostream* aiReport = nullptr, std::ostream* determinismReport = nullptr) {
     const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -290,6 +303,32 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     }
 
     int frames = 60;
+    std::optional<kb::ecs::SystemSchedulerParallelismMode> ecsParallelism;
+    if (const auto option = arguments.Option("--ecs-parallelism")) {
+        if (*option == "systems") ecsParallelism = kb::ecs::SystemSchedulerParallelismMode::SystemStages;
+        else if (*option == "chunks") ecsParallelism = kb::ecs::SystemSchedulerParallelismMode::QueryChunks;
+        else if (*option == "combined") ecsParallelism = kb::ecs::SystemSchedulerParallelismMode::SystemsAndChunks;
+        else { io.err << "error: --ecs-parallelism expects systems, chunks, or combined\n"; return 1; }
+    }
+    std::size_t workerLimit = 0U;
+    if (const auto option = arguments.Option("--workers")) {
+        const auto count = ParseInt(*option);
+        if (!count || *count < 1 || *count > 64) {
+            io.err << "error: --workers expects 1..64 scene workers\n";
+            return 1;
+        }
+        workerLimit = static_cast<std::size_t>(*count);
+    }
+    std::size_t historyCapacity = 0U;
+    if (const auto option = arguments.Option("--ecs-history")) {
+        const auto count = ParseInt(*option);
+        if (ecsReport == nullptr || !count || *count < 1 || *count > 256) {
+            io.err << "error: --ecs-history expects 1..256 retained frames and requires --report ecs\n";
+            return 1;
+        }
+        historyCapacity = static_cast<std::size_t>(*count);
+    }
+    std::deque<std::pair<int, kb::ecs::WorldTelemetrySnapshot>> telemetryHistory;
     if (const std::optional<std::string> framesOption = arguments.Option("--frames"); framesOption.has_value()) {
         const std::optional<int> parsed = ParseInt(*framesOption);
         if (!parsed.has_value() || *parsed < 1) {
@@ -453,7 +492,12 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         ? projectSettings.settings.inputEnabled : loadedProject.legacySettings.inputEnabled;
     const std::string inputMappingContext = projectSettings.found && projectSettings.Succeeded()
         ? projectSettings.settings.inputMappingContext : loadedProject.legacySettings.inputMappingContext;
-    kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
+    kb::ecs::WorldConfig worldConfig;
+    worldConfig.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk64KB;
+    worldConfig.workerThreadLimit = workerLimit;
+    kb::scene::Scene scene{ std::move(loadedProject.descriptor), {}, worldConfig };
+    if (ecsParallelism) scene.Runtime().SetEcsParallelismMode(*ecsParallelism);
+    scene.Runtime().SetDeterministicExecution(arguments.Flag("--deterministic"));
     // A headless run is a determinism tool: scripts see each physics step in the update that ran it.
     kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
     if (!scene.ModuleDiagnostics().empty()) {
@@ -613,6 +657,8 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     bool audioSucceeded = true;
     std::string audioError;
     int completedFrames = 0;
+    auto lastInputActions = kb::core::JsonValue::MakeArray();
+    auto lastInputValues = kb::core::JsonValue::MakeArray();
     if (ecsReport != nullptr) {
         scene.Runtime().SetEcsProfilerEnabled(true);
     }
@@ -671,6 +717,36 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         updateWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - updateStarted).count());
         ++completedFrames;
+        if (historyCapacity != 0U) {
+            if (telemetryHistory.size() == historyCapacity) telemetryHistory.pop_front();
+            telemetryHistory.emplace_back(completedFrames, scene.Runtime().EcsWorld().TelemetrySnapshot());
+        }
+        if (inputReport != nullptr) {
+            using kb::core::JsonValue;
+            lastInputActions = JsonValue::MakeArray();
+            lastInputValues = JsonValue::MakeArray();
+            for (const auto& [name, state] : scene.Input().ActionStates()) {
+                auto value = JsonValue::MakeObject();
+                value.Set("action", JsonValue::MakeString(name));
+                value.Set("value_type", JsonValue::MakeString(std::string{kb::input::ToString(state.value.type)}));
+                value.Set("x", JsonValue::MakeNumber(state.value.x));
+                value.Set("y", JsonValue::MakeNumber(state.value.y));
+                value.Set("z", JsonValue::MakeNumber(state.value.z));
+                value.Set("triggered", JsonValue::MakeBool(state.triggered));
+                lastInputValues.Append(std::move(value));
+            }
+            constexpr std::array phases{"started", "triggered", "completed", "canceled"};
+            for (const auto& event : scene.Input().FrameEvents()) {
+                auto action = JsonValue::MakeObject();
+                action.Set("action", JsonValue::MakeString(event.action));
+                action.Set("phase", JsonValue::MakeString(phases[static_cast<std::size_t>(event.phase)]));
+                action.Set("value_type", JsonValue::MakeString(std::string{kb::input::ToString(event.value.type)}));
+                action.Set("x", JsonValue::MakeNumber(event.value.x));
+                action.Set("y", JsonValue::MakeNumber(event.value.y));
+                action.Set("z", JsonValue::MakeNumber(event.value.z));
+                lastInputActions.Append(std::move(action));
+            }
+        }
         if (audioReport != nullptr) {
             const auto started = std::chrono::steady_clock::now();
             const auto pcm = kb::audio::AudioPlayback::RenderOffline(scene, pcmFramesPerTick);
@@ -717,6 +793,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     const auto particleSnapshot = particleReport != nullptr
         ? kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) : nullptr;
     const bool particleProviderAvailable = kb::particles::ParticlePlayback::HasBackend(scene);
+    const auto audioDiagnosticsSnapshot = audioReport != nullptr ? kb::audio::AudioDiagnostics::Report(scene) : kb::audio::AudioRuntimeDiagnostics{};
     const auto audioSnapshot = audioReport != nullptr ? kb::audio::AudioPlayback::DspReport(scene) : kb::audio::AudioDspRuntimeReport{};
     auto aiSnapshot = aiReport != nullptr ? AiDecisionsJson(scene) : kb::core::JsonValue::MakeObject();
     const auto meterSnapshot = requireMeters ? kb::audio::AudioMetering::Report(scene) : kb::audio::AudioMeterReport{};
@@ -766,6 +843,31 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         *aiReport << aiSnapshot.Dump() << '\n';
         if (!aiReport->good()) { io.err << "error: AI decision report could not be written\n"; return 1; }
     }
+    if (determinismReport != nullptr) {
+        using kb::core::JsonValue;
+        const auto scope = scene.Runtime().DeterminismScope();
+        const auto fixed = scene.Runtime().FixedStepSettings();
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.determinism/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
+        report.Set("enabled", JsonValue::MakeBool(scope.enabled));
+        report.Set("frame_delta_requirement", JsonValue::MakeString("Enabled mode requires finite positive deltas; invalid input is rejected before mutation"));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("fixed_step_index", JsonValue::MakeString(std::to_string(scene.Runtime().FixedStepIndex())));
+        report.Set("fixed_delta_seconds", JsonValue::MakeNumber(fixed.fixedDeltaSeconds));
+        report.Set("max_frame_delta_seconds", JsonValue::MakeNumber(fixed.maxFrameDeltaSeconds));
+        report.Set("max_fixed_steps_per_frame", JsonValue::MakeNumber(static_cast<double>(fixed.maxFixedStepsPerFrame)));
+        report.Set("simulation", JsonValue::MakeString(std::string{scope.simulation}));
+        report.Set("rng", JsonValue::MakeString(std::string{scope.rng}));
+        report.Set("fixed_tick", JsonValue::MakeString(std::string{scope.fixedTick}));
+        report.Set("backends", JsonValue::MakeString(std::string{scope.backends}));
+        report.Set("cross_platform_float_bitwise", JsonValue::MakeBool(scope.crossPlatformFloatBitwise));
+        report.Set("backend_absolute_tolerance", JsonValue::MakeNull());
+        report.Set("tolerance_basis", JsonValue::MakeString("No universal tolerance; compare each backend scenario against its declared bounds"));
+        *determinismReport << report.Dump() << '\n';
+        if (!determinismReport->good()) { io.err << "error: determinism report could not be written\n"; return 1; }
+    }
     if (inputReport != nullptr) {
         using kb::core::JsonValue;
         auto report = JsonValue::MakeObject();
@@ -778,6 +880,10 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         report.Set("replayed", JsonValue::MakeBool(inputReplayPath.has_value()));
         report.Set("recording_written", JsonValue::MakeBool(recordingWritten));
         report.Set("recorded_frames", JsonValue::MakeNumber(static_cast<double>(inputRecording.size())));
+        report.Set("action_snapshot_frame", JsonValue::MakeNumber(completedFrames));
+        report.Set("action_snapshot_player", JsonValue::MakeNumber(0));
+        report.Set("action_events", std::move(lastInputActions));
+        report.Set("actions", std::move(lastInputValues));
         report.Set("timing", JsonValue::MakeString(inputReplayPath ? "recorded delta per tick" : "fixed delta per tick"));
         report.Set("scope", JsonValue::MakeString("Input snapshots and action evaluation; not deterministic world simulation"));
         *inputReport << report.Dump() << '\n';
@@ -832,7 +938,56 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
         report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
         report.Set("telemetry", std::move(telemetry));
+        report.Set("worker_limit", JsonValue::MakeNumber(static_cast<double>(workerLimit)));
+        report.Set("history_capacity_frames", JsonValue::MakeNumber(static_cast<double>(historyCapacity)));
+        auto history = JsonValue::MakeArray();
+        for (const auto& [frame, sample] : telemetryHistory) {
+            JsonValue sampleJson;
+            if (!JsonValue::Parse(kb::ecs::WorldTelemetrySnapshotToJson(sample), sampleJson, parseError)) return 1;
+            auto entry = JsonValue::MakeObject();
+            entry.Set("frame", JsonValue::MakeNumber(frame));
+            entry.Set("telemetry", std::move(sampleJson));
+            history.Append(std::move(entry));
+        }
+        report.Set("history", std::move(history));
+        const auto& config = scene.Runtime().EcsWorld().Config();
+        auto storagePath = JsonValue::MakeObject();
+        storagePath.Set("storage", JsonValue::MakeString("native-archetypes"));
+        storagePath.Set("mirror_entities", JsonValue::MakeBool(config.mirrorEntitiesToBackend));
+        storagePath.Set("mirror_components", JsonValue::MakeBool(config.mirrorNativeComponentChangesToBackend));
+        storagePath.Set("observed_value_writes_only", JsonValue::MakeBool(config.mirrorValueWritesOnlyForObservedComponents));
+        storagePath.Set("observer_scope", JsonValue::MakeString("backend-bound entities; native-only entities do not publish backend events"));
+        report.Set("storage_path", std::move(storagePath));
         report.Set("scheduler", EcsSchedulerJson(scene.Runtime().LastEcsProfilerTrace()));
+        const auto frame = scene.Runtime().HotPathReport();
+        const auto& ecsTrace = scene.Runtime().LastEcsProfilerTrace();
+        report.Set("ecs_scheduler_origin_ns", ecsTrace.frameStartSteadyNanoseconds >= frame.runtimeUpdateStartSteadyNanoseconds
+            ? JsonValue::MakeNumber(static_cast<double>(ecsTrace.frameStartSteadyNanoseconds - frame.runtimeUpdateStartSteadyNanoseconds)) : JsonValue::MakeNull());
+        auto stages = JsonValue::MakeArray();
+        for (std::size_t index = 0; index < frame.runtimeStages.size(); ++index) {
+            const auto& timing = frame.runtimeStages[index];
+            auto stage = JsonValue::MakeObject();
+            stage.Set("name", JsonValue::MakeString(timing.name));
+            stage.Set("start_ns", JsonValue::MakeNumber(static_cast<double>(timing.startNanoseconds)));
+            stage.Set("end_ns", JsonValue::MakeNumber(static_cast<double>(timing.endNanoseconds)));
+            stage.Set("previous_stage", index == 0 ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(index - 1U)));
+            stages.Append(std::move(stage));
+        }
+        report.Set("runtime_stages", std::move(stages));
+        auto sceneSystems = JsonValue::MakeArray();
+        for (const auto& timing : frame.sceneSystems) {
+            auto event = JsonValue::MakeObject();
+            event.Set("type", JsonValue::MakeString(timing.systemType));
+            event.Set("phase", JsonValue::MakeString(timing.phase));
+            event.Set("start_ns", JsonValue::MakeNumber(static_cast<double>(timing.startNanoseconds)));
+            event.Set("end_ns", JsonValue::MakeNumber(static_cast<double>(timing.endNanoseconds)));
+            event.Set("worker", timing.ownerThread ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(timing.workerIndex)));
+            event.Set("dispatch_group", JsonValue::MakeNumber(static_cast<double>(timing.dispatchGroup)));
+            event.Set("queue_wait_ns", JsonValue::MakeNumber(static_cast<double>(timing.queueWaitNanoseconds)));
+            sceneSystems.Append(std::move(event));
+        }
+        report.Set("scene_systems", std::move(sceneSystems));
+        report.Set("runtime_stages_basis", JsonValue::MakeString("observed owner-thread elapsed intervals within the last scene update, in execution order; fixed simulation includes physics, rendering is outside this headless run"));
         *ecsReport << report.Dump() << '\n';
         if (!ecsReport->good()) {
             io.err << "error: the ECS telemetry report could not be written" << '\n';
@@ -867,6 +1022,24 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         unavailable.Append(JsonValue::MakeString("voice_count"));
         unavailable.Append(JsonValue::MakeString("decoder_memory_bytes"));
         unavailable.Append(JsonValue::MakeString("device_underruns"));
+        const auto& diagnostics = audioDiagnosticsSnapshot;
+        JsonValue runtime = JsonValue::MakeObject();
+        runtime.Set("supported", JsonValue::MakeBool(diagnostics.supported));
+        runtime.Set("backend", JsonValue::MakeString(diagnostics.backend));
+        runtime.Set("offline", JsonValue::MakeBool(diagnostics.offline));
+        runtime.Set("playback_available", JsonValue::MakeBool(diagnostics.playbackAvailable));
+        runtime.Set("sample_rate", JsonValue::MakeNumber(diagnostics.sampleRate));
+        runtime.Set("period_frames", JsonValue::MakeNumber(diagnostics.periodFrames));
+        runtime.Set("generation", JsonValue::MakeString(std::to_string(diagnostics.generation)));
+        runtime.Set("device_blocks", JsonValue::MakeString(std::to_string(diagnostics.deviceBlocks)));
+        runtime.Set("device_frames", JsonValue::MakeString(std::to_string(diagnostics.deviceFrames)));
+        runtime.Set("short_blocks", JsonValue::MakeString(std::to_string(diagnostics.shortBlocks)));
+        runtime.Set("callback_deadline_misses", JsonValue::MakeString(std::to_string(diagnostics.callbackDeadlineMisses)));
+        runtime.Set("worst_callback_nanoseconds", JsonValue::MakeString(std::to_string(diagnostics.worstCallbackNanoseconds)));
+        runtime.Set("allocated_bytes", JsonValue::MakeString(std::to_string(diagnostics.allocatedBytes)));
+        runtime.Set("peak_allocated_bytes", JsonValue::MakeString(std::to_string(diagnostics.peakAllocatedBytes)));
+        runtime.Set("allocation_count", JsonValue::MakeString(std::to_string(diagnostics.allocationCount)));
+        report.Set("runtime", std::move(runtime));
         report.Set("unavailable_metrics", std::move(unavailable));
         *audioReport << report.Dump() << '\n';
         if (!audioReport->good()) { io.err << "error: audio execution report could not be written\n"; return 1; }
@@ -879,14 +1052,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input or ai\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input, ai or determinism\n"; return 1; }
     if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
         io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai") {
-        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input or ai\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai" && *report != "determinism") {
+        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input, ai or determinism\n";
         return 1;
     }
+    if (report && *report == "determinism") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "ai") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "input") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "ecs") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, &io.out);

@@ -2090,12 +2090,13 @@ private:
         }
         Text(dc, RECT{ status.left + kPad, status.top, status.left + 470, status.bottom }, left, kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         std::wstring right = message_.empty() ? TipUnderCursor() : Wide(message_);
-        if (message_.empty()) {
-            std::size_t shared = 0;
-            struct Count { std::uint64_t id; std::size_t* result; } count{assetId_.value,&shared};
-            context_.Scene().Runtime().EcsWorld().CreateQuery<kb::scene::TilemapComponent>().ForEach([](kb::scene::SceneEntity, const kb::scene::TilemapComponent& layer, void* data) { auto& state = *static_cast<Count*>(data); if (layer.mapAssetId == state.id) ++*state.result; },&count);
-            if (shared > 1) right = TF("map2d.sharedHint","Shared by {count} layers. More > Make independent",{{"count",std::to_string(shared)}});
-            else if (density_ < 100U) right = TF("map2d.scatterHint","Scatter: {percent}%",{{"percent",std::to_string(density_)}});
+        std::size_t shared = 0;
+        struct Count { std::uint64_t id; std::size_t* result; } count{assetId_.value,&shared};
+        context_.Scene().Runtime().EcsWorld().CreateQuery<kb::scene::TilemapComponent>().ForEach([](kb::scene::SceneEntity, const kb::scene::TilemapComponent& layer, void* data) { auto& state = *static_cast<Count*>(data); if (layer.mapAssetId == state.id) ++*state.result; },&count);
+        if (shared > 1 && !messageIsError_) {
+            right = TF("map2d.sharedHint","Shared by {count} layers. More > Make independent",{{"count",std::to_string(shared)}});
+        } else if (message_.empty()) {
+            if (density_ < 100U) right = TF("map2d.scatterHint","Scatter: {percent}%",{{"percent",std::to_string(density_)}});
             else if (paintInScene_) right = T("map2d.scenePaintActive","Scene View painting enabled");
         }
         Text(dc, RECT{ status.left + 480, status.top, status.right - kPad, status.bottom }, right,
@@ -3037,6 +3038,24 @@ private:
             title = text("map2d.offset","Graphic offset..."); hint = text("map2d.form.offsetHint","Move the graphic without moving its cell. Negative values move left or up. 0.5 is half a tile.");
             fields = {number("map2d.form.right","Right (tiles)",sprite.offsetX,-16,16,0.25),number("map2d.form.down","Down (tiles)",sprite.offsetY,-16,16,0.25)};
             presets = {{text("map2d.form.center","Center"),{"0","0"}}};
+        } else if (kind == "schema") {
+            title=text("map2d.propertySchema","Property schema...");
+            hint=text("map2d.propertySchemaHint","Declare a default and type (bool, int, float or string). Rename from migrates existing values; incompatible conversions are rejected.");
+            fields={{text("map2d.name","Name"),"",0,0,0,false,true},
+                {text("map2d.propertyType","Type"),"string",0,0,0,false,true},
+                {text("map2d.propertyDefault","Default value"),"",0,0,0,false,true},
+                {text("map2d.propertyPrevious","Rename from (optional)"),"",0,0,0,false,true}};
+        } else if (kind == "camera") {
+            title = text("map2d.cameraSettings", "Play camera...");
+            hint = text("map2d.cameraHint", "Follow an entity by name. Leave it empty for a fixed camera. Pixel density 0 allows smooth scaling.");
+            fields = {{text("map2d.cameraFollow", "Follow target"),map_.camera.followTarget,0,0,0,false,true},
+                number("map2d.cameraZoom","Zoom",map_.camera.zoom,0.01,1024,0.25),
+                number("map2d.cameraPixels","Pixels per unit",map_.camera.pixelsPerUnit,0,4096,1),
+                number("map2d.cameraSmoothing","Smoothing (seconds)",map_.camera.smoothingSeconds,0,60,0.05),
+                number("map2d.cameraMarginX","Horizontal drag margin",map_.camera.deadZoneWidth,0,255,0.25),
+                number("map2d.cameraMarginY","Vertical drag margin",map_.camera.deadZoneHeight,0,255,0.25),
+                number("map2d.cameraBounds","Keep inside map",map_.camera.clampToMap?1:0,0,1,1,true)};
+            fields.back().toggle = true;
         } else if (kind == "parallax") {
             title = text("map2d.parallax","Background scrolling..."); hint = text("map2d.form.parallaxHint","Choose how this layer moves when the camera moves. Use backgrounds without collision.");
             fields = {number("map2d.form.horizontal","Horizontal speed",map_.parallaxX,-100,100,0.1),number("map2d.form.vertical","Vertical speed",map_.parallaxY,-100,100,0.1)};
@@ -3054,6 +3073,7 @@ private:
                 number("map2d.form.spacing","Gap between graphics (pixels)",setting.spacing,0,16384,1,true)};
         } else if (kind == "size") {
             title = text("map2d.mapSize","Map Size"); hint = text("map2d.form.sizeHint","Size in tiles. Shrinking removes tiles outside the new area; Undo restores them.");
+            hint += " " + text("map2d.form.sizeLimits","Size: 1..4096. Coordinates: 0..size-1. Floors: -50..50. Sheets: 256. Stack: 32.");
             fields = {number("map2d.form.width","Width (tiles)",map_.width,1,Map2DAsset::MaximumSize,1,true),number("map2d.form.height","Height (tiles)",map_.height,1,Map2DAsset::MaximumSize,1,true)};
         } else if (kind == "position") {
             title = text("map2d.goTo","Go To Position"); hint = text("map2d.form.positionHint","Center the view on this tile. Coordinates start at 0.");
@@ -3063,11 +3083,13 @@ private:
         } else if (kind == "order") {
             const auto* renderer = std::as_const(context_.Scene()).Components().TilemapRenderers().TryGet(entity_);
             title = text("map2d.layerOrder","Layer order..."); hint = text("map2d.layerOrderHint","Higher numbers draw in front (-1000 to 1000).");
+            hint += " " + text("map2d.layerDepthHint","Same plane/floor: each step adds 0.5 depth units, matching Sprite 2D. Floors and entity transforms still affect depth.");
             fields = {number("map2d.form.order","Drawing order",renderer?renderer->sortingOrder:0,-1000,1000,1,true)};
         } else if (kind == "animation-speed") {
             title = text("map2d.form.animationSpeed","Animation speed"); hint = text("map2d.form.speedHint","More frames per second makes the animation faster. Watch the preview before saving.");
-            fields = {number("map2d.form.fps","Frames per second",animationSpeed_,0.1,240,1)};
-            presets = {{text("map2d.form.slow","Slow"),{"4"}},{text("map2d.form.normal","Normal"),{"8"}},{text("map2d.form.fast","Fast"),{"16"}}};
+            fields = {number("map2d.form.fps","Frames per second",animationSpeed_,0.1,240,1),
+                number("map2d.form.animationPhase","Selected tiles: phase (seconds)",animationPhase_,0,86400,0.05)};
+            presets = {{text("map2d.form.slow","Slow"),{"4","0"}},{text("map2d.form.normal","Normal"),{"8","0"}},{text("map2d.form.fast","Fast"),{"16","0"}}};
         } else if (kind == "stamp") {
             title = text("map2d.saveStamp","Save selection as a stamp..."); hint = text("map2d.form.stampHint","Give this pattern a name. You can paint it again from Objects / Stamps.");
             fields = {{text("map2d.name","Name"),"",0,0,0,false,true}};
@@ -3099,20 +3121,41 @@ private:
             if (kind == "surface") EditSelectedTiles([&](auto& tile) { auto shape = kb::assets::Map2DCellCollision(map_,tile); shape.friction=static_cast<float>(n(0)); shape.restitution=static_cast<float>(n(1)); tile.collision=shape; });
             else if (kind == "opacity") TransformSelection("opacity",(static_cast<unsigned>(n(0))*255U+50U)/100U);
             else if (kind == "offset") TransformSelection("offset",0xFFFFFFFFU,static_cast<float>(n(0)),static_cast<float>(n(1)));
+            else if (kind == "schema") {
+                const auto value=kb::assets::ParseMap2DPropertyValue(values[1],values[2]);
+                if (!value) return "Invalid property type or default value";
+                auto updated=map_; std::string error;
+                if (!kb::assets::SetMap2DPropertySchema(updated,values[0],*value,values[3],&error)) return error;
+                BeginChange();
+                for (const auto& [key,tile]:map_.tiles) { static_cast<void>(tile); stroke_->Record(map_,key); }
+                map_=std::move(updated); EndChange();
+            }
+            else if (kind == "camera") {
+                auto updated = map_;
+                updated.camera = {.pixelsPerUnit=static_cast<float>(n(2)), .followTarget=values[0],
+                    .smoothingSeconds=static_cast<float>(n(3)), .deadZoneWidth=static_cast<float>(n(4)),
+                    .deadZoneHeight=static_cast<float>(n(5)), .clampToMap=n(6)!=0, .zoom=static_cast<float>(n(1))};
+                std::string error;
+                if (!kb::assets::IsMap2DAssetValid(updated, &error)) return error;
+                BeginChange(); map_.camera=updated.camera; EndChange();
+            }
             else if (kind == "parallax") { BeginChange(); map_.parallaxX=static_cast<float>(n(0)); map_.parallaxY=static_cast<float>(n(1)); EndChange(); }
             else if (kind == "scatter") density_=static_cast<unsigned>(n(0));
             else if (kind == "atlas") SetSheet([&](auto& setting) { setting.cellSize=static_cast<unsigned>(n(0)); setting.cellHeight=static_cast<unsigned>(n(1)); setting.margin=static_cast<unsigned>(n(2)); setting.spacing=static_cast<unsigned>(n(3)); });
             else if (kind == "size") ResizeTo(static_cast<unsigned>(n(0)),static_cast<unsigned>(n(1)));
             else if (kind == "position") { floor_=static_cast<int>(n(2)); CenterOn(static_cast<int>(n(0)),static_cast<int>(n(1))); }
             else if (kind == "order") { if (!SetLayerOrder(static_cast<int>(n(0)))) return std::string(EditorText("map2d.layerLockedHint","This layer is locked. Unlock it in the Inspector to paint.")); }
-            else if (kind == "animation-speed") animationSpeed_=static_cast<float>(n(0));
+            else if (kind == "animation-speed") { animationSpeed_=static_cast<float>(n(0)); animationPhase_=static_cast<float>(n(1)); }
             else if (kind == "stamp") { if (!SaveStamp(values[0])) return message_; }
             else if (kind.ends_with("-data")) {
                 if (values[0].empty()) return std::string(EditorText("map2d.form.nameRequired","Enter a name before applying."));
+                const auto declared=map_.propertyDefaults.find(values[0]);
+                const bool integer=declared!=map_.propertyDefaults.end() && std::holds_alternative<std::int64_t>(declared->second);
+                if (kind=="number-data" && integer && std::floor(n(1))!=n(1)) return "This property requires a whole number";
                 EditSelectedTiles([&](auto& tile) {
                     if (kind == "remove-data") tile.properties.erase(values[0]);
                     else if (kind == "text-data") tile.properties[values[0]]=values[1];
-                    else if (kind == "number-data") tile.properties[values[0]]=n(1);
+                    else if (kind == "number-data") tile.properties[values[0]]=integer ? kb::assets::Map2DValue{static_cast<std::int64_t>(n(1))} : kb::assets::Map2DValue{n(1)};
                     else tile.properties[values[0]]=n(1)!=0;
                 });
             }
@@ -3190,6 +3233,7 @@ private:
         const auto* definition = kb::assets::Map2DDefinition(map_,animationSprite_);
         animationFrames_ = definition && !definition->frames.empty() ? definition->frames : std::vector<std::uint32_t>{animationSprite_.cell};
         animationSpeed_ = definition ? definition->framesPerSecond : 8;
+        animationPhase_ = animationSprite_.animationPhaseSeconds;
         animationSelected_ = 0; animationPage_ = 0; animationTimelineFirst_ = 0;
         animationEditing_ = true; animationPlaying_ = true; categoryOpen_ = false;
         Invalidate(); return true;
@@ -3220,6 +3264,20 @@ private:
         BeginChange();
         auto& definition = map_.sheets[animationSprite_.sheet].definitions[animationSprite_.cell];
         definition.frames = animationFrames_; definition.framesPerSecond = animationSpeed_;
+        auto editor = Editor();
+        for (auto y = selection_.y0; hasSelection_ && y <= selection_.y1; ++y) for (auto x = selection_.x0; x <= selection_.x1; ++x) {
+            const auto found = map_.tiles.find(Map2DTileKey(x, y, floor_));
+            if (found == map_.tiles.end()) continue;
+            auto tile = found->second;
+            const auto phase = [&](Map2DSprite& sprite) {
+                if (sprite.sheet == animationSprite_.sheet && sprite.cell == animationSprite_.cell)
+                    sprite.animationPhaseSeconds = animationPhase_;
+            };
+            phase(tile.ground);
+            for (auto& sprite : tile.borders) phase(sprite);
+            for (auto& sprite : tile.items) phase(sprite);
+            editor.SetTile(x, y, floor_, tile);
+        }
         EndChange();
         if (messageIsError_) return false;
         animationEditing_ = false; Invalidate(); return true;
@@ -3278,7 +3336,7 @@ private:
         Fill(dc,animationPreview_,kTile); Frame(dc,animationPreview_,kBorder);
         auto frame = animationSprite_.cell;
         if (!animationFrames_.empty()) {
-            const auto index = animationPlaying_ ? static_cast<std::size_t>(std::fmod(std::max(0.0,previewSeconds_)*animationSpeed_,static_cast<double>(animationFrames_.size()))) : static_cast<std::size_t>(std::max(0,animationSelected_));
+            const auto index = animationPlaying_ ? static_cast<std::size_t>(std::fmod((std::max(0.0,previewSeconds_)+animationPhase_)*animationSpeed_,static_cast<double>(animationFrames_.size()))) : static_cast<std::size_t>(std::max(0,animationSelected_));
             frame = animationFrames_[std::min(index,animationFrames_.size()-1)];
         }
         DrawAnimationSprite(frame,animationPreview_);
@@ -3901,9 +3959,11 @@ private:
         AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
         AppendMenuW(menu, MF_STRING, 32U, T("map2d.layerOrder", "Layer order...").c_str());
         AppendMenuW(menu, MF_STRING | (paintInScene_ ? MF_CHECKED : 0U), 33U, T("map2d.paintScene", "Paint in Scene View").c_str());
-        AppendMenuW(menu, MF_STRING | (map_.sortByY ? MF_CHECKED : 0U), 34U, T("map2d.sortByY", "Sort graphics by their feet").c_str());
+        AppendMenuW(menu, MF_STRING | (map_.sortByY ? MF_CHECKED : 0U), 34U, T("map2d.sortByRowScope", "Sort tiles by row (within this map)").c_str());
         AppendMenuW(menu, MF_STRING | (map_.lit ? MF_CHECKED : 0U), 35U, T("map2d.lit", "Lights affect this layer").c_str());
         AppendMenuW(menu, MF_STRING, 36U, T("map2d.parallax", "Background scrolling...").c_str());
+        AppendMenuW(menu, MF_STRING, 39U, T("map2d.cameraSettings", "Play camera...").c_str());
+        AppendMenuW(menu, MF_STRING, 40U, T("map2d.propertySchema", "Property schema...").c_str());
         AppendMenuW(menu, MF_STRING, 37U, T("map2d.makeUnique", "Make this map independent").c_str());
         HMENU tools = CreatePopupMenu();
         AppendMenuW(tools, MF_STRING, 38U, T("map2d.scatter", "Scatter density...").c_str());
@@ -3949,6 +4009,8 @@ private:
         case 34U: BeginChange(); map_.sortByY = !map_.sortByY; EndChange(); break;
         case 35U: BeginChange(); map_.lit = !map_.lit; EndChange(); break;
         case 36U: OpenSettings("parallax"); break;
+        case 39U: OpenSettings("camera"); break;
+        case 40U: OpenSettings("schema"); break;
         case 32U: OpenSettings("order"); break;
         case 20U: ShowMapSizeMenu(anchor); break;
         case 21U:
@@ -4789,6 +4851,7 @@ private:
     Map2DSprite animationSprite_{};
     std::vector<std::uint32_t> animationFrames_;
     float animationSpeed_ = 8;
+    float animationPhase_ = 0;
     int animationSelected_ = -1, animationPage_ = 0, animationTimelineFirst_ = 0;
     RECT animationAtlas_{}, animationTimeline_{}, animationPreview_{};
     std::optional<std::pair<int,int>> sceneHover_;

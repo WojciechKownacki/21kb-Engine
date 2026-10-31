@@ -26,7 +26,9 @@ std::optional<ParticleEmitterExecutionView> ParticleEmitterInspectorModel::ReadE
         if (emitter.effectAssetId != effectAssetId || emitter.emitterId != emitterId) continue;
         return ParticleEmitterExecutionView{.path = emitter.simulationPath, .reason = emitter.gpuFallbackReason,
             .snapshotRevision = snapshot->Revision(), .cpuRenderRecords = emitter.particleCount,
-            .cpuRenderBytes = static_cast<std::uint64_t>(emitter.particleCount) * sizeof(kb::particles::ParticleRenderRecord)};
+            .cpuRenderBytes = static_cast<std::uint64_t>(emitter.particleCount) * sizeof(kb::particles::ParticleRenderRecord),
+            .cpuWorkProfiled = emitter.cpuWorkProfiled, .cpuEmissionNanoseconds = emitter.cpuEmissionNanoseconds,
+            .cpuIntegrationNanoseconds = emitter.cpuIntegrationNanoseconds};
     }
     return std::nullopt;
 }
@@ -35,6 +37,7 @@ std::array<std::string, 3U> ParticleEmitterInspectorModel::ExecutionRows(const P
     const std::string unavailable{ParticleText("particle.execution.unavailable", "Unavailable")};
     std::string simulation = unavailable;
     std::string records = unavailable;
+    std::string work = unavailable;
     if (view.execution) {
         simulation = view.execution->path == kb::particles::ParticleEmitterSimulationPath::Gpu ? "GPU" : "CPU";
         if (view.execution->reason != kb::particles::ParticleGpuFallbackReason::None) {
@@ -42,6 +45,9 @@ std::array<std::string, 3U> ParticleEmitterInspectorModel::ExecutionRows(const P
             simulation += kb::particles::ParticleGpuFallbackReasonName(view.execution->reason);
             simulation += ')';
         }
+        if (view.execution->cpuWorkProfiled)
+            work = "emission " + std::to_string(view.execution->cpuEmissionNanoseconds) +
+                " ns; integration " + std::to_string(view.execution->cpuIntegrationNanoseconds) + " ns (host elapsed, last step)";
         records = ParticleFormat("particle.execution.records", "{count} ({bytes} bytes)", {
             {"count", std::to_string(view.execution->cpuRenderRecords)},
             {"bytes", std::to_string(view.execution->cpuRenderBytes)}});
@@ -49,7 +55,7 @@ std::array<std::string, 3U> ParticleEmitterInspectorModel::ExecutionRows(const P
     return {
         ParticleFormat("particle.execution.simulation", "Simulation: {value}", {{"value", simulation}}),
         ParticleFormat("particle.execution.cpu_records", "CPU render records: {value}", {{"value", records}}),
-        ParticleFormat("particle.execution.timings", "CPU/GPU timings: {value}", {{"value", unavailable}}),
+        ParticleFormat("particle.execution.cpu_work", "CPU work: {value}", {{"value", work}}),
     };
 }
 
@@ -64,6 +70,7 @@ namespace {
     case kb::scene::ParticleOutputType::Trail: return ParticleText("particle.output.trail", "Trail");
     case kb::scene::ParticleOutputType::Ribbon: return ParticleText("particle.output.ribbon", "Ribbon");
     case kb::scene::ParticleOutputType::Beam: return ParticleText("particle.output.beam", "Beam");
+    case kb::scene::ParticleOutputType::Decal: return ParticleText("particle.output.decal", "Decal");
     case kb::scene::ParticleOutputType::Volumetric: return ParticleText("particle.output.volumetric", "Volumetric");
     }
     return ParticleText("particle.invalid", "Invalid");
@@ -411,8 +418,8 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
     const kb::particle_plugin::ParticleCompileRequest& request) {
     ParticleEmitterInspectorView view;
     view.emitterId = selectedEmitterId;
-    view.outputChoices.reserve(8U);
-    for (std::uint8_t raw = 0U; raw <= static_cast<std::uint8_t>(kb::scene::ParticleOutputType::Volumetric); ++raw) {
+    view.outputChoices.reserve(9U);
+    for (std::uint8_t raw = 0U; raw <= static_cast<std::uint8_t>(kb::scene::ParticleOutputType::Decal); ++raw) {
         const auto type = static_cast<kb::scene::ParticleOutputType>(raw);
         auto candidate = asset;
         const auto emitter = std::find_if(candidate.emitters.begin(), candidate.emitters.end(),
@@ -484,6 +491,7 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             selected->output.depthTest ? "true" : "false"), selected->output.depthTest);
         AddToggle(addProperty(ParticleEditorProperty::OutputDepthWrite, std::string{ ParticleText("particle.property.depth_write", "Depth write") },
             selected->output.depthWrite ? "true" : "false"), selected->output.depthWrite);
+        addProperty(ParticleEditorProperty::CustomProcessPath, "Custom simulation (.kbpsim)", selected->customProcess.virtualPath);
         AddToggle(addProperty(ParticleEditorProperty::OutputScreenDepthCollision,
             std::string{ParticleText("particle.property.screen_depth_collision", "Screen depth collision (GPU)")},
             selected->screenDepthCollision ? "true" : "false"), selected->screenDepthCollision);

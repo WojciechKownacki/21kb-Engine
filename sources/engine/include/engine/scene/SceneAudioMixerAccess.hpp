@@ -42,13 +42,11 @@ struct AudioMixerSnapshotTransition {
 // routes everything to its implicit master output at unity, the pre-mixer behavior) plus
 // the active snapshot's NAME (empty = authored bus volumes, no snapshot applied).
 //
-// kb::scene deliberately stores only the SELECTION; the mixer's actual content
-// (kb::audio::AudioMixerAsset - bus routing graph, snapshot volume sets) is resolved
-// lazily, every frame, by the audio backend (the miniaudio plugin's bus registry) through
+// The scene stores the selection, runtime gain overrides and transition state.
+// The audio backend resolves mixer routing and snapshot assets each tick through
 // AssetManager::Load. An unresolvable mixer keeps named routes unavailable; an empty
-// route continues to target the implicit master output. Timed snapshot TRANSITIONS are
-// LIB-150's own explicitly-named scope; setting the active snapshot here applies its
-// volumes from the next audio tick (an immediate switch).
+// route continues to target the implicit master output. SetActiveSnapshot switches
+// immediately on the next audio tick; BeginSnapshotTransition blends using scene time.
 class SceneAudioMixerAccess {
 public:
     SceneAudioMixerAccess() = delete;

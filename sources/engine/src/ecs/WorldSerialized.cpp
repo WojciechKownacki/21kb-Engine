@@ -9,6 +9,8 @@
 #include "ecs/world/WorldInternalAccess.hpp"
 #include "ecs/world/WorldRegistrySet.hpp"
 
+#include <flecs.h>
+
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -193,6 +195,10 @@ bool World::RestoreChunkedSnapshotStream(
 }
 
 bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
+    ValidateStructuralChangeAllowed("ApplyChunkedDeltaSnapshot");
+    if (nativeStorage_ == nullptr || world_ == nullptr) {
+        return false;
+    }
     ChunkedWorldSnapshotHeader header{
         .componentTypes = delta.componentTypes,
         .entityCount = delta.entityCount,
@@ -207,7 +213,13 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
         if (entityId == 0U || !IsAlive(Entity{ entityId })) {
             return false;
         }
-        DestroyEntity(Entity{ entityId });
+        // Backend hierarchy deletion also destroys children. Require them in the
+        // explicit deletion set so validation counts every affected native entity.
+        for (Entity child : Children(Entity{ entityId })) {
+            if (!std::binary_search(destroyedEntityIds.begin(), destroyedEntityIds.end(), child.Id())) {
+                return false;
+            }
+        }
     }
 
     std::size_t touchedCount = 0U;
@@ -217,16 +229,32 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
         }
         touchedCount += chunk.entityIds.size();
     }
-    std::unordered_set<Entity::IdType> touchedEntities;
-    touchedEntities.reserve(touchedCount);
+    std::unordered_set<Entity::IdType> touchedIndices;
+    touchedIndices.reserve(touchedCount);
+    struct PreparedChunk {
+        const ChunkedWorldDeltaSnapshotChunk* source = nullptr;
+        std::vector<BulkComponentData> components;
+        std::vector<ComponentId> removalCandidates;
+        std::vector<Entity> existingEntities;
+        std::vector<std::size_t> existingRows;
+        std::vector<Entity::IdType> newEntityIds;
+        std::vector<std::size_t> newRows;
+    };
+    std::vector<PreparedChunk> prepared;
+    prepared.reserve(delta.chunks.size());
+    std::size_t resultingEntityCount = NativeStorageStats().liveEntities - destroyedEntityIds.size();
     for (const ChunkedWorldDeltaSnapshotChunk& chunk : delta.chunks) {
-        if (chunk.entityIds.empty() || (!chunk.fullArchetype && chunk.components.empty())) {
+        if (chunk.entityIds.empty() || (!chunk.fullArchetype && chunk.components.empty())
+            || (config_.mirrorEntitiesToBackend && (chunk.components.size() >= FLECS_ID_DESC_MAX
+                || chunk.entityIds.size() > static_cast<std::size_t>(std::numeric_limits<int32_t>::max())))) {
             return false;
         }
 
+        PreparedChunk& plan = prepared.emplace_back();
+        plan.source = &chunk;
         std::vector<ComponentId> chunkComponentIds;
         std::vector<ComponentId> targetChunkComponentIds;
-        std::vector<BulkComponentData> rowComponents;
+        auto& rowComponents = plan.components;
         chunkComponentIds.reserve(chunk.components.size());
         targetChunkComponentIds.reserve(chunk.components.size());
         rowComponents.reserve(chunk.components.size());
@@ -253,24 +281,24 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
         }
 
         if (!chunk.fullArchetype) {
-            std::vector<Entity> entities;
-            entities.reserve(chunk.entityIds.size());
+            plan.existingEntities.reserve(chunk.entityIds.size());
             for (Entity::IdType entityId : chunk.entityIds) {
                 const Entity entity{ entityId };
-                if (!entity.IsValid() || !touchedEntities.insert(entityId).second || !IsAlive(entity)) {
+                if (!entity.IsValid() || !IsAlive(entity)
+                    || !touchedIndices.insert(entityId & 0xFFFFFFFFULL).second
+                    || std::binary_search(destroyedEntityIds.begin(), destroyedEntityIds.end(), entityId)) {
                     return false;
                 }
-                entities.push_back(entity);
+                plan.existingEntities.push_back(entity);
             }
             for (std::size_t column = 0; column < chunk.components.size(); ++column) {
                 rowComponents[column].data = chunk.components[column].data.data();
-                rowComponents[column].sourceCount = entities.size();
+                rowComponents[column].sourceCount = plan.existingEntities.size();
             }
-            AddComponents(entities, rowComponents);
             continue;
         }
 
-        std::vector<ComponentId> removalCandidates;
+        auto& removalCandidates = plan.removalCandidates;
         removalCandidates.reserve(delta.componentTypes.size());
         for (const ComponentTypeInfo& componentType : delta.componentTypes) {
             const ComponentTypeInfo* targetComponent = ResolveRestoreComponentType(*this, componentType);
@@ -279,22 +307,46 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
                 removalCandidates.push_back(targetComponent->id);
             }
         }
-        std::vector<Entity> existingEntities;
-        std::vector<std::size_t> existingRows;
-        std::vector<Entity::IdType> newEntityIds;
-        std::vector<std::size_t> newRows;
         for (std::size_t row = 0; row < chunk.entityIds.size(); ++row) {
             const Entity entity{ chunk.entityIds[row] };
-            if (!entity.IsValid() || !touchedEntities.insert(entity.Id()).second) {
+            if (!HasGeneratedEntityIndex(entity)
+                || !touchedIndices.insert(entity.Id() & 0xFFFFFFFFULL).second
+                || std::binary_search(destroyedEntityIds.begin(), destroyedEntityIds.end(), entity.Id())) {
                 return false;
             }
             if (IsAlive(entity)) {
-                existingEntities.push_back(entity);
-                existingRows.push_back(row);
+                plan.existingEntities.push_back(entity);
+                plan.existingRows.push_back(row);
             } else {
-                newEntityIds.push_back(entity.Id());
-                newRows.push_back(row);
+                // A stale generation must not replace another live entity at the same index.
+                const Entity live = ResolveAliveEntity(entity.Id() & 0xFFFFFFFFULL);
+                const bool replacesDestroyed = live.IsValid()
+                    && std::binary_search(destroyedEntityIds.begin(), destroyedEntityIds.end(), live.Id());
+                if ((live.IsValid() && !replacesDestroyed)
+                    || (!live.IsValid() && ecs_get_alive(world_, entity.Id() & 0xFFFFFFFFULL) != 0U)
+                    || resultingEntityCount == std::numeric_limits<std::size_t>::max()) {
+                    return false;
+                }
+                plan.newEntityIds.push_back(entity.Id());
+                plan.newRows.push_back(row);
+                ++resultingEntityCount;
             }
+        }
+    }
+    if (resultingEntityCount != delta.entityCount) {
+        return false;
+    }
+
+    // All input validation precedes deletion, writes and archetype migration.
+    for (Entity::IdType entityId : destroyedEntityIds) {
+        DestroyEntity(Entity{ entityId });
+    }
+    for (PreparedChunk& plan : prepared) {
+        const auto& chunk = *plan.source;
+        auto& rowComponents = plan.components;
+        if (!chunk.fullArchetype) {
+            AddComponents(plan.existingEntities, rowComponents);
+            continue;
         }
 
         auto bindComponents = [&chunk, &rowComponents](
@@ -321,18 +373,18 @@ bool World::ApplyChunkedDeltaSnapshot(const ChunkedWorldDeltaSnapshot& delta) {
             }
         };
 
-        if (!existingEntities.empty()) {
+        if (!plan.existingEntities.empty()) {
             std::vector<std::vector<std::byte>> packedData;
             std::vector<BulkComponentData> components;
-            bindComponents(existingRows, packedData, components);
-            AddComponents(existingEntities, components);
-            RemoveComponents(existingEntities, removalCandidates);
+            bindComponents(plan.existingRows, packedData, components);
+            AddComponents(plan.existingEntities, components);
+            RemoveComponents(plan.existingEntities, plan.removalCandidates);
         }
-        if (!newEntityIds.empty()) {
+        if (!plan.newEntityIds.empty()) {
             std::vector<std::vector<std::byte>> packedData;
             std::vector<BulkComponentData> components;
-            bindComponents(newRows, packedData, components);
-            AdoptEntitiesWithComponents(newEntityIds, components);
+            bindComponents(plan.newRows, packedData, components);
+            AdoptEntitiesWithComponents(plan.newEntityIds, components);
         }
     }
 

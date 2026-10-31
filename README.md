@@ -151,12 +151,12 @@ running entity from the Animator editor.
 
 One panel cooks, packages and publishes atomically, with a manifest, receipt and checksums.
 
-| Target | Status |
+| Target | Build path and verification scope |
 |---|---|
-| **Windows x64** | Editor, player and packaging, fully covered by CI |
-| **Linux x64** | Engine runtime tested in CI under sanitizers, native player host not yet in CI |
-| **Android arm64** (ASTC, ETC2) | Native host and Gradle project, not yet in CI |
-| **Web** (WebGL 2, WebGPU) | WebGL 2 host built and bootstrap tested in CI, touch input tested in a browser; WebGPU not built in CI; no GPU rendering acceptance |
+| **Windows x64** | Native editor, player and packaging; scenario checks qualify specific workflows and backends |
+| **Linux x64** | Runtime and native-host sources; target-host execution requires separate verification |
+| **Android arm64** (ASTC, ETC2) | Native host and Gradle exports; verify each device/backend against its exported build |
+| **Web** (WebGL 2, WebGPU) | Browser host and renderer paths; verify each browser/backend against its exported build |
 
 ## Engineering you can audit
 
@@ -165,7 +165,7 @@ One panel cooks, packages and publishes atomically, with a manifest, receipt and
 | **ECS** | Chunked archetype storage, typed query kernels, parallel scheduler with declared access, deterministic replay and binary snapshots tested at one million entities |
 | **Physics and audio** | Jolt Physics and miniaudio as provider modules behind a versioned module ABI, with old ABI compatibility tested |
 | **Assets** | Virtual paths, asset IDs, compatibility checks, runtime packs and validators, FBX, glTF and OBJ import |
-| **Quality gates** | Warnings as errors on every first party target, AddressSanitizer and UBSan jobs, API compatibility baseline |
+| **Quality gates** | Warnings as errors on first party targets, optional sanitizer configurations and an API compatibility baseline |
 | **Editor automation** | Scenarios drive the real editor binary: authoring, Undo, cooking, Play Mode and GPU pixel checks |
 
 ```mermaid
@@ -189,12 +189,16 @@ flowchart LR
 
 ## Build
 
+After building, follow the [executable empty-project-to-export tutorial](docs/first_scene.md).
+The [feature catalog](docs/feature_catalog.json) links API entry points to their
+verification scopes, including capabilities tested separately from the tutorial.
+
 ```powershell
-cmake -S . -B build/dev -G "Visual Studio 18 2026" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
-cmake --build build/dev --config Release --target kb_editor --parallel 4
+cmake -S . -B build/dev -G "Visual Studio 17 2022" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
+cmake --build build/dev --config Release --target kb_editor --parallel 2
 ```
 
-Requires CMake 3.27 or newer and an MSVC toolchain; CI uses Visual Studio 2026 with the generator above. The configure step downloads
+Requires CMake 3.27 or newer and Visual Studio 2022 with the C++ workload. The configure step downloads
 Lua, Zstandard, Monocypher and Recast. The editor is written to `build/dev/bin/Release/kb_editor.exe`.
 Linux builds the headless engine and tools only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the test commands.
 

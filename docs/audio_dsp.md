@@ -243,7 +243,7 @@ against an independent bilinear Butterworth calculation within 2% after warmup.
 The remaining six authored stages retain their bypassed parameters. Mute,
 unmute and an intentionally incorrect assertion are checked in the package.
 This workflow runs in native Windows Release; full editor ASan execution,
-meters, dedicated mixer panels and runtime preview qualification remain pending.
+meters and runtime preview are covered by the later workflow below.
 
 `kb_audio_runtime_tests mixer-dsp-workload` (CTest `kb_audio_mixer_workload`)
 provides a short repeatable performance workload. It reads 393216 actual stereo
@@ -320,9 +320,9 @@ The latter case's median process CPU accounting was 328.13 ms in both modes;
 the simple case's coarse counter varied between 15.63 and 31.25 ms. Active RSS
 was about 11.1 MiB and 17.6 MiB respectively; capture-mode differences were
 within 72 KiB and are not a memory-saving claim. These are local sampled values,
-not allocation sizes, measured peaks or device deadline guarantees. Full live
-editor meters/preview controls, physical-device timing and other platform
-integration remain pending.
+not allocation sizes, measured peaks or device deadline guarantees. The later
+editor workflow and opt-in native device qualification cover separate scopes;
+other platform integration remains unverified.
 
 Scripts use `Audio.ConfigureMeters(true)`, `Audio.ResetMeters()` and
 `Audio.Meter(bus, channel)`. An empty bus names master; channel indices start at
@@ -361,10 +361,20 @@ providers and failed effect updates display diagnostics. Changing the preview
 selection while an older field edit is pending rejects the stale edit.
 
 The registered `kb_editor_audio_mixer_runtime` test loads a real provider DLL,
-routes 17 control actions through actual row geometry and hit-testing, mixes
+routes control actions through actual row geometry and hit-testing, mixes
 PCM, and reads the painted green master and red clipped-child bars from GDI.
 It checks mute, reset, disable, stop, exact Undo/file bytes, other-mixer isolation
 and all 32 translated catalogs. Native Windows Release and ASan runs cover this
 workflow; the focused Windows ASan CI selection includes this target and test.
-A dedicated mixer docking panel, physical-device audio qualification and other
-platform integration remain pending.
+Open **Options > Audio Mixer** for a dockable view of master and named buses.
+The panel shows stereo peak/RMS bars, held clipping indicators, parent routing,
+mute and a gain fader (-60 to +12 dB, with exact silence at the bottom). Buttons
+control capture, reset and preview through the same provider as the Inspector.
+Use the Inspector to choose the preview clip and edit routing/effect chains.
+Paging keeps every bus reachable in narrow panels. Gain and mute use the same
+atomic asset commands and Undo history as Inspector edits; panel meters refresh
+without advancing gameplay or the audio clock.
+
+The native output qualification and allocation scope are described in
+[audio_reference_project.md](audio_reference_project.md). Other platform mixer
+panel integration and acoustic end-to-end latency remain outside these checks.

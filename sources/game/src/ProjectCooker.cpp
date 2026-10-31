@@ -16,6 +16,7 @@
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
+#include "engine/particles/ParticleProcessAsset.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
@@ -50,9 +51,11 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -1258,6 +1261,10 @@ struct WindowsRuntimeModuleSnapshot {
     plans.clear();
     std::unordered_map<std::string, std::filesystem::path> plannedDestinations;
     for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        if (IsPackagedHostModule(plugin.name)) {
+            plugin.binaryPath.clear();
+            continue;
+        }
         if (!plugin.enabled) {
             continue;
         }
@@ -1611,6 +1618,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
     asset_bake::AssetPackWriter& writer,
     std::vector<asset_bake::RuntimeArtifactReference>& references,
     std::size_t& shaderArtifactCount,
+    std::ostream& diagnostics,
     std::string& error) {
     kb::render::RenderMaterialGraphDocument graph = material.graph;
     if (material.graphSourceAssetId != 0U || !material.graphSourceAssetPath.empty()) {
@@ -1654,6 +1662,11 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         kb::render::RenderMaterialCookPayloadBuilder::Build(
             materialForCook, metadata, manager.Registry(), functionLibrary);
     if (!payload.graphBacked) {
+        if (materialForCook.materialType == "builtin.pbr" && materialForCook.desc.subsurfaceFactor > 0.0F &&
+            asset_bake::HasShaderBakeBackend(profile.shaderBackends,asset_bake::ShaderBakeBackend::Essl)) {
+            diagnostics << "material capability fallback: " << metadata.virtualPath.generic_string()
+                << " backend=essl variant=GBuffer; clearcoat takes precedence over subsurface, otherwise scattering uses diffuse tint\n";
+        }
         return true;
     }
     if (!payload.graphCompileSucceeded) {
@@ -1713,10 +1726,22 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         backends.push_back(*mapped);
     }
 
+    const bool portableCustomData = payload.graphShader.reflection.writesShadingModelColor &&
+        std::find(backends.begin(),backends.end(),kb::render::RenderMaterialGraphShaderBackend::Essl)!=backends.end();
+    if (portableCustomData) {
+        diagnostics << "material capability fallback: " << metadata.virtualPath.generic_string()
+            << " backend=essl variant=GBufferCompact; extra scattering color or iris data requires five color attachments\n";
+    }
     for (const std::string_view pass : kb::render::kRenderMaterialGraphScenePasses) {
         if (!kb::render::RenderMaterialGraphCooksScenePass(payload.graphShader.reflection, pass)) {
             continue;
         }
+        auto passBackends=backends;
+        std::erase_if(passBackends,[&](const auto backend) {
+            return !kb::render::RenderMaterialGraphCooksScenePass(payload.graphShader.reflection,pass,
+                backend==kb::render::RenderMaterialGraphShaderBackend::Essl);
+        });
+        if (passBackends.empty()) continue;
         kb::render::RenderMaterialGraphShaderArtifactRequest shaderRequest{};
         shaderRequest.shadercPath = request.shadercPath.generic_string();
         shaderRequest.varyingDefPath = (shaderSources / "varying.def.sc").generic_string();
@@ -1733,7 +1758,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         shaderRequest.shaderPlatform = profile.shaderPlatform;
         shaderRequest.materialTypeVersion = material.materialTypeVersion;
         const kb::render::RenderMaterialGraphShaderArtifactResult cooked =
-            kb::render::CookRenderMaterialGraphShaderArtifact(payload.graphShader, backends, shaderRequest);
+            kb::render::CookRenderMaterialGraphShaderArtifact(payload.graphShader, passBackends, shaderRequest);
         if (!cooked.Succeeded()) {
             error = "material shader cook failed: " + metadata.virtualPath.generic_string() +
                 " pass=" + std::string{ pass };
@@ -2317,8 +2342,26 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
                 }
             }
         };
-        const std::size_t workerCount =
-            std::min<std::size_t>(misses.size(), std::max(1U, std::thread::hardware_concurrency()));
+        unsigned shaderJobs = std::max(1U, std::thread::hardware_concurrency());
+        // Honor the build's explicit process budget for standalone cooks too.
+#if defined(_WIN32)
+        std::array<char, 32> jobBuffer{};
+        const DWORD jobLength = GetEnvironmentVariableA("CMAKE_BUILD_PARALLEL_LEVEL", jobBuffer.data(),
+            static_cast<DWORD>(jobBuffer.size()));
+        const std::string_view jobLimit = jobLength > 0 && jobLength < jobBuffer.size()
+            ? std::string_view{jobBuffer.data(), jobLength} : std::string_view{};
+#else
+        const char* jobEnvironment = std::getenv("CMAKE_BUILD_PARALLEL_LEVEL");
+        const std::string_view jobLimit = jobEnvironment ? jobEnvironment : "";
+#endif
+        if (!jobLimit.empty()) {
+            unsigned requested = 0U;
+            const auto parsed = std::from_chars(jobLimit.data(), jobLimit.data() + jobLimit.size(), requested);
+            if (parsed.ec == std::errc{} && parsed.ptr == jobLimit.data() + jobLimit.size() && requested > 0U)
+                shaderJobs = std::min(shaderJobs, requested);
+        }
+        const std::size_t workerCount = std::min<std::size_t>(misses.size(), shaderJobs);
+        diagnostics << "fixed shader compiler jobs: " << workerCount << '\n';
         std::vector<std::thread> workers;
         workers.reserve(workerCount - 1U);
         for (std::size_t worker = 1U; worker < workerCount; ++worker) {
@@ -2449,6 +2492,11 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     }
     if (!VerifyCookConfigurationInputsUnchanged(configurationSnapshot, error)) {
         return Failure(std::move(error));
+    }
+    if (const std::string moduleError =
+            ValidatePackagedRuntimeModuleReferences(project.descriptor);
+        !moduleError.empty()) {
+        return Failure(moduleError);
     }
     if (const std::optional<std::string_view> unsupported =
             kb::game::FirstUnsupportedPackagedRuntimeModule(profile.identifier, project.descriptor);
@@ -2641,6 +2689,30 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     manifest.targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile);
     manifest.descriptor = std::move(packagedDescriptor);
     manifest.settings = settings;
+    // Tile atlas coordinates refer to the exact source dimensions. Preserve texels and avoid
+    // mip generation across neighboring cells, including partial final rows and odd dimensions.
+    std::set<std::string> atlasTextures;
+    std::set<std::uint64_t> pointTextures;
+    for (const auto& metadata : assets) {
+        if (IsMaterialAsset(metadata)) {
+            std::vector<std::uint8_t> source;
+            if (!ReadSourceSnapshot(sourceSnapshots, metadata.id.value, source, error)) return Failure(error);
+            kb::assets::AssetMemoryInputStream pointMaterialInput{source};
+            const auto material = kb::render::RenderMaterialAssetLoader::LoadMaterial(pointMaterialInput);
+            if (material && material->desc.pointSampling) {
+                pointTextures.insert(material->desc.albedoTextureAssetId);
+                pointTextures.insert(material->desc.emissiveTextureAssetId);
+                if (!material->albedoTexturePath.empty()) atlasTextures.insert(kb::assets::NormalizeAssetPath(material->albedoTexturePath));
+                if (!material->emissiveTexturePath.empty()) atlasTextures.insert(kb::assets::NormalizeAssetPath(material->emissiveTexturePath));
+            }
+        }
+        if (metadata.physicalPath.extension() != kb::assets::kMap2DAssetExtension) continue;
+        std::vector<std::uint8_t> source;
+        if (!ReadSourceSnapshot(sourceSnapshots, metadata.id.value, source, error)) return Failure(error);
+        const auto map = kb::assets::Map2DAssetIO::Load(source, &error);
+        if (!map) return Failure(error);
+        for (const auto& sheet : map->sheets) atlasTextures.insert(kb::assets::NormalizeAssetPath(sheet.texture));
+    }
     std::set<std::string> packagedPaths;
     std::set<asset_bake::AssetBakeDigest> bakedTextures;
     ProjectCookResult result{};
@@ -2705,6 +2777,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             const kb::render::bake::TextureBakeSettings textureSettings{
                 .semantic = texture->semantic,
                 .colorSpace = texture->colorSpace,
+                .preserveAtlas = atlasTextures.contains(virtualPath) || pointTextures.contains(metadata.id.value),
             };
             for (std::uint32_t familyIndex = 0U;
                  familyIndex < asset_bake::kTextureCompressionFamilyCount;
@@ -2756,9 +2829,10 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 entry.artifacts.push_back(asset_bake::RuntimeArtifactReference{
                     .digest = digest,
                     .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
-                    .qualifier = std::string{ asset_bake::TextureCompressionFamilyName(family) },
+                    .qualifier = textureSettings.preserveAtlas ? "rgba8-atlas" : std::string{ asset_bake::TextureCompressionFamilyName(family) },
                 });
                 ++result.textureArtifactCount;
+                if (textureSettings.preserveAtlas) break;
             }
         } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension &&
                    entry.sourceExtension != kb::assets::kMap2DAssetExtension) {
@@ -2787,6 +2861,17 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             });
             ++result.meshArtifactCount;
         } else {
+            if (metadata.type == kb::particles::kParticleProcessAssetType) {
+                const auto process = kb::particles::DecodeParticleProcessAsset(fileBytes, error);
+                if (!process) return Failure("particle process could not be validated: " + virtualPath + "\n" + error);
+                for (std::uint32_t index = 0U; index < asset_bake::kShaderBakeBackendCount; ++index) {
+                    const auto backend = static_cast<asset_bake::ShaderBakeBackend>(index);
+                    if (!asset_bake::HasShaderBakeBackend(profile.shaderBackends, backend)) continue;
+                    const auto mapped = MaterialBackend(backend);
+                    if (!mapped || !process->programs.contains(std::string{kb::render::RenderMaterialGraphShaderBackendName(*mapped)}))
+                        return Failure("particle process lacks a shader variant required by target " + std::string{profile.identifier} + ": " + virtualPath);
+                }
+            }
             // Preserve editable runtime data for procedural terrain and tilemap chunks.
             if (entry.sourceExtension == kb::assets::kTerrainAssetExtension && !kb::assets::TerrainAssetIO::Load(fileBytes, &error)) {
                 return Failure("terrain could not be validated for cooking: " + virtualPath + "\n" + error);
@@ -2827,6 +2912,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                         writer,
                         entry.artifacts,
                         result.shaderArtifactCount,
+                        diagnostics,
                         error)) {
                     return Failure(std::move(error));
                 }

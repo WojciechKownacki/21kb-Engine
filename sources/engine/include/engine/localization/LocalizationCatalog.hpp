@@ -17,10 +17,12 @@ struct LocalizationMessage {
 };
 
 struct LocalizationCatalog {
-    static constexpr std::uint32_t kSchemaVersion = 1U;
+    static constexpr std::uint32_t kSchemaVersion = 2U;
     std::uint32_t schemaVersion = kSchemaVersion;
     std::string fallbackLanguage;
     std::map<std::string, std::map<std::string, LocalizationMessage, std::less<>>, std::less<>> languages;
+    // One-step source asset to localized asset replacements, grouped by authored locale.
+    std::map<std::string, std::map<std::uint64_t, std::uint64_t>, std::less<>> resources;
 };
 
 } // namespace kb::localization

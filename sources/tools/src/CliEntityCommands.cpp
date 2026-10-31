@@ -42,6 +42,7 @@
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "engine/scene/SceneSprite2DComponents.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
@@ -405,11 +406,21 @@ void ListProperties(std::string_view component, std::ostream& out) {
     const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(component);
     const auto* uiProperty = ui != nullptr ? kb::scene::FindUIComponentProperty(ui->type, name) : nullptr;
     if (((component == "AudioSource" && name == "clipAssetId") ||
+        (component == "ContentInstance" && name == "assetId") ||
         (uiProperty != nullptr && uiProperty->type == kb::scene::UIComponentPropertyType::Asset)) && value.starts_with('/')) {
         const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
         if (metadata == nullptr) {
             io.err << "error: " << component << '.' << name << " '" << value << "' is not an asset of the project\n";
             return false;
+        }
+        if (component == "ContentInstance") {
+            constexpr std::array<std::string_view,5> types{"ScenePrefab","Scene","WorldFragment","World","NavMesh"};
+            const auto* instance=scene.Components().ContentInstances().TryGet(entity);
+            const auto kind=instance?static_cast<std::size_t>(instance->kind):types.size();
+            if (kind>=types.size() || metadata->type!=types[kind]) {
+                io.err << "error: ContentInstance.assetId must match its source kind; set kind before assetId\n";
+                return false;
+            }
         }
         const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, component, name,
             kb::script::ScriptValue{ metadata->id.value, kb::script::ScriptValueType::Hash });
@@ -594,6 +605,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
 [[nodiscard]] int EntityAdd(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> create = arguments.Option("--create");
     const kb::scene::SceneCreateItem* createItem = create.has_value() ? kb::scene::SceneCreateMenu::Find(*create) : nullptr;
+    const auto* uiPreset = create.has_value() && createItem == nullptr
+        ? kb::scene::FindUIComponentPreset(*create) : nullptr;
     const bool playerPreset = create.has_value() && IsPlayerPreset(*create);
     const std::optional<std::string> physics = arguments.Option("--physics");
     if (physics.has_value() && (!playerPreset || (*physics != "2d" && *physics != "3d"))) {
@@ -625,10 +638,23 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
     kb::scene::SceneEntity entity{};
     if (playerPreset) {
-        entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io, physics.has_value() && *physics == "2d");
+        entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io, !physics.has_value() || *physics == "2d");
         if (!entity.IsValid()) return 1;
         if (parent.has_value() && !scene.Hierarchy().SetParent(entity, *parent)) {
             io.err << "error: '" << *name << "' could not be parented\n";
+            return 1;
+        }
+    } else if (uiPreset != nullptr) {
+        const auto parentObject = parent ? scene.Entities().Object(*parent) : kb::scene::SceneObject{};
+        if (kb::scene::IsUIHierarchyPreset(uiPreset->preset)) {
+            entity = kb::scene::CreateUIHierarchy(scene, uiPreset->preset, parentObject, *name);
+        } else {
+            entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = *name, .parent = parentObject});
+            if (entity.IsValid()) kb::scene::ApplySceneUIComponents(scene.Components().UI(), entity,
+                kb::scene::BuildUIComponentPreset(uiPreset->preset));
+        }
+        if (!entity.IsValid()) {
+            io.err << "error: UI preset could not be created\n";
             return 1;
         }
     } else if (create.has_value()) {
@@ -859,6 +885,10 @@ void ListProperties(std::string_view component, std::ostream& out) {
 }
 
 [[nodiscard]] int ComponentCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
+    if (action != "add" && action != "set" && action != "remove") {
+        io.err << "error: component expects add, set or remove\n";
+        return 1;
+    }
     const std::optional<std::string> entityName = arguments.Option("--entity");
     const std::optional<std::string> type = arguments.Option("--type");
     if (!entityName.has_value() || !type.has_value()) {
@@ -1428,14 +1458,34 @@ int RunAiCommand(const ArgumentList& arguments, CommandIo io) {
 }
 
 int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
-    static_cast<void>(arguments);
+    // One component's properties when asked for (by name or display name): what an agent needs
+    // before setting them, without every other component.
+    if (const std::optional<std::string> wanted = arguments.Option("--component"); wanted.has_value()) {
+        const std::string_view name = kb::scene::SceneComponentAuthoring::CanonicalName(*wanted);
+        for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+            if (kind.id != name && kind.displayName != *wanted) continue;
+            io.out << kind.id;
+            if (kind.displayName != kind.id) io.out << " (" << kind.displayName << ')';
+            if (!kind.requiredPlugin.empty()) io.out << " [plugin " << kind.requiredPlugin << ']';
+            io.out << ':';
+            ListProperties(kind.id, io.out);
+            io.out << '\n';
+            if (kind.id == "Transform") io.out << "Transform rotation is in degrees: --set rotation=x,y,z\n";
+            if (kind.id == "MeshRenderer") io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+            return 0;
+        }
+        io.err << "error: no component called '" << *wanted << "'; schema without --component lists them all\n";
+        return 1;
+    }
     io.out << "Transform: rotation (degrees x,y,z)";
     ListProperties("Transform", io.out);
     io.out << "\nMeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+    io.out << "ContentInstance references: assetId=<asset path>; set kind first (0 prefab, 1 scene, 2 fragment, 3 world, 4 navigation).\n";
     io.out << "Engine shapes:";
     for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) io.out << ' ' << shape.virtualPath;
     io.out << "\nentity add --create items:";
     for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) io.out << " '" << item.id << '\'';
+    for (const auto& preset : kb::scene::UIComponentPresetCatalog()) io.out << " '" << preset.name << '\'';
     io.out << " 'Platformer Player' 'Top Down Player'\n";
     for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
         io.out << kind.id;

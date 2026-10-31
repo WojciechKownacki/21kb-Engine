@@ -65,7 +65,8 @@ EditorAssetReimport::Outcome EditorAssetReimport::Run(EditorSceneContext& contex
     const kb::assets::AssetImportItemResult& result = outcome.item;
     if (result.status == kb::assets::AssetImportItemStatus::Failed || result.status == kb::assets::AssetImportItemStatus::Missing || !result.error.empty()) {
         // Refusing to overwrite edits is the policy at work, not a failure of the import.
-        if (result.conflicts.empty()) console.Error("Assets", "Reimport of " + label + " failed: " + result.error);
+        if (result.conflicts.empty()) console.Error("Assets", "Reimport of " + label + " failed: " + result.error +
+            " Fix: " + kb::assets::AssetImportRecoveryAdvice(result));
         else console.Warning("Assets", "Reimport of " + label + " changed nothing: " + result.error);
         return outcome;
     }

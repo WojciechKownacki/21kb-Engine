@@ -16,6 +16,7 @@ public:
     AssetRuntimeLoadService() = delete;
 
     [[nodiscard]] static std::shared_ptr<void> LoadUntyped(
+        AssetManager& manager,
         AssetId id,
         std::type_index expectedType,
         const AssetRegistry& registry,

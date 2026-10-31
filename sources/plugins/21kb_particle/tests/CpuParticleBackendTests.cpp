@@ -26,6 +26,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -602,6 +603,29 @@ void TestCollisionPlaneExecutionAndDisable() {
         "disabled collision plane changed position or velocity");
 }
 
+void TestInternalEventRestartDiscardsPendingBirths() {
+    auto effect = MakeInternalEventEffect();
+    for (auto& emitter : effect.emitters) {
+        emitter.spawn.rateOverTime.keyframes.front().value = 0.0F;
+        emitter.spawn.bursts.clear();
+        emitter.spawn.prewarmSeconds = 0.0F;
+    }
+    Fixture fixture(std::move(effect));
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto instance = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(instance.Succeeded() && backend.Play(fixture.scene, instance.instanceId).Succeeded() &&
+            backend.Emit(fixture.scene, instance.instanceId, 1U).Succeeded(), "pending birth setup failed");
+    Require(backend.Restart(fixture.scene, instance.instanceId).Succeeded() &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Query(fixture.scene, instance.instanceId).liveParticleCount == 0U,
+        "restart delivered a queued birth from the previous simulation");
+    Require(backend.Emit(fixture.scene, instance.instanceId, 1U).Succeeded() &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Query(fixture.scene, instance.instanceId).liveParticleCount == 2U,
+        "restart disabled newly emitted sub-emitter events");
+}
+
 void TestInternalEventTriggersOrderingAndBounds() {
     const auto makeEmitter = [](std::uint64_t id, float y, std::uint32_t capacity = 256U) {
         auto emitter = Fixture::MakeEffect().emitters[0];
@@ -1144,8 +1168,8 @@ void TestModuleCompileRejection() {
         .targetEffect = {.virtualPath = "/Game/Effects/External.kbvfx"},
     });
     Require(createStatus(std::move(unsupportedExternalEffect)) ==
-            kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
-        "external effect event action was accepted by the internal-event compiler");
+            kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "external effect event accepted an unregistered target asset");
 
     auto gpuRequired = Fixture::MakeEffect();
     gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
@@ -2869,6 +2893,88 @@ void TestFieldModules() {
         "a torus swirl did not roll the particle about its ring");
 }
 
+void TestManyEmitterEventProfile() {
+    const auto run = [](bool profiled) {
+        auto effect = Fixture::MakeEffect(600.0F, 128U);
+        const auto prototype = effect.emitters.front();
+        effect.emitters.clear();
+        for (unsigned index = 0U; index < 8U; ++index) {
+            auto emitter = prototype;
+            emitter.emitterId = index + 1U;
+            emitter.authoringOrder = index;
+            emitter.spawn.rateOverTime.keyframes.front().value = index % 2U == 0U ? 600.0F : 0.0F;
+            emitter.spawn.lifetimeMin = emitter.spawn.lifetimeMax = 0.25F;
+            effect.emitters.push_back(std::move(emitter));
+            if (index % 2U == 0U)
+                effect.eventBindings.push_back({.sourceEmitterId = index + 1U,
+                    .trigger = kb::scene::ParticleEventTrigger::Birth,
+                    .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+                    .targetEmitterId = index + 2U, .count = 4U, .maxDepth = 1U, .perStepBudget = 8U});
+        }
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        Require(!kb::particles::ParticlePlayback::EmitterProfilingEnabled(fixture.scene), "emitter profiling must default off");
+        kb::particles::ParticlePlayback::SetEmitterProfilingEnabled(fixture.scene, profiled);
+        Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(), "profile snapshot setup failed");
+        const auto instance = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(instance.Succeeded() && backend.Play(fixture.scene, instance.instanceId).Succeeded(), "event-heavy profile setup failed");
+        std::uint64_t capacityRejected = 0U, eventsRejected = 0U;
+#if defined(_WIN32)
+        FILETIME creation{}, exit{}, kernelBefore{}, userBefore{}, kernelAfter{}, userAfter{};
+        Require(GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernelBefore, &userBefore) != 0, "CPU process clock unavailable");
+#endif
+        const auto started = std::chrono::steady_clock::now();
+        for (unsigned step = 0U; step < 1200U; ++step) {
+            Require(backend.Simulate(fixture.scene, 1.0F / 60.0F).Succeeded(), "event-heavy simulation failed");
+            capacityRejected += backend.LastStepTelemetry().rejectedByCapacity;
+            eventsRejected += backend.LastStepTelemetry().rejectedByEventBudget;
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+#if defined(_WIN32)
+        Require(GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernelAfter, &userAfter) != 0, "CPU process clock unavailable");
+        const auto ticks = [](FILETIME value) { return (std::uint64_t{value.dwHighDateTime} << 32U) | value.dwLowDateTime; };
+        PROCESS_MEMORY_COUNTERS_EX memory{};
+        memory.cb = sizeof(memory);
+        Require(K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory), sizeof(memory)) != 0,
+            "event-heavy process memory unavailable");
+        std::cout << "event_profile_process cpu_ns=" << 100U * (ticks(kernelAfter) + ticks(userAfter) - ticks(kernelBefore) - ticks(userBefore))
+            << " private_bytes=" << memory.PrivateUsage << " working_set_bytes=" << memory.WorkingSetSize
+            << " peak_working_set_bytes=" << memory.PeakWorkingSetSize << '\n';
+#endif
+        const auto states = CopyBackendStates(backend, fixture, instance.instanceId);
+        Require(!states.empty() && states.size() <= 1024U && capacityRejected > 0U && eventsRejected > 0U,
+            "many-emitter fixture did not exercise capacity and event budgets");
+        auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && snapshot->Emitters().size() == 8U, "many-emitter snapshot lost records");
+        std::uint64_t emission = 0U, integration = 0U;
+        for (const auto& emitter : snapshot->Emitters()) {
+            Require(emitter.cpuWorkProfiled == profiled, "emitter profiling availability is wrong");
+            emission += emitter.cpuEmissionNanoseconds;
+            integration += emitter.cpuIntegrationNanoseconds;
+        }
+        Require(profiled ? emission > 0U && integration > 0U : emission == 0U && integration == 0U,
+            "emitter work timings did not follow opt-in");
+        std::cout << "event_profile enabled=" << profiled << " steps=1200 emitters=8 live=" << states.size()
+            << " host_us=" << elapsed << " capacity=" << backend.ParticleCapacity()
+            << " capacity_rejected=" << capacityRejected << " events_rejected=" << eventsRejected
+            << " last_emission_ns=" << emission << " last_integration_ns=" << integration << '\n';
+        snapshot.reset();
+        kb::particles::ParticlePlayback::SetEmitterProfilingEnabled(fixture.scene, false);
+        Require(backend.Simulate(fixture.scene, 1.0F / 60.0F).Succeeded(), "profiling disable step failed");
+        snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        for (const auto& emitter : snapshot->Emitters())
+            Require(!emitter.cpuWorkProfiled && emitter.cpuEmissionNanoseconds == 0U && emitter.cpuIntegrationNanoseconds == 0U,
+                "disabled profiling retained stale timings");
+        const auto hash = HashVisualStateSpan(states);
+        Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(), "profile backend release failed");
+        return hash;
+    };
+    const auto reference = run(false);
+    Require(reference == run(true) && reference == run(true), "many-emitter event determinism changed under profiling");
+}
+
 void TestEmitterExecutionDiagnostics() {
     using Reason = kb::particles::ParticleGpuFallbackReason;
     using Path = kb::particles::ParticleEmitterSimulationPath;
@@ -3072,6 +3178,40 @@ void TestGpuFallbackReasonTable() {
 // Local-space instances of one effect with the same seed share one simulation: the copy is the leader's particles
 // carried to the copy's transform, so it never diverges from the leader. A parameter, another seed or another rate
 // takes the instance out of sharing at once, and it then simulates by itself.
+void RunSharedSimulationBenchmark() {
+    for (const bool distinct : {false, true}) for (const std::uint32_t count : {32U, 64U, 128U, 256U}) {
+        auto effect = Fixture::MakeEffect(0.0F, 1U);
+        effect.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+        effect.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+        Fixture fixture(effect);
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            const auto instance = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+            Require(instance.Succeeded() && backend.SetSeed(fixture.scene, instance.instanceId, distinct ? index : 0U).Succeeded()
+                && backend.Play(fixture.scene, instance.instanceId).Succeeded(), "Sharing benchmark instance did not start");
+        }
+        const auto step = [&] { Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "Sharing benchmark step failed"); };
+        for (unsigned warmup = 0U; warmup < 64U; ++warmup) step();
+        std::array<double, 31U> samples{};
+        g_allocationCount.store(0U, std::memory_order_relaxed);
+        g_countAllocations.store(true, std::memory_order_release);
+        for (auto& sample : samples) {
+            const auto start = std::chrono::steady_clock::now();
+            for (unsigned iteration = 0U; iteration < 64U; ++iteration) step();
+            sample = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 64.0;
+        }
+        g_countAllocations.store(false, std::memory_order_release);
+        const auto allocations = g_allocationCount.load(std::memory_order_relaxed);
+        Require(allocations == 0U, "Warmed sharing search must not allocate");
+        std::sort(samples.begin(), samples.end());
+        std::cout << "sharing instances=" << count << " distinct=" << distinct
+            << " p50_us=" << samples[15] << " p95_us=" << samples[29]
+            << " p99_us=" << samples[30] << " allocations=" << allocations << '\n';
+    }
+}
+
 void TestSharedSimulationOfIdenticalInstances() {
     auto effect = Fixture::MakeEffect(60.0F, 128U);
     effect.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
@@ -3169,6 +3309,24 @@ void TestSharedSimulationOfIdenticalInstances() {
     step(1);
     Require(matchesShifted(cloudOf(leader.instanceId), cloudOf(copy.instanceId), {-4.0F, 1.0F, 0.0F}),
         "an instance with the leader's seed again must rejoin the shared simulation");
+    Require(backend.ClearParameter(fixture.scene, other.instanceId, "gain").Succeeded() &&
+        backend.SetSeed(fixture.scene, copy.instanceId, 12345U).Succeeded() &&
+        backend.SetSeed(fixture.scene, other.instanceId, 12345U).Succeeded(), "Second sharing group did not configure");
+    step(20);
+    Require(matchesShifted(cloudOf(copy.instanceId), cloudOf(other.instanceId), {4.0F, -1.0F, 20.0F}),
+        "Clearing parameters must join the matching group rather than the first effect instance");
+    Require(backend.Pause(fixture.scene, copy.instanceId).Succeeded(), "Sharing leader did not pause");
+    const auto replacement = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(replacement.Succeeded() && backend.SetSeed(fixture.scene, replacement.instanceId, 12345U).Succeeded() &&
+        backend.Play(fixture.scene, replacement.instanceId).Succeeded(), "Replacement sharing follower did not start");
+    place(replacement.instanceId, {10.0F, 0.0F, 0.0F});
+    step(20);
+    Require(matchesShifted(cloudOf(other.instanceId), cloudOf(replacement.instanceId), {10.0F, 0.0F, -20.0F}),
+        "A paused leader must not prevent remaining instances from sharing their live simulation");
+    Require(backend.Release(fixture.scene, copy.instanceId).Succeeded(), "Paused sharing instance did not release");
+    step(1);
+    Require(matchesShifted(cloudOf(replacement.instanceId), cloudOf(other.instanceId), {-10.0F, 0.0F, 20.0F}),
+        "Dense-slot compaction must rebuild groups without stale leader indices");
     Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
         "shared simulation fixture could not release its backend");
 }
@@ -3617,6 +3775,50 @@ void TestCpuParticleSpin() {
 // Mesh and trail outputs run on the GPU too: the mesh draw carries the mesh and material of the emitter, the trail
 // the segment count and spacing (one fewer segment than samples, at the CPU path's sample cadence); a trail of a
 // local-space emitter stays on the CPU because its path is not the closed form.
+void TestLocalTrailFallbackFollowsCurvedOwnerPath() {
+    auto effect = Fixture::MakeEffect(0.0F, 8U);
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    auto& emitter = effect.emitters[0];
+    emitter.simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+    emitter.spawn.speedMin = emitter.spawn.speedMax = 0.0F;
+    emitter.spawn.lifetimeMin = emitter.spawn.lifetimeMax = 10.0F;
+    emitter.output.type = kb::scene::ParticleOutputType::Trail;
+    emitter.output.payload = kb::scene::ParticleTrailOutput{.sampleIntervalSeconds = 1.0F / 60.0F,
+        .maxSamplesPerParticle = 8U, .width = 0.5F};
+    Fixture fixture(effect);
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+        kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(), "local trail registration failed");
+    kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+        backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(), "local trail creation failed");
+    const std::array<kb::math::Vec3, 4> path{{{0, 0, 0}, {2, 0, 0}, {2, 3, 0}, {0, 3, 0}}};
+    std::uint64_t particleId = 0U;
+    kb::math::Vec3 initial{};
+    for (const auto position : path) {
+        Require(backend.ConfigureComponent(fixture.scene, created.instanceId, 1.0F, 0U, true,
+            kb::scene::WorldTransform{.position = position, .rotation = {0, 0, 0, 1}}).Succeeded() &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "local trail motion failed");
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && snapshot->Particles().size() == 1U && snapshot->Emitters().size() == 1U,
+            "local trail fallback lost its particle");
+        const auto& record = snapshot->Particles().front();
+        if (particleId == 0U) { particleId = record.particleId; initial = record.position; }
+        Require(snapshot->Emitters().front().simulationPath == kb::particles::ParticleEmitterSimulationPath::Cpu &&
+            snapshot->Emitters().front().gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::LocalTrail &&
+            record.particleId == particleId &&
+            std::abs(record.position.x - initial.x - position.x) < 0.0001F &&
+            std::abs(record.position.y - initial.y - position.y) < 0.0001F,
+            "local trail fallback did not report CPU execution and preserve the curved owner motion");
+    }
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+        "local trail backend unload failed");
+}
+
 void TestGpuMeshAndTrailRouting() {
     const auto run = [](kb::scene::ParticleOutputType type, bool local) {
         auto effect = Fixture::MakeEffect(600.0F, 1'000U);
@@ -3847,12 +4049,18 @@ int main(int argc, char** argv) {
             RunParticleSceneMemoryProbe();
             return 0;
         }
+        if (argc == 2 && std::string_view{argv[1]} == "--sharing-benchmark") {
+            RunSharedSimulationBenchmark();
+            return 0;
+        }
         TestLazyParticleStorageAdmissionAndReload();
         TestEmitterExecutionDiagnostics();
+        TestManyEmitterEventProfile();
         TestGpuFallbackReasonTable();
         TestSharedSimulationOfIdenticalInstances();
         TestRepeatedFieldsPreserveCpuSemantics();
         TestGpuSubEmitterEvents();
+        TestLocalTrailFallbackFollowsCurvedOwnerPath();
         TestGpuMeshAndTrailRouting();
         TestCpuParticleSpin();
         TestGpuLocalSpaceEmitterRouting();
@@ -3871,6 +4079,7 @@ int main(int argc, char** argv) {
         TestVisualModulesObservableGoldenAndDefaults();
         TestStartColorAndSizeWithoutModules();
         TestCollisionPlaneExecutionAndDisable();
+        TestInternalEventRestartDiscardsPendingBirths();
         TestInternalEventTriggersOrderingAndBounds();
         TestInternalEventBudgetsAndCollisionLocalLimit();
         TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic();

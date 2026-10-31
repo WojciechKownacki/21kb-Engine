@@ -3449,7 +3449,7 @@ void RunMcpCommandTests() {
     input += '\n';
     input += R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"Assets/Scenes/Main.21kbscene","frames":2}}})";
     input += '\n';
-    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"format":"json"}}})";
+    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"topic":"Input"}}})";
     input += '\n';
 
     std::istringstream in{ input };
@@ -4494,10 +4494,13 @@ void RunCommandCatalogTests() {
     };
     const auto listed = mcp(R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})");
     const auto* descriptors = listed.Find("result")->Find("tools");
-    Require(descriptors->Size() == tools.size() && tools.size() >= 11U, "MCP must discover all registered authoring tools");
-    for (std::size_t index = 0U; index < descriptors->Size(); ++index)
-        Require(std::ranges::find(tools, descriptors->At(index)->Find("name")->AsString()) != tools.end(),
+    // Plus kb_cli, which runs any catalog command for the bound project rather than adding one.
+    Require(descriptors->Size() == tools.size() + 1U && tools.size() >= 11U, "MCP must discover all registered authoring tools and the command runner");
+    for (std::size_t index = 0U; index < descriptors->Size(); ++index) {
+        const std::string& name = descriptors->At(index)->Find("name")->AsString();
+        Require(name == "kb_cli" || std::ranges::find(tools, name) != tools.end(),
             "MCP discovery must not invent operations outside the CLI catalog");
+    }
     const auto call = [&](std::string_view name, std::string_view arguments, bool succeeds = true) {
         const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
             std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
@@ -4515,6 +4518,25 @@ void RunCommandCatalogTests() {
     call("entity_edit", R"({"action":"add","name":"Outside","scene":"../Outside.21kbscene"})", false);
     call("script_create", R"({"name":"Outside","language":"lua","folder":"../Outside"})", false);
     call("scene_create", R"({"name":"Outside","project":"../Other"})", false);
+    // The command runner reaches catalog commands without tools of their own, with the bound
+    // project filled in over any --project an agent passes, and refuses to nest the server.
+    call("kb_cli", R"({"args":["scene-new","--name","RunnerScene","--template","Empty"]})");
+    call("kb_cli", R"({"args":["entity","add","--project","../Elsewhere","--scene","/Game/Scenes/RunnerScene.21kbscene","--name","Runner"]})");
+    call("kb_cli", R"({"args":["mcp"]})", false);
+    call("kb_cli", R"({"args":["no-such-command"]})", false);
+    call("kb_cli", R"({"args":[]})", false);
+    // Reference and guides come a page at a time: never the whole API in one answer.
+    const auto page = [&](std::string_view name, std::string_view arguments) {
+        const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
+            std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
+        Require(response.Find("result") && !response.Find("result")->Find("isError")->AsBool(), "Reference tool failed: " + response.Dump());
+        return response.Find("result")->Find("content")->At(0)->Find("text")->AsString();
+    };
+    const std::string index = page("api_reference", "{}");
+    Require(Contains(index, "# 21kb Engine script API") && index.size() < 24U * 1024U, "api_reference without a topic must return the small index");
+    Require(Contains(page("api_reference", R"({"topic":"Physics.Raycast"})"), "# Physics.Raycast"), "api_reference must return one function page");
+    Require(Contains(page("api_reference", R"({"search":"raycast"})"), "Physics.Raycast"), "api_reference must find topics by text");
+    Require(Contains(page("guide", R"({"topic":"objects-and-materials"})"), "material-new"), "guide must return one how-to");
     Require(RunCliProgram({"scene-new", "--project", root, "--name", "CliScene", "--template", "Empty"}).exitCode == 0 &&
         RunCliProgram({"entity", "add", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--name", "Probe", "--position", "1,2,3"}).exitCode == 0 &&
         RunCliProgram({"component", "set", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--entity", "Probe", "--type", "Transform",
@@ -4904,11 +4926,26 @@ void RunWorldMemoryCliTests() {
         return nullptr;
     };
     Require(kind("instances") != nullptr && kind("instances")->Find("source")->AsString() == "measured" && kind("instances")->Find("bytes")->AsNumber() > 0.0, "the instances are measured");
-    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "estimated", "the assets are estimated from file sizes");
+    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "measured", "the published world index payload is measured");
+    const auto* assets = kind("assets_cpu");
+    Require(assets->Find("known_payload_bytes") != nullptr && assets->Find("known_payload_bytes")->GetKind() == kb::core::JsonValue::Kind::Number &&
+            assets->Find("known_payload_bytes")->AsNumber() > 0.0 &&
+            assets->Find("known_payload_bytes")->AsNumber() == assets->Find("bytes")->AsNumber() &&
+            assets->Find("unmeasured_payloads") != nullptr && assets->Find("unmeasured_payloads")->AsNumber(-1.0) == 0.0 &&
+            assets->Find("baseline_unmeasured_payloads") != nullptr && assets->Find("baseline_unmeasured_payloads")->GetKind() == kb::core::JsonValue::Kind::Number,
+        "complete published payload coverage must report its decoded bytes and zero unknown payloads");
     Require(kind("scripts") != nullptr && kind("scripts")->Find("source")->AsString() == "measured", "the script heap is measured");
-    Require(kind("physics")->Find("source")->AsString() == "unavailable" && kind("physics")->Find("bytes")->IsNull() &&
-            kind("gpu")->Find("source")->AsString() == "unavailable" && memory->Find("has_unavailable_kinds")->AsBool(),
-        "kinds this host cannot read are unavailable, not zero");
+    Require(kind("physics")->Find("source")->AsString() == "measured" &&
+            kind("physics")->Find("bytes")->GetKind() == kb::core::JsonValue::Kind::Number &&
+            kind("gpu")->Find("source")->AsString() == "unavailable" && kind("gpu")->Find("bytes")->IsNull() &&
+            memory->Find("has_unavailable_kinds")->AsBool(),
+        "physics allocator bytes are measured while the graphics-free host reports GPU unavailable: " + ran.out);
+    Require(!memory->Find("has_estimated_kinds")->AsBool() &&
+            memory->Find("estimated_bytes")->AsNumber() == 0.0 &&
+            memory->Find("measured_bytes")->AsNumber() == kind("instances")->Find("bytes")->AsNumber() +
+                kind("scripts")->Find("bytes")->AsNumber() + assets->Find("bytes")->AsNumber() +
+                kind("physics")->Find("bytes")->AsNumber(),
+        "measured published payload bytes are included once in measured totals");
     Require(memory->Find("samples")->AsNumber() >= 1.0 && memory->Find("minimum_error_ratio")->AsNumber() > 0.0 &&
             memory->Find("minimum_error_ratio")->AsNumber() <= memory->Find("maximum_error_ratio")->AsNumber(), "the error ratio was sampled");
     const CliRun refused = RunCliProgram({ "run", "--project", project, "--report", "bogus" });
@@ -4970,8 +5007,8 @@ void RunPlayerPresetCliTests() {
 
     const CliRun added = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--position", "2,3,0" });
     Require(added.exitCode == 0, "the Platformer Player preset failed: " + added.out + added.err);
-    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DPlayer.lua";
-    Require(std::filesystem::exists(script) && Contains(read(script), "@expose coyoteTime") && Contains(read(script), "@expose jumpBuffer"),
+    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua";
+    Require(std::filesystem::exists(script) && Contains(read(script), "@expose jumpSpeed") && Contains(read(script), "@expose jumpBuffer"),
         "the preset must write the platformer script, with its tunables");
     for (const char* file : { "Move.21kbinputaction", "Jump.21kbinputaction", "PlayerInput.21kbinputcontext" }) {
         Require(std::filesystem::exists(root / "Assets" / "Input" / file), std::string{ "the preset must write the input asset " } + file);
@@ -4979,9 +5016,9 @@ void RunPlayerPresetCliTests() {
     Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.inputMappingContext ==
                 "/Game/Input/PlayerInput.21kbinputcontext", "the project's input context must be the preset's");
     const CliRun listed = RunCliProgram({ "scene-list", "--project", project });
-    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController"),
-        "the scene must hold a Player with a CharacterController: " + listed.out);
-    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DPlayer.lua" });
+    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController2D"),
+        "the scene must hold a Player with a CharacterController2D: " + listed.out);
+    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DBox2DPlayer.lua" });
     Require(behaviours.exitCode == 0, "the preset script must validate: " + behaviours.out + behaviours.err);
     const CliRun info = RunCliProgram({ "map2d", "info", "--project", project, "--map", "/Game/Maps/World.kbmap2d" });
     Require(Contains(info.out, "follows Player") && Contains(info.out, "kept inside the map"), "the map camera must follow the Player: " + info.out);
@@ -4999,11 +5036,16 @@ void RunPlayerPresetCliTests() {
     const CliRun again = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player" });
     Require(again.exitCode == 1 && Contains(again.err, "already exists"), "a second entity named Player must be refused: " + again.err);
     const CliRun topDown = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--name", "Walker" });
-    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DPlayer.lua"),
+    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DBox2DPlayer.lua"),
         "the top-down preset works and notes that the map is a platformer map: " + topDown.out + topDown.err);
-    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
+    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DBox2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
 
-    // The same players on the 2D physics.
+    const CliRun legacy = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "3d", "--name", "LegacyPlayer" });
+    const std::string legacyScript = read(root / "Assets" / "Scripts" / "Platformer2DPlayer.lua");
+    Require(legacy.exitCode == 0 && Contains(legacyScript, "@expose coyoteTime") && Contains(legacyScript, "@expose jumpBuffer"),
+        "the explicit 3D physics preset must preserve its script and tunables: " + legacy.out + legacy.err);
+
+    // Explicit 2D selection uses the same native presets as the default.
     const CliRun box2d = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "2d", "--name", "Hero2D" });
     Require(box2d.exitCode == 0 && Contains(box2d.out, "Platformer2DBox2DPlayer.lua"), "the 2D physics preset failed: " + box2d.out + box2d.err);
     Require(Contains(read(root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua"), "Physics2D.MoveCharacter"), "the preset must write the 2D physics script");
@@ -5104,6 +5146,10 @@ int main(int argc, char** argv) {
 #else
         RunSprite2DAssetRefusalTests();
 #endif
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "world-memory") {
+        RunWorldMemoryCliTests();
         return EXIT_SUCCESS;
     }
     if (argc != 1) return EXIT_FAILURE;

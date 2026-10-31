@@ -147,6 +147,12 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "UI frame refused";
     case render::SceneRenderDiagnosticKind::UITextUnavailable:
         return "UI text unavailable";
+    case render::SceneRenderDiagnosticKind::ShadowLightLimit:
+        return "local shadow light limit reached; remaining lights render without shadows";
+    case render::SceneRenderDiagnosticKind::MaterialShadingFallback:
+        return "four-target material fallback: extra scattering color or iris data omitted; builtin clearcoat takes precedence over subsurface";
+    case render::SceneRenderDiagnosticKind::GiBoundingBoxFallback:
+        return "GI uses solid bounds for meshes without CPU triangles; prepare a mesh GI proxy";
     case render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected:
         return "GPU particle update rejected";
     }
@@ -259,6 +265,10 @@ void EditorSceneBgfxViewport::SetGraphShaderCacheRoot(std::string root) {
     if (renderer_.IsInitialized()) {
         renderer_.SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
+}
+
+bool EditorSceneBgfxViewport::RendererInitialized() const noexcept {
+    return renderer_.IsInitialized();
 }
 
 const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
@@ -436,6 +446,10 @@ void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     pendingSubmissions_.clear();
     failureDetail_.clear();
     TrackPaintHost(parent);
+}
+
+void EditorSceneBgfxViewport::PrepareParticleScene(const kb::scene::Scene& scene) noexcept {
+    if (renderer_.IsInitialized()) renderer_.PrepareParticleScene(const_cast<kb::scene::Scene&>(scene));
 }
 
 void EditorSceneBgfxViewport::ReleaseScene(

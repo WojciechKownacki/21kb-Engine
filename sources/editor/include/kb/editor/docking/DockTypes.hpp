@@ -32,6 +32,13 @@ enum class DockPanelKind : std::uint8_t {
     ParticleEditor,
     BuildGame,
     TilemapEditor,
+    Profiler,
+    AudioMixer,
+    TimelineEditor,
+    BlendSpace2DEditor,
+    GameplayGraphEditor,
+    // Requests to a command-line AI agent that works on the project with the engine's tools.
+    Agent,
 };
 
 enum class DockSplitAxis : std::uint8_t {
@@ -109,6 +116,7 @@ struct DockLayout {
     DockRect menu{};
     DockRect toolbar{};
     DockRect workspace{};
+    DockRect statusBar{};
     std::vector<DockLeafLayout> leaves{};
     std::vector<DockPanelLayout> panels{};
     std::vector<DockSplitterLayout> splitters{};

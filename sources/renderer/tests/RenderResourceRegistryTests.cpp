@@ -3334,7 +3334,7 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
     {
         std::istringstream input{
             "baseColor 0.25 0.5 0.75 1\n"
-            "clearcoatFactor 0.5\n"
+            "anisotropyStrength 0.5\n"
             "transmissionTexture Textures/transmission.kbtex\n"
             "decalBlendMode PBR\n"
         };
@@ -3342,9 +3342,9 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
         Require(result.asset.has_value(), "Unsupported advanced material field warnings should keep the parsed asset available");
         Require(result.Succeeded() && result.HasWarnings(), "Unsupported advanced material field warnings should keep the asset loadable and diagnostics visible");
         Require(result.diagnostics.size() == 3U, "Unsupported advanced material field diagnostics should report each active advanced field");
-        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost clearcoat code");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost anisotropy code");
         Require(result.diagnostics[0].severity == RenderMaterialAssetParseDiagnosticSeverity::Warning, "Unsupported advanced material diagnostics should be warnings");
-        Require(result.diagnostics[0].field == "clearcoatFactor", "Unsupported advanced material diagnostics lost clearcoat field");
+        Require(result.diagnostics[0].field == "anisotropyStrength", "Unsupported advanced material diagnostics lost anisotropy field");
         Require(result.diagnostics[1].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost transmission texture code");
         Require(result.diagnostics[1].field == "transmissionTexture", "Unsupported advanced material diagnostics lost transmission texture field");
         Require(result.diagnostics[2].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost decal code");

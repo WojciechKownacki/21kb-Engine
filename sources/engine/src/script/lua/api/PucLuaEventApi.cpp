@@ -1,4 +1,5 @@
 #include "script/lua/api/PucLuaEventApi.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
 
 #include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
@@ -17,7 +18,7 @@ namespace kb::script {
 namespace {
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return PucLuaRuntimeApi::ContextFromUpvalue(state);
 }
 
 int LuaEmit(lua_State* state) {
@@ -55,11 +56,11 @@ int LuaEmitTo(lua_State* state) {
 
 } // namespace
 
-void PucLuaEventApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
-    lua_pushlightuserdata(state, &context);
+void PucLuaEventApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext&) {
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEmit>, 1);
     lua_setfield(state, environmentIndex, "Emit");
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEmitTo>, 1);
     lua_setfield(state, environmentIndex, "EmitTo");
 }

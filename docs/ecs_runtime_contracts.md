@@ -35,24 +35,59 @@ backs each statement. Where a statement has no test, it says so.
 
 ## Determinism scope
 
-What is promised: with `SystemSchedulingMode::Deterministic`, the `Deterministic` query policy,
-iteration order and reduction mode, the same registration order and the same fixed step, the
-scheduler runs the systems in the same order and the components end with the same values, whatever
-the number of workers. Independent systems are ordered by name.
+`SceneRuntime::SetDeterministicExecution(true)` opts into dependency/name ordered ECS
+execution and phase/registration ordered scene execution on the owner thread. It also
+removes the fixed-step early exit based on measured CPU duration. Disabling restores
+automatic ECS scheduling. `DeterminismScope()` returns the active policy and the
+simulation, RNG, fixed-tick and backend contracts used by the CLI report.
 
-What is not promised:
+The same binary, registration, initial state and ordered inputs produce the same
+results only when content also uses deterministic query iteration/reductions and
+controls its external inputs. Internal jobs or asynchronous work started by a system
+remain that system's responsibility. Deterministic ECS dispatch alone does not alter
+user query policies.
 
-* bitwise identical floating point results on different platforms or compilers. The golden checksum
-  in `EcsDeterministicReplayTests.cpp` is an exact value for MSVC on x64 only. Linux and ARM runs of
-  the same test are evidence about those platforms and are still to be recorded; a differing result
-  must be reported, not re-baselined;
-* determinism of the physics backend, the GPU, scripts that use time or random sources, or anything
-  that depends on thread timing outside the deterministic scheduler;
-* determinism of the non-deterministic scheduling modes.
+Enabled mode rejects zero, negative, NaN and infinite frame deltas before changing
+scene state; zero would otherwise ask the backend to measure wall time. Fixed ticks
+depend on the same finite positive frame delta sequence, playing state and
+`FixedStepSettings()`. Frame deltas are clamped, at most `maxFixedStepsPerFrame`
+steps run, and excess whole-step debt is discarded. CPU duration does not affect
+this decision in enabled mode. Variable Tick still receives the supplied frame
+delta. Equivalent elapsed time with different frame partitions is not a guarantee.
 
-Tests: `RunDeterministicReplayProducesStableResultTest`,
-`RunDeterministicReplayIgnoresWorkerCountTest` (0, 1, 2, 4 and 7 workers) and
-`RunDeterministicReplayGoldenTest`.
+`kb::math::NextUInt32` has an exact uint32 sequence for the same seed/counter;
+the complete state is the caller-owned seed and counter, including modulo counter
+wrap. Preserve stream ownership, consumption order and state on restore. Floating
+distributions are subject to floating-point rounding; Lua `math.random`, OS entropy,
+GPU random sources and wall-clock seeding are outside this contract.
+
+`kb_cli run --project <dir> --deterministic --report determinism` executes the actual
+headless scene and emits `21kb.determinism/v1` with its policy, fixed-step settings,
+completed frame/tick counts and scope. The CLI also uses synchronous physics stepping.
+Without `--deterministic`, the report explicitly says the policy is disabled.
+JSON goes to stdout and runtime logs to stderr.
+
+No general cross-platform bitwise floating-point or backend guarantee is made. Physics
+requires the same binary, ordered mutations and synchronous steps; cross-platform
+physics comparisons need scenario-specific tolerances. GPU execution, external I/O,
+asynchronous asset readiness and scripts using wall time are outside this guarantee.
+The API and CLI do not invent a universal backend tolerance: the report uses null and
+states that the comparison scenario must supply its bounds.
+
+`kb_ecs_deterministic_replay_tests` checks the ECS recurrence against a double-precision
+numeric golden with absolute component tolerance `0.0001` on every platform. It also
+retains the exact MSVC x64 quantized checksum `536938034` and prints observed checksums
+on other platforms. Worker counts 0, 1, 2, 4 and 7 must agree within a run.
+The scene replay checks exact RNG golden `13224159966847899506` (1024 draws), counter
+wrap and state restoration, 12 bounded fixed ticks over fractional/clamped frame
+deltas, serial scene order with 1/2/4 workers, and steps deliberately slower than their
+simulation delta. These integer/tick comparisons have zero tolerance. The test prints
+portable results for comparison across hosts; Linux and ARM execution evidence is
+still required before claiming qualification on those hosts. The CLI/Lua workflow
+also checks synchronous Jolt constant-velocity motion against its numeric golden
+with absolute position/velocity tolerance `0.001`; this is a bound for that simple
+scenario only. Engine module ABI 25 requires providers to be rebuilt with the
+scene execution policy.
 
 ## Declared access validation
 
@@ -99,6 +134,25 @@ read only, as one JSON object on stdout (`schema` `21kb.ecs-telemetry/v1`, `succ
 the snapshot under `telemetry`); logs stay on stderr. The number of ECS worker threads is not a
 setting of the scene yet, so there is no CLI option for it.
 Tests: `EcsInspectionTests.cpp` (`metric_basis`) and `RunParticleReportCommandTests` in `KbCliTests.cpp` (the ecs report).
+
+## Scheduler lifecycle and planning
+
+`SystemScheduler::Remove(system, world)` detaches an owned system by pointer
+between updates and invalidates its dependency plan and trace. It calls
+`OnDestroy` once; even if that callback throws, the system stays detached.
+Removing an explicit ordering target makes the next rebuild report an unknown
+dependency before any systems run. Removing the dependent or adding a replacement
+repairs the graph. Add, Remove, Update and Shutdown reject overlapping or
+reentrant calls, including attempts to remove a system from its own callback.
+Other scheduler access remains confined to its owner thread.
+
+`PlanningStats()` measures Update's cached execution-plan rebuilds separately
+from execution timing; `ExecutionOrderSnapshot()` is an unmeasured inspection. It reports
+attempts, successful rebuilds, last wall duration, system/edge/stage counts and
+whether the last attempt succeeded. Frames reusing the cached graph leave these
+values unchanged; Shutdown resets them. The scheduler suite measures a 128-reader
+graph, adding a conflicting writer and removing it, and checks cache reuse,
+failed-dependency recovery and exactly-once removal cleanup.
 
 ## ProfilerCounters
 
@@ -159,3 +213,112 @@ for a system to write: a system that only reads the scene during its update and 
 as commands, played back in registration order after the group (the ECS `CommandBuffer` already has
 lanes and a defined playback order, see above). AI thinking and the gameplay senses are read heavy and
 would be the first candidates; they need splitting into a read part and a write part first.
+
+
+## Storage workload measurements
+
+`python scripts/benchmark_ecs.py --build-dir <release-build> --output <report.json>`
+builds the workload and worker-scaling executables, then repeats equal integration
+workloads and validates their results. The report records the revision, whether the
+tree is dirty, compiler, build configuration and executable hashes, plus latency
+percentiles, process memory and allocation-request counts. The direct Flecs reference
+uses a different structural-change API, so its timings do not imply identical overhead.
+
+`kb_ecs_workload_benchmark <entities> <frames> direct-add` compares with
+`native-only direct-add` and `flecs-reference`. Each path creates the same position
+and velocity columns, integrates ten warmup frames plus the requested frames, adds
+an Active component and checks all resulting positions and active entities. The
+reference calls the Flecs C bulk/query/set APIs directly. Structural timings include
+the chosen API's overhead; they do not imply identical implementation algorithms.
+
+Output separates C++ allocation requests, Flecs C allocator requests, native storage
+capacity accounting, and measured process private/working-set bytes on Windows.
+Process memory includes runtime and benchmark bookkeeping; it is not an ECS-only
+heap total. The automated workflow runs each path three times at 20k, 100k and 200k
+entities and checks identical complete-result checksums before comparing timings.
+
+`kb_cli run --project <project> --report ecs` includes `storage_path`, identifying
+native storage and its mirroring flags. Backend observers see current values for
+backend-bound entities, including writes made before registration. Native-only
+entities deliberately publish no backend events; use the default mirrored path
+for providers whose lifecycle depends on these events. External resources remain
+in an owning provider, while hot components carry trivially copyable handles with
+explicit retention and generation validation.
+
+
+## Worker limits and bounded profiler history
+
+`SystemSchedulerParallelismMode::SystemsAndChunks` is an opt-in execution mode
+for ECS systems. Dependencies release graph successors as they complete; sync
+points execute on the scheduler's owner thread. A system can synchronously submit
+jobs, batches or chunks to its execution pool, whose workers help while waiting.
+Nested graph dispatch and asynchronous submissions to that same pool are rejected.
+Graph dispatch from a regular worker callback on the same pool is also rejected.
+Configure the scene scheduler between updates using `SceneRuntime::SetEcsParallelismMode`.
+For headless runs, `kb_cli run --ecs-parallelism combined` selects the same mode;
+`systems` and `chunks` select the existing alternatives. Without the option the
+scene's configured mode is preserved.
+
+The `job_graph` trace mode identifies a graph that actually ran. In this mode the
+worker-pool dispatch counters describe the worker pump dispatch, not the number of
+graph nodes or chunk jobs. Pump active time includes time spent waiting for work;
+system event durations include time spent waiting for nested work and can include
+helping another system's chunks. These durations are elapsed time, not measured
+thread CPU time or a reliable measure of worker utilization.
+
+## Chunk delta application
+
+`World::ApplyChunkedDeltaSnapshot` prepares and validates the complete input before
+deleting entities, writing columns or changing archetypes. Invalid payload sizes,
+duplicate identities or component columns, stale live generations, overlapping
+deletion/update sets and inconsistent final entity counts return `false` without
+applying an earlier part of the delta. A destroyed identity may be replaced by a
+new generation at the same index when that deletion is included in the delta.
+Structural changes remain forbidden during query iteration.
+
+This rejection guarantee covers malformed input. Allocation failures and user
+observer exceptions during application are not a rollback transaction. Chunk
+snapshots contain native component columns; they do not capture physics solver
+state, Lua execution state, entity names or backend relations. They must not be
+used alone as a complete runtime continuation snapshot.
+
+`kb_cli run --project <project> --workers 4 --report ecs --ecs-history 32`
+sets a per-pool scene worker limit and retains only the latest 32 frame snapshots.
+The worker option accepts 1 through 64; omitting it preserves automatic sizing.
+It configures ECS scheduling, transform evaluation, animator evaluation and opt-in
+parallel scene systems. It does not configure independent graphics, audio, physics
+provider or asset-loader threads.
+
+History is opt-in, requires the ECS report, and accepts 1 through 256 frames. Older
+samples are removed before new ones are stored, independently of session duration.
+Every numeric telemetry field has a `metric_descriptors` entry with its unit and
+`measured`, `estimated` or `derived` basis. Memory counters describe native storage
+capacity, not whole-process residency; query traffic is an estimate, not a hardware
+bandwidth counter. Query CPU time sums work and is not frame wall time.
+
+The editor's Options > Profiler panel displays the current scene's ECS entity/chunk
+counts, storage memory, allocations, query cache and query timings. It uses the same
+world telemetry as the CLI and keeps no unbounded history.
+
+When the ECS profiler is enabled, the scene runtime records ordered elapsed intervals
+for streaming, transform synchronization, scene update, fixed-step phases and ECS
+execution. `kb_cli run --report ecs` exports these intervals from the last update;
+the fixed simulation phase includes physics systems. Headless CLI execution does not
+render. `kb_game --profile-file=<path>` records scene update, fixed simulation, ECS and
+render timings for each frame. Its `processing_wall_ms` is elapsed processing time,
+not thread CPU time. The accompanying `.trace.jsonl` file contains one versioned
+record per frame, including scene phases, individual scene-system callbacks, render
+submission and ECS system intervals with dependencies. Scene-system type labels are
+compiler-specific; worker null denotes the owner thread, and dispatch groups describe
+the order of scene scheduler groups. Queue wait is measured from group submission to
+the worker callback starting; it is not CPU time. The scheduler origin ties its relative system times to the same
+steady-clock frame timeline as scene and render stages.
+The editor's headless frame profile uses the same elapsed-time label.
+Frame trace rendering metrics separate scene synchronization, draw count and delayed
+GPU timing. `--profile-scene-overdraw` opts in to an additional GPU replay of opaque,
+GBuffer and transparent mesh and particle draws with depth testing set to always and
+target writes disabled. The delayed sample count is normalized by target pixels; it
+excludes UI, sky, shadows and post-processing. A result is unavailable if queries cannot cover the
+entire measured set or if multiple viewports cannot be distinguished. The queries add
+draw and shader overhead and should not be enabled for ordinary frame-time benchmarks. None of these individual
+metrics alone implies an overall frame-time improvement.

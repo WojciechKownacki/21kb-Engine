@@ -3,6 +3,7 @@
 #include "engine/script/ScriptApiDeclarationParser.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/AssetPayloadMemory.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -574,10 +575,21 @@ kb::assets::AssetLoadResult LuaScriptAssetLoader::Load(const kb::assets::AssetLo
 
     LuaScriptAsset asset{ .source = std::move(source) };
     ParseLuaAssetMetadata(asset);
-    return kb::assets::AssetLoadResult{
-        .asset = std::make_shared<LuaScriptAsset>(std::move(asset)),
-        .error = {},
-    };
+    auto payload = std::make_shared<LuaScriptAsset>(std::move(asset));
+    using kb::assets::StringBufferBytes;
+    std::uint64_t bytes = sizeof(LuaScriptAsset) + StringBufferBytes(payload->source)
+        + payload->imports.capacity() * sizeof(std::string)
+        + payload->exposedVariables.capacity() * sizeof(ScriptApiPin)
+        + payload->exposedVariableDefaults.capacity() * sizeof(ScriptValue)
+        + payload->exposedVariableHasDefault.capacity() * sizeof(std::uint8_t);
+    for (const auto& import : payload->imports) bytes += StringBufferBytes(import);
+    for (const auto& pin : payload->exposedVariables) bytes += StringBufferBytes(pin.name);
+    for (const auto& value : payload->exposedVariableDefaults) {
+        if (value.Type() == ScriptValueType::String || value.Type() == ScriptValueType::Name || value.Type() == ScriptValueType::Guid) {
+            bytes += StringBufferBytes(value.AsString());
+        }
+    }
+    return kb::assets::AssetLoadResult{ .asset = std::move(payload), .error = {}, .residentBytes = bytes };
 }
 
 std::string_view NativeBehaviourDescriptorAssetLoader::Type() const noexcept {

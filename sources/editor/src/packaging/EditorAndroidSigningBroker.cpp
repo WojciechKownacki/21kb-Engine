@@ -41,6 +41,7 @@ struct SigningRequest {
     std::string keyAlias;
     std::filesystem::path inputApk;
     std::filesystem::path outputApk;
+    bool bundle = false;
 };
 
 [[nodiscard]] const std::string* StringMember(const kb::core::JsonValue& object, std::string_view name) noexcept {
@@ -59,19 +60,23 @@ struct SigningRequest {
         return std::nullopt;
     }
     const kb::core::JsonValue* schema = json.Find("schema");
+    const bool bundle = schema != nullptr && schema->GetKind() == kb::core::JsonValue::Kind::Number && schema->AsNumber() == 2.0;
+    const std::string* format = StringMember(json, "format");
     const std::string* session = StringMember(json, "session");
     const std::string* java = StringMember(json, "java");
     const std::string* jar = StringMember(json, "apksignerJar");
     const std::string* keystore = StringMember(json, "keystore");
     const std::string* alias = StringMember(json, "keyAlias");
-    const std::string* input = StringMember(json, "inputApk");
-    const std::string* output = StringMember(json, "outputApk");
-    if (schema == nullptr || schema->GetKind() != kb::core::JsonValue::Kind::Number || schema->AsNumber() != 1.0 ||
-        session == nullptr || java == nullptr || jar == nullptr || keystore == nullptr || alias == nullptr || input == nullptr || output == nullptr) {
+    const std::string* input = StringMember(json, bundle ? "inputPackage" : "inputApk");
+    const std::string* output = StringMember(json, bundle ? "outputPackage" : "outputApk");
+    if (schema == nullptr || schema->GetKind() != kb::core::JsonValue::Kind::Number ||
+        (!bundle && schema->AsNumber() != 1.0) ||
+        (bundle ? (format == nullptr || *format != "aab") : jar == nullptr) ||
+        session == nullptr || java == nullptr || keystore == nullptr || alias == nullptr || input == nullptr || output == nullptr) {
         error = "Signing request schema is invalid.";
         return std::nullopt;
     }
-    return SigningRequest{ *session, *java, *jar, *keystore, *alias, *input, *output };
+    return SigningRequest{ *session, *java, jar == nullptr ? "" : *jar, *keystore, *alias, *input, *output, bundle };
 }
 
 [[nodiscard]] bool JarAllowed(const std::filesystem::path& jar) {
@@ -141,6 +146,45 @@ struct SigningRequest {
 using signing_process::Guard;
 using signing_process::ScopedHandle;
 
+[[nodiscard]] bool SignBundle(const SigningRequest& request, const std::filesystem::path& java,
+    const std::filesystem::path& directory, std::string& storePassword, std::string& keyPassword,
+    void* processJob, std::string& output) {
+    const auto certificate = directory / "android-bundle-certificate.der";
+    const auto trustStore = directory / "android-bundle-public.jks";
+    if (std::filesystem::exists(certificate) || std::filesystem::exists(trustStore)) return false;
+    const std::wstring alias{request.keyAlias.begin(), request.keyAlias.end()};
+    const auto run = [&](std::vector<std::wstring> arguments, std::vector<std::string*> secrets) {
+        arguments.insert(arguments.begin(), L"-Dfile.encoding=UTF-8");
+        auto result = signing_process::RunSigner(java, arguments, directory, std::move(secrets), processJob,
+            std::chrono::seconds{180}, kMaximumOutputBytes);
+        output += result.output;
+        return result.started && result.secretsWritten && !result.timedOut && result.exitCode == 0U;
+    };
+    // Export only the public certificate. RunSigner clears each password copy
+    // immediately after transferring it through the child's standard input.
+    std::string exportPassword = storePassword;
+    if (!run({L"--module", L"java.base/sun.security.tools.keytool.Main", L"-exportcert",
+        L"-keystore", request.keystore.wstring(), L"-alias", alias, L"-file", certificate.wstring()},
+        {&exportPassword})) return false;
+    ScopedHandle certificateGuard = Guard(certificate, false, GENERIC_READ, FILE_SHARE_READ);
+    if (!certificateGuard) return false;
+    // This store holds a public certificate, never a private key or secret.
+    if (!run({L"--module", L"java.base/sun.security.tools.keytool.Main", L"-importcert", L"-noprompt",
+        L"-storetype", L"JKS", L"-keystore", trustStore.wstring(), L"-storepass", L"public-only",
+        L"-alias", alias, L"-file", certificate.wstring()}, {})) return false;
+    ScopedHandle trustGuard = Guard(trustStore, false, GENERIC_READ, FILE_SHARE_READ);
+    if (!trustGuard) return false;
+    if (!run({L"--module", L"jdk.jartool/sun.security.tools.jarsigner.Main", L"-keystore",
+        request.keystore.wstring(), L"-signedjar", request.outputApk.wstring(), request.inputApk.wstring(), alias},
+        {&storePassword, &keyPassword})) return false;
+    ScopedHandle outputGuard = Guard(request.outputApk, false, GENERIC_READ, FILE_SHARE_READ);
+    if (!outputGuard) return false;
+    // Trust exactly the selected key's certificate and require every payload
+    // entry to be signed. Do not waive self-signed or unsigned-entry exit codes.
+    return run({L"--module", L"jdk.jartool/sun.security.tools.jarsigner.Main", L"-verify", L"-strict",
+        L"-keystore", trustStore.wstring(), request.outputApk.wstring(), alias}, {});
+}
+
 [[nodiscard]] bool WriteResponse(const std::filesystem::path& path, std::string_view session) {
     kb::core::JsonValue response = kb::core::JsonValue::MakeObject();
     response.Set("schema", kb::core::JsonValue::MakeNumber(1.0));
@@ -205,14 +249,15 @@ EditorAndroidSigningResult EditorAndroidSigningBroker::Execute(
     if (!request || !ValidSession(request->session) ||
         !package_input::IsValidAndroidKeyAlias(request->keyAlias) || request->keyAlias != expectedAlias ||
         !requestFile.is_absolute() || !responseFile.is_absolute() || !request->java.is_absolute() ||
-        !request->apksignerJar.is_absolute() || !request->keystore.is_absolute() ||
+        (!request->bundle && !request->apksignerJar.is_absolute()) || !request->keystore.is_absolute() ||
         !request->inputApk.is_absolute() || !request->outputApk.is_absolute() ||
         jobsRoot.empty() || !DirectChildOf(jobsRoot, jobRoot) ||
         !DirectChildOf(jobRoot, requestFile) ||
         !DirectChildOf(jobRoot, responseFile) || !DirectChildOf(jobRoot, request->inputApk) ||
         !DirectChildOf(jobRoot, request->outputApk) || SamePath(request->inputApk, request->outputApk) ||
         outputExists || responseExists || !std::filesystem::is_regular_file(request->inputApk) ||
-        !IsTrustedJavaExecutable(request->java) || !JarAllowed(request->apksignerJar) ||
+        !IsTrustedJavaExecutable(request->java) || (!request->bundle && !JarAllowed(request->apksignerJar)) ||
+        (request->bundle && (request->inputApk.extension() != ".aab" || request->outputApk.extension() != ".aab")) ||
         !SamePath(request->keystore, expectedKeystore) || !std::filesystem::is_regular_file(expectedKeystore) ||
         storePassword.empty() || keyPassword.empty()) {
         clearSecrets();
@@ -223,11 +268,20 @@ EditorAndroidSigningResult EditorAndroidSigningBroker::Execute(
     ScopedHandle rootGuard = Guard(jobRoot, true, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE);
     ScopedHandle inputGuard = Guard(request->inputApk, false, GENERIC_READ, FILE_SHARE_READ);
     ScopedHandle javaGuard = Guard(trustedJava, false, GENERIC_READ, FILE_SHARE_READ);
-    ScopedHandle jarGuard = Guard(request->apksignerJar, false, GENERIC_READ, FILE_SHARE_READ);
+    ScopedHandle jarGuard = request->bundle ? ScopedHandle{} : Guard(request->apksignerJar, false, GENERIC_READ, FILE_SHARE_READ);
     ScopedHandle keystoreGuard = Guard(expectedKeystore, false, GENERIC_READ, FILE_SHARE_READ);
-    if (!jobsGuard || !rootGuard || !inputGuard || !javaGuard || !jarGuard || !keystoreGuard) {
+    if (!jobsGuard || !rootGuard || !inputGuard || !javaGuard || (!request->bundle && !jarGuard) || !keystoreGuard) {
         clearSecrets();
         result.message = "Android signing inputs could not be guarded against path replacement.";
+        return result;
+    }
+
+    if (request->bundle) {
+        result.succeeded = SignBundle(*request, trustedJava, jobRoot, storePassword, keyPassword,
+            processJob, result.toolOutput) && WriteResponse(responseFile, request->session);
+        clearSecrets();
+        result.message = result.succeeded ? "Android app bundle signed and verified." : "Android app bundle signing or verification failed.";
+        if (!result.succeeded) std::filesystem::remove(request->outputApk, filesystemError);
         return result;
     }
 

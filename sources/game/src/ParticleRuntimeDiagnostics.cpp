@@ -82,6 +82,9 @@ ParticleRuntimeDiagnosticResult CaptureParticleRuntimeDiagnostics(
     report.Set("observed_max_particle_draws", JsonValue::MakeNumber(observedParticleDraws));
     report.Set("requested_gpu_buffer_bytes", Integer(renderer.GpuEmitterAllocatedBytes()));
     report.Set("total_gpu_sample_limit", JsonValue::MakeNumber(kb::render::kParticleGpuReadbackMaxInstances));
+    report.Set("configured_cpu_particle_limit", JsonValue::MakeNumber(kb::scene::kParticleEffectMaxCpuParticlesPerScene));
+    report.Set("configured_limit_basis", JsonValue::MakeString("capacity ceiling, not measured throughput"));
+    report.Set("cpu_rejection_scope", JsonValue::MakeString("last fixed step; GPU update rejections are separate"));
     const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(scene);
     const auto draws = renderer.GpuParticleDraws(scene);
     bool allGpu = snapshot && !snapshot->Emitters().empty();
@@ -102,6 +105,10 @@ ParticleRuntimeDiagnosticResult CaptureParticleRuntimeDiagnostics(
             row.Set("path", JsonValue::MakeString(gpu ? "gpu" : "cpu"));
             row.Set("reason", JsonValue::MakeString(std::string{kb::particles::ParticleGpuFallbackReasonName(emitter.gpuFallbackReason)}));
             row.Set("cpu_render_record_count", JsonValue::MakeNumber(emitter.particleCount));
+            row.Set("rejected_by_capacity", JsonValue::MakeNumber(emitter.rejectedByCapacity));
+            row.Set("rejected_by_spawn_budget", JsonValue::MakeNumber(emitter.rejectedBySpawnBudget));
+            row.Set("rejected_by_event_budget", JsonValue::MakeNumber(emitter.rejectedByEventBudget));
+            row.Set("dropped_particle_count", JsonValue::MakeNumber(emitter.droppedParticleCount));
             auto records = JsonValue::MakeArray();
             auto atlasFrames = JsonValue::MakeArray();
             const auto particles = snapshot->Particles();

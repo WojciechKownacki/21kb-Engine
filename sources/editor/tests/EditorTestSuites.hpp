@@ -1,5 +1,9 @@
 #pragma once
 
+namespace kb::editor::tests { void RunEditorTimelineTests(); }
+namespace kb::editor::tests { void RunEditorBlendSpace2DTests(); }
+namespace kb::editor::tests { void RunEditorGameplayGraphTests(); }
+
 namespace kb::editor::tests {
 void RunEditorAudioMixerRuntimeTests();
 

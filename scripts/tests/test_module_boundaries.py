@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = ROOT / "sources"
-INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
+INCLUDE = re.compile(r'^\s*#\s*include\s+["<]([^">]+)[">]', re.MULTILINE)
 SUFFIXES = {".cpp", ".hpp", ".h", ".inl"}
 
 
@@ -60,6 +60,10 @@ class ModuleBoundaryTests(unittest.TestCase):
     def test_the_checker_finds_a_violation(self) -> None:
         # Guards the guard: an include that is forbidden must be reported.
         self.assertTrue(_violations(SOURCES / "renderer", ("kb/render",)))
+
+    def test_angle_brackets_do_not_bypass_module_boundaries(self) -> None:
+        self.assertEqual(INCLUDE.findall('#include <kb/editor/Panel.hpp>\n#include "kb/render/Renderer.hpp"'),
+                         ['kb/editor/Panel.hpp', 'kb/render/Renderer.hpp'])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 #include "kb/render/Renderer.hpp"
+#include "kb/render/effects/RenderEffectHost.hpp"
 
 #include "kb/render/BgfxContext.hpp"
 #include "kb/render/RendererCapabilityReport.hpp"
@@ -378,6 +379,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
 }
 
 void Renderer::Shutdown() {
+    renderEffects_.reset();
     if (context_ == nullptr && sceneRenderer_ == nullptr && scenePostProcessRenderer_ == nullptr &&
         finalCompositePass_ == nullptr && renderSceneSynchronizer_ == nullptr) {
         frameActive_ = false;
@@ -467,6 +469,7 @@ bool Renderer::BeginFrame() {
         skinningSynchronizedSceneIds_.clear();
         frameState_.Begin(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
         if (sceneRenderer_ != nullptr) {
+            sceneRenderer_->BeginMeshCoverageFrame(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
             static_cast<void>(sceneRenderer_->BeginFrameMatrixRows(
                 static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
                 static_cast<std::uint64_t>(lastCompletedFrame_)));
@@ -483,6 +486,14 @@ void Renderer::EndFrame() {
         return;
     }
 
+    if (renderEffects_ != nullptr) {
+        const auto resolved = defaultSceneTarget_.ResolvedColorTexture();
+        const auto source = bgfx::isValid(resolved) ? resolved : defaultSceneTarget_.ColorTexture();
+        if (!renderEffects_->Run(ViewId::RenderEffectStart, BackbufferWidth(), BackbufferHeight(), lastCompletedFrame_, frameDeltaSeconds_,
+            UINT16_MAX, source.idx)) {
+            WriteRendererDebugLog("render_effect", renderEffects_->LastError());
+        }
+    }
     lastCompletedFrame_ = context_->EndFrame();
     if (deferredLightingPass_ != nullptr) deferredLightingPass_->EndFrame();
     skyReflection_.EndFrame();
@@ -491,6 +502,7 @@ void Renderer::EndFrame() {
             static_cast<std::uint32_t>(lastCompletedFrame_));
     }
     if (sceneRenderer_ != nullptr) {
+        sceneRenderer_->EndMeshCoverageFrame();
         sceneRenderer_->TickFrame();
         sceneRenderer_->AdvanceFrameTime(frameDeltaSeconds_);
     }
@@ -1130,6 +1142,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                defaultPostProcessSettings_.globalIllumination != ScenePostProcessSettings::GlobalIlluminationMethod::Off) {
         RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, defaultPostProcessSettings_);
     }
+    RendererSceneLightingConfigResolver::ResolveFogProfile(effectiveLightingConfig, bgfx::getRendererType());
+    effectiveLightingConfig.fogBaseHeight -= static_cast<float>(renderScene.RenderOrigin().y);
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
@@ -1445,6 +1459,15 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
         const std::uint64_t cameraEntityId = cameraProxy != nullptr ? cameraProxy->entityId : 0U;
         const bool orthographic = overlayCamera != nullptr && overlayCamera->projection[15] != 0.0F;
+        const std::uint32_t screenSpaceEffects =
+            (effectiveLightingConfig.screenSpaceReflectionsEnabled ? 1U : 0U) |
+            (effectiveLightingConfig.ambientOcclusionEnabled ? 2U : 0U) |
+            (UsesGatheredGi(effectiveLightingConfig)
+                ? (static_cast<std::uint32_t>(effectiveLightingConfig.globalIllumination) + 1U) << 2U : 0U);
+        giHistories_[desc.target.viewport.viewportIndex].BeginFrame({
+            .scene = scene.Id(), .viewport = desc.target.viewport.id.value, .camera = cameraEntityId,
+            .effects = screenSpaceEffects, .cameraOverride = desc.cameraOverride.has_value(), .orthographic = orthographic},
+            frameIndex, desc.resetTemporalHistory);
         if (desc.resetTemporalHistory || history.sceneId != scene.Id() ||
             history.cameraEntityId != cameraEntityId || history.cameraOverride != desc.cameraOverride.has_value() ||
             history.orthographic != orthographic || !history.taaEnabled || !temporalAntiAliasingEnabled ||
@@ -1700,6 +1723,13 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             const std::array<float, 4> focus = SceneLightingPacker::CameraPosition(sceneCamera);
             giVoxelGrid_.Update(renderScene, sceneRenderer_->Resources(), sceneRenderer_->ResourceMap(),
                 { focus[0], focus[1], focus[2] }, effectiveLightingConfig.giVoxelSize);
+            lastSceneSubmitStats_.giGeometryMeshCount += giVoxelGrid_.GeometryMeshCount();
+            lastSceneSubmitStats_.giBoundingBoxMeshCount += giVoxelGrid_.BoundingBoxMeshCount();
+            if (giVoxelGrid_.BoundingBoxMeshCount() != 0U) {
+                lastSceneDiagnostics_.events.push_back({.severity = SceneRenderDiagnosticSeverity::Warning,
+                    .kind = SceneRenderDiagnosticKind::GiBoundingBoxFallback,
+                    .instanceCount = giVoxelGrid_.BoundingBoxMeshCount()});
+            }
         }
         static_cast<void>(giResolvePass_.Submit(SceneGiResolvePassDesc{
             .viewId = viewportPlan.viewIds.giResolve,
@@ -1989,6 +2019,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             const SceneDisplayOutputTransform uiOutputTransform = RendererFinalCompositeSubmitter::DisplayTransform(postProcessOutput);
             if (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
                     .sceneId = scene.Id(),
+                    .scene = &const_cast<kb::scene::Scene&>(scene),
                     .viewportIndex = desc.target.viewport.viewportIndex,
                     .frame = &screenUIFrame,
                     .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),
@@ -2032,6 +2063,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     if (!screenUIFrame.elements.empty() &&
         (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
              .sceneId = scene.Id(),
+             .scene = &const_cast<kb::scene::Scene&>(scene),
              .viewportIndex = desc.target.viewport.viewportIndex,
              .frame = &screenUIFrame,
              .assets = &const_cast<kb::scene::Scene&>(scene).Assets().Manager(),
@@ -2163,6 +2195,14 @@ double Renderer::LastSceneSynchronizationMilliseconds() const noexcept {
     return lastSceneSynchronizationMilliseconds_;
 }
 
+void Renderer::SetMeshCoverageEnabled(bool enabled) noexcept {
+    if (sceneRenderer_) sceneRenderer_->SetMeshCoverageEnabled(enabled);
+}
+
+SceneMeshCoverageMetric Renderer::LastMeshCoverage() const noexcept {
+    return sceneRenderer_ ? sceneRenderer_->LastMeshCoverage() : SceneMeshCoverageMetric{};
+}
+
 double Renderer::LastSceneVisibilityBuildMilliseconds() const noexcept {
     return lastSceneVisibilityBuildMilliseconds_;
 }
@@ -2271,6 +2311,11 @@ void Renderer::SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingC
 
 SceneRenderLightingConfig Renderer::DefaultSceneLightingConfig() const noexcept {
     return defaultSceneLightingConfig_;
+}
+
+RenderEffectHost& Renderer::RenderEffects() {
+    if (!renderEffects_) renderEffects_ = std::make_unique<RenderEffectHost>();
+    return *renderEffects_;
 }
 
 void Renderer::SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept {
@@ -2478,6 +2523,10 @@ bgfx::TextureHandle Renderer::TransparentDepthCopy(bgfx::ViewId viewId, const Re
 }
 
 void Renderer::PrepareParticleScene(kb::scene::Scene& scene) noexcept {
+    if (particleRenderSynchronizer_ != nullptr && sceneRenderer_ != nullptr) {
+        particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
+        static_cast<void>(particleRenderSynchronizer_->Prepare(scene));
+    }
     if (sceneRenderer_ != nullptr) sceneRenderer_->PrepareGpuParticleConsumer(scene);
 }
 
@@ -2495,6 +2544,8 @@ std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> Renderer::Rejected
 }
 
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
+    for (SceneGiHistory& history : giHistories_) history.ReleaseScene(scene.Id());
+    giVoxelGrid_.ResetCache();
     kb::scene::Scene& mutableScene = const_cast<kb::scene::Scene&>(scene);
     if (auxFrameRenderer_ != nullptr) {
         auxFrameRenderer_->ReleaseScene(scene.Id(), sceneRenderer_.get());
@@ -2513,6 +2564,8 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
 }
 
 void Renderer::ReleaseAllScenes() noexcept {
+    for (SceneGiHistory& history : giHistories_) history.Reset();
+    giVoxelGrid_.ResetCache();
     if (auxFrameRenderer_ != nullptr) {
         auxFrameRenderer_->Shutdown(sceneRenderer_.get());
     }

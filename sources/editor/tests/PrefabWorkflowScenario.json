@@ -1,0 +1,433 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "PrefabWorkflow",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "Source",
+      "name": "Source"
+    },
+    {
+      "op": "add_component",
+      "entity": "Source",
+      "component": "Light"
+    },
+    {
+      "op": "component_inspector_field",
+      "entity": "Source",
+      "component": "Light",
+      "property": "intensity",
+      "text": "2"
+    },
+    {
+      "op": "create_prefab",
+      "entity": "Source",
+      "path": "Assets/Prefabs/Shared.kbprefab"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "Source"
+    },
+    {
+      "op": "create_entity",
+      "id": "FirstHolder",
+      "name": "FirstHolder"
+    },
+    {
+      "op": "instantiate_prefab",
+      "id": "First",
+      "name": "Source",
+      "path": "Assets/Prefabs/Shared.kbprefab",
+      "virtual_path": "/Game/Prefabs/Shared.kbprefab",
+      "parent": "FirstHolder"
+    },
+    {
+      "op": "create_entity",
+      "id": "SecondHolder",
+      "name": "SecondHolder"
+    },
+    {
+      "op": "instantiate_prefab",
+      "id": "Second",
+      "name": "Source",
+      "path": "Assets/Prefabs/Shared.kbprefab",
+      "virtual_path": "/Game/Prefabs/Shared.kbprefab",
+      "parent": "SecondHolder"
+    },
+    {
+      "op": "add_component",
+      "entity": "First",
+      "component": "AudioSource"
+    },
+    {
+      "op": "prefab_apply",
+      "entity": "First"
+    },
+    {
+      "op": "assert_component",
+      "entity": "Second",
+      "component": "AudioSource"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_component",
+      "entity": "Second",
+      "component": "AudioSource",
+      "exists": false
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "remove_component",
+      "entity": "First",
+      "component": "AudioSource"
+    },
+    {
+      "op": "prefab_apply",
+      "entity": "First"
+    },
+    {
+      "op": "assert_component",
+      "entity": "Second",
+      "component": "AudioSource",
+      "exists": false
+    },
+    {
+      "op": "component_inspector_field",
+      "entity": "Second",
+      "component": "Light",
+      "property": "intensity",
+      "text": "8"
+    },
+    {
+      "op": "component_inspector_field",
+      "entity": "First",
+      "component": "Light",
+      "property": "intensity",
+      "text": "4"
+    },
+    {
+      "op": "prefab_apply",
+      "entity": "First"
+    },
+    {
+      "op": "assert_property",
+      "entity": "Second",
+      "component": "Light",
+      "property": "intensity",
+      "value": 8
+    },
+    {
+      "op": "prefab_revert",
+      "entity": "Second"
+    },
+    {
+      "op": "assert_property",
+      "entity": "Second",
+      "component": "Light",
+      "property": "intensity",
+      "value": 4
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "Second",
+      "component": "Light",
+      "property": "intensity",
+      "value": 8
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "Second",
+      "component": "Light",
+      "property": "intensity",
+      "value": 4
+    },
+    {
+      "op": "prefab_open",
+      "path": "Assets/Prefabs/Shared.kbprefab",
+      "id": "Edit"
+    },
+    {
+      "op": "component_inspector_field",
+      "entity": "Edit",
+      "component": "Light",
+      "property": "intensity",
+      "text": "6"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "Edit",
+      "component": "Light",
+      "property": "intensity",
+      "value": 4
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "prefab_save"
+    },
+    {
+      "op": "prefab_close"
+    },
+    {
+      "op": "assert_property",
+      "entity": "First",
+      "component": "Light",
+      "property": "intensity",
+      "value": 6
+    },
+    {
+      "op": "assert_property",
+      "entity": "Second",
+      "component": "Light",
+      "property": "intensity",
+      "value": 6
+    },
+    {
+      "op": "create_entity",
+      "id": "Outer",
+      "name": "Outer"
+    },
+    {
+      "op": "instantiate_prefab",
+      "id": "Nested",
+      "name": "Nested",
+      "parent": "Outer",
+      "path": "Assets/Prefabs/Shared.kbprefab",
+      "virtual_path": "/Game/Prefabs/Shared.kbprefab"
+    },
+    {
+      "op": "create_prefab",
+      "entity": "Outer",
+      "path": "Assets/Prefabs/Outer.kbprefab"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "Outer"
+    },
+    {
+      "op": "prefab_open",
+      "path": "Assets/Prefabs/Outer.kbprefab",
+      "id": "OuterEdit"
+    },
+    {
+      "op": "bind_entity",
+      "id": "NestedEdit",
+      "name": "Nested"
+    },
+    {
+      "op": "assert_prefab_link",
+      "entity": "NestedEdit"
+    },
+    {
+      "op": "component_inspector_field",
+      "entity": "NestedEdit",
+      "component": "Light",
+      "property": "intensity",
+      "text": "9"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "NestedEdit",
+      "component": "Light",
+      "property": "intensity",
+      "value": 6
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "prefab_save"
+    },
+    {
+      "op": "prefab_close"
+    },
+    {
+      "op": "instantiate_prefab",
+      "id": "OuterInstance",
+      "name": "OuterInstance",
+      "path": "Assets/Prefabs/Outer.kbprefab",
+      "virtual_path": "/Game/Prefabs/Outer.kbprefab"
+    },
+    {
+      "op": "bind_entity",
+      "id": "NestedFinal",
+      "name": "Nested"
+    },
+    {
+      "op": "assert_property",
+      "entity": "NestedFinal",
+      "component": "Light",
+      "property": "intensity",
+      "value": 9
+    },
+    {
+      "op": "assert_property",
+      "entity": "First",
+      "component": "Light",
+      "property": "intensity",
+      "value": 6
+    },
+    {
+      "op": "assert_prefab_link",
+      "entity": "NestedFinal"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Relocated/.keep",
+      "content": ""
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "move_asset",
+      "asset": "/Game/Prefabs/Shared.kbprefab",
+      "destination": "/Game/Relocated"
+    },
+    {
+      "op": "rename_asset",
+      "asset": "/Game/Relocated/Shared.kbprefab",
+      "name": "Renamed"
+    },
+    {
+      "op": "assert_prefab_link",
+      "entity": "First"
+    },
+    {
+      "op": "component_inspector_field",
+      "entity": "First",
+      "component": "Light",
+      "property": "intensity",
+      "text": "7"
+    },
+    {
+      "op": "prefab_apply",
+      "entity": "First"
+    },
+    {
+      "op": "assert_property",
+      "entity": "Second",
+      "component": "Light",
+      "property": "intensity",
+      "value": 7
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/PrefabWorkflow.21kbscene"
+    },
+    {
+      "op": "assert_property",
+      "entity": "NestedFinal",
+      "component": "Light",
+      "property": "intensity",
+      "value": 9
+    },
+    {
+      "op": "assert_property",
+      "entity": "First",
+      "component": "Light",
+      "property": "intensity",
+      "value": 7
+    },
+    {
+      "op": "assert_prefab_link",
+      "entity": "First"
+    },
+    {
+      "op": "assert_prefab_link",
+      "entity": "NestedFinal"
+    },
+    {
+      "op": "create_entity",
+      "id": "Prototype",
+      "name": "Prototype",
+      "preset": "Cube"
+    },
+    {
+      "op": "create_prefab",
+      "entity": "Prototype",
+      "path": "Assets/Prefabs/Prototype.kbprefab"
+    },
+    {
+      "op": "copy_asset",
+      "asset": "/Game/Prefabs/Prototype.kbprefab",
+      "destination": "/Game/Relocated"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "Prototype"
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "delete_asset",
+      "asset": "/Game/Prefabs/Prototype.kbprefab"
+    },
+    {
+      "op": "instantiate_prefab",
+      "id": "Copy",
+      "name": "Copy",
+      "path": "Assets/Relocated/Prototype.kbprefab",
+      "virtual_path": "/Game/Relocated/Prototype.kbprefab"
+    },
+    {
+      "op": "assert_component",
+      "entity": "Copy",
+      "component": "MeshRenderer"
+    },
+    {
+      "op": "create_entity",
+      "id": "Camera",
+      "name": "Camera",
+      "preset": "Camera"
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/PrefabWorkflow.21kbscene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/PrefabWorkflow.21kbscene"
+    },
+    {
+      "op": "assert_prefab_link",
+      "entity": "Copy"
+    },
+    {
+      "op": "assert_component",
+      "entity": "Copy",
+      "component": "MeshRenderer"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

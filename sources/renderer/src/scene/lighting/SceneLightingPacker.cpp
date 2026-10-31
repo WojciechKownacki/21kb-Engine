@@ -164,6 +164,11 @@ PackedSceneLighting SceneLightingPacker::Build(
         std::max(config.environmentSpecularIntensity, 0.0F),
         0.0F,
     };
+    stats.fogProfile = static_cast<std::uint32_t>(config.fogProfile);
+    stats.fogMode = !config.fogEnabled ? 0U : config.volumetricFogEnabled ? 2U : 1U;
+    lighting.fogParams = {std::clamp(config.fogDensity, 0.0F, 10000.0F),
+        std::clamp(config.fogHeightFalloff, 0.0F, 10000.0F), config.fogBaseHeight, config.fogEnabled ? 1.0F : 0.0F};
+    lighting.fogColor = {config.fogColor[0], config.fogColor[1], config.fogColor[2], std::clamp(config.fogAnisotropy, -0.9F, 0.9F)};
     lighting.skyReflection = config.skyReflection;
     lighting.skyReflectionParams = { bgfx::isValid(config.skyReflection) ? 1.0F : 0.0F, config.skyReflectionMaxMip, 0.0F, 0.0F };
     stats.submittedEnvironmentLightingCount = config.environmentMode == SceneRenderEnvironmentMode::Disabled ? 0U : 1U;

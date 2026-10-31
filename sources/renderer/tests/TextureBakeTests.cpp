@@ -901,6 +901,22 @@ void RunBakedTextureDimensionRuleTest() {
         refusedSink);
     Require(refused.status == TextureBakeStatus::UnalignedDimensions, "A misaligned source was not refused");
     Require(refusedStore.PublishedFileCount() == 0U, "A refused bake left an artifact in the store");
+    const auto atlas = BakeTextureBytes(odd,
+        TextureBakeSettings{RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Srgb, true},
+        DesktopTestProfile(), TextureCompressionFamily::BlockCompressedBaseline, refusedSink);
+    Require(atlas.status == TextureBakeStatus::Success && atlas.format == bgfx::TextureFormat::RGBA8,
+        "an atlas keeps unaligned dimensions in a cooked RGBA8 artifact");
+    Require(atlas.key.Digest() != refused.key.Digest(), "atlas policy has a distinct bake key");
+    RenderTextureAssetData loadedAtlas;
+    Require(kb::render::bake::ReadBakedTexture(atlas.primaryBlock, loadedAtlas) && loadedAtlas.width == 6U && loadedAtlas.height == 6U &&
+        loadedAtlas.mipCount == 1U && loadedAtlas.gpuBlocks && loadedAtlas.gpuBlocks->blocks == MakeRgba8Gradient(6U, 6U, 0xFFU),
+        "cooked atlas preserves every texel without cross-cell mip filtering");
+    Require(SelectRenderTextureUploadPath(loadedAtlas, true) == RenderTextureUploadPath::GpuBlocks,
+        "a cooked RGBA8 atlas uploads directly without regenerating mips");
+    const auto decodedAtlas = DecodeRenderTextureToRgba8(loadedAtlas);
+    Require(decodedAtlas && decodedAtlas->rgba8 == loadedAtlas.gpuBlocks->blocks, "CPU atlas readback keeps exact pixels");
+    Require(kb::render::bake::BakedTextureFormatMatchesFamily(bgfx::TextureFormat::RGBA8, "rgba8-atlas") &&
+        !kb::render::bake::BakedTextureFormatMatchesFamily(bgfx::TextureFormat::BC1, "rgba8-atlas"), "atlas qualifier is format-specific");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1296,17 +1312,19 @@ void RunBakedTextureFallbackGuardTest() {
     Require(untouched.has_value() && untouched->rgba8 == plain.rgba8 && !untouched->gpuBlocks.has_value(),
         "The RGBA8 fallback did not pass an already-decoded texture through unchanged");
 
-    // A payload that claims an uncompressed format is malformed, not a texture to salvage:
-    // bimg's decoder fills the target with a checkerboard for a format it cannot handle.
+    // Atlas RGBA8 is copied exactly; unhandled formats never enter bimg's checkerboard fallback.
     RenderTextureAssetData uncompressedPayload{};
     uncompressedPayload.width = edge;
     uncompressedPayload.height = edge;
     uncompressedPayload.gpuBlocks =
         RenderTextureGpuBlocks{ bgfx::TextureFormat::RGBA8, MakeRgba8Gradient(edge, edge, 0xFFU) };
-    Require(!DecodeRenderTextureToRgba8(uncompressedPayload).has_value(),
-        "The RGBA8 fallback accepted a payload that is not a block format");
-    Require(SelectRenderTextureUploadPath(uncompressedPayload, true) == RenderTextureUploadPath::DecodedRgba8,
-        "A payload that claims RGBA8 must not be taken as a compressed upload");
+    const auto rgbaAtlas = DecodeRenderTextureToRgba8(uncompressedPayload);
+    Require(rgbaAtlas && rgbaAtlas->rgba8 == uncompressedPayload.gpuBlocks->blocks,
+        "RGBA8 atlas readback preserves the uncompressed payload");
+    Require(SelectRenderTextureUploadPath(uncompressedPayload, true) == RenderTextureUploadPath::GpuBlocks,
+        "a supported RGBA8 atlas uploads its cooked bytes directly");
+    uncompressedPayload.gpuBlocks->format = bgfx::TextureFormat::BGRA8;
+    Require(!DecodeRenderTextureToRgba8(uncompressedPayload), "unhandled uncompressed formats are refused");
 
     // A payload too short for the level it claims.
     RenderTextureAssetData truncatedPayload{};

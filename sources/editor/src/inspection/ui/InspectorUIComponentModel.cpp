@@ -2,6 +2,9 @@
 #include "localization/EditorLocalization.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneLocalization.hpp"
+#include "engine/ui/UITheme.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -141,6 +144,7 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "opacity") return std::string{ EditorText("uiProperty.opacity", "Opacity") };
     if (name == "optionCount") return std::string{ EditorText("uiProperty.optionCount", "Option Count") };
     if (name == "overflow") return std::string{ EditorText("uiProperty.overflow", "Overflow") };
+    if (name == "fontRenderMode") return std::string{ EditorText("uiProperty.fontRenderMode", "Font Rendering") };
     if (name == "padding") return std::string{ EditorText("uiProperty.padding", "Padding") };
     if (name == "pivot.x") return std::string{ EditorText("uiProperty.pivot.x", "Pivot x") };
     if (name == "pivot.y") return std::string{ EditorText("uiProperty.pivot.y", "Pivot y") };
@@ -226,6 +230,7 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
         return component == Text ? std::vector<std::string_view>{EditorText("uiChoice.top", "Top"), EditorText("uiChoice.center", "Center"), EditorText("uiChoice.bottom", "Bottom")}
                                  : std::vector<std::string_view>{EditorText("uiChoice.top", "Top"), EditorText("uiChoice.center", "Center"), EditorText("uiChoice.bottom", "Bottom"), EditorText("uiChoice.stretch", "Stretch")};
     if (component == Text && name == "wrapMode") return {EditorText("uiChoice.noWrap", "No Wrap"), EditorText("uiChoice.word", "Word"), EditorText("uiChoice.character", "Character")};
+    if (component == Text && name == "fontRenderMode") return {EditorText("uiChoice.fontBitmap", "Bitmap"), EditorText("uiChoice.fontSdf", "Signed Distance Field")};
     if (component == Image && name == "scaleMode") return {EditorText("uiChoice.stretch", "Stretch"), EditorText("uiChoice.fitInside", "Fit Inside"), EditorText("uiChoice.fillAndCrop", "Fill and Crop"), EditorText("uiChoice.tiled", "Tiled")};
     if (component == Image && name == "fillMethod") return {EditorText("uiChoice.none", "None"), EditorText("uiChoice.horizontal", "Horizontal"), EditorText("uiChoice.vertical", "Vertical"), EditorText("uiChoice.radial360", "Radial 360")};
     if (component == Image && name == "fillOrigin") return {EditorText("uiChoice.start", "Start"), EditorText("uiChoice.end", "End")};
@@ -384,9 +389,17 @@ std::vector<kb::scene::UIComponentType> InspectorUIComponentModel::Components(
 std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
     const kb::scene::Scene& scene, kb::scene::SceneEntity entity,
     kb::scene::UIComponentType component) {
-    const kb::scene::UIComponentSet values =
+    kb::scene::UIComponentSet values =
         kb::scene::CaptureSceneUIComponents(scene.Components().UI(), entity);
     if (!kb::scene::HasUIComponent(values, component)) return {};
+    if (values.rectTransform && values.rectTransform->themeAssetId != 0U) {
+        const auto id = scene.Localization().ResolveResource(values.rectTransform->themeAssetId);
+        const auto theme = scene.Assets().Manager().Load<kb::scene::UITheme>(kb::assets::AssetId{id});
+        std::vector<kb::scene::UIThemePropertyKey> overrides;
+        if (theme.IsLoaded() && kb::scene::ParseUIThemeOverrides(kb::scene::UIRectThemeOverrides(*values.rectTransform), overrides))
+            static_cast<void>(kb::scene::ResolveUITheme(*theme, kb::scene::UIRectThemeVariant(*values.rectTransform),
+                                                       overrides, values, values));
+    }
 
     std::vector<InspectorUIPropertyRow> output;
     for (const kb::scene::UIComponentPropertyDescriptor& property :

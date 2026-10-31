@@ -29,7 +29,7 @@ using kb::assets::AssetMetadata;
 using kb::scene::SceneEntity;
 using kb::scene::Sprite2DComponent;
 
-constexpr float kSortingOrderLift = 0.01F;
+constexpr float kSortingOrderLift = kb::render::RenderMap2DMeshBuilder::kSortingOrderLift;
 
 [[nodiscard]] std::uint32_t Channel(float value) noexcept {
     return static_cast<std::uint32_t>(std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));

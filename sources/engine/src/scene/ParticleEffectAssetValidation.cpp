@@ -425,6 +425,9 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
         if (!EnumInRange(emitter.output.alignment, ParticleAlignment::Local))
             Add(result, ParticleEffectDiagnosticCode::InvalidEnum, base + ".output.alignment", "alignment is invalid",
                 emitter.emitterId);
+        ValidateReference(emitter.customProcess, base + ".customProcess", result, emitter.emitterId);
+        if (!emitter.customProcess.Empty() && (asset.backendPolicy != ParticleBackendPolicy::GpuVisualRequired || emitter.output.type != ParticleOutputType::Billboard))
+            Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".customProcess", "custom particle process v1 requires GpuVisualRequired and Billboard output", emitter.emitterId);
         ValidateReference(emitter.output.material, base + ".output.material", result, emitter.emitterId);
         ValidateReference(emitter.output.mesh, base + ".output.mesh", result, emitter.emitterId);
         ValidateReference(emitter.output.textureAtlas, base + ".output.textureAtlas", result, emitter.emitterId);

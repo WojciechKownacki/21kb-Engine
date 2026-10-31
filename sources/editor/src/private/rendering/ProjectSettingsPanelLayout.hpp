@@ -16,6 +16,7 @@ namespace kb::editor {
 // without touching any GDI device.
 struct ProjectSettingsPanelLayoutRects {
     RECT header{};         // Title bar (full width).
+    RECT searchField{};    // Search box at the top of the sidebar.
     RECT sidebar{};        // Left category column.
     RECT divider{};        // 1px line between sidebar and content.
     RECT content{};        // Right content pane.
@@ -65,8 +66,16 @@ public:
 
     [[nodiscard]] static ProjectSettingsPanelLayoutRects Resolve(const RECT& content) noexcept;
 
+    // The sidebar groups its categories under captions: Project from the first category,
+    // Editor from kEditorGroupStart, Plugins from kPluginsGroupStart.
+    static constexpr int kEditorGroupStart = 4;
+    static constexpr int kPluginsGroupStart = 6;
     // A category row in the left sidebar (index 0 is the first category).
     [[nodiscard]] static RECT CategoryRow(const RECT& sidebar, int index) noexcept;
+    // The caption above group 0 (Project), 1 (Editor) or 2 (Plugins).
+    [[nodiscard]] static RECT GroupCaption(const RECT& sidebar, int group) noexcept;
+    // The one-line description under a setting's label, across the page.
+    [[nodiscard]] static RECT DescriptionRect(const ProjectSettingsPanelLayoutRects& rects, const RECT& label) noexcept;
 
     // The visible Mapping Context selector box, inset within its row cell.
     [[nodiscard]] static RECT MappingFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept;

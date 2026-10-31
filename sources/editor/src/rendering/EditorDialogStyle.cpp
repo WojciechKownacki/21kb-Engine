@@ -274,7 +274,8 @@ void EditorDialogStyle::PaintMenuRow(
     HeroIconKind icon,
     bool hovered,
     bool enabled,
-    bool showIcon) {
+    bool showIcon,
+    std::string_view shortcut) {
     GdiDrawing::FillRectColor(dc, bounds, Color(hovered ? theme.toolbarButton : theme.panel));
     int textLeft = bounds.left + 9;
     if (showIcon) {
@@ -283,9 +284,17 @@ void EditorDialogStyle::PaintMenuRow(
         HeroIconPainter::Draw(dc, iconRect, icon, Color(enabled ? theme.textSecondary : theme.textDisabled), 1);
         textLeft = iconRect.right + 7;
     }
+    int textRight = bounds.right - 8;
+    if (!shortcut.empty()) {
+        // Right-aligned and dimmer than the label, as Windows and the other editors show it.
+        const RECT shortcutRect{textLeft, bounds.top, bounds.right - 10, bounds.bottom};
+        PaintText(dc, shortcutRect, shortcut, Color(enabled ? theme.textDisabled : theme.borderPanel), 11, FW_NORMAL,
+            DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        textRight = shortcutRect.right - 64;
+    }
     PaintText(
         dc,
-        RECT{textLeft, bounds.top, bounds.right - 8, bounds.bottom},
+        RECT{textLeft, bounds.top, textRight, bounds.bottom},
         label,
         Color(enabled ? (hovered ? theme.textPrimary : theme.textSecondary) : theme.textDisabled),
         11,
@@ -304,8 +313,44 @@ void EditorDialogStyle::PaintCheckbox(
         Color(checked && enabled ? theme.tabActive : theme.background),
         Color(checked && enabled ? theme.accent : theme.borderPanel));
     if (!checked) return;
-    PaintText(dc, bounds, "\xE2\x9C\x93", Color(enabled ? theme.textPrimary : theme.textDisabled), 9, FW_SEMIBOLD,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    HeroIconPainter::Draw(dc, Inset(bounds, 3, 3, 3, 3), HeroIconKind::Check,
+        Color(enabled ? theme.textPrimary : theme.textDisabled), 1);
+}
+
+void EditorDialogStyle::PaintOptionButton(
+    HDC dc,
+    const RECT& bounds,
+    const EditorTheme& theme,
+    std::string_view label,
+    bool selected,
+    bool enabled) {
+    constexpr int radius = 6;
+    if (selected) {
+        FillRound(dc, bounds, Blend(Color(theme.toolbarButton), RGB(55, 119, 142), 50), RGB(86, 172, 205), radius);
+        GdiDrawing::FillRectColor(dc, RECT{bounds.left + 3, bounds.top + 1, bounds.right - 3, bounds.top + 2}, RGB(85, 150, 174));
+    } else {
+        FillRound(dc, bounds, Color(enabled ? theme.chrome : theme.background), Color(enabled ? theme.borderPanel : theme.borderChrome), radius);
+    }
+    const COLORREF text = selected ? RGB(235, 250, 255) : Color(enabled ? theme.textSecondary : theme.textDisabled);
+    PaintText(dc, RECT{bounds.left + 8, bounds.top, bounds.right - 8, bounds.bottom}, label, text, 12,
+        selected ? FW_SEMIBOLD : FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void EditorDialogStyle::PaintSwitch(
+    HDC dc,
+    const RECT& bounds,
+    const EditorTheme& theme,
+    bool on,
+    bool enabled) {
+    const int height = Height(bounds);
+    const COLORREF track = on ? (enabled ? RGB(46, 160, 98) : Blend(Color(theme.chrome), RGB(46, 160, 98), 40))
+                              : Color(theme.chrome);
+    FillRound(dc, bounds, track, on ? track : Color(theme.borderPanel), height);
+    const int knob = height - 6;
+    const int knobLeft = on ? static_cast<int>(bounds.right) - 3 - knob : static_cast<int>(bounds.left) + 3;
+    const RECT knobRect{knobLeft, bounds.top + 3, knobLeft + knob, bounds.top + 3 + knob};
+    const COLORREF knobColor = Color(on ? theme.textPrimary : (enabled ? theme.textSecondary : theme.textDisabled));
+    FillRound(dc, knobRect, knobColor, knobColor, knob);
 }
 
 void EditorDialogStyle::PaintScrollbar(

@@ -2906,7 +2906,9 @@ namespace bgfx { namespace d3d12
 			}
 			else if (NULL != mainFrameBuffer().m_swapChain)
 			{
-				uint32_t idx = (m_backBufferColorIdx-1) % m_scd.bufferCount;
+				// Screenshot requests run after submit and before present. Capture the
+				// buffer just rendered, rather than the previous simulation frame.
+				const uint32_t idx = m_backBufferColorIdx;
 				m_cmd.finish(m_backBufferColorFence[idx]);
 				backBuffer = mainFrameBuffer().m_backBufferColor[idx];
 			}

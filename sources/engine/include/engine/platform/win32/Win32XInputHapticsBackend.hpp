@@ -4,8 +4,8 @@
 
 namespace kb::input {
 
-// Windows XInput actuator for the same 0..3 controller slots polled by
-// Win32InputCollector. Destruction always silences all motors so host shutdown
+// Windows XInput actuator resolved through the shared controller slot registry.
+// Destruction always silences all motors so host shutdown
 // cannot leave a controller vibrating.
 class Win32XInputHapticsBackend final : public IInputHapticsBackend {
 public:

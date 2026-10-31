@@ -194,12 +194,12 @@ void PaintRow(
         Text(dc, Rect(rowRect.left + kRowPadX, rowRect.top, ValueRect(rowRect).left, rowRect.bottom), row.label, Color(theme.textSecondary));
     }
     if (row.kind == InspectorAudioMixerRowKind::Bool) {
+        // Same box as the Inspector's bool rows: accent fill and a tick while on.
         const RECT box = CheckboxRect(rowRect);
-        Frame(dc, box, hovered ? RGB(34, 38, 45) : Color(theme.chrome), Color(theme.borderPanel));
+        Frame(dc, box, row.boolValue ? Color(theme.accent) : (hovered ? RGB(34, 38, 45) : Color(theme.chrome)),
+            row.boolValue || hovered ? Color(theme.accent) : Color(theme.borderPanel));
         if (row.boolValue) {
-            ScopedFont font(10, FW_SEMIBOLD);
-            const ScopedGdiObject selected(dc, font.handle);
-            Text(dc, box, "x", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            Text(dc, box, "\xE2\x9C\x94", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         return;
     }

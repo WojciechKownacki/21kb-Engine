@@ -37,9 +37,10 @@ enum class AssetKind : std::uint8_t {
     InputAction,
     InputMap,
     Font,
+    UITheme,
 };
 
-inline constexpr std::size_t kAssetKindCount = 11;
+inline constexpr std::size_t kAssetKindCount = 12;
 
 // The friendly, front-end-facing kind name (e.g. "Mesh", "InputMap"), the
 // exact token TryParseAssetKind accepts and the script Assets.KindOf output

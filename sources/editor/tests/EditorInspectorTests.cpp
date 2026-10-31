@@ -19,6 +19,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
@@ -34,6 +35,10 @@
 #include "inspection/InspectorPanelState.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "scene/ui/EditorUIThemeAssets.hpp"
+#include "engine/ui/UIThemeIO.hpp"
+#include "commands/EditorCommandStack.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -323,6 +328,14 @@ void RunComponentSearchSynonymsTest() {
     const std::vector<const kb::editor::InspectorComponentTile*> lightTiles = kb::editor::InspectorComponentCatalog::Search("light");
     kb::editor::tests::Require(!lightTiles.empty() && lightTiles.front()->id == "Light" && finds("light", "Ambient Radiance"),
         "Searching light must list the Light first and still offer the components known by it");
+    const auto billboardRows = kb::editor::InspectorAddComponentBrowserModel::Rows({}, "billboard");
+    kb::editor::tests::Require(!billboardRows.empty() && billboardRows.front().id == "Facing Panel"
+        && kb::editor::InspectorAddComponentBrowserModel::Description(billboardRows, 0).find("face the camera") != std::string_view::npos,
+        "A synonym result must expose the author-facing explanation used by the browser");
+    kb::editor::tests::Require(kb::editor::InspectorAddComponentBrowserModel::Description(billboardRows, -1).empty()
+        && kb::editor::InspectorAddComponentBrowserModel::Description(billboardRows, 10000).empty()
+        && kb::editor::InspectorAddComponentBrowserModel::Description(kb::editor::InspectorAddComponentBrowserModel::Rows({}, {}), 0).empty(),
+        "Invalid selection and category rows must not reuse component help");
     std::size_t described = 0U;
     for (const kb::editor::InspectorComponentTile& tile : kb::editor::InspectorComponentCatalog::Tiles()) {
         if (tile.category == "User Widget") continue;
@@ -1325,8 +1338,9 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
             normalTextureParameter->expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Linear &&
             normalTextureParameter->enabled,
         "KBMAT-0003: Material Editor parameter model should expose supported texture slots");
-    const kb::editor::MaterialEditorParameter* clearcoatParameter = findEditorParameter("clearcoatFactor");
-    kb::editor::tests::Require(clearcoatParameter != nullptr && !clearcoatParameter->enabled,
+    // Clearcoat is evaluated now; transmission is still parsed and ignored by the built-in type.
+    const kb::editor::MaterialEditorParameter* transmissionParameter = findEditorParameter("transmissionFactor");
+    kb::editor::tests::Require(transmissionParameter != nullptr && !transmissionParameter->enabled,
         "KBMAT-0003: unsupported advanced parameters should remain visible but disabled");
     kb::editor::tests::Require(!materialEditor.InfoPanelVisible(), "Material Editor info panel should be hidden by default");
     kb::editor::tests::Require(materialEditor.ToggleInfoPanel(), "Material Editor info panel toggle should report a state change");
@@ -2577,7 +2591,7 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     const kb::editor::MaterialEditorPanelDetailsRows details = kb::editor::MaterialEditorPanelRenderer::DetailsRows(materialEditor.Parameters(), 1U);
     kb::editor::tests::Require(details.title.find("Selected Node #1") != std::string::npos, "Material Editor details should describe selected graph node context");
     kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("baseColor") != std::string::npos && row.find(" = ") != std::string::npos; }), "Material Editor details should expose metadata-driven baseColor parameter with default value");
-    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("clearcoatFactor") != std::string::npos && row.find("disabled") != std::string::npos; }), "Material Editor details should expose unsupported advanced rows as disabled");
+    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("transmissionFactor") != std::string::npos && row.find("disabled") != std::string::npos; }), "Material Editor details should expose unsupported advanced rows as disabled");
     kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Base Color") != std::string::npos && row.find("sRGB") != std::string::npos; }), "Material Editor details should expose metadata-driven Base Color texture slot");
     kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Normal") != std::string::npos && row.find("Linear") != std::string::npos; }), "Material Editor details should expose metadata-driven texture color policy");
 }
@@ -3029,7 +3043,11 @@ void RunAddComponentBrowserModelTest() {
     kb::editor::tests::Require(physics.size() == 7U && physics.front().kind == AddComponentRowKind::Component, "A category lists its 7 components as Component rows");
 
     const std::vector<kb::editor::AddComponentRow> search = InspectorAddComponentBrowserModel::Rows("Physics", "collid");
-    kb::editor::tests::Require(search.size() == 2U && search.front().id == "Collider" && search.back().id == "Collider2D", "A search query overrides the category and finds Collider and Collider 2D");
+    kb::editor::tests::Require(search.size() == 3U &&
+        std::ranges::any_of(search, [](const auto& row) { return row.id == "Collider"; }) &&
+        std::ranges::any_of(search, [](const auto& row) { return row.id == "Collider2D"; }) &&
+        std::ranges::any_of(search, [](const auto& row) { return row.id == "TilemapCollider"; }),
+        "A search query overrides the category and finds all three collider components");
 
     const auto noPlugins = [](std::string_view) { return false; };
     const std::vector<kb::editor::AddComponentRow> filteredCategories =
@@ -3368,6 +3386,142 @@ void RunInspectorTextCaretTest() {
         "With no field being edited the caret must neither blink nor request repaints");
 }
 
+void RunUIThemeEditorModelTest() {
+    using namespace kb::scene;
+    using kb::editor::EditorUIThemeAssets;
+    using kb::editor::InspectorUIThemeModel;
+    const UIThemePropertyKey axes{UIComponentType::Text, "fontVariations"};
+    const UIThemePropertyKey color{UIComponentType::Text, "color.r"};
+    UITheme theme{{{axes, std::string{"wght=400"}}, {color, 0.3F}}, {{"accent", {}}}};
+    const auto colorRows = InspectorUIThemeModel::Rows(theme, "accent");
+    const auto colorRow = std::ranges::find(colorRows, color, &kb::editor::InspectorUIThemeRow::key);
+    kb::editor::tests::Require(colorRow != colorRows.end() && colorRow->color &&
+        kb::editor::tests::NearlyEqual((*colorRow->color)[0], 0.3F),
+        "The theme color picker must show the inherited base color");
+    auto pickerTheme = theme;
+    kb::editor::tests::Require(InspectorUIThemeModel::EditColor(pickerTheme, "accent", color, {0.2F, 0.4F, 0.6F, 0.8F}),
+        "Theme color picking must edit all four channels together");
+    UIComponentSet picked;
+    kb::editor::tests::Require(ResolveUITheme(pickerTheme, "accent", {}, UIComponentSet{.text = UIText{}}, picked) ==
+        UIThemeResolveResult::Succeeded && kb::editor::tests::NearlyEqual(picked.text->color.b, 0.6F) &&
+        kb::editor::tests::NearlyEqual(picked.text->color.a, 0.8F) &&
+        ResolveUITheme(pickerTheme, "", {}, UIComponentSet{.text = UIText{}}, picked) == UIThemeResolveResult::Succeeded &&
+        kb::editor::tests::NearlyEqual(picked.text->color.r, 0.3F),
+        "Picking a variant color must retain alpha and leave the base style unchanged");
+    kb::editor::tests::Require(InspectorUIThemeModel::Edit(theme, "accent", axes, ""),
+        "An empty theme string must create a variant override");
+    UIComponentSet authored;
+    authored.rectTransform.emplace();
+    authored.rectTransform->themeAssetId = 1U;
+    authored.text.emplace();
+    authored.text->color.r = 0.9F;
+    UIComponentSet resolved;
+    kb::editor::tests::Require(ResolveUITheme(theme, "accent", {}, authored, resolved) == UIThemeResolveResult::Succeeded &&
+        UITextFontVariations(*resolved.text).empty(), "An empty string override must hide the base string");
+    kb::editor::tests::Require(InspectorUIThemeModel::Edit(theme, "accent", axes, "@inherit") &&
+        ResolveUITheme(theme, "accent", {}, authored, resolved) == UIThemeResolveResult::Succeeded &&
+        UITextFontVariations(*resolved.text) == "wght=400", "Explicit inherit must restore the base string");
+    kb::editor::tests::Require(EditorUIThemeAssets::MarkLocalOverrides(authored, std::span{&color, 1U}) &&
+        EditorUIThemeAssets::MarkLocalOverrides(authored, std::span{&color, 1U}), "Local override must be idempotent");
+    std::vector<UIThemePropertyKey> keys;
+    kb::editor::tests::Require(ParseUIThemeOverrides(UIRectThemeOverrides(*authored.rectTransform), keys) && keys.size() == 1U &&
+        ResolveUITheme(theme, "accent", keys, authored, resolved) == UIThemeResolveResult::Succeeded &&
+        kb::editor::tests::NearlyEqual(resolved.text->color.r, 0.9F), "A local edit must survive theme resolution");
+    std::string variant = "accent";
+    std::uint64_t selectedAsset = 1U;
+    InspectorUIThemeModel::NormalizeSelection(theme, 2U, selectedAsset, variant);
+    kb::editor::tests::Require(variant.empty() && selectedAsset == 2U, "Changing assets must select the base theme");
+    variant = "accent";
+    theme.variants.clear();
+    InspectorUIThemeModel::NormalizeSelection(theme, 2U, selectedAsset, variant);
+    kb::editor::tests::Require(variant.empty(), "Removing a selected variant must return to base");
+
+    const auto root = std::filesystem::temp_directory_path() / "kb-ui-theme-editor-tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Assets", error);
+    const auto file = root / "Assets" / "Theme.kbtheme";
+    kb::scene::Scene scene;
+    kb::editor::tests::Require(UIThemeIO::Save(file, theme) && scene.Assets().MountProject(root) && scene.Assets().Discover() == 1U,
+        "Theme editor fixture must be discovered");
+    const auto* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Theme.kbtheme");
+    kb::editor::tests::Require(metadata != nullptr, "Theme asset must be registered");
+    const auto id = metadata->id;
+    const auto canvas = scene.Entities().CreateObject();
+    ApplySceneUIComponents(scene.Components().UI(), canvas.Entity(), BuildUIComponentPreset(UIComponentPreset::Canvas));
+    for (unsigned index = 0; index < 3U; ++index) {
+        const auto widget = scene.Entities().CreateObject(SceneObjectDesc{.parent = canvas});
+        auto components = BuildUIComponentPreset(UIComponentPreset::Text);
+        components.rectTransform->themeAssetId = id.value;
+        components.rectTransform->offsetMin = {0.0F, static_cast<float>(index) * 50.0F};
+        components.rectTransform->offsetMax = {200.0F, static_cast<float>(index) * 50.0F + 40.0F};
+        if (index == 2U) {
+            components.text->color.r = 0.9F;
+            kb::editor::tests::Require(EditorUIThemeAssets::MarkLocalOverrides(components, std::span{&color, 1U}),
+                "The third live widget must retain its local color");
+        }
+        ApplySceneUIComponents(scene.Components().UI(), widget.Entity(), components);
+    }
+    const auto assertFrame = [&](Scene& target, float expected) {
+        kb::editor::tests::Require(target.UI().Update(640, 360, {}, 0.016F), "Theme frame must update");
+        unsigned shared = 0U, localCount = 0U;
+        for (const auto& element : target.UI().Frame().elements) {
+            if (!element.text) continue;
+            if (kb::editor::tests::NearlyEqual(element.text->color.r, expected)) ++shared;
+            if (kb::editor::tests::NearlyEqual(element.text->color.r, 0.9F)) ++localCount;
+        }
+        kb::editor::tests::Require(shared == 2U && localCount == 1U,
+            "A live theme edit must update both shared widgets and preserve the third widget's override");
+    };
+    assertFrame(scene, 0.3F);
+    auto changed = theme;
+    kb::editor::tests::Require(InspectorUIThemeModel::Edit(changed, "", color, "0.6"), "Theme color edit must validate");
+    kb::editor::EditorCommandStack commands;
+    kb::editor::tests::Require(commands.Execute(std::make_unique<kb::editor::EditorUIThemeEditCommand>(scene, id, "Edit UI Theme", theme, changed)),
+        "Theme asset edit must execute");
+    assertFrame(scene, 0.6F);
+    kb::editor::tests::Require(commands.Undo(), "Theme asset edit must support undo");
+    assertFrame(scene, 0.3F);
+    const auto undone = UIThemeIO::Load(file);
+    kb::editor::tests::Require(undone && ResolveUITheme(*undone, "", {}, UIComponentSet{.text = UIText{}}, resolved) == UIThemeResolveResult::Succeeded &&
+        kb::editor::tests::NearlyEqual(resolved.text->color.r, 0.3F), "Undo must restore the previous theme value");
+    kb::editor::tests::Require(commands.Redo(), "Theme asset edit must support redo");
+    assertFrame(scene, 0.6F);
+    const auto savedScene = root / "Assets" / "ThemeScene.21kbscene";
+    kb::editor::tests::Require(SceneDocumentService::Save(scene, savedScene, "ThemeScene"), "Themed scene must save");
+    Scene restoredScene;
+    kb::editor::tests::Require(restoredScene.Assets().MountProject(root) &&
+        SceneDocumentService::LoadFileIntoScene(restoredScene, savedScene), "Themed scene must reload");
+    static_cast<void>(restoredScene.Assets().Discover());
+    assertFrame(restoredScene, 0.6F);
+    const auto loaded = UIThemeIO::Load(file);
+    kb::editor::tests::Require(loaded && ResolveUITheme(*loaded, "", {}, UIComponentSet{.text = UIText{}}, resolved) == UIThemeResolveResult::Succeeded &&
+        kb::editor::tests::NearlyEqual(resolved.text->color.r, 0.6F), "Redo must persist the edited theme value");
+    UIComponentSet sharedA;
+    sharedA.text.emplace();
+    UIComponentSet sharedB = sharedA;
+    UIComponentSet local = authored;
+    UIComponentSet resolvedA, resolvedB, resolvedLocal;
+    kb::editor::tests::Require(loaded &&
+        ResolveUITheme(*loaded, "", {}, sharedA, resolvedA) == UIThemeResolveResult::Succeeded &&
+        ResolveUITheme(*loaded, "", {}, sharedB, resolvedB) == UIThemeResolveResult::Succeeded &&
+        ResolveUITheme(*loaded, "", keys, local, resolvedLocal) == UIThemeResolveResult::Succeeded &&
+        kb::editor::tests::NearlyEqual(resolvedA.text->color.r, 0.6F) &&
+        kb::editor::tests::NearlyEqual(resolvedB.text->color.r, 0.6F) &&
+        kb::editor::tests::NearlyEqual(resolvedLocal.text->color.r, 0.9F),
+        "Reloaded shared theme must update multiple controls and retain the local override");
+    auto invalid = changed;
+    invalid.properties.push_back({color, 0.2F});
+    kb::editor::tests::Require(!EditorUIThemeAssets::Write(scene, id, invalid),
+        "Invalid edits must be rejected before replacing the asset");
+    const auto afterRejectedWrite = UIThemeIO::Load(file);
+    kb::editor::tests::Require(afterRejectedWrite &&
+        ResolveUITheme(*afterRejectedWrite, "", {}, sharedA, resolvedA) == UIThemeResolveResult::Succeeded &&
+        kb::editor::tests::NearlyEqual(resolvedA.text->color.r, 0.6F),
+        "Rejected writes must leave the saved theme intact");
+    std::filesystem::remove_all(root, error);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -3380,6 +3534,7 @@ void RunEditorInspectorTests() {
     RunInspectorHoverIndexTest();
     RunAddComponentBrowserModelTest();
     RunUIComponentAuthoringTest();
+    RunUIThemeEditorModelTest();
     RunInspectorTextCaretTest();
     RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();

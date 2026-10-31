@@ -11,6 +11,10 @@
 #include "app/cursor/EditorInternalSplitterCursorController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "rendering/BuildGamePanelRenderer.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
@@ -129,6 +133,20 @@ void InvalidateMaterialGraphPanel(
 } // namespace
 
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown) {
+    if (const auto* state=sceneContext_.GameplayGraphEditor();state && state->dragging) {
+        if (!leftButtonDown) GameplayGraphEditorPanel::PointerUp(messageWindow,sceneContext_);
+        else if (const auto content=EditorPanelContentResolver::Resolve(DockPanelKind::GameplayGraphEditor,messageWindow,mainWindow_,dockModel_,floatingWindows_,metrics_))
+            static_cast<void>(GameplayGraphEditorPanel::PointerMove({content->left,content->top,content->right-content->left,content->bottom-content->top},x,y,sceneContext_));
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_,messageWindow);return;
+    }
+    if (const auto* state=sceneContext_.BlendSpace2DEditor();state && state->dragging) {
+        if (!leftButtonDown) static_cast<void>(BlendSpace2DEditorPanel::PointerUp(messageWindow,sceneContext_));
+        else if (const auto content=EditorPanelContentResolver::Resolve(DockPanelKind::BlendSpace2DEditor,messageWindow,mainWindow_,dockModel_,floatingWindows_,metrics_)) {
+            static_cast<void>(BlendSpace2DEditorPanel::PointerMove(
+                {content->left,content->top,content->right-content->left,content->bottom-content->top},x,y,sceneContext_));
+        }
+        sceneViewport_.RequestPresent();EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_,messageWindow);return;
+    }
     if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
         sceneContext_.ParticleEditorWorkspace().ModuleDragActive() ||
         sceneContext_.ParticleEditorWorkspace().PropertySliderActive()) {

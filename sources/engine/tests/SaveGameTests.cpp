@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -298,6 +299,31 @@ void RunSaveGameChunkFailureTest() {
         chunks.Load(chunks.Open(), "Base").Succeeded(), "Index publication failure must preserve the old snapshot");
     kb::tests::Require(std::filesystem::remove(blocked) && chunks.Prune() && chunks.Commit(next),
         "A failed partial commit must be recoverable after storage becomes available");
+}
+
+void RunUserStorageLifecycleBarrierTest() {
+    ResetSaveTestRoot();
+    kb::platform::UserStorage storage(SaveTestRoot(), 4096U);
+    storage.WaitForPendingWrites();
+    std::vector<std::future<bool>> writes;
+    for (int revision = 0; revision < 64; ++revision) {
+        writes.push_back(storage.WriteAsync("session", std::to_string(revision)));
+    }
+    auto rejected = storage.WriteAsync("oversize", std::string(8192U, 'x'));
+    storage.WaitForPendingWrites();
+    for (auto& write : writes) {
+        kb::tests::Require(write.wait_for(std::chrono::seconds{0}) == std::future_status::ready && write.get(),
+            "Lifecycle barrier returned before a queued storage write completed");
+    }
+    kb::tests::Require(rejected.wait_for(std::chrono::seconds{0}) == std::future_status::ready && !rejected.get(),
+        "Lifecycle barrier must preserve an individual write failure");
+    kb::platform::UserStorage reopened(SaveTestRoot(), 4096U);
+    kb::tests::Require(reopened.Read("session") == std::optional<std::string>{"63"} && !reopened.Read("oversize"),
+        "Reopened storage must contain the final committed revision after the lifecycle barrier");
+    auto resumed = storage.WriteAsync("session", "resumed");
+    storage.WaitForPendingWrites();
+    kb::tests::Require(resumed.get() && reopened.Read("session") == std::optional<std::string>{"resumed"},
+        "Lifecycle barrier must leave storage usable after resuming");
 }
 
 void RunSaveGameInvalidValueTest() {
@@ -716,6 +742,7 @@ void RunSaveGameTests() {
     RunSaveGameStorageFullTest();
     RunSaveGameChunkStoreTest();
     RunSaveGameChunkFailureTest();
+    RunUserStorageLifecycleBarrierTest();
     RunSaveGameCorruptionTest();
     RunSaveGameMigrationTest();
     RunSaveGameDomainSeparationTest();

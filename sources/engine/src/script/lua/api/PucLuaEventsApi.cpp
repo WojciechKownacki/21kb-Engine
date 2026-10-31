@@ -26,23 +26,12 @@ extern "C" {
 namespace kb::script {
 namespace {
 
-// Owns the LUA_REGISTRYINDEX reference a subscription holds onto the Lua
-// callback function value. Kept alive by a shared_ptr captured inside the
-// NativeEventSubscriptionCallback closure ScriptEventBus stores — when
-// Unsubscribe (or the whole bus/subscription vector) destroys that
-// std::function, this drops to zero refs and ~SubscriberInvocation runs,
-// releasing the registry slot. `state` is always the owning main Lua state,
-// never a short-lived generator thread, so a completed lifecycle coroutine
-// can be collected while the subscription stays valid. Safe only as long as
-// that main state outlives the last subscription:
-// kb::script::ScriptRuntimeHostState (ScriptRuntimeHost.cpp) declares
-// `luaRuntime` (owns the lua_State) BEFORE `runtime` (owns the ScriptEventBus
-// holding these subscriptions), so members are torn down in the required
-// order (runtime/subscriptions first, lua_State after). Test code constructing
-// both directly must declare PucLuaScriptRuntime before ScriptRuntime for the
-// same reason (the existing test suite already does).
+// The bus and checkpoint images share callback owners. A reference is released
+// only in its live VM and while this owner belongs to the current history branch.
+// The state is the main thread, so completed lifecycle threads may be collected.
 struct SubscriberInvocation {
     lua_State* state = nullptr;
+    std::weak_ptr<PucLuaStateLifetime> lifetime;
     PucLuaScriptRuntime* runtime = nullptr;
     int ref = LUA_NOREF;
     ScriptExecutionContext context;
@@ -59,8 +48,9 @@ struct SubscriberInvocation {
         lua_State* stateArg,
         PucLuaScriptRuntime* runtimeArg,
         int refArg,
-        ScriptExecutionContext& sourceContext) noexcept
+        ScriptExecutionContext& sourceContext)
         : state(stateArg)
+        , lifetime(PucLuaRuntimeApi::Lifetime(stateArg))
         , runtime(runtimeArg)
         , ref(refArg)
         , context(
@@ -74,15 +64,20 @@ struct SubscriberInvocation {
               nullptr,
               sourceContext.SharedState(),
               sourceContext.Functions(),
-              sourceContext.Events()) {}
+              sourceContext.Events()) {
+        if (const auto owner = lifetime.lock()) owner->eventReferenceOwners[ref] = this;
+    }
 
     SubscriberInvocation(const SubscriberInvocation&) = delete;
     SubscriberInvocation& operator=(const SubscriberInvocation&) = delete;
 
     ~SubscriberInvocation() {
-        if (state != nullptr && ref != LUA_NOREF) {
-            luaL_unref(state, LUA_REGISTRYINDEX, ref);
-        }
+        const auto owner = lifetime.lock();
+        if (!owner || owner->state != state || ref == LUA_NOREF) return;
+        const auto found = owner->eventReferenceOwners.find(ref);
+        if (found == owner->eventReferenceOwners.end() || found->second != this) return;
+        owner->eventReferenceOwners.erase(found);
+        luaL_unref(state, LUA_REGISTRYINDEX, ref);
     }
 };
 
@@ -104,6 +99,9 @@ void BindSubscriberExecutionApi(const std::shared_ptr<SubscriberInvocation>& inv
 }
 
 void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, const ScriptEvent& event) {
+    const auto owner = invocation->lifetime.lock();
+    if (!owner || owner->state != invocation->state) throw std::runtime_error("Lua event subscriber VM has closed");
+    PucLuaExecutionContextScope activeContext{invocation->state, invocation->context};
     PucLuaStackGuard stack{ invocation->state };
     lua_rawgeti(invocation->state, LUA_REGISTRYINDEX, invocation->ref);
     BindSubscriberExecutionApi(invocation);
@@ -127,7 +125,7 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
 }
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return PucLuaRuntimeApi::ContextFromUpvalue(state);
 }
 
 [[nodiscard]] kb::scene::SceneEntity OptionalEntityArg(lua_State* state, int index) {
@@ -225,7 +223,9 @@ int LuaEventsSubscribe(lua_State* state) {
         lua_xmove(state, registryState, 1);
     }
     const int ref = luaL_ref(registryState, LUA_REGISTRYINDEX);
-    auto invocation = std::make_shared<SubscriberInvocation>(registryState, runtime, ref, *context);
+    std::shared_ptr<SubscriberInvocation> invocation;
+    try { invocation = std::make_shared<SubscriberInvocation>(registryState, runtime, ref, *context); }
+    catch (...) { luaL_unref(registryState, LUA_REGISTRYINDEX, ref); throw; }
     const EventSubscriptionHandle handle = context->Events()->Subscribe(
         eventName,
         [invocation](const ScriptEvent& event) { InvokeSubscriber(invocation, event); },
@@ -308,29 +308,29 @@ int LuaEventsEmitDeferred(lua_State* state) {
 
 } // namespace
 
-void PucLuaEventsApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context, const PucLuaScriptRuntime& runtime) {
+void PucLuaEventsApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext&, const PucLuaScriptRuntime& runtime) {
     lua_createtable(state, 0, 5);
     const int tableIndex = lua_gettop(state);
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushlightuserdata(state, const_cast<void*>(static_cast<const void*>(&runtime)));
     lua_pushlightuserdata(state, runtime.state_);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsSubscribe>, 3);
     lua_setfield(state, tableIndex, "Subscribe");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsUnsubscribe>, 1);
     lua_setfield(state, tableIndex, "Unsubscribe");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsEmit>, 1);
     lua_setfield(state, tableIndex, "Emit");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsEmitDeferred>, 1);
     lua_setfield(state, tableIndex, "EmitDeferred");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsBroadcast>, 1);
     lua_setfield(state, tableIndex, "Broadcast");
 

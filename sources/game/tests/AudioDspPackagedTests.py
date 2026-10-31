@@ -253,8 +253,49 @@ end
     cook()
     run(player, "--headless", "--frames=3", "--width=64", "--height=64", "--uncapped", cwd=output, expected=1)
     require("meter negative control" in history[-1]["stderr"] + history[-1]["stdout"], "Negative meter assertion was not executed")
+    routing_reference = None
+    if args.editor_tests:
+        editor_output = run(args.editor_tests, "audio-mixer-runtime")
+        require("actualDLL=1 PCM=verified" in editor_output, "Editor did not render actual provider PCM")
+        editor_root = temp / "kb_editor_audio_runtime_tests"
+        routing_reference = json.loads((editor_root / "routing-pcm.json").read_text(encoding="utf8"))
+        base = routing_reference["base"]
+        child = routing_reference["child"]
+        muted = routing_reference["muted"]
+        analytic = (3276 / 32768) * 0.25 * 10**(24/20)
+        require(abs(base["peak"] - analytic) < analytic * 0.02 and
+                abs(base["rms"] - analytic / math.sqrt(2)) < analytic * 0.02 and
+                abs(child["peak"] - base["peak"] * 0.5) < analytic * 0.02 and
+                abs(child["rms"] - base["rms"] * 0.5) < analytic * 0.02 and
+                muted["peak"] == 0 and muted["rms"] == 0,
+                "Editor routing reference disagrees with independent gain and mute expectations")
+        shutil.copyfile(editor_root / "Routing.kbmixer", file)
+        editor_tone = root / "EditorTone.wav"
+        shutil.copyfile(editor_root / "Tone.wav", editor_tone)
+        cli("import", "--project", project, "--destination", "/Game/Audio", editor_tone)
+        cli("component", "set", "--project", project, "--entity", "Emitter", "--type", "Audio Source",
+            "--set", "clipAssetId=/Game/Audio/EditorTone.21kb")
+        phases = []
+        for phase, action in [("base", ""), ("child", 'assert(Audio.SetBusVolume("Effects", 0.5))'),
+                              ("muted", 'assert(Audio.SetBusVolume("Output", 0))')]:
+            reference = routing_reference[phase]
+            phases.append(f'''    {action}
+    Audio.RenderOffline(8192)
+    local pcm = Audio.RenderOffline(8192)
+    assert(pcm.frames == 8192 and math.abs(pcm.peak - {reference['peak']!r}) < {max(reference['peak'] * 0.02, 1e-6)!r}
+           and math.abs(pcm.rms - {reference['rms']!r}) < {max(reference['rms'] * 0.02, 1e-6)!r}, "editor package routing {phase}")
+    Log("packaged routing {phase} matches editor PCM")
+''')
+        script.write_text('function Ready(self, dt)\n    assert(Audio.ConfigureOffline())\n' +
+                          "".join(phases) + 'end\n', encoding="utf8")
+        cook()
+        text = run(player, "--headless", "--frames=3", "--width=64", "--height=64", "--uncapped", cwd=output)
+        require(all(text.count(f"kb_game: script: packaged routing {phase} matches editor PCM") == 1
+                    for phase in ("base", "child", "muted")) and "shutdown=clean" in text,
+                "Packaged output did not match actual editor routing PCM")
     (root / "result.json").write_text(json.dumps(dict(result="PASS", pcm=report, meters=meters, inspectorAuthored=bool(args.editor_tests),
         inspectorPcm=ui_report if args.editor_tests else None, negativeScriptExit=1, packagedMeters=True, negativeMeterExit=1,
+        editorRoutingPcm=routing_reference,
         limitation="Offline native PCM and a hidden Windows player; no physical audio device or other platform qualification."), indent=2), encoding="utf8")
     print(f"PASS: authored effects, actual CLI PCM and cooked runtime PCM; {root}")
 

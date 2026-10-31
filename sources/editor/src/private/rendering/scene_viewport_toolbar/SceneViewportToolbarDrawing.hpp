@@ -23,6 +23,8 @@ public:
     [[nodiscard]] static COLORREF ToolbarRowColor(const EditorTheme& theme) noexcept;
     static void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius);
     static void DrawIconButton(HDC dc, RECT rect, HeroIconKind icon, const EditorTheme& theme, bool active);
+    // An icon button that also names its keyboard shortcut, small, beside the icon.
+    static void DrawToolButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view key, const EditorTheme& theme, bool active);
     static void DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view value, const EditorTheme& theme, bool active = false);
     static void DrawDivider(HDC dc, const RECT& toolbar, int x, const EditorTheme& theme);
 };

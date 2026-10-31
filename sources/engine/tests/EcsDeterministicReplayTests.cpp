@@ -7,6 +7,8 @@
 #include "engine/ecs/World.hpp"
 
 #include <cstdint>
+#include <cmath>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -127,8 +129,10 @@ void AccumulateReplayChecksum(kb::ecs::Entity entity, const EcsPosition& positio
 
 [[nodiscard]] ReplayResult RunReplay(std::size_t workerCount) {
     kb::ecs::World world;
+    std::vector<kb::ecs::Entity> entities;
     for (int index = 0; index < 48; ++index) {
         const kb::ecs::Entity entity = world.CreateEntity();
+        entities.push_back(entity);
         world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = static_cast<float>(index % 7) });
         world.Set(entity, EcsVelocity{ .x = 1.0F + static_cast<float>(index % 5), .y = -0.5F + static_cast<float>(index % 3) });
     }
@@ -150,6 +154,18 @@ void AccumulateReplayChecksum(kb::ecs::Entity entity, const EcsPosition& positio
         scheduler.Update(world, 1.0F / 60.0F);
     }
 
+    // Numeric golden from the same specified recurrence evaluated in double precision.
+    // This bound applies only to these bounded arithmetic inputs, not arbitrary systems/backends.
+    for (std::size_t index=0; index<entities.size(); ++index) {
+        double x=static_cast<double>(index), y=static_cast<double>(index%7U);
+        double vx=1.0+static_cast<double>(index%5U), vy=-0.5+static_cast<double>(index%3U);
+        for (int frame=0; frame<8; ++frame) { x+=vx/60.0; y+=vy/60.0; vx*=0.875; vy*=0.875; x+=0.25; y-=0.125; }
+        const auto& position=*world.TryGet<EcsPosition>(entities[index]);
+        const auto& velocity=*world.TryGet<EcsVelocity>(entities[index]);
+        kb::tests::Require(std::abs(position.x-x)<=0.0001 && std::abs(position.y-y)<=0.0001
+            && std::abs(velocity.x-vx)<=0.0001 && std::abs(velocity.y-vy)<=0.0001,
+            "ECS replay exceeded absolute component tolerance 0.0001");
+    }
     ReplayResult result{ .executionOrder = executionOrder };
     world.ForEach<EcsPosition, EcsVelocity>(&AccumulateReplayChecksum, &result.checksum);
     scheduler.Shutdown(world);
@@ -190,9 +206,9 @@ void RunDeterministicReplayGoldenTest() {
     const std::string message = "ECS deterministic replay golden checksum changed: got " + std::to_string(result.checksum);
     kb::tests::Require(result.checksum == kReplayGoldenChecksumMsvcX64, message.c_str());
 #else
-    static_cast<void>(result);
     static_cast<void>(kReplayGoldenChecksumMsvcX64);
 #endif
+    std::cout << "ecs_replay checksum=" << result.checksum << " absolute_component_tolerance=0.0001\n";
 }
 
 } // namespace

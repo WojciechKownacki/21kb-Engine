@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Save storage tests</title></head>
+<body><pre id="output"></pre>
+<script>
+const output = document.getElementById('output');
+var Module = {
+    print: text => { output.textContent += text + '\n'; },
+    printErr: text => { output.textContent += text + '\n'; },
+    onAbort: error => { window.storageResult = {ok:false, error:String(error)}; },
+    onRuntimeInitialized: async function() {
+        try {
+            Module.kbInitializeStorage();
+            const storage = Module.kbUserStorage;
+            const deadline = Date.now() + 20000;
+            while (storage.startup === 0 && Date.now() < deadline)
+                await new Promise(resolve => setTimeout(resolve, 20));
+            if (storage.startup !== 1) throw new Error(storage.diagnostic || 'Storage startup timed out');
+            const phase = new URL(location.href).searchParams.get('phase') || 'read';
+            const code = Module.callMain([phase, storage.root + '/Saves']);
+            if (code !== 0) throw new Error('Native test exit ' + code);
+            if (!storage.flush()) throw new Error(storage.diagnostic || 'Storage flush refused');
+            while (storage.status === 2 && Date.now() < deadline)
+                await new Promise(resolve => setTimeout(resolve, 20));
+            if (storage.status !== 0) throw new Error(storage.diagnostic || 'Storage did not become clean');
+            window.storageResult = {ok:true, phase, status:storage.status, output:output.textContent};
+        } catch (error) {
+            window.storageResult = {ok:false, error:String(error), output:output.textContent};
+        }
+    }
+};
+</script>
+{{{ SCRIPT }}}
+</body></html>

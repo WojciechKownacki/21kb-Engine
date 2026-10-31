@@ -168,7 +168,7 @@ void PutMaterialDesc(std::vector<std::uint8_t>& bytes, const RenderMaterialDesc&
     PutUInt32(bytes, static_cast<std::uint32_t>(desc.layerBlendMode));
     PutUInt32(bytes, static_cast<std::uint32_t>(desc.translucencyBlend));
     PutUInt32(bytes, desc.doubleSided ? 1U : 0U);
-    PutUInt32(bytes, desc.writesDepth ? 1U : 0U);
+    PutUInt32(bytes, (desc.writesDepth ? 1U : 0U) | (desc.pointSampling ? 2U : 0U));
     PutUInt64(bytes, desc.albedoTextureAssetId);
     PutUInt64(bytes, desc.normalTextureAssetId);
     PutUInt64(bytes, desc.metallicRoughnessTextureAssetId);
@@ -322,13 +322,14 @@ private:
     if (!reader.ReadUInt32(alphaMode) || !reader.ReadUInt32(decalBlendMode) ||
         !reader.ReadUInt32(layerBlendMode) || !reader.ReadUInt32(translucencyBlend) ||
         !reader.ReadUInt32(doubleSided) || !reader.ReadUInt32(writesDepth) ||
-        doubleSided > 1U || writesDepth > 1U) return false;
+        doubleSided > 1U || writesDepth > 3U) return false;
     desc.alphaMode = static_cast<RenderMaterialAlphaMode>(alphaMode);
     desc.decalBlendMode = static_cast<RenderMaterialDecalBlendMode>(decalBlendMode);
     desc.layerBlendMode = static_cast<RenderMaterialLayerBlendMode>(layerBlendMode);
     desc.translucencyBlend = static_cast<RenderMaterialTranslucencyBlend>(translucencyBlend);
     desc.doubleSided = doubleSided != 0U;
-    desc.writesDepth = writesDepth != 0U;
+    desc.writesDepth = (writesDepth & 1U) != 0U;
+    desc.pointSampling = (writesDepth & 2U) != 0U;
     if (!reader.ReadUInt64(desc.albedoTextureAssetId) || !reader.ReadUInt64(desc.normalTextureAssetId) ||
         !reader.ReadUInt64(desc.metallicRoughnessTextureAssetId) ||
         !reader.ReadUInt64(desc.occlusionTextureAssetId) || !reader.ReadUInt64(desc.emissiveTextureAssetId) ||

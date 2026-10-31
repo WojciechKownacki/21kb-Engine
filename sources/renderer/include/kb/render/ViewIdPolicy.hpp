@@ -68,6 +68,10 @@ static_assert(PostProcessMaterialStart >= SkyReflectionStart + SkyReflectionView
 static_assert(PostProcessMaterialStart + PostProcessMaterialViewsPerViewport * GiResolveMaxViewports <= ScreenCapture,
     "Post process material views overlap the capture view");
 
+constexpr std::uint16_t RenderEffectStart = PostProcessMaterialStart + PostProcessMaterialViewsPerViewport * GiResolveMaxViewports;
+constexpr std::uint16_t RenderEffectViewCount = 12U;
+static_assert(RenderEffectStart + RenderEffectViewCount <= ScreenCapture, "Render effects overlap capture views");
+
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;
 }

@@ -5,9 +5,33 @@
 #include <fstream>
 
 static_assert(kb::modules::kEngineModuleAbiVersion > 1U);
+#ifndef KB_TEST_ABI_VARIANT
+#define KB_TEST_ABI_VARIANT 0
+#endif
+#if KB_TEST_ABI_VARIANT >= 2
+extern "C" KB_ENGINE_MODULE_EXPORT const kb::modules::EngineModuleBuildFingerprint kb_engine_module_build_fingerprint = [] {
+    auto fingerprint = kb::modules::kEngineModuleBuildFingerprint;
+#if KB_TEST_ABI_VARIANT == 2
+    ++fingerprint.fields[1]; // Compiler version.
+#elif KB_TEST_ABI_VARIANT == 3
+    ++fingerprint.fields[9]; // Metadata layout.
+#elif KB_TEST_ABI_VARIANT == 4
+    ++fingerprint.fields[3]; // Runtime mode.
+#elif KB_TEST_ABI_VARIANT == 5
+    --fingerprint.size; // Descriptor layout.
+#endif
+    return fingerprint;
+}();
+#endif
 
 extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
+    #if KB_TEST_ABI_VARIANT == 0
     return kb::modules::kEngineModuleAbiVersion - 1U;
+#elif KB_TEST_ABI_VARIANT == 1
+    return kb::modules::kEngineModuleAbiVersion + 1U;
+#else
+    return kb::modules::kEngineModuleAbiVersion;
+#endif
 }
 
 extern "C" KB_ENGINE_MODULE_EXPORT const char* kb_engine_module_name() {

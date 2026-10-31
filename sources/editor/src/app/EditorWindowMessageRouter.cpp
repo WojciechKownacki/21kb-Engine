@@ -1,3 +1,4 @@
+#include "windowing/EditorDisplayRecovery.hpp"
 #include "app/EditorWindowMessageRouter.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "app/EditorKeyState.hpp"
@@ -9,6 +10,8 @@
 #include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
+#include "app/agent/EditorAgentPanelController.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "app/EditorBuildGameInputHandler.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "app/EditorAssetBrowserInputHandler.hpp"
@@ -60,6 +63,97 @@ void CancelAnimationPreviewCameraNavigation(EditorWindowMessageContext& context)
     context.sceneContext.AnimationPreviewCamera().EndNavigation();
     RestoreEditorViewportNavigationCursor();
     context.sceneViewport.RequestPresent();
+}
+
+// After the Console's filter text changes the list starts from its top again, because the old
+// scroll position belongs to a different list.
+void RefreshConsoleFilter(EditorWindowMessageContext& context, HWND messageWindow) noexcept {
+    context.sceneContext.Console().SetListScrollRow(0, 0);
+    InvalidateRect(messageWindow, nullptr, FALSE);
+    if (messageWindow != context.mainWindow) {
+        InvalidateRect(context.mainWindow, nullptr, FALSE);
+    }
+}
+
+// After the Settings search text changes, a page with nothing that matches gives way to the
+// first page that has something.
+void RefreshSettingsSearch(EditorWindowMessageContext& context, HWND messageWindow) {
+    EditorProjectSettingsState& settings = context.sceneContext.ProjectSettings();
+    const std::string_view query = settings.Search().Query();
+    if (!ProjectSettingsPanelRenderer::CategoryMatches(settings.SelectedCategory(), query)) {
+        if (const std::optional<int> first = ProjectSettingsPanelRenderer::FirstMatchingCategory(query); first.has_value()) {
+            static_cast<void>(settings.SelectCategory(*first));
+        }
+    }
+    InvalidateRect(messageWindow, nullptr, FALSE);
+    if (messageWindow != context.mainWindow) {
+        InvalidateRect(context.mainWindow, nullptr, FALSE);
+    }
+}
+
+// A focused search box takes the characters typed; `changed` runs after each edit of its text.
+template <typename Changed>
+[[nodiscard]] bool HandleSearchFieldChar(EditorHierarchySearchState& field, WPARAM key, Changed&& changed) {
+    if (!field.IsFocused()) {
+        return false;
+    }
+    if (key >= 0x20U) {
+        field.AppendAscii(static_cast<wchar_t>(key));
+        changed();
+    }
+    // Control characters arrive here too (Backspace, Enter, Esc); WM_KEYDOWN acts on those.
+    return true;
+}
+
+// Editing keys of a focused search box: Backspace, Esc (the first empties it, the second leaves
+// it), Enter (leaves it) and the clipboard shortcuts.
+template <typename Changed>
+[[nodiscard]] bool HandleSearchFieldKeyDown(EditorHierarchySearchState& field, HWND owner, WPARAM key, Changed&& changed) {
+    if (!field.IsFocused()) {
+        return false;
+    }
+    switch (EditorTextInputShortcuts::Resolve(key)) {
+    case EditorTextInputShortcut::SelectAll:
+        field.SelectAll();
+        return true;
+    case EditorTextInputShortcut::Copy:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, field.Query()));
+        return true;
+    case EditorTextInputShortcut::Cut:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, field.Query()));
+        field.Clear();
+        changed();
+        return true;
+    case EditorTextInputShortcut::Paste:
+        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
+            field.Insert(*text);
+            changed();
+        }
+        return true;
+    case EditorTextInputShortcut::None:
+        break;
+    }
+    switch (key) {
+    case VK_BACK:
+        field.Backspace();
+        break;
+    case VK_ESCAPE:
+        if (field.Query().empty()) {
+            field.Focus(false);
+        } else {
+            field.Clear();
+        }
+        break;
+    case VK_RETURN:
+        field.Focus(false);
+        break;
+    default:
+        // Plain keys belong to the field (Delete must not delete the selected object), while
+        // Ctrl shortcuts such as Ctrl+S still reach the editor.
+        return (GetKeyState(VK_CONTROL) & 0x8000) == 0;
+    }
+    changed();
+    return true;
 }
 
 [[nodiscard]] bool HandleTransformToolShortcut(EditorSceneContext& sceneContext, WPARAM key) noexcept {
@@ -485,9 +579,20 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.sceneViewport.SetHostSurfaceSuspended(messageWindow, false);
         }
         return EditorWindowResizeHandler::HandleSize(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows, context_.sceneViewport);
+    case WM_MOVE:
+        if (const auto id = context_.floatingWindows.Queries().PanelId(messageWindow); id != 0U) {
+            RECT rect{};
+            if (GetWindowRect(messageWindow, &rect)) context_.dockModel.Commands().MoveFloatingPanel(id, rect.left, rect.top);
+        }
+        return 0;
+    case WM_DISPLAYCHANGE:
+        RecoverNativeWindow(messageWindow);
+        for (const auto floating : context_.floatingWindows.Queries().Windows()) RecoverNativeWindow(floating);
+        return 0;
     case WM_DPICHANGED:
+        RecoverNativeWindow(messageWindow, reinterpret_cast<const RECT*>(lparam));
         context_.sceneViewport.NotifyHostDpiChanged(messageWindow);
-        return DefWindowProcW(messageWindow, message, wparam, lparam);
+        return 0;
     case WM_ACTIVATEAPP:
         if (wparam == FALSE) {
             // Native scene surfaces are WS_CHILD and therefore cannot escape
@@ -570,6 +675,17 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_CHAR:
+        if (EditorAgentPanelController{ context_.sceneContext }.HandleChar(wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
+        if (HandleSearchFieldChar(context_.sceneContext.Console().Filter(), wparam,
+                [&] { RefreshConsoleFilter(context_, messageWindow); }) ||
+            HandleSearchFieldChar(context_.sceneContext.ProjectSettings().Search(), wparam,
+                [&] { RefreshSettingsSearch(context_, messageWindow); })) {
+            return 0;
+        }
         if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleCharacter(static_cast<wchar_t>(wparam))) {
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
@@ -609,6 +725,40 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             if (context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Scene, DockArea::Center)) {
                 context_.sceneViewport.RequestPresent();
                 InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
+        if (wparam == 'K' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
+            // From anywhere: the Agent panel comes forward (its drawer opens) with the request box ready.
+            static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+            context_.sceneContext.AgentPanel().Prepare();
+            context_.sceneContext.AgentPanel().FocusInput(true);
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
+        if (wparam == VK_SPACE && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
+            !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
+            // Slides the bottom drawer (Project Files, Console) open or back to its tab strip.
+            const bool collapsed = context_.dockModel.Queries().DrawerCollapsed();
+            if (context_.dockModel.Commands().SetDrawerCollapsed(!collapsed)) {
+                context_.sceneViewport.RequestPresent();
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
+        if (wparam == 'R' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
+            !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
+            // Realtime for every Scene View, as the toolbar button sets it for one.
+            for (const DockPanel& panel : context_.dockModel.Queries().Panels()) {
+                if (panel.kind == DockPanelKind::Scene) {
+                    context_.sceneContext.ViewportPreview(panel.id).ToggleRealtime();
+                }
+            }
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            for (HWND window : context_.floatingWindows.Queries().Windows()) {
+                InvalidateRect(window, nullptr, FALSE);
             }
             return 0;
         }
@@ -666,6 +816,17 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         if (HandleMaterialGraphShortcut(messageWindow, context_, wparam)) {
             context_.sceneViewport.RequestPresent();
+            return 0;
+        }
+        if (EditorAgentPanelController{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
+        if (HandleSearchFieldKeyDown(context_.sceneContext.Console().Filter(), messageWindow, wparam,
+                [&] { RefreshConsoleFilter(context_, messageWindow); }) ||
+            HandleSearchFieldKeyDown(context_.sceneContext.ProjectSettings().Search(), messageWindow, wparam,
+                [&] { RefreshSettingsSearch(context_, messageWindow); })) {
             return 0;
         }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {

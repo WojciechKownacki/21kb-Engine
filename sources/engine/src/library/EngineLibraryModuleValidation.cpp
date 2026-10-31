@@ -73,6 +73,10 @@ ModuleCatalogValidationResult ValidateModuleCatalog(std::span<const LibraryModul
             result.errors.emplace_back("module catalog entry has an empty name");
             continue;
         }
+        if (module.capability && module.Register == nullptr) {
+            result.succeeded = false;
+            result.errors.push_back("module '" + module.name + "' has capability but no Register function");
+        }
         if (!byName.emplace(module.name, &module).second) {
             result.succeeded = false;
             result.errors.push_back("module catalog has a duplicate module name '" + module.name + "'");

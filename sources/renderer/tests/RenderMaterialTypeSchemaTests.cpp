@@ -249,9 +249,9 @@ void RunKbmat1009MaterialTextureSlotColorSpaceRuntimeGateTest() {
             Require(policy.expectedColorSpace != RenderMaterialTextureColorSpace::Unknown, "KBMAT-1009: runtime-supported texture slots need explicit color-space policy");
         }
     }
-    Require(supportedSlotCount == 5U, "KBMAT-1009: runtime should bind the five MVP PBR texture slots");
+    Require(supportedSlotCount == 7U, "KBMAT-1009: runtime should bind the seven PBR texture slots including coat layers");
     Require(supportedSrgbSlotCount == 2U, "KBMAT-1009: only Base Color and Emissive runtime slots should bind as sRGB");
-    Require(supportedLinearSlotCount == 3U, "KBMAT-1009: Normal, Metallic-Roughness and Occlusion runtime slots should bind as linear");
+    Require(supportedLinearSlotCount == 5U, "KBMAT-1009: Normal, Metallic-Roughness, Occlusion and both coat slots should bind as linear");
 
     RenderMaterialResource material{};
     material.albedoTextureAssetId = 11U;
@@ -768,11 +768,11 @@ void RunBuiltInPbrSchemaDistinguishesSupportedVsAdvancedTest() {
     const RenderMaterialParameterSchema* clearcoat = FindMaterialParameterSchema(schema, "clearcoatFactor");
     Require(clearcoat != nullptr, "Schema missing clearcoatFactor");
     Require(clearcoat->group == RenderMaterialParameterGroup::Advanced, "clearcoatFactor should be Advanced");
-    Require(clearcoat->runtimeSupport == RenderMaterialFeatureSupport::ParsedButIgnored, "clearcoatFactor should be ParsedButIgnored");
+    Require(clearcoat->runtimeSupport == RenderMaterialFeatureSupport::Supported, "clearcoatFactor should be supported");
 
     const RenderMaterialTextureSlotSchema* clearcoatTex = FindMaterialTextureSlotSchema(schema, "clearcoatTextureAssetId");
     Require(clearcoatTex != nullptr, "Schema missing clearcoat texture slot");
-    Require(clearcoatTex->runtimeSupport == RenderMaterialFeatureSupport::ParsedButIgnored, "clearcoatTexture should be ParsedButIgnored");
+    Require(clearcoatTex->runtimeSupport == RenderMaterialFeatureSupport::Supported, "clearcoatTexture should be supported");
 }
 
 void RunBuiltInPbrSchemaParserUsesSchemaForValidationTest() {
@@ -798,7 +798,7 @@ void RunBuiltInPbrSchemaParserUsesSchemaForValidationTest() {
 void RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest() {
     std::istringstream input{
         "baseColor 0.25 0.5 0.75 1\n"
-        "clearcoatFactor 0.5\n"
+        "anisotropyStrength 0.5\n"
         "transmissionTexture Textures/transmission.kbtex\n"
     };
     const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
@@ -806,7 +806,7 @@ void RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest() {
     Require(result.Succeeded() && result.HasWarnings(), "KBMAT-0014: Unsupported advanced PBR fields should keep the asset loadable and warning diagnostics visible");
     Require(result.diagnostics.size() == 2U, "KBMAT-0014: Should report 2 unsupported advanced PBR field diagnostics");
     Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "KBMAT-0014: First diagnostic should be UnsupportedAdvancedField");
-    Require(result.diagnostics[0].field == "clearcoatFactor", "KBMAT-0014: First diagnostic should be for clearcoatFactor");
+    Require(result.diagnostics[0].field == "anisotropyStrength", "KBMAT-0014: First diagnostic should be for anisotropyStrength");
     Require(result.diagnostics[1].field == "transmissionTexture", "KBMAT-0014: Second diagnostic should be for transmissionTexture");
 }
 
@@ -1316,7 +1316,7 @@ void RunBuiltInPbrSchemaUnsupportedAdvancedFeaturesListedTest() {
         if (feature == "clearcoatFactor") foundClearcoat = true;
         if (feature == "transmissionFactor") foundTransmission = true;
     }
-    Require(foundClearcoat, "Schema should list clearcoatFactor as unsupported advanced");
+    Require(!foundClearcoat, "Schema still lists supported clearcoat as unsupported");
     Require(foundTransmission, "Schema should list transmissionFactor as unsupported advanced");
 }
 
@@ -4232,7 +4232,7 @@ void RunMaterialParserDiagnosticsCarrySourceContextTest() {
             << "materialType builtin.pbr\n"
             << "materialTypeVersion 1\n"
             << "baseColor 1 1 1 1\n"
-            << "clearcoatFactor 0.25\n"
+            << "anisotropyStrength 0.25\n"
             << "unknownMaterialField 7\n";
     }
 
@@ -4741,10 +4741,22 @@ void RunMaterialShadingModelGatingTest() {
             "KBMAT-MAT37: the forward pass must light with the graph's model colour");
         Require(gbuffer.find("gl_FragData[4] = vec4(clamp(" + std::string{ field }) != std::string::npos,
             "KBMAT-MAT37: the G-buffer pass must write the model colour to the fifth target");
+        Require(RenderMaterialGraphCooksScenePass(colorResult.shader.reflection,kRenderMaterialGraphCompactGBufferPass),
+            "Scattering graphs must cook their compact deferred variant");
+        Require(!RenderMaterialGraphCooksScenePass(colorResult.shader.reflection,"GBuffer",true) &&
+            RenderMaterialGraphCooksScenePass(colorResult.shader.reflection,kRenderMaterialGraphCompactGBufferPass,true) &&
+            RenderMaterialGraphCooksScenePass(colorResult.shader.reflection,"GBuffer",false),
+            "Portable cook and validation must require compact graph data instead of a fifth target");
+        const auto compact=BuildGraphFragmentWrapperSource(colorResult.shader,kRenderMaterialGraphCompactGBufferPass);
+        Require(compact.find("gl_FragData[3]")!=std::string::npos && compact.find("gl_FragData[4]")==std::string::npos &&
+            compact.find("surface.baseColor.rgb")!=std::string::npos,
+            "Compact deferred variant must preserve graph evaluation without writing a fifth target");
         colorGraph.shadingModel = "defaultLit";
         const RenderMaterialGraphCompileResult defaultLit = CompileRenderMaterialGraphToShaderSource(colorGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0378U });
         Require(defaultLit.Succeeded() && !defaultLit.shader.reflection.writesShadingModelColor,
             "KBMAT-MAT37: Default Lit ignores the scattering colour pins");
+        Require(!RenderMaterialGraphCooksScenePass(defaultLit.shader.reflection,kRenderMaterialGraphCompactGBufferPass),
+            "Ordinary graphs must not cook a redundant compact variant");
     }
 
     // Unreal's Eye: Iris Mask, Iris Distance and Iris Normal ride in the fifth target (octahedral

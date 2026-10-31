@@ -6,6 +6,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/AssetMemoryInputStream.hpp"
+#include "engine/assets/AssetPayloadMemory.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -34,6 +35,38 @@
 
 namespace kb::render {
 namespace {
+
+using kb::assets::StringBufferBytes;
+
+[[nodiscard]] std::optional<std::uint64_t> MeshResidentBytes(const RenderMeshAssetData& mesh) {
+    const auto buffers = [](const auto&... values) {
+        return (std::uint64_t{0} + ... + (static_cast<std::uint64_t>(values.capacity()) * sizeof(values[0])));
+    };
+    std::uint64_t bytes = sizeof(mesh) + buffers(mesh.vertices, mesh.tangentVertices, mesh.indices16, mesh.indices32,
+        mesh.sections, mesh.meshlets, mesh.lods, mesh.materialSlots, mesh.materialNames, mesh.embeddedMaterials,
+        mesh.terrainSectionIndices, mesh.dynamicVertexUpdateRanges, mesh.dynamicSectionUpdateIndices,
+        mesh.terrainLayerWeights, mesh.dynamicTerrainLayerWeightUpdates);
+    for (const auto& name : mesh.materialNames) bytes += StringBufferBytes(name);
+    for (const auto& material : mesh.embeddedMaterials) {
+        for (const auto* name : {&material.name, &material.albedoTexturePath, &material.normalTexturePath,
+                &material.metallicRoughnessTexturePath, &material.occlusionTexturePath, &material.emissiveTexturePath,
+                &material.clearcoatTexturePath, &material.clearcoatRoughnessTexturePath, &material.sheenColorTexturePath,
+                &material.transmissionTexturePath, &material.thicknessTexturePath, &material.anisotropyTexturePath,
+                &material.decalTexturePath, &material.layerMaskTexturePath}) bytes += StringBufferBytes(*name);
+    }
+    if (mesh.streaming) {
+        const auto& layout = *mesh.streaming;
+        bytes += buffers(layout.lodFirstChunk, layout.lodChunkCount, layout.lodGeometryBytes,
+            layout.lodErrors, layout.fragments, layout.chunks);
+        for (const auto& chunk : layout.chunks) bytes += buffers(chunk);
+        if (layout.primaryBlock) {
+            // Shared payload attribution cannot be recovered from one scalar reading.
+            if (layout.primaryBlock.use_count() != 1) return std::nullopt;
+            bytes += sizeof(*layout.primaryBlock) + buffers(*layout.primaryBlock);
+        }
+    }
+    return bytes;
+}
 
 [[nodiscard]] std::string LowerExtensionText(std::string extension) {
     std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
@@ -577,6 +610,37 @@ std::vector<kb::assets::AssetId> RenderMeshAssetLoader::DiscoverDependencies(
 
 namespace {
 
+class CancelledMeshLoad final : public std::runtime_error {
+public:
+    CancelledMeshLoad() : std::runtime_error("Asset load cancelled") {}
+};
+
+class CancellableObjBuffer final : public std::streambuf {
+public:
+    CancellableObjBuffer(std::streambuf& source, const kb::assets::AssetLoadRequest& request)
+        : source_(source), request_(request) {}
+protected:
+    int_type underflow() override {
+        if (request_.IsCancellationRequested()) throw CancelledMeshLoad{};
+        const auto count = source_.sgetn(bytes_.data(), static_cast<std::streamsize>(bytes_.size()));
+        if (count == 0) return traits_type::eof();
+        setg(bytes_.data(), bytes_.data(), bytes_.data() + count);
+        return traits_type::to_int_type(*gptr());
+    }
+private:
+    std::streambuf& source_;
+    const kb::assets::AssetLoadRequest& request_;
+    std::array<char, 4096U> bytes_{};
+};
+
+[[nodiscard]] std::optional<RenderMeshAssetData> LoadCancellableObj(
+    std::istream& source, const kb::assets::AssetLoadRequest& request) {
+    CancellableObjBuffer buffer{*source.rdbuf(), request};
+    std::istream input{&buffer};
+    input.exceptions(std::ios::badbit);
+    return RenderMeshAssetBuilder::LoadObj(input);
+}
+
 [[nodiscard]] kb::assets::AssetLoadResult LoadRenderMeshAsset(const kb::assets::AssetLoadRequest& request) {
     std::optional<RenderMeshAssetData> mesh;
     std::string packagedError;
@@ -611,7 +675,7 @@ namespace {
             mesh = RenderMeshAssetBuilder::LoadFbx(bytes);
         } else {
             kb::assets::AssetMemoryInputStream input{ source };
-            mesh = RenderMeshAssetBuilder::LoadObj(input);
+            mesh = LoadCancellableObj(input, request);
         }
     } else {
         if (extension == ".gltf" || extension == ".glb") {
@@ -619,9 +683,11 @@ namespace {
         } else if (extension == ".fbx") {
             mesh = RenderMeshAssetBuilder::LoadFbx(request.resolvedPath);
         } else {
-            mesh = RenderMeshAssetBuilder::LoadObj(request.resolvedPath);
+            std::ifstream source{request.resolvedPath, std::ios::binary};
+            if (source) mesh = LoadCancellableObj(source, request);
         }
     }
+    if (request.IsCancellationRequested()) return {.error = "Asset load cancelled"};
     if (!mesh.has_value()) {
         return kb::assets::AssetLoadResult{
             .error = packagedError.empty()
@@ -641,7 +707,11 @@ namespace {
 
 kb::assets::AssetLoadResult RenderMeshAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     try {
-        return LoadRenderMeshAsset(request);
+        auto result = LoadRenderMeshAsset(request);
+        if (result.Succeeded()) result.residentBytes = MeshResidentBytes(*std::static_pointer_cast<RenderMeshAssetData>(result.asset));
+        return result;
+    } catch (const CancelledMeshLoad&) {
+        return {.error = "Asset load cancelled"};
     } catch (const std::bad_alloc&) {
         return kb::assets::AssetLoadResult{ .error = "Render mesh load exceeded its memory budget" };
     } catch (const std::length_error&) {

@@ -36,6 +36,13 @@ template <typename E> requires std::is_enum_v<E>
 void Write(std::vector<std::uint8_t>& out, E v) { SceneAssetBinaryIO::WriteUInt32(out, static_cast<std::uint32_t>(v)); }
 
 bool ReadValue(Reader& in, UIRectTransform& v) { return Read(in,v.anchorMin)&&Read(in,v.anchorMax)&&Read(in,v.offsetMin)&&Read(in,v.offsetMax)&&Read(in,v.pivot)&&Read(in,v.scale)&&in.ReadFloat(v.rotationDegrees)&&in.ReadInt32(v.zOrder); }
+bool ReadValue(Reader& in, UIRectTransform& v, std::uint32_t version) {
+    if (!ReadValue(in, v)) return false;
+    if (version < SceneDocument::UIThemeBindingFileVersion) return true;
+    std::string variant, overrides;
+    return in.ReadUInt64(v.themeAssetId) && in.ReadString(variant, 128U) && SetUIRectThemeVariant(v, variant) &&
+        in.ReadString(overrides, 1023U) && SetUIRectThemeOverrides(v, overrides);
+}
 bool ReadValue(Reader& in, UICanvas& v) { return in.ReadInt32(v.sortingOrder)&&in.ReadBool(v.pixelPerfect); }
 // v39 added the render mode, world scale, safe-area layout and owning player. An older canvas keeps
 // filling the whole screen, which is how it was authored.
@@ -74,7 +81,20 @@ bool ReadValue(Reader& in, UIText& v, std::uint32_t fileVersion) {
     if (!ReadValue(in, v)) return false;
     if (fileVersion < 39U) return true;
     std::string key;
-    return in.ReadString(key,static_cast<std::uint32_t>(UIText::MaxLocalizationKeyBytes-1U))&&SetUITextLocalizationKey(v,key)&&Read(in,v.overflow)&&in.ReadBool(v.autoSize)&&in.ReadFloat(v.minFontSize)&&in.ReadUInt32(v.maxLines)&&in.ReadFloat(v.characterSpacing);
+    if (!(in.ReadString(key,static_cast<std::uint32_t>(UIText::MaxLocalizationKeyBytes-1U))&&SetUITextLocalizationKey(v,key)&&Read(in,v.overflow)&&in.ReadBool(v.autoSize)&&in.ReadFloat(v.minFontSize)&&in.ReadUInt32(v.maxLines)&&in.ReadFloat(v.characterSpacing))) return false;
+    if (fileVersion < SceneDocument::UITextPluralFileVersion) return true;
+    std::string number;
+    if (!in.ReadString(number, static_cast<std::uint32_t>(v.localizationNumber.size() - 1U)) || !SetUITextLocalizationNumber(v, number)) return false;
+    if (fileVersion < SceneDocument::UITextFontVariationsFileVersion) return true;
+    std::string variations;
+    if (!in.ReadString(variations, static_cast<std::uint32_t>(v.fontVariations.size() - 1U)) || !SetUITextFontVariations(v, variations)) return false;
+    if (fileVersion < SceneDocument::UITextFallbackFontFileVersion) return true;
+    if (!in.ReadUInt64(v.fallbackFontAssetId)) return false;
+    if (fileVersion < SceneDocument::UITextFontRenderModeFileVersion) return true;
+    std::uint32_t mode = 0U;
+    if (!in.ReadUInt32(mode) || mode > static_cast<std::uint32_t>(UITextFontRenderMode::SignedDistanceField)) return false;
+    v.fontRenderMode = static_cast<UITextFontRenderMode>(mode);
+    return true;
 }
 bool ReadValue(Reader& in, UIBorder& v) { return Read(in,v.backgroundColor)&&Read(in,v.borderColor)&&Read(in,v.borderWidth)&&Read(in,v.cornerRadius)&&in.ReadFloat(v.opacity); }
 bool ReadValue(Reader& in, UIMask& v) { return in.ReadBool(v.showGraphic); }
@@ -180,7 +200,7 @@ template <typename T> bool ReadValue(Reader& in, T& v, std::uint32_t) requires r
 { return ReadValue(in, v); }
 
 #define KB_WRITE_FIELD(Field) Write(out, v.Field)
-void WriteValue(std::vector<std::uint8_t>& out, const UIRectTransform& v) { KB_WRITE_FIELD(anchorMin);KB_WRITE_FIELD(anchorMax);KB_WRITE_FIELD(offsetMin);KB_WRITE_FIELD(offsetMax);KB_WRITE_FIELD(pivot);KB_WRITE_FIELD(scale);SceneAssetBinaryIO::WriteFloat(out,v.rotationDegrees);SceneAssetBinaryIO::WriteInt32(out,v.zOrder); }
+void WriteValue(std::vector<std::uint8_t>& out, const UIRectTransform& v) { KB_WRITE_FIELD(anchorMin);KB_WRITE_FIELD(anchorMax);KB_WRITE_FIELD(offsetMin);KB_WRITE_FIELD(offsetMax);KB_WRITE_FIELD(pivot);KB_WRITE_FIELD(scale);SceneAssetBinaryIO::WriteFloat(out,v.rotationDegrees);SceneAssetBinaryIO::WriteInt32(out,v.zOrder);SceneAssetBinaryIO::WriteUInt64(out,v.themeAssetId);SceneAssetBinaryIO::WriteString(out,UIRectThemeVariant(v));SceneAssetBinaryIO::WriteString(out,UIRectThemeOverrides(v)); }
 void WriteValue(std::vector<std::uint8_t>& out, const UICanvas& v) { SceneAssetBinaryIO::WriteInt32(out,v.sortingOrder);SceneAssetBinaryIO::WriteBool(out,v.pixelPerfect);KB_WRITE_FIELD(renderMode);SceneAssetBinaryIO::WriteFloat(out,v.pixelsPerUnit);SceneAssetBinaryIO::WriteBool(out,v.respectSafeArea);SceneAssetBinaryIO::WriteInt32(out,v.player);SceneAssetBinaryIO::WriteBool(out,v.modal); }
 void WriteValue(std::vector<std::uint8_t>& out, const UICanvasScaler& v) { KB_WRITE_FIELD(scaleMode);KB_WRITE_FIELD(referenceResolution);SceneAssetBinaryIO::WriteFloat(out,v.scaleFactor);SceneAssetBinaryIO::WriteFloat(out,v.matchWidthOrHeight); }
 void WriteValue(std::vector<std::uint8_t>& out, const UICanvasGroup& v) { SceneAssetBinaryIO::WriteFloat(out,v.opacity);SceneAssetBinaryIO::WriteBool(out,v.interactable);SceneAssetBinaryIO::WriteBool(out,v.blocksRaycasts);SceneAssetBinaryIO::WriteBool(out,v.ignoreParentGroups);SceneAssetBinaryIO::WriteBool(out,v.visible);SceneAssetBinaryIO::WriteFloat(out,v.transitionSeconds);KB_WRITE_FIELD(hiddenOffset);SceneAssetBinaryIO::WriteFloat(out,v.hiddenScale); }
@@ -195,7 +215,7 @@ void WriteValue(std::vector<std::uint8_t>& out, const UIAspectRatioFitter& v) { 
 void WriteValue(std::vector<std::uint8_t>& out, const UISprite& v) { SceneAssetBinaryIO::WriteUInt64(out,v.spriteAssetId);KB_WRITE_FIELD(color);SceneAssetBinaryIO::WriteBool(out,v.preserveAspect); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIImage& v) { SceneAssetBinaryIO::WriteUInt64(out,v.imageAssetId);KB_WRITE_FIELD(uvRect);KB_WRITE_FIELD(scaleMode);SceneAssetBinaryIO::WriteBool(out,v.preserveAspect);KB_WRITE_FIELD(nineSlice);KB_WRITE_FIELD(color);KB_WRITE_FIELD(fillMethod);KB_WRITE_FIELD(fillOrigin);SceneAssetBinaryIO::WriteFloat(out,v.fillAmount);SceneAssetBinaryIO::WriteBool(out,v.fillClockwise);SceneAssetBinaryIO::WriteFloat(out,v.alphaHitThreshold);SceneAssetBinaryIO::WriteUInt64(out,v.materialAssetId); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIRawImage& v) { SceneAssetBinaryIO::WriteUInt64(out,v.imageAssetId);KB_WRITE_FIELD(uvRect);KB_WRITE_FIELD(color); }
-void WriteValue(std::vector<std::uint8_t>& out, const UIText& v) { SceneAssetBinaryIO::WriteString(out,UITextContent(v));SceneAssetBinaryIO::WriteUInt64(out,v.fontAssetId);SceneAssetBinaryIO::WriteFloat(out,v.fontSize);KB_WRITE_FIELD(color);KB_WRITE_FIELD(horizontalAlignment);KB_WRITE_FIELD(verticalAlignment);KB_WRITE_FIELD(wrapMode);SceneAssetBinaryIO::WriteFloat(out,v.lineSpacing);SceneAssetBinaryIO::WriteBool(out,v.richText);SceneAssetBinaryIO::WriteString(out,UITextLocalizationKey(v));KB_WRITE_FIELD(overflow);SceneAssetBinaryIO::WriteBool(out,v.autoSize);SceneAssetBinaryIO::WriteFloat(out,v.minFontSize);SceneAssetBinaryIO::WriteUInt32(out,v.maxLines);SceneAssetBinaryIO::WriteFloat(out,v.characterSpacing); }
+void WriteValue(std::vector<std::uint8_t>& out, const UIText& v) { SceneAssetBinaryIO::WriteString(out,UITextContent(v));SceneAssetBinaryIO::WriteUInt64(out,v.fontAssetId);SceneAssetBinaryIO::WriteFloat(out,v.fontSize);KB_WRITE_FIELD(color);KB_WRITE_FIELD(horizontalAlignment);KB_WRITE_FIELD(verticalAlignment);KB_WRITE_FIELD(wrapMode);SceneAssetBinaryIO::WriteFloat(out,v.lineSpacing);SceneAssetBinaryIO::WriteBool(out,v.richText);SceneAssetBinaryIO::WriteString(out,UITextLocalizationKey(v));KB_WRITE_FIELD(overflow);SceneAssetBinaryIO::WriteBool(out,v.autoSize);SceneAssetBinaryIO::WriteFloat(out,v.minFontSize);SceneAssetBinaryIO::WriteUInt32(out,v.maxLines);SceneAssetBinaryIO::WriteFloat(out,v.characterSpacing); SceneAssetBinaryIO::WriteString(out,UITextLocalizationNumber(v)); SceneAssetBinaryIO::WriteString(out,UITextFontVariations(v)); SceneAssetBinaryIO::WriteUInt64(out,v.fallbackFontAssetId); KB_WRITE_FIELD(fontRenderMode); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIBorder& v) { KB_WRITE_FIELD(backgroundColor);KB_WRITE_FIELD(borderColor);KB_WRITE_FIELD(borderWidth);KB_WRITE_FIELD(cornerRadius);SceneAssetBinaryIO::WriteFloat(out,v.opacity); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIMask& v) { SceneAssetBinaryIO::WriteBool(out,v.showGraphic);SceneAssetBinaryIO::WriteFloat(out,v.softness); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIShadow& v) { KB_WRITE_FIELD(offset);KB_WRITE_FIELD(color);SceneAssetBinaryIO::WriteFloat(out,v.blur); }

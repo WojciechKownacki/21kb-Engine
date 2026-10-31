@@ -2561,6 +2561,73 @@
       "after": "menu-settings-edited"
     },
     {
+      "op": "key",
+      "key": "LeftShift",
+      "down": true
+    },
+    {
+      "op": "key",
+      "key": "Home",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "Home",
+      "down": false
+    },
+    {
+      "op": "key",
+      "key": "LeftShift",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "menu-text-selected",
+      "require_non_uniform": true
+    },
+    {
+      "op": "key",
+      "key": "Backspace",
+      "down": true
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "key",
+      "key": "Backspace",
+      "down": false
+    },
+    {
+      "op": "step",
+      "frames": 1,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "assert_property",
+      "entity": "name_input",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": ""
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "menu-text-cleared",
+      "require_non_uniform": true
+    },
+    {
       "op": "pointer",
       "x": 979.0,
       "y": 584.0,

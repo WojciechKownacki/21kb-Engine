@@ -55,6 +55,7 @@ bool ScreenUIComposite::Initialize() {
         return true;
     }
     program_ = ShaderLoader::LoadProgram("vs_screen_ui.sc", "fs_screen_ui.sc");
+    distanceFieldProgram_ = ShaderLoader::LoadProgram("vs_screen_ui.sc", "fs_screen_ui_sdf.sc");
     sampler_ = bgfx::createUniform("s_screenUITexture", bgfx::UniformType::Sampler);
     viewportUniform_ = bgfx::createUniform("u_screenUIViewport", bgfx::UniformType::Vec4);
     fillColorUniform_ = bgfx::createUniform("u_screenUIFillColor", bgfx::UniformType::Vec4);
@@ -95,6 +96,10 @@ void ScreenUIComposite::Shutdown() noexcept {
         bgfx::destroy(tonemapParamsUniform_);
         tonemapParamsUniform_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(distanceFieldProgram_)) {
+        bgfx::destroy(distanceFieldProgram_);
+        distanceFieldProgram_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(program_)) {
         bgfx::destroy(program_);
         program_ = BGFX_INVALID_HANDLE;
@@ -106,6 +111,22 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         return false;
     }
     const ScreenUIDrawList& drawList = *desc.drawList;
+    if (!desc.overdrawQueries.empty()) {
+        if (bgfx::getCaps()->limits.maxOcclusionQueries == 0U ||
+            desc.overdrawQueries.size() != drawList.batches.size()) return false;
+        for (std::size_t index = 0; index < drawList.batches.size(); ++index) {
+            const auto handle = desc.overdrawQueries[index];
+            if (!bgfx::isValid(handle) ||
+                drawList.batches[index].texture.source == ScreenUITextureSource::Material) return false;
+            const auto key = drawList.batches[index].texture;
+            if (key.source != ScreenUITextureSource::None) {
+                const auto* texture = Resolve(desc.textures, key);
+                if (texture == nullptr || !bgfx::isValid(texture->texture)) return false;
+            }
+            for (std::size_t previous = 0; previous < index; ++previous)
+                if (desc.overdrawQueries[previous].idx == handle.idx) return false;
+        }
+    }
     const RenderViewportRect outputRect =
         desc.outputRect.extent.IsValid() ? desc.outputRect : RenderViewportRect{.extent = desc.outputExtent};
     bgfx::setViewName(desc.viewId, "KB Screen UI Composite");
@@ -202,7 +223,14 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
                        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
         bgfx::setVertexBuffer(0U, &vertices, 0U, vertexCount);
         bgfx::setIndexBuffer(&indices, batch.firstIndex, batch.indexCount);
-        bgfx::submit(desc.viewId, program_);
+        const auto program = batch.style.fragmentKind == ScreenUIFragmentKind::DistanceFieldFont ? distanceFieldProgram_ : program_;
+        if (!bgfx::isValid(program)) { bgfx::discard(); continue; }
+        if (desc.overdrawQueries.empty()) {
+            bgfx::submit(desc.viewId, program);
+        } else {
+            const auto index = static_cast<std::size_t>(&batch - drawList.batches.data());
+            bgfx::submit(desc.viewId, program, desc.overdrawQueries[index]);
+        }
     }
     return true;
 }
@@ -216,7 +244,7 @@ bool ScreenUIComposite::IsInitialized() const noexcept {
 }
 
 const ScreenUIResolvedTexture* ScreenUIComposite::Resolve(std::span<const ScreenUIResolvedTexture> textures,
-                                                          ScreenUITextureKey key) noexcept {
+                                                          const ScreenUITextureKey& key) noexcept {
     const auto found = std::ranges::find(textures, key, &ScreenUIResolvedTexture::key);
     return found == textures.end() ? nullptr : &*found;
 }

@@ -1,0 +1,117 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "EcsLifecycle",
+      "template": "Basic"
+    },
+    {
+      "op": "configure_runtime_rendering",
+      "width": 640,
+      "height": 480
+    },
+    {
+      "op": "create_entity",
+      "id": "owner",
+      "name": "ResourceOwner",
+      "preset": "Cube"
+    },
+    {
+      "op": "duplicate_entity",
+      "entity": "owner",
+      "id": "clone"
+    },
+    {
+      "op": "rename_entity",
+      "entity": "clone",
+      "name": "ResourceClone"
+    },
+    {
+      "op": "add_component",
+      "entity": "clone",
+      "component": "Light"
+    },
+    {
+      "op": "set_property",
+      "entity": "clone",
+      "component": "Light",
+      "property": "intensity",
+      "value": 2
+    },
+    {
+      "op": "assert_property",
+      "entity": "clone",
+      "component": "Light",
+      "property": "intensity",
+      "value": 2
+    },
+    {
+      "op": "delete_entity",
+      "entity": "owner"
+    },
+    {
+      "op": "assert_component",
+      "entity": "clone",
+      "component": "MeshRenderer"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 8,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "shared-resource-after-delete",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "clone"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_component",
+      "entity": "clone",
+      "component": "MeshRenderer"
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/EcsLifecycle.21kbscene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/EcsLifecycle.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 8,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "restored-resource",
+      "require_non_uniform": true
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

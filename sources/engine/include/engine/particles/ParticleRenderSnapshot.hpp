@@ -154,6 +154,11 @@ struct ParticleRenderEmitterRecord {
     // Retained particles can finish on their previous path after a live edit.
     ParticleEmitterSimulationPath simulationPath = ParticleEmitterSimulationPath::Cpu;
     ParticleGpuFallbackReason gpuFallbackReason = ParticleGpuFallbackReason::CpuPolicy;
+    // Opt-in host elapsed time for emission and force/integration work in the last fixed step.
+    // Excludes shared scheduler, age/event processing, snapshot packing and GPU execution.
+    bool cpuWorkProfiled = false;
+    std::uint64_t cpuEmissionNanoseconds = 0U;
+    std::uint64_t cpuIntegrationNanoseconds = 0U;
     // A zero encoded axis represents 256, preserving the authored 1..256 grid
     // without widening the renderer ABI for the common 1x1 case.
     std::uint8_t flipbookColumnsEncoded = 1U;

@@ -2,6 +2,7 @@
 #include "TestSuites.hpp"
 
 #include "engine/ecs/System.hpp"
+#include "engine/ecs/Query.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputKey.hpp"
@@ -13,6 +14,7 @@
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/InputComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -23,9 +25,13 @@
 #include "engine/security/ReleaseManifest.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -39,6 +45,10 @@ namespace {
 
 #ifndef KB_BASIC_LIGHTING_PLUGIN_PATH
 #define KB_BASIC_LIGHTING_PLUGIN_PATH ""
+#endif
+
+#ifndef KB_PHYSICS_JOLT_PLUGIN_PATH
+#define KB_PHYSICS_JOLT_PLUGIN_PATH ""
 #endif
 
 #ifndef __has_feature
@@ -64,6 +74,10 @@ struct ModuleProbe {
     int attachCount = 0;
     int detachCount = 0;
     std::vector<std::string> unloadOrder;
+    std::set<std::string> registrations;
+    std::map<std::string, std::function<void()>> callbacks;
+    int callbackCalls = 0;
+    bool failCleanup = false;
 };
 
 class ProbeSystem final : public kb::ecs::System {
@@ -173,15 +187,27 @@ public:
         return kb::modules::EngineModuleMetadata{ name_, 1U, dependencies_, Phase::Default };
     }
     void OnLoad(kb::modules::EngineModuleContext&) override {
+        probe_.registrations.insert(name_);
         if (fault_ != nullptr && *fault_ == Fault::Load) throw std::runtime_error("load exploded");
         probe_.loadOrder.push_back(name_);
     }
     void OnEnable() override {
+        probe_.callbacks.emplace(name_, [this] { ++probe_.callbackCalls; });
         if (fault_ != nullptr && *fault_ == Fault::Enable) throw std::runtime_error("enable exploded");
         ++probe_.enableCount;
     }
-    void OnDisable() override { ++probe_.disableCount; probe_.unloadOrder.push_back("disable:" + name_); }
-    void OnUnload() override { ++probe_.unloadCount; probe_.unloadOrder.push_back("unload:" + name_); }
+    void OnDisable() override {
+        probe_.callbacks.erase(name_);
+        ++probe_.disableCount;
+        probe_.unloadOrder.push_back("disable:" + name_);
+        if (probe_.failCleanup) throw std::runtime_error("disable cleanup failed");
+    }
+    void OnUnload() override {
+        probe_.registrations.erase(name_);
+        ++probe_.unloadCount;
+        probe_.unloadOrder.push_back("unload:" + name_);
+        if (probe_.failCleanup) throw std::runtime_error("unload cleanup failed");
+    }
 private:
     std::string name_;
     std::vector<std::string> dependencies_;
@@ -190,13 +216,16 @@ private:
 };
 
 void RunModuleLoadRollsBackOnFailureTest() {
+    for (const bool failCleanup : {false, true}) {
     for (const FaultyModule::Fault kind : { FaultyModule::Fault::Load, FaultyModule::Fault::Enable }) {
         ModuleProbe probe;
+        probe.failCleanup = failCleanup;
         FaultyModule::Fault fault = kind;
         kb::scene::Scene scene;
         EngineModuleHost host{ kb::project::ProjectDescriptor{} };
         host.Add(std::make_unique<FaultyModule>("First", std::vector<std::string>{}, probe, nullptr));
         host.Add(std::make_unique<FaultyModule>("Second", std::vector<std::string>{ "First" }, probe, &fault));
+        host.Add(std::make_unique<FaultyModule>("Third", std::vector<std::string>{ "Second" }, probe, nullptr));
         host.Load(scene.Runtime().EcsWorld());
         const bool inLoad = kind == FaultyModule::Fault::Load;
         kb::tests::Require(host.ActiveCount() == 0U && !host.IsActive("First") && !host.IsActive("Second"), "a failed load must leave no module active");
@@ -206,21 +235,41 @@ void RunModuleLoadRollsBackOnFailureTest() {
                               line.find(inLoad ? "load exploded" : "enable exploded") != std::string::npos);
         }
         kb::tests::Require(named, "the diagnostic must name the module, the step and the cause");
+        kb::tests::Require(probe.registrations.empty() && probe.callbacks.empty(),
+            "rollback must remove registrations and callbacks including partial failing initialization");
+        if (failCleanup) {
+            kb::tests::Require(std::ranges::any_of(host.Diagnostics(), [](const std::string& line) {
+                return line.find("module 'Second' failed during rollback OnUnload: unload cleanup failed") != std::string::npos;
+            }), "rollback failures must name the module, cleanup step and cause");
+            if (!inLoad) {
+                kb::tests::Require(std::ranges::any_of(host.Diagnostics(), [](const std::string& line) {
+                    return line.find("failed during rollback OnDisable: disable cleanup failed") != std::string::npos;
+                }), "enable rollback failures must be reported too");
+            }
+        }
         if (inLoad) {
-            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "unload:First" }, "only the module that had loaded is unloaded");
+            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "unload:Second", "unload:First" }, "every started load is undone, including the partial failing step");
         } else {
-            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "disable:First", "unload:Second", "unload:First" },
+            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "disable:Second", "disable:First", "unload:Third", "unload:Second", "unload:First" },
                 "the enabled module is disabled and the loaded modules are unloaded, newest first");
         }
         // The fault is fixed: the next Load works from a clean state.
         fault = FaultyModule::Fault::None;
+        probe.failCleanup = false;
         probe.loadOrder.clear();
         host.Load(scene.Runtime().EcsWorld());
-        kb::tests::Require(host.ActiveCount() == 2U && host.IsActive("First") && host.IsActive("Second") &&
-                probe.loadOrder == std::vector<std::string>{ "First", "Second" },
+        kb::tests::Require(host.ActiveCount() == 3U && host.IsActive("First") && host.IsActive("Second") && host.IsActive("Third") &&
+                probe.loadOrder == std::vector<std::string>{ "First", "Second", "Third" },
             "after the fault is fixed the modules load again, in dependency order");
+        kb::tests::Require(probe.registrations.size() == 3U && probe.callbacks.size() == 3U, "retry must recreate every registration exactly once");
+        for (const auto& [name, callback] : probe.callbacks) {
+            static_cast<void>(name);
+            callback();
+        }
+        kb::tests::Require(probe.callbackCalls == 3, "retried callbacks must remain functional");
         host.Unload();
-        kb::tests::Require(host.ActiveCount() == 0U, "an unload after a successful retry leaves nothing active");
+        kb::tests::Require(host.ActiveCount() == 0U && probe.registrations.empty() && probe.callbacks.empty(), "an unload after a successful retry leaves nothing active");
+    }
     }
 }
 
@@ -381,6 +430,80 @@ void RunSceneModuleReloadLifecycleTest() {
     kb::tests::Require(probe.loadOrder.size() == 2, "Reload should load active modules again");
     kb::tests::Require(probe.enableCount == 2, "Reload should enable active modules again");
     kb::tests::Require(probe.attachCount == 2, "Reload should attach active modules again");
+}
+
+struct ReloadCacheValue { int value = 0; };
+
+class QueryCacheModule final : public kb::modules::IEngineModule {
+public:
+    std::vector<kb::scene::Scene*> scenes;
+    bool releasedBeforeUnload = false;
+    kb::modules::EngineModuleMetadata Metadata() const override {
+        return { "Tests.QueryCache", 1U, {}, Phase::Default };
+    }
+    void OnSceneAttach(kb::scene::Scene& scene) override {
+        [[maybe_unused]] auto query = scene.Runtime().EcsWorld().CreateQuery<ReloadCacheValue>();
+    }
+    void OnUnload() override {
+        releasedBeforeUnload = true;
+        for (auto* scene : scenes) {
+            auto& world = scene->Runtime().EcsWorld();
+            const auto before = world.TelemetrySnapshot().queryCacheMisses;
+            [[maybe_unused]] auto query = world.CreateQuery<ReloadCacheValue>();
+            releasedBeforeUnload &= world.TelemetrySnapshot().queryCacheMisses == before + 1U;
+        }
+    }
+};
+
+void RunMultiSceneQueryCacheReloadTest() {
+    kb::scene::Scene first;
+    kb::scene::Scene second;
+    EngineModuleHost host{ kb::project::ProjectDescriptor{} };
+    auto module = std::make_unique<QueryCacheModule>();
+    auto* probe = module.get();
+    probe->scenes = { &first, &second };
+    host.Add(std::move(module));
+    host.Load(first.Runtime().EcsWorld());
+    host.AttachScene(first);
+    host.AttachScene(second);
+    std::array<kb::scene::Scene*, 3U> scenes{ &first, nullptr, &second };
+    host.Reload(first.Runtime().EcsWorld(), scenes);
+    kb::tests::Require(probe->releasedBeforeUnload,
+        "Reload must release unused query plans in every attached scene before module unload");
+    host.DetachScene(second);
+    host.DetachScene(first);
+}
+
+void RunDynamicModuleConstructionFailureTest() {
+#if !KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS && defined(KB_MODULE_FAULT_1_PATH)
+    const std::array<const char*, 3U> paths{
+        KB_MODULE_FAULT_1_PATH, KB_MODULE_FAULT_2_PATH, KB_MODULE_FAULT_3_PATH };
+    const std::array<const char*, 3U> traces{
+        KB_MODULE_FAULT_1_TRACE, KB_MODULE_FAULT_2_TRACE, KB_MODULE_FAULT_3_TRACE };
+    const std::array<const char*, 3U> expected{
+        "failed during creation", "failed during metadata", "metadata name does not match" };
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        std::filesystem::remove(traces[index]);
+        kb::project::ProjectDescriptor project;
+        project.disableEnginePluginsByDefault = true;
+        project.plugins.push_back({ .name = "Tests.ModuleFault", .binaryPath = paths[index], .enabled = true });
+        kb::scene::Scene scene;
+        EngineModuleHost host{ project };
+        host.Load(scene.Runtime().EcsWorld());
+        kb::tests::Require(host.ActiveCount() == 0U &&
+                std::ranges::any_of(host.Diagnostics(), [&](const std::string& diagnostic) {
+                    return diagnostic.find(expected[index]) != std::string::npos;
+                }), "A rejected plugin factory or metadata must leave no active module and report its cause");
+        std::ifstream input{ traces[index] };
+        const std::string trace{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        const std::array<std::string, 3U> expectedTraces{
+            "factory entered\nexception destroyed\n",
+            "factory entered\nmetadata entered\nmodule destroyed\nexception destroyed\n",
+            "factory entered\nmetadata entered\nmodule destroyed\n" };
+        kb::tests::Require(trace == expectedTraces[index],
+            "Plugin objects and plugin-defined exception destructors must run before unloading the rejected DLL");
+    }
+#endif
 }
 
 // Dependencies load before dependents regardless of registration order.
@@ -697,6 +820,41 @@ void RunSceneInputActivationPerLocalUserTest() {
         "Player 1 should remain unaffected by player 2's ArrowUp binding");
 }
 
+void RunPhysicsModuleReloadTest() {
+#if !KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
+    const std::filesystem::path pluginPath = KB_PHYSICS_JOLT_PLUGIN_PATH;
+    if (pluginPath.empty()) return;
+    kb::tests::Require(std::filesystem::is_regular_file(pluginPath),
+        "Physics plugin is missing from the module lifecycle test");
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back({ .name = "Physics.Jolt", .binaryPath = pluginPath.string(), .enabled = true });
+    kb::scene::Scene scene;
+    const auto baseline = scene.Runtime().SceneSystemCount();
+    EngineModuleHost host{ project };
+    host.Load(scene.Runtime().EcsWorld());
+    host.AttachScene(scene);
+    host.AttachScene(scene);
+    kb::tests::Require(scene.Runtime().SceneSystemCount() == baseline + 1U,
+        "Physics module attached its scene system more than once");
+    std::array<kb::scene::Scene*, 1U> scenes{ &scene };
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        host.Reload(scene.Runtime().EcsWorld(), scenes);
+        kb::tests::Require(host.IsActive("Physics.Jolt") && host.Diagnostics().empty() &&
+                scene.Runtime().SceneSystemCount() == baseline + 1U,
+            "Physics reload retained a scene system from the previous module");
+        static_cast<void>(scene.Runtime().Update(1.0F / 30.0F));
+        kb::tests::Require(kb::scene::PhysicsBackend::HasBackend(scene),
+            "Physics reload did not register the replacement backend");
+    }
+    host.DetachScene(scene);
+    host.DetachScene(scene);
+    kb::tests::Require(scene.Runtime().SceneSystemCount() == baseline &&
+            !kb::scene::PhysicsBackend::HasBackend(scene),
+        "Physics detach retained its scene system or backend");
+#endif
+}
+
 void RunBasicLightingPluginTogglesSceneLightingTest() {
 #if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
     return;
@@ -749,6 +907,9 @@ void RunEngineModuleTests() {
     RunSceneInputActivationUsesUnsafeHotQueryTest();
     RunSceneInputActivationPerLocalUserTest();
     RunBasicLightingPluginTogglesSceneLightingTest();
+    RunPhysicsModuleReloadTest();
+    RunMultiSceneQueryCacheReloadTest();
+    RunDynamicModuleConstructionFailureTest();
 }
 
 } // namespace kb::tests

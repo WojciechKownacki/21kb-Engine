@@ -244,6 +244,7 @@ void HashDesc(std::uint64_t& hash, const RenderMaterialDesc& desc) noexcept {
     HashCombine(hash, static_cast<std::uint64_t>(desc.translucencyBlend));
     HashCombine(hash, desc.doubleSided ? 1U : 0U);
     HashCombine(hash, desc.writesDepth ? 1U : 0U);
+    HashCombine(hash, desc.pointSampling ? 1U : 0U);
 }
 
 void HashGraphParameterValues(std::uint64_t& hash, const std::vector<RenderMaterialGraphParameterValue>& values) noexcept {

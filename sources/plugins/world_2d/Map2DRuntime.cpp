@@ -44,6 +44,8 @@ Map2DAsset Header(const Map2DAsset& map) {
     result.sheets = map.sheets;
     result.sortByY = map.sortByY;
     result.lit = map.lit;
+    result.propertySchemaVersion = map.propertySchemaVersion;
+    result.propertyDefaults = map.propertyDefaults;
     result.background = false;
     return result;
 }
@@ -68,6 +70,9 @@ struct Map2DRuntime::State {
         // A recreated map starts its animation at the beginning, including after
         // the editor restores its scene snapshot between Play sessions.
         double seconds = 0.0;
+        bool animationPaused = false;
+        std::array<int,4> prefabRegion{0,0,4095,4095};
+        std::uint32_t prefabBudget = 256U;
         std::map<std::uint64_t, std::map<std::uint64_t, Map2DTile>> cells;
         std::map<std::uint64_t, Chunk> chunks;
         std::set<std::uint64_t> dirty;
@@ -113,7 +118,6 @@ namespace {
 template <class Instance>
 void DriveCamera(kb::scene::Scene& scene, SceneEntity owner, Instance& instance, float deltaSeconds, std::set<SceneEntity>& driven) {
     const Map2DCamera& settings = instance.map.camera;
-    if (settings.pixelsPerUnit <= 0.0F && settings.followTarget.empty()) return;
     const auto query = std::as_const(scene).Components();
     const auto parent = scene.Hierarchy().Parent(owner);
     const SceneEntity container = query.Grids().Has(parent) && !query.Tilemaps().Has(parent) ? parent : owner;
@@ -127,11 +131,11 @@ void DriveCamera(kb::scene::Scene& scene, SceneEntity owner, Instance& instance,
 
     const bool wall = instance.map.orientation == Map2DOrientation::Wall;
     const float size = instance.map.tileSize;
-    const float wanted = static_cast<float>(instance.map.viewHeight) * size;
+    const float wanted = static_cast<float>(instance.map.viewHeight) * size / settings.zoom;
     const auto viewport = scene.UI().Frame().viewportSize;
     const PixelPerfectView view = settings.pixelsPerUnit > 0.0F
         ? ComputePixelPerfectView(viewport.y, settings.pixelsPerUnit, wanted) : PixelPerfectView{ .orthographicHeight = wanted };
-    if (view.pixelPerfect && lens.orthographicHeight != view.orthographicHeight) {
+    if (lens.orthographicHeight != view.orthographicHeight) {
         lens.orthographicHeight = view.orthographicHeight;
         scene.Components().Cameras().Set(cameraEntity, lens);
     }
@@ -179,7 +183,14 @@ void DriveCamera(kb::scene::Scene& scene, SceneEntity owner, Instance& instance,
         instance.cameraCentre = StepCamera2DFollow(frame);
     }
     auto centre = *instance.cameraCentre;
-    if (view.pixelPerfect) { centre[0] = SnapToPixels(centre[0], view.unitsPerPixel); centre[1] = SnapToPixels(centre[1], view.unitsPerPixel); }
+    if (view.pixelPerfect) {
+        // Odd viewport dimensions place the view centre on a pixel centre rather than an edge.
+        // Match that phase so texel edges never fall on raster sample centres.
+        const float phaseX = std::fmod(std::round(viewport.x), 2.0F) * 0.5F * view.unitsPerPixel;
+        const float phaseY = std::fmod(std::round(viewport.y), 2.0F) * 0.5F * view.unitsPerPixel;
+        centre[0] = SnapToPixels(centre[0] - phaseX, view.unitsPerPixel) + phaseX;
+        centre[1] = SnapToPixels(centre[1] - phaseY, view.unitsPerPixel) + phaseY;
+    }
     if (transform.localPosition.x != centre[0] || (wall ? transform.localPosition.y : transform.localPosition.z) != centre[1]) {
         transform.localPosition.x = centre[0];
         (wall ? transform.localPosition.y : transform.localPosition.z) = centre[1];
@@ -210,6 +221,25 @@ std::optional<Map2DTile> Map2DRuntime::Tile(SceneEntity entity, std::uint32_t x,
     if (map == nullptr || x >= map->width || y >= map->height || floor < Map2DAsset::MinimumFloor || floor > Map2DAsset::MaximumFloor) return {};
     const auto found = map->tiles.find(Map2DTileKey(x, y, floor));
     return found == map->tiles.end() ? std::nullopt : std::optional<Map2DTile>{ found->second };
+}
+
+bool Map2DRuntime::SetAnimationPaused(SceneEntity entity, bool paused) {
+    const auto found = state_->instances.find(entity);
+    if (found == state_->instances.end()) return false;
+    found->second.animationPaused = paused;
+    return true;
+}
+bool Map2DRuntime::SetPrefabRegion(SceneEntity entity, int minX, int minY, int maxX, int maxY, std::uint32_t budget) {
+    const auto found=state_->instances.find(entity);
+    if (found==state_->instances.end() || budget<1U || budget>4096U) return false;
+    found->second.prefabRegion={minX,minY,maxX,maxY}; found->second.prefabBudget=budget; return true;
+}
+std::size_t Map2DRuntime::PrefabInstanceCount(SceneEntity entity) const {
+    const auto found=state_->instances.find(entity);
+    if (found==state_->instances.end()) return 0U;
+    std::size_t count=0U;
+    for (const auto& [key,chunk]:found->second.chunks) { static_cast<void>(key); count+=chunk.prefabs.size(); }
+    return count;
 }
 
 bool Map2DRuntime::SetTile(SceneEntity entity, std::uint32_t x, std::uint32_t y, std::int32_t floor,
@@ -379,7 +409,8 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
             if (!SetUpMap2DCollision(scene, owner, empty, nullptr, &error)) { context.ReportError(error); continue; }
         }
         if (advanceTime) {
-            instance.seconds += std::max(0.0F, context.DeltaSeconds());
+            if (!instance.animationPaused && std::isfinite(context.DeltaSeconds()))
+                instance.seconds += std::max(0.0F, context.DeltaSeconds());
             DriveCamera(scene, owner, instance, std::max(0.0F, context.DeltaSeconds()), state_->camerasDriven);
         }
         const auto* renderer = query.TilemapRenderers().TryGet(owner);
@@ -435,6 +466,7 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
             else fragment.tiles = instance.cells[key];
             if (!fragment.background && fragment.tiles.empty()) {
                 if (const auto found = instance.chunks.find(key); found != instance.chunks.end()) {
+                    if (!found->second.prefabs.empty()) continue; // Instance removal consumes the per-frame budget below.
                     if (scene.Entities().IsAlive(found->second.entity)) scene.Entities().Destroy(found->second.entity);
                     static_cast<void>(assets.ReleaseGeneratedAsset(found->second.mesh));
                     if (found->second.shadowMesh.IsValid()) static_cast<void>(assets.ReleaseGeneratedAsset(found->second.shadowMesh));
@@ -493,14 +525,43 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
                 for (auto sprite : tile.borders) remember(sprite);
                 for (auto sprite : tile.items) remember(sprite);
             }
+            if (!instance.collider.enabled || key == BackgroundChunk) fragment.tiles.clear();
+            std::string error;
+            std::vector<AssetId> collisionAssets;
+            if (!SetUpMap2DCollision(scene, chunk.entity, fragment, nullptr, &error, &collisionAssets)) { context.ReportError(error); continue; }
+            for (const auto id : chunk.collisionAssets) if (std::ranges::find(collisionAssets, id) == collisionAssets.end()) static_cast<void>(assets.ReleaseGeneratedAsset(id));
+            chunk.collisionAssets = std::move(collisionAssets);
+            completed.insert(key);
+            ++state_->rebuilt;
+        }
+        for (auto key : completed) instance.dirty.erase(key);
+        for (const auto& [key, chunk] : instance.chunks) {
+            static_cast<void>(key);
+            auto transform = scene.Transforms().Get(chunk.entity);
+            if (transform.localPosition.x != parallax.x || transform.localPosition.y != parallax.y || transform.localPosition.z != parallax.z) { transform.localPosition = parallax; scene.Transforms().Set(chunk.entity, transform); }
+        }
+        if (advanceTime) {
+            std::uint32_t changes=0U;
+            const auto active = [&](std::uint64_t cell) {
+                const int x=static_cast<int>(Map2DTileKeyX(cell)), y=static_cast<int>(Map2DTileKeyY(cell));
+                const auto& region=instance.prefabRegion;
+                return x>=region[0] && y>=region[1] && x<=region[2] && y<=region[3];
+            };
+            for (auto& [key,chunk]:instance.chunks) {
+                const auto& cells=instance.cells[key];
+                const auto& fragment=instance.map;
             for (auto it = chunk.prefabs.begin(); it != chunk.prefabs.end();) {
-                const auto cell = fragment.tiles.find(it->first);
-                if (cell != fragment.tiles.end() && cell->second.prefab == it->second.first && scene.Entities().IsAlive(it->second.second)) { ++it; continue; }
+                const auto cell = cells.find(it->first);
+                if (active(it->first) && cell != cells.end() && cell->second.prefab == it->second.first && scene.Entities().IsAlive(it->second.second)) { ++it; continue; }
+                if (changes>=instance.prefabBudget) break;
+                ++changes;
                 if (scene.Entities().IsAlive(it->second.second)) scene.Entities().Destroy(it->second.second);
                 it = chunk.prefabs.erase(it);
             }
-            for (const auto& [cell, tile] : fragment.tiles) {
-                if (tile.prefab.empty() || chunk.prefabs.contains(cell)) continue;
+            for (const auto& [cell, tile] : cells) {
+                if (!active(cell) || tile.prefab.empty() || chunk.prefabs.contains(cell)) continue;
+                if (changes>=instance.prefabBudget) break;
+                ++changes;
                 const auto prefab = scene.Assets().LoadPrefab(kb::assets::Utf8Path(tile.prefab));
                 if (!prefab.IsLoaded()) { context.ReportError("Tilemap prefab could not be loaded: " + tile.prefab); continue; }
                 const auto spawned = scene.Prefabs().Instantiate(*prefab.Get(), { .parent = scene.Entities().Object(chunk.entity) });
@@ -517,20 +578,7 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
                 scene.Transforms().Set(root, transform);
                 chunk.prefabs.emplace(cell, std::make_pair(tile.prefab, root));
             }
-            if (!instance.collider.enabled || key == BackgroundChunk) fragment.tiles.clear();
-            std::string error;
-            std::vector<AssetId> collisionAssets;
-            if (!SetUpMap2DCollision(scene, chunk.entity, fragment, nullptr, &error, &collisionAssets)) { context.ReportError(error); continue; }
-            for (const auto id : chunk.collisionAssets) if (std::ranges::find(collisionAssets, id) == collisionAssets.end()) static_cast<void>(assets.ReleaseGeneratedAsset(id));
-            chunk.collisionAssets = std::move(collisionAssets);
-            completed.insert(key);
-            ++state_->rebuilt;
-        }
-        for (auto key : completed) instance.dirty.erase(key);
-        for (const auto& [key, chunk] : instance.chunks) {
-            static_cast<void>(key);
-            auto transform = scene.Transforms().Get(chunk.entity);
-            if (transform.localPosition.x != parallax.x || transform.localPosition.y != parallax.y || transform.localPosition.z != parallax.z) { transform.localPosition = parallax; scene.Transforms().Set(chunk.entity, transform); }
+            }
         }
         // Replace only the legacy map cache. An ordinary mesh is an independent authored component.
         if (const auto* mesh = query.MeshRenderers().TryGet(owner);

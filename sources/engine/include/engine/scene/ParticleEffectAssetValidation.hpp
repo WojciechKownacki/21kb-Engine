@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -82,6 +83,8 @@ struct ParticleEffectDependencyResult {
     }
 };
 
+struct ParticleEffectLoadResult;
+
 class ParticleEffectAssetValidator final {
   public:
     ParticleEffectAssetValidator() = delete;
@@ -94,6 +97,9 @@ class ParticleEffectAssetValidator final {
     [[nodiscard]] static ParticleEffectDependencyResult ValidateDependencies(const ParticleEffectAsset& workingAsset,
                                                                              const kb::assets::AssetMetadata& metadata,
                                                                              const kb::assets::AssetRegistry& registry);
+    [[nodiscard]] static ParticleEffectDependencyResult ValidateDependencies(const ParticleEffectAsset& workingAsset,
+        const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry,
+        const std::function<ParticleEffectLoadResult(const kb::assets::AssetMetadata&)>& loadEffect);
 };
 
 [[nodiscard]] std::string FormatParticleEffectDiagnostic(const ParticleEffectDiagnostic& diagnostic);

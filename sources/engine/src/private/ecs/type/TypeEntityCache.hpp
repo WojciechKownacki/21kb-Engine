@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/ecs/Entity.hpp"
+#include "ecs/type/OwnedTypeName.hpp"
 
 #include <string_view>
 #include <typeindex>
@@ -19,7 +20,7 @@ public:
 private:
     [[nodiscard]] static Entity::IdType CreateTypeEntity(ecs_world_t* world, std::string_view name);
 
-    std::unordered_map<std::type_index, Entity::IdType> ids_;
+    std::unordered_map<std::string, Entity::IdType, OwnedTypeNameHash, std::equal_to<>> ids_;
 };
 
 } // namespace kb::ecs

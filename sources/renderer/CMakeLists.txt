@@ -19,6 +19,9 @@ add_library(kb_renderer STATIC
     include/kb/render/SceneRenderTargetFormat.hpp
     include/kb/render/ShaderManifest.hpp
     include/kb/render/ShaderLoader.hpp
+    include/kb/render/effects/RenderEffectApi.hpp
+    include/kb/render/effects/RenderEffectHost.hpp
+    src/effects/RenderEffectHost.cpp
     include/kb/render/ShaderBinaryProvider.hpp
     include/kb/render/RuntimeAssetShaderProvider.hpp
     include/kb/render/frame/FinalCompositePass.hpp
@@ -130,6 +133,7 @@ add_library(kb_renderer STATIC
     src/bake/TextureBakedPayload.cpp
     src/DisplayConfig.cpp
     src/Renderer.cpp
+    src/RendererMemory.cpp
     src/RendererCapabilityReport.cpp
     src/renderer/RendererExposureSubmitter.cpp
     src/renderer/RendererExposureSubmitter.hpp
@@ -356,6 +360,7 @@ add_library(kb_renderer STATIC
     src/scene/submit/SceneMeshInstanceBufferPool.hpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.cpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.hpp
+    src/scene/submit/SceneMeshCoverageProbe.hpp
     src/scene/submit/SceneMeshMaterialBindingResolver.cpp
     src/scene/submit/SceneMeshMaterialBindingResolver.hpp
     src/scene/submit/SceneMeshPassResources.cpp
@@ -378,6 +383,7 @@ add_library(kb_renderer STATIC
     src/gi/SceneGiResolvePass.cpp
     src/gi/SceneGiUniforms.cpp
     src/gi/SceneGiVoxelGrid.cpp
+    src/particles/ParticleProcessCook.cpp
     src/particles/ParticleGpuEmitterSimulation.cpp
     src/particles/ParticleGpuReadback.cpp
     src/shadow/PointShadowPassPlanner.hpp
@@ -387,6 +393,7 @@ add_library(kb_renderer STATIC
     src/private/ui/ScreenUIDrawData.hpp
     src/private/ui/ScreenUIDrawBatchBuilder.hpp
     src/private/ui/ScreenUIFontPayloadValidator.hpp
+    src/private/ui/ScreenUIFontDistanceField.hpp
     src/private/ui/ScreenUIFontAtlasCache.hpp
     src/private/ui/ScreenUITextMarkupParser.hpp
     src/ui/ScreenUIBackgroundBlur.cpp
@@ -394,7 +401,9 @@ add_library(kb_renderer STATIC
     src/ui/ScreenUIDrawBatchBuilder.cpp
     src/ui/ScreenUIRenderer.cpp
     src/ui/ScreenUIFontPayloadValidator.cpp
+    src/ui/ScreenUIFontDistanceField.cpp
     src/ui/ScreenUIFontAtlasCache.cpp
+    src/ui/ScreenUIVariableFontRasterizer.cpp
     src/ui/ScreenUITextMarkupParser.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/allocator.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexgenerator.cpp
@@ -471,9 +480,13 @@ if(BGFX_CONFIG_RENDERER_WEBGPU AND KB_GENERATE_RENDERER_SHADERS AND
     list(APPEND KB_RENDERER_SHADER_PROFILES wgsl)
 endif()
 
+# Optional shaders may be missing on backends without a locally generated binary;
+# the UI renderer falls back to its required bitmap shader in that case.
 set(KB_RENDERER_SHADER_MANIFEST
     cs_hzb_downsample.sc
     cs_hzb_seed.sc
+    cs_instance_compact.sc
+    cs_instance_compact_clear.sc
     cs_instance_cull.sc
     cs_instance_cull_clear.sc
     cs_instance_cull_finalize.sc
@@ -609,6 +622,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         SHADERS
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_layered_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
@@ -630,6 +644,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_screen_ui.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_screen_ui_sdf.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -672,6 +687,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         TYPE COMPUTE
         SHADERS
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_clear.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_compact.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_compact_clear.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_finalize.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
@@ -697,6 +714,22 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_GENERATED_FRAGMENT_SHADERS}
             ${KB_RENDERER_GENERATED_COMPUTE_SHADERS}
     )
+
+    # bgfx's fixed-shader commands track the entry point and varying definition.
+    # Height fog is shared with graph shaders, whose cooker already tracks transitive includes.
+    foreach(_fog_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS)
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh")
+        endif()
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND DEPENDS
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/gbuffer_contract.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/shading_models.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_layers.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_gbuffer.sh")
+        endif()
+    endforeach()
 
     add_custom_command(
         OUTPUT "${KB_RENDERER_SHADER_STAGE_STAMP}"
@@ -785,6 +818,8 @@ target_link_libraries(kb_renderer
         bimg
         bimg_decode
         kb_ufbx
+    PRIVATE
+        kb_harfbuzz
 )
 
 if(WIN32)
@@ -841,6 +876,22 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     set_tests_properties(kb_renderer_cpu_contract_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;correctness")
 
+    add_executable(kb_asset_loading_tests tests/AssetLoadingConcurrencyTests.cpp)
+    target_link_libraries(kb_asset_loading_tests PRIVATE kb_renderer kb_renderer_bake)
+    kb_apply_quality_gates(kb_asset_loading_tests)
+    add_test(NAME kb_asset_loading_tests COMMAND kb_asset_loading_tests)
+    set_tests_properties(kb_asset_loading_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "assets;concurrency;packaging")
+
+    add_executable(kb_content_streaming_tests
+        tests/RuntimeContentStreamingTestMain.cpp tests/RuntimeContentStreamingTests.cpp)
+    target_link_libraries(kb_content_streaming_tests PRIVATE kb_renderer kb_renderer_bake)
+    kb_apply_quality_gates(kb_content_streaming_tests)
+    kb_target_copy_bgfx_runtime_shaders(kb_content_streaming_tests)
+    add_test(NAME kb_content_streaming_tests COMMAND kb_content_streaming_tests)
+    set_tests_properties(kb_content_streaming_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "renderer;streaming;memory")
+
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
         tests/AssetImportCatalogCoverageTests.cpp
@@ -848,6 +899,8 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/MeshReimportTests.cpp
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
+        tests/GpuFrustumCullingTests.cpp
+        tests/RenderEffectPluginTests.cpp
         tests/RendererTestSupport.hpp
         tests/FinalCompositePassTests.cpp
         tests/PostProcessChainTests.cpp
@@ -861,6 +914,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/GraphForwardGpuRenderTests.cpp
         tests/RendererCapabilityReportTests.cpp
         tests/RendererRuntimeSubmitTests.cpp
+        tests/ParticleProcessTests.cpp
         tests/ParticleGpuMotionTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp
@@ -898,6 +952,11 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             KB_RENDERER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
     )
 
+    set(KB_RENDER_EFFECT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    add_subdirectory("${CMAKE_SOURCE_DIR}/samples/RenderEffectPlugin" "${CMAKE_CURRENT_BINARY_DIR}/external_render_effect")
+    add_dependencies(kb_renderer_tests sample_render_effect)
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/render_effect_plugin_path.txt" CONTENT "$<TARGET_FILE:sample_render_effect>")
+
     # The file-to-pixel particle test loads the real particle provider as a module.
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_21kb_particle_plugin)
         target_compile_definitions(kb_renderer_tests PRIVATE
@@ -912,6 +971,20 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-contact-death)
             set_tests_properties(kb_renderer_particle_contact_death PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            add_test(NAME kb_renderer_particle_sort_modes
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-sort-modes)
+            set_tests_properties(kb_renderer_particle_sort_modes PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            add_test(NAME kb_renderer_particle_blend_goldens
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-blend-goldens)
+            set_tests_properties(kb_renderer_particle_blend_goldens PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            foreach(backend IN ITEMS d3d12 vulkan opengl)
+                add_test(NAME kb_renderer_particle_blend_goldens_${backend}
+                    COMMAND $<TARGET_FILE:kb_renderer_tests> particle-blend-goldens --backend ${backend})
+                set_tests_properties(kb_renderer_particle_blend_goldens_${backend} PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            endforeach()
             add_test(NAME kb_renderer_particle_depth_collision
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-depth-collision)
             set_tests_properties(kb_renderer_particle_depth_collision PROPERTIES
@@ -922,6 +995,14 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     # The complete node/profile sweep has separate bounded processes below.
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-integration)
     if(WIN32)
+        add_test(NAME kb_renderer_ui_overdraw COMMAND $<TARGET_FILE:kb_renderer_tests> screen-ui-overdraw)
+        set_tests_properties(kb_renderer_ui_overdraw PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;ui;gpu;headless" TIMEOUT 60)
+    endif()
+    if(WIN32)
+        add_test(NAME kb_renderer_particle_depth_outputs COMMAND $<TARGET_FILE:kb_renderer_tests> particle-volumetric-submit)
+        set_tests_properties(kb_renderer_particle_depth_outputs PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 180)
         add_test(NAME kb_renderer_display_alpha COMMAND $<TARGET_FILE:kb_renderer_tests> display-alpha)
         set_tests_properties(kb_renderer_display_alpha PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 180
@@ -938,6 +1019,23 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
         # Screen-space ambient occlusion, reflections and bounce light, and the voxel grid built from mesh geometry.
         add_test(NAME kb_renderer_screen_space COMMAND $<TARGET_FILE:kb_renderer_tests> screen-space)
+        add_test(NAME kb_renderer_graph_compact_gbuffer COMMAND $<TARGET_FILE:kb_renderer_tests> graph-compact-gbuffer)
+        set_tests_properties(kb_renderer_graph_compact_gbuffer PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
+        foreach(_fog_backend d3d11 d3d12 vulkan opengl)
+            add_test(NAME kb_renderer_material_matrix_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> material-matrix --backend ${_fog_backend})
+            set_tests_properties(kb_renderer_material_matrix_${_fog_backend} PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
+            add_test(NAME kb_renderer_fog_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> fog-profiles --backend ${_fog_backend})
+            set_tests_properties(kb_renderer_fog_${_fog_backend} PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;fog" TIMEOUT 180)
+        endforeach()
+        add_test(NAME kb_renderer_screen_effect_lifecycle COMMAND $<TARGET_FILE:kb_renderer_tests> screen-effect-lifecycle)
+        set_tests_properties(kb_renderer_screen_effect_lifecycle PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;screen-space" TIMEOUT 180)
+        add_test(NAME kb_renderer_diagnostics COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-diagnostics)
+        set_tests_properties(kb_renderer_diagnostics PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;diagnostics" TIMEOUT 180)
         set_tests_properties(kb_renderer_screen_space PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;screen-space" TIMEOUT 180)
         # Point, spot, directional and cascaded shadows, and GPU mesh particles, with image readback.

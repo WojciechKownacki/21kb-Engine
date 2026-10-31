@@ -1,5 +1,29 @@
 # Android input tests
 
+## Packaged controller test
+
+`prepare_controller_fixture.py` authors and cooks a scene with six independent
+analog actions, face buttons and directional-pad actions for each controller
+slot. Package its generated project with `scripts/package_game.py` for Android,
+using a dedicated application ID and the normal production player.
+
+Compile `UinputController.c` with the Android NDK for the selected host ABI, for
+example with `aarch64-linux-android23-clang -std=c11 -D_GNU_SOURCE -Wall -Wextra
+-Werror UinputController.c -o uinput-controller`. Then run:
+
+```sh
+python sources/game/tests/android/run_packaged_controller_tests.py --adb adb --serial <authorized-host> --apk <packaged-player.apk> --helper <uinput-controller> --application-id <test-application-id> --output <results-directory>
+```
+
+This requires shell access to `/dev/uinput`. The helper registers two OS devices
+and sends kernel events only while the packaged player owns focus. The test
+reads the cooked Lua scene's public action values, checks independent axes and
+buttons, dead zones, held-button disconnection and reconnection with a new OS
+device ID, and removes its devices afterward. These are OS virtual controllers;
+physical USB and Bluetooth controller mappings require separate hardware tests.
+
+## Input adapter test APK
+
 This APK runs the production Android controller and touch adapters with GameActivity 4.4.2
 and Android Games Controller 2.0.2. It uses a transparent, nonfocusable activity
 with preview disabled. The CLI registers two OS virtual controllers with `uinput`

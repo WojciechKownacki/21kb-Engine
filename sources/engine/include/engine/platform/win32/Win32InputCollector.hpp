@@ -17,18 +17,20 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace kb::scene { class Scene; }
+
 namespace kb::input {
 
 class InputDeviceState;
 
-// Fills an engine InputDeviceState from the Win32 keyboard/mouse and XInput
+// Fills an engine InputDeviceState from the Win32 keyboard/mouse and gamepad
 // devices owned by the foreground process. The collector is shared by every
 // Win32 host (editor and standalone player), so platform polling has one
 // production implementation.
 class Win32InputCollector {
 public:
     // Observes message-driven device input that cannot be polled: touch
-    // contacts and mouse-wheel deltas. Touch messages are consumed (true);
+    // contacts, raw relative mouse motion and mouse-wheel deltas. Touch messages are consumed (true);
     // wheel messages return false so the host UI can route the same wheel
     // event while the normalized runtime snapshot receives it next Collect.
     [[nodiscard]] bool HandleWindowMessage(
@@ -43,21 +45,42 @@ public:
         std::uint32_t renderHeight) noexcept;
     void ClearPointerViewport() noexcept;
     void Collect(InputDeviceState& state, HWND ownerWindow) noexcept;
+    void Collect(kb::scene::Scene& scene, HWND ownerWindow);
+    // Also used by deterministic hosts that supply the device snapshot themselves.
+    void ApplyTextClipboard(kb::scene::Scene& scene, HWND ownerWindow);
+    // Called after runtime UI updates so the next native IME message belongs to
+    // the current field. Also places the OS composition/candidate window.
+    void SynchronizeTextInput(kb::scene::Scene& scene, HWND ownerWindow);
 
 private:
     void UpdateTouchPoint(
         std::uint32_t id, float x, float y, InputTouchPhase phase) noexcept;
     void AdvanceTouchFrame() noexcept;
+    void ApplyImeText(kb::scene::Scene& scene, HWND ownerWindow);
 
     static constexpr std::size_t kMaxTouchPoints = 10U;
     bool hasPreviousMouse_ = false;
+    bool copyWasDown_ = false;
+    bool cutWasDown_ = false;
+    bool pasteWasDown_ = false;
     POINT previousMouse_{};
     std::array<InputTouchPoint, kMaxTouchPoints> touchPoints_{};
     std::size_t touchPointCount_ = 0U;
     std::array<char32_t, 64U> pendingTextInput_{};
     std::size_t pendingTextInputCount_ = 0U;
     Utf16InputDecoder textDecoder_{};
+    Utf16InputDecoder imeDecoder_{};
+    std::array<char32_t, 1024U> pendingImeText_{};
+    std::size_t pendingImeCount_ = 0U;
+    std::uint64_t textScene_ = 0U, textEntity_ = 0U;
+    std::uint64_t imeScene_ = 0U, imeEntity_ = 0U;
+    bool imeComposing_ = false;
+    bool imeOverflow_ = false;
+    bool imeKeysPendingRelease_ = false;
     float pendingMouseWheel_ = 0.0F;
+    float pendingRawMouseX_ = 0.0F;
+    float pendingRawMouseY_ = 0.0F;
+    bool rawRelativeMouse_ = false;
     HWND pointerCoordinateWindow_ = nullptr;
     RECT pointerClientViewport_{};
     std::uint32_t pointerRenderWidth_ = 0U;

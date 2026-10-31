@@ -182,11 +182,14 @@ class TouchScenario:
         self.report = report
         self.layout = {}
 
+    def exception_events(self):
+        return self.client.events
+
     def states(self):
         state = self.client.evaluate("({data:{...document.documentElement?.dataset},"
             "output:document.querySelector('#output')?.value})")
         require(not state["data"].get("kbError"), "The actual player failed: " + str(state))
-        errors = [event["params"]["exceptionDetails"] for event in self.client.events
+        errors = [event["params"]["exceptionDetails"] for event in self.exception_events()
             if event.get("method") == "Runtime.exceptionThrown"]
         require(not errors, "Unhandled browser/runtime exception: " + str(errors))
         require(not self.client.evaluate("window.kbTouchGraphicsLost || []"),
@@ -475,7 +478,7 @@ def main(*, fixture=author_fixture, scenario_type=TouchScenario,
         if client is not None:
             try:
                 report["failureState"] = client.evaluate("({hash:location.hash,"
-                    "data:{...document.documentElement.dataset},focused:document.hasFocus(),"
+                    "data:{...document.documentElement?.dataset},focused:document.hasFocus(),"
                     "visibility:document.visibilityState,lost:window.kbTouchGraphics?.context.isContextLost()})")
                 data = client.call("Page.captureScreenshot", format="png")["data"]
                 (root / "failure.png").write_bytes(base64.b64decode(data))

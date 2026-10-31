@@ -8,6 +8,7 @@
 #include "app/EditorShellInteractionState.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
+#include "engine/platform/win32/Win32RawMouseRegistration.hpp"
 #include "platform/win32/Win32InputDebugLogger.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
@@ -17,6 +18,7 @@
 
 #include "kb/editor/theme/EditorTheme.hpp"
 
+#include <chrono>
 #include <cstdint>
 
 #if defined(_WIN32)
@@ -46,6 +48,7 @@ struct EditorApplicationState {
     EditorShellInteractionState shellInteraction;
     EditorPointerDragState pointerDrag;
     kb::input::Win32InputCollector inputCollector;
+    kb::input::Win32RawMouseRegistration rawMouse;
     Win32InputDebugLogger inputDebugLogger;
     // Last observed ScriptEditorWindow::SaveSerial() — a change means the user
     // saved a script (Ctrl+S), so the open script's asset is reloaded and any
@@ -54,6 +57,14 @@ struct EditorApplicationState {
     std::uint64_t lastPlayConsoleEntrySequence = 0U;
     std::uint64_t lastPlayConsoleEntryCount = 0U;
     std::uint64_t lastPlaySceneRenderRevision = 0U;
+    // The Console as the status bar last showed it; a change repaints the bar's counts.
+    std::uint64_t lastStatusConsoleEntrySequence = 0U;
+    std::uint64_t lastStatusConsoleEntryCount = 0U;
+    bool lastStatusRendererInitialized = false;
+    // Whether the window was last too short for the bottom drawer to stay open.
+    bool compactWindow = false;
+    // When the "Used by" column of Project Files last looked at the scene.
+    std::chrono::steady_clock::time_point lastAssetUsersRefresh{};
     bool running = false;
 #endif
 };

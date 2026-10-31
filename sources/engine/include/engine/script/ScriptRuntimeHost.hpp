@@ -56,10 +56,13 @@ struct ScriptRuntimeHostOptions {
     bool installSceneSystem = false;
 };
 
-class ScriptRuntimeHost final {
+class ScriptRuntimeHost final : public kb::core::IRuntimeStateProvider {
 public:
     explicit ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostOptions options = {});
     ~ScriptRuntimeHost();
+    [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override;
+    [[nodiscard]] bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const override;
+    [[nodiscard]] bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) override;
 
     ScriptRuntimeHost(const ScriptRuntimeHost&) = delete;
     ScriptRuntimeHost& operator=(const ScriptRuntimeHost&) = delete;
@@ -82,6 +85,9 @@ public:
     // constructing — not recomputed/guessed, the actual outcome.
     [[nodiscard]] const std::vector<kb::library::EngineLibraryModuleReportEntry>& LibraryStartupReport() const noexcept;
 
+    [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& endpoint, std::string& error);
+    void PollLuaDebugger();
+    void StopLuaDebugger() noexcept;
     [[nodiscard]] bool InstallSceneSystem();
     // Drives the installed script scene system's shutdown lifecycle NOW — fires
     // Deactivated + Destroyed on every tracked behaviour and clears tracking,
@@ -129,8 +135,6 @@ private:
     void AddDiagnostic(std::string message);
 
     std::shared_ptr<ScriptRuntimeHostState> state_;
-    kb::scene::SceneSystemHandle sceneSystemHandle_{};
-    bool sceneSystemInstalled_ = false;
     std::vector<std::string> diagnostics_;
     std::vector<kb::library::EngineLibraryModuleReportEntry> libraryStartupReport_;
 };

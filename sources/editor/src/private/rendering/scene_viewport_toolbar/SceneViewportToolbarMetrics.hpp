@@ -10,6 +10,7 @@ struct SceneViewportToolbarMetrics {
     static constexpr int FpsCounterWidth = 66;
     static constexpr int PipelineStatsWidth = 206;
     static constexpr int IconButtonWidth = 34;
+    static constexpr int ToolButtonWidth = 40;
     static constexpr int ValueButtonWidth = 70;
     static constexpr int ProfileButtonWidth = 104;
     static constexpr int ButtonRadius = 6;

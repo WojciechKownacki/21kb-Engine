@@ -1,4 +1,5 @@
 #include "engine/scene/ParticleEffectAssetValidation.hpp"
+#include "engine/particles/ParticleProcessAsset.hpp"
 
 #include "engine/assets/AssetKind.hpp"
 #include "engine/assets/IAssetLoader.hpp"
@@ -61,6 +62,7 @@ struct DependencyReference {
     bool expectsParticleEffect = false;
     ParticleStableId emitterId = 0U;
     ParticleStableId moduleId = 0U;
+    bool expectsParticleProcess = false;
 };
 
 [[nodiscard]] const kb::assets::AssetMetadata* Resolve(const DependencyReference& dependency,
@@ -98,6 +100,7 @@ struct DependencyReference {
     const kb::assets::AssetMetadata* resolved = byId != nullptr ? byId : byPath;
     const bool correctType = dependency.expectsParticleEffect
                                  ? resolved->type == kParticleEffectAssetType
+                                 : dependency.expectsParticleProcess ? resolved->type == kb::particles::kParticleProcessAssetType
                                  : kb::assets::AssetMatchesKind(*resolved, *dependency.expectedKind);
     if (!correctType) {
         AddDiagnostic(result, ParticleEffectDiagnosticCode::WrongAssetType, owner, dependency.path,
@@ -115,6 +118,8 @@ struct DependencyReference {
         const std::string base = "effect.emitter[" + std::to_string(index) + "].output.";
         references.push_back(
             {emitter.output.material, base + "material", kb::assets::AssetKind::Material, false, emitter.emitterId});
+        if (!emitter.customProcess.Empty())
+            references.push_back({emitter.customProcess, "effect.emitter[" + std::to_string(index) + "].customProcess", std::nullopt, false, emitter.emitterId, 0U, true});
         if (!emitter.spawn.shapeMesh.Empty())
             references.push_back({emitter.spawn.shapeMesh, "effect.emitter[" + std::to_string(index) + "].spawn.shape.mesh",
                                   kb::assets::AssetKind::Mesh, false, emitter.emitterId});
@@ -269,6 +274,13 @@ ParticleEffectAssetValidator::ValidateDependencies(const ParticleEffectAsset& wo
         [](const kb::assets::AssetMetadata& dependency) {
             return ParticleEffectAssetIO::LoadDetailed(dependency.physicalPath);
         });
+}
+
+ParticleEffectDependencyResult ParticleEffectAssetValidator::ValidateDependencies(
+    const ParticleEffectAsset& workingAsset, const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry,
+    const std::function<ParticleEffectLoadResult(const kb::assets::AssetMetadata&)>& loadEffect) {
+    return ValidateDependenciesImpl(workingAsset, metadata, registry, loadEffect);
 }
 
 } // namespace kb::scene

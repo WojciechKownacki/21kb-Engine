@@ -1,6 +1,8 @@
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "TestSupport.hpp"
 
 #include "engine/localization/LocalizationCatalog.hpp"
+#include "engine/assets/AssetImportService.hpp"
 #include "engine/localization/LocalizationCatalogIO.hpp"
 #include "engine/localization/PluralRules.hpp"
 #include "engine/scene/Scene.hpp"
@@ -11,6 +13,8 @@
 
 #include <array>
 #include <filesystem>
+#include <fstream>
+#include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 #include <initializer_list>
 #include <limits>
 #include <optional>
@@ -151,6 +155,23 @@ void RunLocalizationTests() {
     Require(scene.Localization().SetCatalog(metadata->id.value), "Scene localization rejected a valid catalog asset");
     Require(scene.Localization().Translate("menu.play") == "Play", "Fallback language did not resolve the default translation");
     Require(scene.Localization().SetLanguage("pl"), "Scene localization rejected an authored language");
+    kb::script::ScriptRuntimeHost languageHost{scene};
+    const auto callLocalization = [&](const char* name, std::initializer_list<kb::script::ScriptFunctionArgument> arguments) {
+        auto result = languageHost.Functions().Call(name, {arguments.begin(), arguments.size()}, kb::script::ScriptFunctionCallContext{.scene = &scene});
+        Require(result.executed && result.Succeeded(), name);
+        return result;
+    };
+    using kb::script::ScriptValue;
+    Require(callLocalization("Localization.SetCatalog", {{"catalog", ScriptValue{metadata->id.value, kb::script::ScriptValueType::Hash}}}).Output("set")->AsBool() &&
+        callLocalization("Localization.SetLanguage", {{"language", ScriptValue{std::string{"pl"}}}}).Output("set")->AsBool(),
+        "Localization API could not select the catalog and language");
+    Require(callLocalization("Localization.Translate", {{"key", ScriptValue{std::string{"menu.play"}}}}).Output("text")->AsString() == "Graj" &&
+        callLocalization("Localization.FormatPlural", {{"key", ScriptValue{std::string{"hud.coins"}}}, {"count", ScriptValue{2}}}).Output("text")->AsString() == "2 monety",
+        "Localization API did not use selected translations and plural rules");
+    const auto language = languageHost.Functions().Call("Localization.Language", {},
+        kb::script::ScriptFunctionCallContext{.scene = &scene});
+    Require(language.executed && language.Succeeded() && language.Output("language")->AsString() == "pl",
+        "Localization.Language API did not read the selected runtime language");
     Require(scene.Localization().Translate("menu.play") == "Graj", "Selected localization language did not override fallback text");
     Require(scene.Localization().Translate("menu.quit") == "Quit", "Missing selected-language text did not fall back to the catalog language");
     Require(scene.Localization().FormatPlural("hud.coins", 1) == "1 moneta" &&
@@ -163,6 +184,13 @@ void RunLocalizationTests() {
         "Polish plural selection must follow the CLDR rules for teens and decimals");
     Require(scene.Localization().FormatPluralNumber("hud.coins", "not-a-number") == "hud.coins",
         "A malformed plural number must leave the key visible");
+    for (const auto locale : {"pl-PL", "pl_PL", "pl-Latn-PL", "PL_pl", "pL_lAtN_pL"}) {
+        Require(scene.Localization().SetLanguage(locale) && scene.Localization().Language() == locale &&
+                scene.Localization().Translate("menu.play") == "Graj" &&
+                scene.Localization().Translate("menu.quit") == "Quit" &&
+                scene.Localization().FormatPlural("hud.coins", 22) == "22 monety",
+            "Regional fallback must use the supplying language's text and plural rules");
+    }
     Require(scene.Localization().SetLanguage("en"), "Scene localization rejected the fallback language");
     Require(scene.Localization().FormatPluralNumber("hud.coins", "1") == "1 coin" &&
             scene.Localization().FormatPluralNumber("hud.coins", "1.0") == "1.0 coins",
@@ -186,6 +214,106 @@ void RunLocalizationTests() {
         host.Functions().Call("Localization.FormatPluralNumber", arguments, kb::script::ScriptFunctionCallContext{ .scene = &scene });
     Require(formatted.Succeeded() && formatted.Output("text").has_value() && formatted.Output("text")->AsString() == "1c6 de vies",
         "Localization.FormatPluralNumber must select the CLDR category of a compact decimal");
+    auto aliased = catalog;
+    aliased.fallbackLanguage = "EN";
+    const auto aliasPath = root / "Aliases.kbloc";
+    Require(kb::localization::LocalizationCatalogIO::Save(aliasPath, aliased) &&
+        kb::localization::LocalizationCatalogIO::Load(aliasPath).has_value(), "Fallback locale spelling must match case-insensitively");
+    aliased.languages["EN"] = aliased.languages.at("en");
+    Require(!kb::localization::LocalizationCatalogIO::Save(aliasPath, aliased), "Ambiguous locale aliases must not be saved");
+    const auto loadText = [](std::string_view text) {
+        return kb::localization::LocalizationCatalogIO::Load(std::span<const std::uint8_t>{
+            reinterpret_cast<const std::uint8_t*>(text.data()), text.size()});
+    };
+    for (const std::string_view malformed : {
+             "schema 1 fallback en fallback pl language en text key value",
+             "schema 1 fallback en language en text key value language EN text key other",
+             "schema 1 fallback en-US language en-US text key value language EN_us text key other",
+             "schema 1 fallback en--US language en--US text key value",
+             "schema 1 fallback -en language -en text key value",
+             "schema 1 fallback en language en text key \"\xFF\"",
+             "schema 1 fallback en language en plural key other \"\xED\xA0\x80\""}) {
+        Require(!loadText(malformed), "Malformed or ambiguous catalog must fail import");
+    }
+    const std::string nulMessage = std::string{"schema 1 fallback en language en text key \"a"} + '\0' + "b\"";
+    Require(!loadText(nulMessage), "Catalog messages cannot hide text after embedded nulls");
+    Require(kb::localization::LocalizationCatalogIO::Load(aliasPath)->languages.size() == catalog.languages.size(),
+        "Rejected catalog save must preserve the previous valid file");
+    std::filesystem::create_directories(root / "Assets" / "Scripts");
+    for (const auto name : {"Base", "English", "Polish"}) {
+        std::ofstream file{root / "Assets" / "Scripts" / (std::string{name} + ".lua")};
+        file << "function Ready(self, dt) end\n";
+    }
+    static_cast<void>(scene.Assets().Discover());
+    auto& registry = scene.Assets().Manager().Registry();
+    const auto source = registry.FindByPath("/Game/Scripts/Base.lua")->id;
+    const auto english = registry.FindByPath("/Game/Scripts/English.lua")->id;
+    const auto polish = registry.FindByPath("/Game/Scripts/Polish.lua")->id;
+    auto resources = catalog;
+    resources.resources = {{"en", {{source.value, english.value}}}, {"pl", {{source.value, polish.value}}}};
+    const auto resourcesPath = root / "Assets" / "Localization" / "Resources.kbloc";
+    Require(kb::localization::LocalizationCatalogIO::Save(resourcesPath, resources), "Resource mappings must save");
+    static_cast<void>(scene.Assets().Discover());
+    const auto resourceId = registry.FindByPath("/Game/Localization/Resources.kbloc")->id;
+    Require(scene.Localization().SetCatalog(resourceId.value) && scene.Localization().ResolveResource(source.value) == english.value,
+        "Resource fallback must select the catalog fallback language");
+    Require(scene.Localization().SetLanguage("PL_pl") && scene.Localization().ResolveResource(source.value) == polish.value &&
+        scene.Localization().ResolveResource(0U) == 0U && scene.Localization().ResolveResource(123U) == 123U &&
+        scene.Localization().ResolveResource(polish.value) == polish.value,
+        "Resource remapping must use locale parents, preserve absent mappings and apply only once");
+    Require(scene.Localization().SetLanguage("fr") && scene.Localization().ResolveResource(source.value) == english.value,
+        "A missing locale mapping must use the fallback resource");
+    const std::array resourceArguments{kb::script::ScriptFunctionArgument{
+        "source", kb::script::ScriptValue{source.value, kb::script::ScriptValueType::Hash}}};
+    const auto remapped = host.Functions().Call("Localization.ResolveResource", resourceArguments,
+        kb::script::ScriptFunctionCallContext{.scene = &scene});
+    Require(remapped.Succeeded() && remapped.Output("asset")->AsUInt64() == english.value,
+        "Script resource lookup must preserve the full-width asset identifier");
+    const auto* resourceMetadata = registry.Find(resourceId);
+    Require(resourceMetadata->dependencies.size() == 3U, "All source and translated resources must enter dependency discovery");
+    auto invalid = resources;
+    invalid.resources["pl"][source.value] = resourceId.value;
+    const auto invalidPath = root / "InvalidResources.kbloc";
+    Require(kb::localization::LocalizationCatalogIO::Save(invalidPath, invalid), "Invalid dependency fixture must serialize");
+    kb::localization::LocalizationCatalogAssetLoader loader;
+    auto invalidMetadata = *resourceMetadata;
+    invalidMetadata.physicalPath = invalidPath;
+    Require(loader.ValidateDependencies(invalidMetadata, registry).has_value(), "Mismatched resource types must fail validation");
+    invalid.resources["pl"][source.value] = 999999U;
+    Require(kb::localization::LocalizationCatalogIO::Save(invalidPath, invalid) &&
+        loader.ValidateDependencies(invalidMetadata, registry).has_value(), "Missing localized assets must fail validation");
+    kb::assets::AssetRegistry incompatibleImports;
+    for (const auto id : {source, english, polish}) {
+        auto entry = *registry.Find(id);
+        entry.type = "ImportedAsset";
+        entry.importCategory = id == polish ? "Font" : "Texture";
+        Require(incompatibleImports.Upsert(entry), "Imported resource fixture must register");
+    }
+    invalidMetadata.physicalPath = resourcesPath;
+    Require(loader.ValidateDependencies(invalidMetadata, incompatibleImports).has_value(),
+        "Imported assets of different categories must not replace each other");
+    for (const auto malformed : {
+        "schema 1 fallback en language en resource 1 2",
+        "schema 2 fallback en language en resource 0 2",
+        "schema 2 fallback en language en resource 1 2 resource 1 3"})
+        Require(!loadText(malformed), "Malformed or duplicate resource mappings must be rejected");
+    Require(loadText("schema 2 fallback en language en resource 1 2").has_value(),
+        "Resource-only locales must be supported");
+    const std::array importSources{resourcesPath};
+    const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), importSources, "/Game/Imported");
+    Require(imported.items.size() == 1U && imported.items.front().Succeeded() &&
+        imported.items.front().assetPhysicalPath.extension() == ".kbloc",
+        "Catalog import must retain the native format and runtime loader");
+    const auto reused = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), importSources, "/Game/Imported");
+    Require(reused.items.front().status == kb::assets::AssetImportItemStatus::Reused &&
+        reused.items.front().id == imported.items.front().id,
+        "Unchanged catalog imports must reuse their stable asset ID");
+    const auto brokenPath = root / "Broken.kbloc";
+    { std::ofstream broken{brokenPath}; broken << "schema 2 invalid"; }
+    const std::array brokenSources{brokenPath};
+    const auto rejected = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), brokenSources, "/Game/Imported");
+    Require(!rejected.items.front().Succeeded() && !std::filesystem::exists(root / "Assets" / "Imported" / "Broken.kbloc"),
+        "Malformed catalog import must not publish an asset");
     std::filesystem::remove_all(root);
 }
 

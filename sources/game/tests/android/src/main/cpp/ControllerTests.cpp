@@ -16,6 +16,7 @@
 #include <vector>
 
 void VerifyAndroidTouchInput();
+void VerifyAndroidHaptics(kb::game::AndroidGamepadInput& provider);
 
 namespace {
 using kb::input::InputDeviceState;
@@ -33,6 +34,8 @@ struct Observation {
     bool ready = false;
     bool stopped = false;
     std::u32string text;
+    std::size_t caret = 0U;
+    std::size_t selectionAnchor = 0U;
     unsigned submits = 0U;
     std::string imeDiagnostic;
     std::array<unsigned, PADDLEBOAT_MAX_CONTROLLERS> statuses{};
@@ -45,6 +48,7 @@ std::atomic<unsigned> surfaces{0U}, lostSurfaces{0U}, resizedSurfaces{0U};
 std::atomic<bool> holdMotion{false}, finishTouchFrame{false};
 std::atomic<unsigned> touchEvents{0U};
 std::atomic<bool> touchBoundaries{false};
+std::atomic<bool> hapticsVerified{false};
 std::atomic<int> imeRequest{-1};
 std::atomic<unsigned> imeDismissals{0U};
 struct PlatformInput {
@@ -125,6 +129,11 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_requestIme(JNIEnv*, 
     imeRequest.store(shown ? 1 : 0);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_requestMultilineIme(JNIEnv*, jclass) {
+    imeRequest.store(2);
+}
+
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_kbengine_controllertests_ControllerInstrumentation_imeState(JNIEnv* env, jclass) {
     const std::lock_guard lock{observationMutex};
@@ -138,6 +147,15 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_imeState(JNIEnv* env
 extern "C" JNIEXPORT jint JNICALL
 Java_com_kbengine_controllertests_ControllerInstrumentation_imeDismissalCount(JNIEnv*, jclass) {
     return static_cast<jint>(imeDismissals.load());
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_imeSelection(JNIEnv* env, jclass) {
+    const std::lock_guard lock{observationMutex};
+    const jint values[]{static_cast<jint>(observation.selectionAnchor), static_cast<jint>(observation.caret)};
+    auto result = env->NewIntArray(2);
+    if (result != nullptr) env->SetIntArrayRegion(result, 0, 2, values);
+    return result;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -245,6 +263,7 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_diagnostics(JNIEnv* 
          << " resized-surfaces=" << resizedSurfaces.load() << " viewport=" << observation.state.PointerViewportWidth()
          << 'x' << observation.state.PointerViewportHeight() << " touches=" << observation.state.TouchPoints().size()
          << " touch-events=" << touchEvents.load() << " touch-boundaries=" << touchBoundaries.load()
+         << " haptics-verified=" << hapticsVerified.load()
          << " ime=" << observation.imeDiagnostic
          << " safe-area=" << observation.safeArea.left << ',' << observation.safeArea.top << ','
          << observation.safeArea.right << ',' << observation.safeArea.bottom
@@ -280,6 +299,8 @@ extern "C" void android_main(android_app* app) {
         PlatformInput platform;
         auto& controllers = platform.controllers;
         Require(controllers.Initialize(*app->activity), "Controller library initialization failed");
+        VerifyAndroidHaptics(controllers);
+        hapticsVerified.store(true);
         app->userData = &platform;
         app->onAppCmd = [](android_app* host, int32_t command) {
             auto& inputs = *static_cast<PlatformInput*>(host->userData);
@@ -312,6 +333,7 @@ extern "C" void android_main(android_app* app) {
             const int requested = imeRequest.exchange(-1);
             if (requested >= 0) {
                 platform.imeRequested = requested != 0;
+                if (requested != 0) kb::game::ConfigureAndroidTextInput(app->activity, requested == 2);
                 if (requested != 0 && !platform.imeInitialized) {
                     constexpr std::u32string_view initial = U"Start \U0001F600 ";
                     kb::game::SetAndroidTextInputState(app->activity, initial, initial.size());
@@ -338,6 +360,8 @@ extern "C" void android_main(android_app* app) {
                 if (context.valid) {
                     const std::lock_guard lock{observationMutex};
                     observation.text.assign(context.text.data(), context.count);
+                    observation.caret = context.caret;
+                    observation.selectionAnchor = context.selectionAnchor;
                 }
             }
             platform.digital.Publish(platform.textState);

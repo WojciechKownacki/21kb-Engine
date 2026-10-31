@@ -1,0 +1,145 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "SharedAssets",
+      "template": "Basic"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "HeadlessMaterialPreview/Assets/Galeria/M21_Baza.kbmat",
+      "destination": "Assets/Materials/Shared.kbmat"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "create_entity",
+      "id": "First",
+      "name": "First",
+      "preset": "Cube"
+    },
+    {
+      "op": "assign_material_slot",
+      "entity": "First",
+      "asset": "/Game/Materials/Shared.kbmat",
+      "slot": 0
+    },
+    {
+      "op": "create_entity",
+      "id": "Second",
+      "name": "Second",
+      "preset": "Cube"
+    },
+    {
+      "op": "assign_material_slot",
+      "entity": "Second",
+      "asset": "/Game/Materials/Shared.kbmat",
+      "slot": 0
+    },
+    {
+      "op": "open_asset",
+      "asset": "/Game/Materials/Shared.kbmat"
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "shared-material-scope",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Copies/.keep",
+      "content": ""
+    },
+    {
+      "op": "copy_asset",
+      "asset": "/Game/Materials/Shared.kbmat",
+      "destination": "/Game/Copies"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "assign_material_slot",
+      "entity": "Second",
+      "asset": "/Game/Copies/Shared.kbmat",
+      "slot": 0
+    },
+    {
+      "op": "open_asset",
+      "asset": "/Game/Copies/Shared.kbmat"
+    },
+    {
+      "op": "set_material",
+      "asset": "/Game/Copies/Shared.kbmat",
+      "property": "double_sided",
+      "value": true
+    },
+    {
+      "op": "focus_material_editor"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "save_material",
+      "asset": "/Game/Copies/Shared.kbmat"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Materials/Shared.kbmat",
+      "contains": "doubleSided false"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Copies/Shared.kbmat",
+      "contains": "doubleSided false"
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "save_material",
+      "asset": "/Game/Copies/Shared.kbmat"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Copies/Shared.kbmat",
+      "contains": "doubleSided true"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Materials/Shared.kbmat",
+      "contains": "doubleSided false"
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/SharedAssets.21kbscene"
+    },
+    {
+      "op": "assert_material_slot",
+      "entity": "First",
+      "asset": "/Game/Materials/Shared.kbmat",
+      "slot": 0
+    },
+    {
+      "op": "assert_material_slot",
+      "entity": "Second",
+      "asset": "/Game/Copies/Shared.kbmat",
+      "slot": 0
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/SharedAssets.21kbscene"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

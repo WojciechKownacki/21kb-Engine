@@ -440,6 +440,34 @@ void TestGateExpiryAndRevocation() {
     Require(rig.kicked.back() == AuthKickReason::Expired && rig.gate->AuthenticatedCount() == 0U, "the expiry was not reported");
 }
 
+void TestGateQueuedCommandInvalidation() {
+    for (const bool revoke : {false, true}) {
+        GateRig rig;
+        auto player = rig.Connect("ada", "correct horse", 7001U, 0U);
+        std::uint64_t now = rig.Run(0U, 2000U, { &player }, [&] {
+            return player.client->State() == ClientState::Connected;
+        });
+        Require(player.client->Send(0U, MakeLoginMessage(player.login.token)) == SendResult::Queued, "send login");
+        now = rig.Run(now, now + 1000U, { &player }, [&] { return rig.gate->AuthenticatedCount() == 1U; });
+        Require(rig.gate->AuthenticatedCount() == 1U, "login");
+        Require(player.client->Send(0U, MakeCommandMessage(GateRig::Text("queued"))) == SendResult::Queued, "send command");
+        // Deliver a real session packet to Host before the gate observes the invalidation.
+        player.client->Update(now + 10U);
+        rig.network.Advance(now + 20U);
+        rig.host->Update(now + 20U);
+        if (revoke) {
+            rig.provider.RevokeToken(player.login.claims.tokenId);
+            Require(rig.gate->UpdateRevocations(rig.provider.PublishRevocations(kBase)), "load revocation");
+        }
+        rig.gate->Update(now + 20U, revoke ? kBase : player.login.claims.expiresAt, rig.commands);
+        Require(rig.commands.empty() && rig.gate->GetStats().commandsPassed == 0U,
+            "a queued command passed after token invalidation");
+        Require(rig.gate->AuthenticatedCount() == 0U && rig.kicked.size() == 1U &&
+            rig.kicked.front() == (revoke ? AuthKickReason::Revoked : AuthKickReason::Expired),
+            "the invalidated session did not report its removal");
+    }
+}
+
 void TestGateLoginTimeout() {
     AuthGateConfig config;
     config.loginTimeoutMilliseconds = 1500U;
@@ -521,6 +549,7 @@ int main() {
         { "gate-refusals", &TestGateRefusals },
         { "gate-command-limits", &TestGateCommandLimits },
         { "gate-expiry-and-revocation", &TestGateExpiryAndRevocation },
+        { "gate-queued-command-invalidation", &TestGateQueuedCommandInvalidation },
         { "gate-login-timeout", &TestGateLoginTimeout },
         { "gate-real-udp", &TestGateRealUdp },
     };

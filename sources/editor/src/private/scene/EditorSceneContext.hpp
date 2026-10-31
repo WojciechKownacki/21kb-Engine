@@ -1,4 +1,7 @@
 #pragma once
+#include "kb/editor/docking/DockTypes.hpp"
+
+#include "engine/ui/UITheme.hpp"
 
 #include "engine/assets/Map2DAsset.hpp"
 #include "engine/scene/SceneTemplates.hpp"
@@ -24,6 +27,8 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetUsers.hpp"
+#include "agent/EditorAgentPanelState.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
@@ -47,6 +52,9 @@
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
+#include "scene/TimelineEditorDocumentState.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
+#include "scene/EditorTimelinePreviewSession.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
@@ -124,6 +132,8 @@ struct TerrainLayerPaintSettings;
 } // namespace kb::terrain_editor
 
 namespace kb::editor {
+struct BlendSpace2DEditorState;
+struct GameplayGraphEditorState;
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
@@ -240,6 +250,8 @@ public:
     [[nodiscard]] MaterialEditorState& MaterialEditor() noexcept;
     [[nodiscard]] const MaterialEditorState& MaterialEditor() const noexcept;
     [[nodiscard]] EditorConsoleState& Console() noexcept;
+    [[nodiscard]] EditorAgentPanelState& AgentPanel() noexcept { return agentPanel_; }
+    [[nodiscard]] const EditorAgentPanelState& AgentPanel() const noexcept { return agentPanel_; }
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
@@ -269,6 +281,12 @@ public:
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
+    // Which objects of the open scene use each asset, for the "Used by" column of Project Files.
+    // RefreshAssetUsers recomputes it when the scene changed and returns whether it changed;
+    // the version moves with every change so a retained panel image knows to repaint.
+    bool RefreshAssetUsers();
+    [[nodiscard]] const EditorAssetUsers& AssetUsers() const noexcept { return assetUsers_; }
+    [[nodiscard]] std::uint64_t AssetUsersVersion() const noexcept { return assetUsersVersion_; }
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
     [[nodiscard]] bool SceneRenderStructuralDirty() const noexcept;
@@ -298,6 +316,11 @@ public:
     // installed scene system produced to the Console, so a behaviour that
     // silently fails to run during play surfaces a reason instead of nothing.
     void SurfaceScriptDiagnostics();
+    static void ConfigureLuaDebugger(std::filesystem::path directory);
+    [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& directory, std::string& error);
+    void PollLuaDebugger();
+    [[nodiscard]] bool LuaDebuggerPaused() const;
+
     // Single production play-mode update path shared by the visible editor
     // loop and deterministic automation. Input collection remains owned by
     // the host, but system execution, fault surfacing, diagnostics, render
@@ -563,6 +586,9 @@ public:
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] kb::assets::AssetId AudioMixerPanelAsset() const;
+    [[nodiscard]] std::size_t AudioMixerPanelFirst() const noexcept { return audioMixerPanelFirst_; }
+    [[nodiscard]] bool AudioMixerPanelPointer(DockRect content, int x, int y);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
     // Create > Post-Process Profile and Create > Import Preset (EditorSceneContextPostProcess.cpp).
     [[nodiscard]] bool CreatePostProcessProfileAsset(const std::filesystem::path& virtualFolder);
@@ -584,6 +610,54 @@ public:
     [[nodiscard]] bool CreateNativeScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenTimelineEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenBlendSpace2DEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenGameplayGraphAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool CreateGameplayGraphAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] GameplayGraphEditorState* GameplayGraphEditor() noexcept { return gameplayGraphEditor_.get(); }
+    [[nodiscard]] const GameplayGraphEditorState* GameplayGraphEditor() const noexcept { return gameplayGraphEditor_.get(); }
+    [[nodiscard]] bool ConsumeGameplayGraphOpenRequest() noexcept;
+    void ClearGameplayGraphPreview() noexcept;
+    [[nodiscard]] bool CreateBlendSpace2DAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool ConsumeBlendSpace2DEditorOpenRequest() noexcept;
+    [[nodiscard]] bool EditBlendSpace2DAsset(const std::function<bool(kb::scene::BlendSpace2DAsset&)>& edit);
+    [[nodiscard]] const BlendSpace2DEditorState* BlendSpace2DEditor() const noexcept { return blendSpaceEditor_.get(); }
+    [[nodiscard]] bool UndoBlendSpace2DEditorEdit();
+    [[nodiscard]] bool RedoBlendSpace2DEditorEdit();
+    [[nodiscard]] bool SaveBlendSpace2DEditorAsset();
+    [[nodiscard]] bool RevertBlendSpace2DEditorAsset();
+    [[nodiscard]] bool SetBlendSpace2DPreviewOwner(kb::scene::SceneEntity owner);
+    [[nodiscard]] bool SetBlendSpace2DPreviewCoordinates(float x, float y);
+    [[nodiscard]] bool SeekBlendSpace2DPreview(float phase);
+    [[nodiscard]] bool PlayBlendSpace2DPreview(bool playing);
+    [[nodiscard]] bool TickBlendSpace2DPreview(float delta);
+    void ClearBlendSpace2DPreview() noexcept;
+    void SynchronizeBlendSpace2DReleaseHandler();
+    void FitBlendSpace2DEditorView();
+    void SelectBlendSpace2DSample(std::size_t index);
+    void SetBlendSpace2DEditorFirstRow(std::size_t row);
+    [[nodiscard]] bool BeginBlendSpace2DSampleDrag(std::size_t index);
+    [[nodiscard]] bool MoveBlendSpace2DSample(float x, float y);
+    [[nodiscard]] bool EndBlendSpace2DSampleDrag();
+    [[nodiscard]] const TimelineEditorDocumentState& TimelineEditorDocument() const noexcept { return timelineEditorDocument_; }
+    [[nodiscard]] bool EditTimelineAsset(const std::function<bool(kb::scene::TimelineAsset&)>& edit);
+    [[nodiscard]] bool UndoTimelineEditorEdit();
+    [[nodiscard]] bool RedoTimelineEditorEdit();
+    [[nodiscard]] bool SaveTimelineEditorAsset();
+    [[nodiscard]] bool RevertTimelineEditorAsset();
+    [[nodiscard]] std::size_t TimelineEditorFirstRow() const noexcept { return timelineEditorFirstRow_; }
+    [[nodiscard]] std::size_t TimelineEditorSelectedRow() const noexcept { return timelineEditorSelectedRow_; }
+    void SetTimelineEditorFirstRow(std::size_t row) noexcept { timelineEditorFirstRow_ = row; }
+    void SetTimelineEditorSelectedRow(std::size_t row) noexcept { timelineEditorSelectedRow_ = row; }
+    [[nodiscard]] bool TimelineEditorLoop() const noexcept { return timelineEditorLoop_; }
+    void SetTimelineEditorLoop(bool loop) noexcept { timelineEditorLoop_ = loop; }
+    void ClearTimelineEditorPreview() noexcept { timelineEditorPreview_.Clear(); timelineEditorOwner_ = {}; }
+    [[nodiscard]] bool SetTimelineEditorPreviewOwner(kb::scene::SceneEntity owner);
+    [[nodiscard]] bool SeekTimelineEditorPreview(float time);
+    [[nodiscard]] bool PlayTimelineEditorPreview(float rate, bool loop);
+    void PauseTimelineEditorPreview() noexcept;
+    [[nodiscard]] bool TickTimelineEditorPreview(float deltaSeconds);
+    [[nodiscard]] const EditorTimelinePreviewSession& TimelineEditorPreview() const noexcept { return timelineEditorPreview_; }
     [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool HasParticleEditorAsset() const noexcept;
     [[nodiscard]] kb::assets::AssetId ParticleEditorAssetId() const noexcept;
@@ -849,6 +923,9 @@ public:
     [[nodiscard]] bool SetSceneAudioOcclusion(const kb::scene::AudioOcclusionSettings& settings);
     // A post-process profile asset's values (the Inspector edits them, undoably) and the scene's
     // profile (saved with the scene, undoable through the scene history); 0 clears it.
+    [[nodiscard]] bool CreateUIThemeAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] std::optional<kb::scene::UITheme> ReadUITheme(kb::assets::AssetId id) const;
+    [[nodiscard]] bool SetUITheme(kb::assets::AssetId id, const kb::scene::UITheme& theme);
     [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> ReadPostProcessProfile(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetPostProcessProfile(kb::assets::AssetId id, const kb::render::ScenePostProcessSettings& settings);
     [[nodiscard]] bool SetScenePostProcessProfile(kb::assets::AssetId id);
@@ -1523,6 +1600,13 @@ private:
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
+    TimelineEditorDocumentState timelineEditorDocument_;
+    std::unique_ptr<BlendSpace2DEditorState> blendSpaceEditor_;
+    std::unique_ptr<GameplayGraphEditorState> gameplayGraphEditor_;
+    std::size_t timelineEditorFirstRow_ = 0, timelineEditorSelectedRow_ = 0;
+    bool timelineEditorLoop_ = false;
+    EditorTimelinePreviewSession timelineEditorPreview_;
+    kb::scene::SceneEntity timelineEditorOwner_{};
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     kb::assets::AssetId skeletalMeshEditorPrimarySkeletonId_{};
     kb::assets::AssetId pendingSkeletalMeshEditorAssetId_{};
@@ -1543,6 +1627,11 @@ private:
     std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
+    EditorAssetUsers assetUsers_;
+    EditorAgentPanelState agentPanel_;
+    std::uint64_t assetUsersVersion_ = 0U;
+    std::uint64_t assetUsersRevision_ = ~std::uint64_t{ 0U };
+    std::uint64_t assetUsersGeneration_ = ~std::uint64_t{ 0U };
     EditorConfiguration editorConfig_;
     EditorPluginsState plugins_;
     bool particleProviderMigrationResolved_ = false;
@@ -1559,6 +1648,7 @@ private:
     std::string graphShaderCacheRoot_;
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
+    std::size_t audioMixerPanelFirst_ = 0U;
     EditorCommandStack commandStack_;
     EditorCommandStack playModeDocumentCommands_;
     // The scene document's undo history, selection and unsaved state, kept aside while a prefab is edited.

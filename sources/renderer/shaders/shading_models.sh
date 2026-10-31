@@ -54,7 +54,7 @@ vec3 KbShadingModelLightColor(float model, float customData0, float customData1,
     if (nDotL <= 0.0) {
         return vec3(0.0, 0.0, 0.0);
     }
-    vec3 H = normalize(V + L);
+    vec3 H = ((V + L) / max(length(V + L), 0.00001));
     float nDotV = max(dot(N, V), 0.0001);
     float nDotH = max(dot(N, H), 0.0);
     if (KbIsShadingModel(model, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT)) {
@@ -86,6 +86,24 @@ vec3 KbShadingModelLightColor(float model, float customData0, float customData1,
     return defaultLit;
 }
 
+// A coat above a scattering base. The existing graph models keep their independent model ids;
+// built-in PBR can use both authored layers without discarding either parameter set.
+vec3 KbLayeredPbrLight(float coat, float coatRoughness, float subsurface, vec3 modelColor,
+    vec3 N, vec3 V, vec3 L, float nDotLRaw, vec3 albedo, float metallic, float roughness,
+    vec3 diffuseLobe, vec3 specularLobe)
+{
+    vec3 base = KbShadingModelLightColor(KB_GBUFFER_SHADING_MODEL_SUBSURFACE, subsurface, 0.0,
+        N, V, L, nDotLRaw, albedo, metallic, roughness, diffuseLobe, specularLobe, modelColor);
+    if (coat <= 0.0) return base;
+    vec3 H = (V + L) / max(length(V + L), 0.00001);
+    float coatCosine = nDotLRaw > 0.0 ? dot(V, H) : dot(N, V);
+    float coatFresnel = (0.04 + 0.96 * pow(1.0 - clamp(coatCosine, 0.0, 1.0), 5.0)) * coat;
+    vec3 coated = KbShadingModelLightColor(KB_GBUFFER_SHADING_MODEL_CLEAR_COAT, coat, coatRoughness,
+        N, V, L, nDotLRaw, albedo, metallic, roughness, diffuseLobe, specularLobe, modelColor);
+    vec3 defaultLit = (diffuseLobe + specularLobe) * max(nDotLRaw, 0.0);
+    return coated + (base - defaultLit) * (1.0 - coatFresnel);
+}
+
 // Octahedral encoding of a unit vector into -1..1 (the eye's iris normal in the custom data).
 vec2 KbOctEncode(vec3 n)
 {
@@ -110,7 +128,7 @@ vec3 KbEyeLight(vec3 N, vec3 V, vec3 L, float nDotLRaw, vec3 albedo, float metal
     vec3 irisNormal, float irisMask, float irisDistance)
 {
     float nDotL = max(nDotLRaw, 0.0);
-    vec3 H = normalize(V + L);
+    vec3 H = ((V + L) / max(length(V + L), 0.00001));
     float fresnel = 0.04 + 0.96 * pow(1.0 - clamp(dot(V, H), 0.0, 1.0), 5.0);
     vec3 causticNormal = normalize(mix(irisNormal, -N, clamp(irisMask * irisDistance, 0.0, 1.0)));
     float irisNoL = clamp(dot(irisNormal, L), 0.0, 1.0);

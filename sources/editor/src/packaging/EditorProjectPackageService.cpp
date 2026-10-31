@@ -231,6 +231,17 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
             error = "The Android package request is missing application metadata.";
             return false;
         }
+        if (targetSpec->needsAndroidMetadata &&
+            (request.androidFormat != "apk" && request.androidFormat != "aab")) {
+            error = "Android package format must be apk or aab.";
+            return false;
+        }
+        if (targetSpec->needsAndroidMetadata && request.androidFormat == "aab" &&
+            (!request.androidBundletool.is_absolute() ||
+             !std::filesystem::is_regular_file(request.androidBundletool, filesystemError) || filesystemError)) {
+            error = "Android app bundles require an absolute existing bundletool JAR.";
+            return false;
+        }
         if (targetSpec->needsAndroidMetadata && request.configuration == "Release" &&
             (request.androidKeystore.empty() || request.androidKeyAlias.empty() ||
              request.androidStorePassword.empty() || request.androidKeyPassword.empty())) {
@@ -430,6 +441,8 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
         appendText(L"--android-application-id", request.androidApplicationId);
         appendText(L"--android-version-code", std::to_string(request.androidVersionCode));
         appendText(L"--android-label", request.androidLabel);
+        appendText(L"--android-format", request.androidFormat);
+        if (request.androidFormat == "aab") append(L"--android-bundletool", request.androidBundletool);
         appendText(L"--android-min-sdk", "23");
         appendText(L"--android-target-sdk", "36");
         if (request.configuration == "Release") {

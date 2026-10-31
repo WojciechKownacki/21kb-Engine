@@ -5,6 +5,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/platform/win32/Win32InputKeyMap.hpp"
+#include "engine/platform/win32/Win32GamepadInput.hpp"
 
 #include <Xinput.h>
 
@@ -32,60 +33,6 @@ namespace {
     return foregroundProcess == GetCurrentProcessId();
 }
 
-struct StickAxes {
-    float x = 0.0F;
-    float y = 0.0F;
-};
-
-[[nodiscard]] StickAxes NormalizeStick(SHORT rawX, SHORT rawY, SHORT deadZone) noexcept {
-    const float x = static_cast<float>(rawX);
-    const float y = static_cast<float>(rawY);
-    const float magnitude = std::sqrt((x * x) + (y * y));
-    if (magnitude <= static_cast<float>(deadZone)) {
-        return {};
-    }
-    constexpr float kMaxMagnitude = 32767.0F;
-    const float clamped = std::min(magnitude, kMaxMagnitude);
-    const float scaled = (clamped - static_cast<float>(deadZone)) /
-        (kMaxMagnitude - static_cast<float>(deadZone));
-    return StickAxes{.x = (x / magnitude) * scaled, .y = (y / magnitude) * scaled};
-}
-
-[[nodiscard]] float NormalizeTrigger(BYTE value) noexcept {
-    if (value <= XINPUT_GAMEPAD_TRIGGER_THRESHOLD) {
-        return 0.0F;
-    }
-    return static_cast<float>(value - XINPUT_GAMEPAD_TRIGGER_THRESHOLD) /
-        (255.0F - static_cast<float>(XINPUT_GAMEPAD_TRIGGER_THRESHOLD));
-}
-
-void CollectGamepads(InputDeviceState& state) noexcept {
-    static_assert(InputDeviceState::kMaxGamepads <= XUSER_MAX_COUNT,
-        "Polling more gamepad slots than XInput supports");
-    for (std::uint8_t index = 0U; index < InputDeviceState::kMaxGamepads; ++index) {
-        XINPUT_STATE gamepadState{};
-        const bool connected = XInputGetState(index, &gamepadState) == ERROR_SUCCESS;
-        state.SetGamepadConnected(index, connected);
-        if (!connected) {
-            continue;
-        }
-
-        const XINPUT_GAMEPAD& pad = gamepadState.Gamepad;
-        for (const Win32GamepadButtonBinding& binding : Win32InputKeyMap::GamepadButtons()) {
-            state.SetKeyDown(binding.key, (pad.wButtons & binding.mask) != 0, index);
-        }
-        const StickAxes left = NormalizeStick(
-            pad.sThumbLX, pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
-        const StickAxes right = NormalizeStick(
-            pad.sThumbRX, pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
-        state.SetAnalog(InputKey::GamepadLeftStickX, left.x, index);
-        state.SetAnalog(InputKey::GamepadLeftStickY, left.y, index);
-        state.SetAnalog(InputKey::GamepadRightStickX, right.x, index);
-        state.SetAnalog(InputKey::GamepadRightStickY, right.y, index);
-        state.SetAnalog(InputKey::GamepadLeftTrigger, NormalizeTrigger(pad.bLeftTrigger), index);
-        state.SetAnalog(InputKey::GamepadRightTrigger, NormalizeTrigger(pad.bRightTrigger), index);
-    }
-}
 
 } // namespace
 
@@ -120,11 +67,65 @@ void Win32InputCollector::AdvanceTouchFrame() noexcept {
 
 bool Win32InputCollector::HandleWindowMessage(
     HWND ownerWindow, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_INPUT) {
+        RAWINPUT raw{};
+        UINT size = sizeof(raw);
+        if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw,
+                &size, sizeof(RAWINPUTHEADER)) != UINT(-1) &&
+            raw.header.dwType == RIM_TYPEMOUSE && OwnerProcessIsForeground(ownerWindow)) {
+            rawRelativeMouse_ = (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0;
+            if (rawRelativeMouse_) {
+                pendingRawMouseX_ += static_cast<float>(raw.data.mouse.lLastX);
+                pendingRawMouseY_ += static_cast<float>(raw.data.mouse.lLastY);
+            } else {
+                pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
+            }
+        }
+        return false; // The host must call DefWindowProc for raw-input cleanup.
+    }
+    if (message == WM_KILLFOCUS || message == WM_CANCELMODE) {
+        pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
+        rawRelativeMouse_ = false;
+        hasPreviousMouse_ = false;
+    }
+    if (message == WM_IME_STARTCOMPOSITION && textEntity_ != 0U) {
+        imeComposing_ = true;
+        imeKeysPendingRelease_ = true;
+        imeScene_ = textScene_;
+        imeEntity_ = textEntity_;
+        imeDecoder_.Reset();
+        imeOverflow_ = false;
+        return false; // Let the native IME display its uncommitted composition.
+    }
+    if (message == WM_IME_ENDCOMPOSITION) {
+        imeComposing_ = false;
+        return false;
+    }
+    if (message == WM_IME_CHAR && textEntity_ != 0U) {
+        // A result arriving after cancellation belongs to the retired editor.
+        if (imeEntity_ == 0U || imeScene_ != textScene_ || imeEntity_ != textEntity_) return true;
+        imeKeysPendingRelease_ = true;
+        char32_t scalar = 0U;
+        if (imeDecoder_.Consume(static_cast<char16_t>(wparam), scalar)) {
+            if (pendingImeCount_ < pendingImeText_.size()) pendingImeText_[pendingImeCount_++] = scalar;
+            else imeOverflow_ = true;
+        }
+        // DefWindowProc would translate this into WM_CHAR a second time.
+        return true;
+    }
+    if (message == WM_KILLFOCUS) {
+        textEntity_ = 0U;
+        imeComposing_ = false;
+        pendingImeCount_ = 0U;
+        imeEntity_ = 0U;
+        imeDecoder_.Reset();
+    }
     if (message == WM_CANCELMODE) {
         for (std::size_t index = 0U; index < touchPointCount_; ++index) touchPoints_[index].phase = InputTouchPhase::Cancelled;
         return false;
     }
     if (message == WM_CHAR) {
+        if (imeComposing_) return false;
         const std::uint16_t repeatCount =
             (std::max)(static_cast<std::uint16_t>(LOWORD(lparam)), std::uint16_t{1U});
         for (std::uint16_t repeat = 0U; repeat < repeatCount; ++repeat) {
@@ -217,7 +218,10 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
     state.Reset();
     const bool focused = OwnerProcessIsForeground(ownerWindow);
     state.SetHasFocus(focused);
+    CollectWin32Gamepads(state, ownerWindow);
     if (!focused) {
+        pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
+        rawRelativeMouse_ = false;
         hasPreviousMouse_ = false;
         touchPointCount_ = 0U;
         pendingMouseWheel_ = 0.0F;
@@ -247,7 +251,7 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
 
     POINT cursor{};
     if (GetCursorPos(&cursor) != 0) {
-        if (hasPreviousMouse_) {
+        if (hasPreviousMouse_ && !rawRelativeMouse_) {
             state.SetAnalog(
                 InputKey::MouseX,
                 static_cast<float>(cursor.x - previousMouse_.x) * pointerDeltaScaleX);
@@ -279,6 +283,13 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
         }
     }
 
+    if (rawRelativeMouse_) {
+        // Raw relative counts are independent of cursor acceleration, warps and
+        // viewport DPI. Absolute pointer coordinates still use the client map.
+        state.SetAnalog(InputKey::MouseX, pendingRawMouseX_);
+        state.SetAnalog(InputKey::MouseY, pendingRawMouseY_);
+    }
+    pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;
     state.SetTouchPoints(std::span<const InputTouchPoint>{
         touchPoints_.data(), touchPointCount_});
     static_cast<void>(state.AddTextInput(std::span<const char32_t>{
@@ -300,7 +311,6 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
     AdvanceTouchFrame();
     state.SetAnalog(InputKey::MouseWheel, pendingMouseWheel_);
     pendingMouseWheel_ = 0.0F;
-    CollectGamepads(state);
 }
 
 } // namespace kb::input

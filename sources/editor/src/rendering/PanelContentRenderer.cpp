@@ -1,6 +1,9 @@
 #include "rendering/PanelContentRenderer.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "localization/EditorLocalization.hpp"
+#include "engine/ecs/World.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/ecs/SystemSchedulerTrace.hpp"
 
 #if defined(_WIN32)
 #include "console/EditorConsoleLayout.hpp"
@@ -12,11 +15,16 @@
 #include "rendering/EditorScriptEditorOverlay.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/AudioMixerPanelView.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
+#include "rendering/AgentPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/EditorSettingsPanelRenderer.hpp"
@@ -202,12 +210,29 @@ void DrawConsoleToolbar(HDC dc, const EditorConsoleLayoutRects& layout, const Ed
     DrawPill(dc, layout.infoButton, theme, EditorConsoleLevel::Info, console.Count(EditorConsoleLevel::Info), console.ShowInfo());
     DrawPill(dc, layout.warningButton, theme, EditorConsoleLevel::Warning, console.Count(EditorConsoleLevel::Warning), console.ShowWarnings());
     DrawPill(dc, layout.errorButton, theme, EditorConsoleLevel::Error, console.Count(EditorConsoleLevel::Error), console.ShowErrors());
+    if (layout.filterField.right > layout.filterField.left) {
+        const bool focused = console.Filter().IsFocused();
+        const std::string_view query = console.Filter().Query();
+        GdiDrawing::DrawSharpFrame(dc, layout.filterField, Color(theme.chrome), Color(focused ? theme.accent : theme.borderPanel));
+        constexpr int iconSize = 12;
+        const int iconTop = static_cast<int>(layout.filterField.top) + (static_cast<int>(layout.filterField.bottom - layout.filterField.top) - iconSize) / 2;
+        HeroIconPainter::Draw(dc, RECT{ layout.filterField.left + 7, iconTop, layout.filterField.left + 7 + iconSize, iconTop + iconSize },
+            HeroIconKind::MagnifyingGlass, Color(theme.textDisabled), 1);
+        const RECT text{ layout.filterField.left + 25, layout.filterField.top, layout.filterField.right - 6, layout.filterField.bottom };
+        if (query.empty() && !focused) {
+            DrawText(dc, text, EditorText("console.filterPlaceholder", "Filter messages"), Color(theme.textDisabled), 12);
+        } else {
+            // The caret is the field's only sign of focus besides its border.
+            const std::string shown = std::string{ query } + (focused ? "|" : "");
+            DrawText(dc, text, shown.c_str(), Color(theme.textPrimary), 12);
+        }
+    }
     DrawButton(dc, layout.copyLineButton, theme, EditorText("console.copyLine", "Copy Line"), console.HoveredButton() == EditorConsoleButton::CopyLine, console.PressedButton() == EditorConsoleButton::CopyLine);
     DrawButton(dc, layout.saveLogButton, theme, EditorText("console.saveLog", "Save Log"), console.HoveredButton() == EditorConsoleButton::SaveLog, console.PressedButton() == EditorConsoleButton::SaveLog);
     DrawButton(dc, layout.clearButton, theme, EditorText("console.clear", "Clear"), console.HoveredButton() == EditorConsoleButton::Clear, console.PressedButton() == EditorConsoleButton::Clear);
 }
 
-void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorConsoleEntry& entry, int visibleIndex, bool selected) {
+void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorConsoleEntry& entry, std::uint32_t repeat, int visibleIndex, bool selected) {
     const bool zebra = (visibleIndex & 1) != 0;
     GdiDrawing::FillRectColor(dc, row, selected ? Blend(Color(theme.panel), Color(theme.accent), 16) : RowBackground(theme, entry.level, zebra));
     if (selected) {
@@ -221,9 +246,18 @@ void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorCons
     GdiDrawing::FillRectColor(dc, category, Color(theme.chrome));
     DrawText(dc, EditorConsoleInsetRect(category, 6, 0), entry.category.c_str(), Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
+    LONG messageRight = row.right - 10;
+    if (repeat > 1U) {
+        // How many identical entries this row stands for.
+        const std::string count = "\xC3\x97" + std::to_string(repeat);
+        const RECT badge{ row.right - 62, row.top + 3, row.right - 10, row.bottom - 3 };
+        GdiDrawing::FillRectColor(dc, badge, Color(theme.chrome));
+        DrawText(dc, badge, count.c_str(), Color(theme.textSecondary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        messageRight = badge.left - 8;
+    }
     {
         const CutTextDataScope logMessage;
-        DrawText(dc, RECT{ row.left + 230, row.top, row.right - 10, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
+        DrawText(dc, RECT{ row.left + 230, row.top, messageRight, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
     }
 
     GdiDrawing::FillRectColor(dc, RECT{ row.left, row.bottom - 1, row.right, row.bottom }, Color(theme.borderChrome));
@@ -285,24 +319,21 @@ void DrawConsolePanel(HDC dc, const RECT& content, const EditorTheme& theme, con
     const int lastVisible = firstVisible + scroll.visibleRows + 1;
     int rowIndex = 0;
     int accepted = 0;
-    int acceptedIndex = 0;
-    for (const EditorConsoleEntry& entry : console.Entries()) {
-        if (!console.Accepts(entry.level)) {
-            continue;
+    ForEachEditorConsoleRow(console, [&](const EditorConsoleRow& visible) {
+        const int index = accepted++;
+        if (index < firstVisible) {
+            return true;
         }
-        ++accepted;
-        if (acceptedIndex < firstVisible) {
-            ++acceptedIndex;
-            continue;
-        }
-        if (acceptedIndex >= lastVisible) {
-            break;
+        if (index >= lastVisible) {
+            return false;
         }
         RECT row{ layout.listRows.left, layout.listRows.top + rowIndex * rowHeight, layout.listRows.right, layout.listRows.top + (rowIndex + 1) * rowHeight };
-        DrawConsoleRow(dc, row, theme, entry, rowIndex, console.SelectedSequence() == entry.sequence);
+        const std::uint64_t selected = console.SelectedSequence();
+        DrawConsoleRow(dc, row, theme, *visible.entry, visible.repeat, rowIndex,
+            selected != 0U && selected >= visible.firstSequence && selected <= visible.entry->sequence);
         ++rowIndex;
-        ++acceptedIndex;
-    }
+        return true;
+    });
 
     if (accepted == 0) {
         DrawText(dc, layout.listRows, console.Entries().empty() ? EditorText("console.emptyReady", "Console is ready. No log entries yet.")
@@ -337,6 +368,39 @@ void PanelContentRenderer::Paint(
     const RECT visibleContent = IntersectRectOrEmpty(content, contentClip);
 
     switch (panel.kind) {
+    case DockPanelKind::AudioMixer: {
+        const auto id = sceneContext.AudioMixerPanelAsset();
+        const auto asset = sceneContext.ReadAudioMixerAsset(id);
+        const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), id);
+        const DockRect bounds{visibleContent.left, visibleContent.top, visibleContent.right - visibleContent.left, visibleContent.bottom - visibleContent.top};
+        const auto layout = AudioMixerPanelView::Layout(bounds, asset.value_or(kb::audio::AudioMixerAsset{}), runtime, sceneContext.AudioMixerPanelFirst());
+        AudioMixerPanelView::Paint(dc, bounds, theme, layout, asset ? runtime.diagnostic : "Select an audio mixer in Project Files.");
+        break;
+    }
+    case DockPanelKind::Profiler: {
+        const auto snapshot = sceneContext.Scene().Runtime().EcsWorld().TelemetrySnapshot();
+        const std::array<std::string, 13> rows{
+            "ECS profiler - current scene",
+            "Entities: " + std::to_string(snapshot.entityCount) + " count (measured)",
+            "Chunks: " + std::to_string(snapshot.chunkCount) + " count (measured)",
+            "Native payload: " + std::to_string(snapshot.committedBytes) + " bytes (measured allocation capacity)",
+            "Entity records: " + std::to_string(snapshot.entityRecordBytes) + " bytes (measured capacity)",
+            "Occupancy: " + std::to_string(snapshot.occupancyPercent) + " % (derived)",
+            "Storage allocations: " + std::to_string(snapshot.storageSystemAllocationCount) + " count (measured)",
+            "Query cache hits: " + std::to_string(snapshot.queryCacheHits) + " count (measured)",
+            "Query cache misses: " + std::to_string(snapshot.queryCacheMisses) + " count (measured)",
+            "Query prepare: " + std::to_string(snapshot.queryPrepareElapsedNanoseconds) + " ns (measured)",
+            "Query kernels: " + std::to_string(snapshot.queryKernelElapsedNanoseconds) + " ns (measured CPU sum)",
+            "Query traffic: " + std::to_string(snapshot.queryBytesTouched) + " bytes (estimated)",
+            "Native storage scope; excludes GPU, physics and backend mirror memory."};
+        int y = content.top + 20;
+        for (const auto& row : rows) {
+            DrawText(dc, RECT{content.left + 20, y, content.right - 16, y + 24}, row,
+                Color(theme.textPrimary), 11, FW_NORMAL, DT_LEFT | DT_SINGLELINE);
+            y += 27;
+        }
+        break;
+    }
     case DockPanelKind::Hierarchy:
         HierarchyPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
@@ -356,6 +420,19 @@ void PanelContentRenderer::Paint(
             dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
             renderBackendSettings, sceneViewport);
         break;
+    case DockPanelKind::TimelineEditor:
+        TimelineEditorPanel::Paint(dc, sceneViewportHost,
+            {visibleContent.left, visibleContent.top, visibleContent.right-visibleContent.left, visibleContent.bottom-visibleContent.top},
+            panel, theme, sceneContext, sceneViewport);
+        break;
+    case DockPanelKind::GameplayGraphEditor:
+        GameplayGraphEditorPanel::Paint(dc,{visibleContent.left,visibleContent.top,visibleContent.right-visibleContent.left,visibleContent.bottom-visibleContent.top},theme,sceneContext);
+        break;
+    case DockPanelKind::BlendSpace2DEditor:
+        BlendSpace2DEditorPanel::Paint(dc,sceneViewportHost,
+            {visibleContent.left,visibleContent.top,visibleContent.right-visibleContent.left,visibleContent.bottom-visibleContent.top},
+            panel,theme,sceneContext,sceneViewport);
+        break;
     case DockPanelKind::AnimatorEditor:
         AnimatorEditorPanelRenderer{}.Paint(
             dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
@@ -372,6 +449,9 @@ void PanelContentRenderer::Paint(
     case DockPanelKind::Console:
         DrawConsolePanel(dc, content, theme, sceneContext.Console());
         ConsoleDetailTextOverlay::Sync(sceneViewportHost, content, sceneContext.Console());
+        break;
+    case DockPanelKind::Agent:
+        AgentPanelRenderer::Paint(dc, content, theme, sceneContext.AgentPanel());
         break;
     case DockPanelKind::Scene:
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);

@@ -509,6 +509,8 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                                           ParseBool));
         static_cast<void>(reader.Optional(IndexPath(emitterIndex, "screenDepthCollision"), emitter.screenDepthCollision,
                                           ParseBool));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "customProcess.assetId"), emitter.customProcess.assetId, ParseUInt<std::uint64_t>));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "customProcess.path"), emitter.customProcess.virtualPath, ParseQuoted));
         reader.Required(IndexPath(emitterIndex, "spawn.mode"), emitter.spawn.mode, ParseEnum<ParticleSpawnMode>,
                         ParticleEffectDiagnosticCode::InvalidEnum);
         ReadCurve(reader, IndexPath(emitterIndex, "spawn.rate"), emitter.spawn.rateOverTime);
@@ -1160,6 +1162,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         if (e.absolutePosition) BoolLine(out, IndexPath(ei, "absolutePosition"), true);
         if (e.screenDepthCollision) BoolLine(out, IndexPath(ei, "screenDepthCollision"), true);
         Line(out, IndexPath(ei, "spawn.mode"), EnumText(e.spawn.mode));
+        if (!e.customProcess.Empty()) WriteReference(out, IndexPath(ei, "customProcess"), e.customProcess);
         WriteCurve(out, IndexPath(ei, "spawn.rate"), e.spawn.rateOverTime);
         Line(out, IndexPath(ei, "spawn.burstCount"), std::to_string(e.spawn.bursts.size()));
         for (std::size_t bi = 0; bi < e.spawn.bursts.size(); ++bi) {

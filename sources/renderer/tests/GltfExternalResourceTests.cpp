@@ -7,10 +7,13 @@
 
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/GltfExternalResources.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
 
 #include <cgltf/cgltf.h>
@@ -249,6 +252,27 @@ void BufferUrisOutsideTheSourceFolderAreRefused() {
     return document + "}";
 }
 
+void ClearcoatImportPreservesLayersAndLinearTexturePaths() {
+    const TempRoot root;
+    WriteBytes(root.Path() / "triangle.bin", TriangleBuffer());
+    WriteText(root.Path() / "coat.png", "png bytes");
+    const auto path = root.Path() / "Layers.gltf";
+    WriteText(path, MaterialDocument(
+        R"([{"extensions":{"KHR_materials_clearcoat":{"clearcoatFactor":0.8,"clearcoatRoughnessFactor":0.3,"clearcoatTexture":{"index":0},"clearcoatRoughnessTexture":{"index":0}}}},{},{}])", "coat.png"));
+    const auto loaded = RenderMeshAssetBuilder::LoadGltf(path);
+    Require(loaded.has_value() && !loaded->embeddedMaterials.empty(), "Clearcoat glTF did not load");
+    const auto& material = loaded->embeddedMaterials.front();
+    Require(std::abs(material.desc.clearcoatFactor - 0.8F) < 0.0001F &&
+        std::abs(material.desc.clearcoatRoughnessFactor - 0.3F) < 0.0001F &&
+        material.clearcoatTexturePath == "coat.png" && material.clearcoatRoughnessTexturePath == "coat.png",
+        "glTF import discarded clearcoat factors or texture paths");
+    std::string error;
+    const auto manifest = RenderMeshSourceImport::Inspect(path, &error);
+    RequireThat(manifest.has_value(), "Clearcoat import manifest failed: " + error);
+    Require(!manifest->materials.empty() && std::abs(manifest->materials.front().desc.clearcoatFactor-0.8F)<0.0001F &&
+        manifest->materials.front().clearcoatTexturePath == "coat.png", "Clearcoat import manifest lost layer data");
+}
+
 void UnnamedMaterialsKeepDistinctStableSlots() {
     const TempRoot root;
     const std::filesystem::path document = root.Path() / "Materials.gltf";
@@ -465,6 +489,39 @@ void ExpandedMeshHierarchiesAreBounded() {
 
 } // namespace
 
+
+void VerifyStaticImportGoldenPackage(const char* filename) {
+    auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
+    Require(pack->Mount(filename, kb::assets::bake::WindowsX64BakeTargetProfile()) ==
+            kb::assets::bake::RuntimeAssetPackStatus::Success, "Static golden package did not mount");
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) && manager.MountRuntimePack(pack),
+        "Static golden package did not register");
+    const auto* metadata = manager.Registry().FindByPath("/Game/Golden/Axis.21kb");
+    Require(metadata != nullptr, "Cook omitted the imported OBJ golden");
+    const auto mesh = manager.Load<RenderMeshAssetData>(metadata->id);
+    Require(mesh.IsLoaded() && mesh->desc.vertexCount == 3U && mesh->desc.indexCount == 3U,
+        "Cook changed the imported OBJ topology");
+    const auto bounds = BoundsOf(*mesh);
+    Require(Near(bounds.low[0], 0.0F) && Near(bounds.high[0], 0.0F) &&
+            Near(bounds.low[1], 0.0F) && Near(bounds.high[1], 2.0F) &&
+            Near(bounds.low[2], 0.0F) && Near(bounds.high[2], 2.0F),
+        "Final cook changed OBJ handedness, import scale or rotation");
+    bool materialChecked = false;
+    for (const auto& asset : manager.Registry().ByType("RenderMaterial")) {
+        if (!asset.virtualPath.filename().string().starts_with("Repair_Skin_")) continue;
+        const auto material = manager.Load<RenderMaterialAssetData>(asset.id);
+        Require(material.IsLoaded() && std::abs(material->desc.metallicFactor - 0.25F) < 0.001F &&
+                std::abs(material->desc.roughnessFactor - 0.75F) < 0.001F && material->desc.albedoTextureAssetId != 0U &&
+                manager.Registry().Find(kb::assets::AssetId{material->desc.albedoTextureAssetId}) != nullptr,
+            "Cook changed glTF PBR values or the imported texture reference");
+        materialChecked = true;
+    }
+    Require(materialChecked, "Cook omitted the imported glTF material golden");
+    std::cout << "static_import_package_golden topology=PASS axes=PASS scale=PASS rotation=PASS material=PASS\n";
+}
+
 void RunGltfExternalResourceTests() {
     ExpandedMeshSizesAreRefusedBeforeDecoding();
     ExpandedMeshHierarchiesAreBounded();
@@ -474,6 +531,7 @@ void RunGltfExternalResourceTests() {
     RelativeResourcePathsAreTheOnlyAcceptedFileUris();
     ExternalBufferImportsAndLoadsWithoutTheSourceFolder();
     BufferUrisOutsideTheSourceFolderAreRefused();
+    ClearcoatImportPreservesLayersAndLinearTexturePaths();
     UnnamedMaterialsKeepDistinctStableSlots();
     ExternalImagesResolveInsideTheDocumentFolderOnly();
 }

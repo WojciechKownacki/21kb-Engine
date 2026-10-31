@@ -1,14 +1,48 @@
 #pragma once
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
+#include <stop_token>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace kb::ecs {
+
+namespace detail {
+class GraphBridge;
+#if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
+using GraphBridgeSlot = std::atomic<std::shared_ptr<GraphBridge>>;
+#else
+// Some platform standard libraries lack the C++20 shared_ptr specialization.
+// Retain ownership under the same lock as publication on those platforms.
+class GraphBridgeSlot {
+public:
+    [[nodiscard]] std::shared_ptr<GraphBridge> load() const {
+        const std::lock_guard lock{mutex_};
+        return value_;
+    }
+    void store(std::shared_ptr<GraphBridge> value) {
+        const std::lock_guard lock{mutex_};
+        value_ = std::move(value);
+    }
+private:
+    mutable std::mutex mutex_;
+    std::shared_ptr<GraphBridge> value_;
+};
+#endif
+}
+
+class JobGraph;
+struct WorkerPoolGraphResult {
+    std::size_t completedJobs = 0U;
+    std::size_t cancelledJobs = 0U;
+    std::size_t nestedJobs = 0U;
+};
 
 struct WorkerPoolConfig {
     std::size_t workerCount = 0;
@@ -139,6 +173,12 @@ public:
     void Start(WorkerPoolConfig config);
     void Stop();
     void Run(std::span<const WorkerPoolJob> jobs);
+    // Dependency completion releases successors immediately. Synchronous nested
+    // Run/RunBatches/ParallelForChunks share these workers and help while waiting.
+    // Cancellation skips pending work and drains active callbacks before return.
+    // Nested RunGraph and asynchronous Submit calls on this pool throw std::logic_error.
+    [[nodiscard]] WorkerPoolGraphResult RunGraph(JobGraph graph,
+        std::span<const WorkerPoolJob> jobs, std::stop_token cancellation = {});
     void RunBatches(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context);
     void ParallelForChunks(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context);
     void ParallelForChunks(std::size_t itemCount, std::size_t chunkSize, WorkerPoolChunkCallback callback, void* context);
@@ -166,6 +206,8 @@ private:
     class WorkerPoolState;
 
     std::unique_ptr<WorkerPoolState> state_;
+    detail::GraphBridgeSlot graphBridge_;
+    std::mutex graphDispatchMutex_;
 };
 
 template <typename BatchJob>

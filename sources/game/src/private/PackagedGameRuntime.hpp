@@ -2,6 +2,7 @@
 
 #include "GameProjectRuntime.hpp"
 #include "RuntimeSceneFrameSync.hpp"
+#include "kb/net/SceneClient.hpp"
 
 #include <filesystem>
 #include <iosfwd>
@@ -49,6 +50,8 @@ public:
         std::ostream& diagnostics,
         bool* frameSubmitted = nullptr);
     [[nodiscard]] bool Shutdown(kb::render::Renderer& renderer, std::ostream& diagnostics);
+    [[nodiscard]] bool ConfigureNetwork(kb::net::SceneClientOptions options,
+        kb::net::SceneClient::TransportFactory factory);
     // Keep the running scene while the platform recreates its graphics context.
     void ReleaseRenderResources(kb::render::Renderer& renderer);
 
@@ -58,9 +61,15 @@ public:
 private:
     GameProjectRuntime project_{};
     std::unique_ptr<kb::scene::Scene> scene_;
+    std::unique_ptr<kb::net::SceneClient> network_;
+    std::uint64_t networkStarted_ = 0U;
+    bool ticked_ = false;
     kb::script::ScriptModule* script_ = nullptr;
     bool scriptActive_ = false;
     bool runtimeClean_ = true;
+    bool lightingApplied_ = false;
+    bool reportedMaterialShadingFallback_ = false;
+    bool reportedGraphProgramFallback_ = false;
     RuntimeSceneFrameSync renderSceneSync_;
 };
 

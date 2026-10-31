@@ -89,13 +89,16 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
         }
     }
 
-    if (trailHistoryRevision_ != snapshot.Revision()) {
+    if (trailHistoryRevision_ != snapshot.Revision() || trailHistorySceneId_ != snapshot.SceneId() ||
+        trailHistoryBackendEpoch_ != snapshot.BackendEpoch()) {
         for (TrailHistory& history : trailHistories_) {
             if (history.sceneId == snapshot.SceneId() && history.particleId != 0U &&
                 (history.backendEpoch != snapshot.BackendEpoch() ||
                     history.lastSeenRevision + 1U < snapshot.Revision())) history = {};
         }
         trailHistoryRevision_ = snapshot.Revision();
+        trailHistorySceneId_ = snapshot.SceneId();
+        trailHistoryBackendEpoch_ = snapshot.BackendEpoch();
     }
 
     // One camera-facing strip through `count` points (Unity's LineRenderer/TrailRenderer, Niagara's ribbon):

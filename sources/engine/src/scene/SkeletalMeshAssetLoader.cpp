@@ -5,6 +5,7 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 
 #include <memory>
+#include <algorithm>
 
 namespace kb::scene {
 
@@ -48,9 +49,18 @@ std::vector<kb::assets::AssetId> SkeletalMeshAssetLoader::DiscoverDependencies(
     const kb::assets::AssetMetadata& metadata,
     const kb::assets::AssetRegistry& registry) const {
     static_cast<void>(registry);
-    const auto binding = SkeletalMeshAssetIO::LoadBinding(metadata.physicalPath);
-    if (!binding) return {};
-    return { kb::assets::AssetId{ binding->skeletonAssetId } };
+    const auto mesh = SkeletalMeshAssetIO::Load(metadata.physicalPath);
+    if (!mesh) return {};
+    std::vector<kb::assets::AssetId> dependencies{ kb::assets::AssetId{ mesh->skeletonAssetId } };
+    for (const auto& lod : mesh->lods) {
+        for (const auto& section : lod.sections) {
+            const kb::assets::AssetId material{ section.materialAssetId };
+            if (material.IsValid() && std::ranges::find(dependencies, material) == dependencies.end()) {
+                dependencies.push_back(material);
+            }
+        }
+    }
+    return dependencies;
 }
 
 std::optional<std::string> SkeletalMeshAssetLoader::ValidateDependencies(

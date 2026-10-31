@@ -8,8 +8,14 @@
 #include <string>
 
 namespace kb::cli {
+[[nodiscard]] int RunBlendSpace2DCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunVisualGraphCommand(const ArgumentList& arguments, CommandIo io);
 
+[[nodiscard]] int RunLuaDebugCommand(const ArgumentList& arguments, CommandIo io);
+
+[[nodiscard]] int RunLayoutCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunGuideCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io);
@@ -44,6 +50,9 @@ namespace kb::cli {
 [[nodiscard]] int RunPostProcessNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVfxCommand(std::string_view command, const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVfxProfileCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunParticleProcessCookCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunRenderEffectRunCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunRenderEffectExportCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRendererInfoCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPostProcessSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io);

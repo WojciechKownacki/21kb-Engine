@@ -16,6 +16,10 @@
 
 namespace kb::render {
 
+class SceneGpuDrivenCullingPass;
+
+class SceneMeshCoverageProbe;
+
 struct SceneMeshDrawCommandSubmitDesc {
     bgfx::ViewId viewId = 0;
     std::span<const MeshDrawCommand> commands{};
@@ -39,6 +43,9 @@ struct SceneMeshDrawCommandSubmitDesc {
     const SceneMeshPassResources& passResources;
     SceneMeshInstanceBufferPool* instanceBufferPool = nullptr;
     SceneRenderDiagnostics* diagnostics = nullptr;
+    SceneMeshCoverageProbe* coverageProbe = nullptr;
+    const SceneGpuDrivenCullingPass* gpuCulling = nullptr;
+    const SceneRenderCamera* camera = nullptr;
     SceneRenderSubmitStats& stats;
 };
 

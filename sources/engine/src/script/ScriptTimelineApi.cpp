@@ -119,6 +119,15 @@ ScriptFunctionCallResult Pause(
         : Applied(context.scene->Timelines().Pause(Instance(arguments)));
 }
 
+ScriptFunctionCallResult SetPlayback(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments) {
+    return context.scene == nullptr
+        ? Error("Timeline.SetPlayback requires an active scene")
+        : Applied(context.scene->Timelines().SetPlayback(Instance(arguments),
+            Arg(arguments, "rate")->AsFloat(), Arg(arguments, "loop")->AsBool()));
+}
+
 ScriptFunctionCallResult Seek(
     const ScriptFunctionCallContext& context,
     std::span<const ScriptFunctionArgument> arguments) {
@@ -218,6 +227,10 @@ bool ScriptTimelineApi::Register(ScriptRuntimeHost& host) {
         }, { instance }, &Create) &&
         RegisterFunction(host, "Timeline.Release", { instance }, applied, &Release) &&
         RegisterFunction(host, "Timeline.Play", { instance }, applied, &Play) &&
+        RegisterFunction(host, "Timeline.SetPlayback", {
+            instance, { "rate", ScriptValueType::Float, true },
+            { "loop", ScriptValueType::Bool, true },
+        }, applied, &SetPlayback) &&
         RegisterFunction(host, "Timeline.Pause", { instance }, applied, &Pause) &&
         RegisterFunction(host, "Timeline.Seek", {
             instance, { "time", ScriptValueType::Float, true },

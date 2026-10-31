@@ -1,4 +1,5 @@
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "scene/submit/SceneMeshCoverageProbe.hpp"
 
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/Scene.hpp"
@@ -70,6 +71,7 @@ namespace {
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .fogProfile = requested.fogProfile != defaultConfig.fogProfile ? requested.fogProfile : fallback.fogProfile,
         .fogEnabled = requested.fogEnabled != defaultConfig.fogEnabled ? requested.fogEnabled : fallback.fogEnabled,
         .fogDensity = requested.fogDensity != defaultConfig.fogDensity ? requested.fogDensity : fallback.fogDensity,
         .fogHeightFalloff = requested.fogHeightFalloff != defaultConfig.fogHeightFalloff ? requested.fogHeightFalloff : fallback.fogHeightFalloff,
@@ -109,6 +111,22 @@ namespace {
 
 SceneRenderer::SceneRenderer() = default;
 
+void SceneRenderer::SetMeshCoverageEnabled(bool enabled) noexcept {
+    if (meshCoverage_) meshCoverage_->SetEnabled(enabled);
+}
+
+void SceneRenderer::BeginMeshCoverageFrame(std::uint64_t frame) {
+    if (meshCoverage_) meshCoverage_->BeginFrame(frame);
+}
+
+void SceneRenderer::EndMeshCoverageFrame() {
+    if (meshCoverage_) meshCoverage_->EndFrame();
+}
+
+SceneMeshCoverageMetric SceneRenderer::LastMeshCoverage() const noexcept {
+    return meshCoverage_ ? meshCoverage_->Last() : SceneMeshCoverageMetric{};
+}
+
 SceneRenderer::~SceneRenderer() {
     Shutdown();
 }
@@ -134,12 +152,19 @@ bool SceneRenderer::Initialize(std::uint64_t particleBufferBudgetBytes) {
         meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
     meshSubmitter_->SetSkinningPaletteAllocator(&skinningPalettes_);
+    meshCoverage_ = std::make_unique<SceneMeshCoverageProbe>();
+    meshSubmitter_->SetCoverageProbe(meshCoverage_.get());
+    particleRenderer_->SetCoverageProbe(meshCoverage_.get());
 
     initialized_ = true;
     return true;
 }
 
 void SceneRenderer::Shutdown() {
+    if (meshCoverage_ != nullptr) {
+        meshCoverage_->Shutdown();
+        meshCoverage_.reset();
+    }
     if (particleRenderer_ != nullptr) {
         particleRenderer_->Shutdown();
         particleRenderer_.reset();
@@ -208,6 +233,7 @@ void SceneRenderer::SubmitMeshPass(
     std::span<const std::uint64_t> selectedEntityIds,
     const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride,
     bool terrainLayersOnly) const {
+    if (meshCoverage_) meshCoverage_->BeginPass(pass, viewportWidth, viewportHeight, viewId);
     lastSubmitStats_ = SceneRenderSubmitStats{};
     lastDiagnostics_.Clear();
     const SceneRenderDrawBudget effectiveDrawBudget = ResolveDrawBudget(drawBudget, defaultDrawBudget_);

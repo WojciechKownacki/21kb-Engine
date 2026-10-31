@@ -3,6 +3,10 @@
 #include "engine/ecs/World.hpp"
 #include "engine/modules/EngineModuleContext.hpp"
 #include "engine/modules/EngineModuleExports.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "modules/EngineModuleSdkAdapter.hpp"
+#include "engine/assets/AssetManager.hpp"
 
 #include <exception>
 #include <algorithm>
@@ -29,19 +33,19 @@ public:
         EngineModuleLibrary library,
         IEngineModule* module,
         DestroyEngineModuleFn destroy,
-        bool unloadLibraryOnShutdown) noexcept
+        EngineModuleMetadata metadata) noexcept
         : path_(std::move(path))
         , library_(std::move(library))
         , module_(module)
         , destroy_(destroy)
-        , unloadLibraryOnShutdown_(unloadLibraryOnShutdown) {}
+        , metadata_(std::move(metadata)) {}
 
     ~DynamicEngineModule() override {
         if (module_ != nullptr && destroy_ != nullptr) {
             destroy_(module_);
             module_ = nullptr;
         }
-        if (unloadLibraryOnShutdown_) {
+        if (metadata_.unloadLibraryOnShutdown) {
             library_.Reset();
         } else {
             library_.ReleaseWithoutUnload();
@@ -49,11 +53,14 @@ public:
     }
 
     [[nodiscard]] EngineModuleMetadata Metadata() const override {
-        return module_->Metadata();
+        return metadata_;
     }
 
     void OnLoad(EngineModuleContext& context) override {
-        module_->OnLoad(context);
+        EngineModuleContext scoped{ context.EcsWorld(), context.Project(), library_.Retain(),
+            +[](kb::assets::AssetManager& manager, std::unique_ptr<kb::assets::IAssetLoader> loader,
+                std::shared_ptr<void> library) { return manager.RegisterLoader(std::move(loader), std::move(library)); } };
+        module_->OnLoad(scoped);
     }
 
     void OnEnable() override {
@@ -81,7 +88,7 @@ private:
     EngineModuleLibrary library_;
     IEngineModule* module_ = nullptr;
     DestroyEngineModuleFn destroy_ = nullptr;
-    bool unloadLibraryOnShutdown_ = true;
+    EngineModuleMetadata metadata_;
 };
 
 [[nodiscard]] std::unique_ptr<IEngineModule> LoadDynamicModule(
@@ -104,6 +111,10 @@ private:
         return nullptr;
     }
 
+    std::vector<std::string> optionalExportDiagnostics;
+    if (auto* entry = loaded.library.FindSymbol(KB_MODULE_SDK_ENTRY, optionalExportDiagnostics); entry != nullptr) {
+        return CreateSdkModule(std::move(loaded.library), reinterpret_cast<KbModuleGetApi>(entry), plugin.name, diagnostics);
+    }
     auto* abiVersion = reinterpret_cast<EngineModuleAbiVersionFn>(loaded.library.FindSymbol(kEngineModuleAbiVersionSymbol, diagnostics, "engine module plugin"));
     auto* moduleName = reinterpret_cast<EngineModuleNameFn>(loaded.library.FindSymbol(kEngineModuleNameSymbol, diagnostics, "engine module plugin"));
     auto* create = reinterpret_cast<CreateEngineModuleFn>(loaded.library.FindSymbol(kEngineModuleCreateSymbol, diagnostics, "engine module plugin"));
@@ -119,6 +130,24 @@ private:
         loaded.library.Reset();
         return nullptr;
     }
+    const auto* build = static_cast<const EngineModuleBuildFingerprint*>(
+        loaded.library.FindSymbol(kEngineModuleBuildSymbol, diagnostics, "engine module plugin"));
+    if (build == nullptr) {
+        diagnostics.push_back("plugin '" + path.string() + "' has no build fingerprint; rebuild with the engine SDK");
+        return nullptr;
+    }
+    if (build->size != sizeof(EngineModuleBuildFingerprint) || build->revision != 1U) {
+        diagnostics.push_back("plugin '" + path.string() + "' has incompatible build fingerprint layout");
+        return nullptr;
+    }
+    for (std::size_t index = 0; index < kEngineModuleBuildFields.size(); ++index) {
+        if (build->fields[index] != kEngineModuleBuildFingerprint.fields[index]) {
+            diagnostics.push_back("plugin '" + path.string() + "' has incompatible " +
+                kEngineModuleBuildFields[index] + " (plugin " + std::to_string(build->fields[index]) +
+                ", engine " + std::to_string(kEngineModuleBuildFingerprint.fields[index]) + "); rebuild with the engine SDK");
+            return nullptr;
+        }
+    }
     const char* exportedName = moduleName();
     if (exportedName == nullptr || exportedName[0] == '\0') {
         diagnostics.push_back("plugin '" + path.string() + "' exported an empty engine module name");
@@ -130,15 +159,31 @@ private:
         loaded.library.Reset();
         return nullptr;
     }
-    IEngineModule* module = create();
-    if (module == nullptr) {
-        diagnostics.push_back("plugin '" + path.string() + "' did not create a module");
-        loaded.library.Reset();
-        return nullptr;
+    // Destroy plugin-owned objects and exceptions while their library is still
+    // mapped, including failures before ownership reaches the host wrapper.
+    const char* step = "creation";
+    try {
+        std::unique_ptr<IEngineModule, DestroyEngineModuleFn> module{ create(), destroy };
+        if (module == nullptr) {
+            diagnostics.push_back("plugin '" + path.string() + "' did not create a module");
+            return nullptr;
+        }
+        step = "metadata";
+        EngineModuleMetadata metadata = module->Metadata();
+        if (metadata.name != exportedName) {
+            diagnostics.push_back("plugin '" + path.string() + "' metadata name does not match its exported name");
+            return nullptr;
+        }
+        auto wrapper = std::make_unique<DynamicEngineModule>(loaded.loadedPath,
+            std::move(loaded.library), module.get(), destroy, std::move(metadata));
+        static_cast<void>(module.release());
+        return wrapper;
+    } catch (const std::exception& error) {
+        diagnostics.push_back("plugin '" + path.string() + "' failed during " + step + ": " + error.what());
+    } catch (...) {
+        diagnostics.push_back("plugin '" + path.string() + "' failed during " + step + " with an unknown error");
     }
-
-    const EngineModuleMetadata metadata = module->Metadata();
-    return std::make_unique<DynamicEngineModule>(loaded.loadedPath, std::move(loaded.library), module, destroy, metadata.unloadLibraryOnShutdown);
+    return nullptr;
 }
 
 // Topologically order the active modules: a module never loads before a
@@ -269,12 +314,23 @@ void EngineModuleHost::LoadProjectPluginModules() {
     projectPluginCandidateStart_ = candidates_.size();
     hasProjectPluginCandidates_ = true;
 
+    CollectProjectPluginModules(candidates_, diagnostics_, warnings_);
+}
+
+void EngineModuleHost::CollectProjectPluginModules(
+    std::vector<std::unique_ptr<IEngineModule>>& output,
+    std::vector<std::string>& diagnostics,
+    std::vector<std::string>& warnings) {
+
     // Platform hosts inject providers as static modules when the platform cannot ship or
     // load project DLLs (Android/Web) or when a monolithic build was requested. A descriptor
     // still carries its portable desktop binary name; do not load a second copy after the
     // matching static provider has already been supplied by the host.
     std::set<std::string> staticModuleNames;
-    for (const std::unique_ptr<IEngineModule>& candidate : candidates_) {
+    const std::size_t staticCount = hasProjectPluginCandidates_
+        ? projectPluginCandidateStart_ : candidates_.size();
+    for (std::size_t index = 0U; index < staticCount; ++index) {
+        const auto& candidate = candidates_[index];
         if (candidate != nullptr) {
             staticModuleNames.insert(candidate->Metadata().name);
         }
@@ -284,9 +340,9 @@ void EngineModuleHost::LoadProjectPluginModules() {
         if (!plugin.enabled || plugin.binaryPath.empty() || staticModuleNames.contains(plugin.name)) {
             continue;
         }
-        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics_, warnings_);
+        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics, warnings);
         if (module != nullptr) {
-            candidates_.push_back(std::move(module));
+            output.push_back(std::move(module));
         }
     }
 }
@@ -304,11 +360,15 @@ void EngineModuleHost::Load(kb::ecs::World& world) {
     if (loaded_) {
         return;
     }
-    loaded_ = true;
     diagnostics_.clear();
     warnings_.clear();
 
     LoadProjectPluginModules();
+    LoadPreparedModules(world);
+}
+
+void EngineModuleHost::LoadPreparedModules(kb::ecs::World& world) {
+    loaded_ = true;
 
     std::vector<ResolveEntry> entries;
     entries.reserve(candidates_.size());
@@ -329,37 +389,53 @@ void EngineModuleHost::Load(kb::ecs::World& world) {
     active_ = ResolveOrder(entries, diagnostics_);
 
     // Loading is a transaction: a module that throws from OnLoad or OnEnable undoes the steps that already completed
-    // (disable the enabled ones, unload the loaded ones, newest first), leaves the host unloaded with a diagnostic that
+    // (including a partially completed failing step, newest first), leaves the host unloaded with a diagnostic that
     // names the module and the step, and lets the next Load start again from a clean state.
     EngineModuleContext context{ world, project_ };
     std::size_t loadedCount = 0U;
     std::size_t enabledCount = 0U;
     const char* step = "OnLoad";
-    IEngineModule* failing = nullptr;
+    std::string failingName;
+    const auto moduleName = [&](IEngineModule* module) -> const std::string& {
+        return std::ranges::find_if(entries, [module](const ResolveEntry& entry) {
+            return entry.module == module;
+        })->metadata.name;
+    };
     try {
         for (IEngineModule* module : active_) {
-            failing = module;
-            module->OnLoad(context);
+            failingName = moduleName(module);
             ++loadedCount;
+            module->OnLoad(context);
         }
         step = "OnEnable";
         for (IEngineModule* module : active_) {
-            failing = module;
-            module->OnEnable();
+            failingName = moduleName(module);
             ++enabledCount;
+            module->OnEnable();
         }
         return;
     } catch (const std::exception& error) {
-        diagnostics_.push_back("module '" + failing->Metadata().name + "' failed in " + step + ": " + error.what() + "; loading was rolled back");
+        diagnostics_.push_back("module '" + failingName + "' failed in " + step + ": " + error.what() + "; loading was rolled back");
     } catch (...) {
-        diagnostics_.push_back("module '" + failing->Metadata().name + "' failed in " + step + " with an unknown error; loading was rolled back");
+        diagnostics_.push_back("module '" + failingName + "' failed in " + step + " with an unknown error; loading was rolled back");
     }
-    for (std::size_t index = enabledCount; index > 0U; --index) {
-        try { active_[index - 1U]->OnDisable(); } catch (...) {}
-    }
-    for (std::size_t index = loadedCount; index > 0U; --index) {
-        try { active_[index - 1U]->OnUnload(); } catch (...) {}
-    }
+    const auto undo = [&](std::size_t count, const char* undoStep, auto operation) {
+        for (std::size_t index = count; index > 0U; --index) {
+            IEngineModule* module = active_[index - 1U];
+            const auto entry = std::ranges::find_if(entries, [module](const ResolveEntry& candidate) {
+                return candidate.module == module;
+            });
+            try {
+                (module->*operation)();
+            } catch (const std::exception& error) {
+                diagnostics_.push_back("module '" + entry->metadata.name + "' failed during rollback " + undoStep + ": " + error.what());
+            } catch (...) {
+                diagnostics_.push_back("module '" + entry->metadata.name + "' failed during rollback " + undoStep + " with an unknown error");
+            }
+        }
+    };
+    undo(enabledCount, "OnDisable", &IEngineModule::OnDisable);
+    undo(loadedCount, "OnUnload", &IEngineModule::OnUnload);
     active_.clear();
     loaded_ = false;
 }
@@ -391,10 +467,27 @@ void EngineModuleHost::Unload() {
 }
 
 void EngineModuleHost::Reload(kb::ecs::World& world, std::span<kb::scene::Scene*> attachedScenes) {
+    std::vector<std::unique_ptr<IEngineModule>> replacement;
+    std::vector<std::string> replacementErrors;
+    std::vector<std::string> replacementWarnings;
+    CollectProjectPluginModules(replacement, replacementErrors, replacementWarnings);
+    if (!replacementErrors.empty()) {
+        diagnostics_ = std::move(replacementErrors);
+        diagnostics_.push_back("module reload rejected before detaching the current scenes");
+        warnings_ = std::move(replacementWarnings);
+        return;
+    }
     if (loaded_) {
         for (auto it = attachedScenes.rbegin(); it != attachedScenes.rend(); ++it) {
             if (*it != nullptr) {
                 DetachScene(**it);
+            }
+        }
+        // Each attached scene has its own cache, potentially retaining query
+        // deleters from the module that is about to be unmapped.
+        for (kb::scene::Scene* scene : attachedScenes) {
+            if (scene != nullptr) {
+                scene->Runtime().EcsWorld().ReleaseUnusedQueryPlans();
             }
         }
         world.ReleaseUnusedQueryPlans();
@@ -402,7 +495,14 @@ void EngineModuleHost::Reload(kb::ecs::World& world, std::span<kb::scene::Scene*
     }
 
     ClearProjectPluginModules();
-    Load(world);
+    projectPluginCandidateStart_ = candidates_.size();
+    hasProjectPluginCandidates_ = true;
+    for (auto& module : replacement) {
+        candidates_.push_back(std::move(module));
+    }
+    diagnostics_.clear();
+    warnings_ = std::move(replacementWarnings);
+    LoadPreparedModules(world);
 
     for (kb::scene::Scene* scene : attachedScenes) {
         if (scene != nullptr) {

@@ -92,6 +92,7 @@ struct SystemSchedulerFrameCounters {
 struct SystemSchedulerTrace {
     std::uint64_t frameIndex = 0;
     std::uint64_t frameDurationNanoseconds = 0;
+    std::uint64_t frameStartSteadyNanoseconds = 0;
     SystemSchedulerFrameCounters frameCounters;
     std::vector<SystemSchedulerStageCounters> stageCounters;
     std::vector<SystemSchedulerSystemCounters> systemCounters;

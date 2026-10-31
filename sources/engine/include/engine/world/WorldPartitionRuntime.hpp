@@ -104,7 +104,7 @@ enum class WorldMemorySource : std::uint8_t {
 };
 
 // A host's reading of the total memory of one kind, in bytes, now; empty when it cannot be read. The report counts growth since the
-// first world was placed, so a total that includes memory the world did not cause is fine.
+// first world was placed. Shared-process readings can include unrelated growth and require a control for attribution.
 using WorldMemoryProbe = std::function<std::optional<std::uint64_t>()>;
 
 struct WorldMemoryCategory {
@@ -113,6 +113,10 @@ struct WorldMemoryCategory {
     std::uint64_t bytes = 0U;         // growth since the baseline
     std::uint64_t baselineBytes = 0U; // the reading before any cell loaded
     std::string note;
+    // CPU asset coverage, independent of any file-size estimate in bytes.
+    std::uint64_t knownPayloadBytes = 0U;
+    std::size_t unmeasuredPayloads = 0U;
+    std::size_t baselineUnmeasuredPayloads = 0U;
 };
 
 struct WorldMemoryReport {
@@ -120,11 +124,14 @@ struct WorldMemoryReport {
     // What the streaming budget charges for the cells resident now.
     std::uint64_t estimatedResidentBytes = 0U;
     std::array<WorldMemoryCategory, kWorldMemoryKindCount> categories{};
-    // The sum of the kinds that have a reading; kinds without one are not guessed.
+    // Only subsystem measurements contribute here; estimates remain separate.
     std::uint64_t measuredBytes = 0U;
+    std::uint64_t estimatedBytes = 0U;
+    bool hasEstimatedKinds = false;
     bool hasUnavailableKinds = false;
     // measuredBytes / estimatedResidentBytes for the cells resident now (0 when none), and the lowest, highest and number of such
-    // ratios taken each time the set of resident cells settled. Above 1 the estimate is too small.
+    // ratios sampled when this report is requested with no cell load/unload pending. With estimated or unavailable kinds,
+    // this is only a partial comparison, not the total estimation error.
     double errorRatio = 0.0;
     double minimumErrorRatio = 0.0;
     double maximumErrorRatio = 0.0;

@@ -62,6 +62,13 @@ public:
         return deviceState_;
     }
 
+    // UI reads DeviceState; gameplay reads this snapshot. A modal blocks actions
+    // and raw gameplay input, retaining held controls until their release.
+    [[nodiscard]] const InputDeviceState& GameplayDeviceState() const noexcept {
+        return gameplayInputFiltered_ ? gameplayDevice_ : deviceState_;
+    }
+    void SetGameplayInputBlocked(bool blocked) noexcept { gameplayInputBlocked_ = blocked; }
+
     // Pushes a mapping context (resolved via the configured resolvers). Higher
     // priority wins for consume-gated keys. Re-adding an existing context updates
     // its priority. Returns false if the context could not be resolved.
@@ -100,10 +107,18 @@ public:
         return frameEvents_;
     }
 
+    // Evaluated values for diagnostics, including axes below their trigger threshold.
+    [[nodiscard]] const std::unordered_map<std::string, InputActionState>& ActionStates() const noexcept { return actionStates_; }
+
 private:
     [[nodiscard]] const InputActionState* FindState(std::string_view action) const;
 
     InputDeviceState deviceState_;
+    InputDeviceState gameplayDevice_;
+    InputDeviceState suppressedControls_;
+    std::vector<std::uint32_t> suppressedTouches_;
+    bool gameplayInputBlocked_ = false;
+    bool gameplayInputFiltered_ = false;
     InputMappingContextStack stack_;
     std::unordered_map<std::string, InputActionState> actionStates_;
     std::unordered_map<std::string, TriggerState> previousCombined_;

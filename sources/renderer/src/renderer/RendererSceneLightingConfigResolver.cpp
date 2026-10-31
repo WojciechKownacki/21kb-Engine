@@ -44,6 +44,7 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .fogProfile = requested.fogProfile != defaultConfig.fogProfile ? requested.fogProfile : fallback.fogProfile,
         .fogEnabled = requested.fogEnabled != defaultConfig.fogEnabled ? requested.fogEnabled : fallback.fogEnabled,
         .fogDensity = requested.fogDensity != defaultConfig.fogDensity ? requested.fogDensity : fallback.fogDensity,
         .fogHeightFalloff = requested.fogHeightFalloff != defaultConfig.fogHeightFalloff ? requested.fogHeightFalloff : fallback.fogHeightFalloff,
@@ -68,6 +69,7 @@ void RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(
         config.giIntensity = settings.globalIlluminationIntensity;
     }
     if (settings.fogEnabled) {
+        config.fogProfile = settings.fogProfile;
         config.fogEnabled = true;
         config.fogDensity = settings.fogDensity;
         config.fogHeightFalloff = settings.fogHeightFalloff;
@@ -76,6 +78,21 @@ void RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(
         config.volumetricFogEnabled = settings.volumetricFogEnabled;
         config.fogAnisotropy = settings.fogAnisotropy;
     }
+}
+
+void RendererSceneLightingConfigResolver::ResolveFogProfile(
+    SceneRenderLightingConfig& config, bgfx::RendererType::Enum backend) noexcept {
+    static_cast<void>(backend);
+#if defined(__EMSCRIPTEN__)
+    config.fogProfile = SceneFogProfile::Web;
+#elif defined(__ANDROID__) || defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+    config.fogProfile = SceneFogProfile::Mobile;
+#else
+    if (config.fogProfile == SceneFogProfile::Automatic) {
+        config.fogProfile = backend == bgfx::RendererType::OpenGLES ? SceneFogProfile::Mobile : SceneFogProfile::Desktop;
+    }
+#endif
+    if (config.fogProfile != SceneFogProfile::Desktop) config.volumetricFogEnabled = false;
 }
 
 std::uint32_t RendererSceneLightingConfigResolver::ShadowFilterSampleCount(SceneRenderShadowFilter filter) noexcept {

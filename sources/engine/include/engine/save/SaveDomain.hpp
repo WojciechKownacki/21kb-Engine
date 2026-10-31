@@ -17,9 +17,8 @@ namespace kb::save {
 //   - scene state -> kb::scene::SceneDocumentService, an entirely separate
 //     subsystem with its own binary format and magic ("21KBSCN"); a scene is
 //     structured entity/component data, not a flat key/value table.
-//   - network data -> the multiplayer subsystem (backlog section 18), not yet
-//     built; it is deliberately not given a kb::save domain here rather than
-//     reserving an orphan enumerator with no store behind it.
+//   - network data -> the networking subsystem's own wire formats, outside
+//     the scalar key/value save domains.
 enum class SaveDomain : std::uint8_t {
     SaveGame = 0,     // player progress
     UserSettings = 1, // user preferences (audio, video, controls, ...)

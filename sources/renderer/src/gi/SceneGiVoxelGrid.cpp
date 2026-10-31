@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstring>
+#include <unordered_set>
 
 namespace kb::render {
 namespace {
@@ -78,9 +80,10 @@ SceneGiVoxelGrid::MeshMask SceneGiVoxelGrid::BuildMask(const RenderMeshProxyGeom
         return mask;
     }
     mask.cell = largest / static_cast<float>(kMaskCells);
+    if (!(mask.cell > 0.0F) || !std::isfinite(mask.cell)) return mask;
     for (std::size_t axis = 0U; axis < 3U; ++axis) {
         mask.minCorner[axis] = lo[axis];
-        mask.center[axis] = 0.5F * (lo[axis] + hi[axis]);
+        mask.center[axis] = lo[axis] + 0.5F * (hi[axis] - lo[axis]);
         mask.halfExtents[axis] = 0.5F * (hi[axis] - lo[axis]);
         mask.dims[axis] = std::clamp(static_cast<int>(std::ceil((hi[axis] - lo[axis]) / mask.cell)), 1, kMaskCells);
     }
@@ -94,19 +97,19 @@ SceneGiVoxelGrid::MeshMask SceneGiVoxelGrid::BuildMask(const RenderMeshProxyGeom
         const int cz = std::clamp(static_cast<int>((z - lo[2]) / mask.cell), 0, mask.dims[2] - 1);
         cells[(static_cast<std::size_t>(cz) * ny + static_cast<std::size_t>(cy)) * nx + static_cast<std::size_t>(cx)] = 1U;
     };
-    const float step = 0.5F * mask.cell;
+    const double step = 0.5 * static_cast<double>(mask.cell);
     for (std::size_t triangle = 0U; triangle + 2U < geometry.indices.size(); triangle += 3U) {
         const float* a = &geometry.positions[static_cast<std::size_t>(geometry.indices[triangle]) * 3U];
         const float* b = &geometry.positions[static_cast<std::size_t>(geometry.indices[triangle + 1U]) * 3U];
         const float* c = &geometry.positions[static_cast<std::size_t>(geometry.indices[triangle + 2U]) * 3U];
-        float longest = 0.0F;
+        double longest = 0.0;
         for (const auto& edge : { std::array<const float*, 2>{ a, b }, std::array<const float*, 2>{ b, c }, std::array<const float*, 2>{ c, a } }) {
-            const float dx = edge[0][0] - edge[1][0];
-            const float dy = edge[0][1] - edge[1][1];
-            const float dz = edge[0][2] - edge[1][2];
+            const double dx = static_cast<double>(edge[0][0]) - edge[1][0];
+            const double dy = static_cast<double>(edge[0][1]) - edge[1][1];
+            const double dz = static_cast<double>(edge[0][2]) - edge[1][2];
             longest = std::max(longest, std::sqrt(dx * dx + dy * dy + dz * dz));
         }
-        const int n = std::clamp(static_cast<int>(std::ceil(longest / step)), 1, kMaxSamplesPerEdge);
+        const int n = static_cast<int>(std::clamp(std::ceil(longest / step), 1.0, static_cast<double>(kMaxSamplesPerEdge)));
         for (int i = 0; i <= n; ++i) {
             for (int j = 0; j <= n - i; ++j) {
                 const float u = static_cast<float>(i) / static_cast<float>(n);
@@ -137,13 +140,13 @@ bool SceneGiVoxelGrid::MaskTouches(const MeshMask& mask, const std::array<float,
     std::array<int, 3> first{};
     std::array<int, 3> last{};
     for (std::size_t axis = 0U; axis < 3U; ++axis) {
-        const int low = static_cast<int>(std::floor((lo[axis] - mask.minCorner[axis]) / mask.cell));
-        const int high = static_cast<int>(std::floor((hi[axis] - mask.minCorner[axis]) / mask.cell));
-        if (high < 0 || low >= mask.dims[axis]) {
+        const double low = std::floor((static_cast<double>(lo[axis]) - mask.minCorner[axis]) / mask.cell);
+        const double high = std::floor((static_cast<double>(hi[axis]) - mask.minCorner[axis]) / mask.cell);
+        if (!std::isfinite(low) || !std::isfinite(high) || high < 0.0 || low >= mask.dims[axis]) {
             return false;
         }
-        first[axis] = std::max(low, 0);
-        last[axis] = std::min(high, mask.dims[axis] - 1) + 1; // exclusive
+        first[axis] = static_cast<int>(std::max(low, 0.0));
+        last[axis] = static_cast<int>(std::min(high, static_cast<double>(mask.dims[axis] - 1))) + 1; // exclusive
     }
     const std::size_t nx = static_cast<std::size_t>(mask.dims[0]) + 1U;
     const std::size_t ny = static_cast<std::size_t>(mask.dims[1]) + 1U;
@@ -183,15 +186,38 @@ void SceneGiVoxelGrid::Shutdown() noexcept {
         }
         *handle = BGFX_INVALID_HANDLE;
     }
+    ResetCache();
+    std::vector<std::uint8_t>{}.swap(albedoVoxels_);
+    std::vector<std::uint16_t>{}.swap(emissiveVoxels_);
+    stats_ = {};
+}
+
+void SceneGiVoxelGrid::ResetCache() noexcept {
     signature_ = 0U;
     masks_.clear();
-    albedoVoxels_.clear();
-    emissiveVoxels_.clear();
+    occupiedVoxels_ = geometryMeshes_ = boundingBoxMeshes_ = 0U;
+    stats_.cachedMaskBytes = 0U;
+    stats_.cpuPayloadBytes = albedoVoxels_.capacity() + emissiveVoxels_.capacity() * sizeof(std::uint16_t);
+    stats_.rebuilt = false;
+    stats_.uploadedBytes = 0U;
 }
 
 void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap, const std::array<float, 3>& focus, float voxelSize) {
     if (!IsValid()) {
+        return;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    stats_.rebuilt = false;
+    stats_.maskBuildCount = 0U;
+    stats_.uploadedBytes = 0U;
+    const auto finish = [&]() {
+        stats_.cpuPayloadBytes = albedoVoxels_.capacity() + emissiveVoxels_.capacity() * sizeof(std::uint16_t) + stats_.cachedMaskBytes;
+        stats_.gpuPayloadBytes = static_cast<std::uint64_t>(kVoxelCount) * 12U;
+        stats_.updateMilliseconds = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+    };
+    if (!std::isfinite(voxelSize) || !std::isfinite(focus[0]) || !std::isfinite(focus[1]) || !std::isfinite(focus[2])) {
+        finish();
         return;
     }
     voxelSize = std::max(voxelSize, 0.05F);
@@ -204,6 +230,7 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
     std::uint64_t signature = 14695981039346656037ULL;
     Mix(signature, voxelSize);
     Mix(signature, origin);
+    std::unordered_set<std::uint64_t> activeMeshes;
     for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
         static_cast<void>(entityId);
         const MeshRenderProxyDesc& desc = proxy.desc;
@@ -214,13 +241,21 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
         Mix(signature, desc.model);
         Mix(signature, desc.meshAssetId);
         const RenderMeshResource* signatureMesh = resources.FindMesh(resourceMap.ResolveMesh(desc.meshAssetId));
+        if (signatureMesh != nullptr && signatureMesh->proxyGeometry != nullptr) activeMeshes.insert(desc.meshAssetId);
         Mix(signature, signatureMesh != nullptr ? signatureMesh->version : std::uint64_t{ 0U });
         Mix(signature, surface.albedo);
         Mix(signature, surface.emissive);
     }
+    // Streamed-out assets must not accumulate occupancy masks for the entire journey.
+    std::erase_if(masks_, [&](const auto& entry) { return !activeMeshes.contains(entry.first); });
+    stats_.cachedMaskBytes = 0U;
+    for (const auto& [id, mask] : masks_) { static_cast<void>(id); stats_.cachedMaskBytes += mask.prefix.capacity() * sizeof(std::uint32_t); }
     if (signature == signature_) {
+        finish();
         return;
     }
+    stats_.rebuilt = true;
+    ++stats_.rebuildCount;
     signature_ = signature;
     origin_ = { origin[0], origin[1], origin[2], voxelSize };
 
@@ -239,10 +274,20 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
         if (desc.visible && mesh != nullptr && mesh->proxyGeometry != nullptr) {
             MeshMask& cached = masks_[desc.meshAssetId];
             if (cached.version != mesh->version) {
+                stats_.cachedMaskBytes -= cached.prefix.capacity() * sizeof(std::uint32_t);
                 cached = BuildMask(*mesh->proxyGeometry);
                 cached.version = mesh->version;
+                stats_.cachedMaskBytes += cached.prefix.capacity() * sizeof(std::uint32_t);
+                ++stats_.maskBuildCount;
             }
             mask = cached.usable ? &cached : nullptr;
+            // Keep the current mesh while evicting other cached masks. Their geometry is
+            // rebuilt when needed; budget pressure never changes a thin wall into a box.
+            for (auto entry = masks_.begin(); stats_.cachedMaskBytes > kMaskCacheBudgetBytes && entry != masks_.end();) {
+                if (entry->first == desc.meshAssetId) { ++entry; continue; }
+                stats_.cachedMaskBytes -= entry->second.prefix.capacity() * sizeof(std::uint32_t);
+                entry = masks_.erase(entry);
+            }
         }
         if (!desc.visible || mesh == nullptr || (mask == nullptr && !mesh->boundsBox.IsValid()) ||
             !ResolveSurface(desc, resources, resourceMap, surface)) {
@@ -278,10 +323,15 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
         }
         std::array<int, 3> lo{};
         std::array<int, 3> hi{};
+        bool validBounds = true;
         for (int axis = 0; axis < 3; ++axis) {
-            lo[axis] = std::max(0, static_cast<int>(std::floor((worldCenter[axis] - worldHalf[axis] - origin[axis]) / voxelSize)));
-            hi[axis] = std::min(dimension - 1, static_cast<int>(std::floor((worldCenter[axis] + worldHalf[axis] - origin[axis]) / voxelSize)));
+            const double low = std::floor((static_cast<double>(worldCenter[axis]) - worldHalf[axis] - origin[axis]) / voxelSize);
+            const double high = std::floor((static_cast<double>(worldCenter[axis]) + worldHalf[axis] - origin[axis]) / voxelSize);
+            if (!std::isfinite(low) || !std::isfinite(high)) { validBounds = false; break; }
+            lo[axis] = static_cast<int>(std::clamp(low, 0.0, static_cast<double>(dimension)));
+            hi[axis] = static_cast<int>(std::clamp(high, -1.0, static_cast<double>(dimension - 1)));
         }
+        if (!validBounds) continue;
         for (int z = lo[2]; z <= hi[2]; ++z) {
             for (int y = lo[1]; y <= hi[1]; ++y) {
                 for (int x = lo[0]; x <= hi[0]; ++x) {
@@ -328,6 +378,8 @@ void SceneGiVoxelGrid::Update(const RenderScene& renderScene, const RenderResour
     };
     upload(albedo_, albedoVoxels_.data(), static_cast<std::uint32_t>(albedoVoxels_.size()));
     upload(emissive_, emissiveVoxels_.data(), static_cast<std::uint32_t>(emissiveVoxels_.size() * sizeof(std::uint16_t)));
+    stats_.uploadedBytes = albedoVoxels_.size() + emissiveVoxels_.size() * sizeof(std::uint16_t);
+    finish();
 }
 
 } // namespace kb::render

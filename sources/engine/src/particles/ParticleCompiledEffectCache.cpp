@@ -155,6 +155,7 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         const auto& binding = effect.eventBindings[index];
         WriteUInt8(bytes, binding.sourceEmitterIndex); WriteUInt8(bytes, static_cast<std::uint8_t>(binding.trigger));
         WriteUInt64(bytes, binding.sourceModuleId); WriteUInt8(bytes, binding.targetEmitterIndex);
+        WriteUInt64(bytes, binding.targetEffectAssetId);
         WriteUInt32(bytes, binding.count); WriteUInt8(bytes, binding.maxDepth); WriteUInt32(bytes, binding.perStepBudget);
         WriteFloat(bytes, binding.ratePerSecond);
     }
@@ -289,7 +290,9 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
         auto& binding = effect.eventBindings[index]; std::uint8_t trigger = 0U;
         if (!reader.U8(binding.sourceEmitterIndex) || binding.sourceEmitterIndex >= effect.emitterCount ||
             !reader.U8(trigger) || trigger > static_cast<std::uint8_t>(kb::scene::ParticleEventTrigger::WhileAlive) ||
-            !reader.U64(binding.sourceModuleId) || !reader.U8(binding.targetEmitterIndex) || binding.targetEmitterIndex >= effect.emitterCount ||
+            !reader.U64(binding.sourceModuleId) || !reader.U8(binding.targetEmitterIndex) ||
+            !reader.U64(binding.targetEffectAssetId) ||
+            (binding.targetEffectAssetId == 0U && binding.targetEmitterIndex >= effect.emitterCount) ||
             !reader.U32(binding.count) || !reader.U8(binding.maxDepth) || !reader.U32(binding.perStepBudget) ||
             !reader.F(binding.ratePerSecond)) return false;
         binding.trigger = static_cast<kb::scene::ParticleEventTrigger>(trigger);

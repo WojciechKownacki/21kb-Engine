@@ -1,6 +1,7 @@
 #include "script/lua/PucLuaRuntimeApi.hpp"
 
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/api/PucLuaEventApi.hpp"
 #include "script/lua/api/PucLuaEventsApi.hpp"
 #include "script/lua/api/PucLuaFunctionApi.hpp"
@@ -10,6 +11,27 @@
 #include "script/lua/api/PucLuaTaskApi.hpp"
 
 namespace kb::script {
+
+std::shared_ptr<PucLuaStateLifetime> PucLuaRuntimeApi::Lifetime(lua_State* state) noexcept {
+    if (state == nullptr) return {};
+    auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    return runtime != nullptr ? runtime->stateLifetime_ : nullptr;
+}
+
+PucLuaStateLifetime* PucLuaRuntimeApi::ContextSlot(lua_State* state) noexcept {
+    if (state == nullptr) return nullptr;
+    auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    return runtime != nullptr ? runtime->stateLifetime_.get() : nullptr;
+}
+
+ScriptExecutionContext* PucLuaRuntimeApi::ContextFromUpvalue(lua_State* state) noexcept {
+    const auto* slot = static_cast<PucLuaStateLifetime*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return slot != nullptr ? slot->activeContext : nullptr;
+}
+
+void PucLuaRuntimeApi::PushContextSlot(lua_State* state, bool enabled) {
+    lua_pushlightuserdata(state, enabled ? ContextSlot(state) : nullptr);
+}
 
 std::optional<std::string> PucLuaRuntimeApi::AttachRuntimeFunctions(lua_State* state, int environmentIndex, PucLuaScriptRuntime& runtime) {
     PucLuaModuleApi::AttachImport(state, environmentIndex, runtime);

@@ -273,7 +273,8 @@ struct MaterialShaderQualifier final {
         }
         const bgfx::RendererType::Enum renderer = RendererForShaderBackend(backend);
         for (const std::string_view pass : kRenderMaterialGraphScenePasses) {
-            if (!RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass)) {
+            if (!RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass,
+                    backend == kb::assets::bake::ShaderBakeBackend::Essl)) {
                 continue;
             }
             const auto validateStage = [&](std::string_view stage) {

@@ -1,12 +1,15 @@
 #pragma once
 
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/StatelessSceneSystem.hpp"
 
 namespace kb::scene {
 
-class SceneUISystem final : public SceneSystem {
+class SceneUISystem final : public SceneSystem, public IStatelessSceneSystem {
   public:
-    void OnUpdate(SceneSystemContext& context) override;
+    // Modal routing must be current before any input polling or gameplay update,
+    // regardless of the order in which modules registered their systems.
+    void OnFrameStart(SceneSystemContext& context) override;
 };
 
 } // namespace kb::scene

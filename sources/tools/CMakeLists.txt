@@ -1,10 +1,14 @@
 add_library(kb_cli_core STATIC
     src/CliAnimatorCommands.cpp
+    src/CliBlendSpace2DCommands.cpp
+    src/CliVisualGraphCommands.cpp
     src/CliSkeletonCommands.cpp
     src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp
+    src/CliLuaDebugCommand.cpp
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
+    src/CliLayoutCommands.cpp
     src/CliCommon.cpp
     src/CliDispatch.cpp
     src/CliEntityCommands.cpp
@@ -31,6 +35,18 @@ add_library(kb_cli_core STATIC
 target_include_directories(kb_cli_core PUBLIC src/private)
 
 target_link_libraries(kb_cli_core PUBLIC kb_engine)
+# Workspace files use the editor's existing portable layout and settings code.
+target_include_directories(kb_cli_core PRIVATE ../editor/src/private ../editor/include)
+target_sources(kb_cli_core PRIVATE
+    ../editor/src/settings/EditorConfigurationStore.cpp
+    ../editor/src/settings/EditorPanelSessionText.cpp
+    ../editor/src/settings/EditorLayoutLibrary.cpp
+    ../editor/src/docking/DefaultDockWorkspace.cpp
+    ../editor/src/docking/DockLayoutSerializer.cpp
+    ../editor/src/docking/DockNodeFactory.cpp
+    ../editor/src/docking/DockGeometry.cpp
+    ../editor/src/localization/EditorLocalization.cpp)
+
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
 # Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.
 if(KB_BUILD_RENDERER)
@@ -40,6 +56,8 @@ if(KB_BUILD_RENDERER)
         src/CliMaterialCommands.cpp
         src/CliMaterialGraphCommands.cpp
         src/CliPostProcessCommands.cpp
+        src/CliParticleProcessCommands.cpp
+        src/CliRenderEffectCommands.cpp
         src/CliParticleCommands.cpp
         src/CliParticleProfileCommand.cpp
         src/CliMap2DCommands.cpp
@@ -51,6 +69,7 @@ kb_apply_quality_gates(kb_cli_core)
 
 add_executable(kb_cli
     src/main.cpp
+    src/CliCommandSupervisor.cpp
 )
 
 if(WIN32)
@@ -111,6 +130,20 @@ add_custom_command(TARGET kb_cli POST_BUILD
 )
 
 if(BUILD_TESTING)
+    find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME kb_cli_determinism_workflow
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/DeterminismWorkflowTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_determinism_workflow PROPERTIES LABELS "tools;deterministic;replay" TIMEOUT 120)
+    endif()
+    if(WIN32)
+        find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+        add_test(NAME kb_cli_command_limits
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliCommandLimitsTests.py
+                --cli $<TARGET_FILE:kb_cli> --test-root ${CMAKE_BINARY_DIR}/cli-command-limits)
+        set_tests_properties(kb_cli_command_limits PROPERTIES LABELS "tools;process" TIMEOUT 90)
+    endif()
     add_executable(kb_cli_tests
         tests/KbCliTests.cpp
     )
@@ -201,6 +234,9 @@ if(BUILD_TESTING)
             "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
             "-Dzstd_LIBRARY=$<TARGET_FILE:kb_zstd>"
             "-Drecast_LIBRARY=$<TARGET_FILE:kb_recast>"
+            "-Dui_text_shaping_LIBRARY=$<TARGET_FILE:kb_ui_text_shaping>"
+            "-Dharfbuzz_LIBRARY=$<TARGET_FILE:kb_harfbuzz>"
+            "-Dsheenbidi_LIBRARY=$<TARGET_FILE:kb_sheenbidi>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkLayout.cmake")
         set_tests_properties(kb_native_sdk_layout PROPERTIES
             CONFIGURATIONS "Release;RelWithDebInfo" LABELS "tools;native-sdk" TIMEOUT 240)

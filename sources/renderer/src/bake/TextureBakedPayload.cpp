@@ -50,6 +50,7 @@ std::string BakedTextureMipBlockName(std::uint32_t level) {
 bool BakedTextureFormatMatchesFamily(
     bgfx::TextureFormat::Enum format,
     std::string_view qualifier) noexcept {
+    if (qualifier == "rgba8-atlas") return format == bgfx::TextureFormat::RGBA8;
     if (qualifier == "bc-baseline") {
         return format == bgfx::TextureFormat::BC1 || format == bgfx::TextureFormat::BC3;
     }
@@ -182,17 +183,17 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
     }
 
     const auto format = static_cast<bimg::TextureFormat::Enum>(container.m_format);
-    if (format < 0 || format >= bimg::TextureFormat::Count || !bimg::isCompressed(format)) {
+    if (format < 0 || format >= bimg::TextureFormat::Count || (!bimg::isCompressed(format) && format != bimg::TextureFormat::RGBA8)) {
         return false;
     }
 
     const auto width = static_cast<std::uint16_t>(container.m_width);
     const auto height = static_cast<std::uint16_t>(container.m_height);
-    if (container.m_numMips != bimg::imageGetNumMips(format, width, height)) {
+    if (format == bimg::TextureFormat::RGBA8 ? container.m_numMips != 1U : container.m_numMips != bimg::imageGetNumMips(format, width, height)) {
         return false;
     }
 
-    const std::uint32_t payloadSize = TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, false, true, 1U, format));
+    const std::uint32_t payloadSize = TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, false, container.m_numMips > 1U, 1U, format));
     const std::uint64_t expectedSize = static_cast<std::uint64_t>(container.m_offset) +
         static_cast<std::uint64_t>(container.m_numMips) * sizeof(std::uint32_t) + payloadSize;
     if (payloadSize == 0U || primaryBlock.size() < expectedSize) {

@@ -2,11 +2,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace kb::modules {
+struct EngineModuleLibraryLifetime;
 
 class EngineModuleLibrary final {
 public:
@@ -26,6 +28,8 @@ public:
     [[nodiscard]] void* FindSymbol(std::string_view name, std::vector<std::string>& errors, std::string_view diagnosticLabel = "engine module") const;
     void Reset() noexcept;
     void ReleaseWithoutUnload() noexcept;
+    // Keeps native code mapped until the last dependent resource is destroyed.
+    [[nodiscard]] std::shared_ptr<void> Retain();
 
 private:
     friend class EngineModuleLoader;
@@ -35,6 +39,7 @@ private:
     std::filesystem::path originalPath_;
     std::filesystem::path loadedPath_;
     void* handle_ = nullptr;
+    std::shared_ptr<EngineModuleLibraryLifetime> lifetime_;
 };
 
 struct EngineModuleLoadDesc {

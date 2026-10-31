@@ -421,12 +421,22 @@ void AuthGate::Update(std::uint64_t nowMilliseconds, std::int64_t nowSeconds, st
             continue;
         }
         if (event.type == NetEventType::Disconnected) {
+            if (peers_.contains(peer) && hooks_.onDisconnected) hooks_.onDisconnected(peer, event.reason);
             peers_.erase(peer);
             continue;
         }
         const auto found = peers_.find(peer);
         if (found == peers_.end()) continue; // a peer already dropped
         PeerState& state = found->second;
+        // Validate before dispatching queued commands, including at the expiry boundary.
+        if (state.authenticated && nowSeconds >= state.claims.expiresAt) {
+            Kick(peer, AuthKickReason::Expired);
+            continue;
+        }
+        if (state.authenticated && revocations_.IsRevoked(state.claims)) {
+            Kick(peer, AuthKickReason::Revoked);
+            continue;
+        }
         const std::vector<std::uint8_t>& data = event.message.data;
         if (data.empty()) {
             ++stats_.commandsRefused;

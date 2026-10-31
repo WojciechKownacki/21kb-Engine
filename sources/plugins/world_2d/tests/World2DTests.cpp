@@ -230,6 +230,26 @@ int main() {
         Require(editor.FillSprite("/Game/Sprites/ground.png", 32U, 2U, 0U, 0U, 0) == 0U,
             "filling the same tile must be a no-op");
         const auto original = map.tiles;
+        for (const auto invalid : {0U, Map2DAsset::MaximumSize + 1U, UINT32_MAX}) {
+            kb::world2d::Map2DChangeSet rejected;
+            kb::world2d::ResizeMap2D(map, invalid, 3U, &rejected);
+            rejected.Finish(map);
+            Require(map.width == 4U && map.height == 3U && map.tiles == original && rejected.Empty(),
+                "Invalid resize must preserve dimensions, every tile and the undo history");
+        }
+        auto maximum = map;
+        maximum.sheets.resize(Map2DAsset::MaximumSheets, map.sheets.front());
+        maximum.tiles.begin()->second.items.assign(Map2DAsset::MaximumStack, {.sheet=0, .cell=0});
+        Require(kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(maximum)).has_value(),
+            "Import must preserve the maximum sheet and stack counts");
+        auto overflow = maximum;
+        overflow.sheets.push_back(map.sheets.front());
+        Require(!kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(overflow)).has_value(),
+            "Import accepted too many sprite sheets");
+        overflow = maximum;
+        overflow.tiles.begin()->second.items.push_back({.sheet=0, .cell=0});
+        Require(!kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(overflow)).has_value(),
+            "Import silently truncated an overflowing sprite stack");
         kb::world2d::Map2DChangeSet resize;
         kb::world2d::ResizeMap2D(map, 2U, 2U, &resize);
         resize.Finish(map);
@@ -596,7 +616,16 @@ int main() {
         Require(entityCount > 3, "prefab and shadow entities are instantiated");
         const auto captured = SceneDocumentService::Capture(scene, "LiveMap");
         Require(captured.worldPrefab.Nodes().size() == 2, "generated chunks, shadow geometry and cell prefabs never enter saved scenes");
-        Require(runtime->PaintGround(owner,16,3,0,"Ground"), "runtime paints embedded ground rules");
+        kb::script::ScriptRuntimeHost mapApi{scene};
+        const std::array paintArguments{
+            kb::script::ScriptFunctionArgument{"entity", kb::script::ScriptValue{owner.Id(), kb::script::ScriptValueType::Entity}},
+            kb::script::ScriptFunctionArgument{"x", kb::script::ScriptValue{16}},
+            kb::script::ScriptFunctionArgument{"y", kb::script::ScriptValue{3}},
+            kb::script::ScriptFunctionArgument{"floor", kb::script::ScriptValue{0}},
+            kb::script::ScriptFunctionArgument{"brush", kb::script::ScriptValue{std::string{"Ground"}}}};
+        const auto painted = mapApi.Functions().Call("Map2D.PaintGround", paintArguments,
+            kb::script::ScriptFunctionCallContext{.scene = &scene});
+        Require(painted.Succeeded() && painted.Output("applied")->AsBool(), "runtime API paints embedded ground rules");
         Require(runtime->Tile(owner,17,3)->borders.size() > 0, "runtime autoborder crosses a chunk boundary");
         static_cast<void>(scene.Runtime().Update(0));
         Require(runtime->RebuiltChunksLastUpdate() == 2, "boundary painting only rebuilds the two adjacent chunks");
@@ -604,6 +633,21 @@ int main() {
         Require(runtime->RebuiltChunksLastUpdate() == 2, "animated cells rebuild only when their frame changes");
         static_cast<void>(scene.Runtime().Update(0.01F));
         Require(runtime->RebuiltChunksLastUpdate() == 0, "animation does not rebuild between frames");
+        const auto pauseAnimation = [&](bool paused) {
+            const std::array arguments{
+                ScriptFunctionArgument{"entity", ScriptValue{owner.Id(), ScriptValueType::Entity}},
+                ScriptFunctionArgument{"paused", ScriptValue{paused}}};
+            const auto result = mapApi.Functions().Call("Map2D.SetAnimationPaused", arguments, ScriptFunctionCallContext{.scene = &scene});
+            Require(result.Succeeded() && result.Output("applied")->AsBool(), "public API changes the map animation clock");
+        };
+        pauseAnimation(true);
+        static_cast<void>(scene.Runtime().Update(0.5F));
+        Require(runtime->RebuiltChunksLastUpdate() == 0, "paused animation leaves every chunk unchanged");
+        pauseAnimation(false);
+        static_cast<void>(scene.Runtime().Update(0.01F));
+        Require(runtime->RebuiltChunksLastUpdate() == 0, "resume preserves the animation phase");
+        static_cast<void>(scene.Runtime().Update(0.26F));
+        Require(runtime->RebuiltChunksLastUpdate() == 2, "resumed clips advance only their animated chunks");
         auto cameraTransform = scene.Transforms().Get(camera); cameraTransform.localPosition.x = 4;
         scene.Transforms().Set(camera, cameraTransform);
         static_cast<void>(scene.Runtime().Update(0));
@@ -656,7 +700,31 @@ int main() {
             }
         }
     }
-    // The last graphic of a sheet samples exactly its own cell, half a texel inside, for square and
+    // Graphic collision outlines follow the rendered rectangle, including its aspect and offset, after reload.
+    {
+        auto map = kb::assets::MakeEmptyMap2DAsset(1, 1);
+        map.background = false;
+        map.sheets.push_back({.texture = "/Game/Sprites/ground.png", .cellSize = 16, .columns = 1, .rows = 1, .cellHeight = 24});
+        const std::vector<std::array<float, 2>> points{{0.1F,0.2F},{0.9F,0.3F},{0.4F,0.8F}};
+        map.sheets[0].definitions[0].collision = {.kind = kb::assets::Map2DCollisionKind::Polygon, .polygon = points};
+        for (std::uint8_t rotation = 0; rotation < 4; ++rotation) for (unsigned flip = 0; flip < 4; ++flip) {
+            auto& sprite = map.tiles[Map2DTileKey(0,0,0)].ground;
+            sprite = {.sheet=0,.cell=0,.rotation=rotation,.flipX=(flip&1U)!=0,.flipY=(flip&2U)!=0,.tint=0x80FF80FFU,.offsetX=0.2F,.offsetY=-0.1F};
+            const auto loaded = kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(map));
+            Require(loaded.has_value(), "transformed collision map reloads");
+            const auto shape = kb::assets::Map2DCellCollision(*loaded, loaded->tiles.begin()->second);
+            const float width = rotation % 2U ? 1.5F : 1.0F, height = rotation % 2U ? 1.0F : 1.5F;
+            Require(shape.polygon.size() == points.size(), "transformed outline keeps its vertices");
+            for (std::size_t i=0; i<points.size(); ++i) {
+                const float u = (shape.polygon[i][0] - sprite.offsetX - (1-width)*0.5F) / width;
+                const float v = (shape.polygon[i][1] - sprite.offsetY - (1-height)) / height;
+                const auto uv = kb::assets::Map2DSpriteUV(sprite,u,v);
+                Require(std::abs(uv[0]-points[i][0]) < 0.0001F && std::abs(uv[1]-points[i][1]) < 0.0001F,
+                    "collision points match displayed texels with aspect, flip, rotation and offset");
+            }
+        }
+    }
+    // The last graphic of a sheet samples exactly its own cell with point filtering, for square and
     // rectangular cells, with and without margin, spacing and spare image area.
     {
         struct Atlas { std::uint32_t cellSize, cellHeight, columns, rows, margin, spacing, imageWidth, imageHeight; };
@@ -675,8 +743,8 @@ int main() {
             const float left = static_cast<float>(atlas.margin + (last % atlas.columns) * (atlas.cellSize + atlas.spacing));
             const float top = static_cast<float>(atlas.margin + (last / atlas.columns) * (height + atlas.spacing));
             const float width = static_cast<float>(sheet.ImageWidth()), imageHeight = static_cast<float>(sheet.ImageHeight());
-            const float expected[4] = { (left + 0.5F) / width, (top + 0.5F) / imageHeight,
-                (left + static_cast<float>(atlas.cellSize) - 0.5F) / width, (top + static_cast<float>(height) - 0.5F) / imageHeight };
+            const float expected[4] = { left / width, top / imageHeight,
+                (left + static_cast<float>(atlas.cellSize)) / width, (top + static_cast<float>(height)) / imageHeight };
             float lowU = 2.0F, lowV = 2.0F, highU = -1.0F, highV = -1.0F;
             const auto& section = mesh->sections[1];
             for (std::uint32_t vertex = section.vertexStart; vertex < section.vertexStart + section.vertexCount; ++vertex) {
@@ -838,9 +906,17 @@ int main() {
         expected.cell = 2U;
         Require(kb::assets::Map2DAnimatedSprite(map, turned, 0.5) == expected, "an animated frame keeps the sprite's turn, flip, tint and offset");
 
+        auto phased = turned;
+        phased.animationPhaseSeconds = 0.25F;
+        Require(kb::assets::Map2DAnimatedSprite(map, phased, 0.0).cell == 1U &&
+                kb::assets::Map2DAnimatedSprite(map, phased, 0.5).cell == 0U, "instances offset and loop the same clip independently");
+        Require(kb::assets::ParseMap2DSprite(kb::assets::FormatMap2DSprite(phased)) == phased, "sprite phase survives text serialization");
+        Require(!kb::assets::ParseMap2DSprite("0:0@0/0/4294967295/0/0/-1"), "negative phase is rejected");
+        Require(!kb::assets::ParseMap2DSprite("0:0@0/0/4294967295/0/0/0.25/1"), "extra sprite fields are rejected");
+        map.tiles[kb::assets::Map2DTileKey(2, 2, 0)].ground = phased;
         std::string error;
         const auto loaded = kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(map), &error);
-        Require(loaded.has_value() && loaded->sheets == map.sheets, "clips must survive the file");
+        Require(loaded.has_value() && loaded->sheets == map.sheets && loaded->tiles == map.tiles, "clips and instance phases must survive the file");
         for (double seconds : { 0.0, 0.3, 0.6, 0.9, 1.7 }) {
             for (std::uint32_t cell : { 0U, 3U, 4U }) {
                 Require(kb::assets::Map2DAnimatedSprite(*loaded, { .sheet = 0, .cell = cell }, seconds) ==
@@ -867,13 +943,14 @@ int main() {
         auto& manager = scene.Assets().Manager();
         Require(manager.Mounts().Mount("Game", assets), "mount clip assets");
         Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register clip renderer");
-        auto map = kb::assets::MakeEmptyMap2DAsset(32U, 32U);
+        auto map = kb::assets::MakeEmptyMap2DAsset(256U, 256U);
         map.background = false;
         map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Test.kbmat", .columns = 4, .rows = 2 });
         map.sheets[0].definitions[0].frames = { 0, 1, 2 };
         map.sheets[0].definitions[0].framesPerSecond = 4.0F;
-        map.tiles[Map2DTileKey(1U, 1U, 0)].ground = { .sheet = 0, .cell = 0 };
-        map.tiles[Map2DTileKey(20U, 20U, 0)].ground = { .sheet = 0, .cell = 5 };
+        for (unsigned y = 0; y < 256; ++y) for (unsigned x = 0; x < 256; ++x)
+            map.tiles[Map2DTileKey(x, y, 0)].ground = { .sheet = 0, .cell = x < 16 && y < 16 ? 0U : 5U,
+                .animationPhaseSeconds = x < 16 && y < 16 ? 0.05F : 0.0F };
         const auto file = root / "Clips.kbmap2d";
         Require(kb::assets::Map2DAssetIO::Save(file, map), "save the clip map");
         const kb::assets::AssetId source{ 8123U };
@@ -889,8 +966,11 @@ int main() {
             Require(scene.Runtime().DrainSceneSystemErrors().empty(), "the clip map runs without errors");
             return runtime->RebuiltChunksLastUpdate();
         };
-        Require(step(0.0F) == 2U, "both chunks are built when Play starts");
+        Require(step(0.0F) == 256U, "all occupied chunks of the 65536-cell map build when Play starts");
+        const auto animationStarted = std::chrono::steady_clock::now();
         Require(step(0.3F) == 1U, "a clip's frame change rebuilds only the chunk it is drawn in");
+        const auto animationElapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - animationStarted).count();
+        std::printf("map2d animation 65536 cells, 256 animated: rebuilt 1/256 chunks in %.3f ms\n", animationElapsed);
         Require(step(0.0F) == 0U, "no time passing (a pause) rebuilds nothing");
         Require(step(0.1F) == 0U, "time inside the same frame rebuilds nothing");
         Require(step(0.2F) == 1U, "the next frame rebuilds its chunk");
@@ -898,7 +978,8 @@ int main() {
         scene.Runtime().SetPlaying(false);
         static_cast<void>(scene.Runtime().Update(0.0F));
         scene.Runtime().SetPlaying(true);
-        Require(step(0.0F) == 2U, "Play builds the map again");
+        Require(step(0.0F) == 256U, "Play builds the map again");
+        Require(runtime->Tile(owner, 1, 1)->ground.animationPhaseSeconds == 0.05F, "play reload preserves authored phase");
         Require(step(0.1F) == 0U, "Play starts every clip over: 0.1 s is still the first frame, as it was not after 0.8 s");
         Require(step(0.2F) == 1U, "and the clip then advances on its own time");
     }
@@ -912,6 +993,7 @@ int main() {
         Require(manager.Mounts().Mount("Game", assets), "mount prefab cell assets");
         Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register prefab cell renderer");
         const auto prefabSource = scene.Entities().CreateObject({ .name = "Marker" });
+        static_cast<void>(scene.Entities().CreateObject({.name="MarkerChild",.parent=prefabSource}));
         Require(scene.Prefabs().CreateAsset(prefabSource, "Marker", assets / "Marker.kbprefab").IsValid(), "save the marker prefab");
         scene.Entities().Destroy(prefabSource.Entity());
         static_cast<void>(scene.Assets().Discover());
@@ -956,18 +1038,36 @@ int main() {
             return cells;
         };
         const std::string marker = "/Game/Marker.kbprefab";
+        std::size_t budget=256U;
+        const auto settle = [&](std::size_t expected) {
+            for (int frame=0; frame<100; ++frame) {
+                const auto before=runtime->PrefabInstanceCount(owner);
+                step();
+                const auto after=runtime->PrefabInstanceCount(owner);
+                Require((before>after ? before-after : after-before)<=budget, "prefab lifecycle obeys the per-frame budget");
+                if (after==expected) {
+                    for (const auto& chunk:scene.Entities().Object(owner).Children()) for (const auto& prefab:chunk.Children()) {
+                        if (prefab.Name()!="Marker") continue;
+                        Require(prefab.Children().size()==1U && prefab.Children().front().Name()=="MarkerChild",
+                            "streamed prefab retains its child hierarchy reference");
+                    }
+                    return;
+                }
+            }
+            Require(false,"prefab lifecycle did not settle");
+        };
         const auto started = std::chrono::steady_clock::now();
         const std::size_t marked = mark(0U, kSide, marker);
         Require(marked == 4080U, "every cell but the chunk anchors gets a prefab");
-        step();
-        Require(scene.Entities().Count() - withChunks == marked, "one instance per prefab cell");
+        settle(marked);
+        Require(scene.Entities().Count() - withChunks == marked*2U, "one instance per prefab cell");
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
         std::printf("map2d %zu prefab cells %lld ms\n", marked, static_cast<long long>(elapsed.count()));
         Require(elapsed < std::chrono::seconds(30), "thousands of prefab cells stay inside their time budget");
 
         static_cast<void>(mark(0U, kSide, marker));
         step();
-        Require(scene.Entities().Count() - withChunks == marked && runtime->RebuiltChunksLastUpdate() == 0U,
+        Require(scene.Entities().Count() - withChunks == marked*2U && runtime->RebuiltChunksLastUpdate() == 0U,
             "painting a cell with the prefab it already has changes nothing and creates no duplicate");
         for (std::uint32_t x = 1U; x < 16U; ++x) {
             Map2DTile tile = *runtime->Tile(owner, x, 5U);
@@ -975,19 +1075,35 @@ int main() {
             Require(runtime->SetTile(owner, x, 5U, 0, tile), "set data on a prefab cell");
         }
         step();
-        Require(scene.Entities().Count() - withChunks == marked, "changing a prefab cell's data keeps its single instance");
+        Require(scene.Entities().Count() - withChunks == marked*2U, "changing a prefab cell's data keeps its single instance");
 
         const std::size_t cleared = mark(0U, 8U, "");
-        step();
-        Require(scene.Entities().Count() - withChunks == marked - cleared, "clearing the prefab of cells removes exactly their instances");
+        settle(marked-cleared);
+        Require(scene.Entities().Count() - withChunks == (marked-cleared)*2U, "clearing the prefab of cells removes exactly their instances");
         Require(runtime->Tile(owner, 3U, 5U).has_value() && runtime->Tile(owner, 3U, 5U)->properties.contains("visited"),
             "clearing a prefab keeps the rest of the cell");
         static_cast<void>(mark(0U, 8U, marker));
-        step();
-        Require(scene.Entities().Count() - withChunks == marked, "painting them again restores one instance each");
+        settle(marked);
+        Require(scene.Entities().Count() - withChunks == marked*2U, "painting them again restores one instance each");
 
+        const auto memoryBeforeStreaming=WorkingSetBytes();
+        budget=64U;
+        for (int cycle=0; cycle<3; ++cycle) {
+            Require(runtime->SetPrefabRegion(owner,0,0,31,63,64U),"restrict prefab region");
+            settle(marked/2U);
+            Require(scene.Entities().Count()==withChunks+marked,"streaming keeps exactly the selected half");
+            Require(runtime->SetPrefabRegion(owner,0,0,-1,-1,64U),"unload prefab region");
+            settle(0U);
+            Require(scene.Entities().Count()==withChunks,"streaming out leaves no prefab entities");
+            Require(runtime->Tile(owner,3U,5U)->properties.contains("visited"),"streaming preserves cell data and prefab references");
+            Require(runtime->SetPrefabRegion(owner,0,0,63,63,64U),"reload prefab region");
+            settle(marked);
+            Require(scene.Entities().Count()==withChunks+marked*2U,"streaming in creates each prefab once");
+        }
+        const auto memoryAfterStreaming=WorkingSetBytes();
+        Require(memoryAfterStreaming<=memoryBeforeStreaming+64U*1024U*1024U,"repeated streaming has bounded memory growth");
         static_cast<void>(mark(0U, kSide, ""));
-        step();
+        settle(0U);
         Require(scene.Entities().Count() == withChunks, "erasing every prefab leaves no instance behind");
         static_cast<void>(mark(0U, 3U, marker));
         step();
@@ -998,6 +1114,32 @@ int main() {
         scene.Runtime().SetPlaying(true);
         step();
         Require(scene.Entities().Count() == withChunks, "the next Play starts from the authored map, which has no prefab cells");
+    }
+    // Schema defaults, exact types, atomic migrations and byte round-trips.
+    {
+        auto map=kb::assets::MakeEmptyMap2DAsset(8U,8U);
+        auto& tile=map.tiles[Map2DTileKey(1U,1U,0)];
+        tile.properties["level"]=std::int64_t{7};
+        std::string error;
+        Require(kb::assets::SetMap2DPropertySchema(map,"level",std::int64_t{2},{},&error),error.c_str());
+        Require(kb::assets::SetMap2DPropertySchema(map,"enabled",true,{},&error),error.c_str());
+        Require(kb::assets::SetMap2DPropertySchema(map,"label",std::string{"default"},{},&error),error.c_str());
+        Require(kb::assets::SetMap2DPropertySchema(map,"cost",1.5,{},&error),error.c_str());
+        Require(std::get<bool>(*kb::assets::Map2DCellProperty(map,{},"enabled")),"empty cells inherit schema defaults");
+        auto invalid=map;
+        invalid.tiles.begin()->second.properties["level"]=std::string{"wrong"};
+        Require(!kb::assets::IsMap2DAssetValid(invalid),"schema rejects wrong override types");
+        Require(kb::assets::SetMap2DPropertySchema(map,"rank",2.5,"level",&error),error.c_str());
+        Require(!map.tiles.begin()->second.properties.contains("level") && std::get<double>(map.tiles.begin()->second.properties.at("rank"))==7.0,
+            "renaming and widening an integer preserves overrides");
+        const auto saved=kb::assets::Map2DAssetIO::Write(map);
+        Require(!kb::assets::SetMap2DPropertySchema(map,"rank",false,{},&error) && kb::assets::Map2DAssetIO::Write(map)==saved,
+            "incompatible migration is atomic");
+        const auto loaded=kb::assets::Map2DAssetIO::Parse(saved,&error);
+        Require(loaded && loaded->propertyDefaults==map.propertyDefaults && loaded->propertySchemaVersion==5U && loaded->tiles==map.tiles,
+            "schema and migrated overrides survive serialization");
+        Require(!kb::assets::ParseMap2DPropertyValue("float","nan") && !kb::assets::ParseMap2DPropertyValue("int","1.2"),"invalid numeric defaults are refused");
+        Require(!kb::assets::Map2DAssetIO::Parse(saved+"propertyDefault bool 656e61626c6564 1\n"),"duplicate schema fields are refused");
     }
     // Prefab cells in the editor: painting one is a single undoable step, it survives a save, and redo and undo can be
     // repeated without leaving a stray prefab behind. Tile data reaches a game from the bytes the cooker stores: a map
@@ -1474,13 +1616,15 @@ int main() {
         std::string error;
         const auto plain = kb::assets::Map2DAssetIO::Write(map);
         Require(plain.find("camera") == std::string::npos, "a map without camera settings writes no camera line");
-        map.camera = { .pixelsPerUnit = 16.0F, .followTarget = "Hero One", .smoothingSeconds = 0.25F, .deadZoneWidth = 1.5F, .deadZoneHeight = 0.5F, .clampToMap = true };
+        map.camera = { .pixelsPerUnit = 16.0F, .followTarget = "Hero One", .smoothingSeconds = 0.25F, .deadZoneWidth = 1.5F, .deadZoneHeight = 0.5F, .clampToMap = true, .zoom = 2.0F };
         const auto loaded = kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(map), &error);
         Require(loaded.has_value() && loaded->camera == map.camera, "camera settings survive the file");
         const auto without = kb::assets::Map2DAssetIO::Parse(plain, &error);
         Require(without.has_value() && without->camera == kb::assets::Map2DCamera{}, "a file without a camera line keeps the plain camera");
         for (const auto& change : std::initializer_list<void (*)(kb::assets::Map2DCamera&)>{
                  [](kb::assets::Map2DCamera& camera) { camera.pixelsPerUnit = -1.0F; },
+                 [](kb::assets::Map2DCamera& camera) { camera.zoom = 0.0F; },
+                 [](kb::assets::Map2DCamera& camera) { camera.zoom = std::numeric_limits<float>::quiet_NaN(); },
                  [](kb::assets::Map2DCamera& camera) { camera.pixelsPerUnit = std::numeric_limits<float>::quiet_NaN(); },
                  [](kb::assets::Map2DCamera& camera) { camera.smoothingSeconds = 61.0F; },
                  [](kb::assets::Map2DCamera& camera) { camera.deadZoneWidth = -0.5F; },
@@ -1551,6 +1695,31 @@ int main() {
 
         for (const bool wall : { false, true }) {
             const auto orientation = wall ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat;
+            auto zoomed = build(orientation, { .clampToMap = true, .zoom = 2.0F });
+            frames(*zoomed, 3, 640.0F, 480.0F);
+            Require(std::abs(height(*zoomed) - 5.5F) < 1.0e-5F, "plain camera applies explicit zoom without a follow target");
+            auto pixelZoomed = build(orientation, { .pixelsPerUnit = 16.0F, .zoom = 2.0F });
+            frames(*pixelZoomed, 3, 640.0F, 480.0F);
+            Require(std::abs(height(*pixelZoomed) - 6.0F) < 1.0e-5F, "pixel-perfect zoom fits five whole pixels per texel");
+            if (wall) {
+                auto& scene = pixelZoomed->scene;
+                scene.Components().CharacterControllers2D().Set(pixelZoomed->hero, {.sideView=true});
+                kb::script::ScriptRuntimeHost host{scene};
+                const std::array arguments{
+                    kb::script::ScriptFunctionArgument{"entity", kb::script::ScriptValue{pixelZoomed->owner.Id(), kb::script::ScriptValueType::Entity}},
+                    kb::script::ScriptFunctionArgument{"character", kb::script::ScriptValue{pixelZoomed->hero.Id(), kb::script::ScriptValueType::Entity}},
+                    kb::script::ScriptFunctionArgument{"targetX", kb::script::ScriptValue{1}},
+                    kb::script::ScriptFunctionArgument{"targetY", kb::script::ScriptValue{1}}};
+                for (const auto coordinate : {1.0e30, -1.0e30}) {
+                    place(*pixelZoomed, coordinate, 1.0, true);
+                    frames(*pixelZoomed, 1, 640.0F, 480.0F);
+                    const auto result = host.Functions().Call("Map2D.PlatformerWaypoint", arguments,
+                        kb::script::ScriptFunctionCallContext{.scene=&scene});
+                    Require(!result.Succeeded() && !result.errors.empty() &&
+                        result.errors.front() == "Character position exceeds tile coordinate range",
+                        "navigation must reject unrepresentable cell coordinates before integer conversion");
+                }
+            }
             auto rig = build(orientation, { .pixelsPerUnit = 16.0F, .followTarget = "Hero", .clampToMap = true });
             place(*rig, 3.3, wall ? 12.2 : 2.2, wall);
             frames(*rig, 3, 1280.0F, 720.0F);

@@ -1,6 +1,7 @@
 #include "engine/script/ScriptApiExport.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <string_view>
 #include <vector>
@@ -514,6 +515,253 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
     }
 
     return out;
+}
+
+namespace {
+
+[[nodiscard]] std::string Lower(std::string_view text) {
+    std::string lower{ text };
+    std::ranges::transform(lower, lower.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    return lower;
+}
+
+// A name as a file name: letters, digits, spaces and - _ . kept, anything else replaced.
+[[nodiscard]] std::string PageFileName(std::string_view name) {
+    std::string file;
+    for (const char character : name) {
+        const unsigned char code = static_cast<unsigned char>(character);
+        file += std::isalnum(code) != 0 || character == ' ' || character == '-' || character == '_' || character == '.' ? character : '_';
+    }
+    return file.empty() ? std::string{ "_" } : file;
+}
+
+[[nodiscard]] std::string FunctionShortName(std::string_view functionName) {
+    const std::size_t dot = functionName.find('.');
+    return std::string{ dot == std::string_view::npos ? functionName : functionName.substr(dot + 1U) };
+}
+
+[[nodiscard]] std::string FunctionPagePath(std::string_view functionName) {
+    return "functions/" + PageFileName(FunctionGroup(functionName)) + "/" + PageFileName(FunctionShortName(functionName)) + ".md";
+}
+
+[[nodiscard]] std::string GroupPagePath(std::string_view group) {
+    return "functions/" + PageFileName(group) + ".md";
+}
+
+[[nodiscard]] std::string ComponentPagePath(std::string_view component) {
+    return "components/" + PageFileName(component) + ".md";
+}
+
+[[nodiscard]] const ScriptApiCatalogLuaBinding* LuaBindingOf(const ScriptApiCatalog& catalog, std::string_view functionName) {
+    for (const ScriptApiCatalogLuaBinding& binding : catalog.luaBindings) {
+        if (binding.functionName == functionName) {
+            return &binding;
+        }
+    }
+    return nullptr;
+}
+
+// How a script calls the function: its Lua convenience call when there is one, otherwise
+// CallFunction.
+[[nodiscard]] std::string LuaCall(const ScriptApiCatalog& catalog, const ScriptApiCatalogFunction& function) {
+    std::string arguments;
+    for (const ScriptApiPin& pin : function.inputs) {
+        if (!arguments.empty()) {
+            arguments += ", ";
+        }
+        arguments += pin.name;
+    }
+    if (const ScriptApiCatalogLuaBinding* binding = LuaBindingOf(catalog, function.name); binding != nullptr) {
+        return (binding->tableName.empty() ? std::string{} : binding->tableName + ".") + binding->luaName + "(" + arguments + ")";
+    }
+    return "CallFunction(\"" + function.name + "\", { " + arguments + " })";
+}
+
+[[nodiscard]] std::map<std::string, std::vector<const ScriptApiCatalogFunction*>> FunctionGroups(const ScriptApiCatalog& catalog) {
+    std::map<std::string, std::vector<const ScriptApiCatalogFunction*>> groups;
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        groups[FunctionGroup(function.name)].push_back(&function);
+    }
+    return groups;
+}
+
+[[nodiscard]] std::string IndexPage(const ScriptApiCatalog& catalog) {
+    std::string out;
+    out += "# 21kb Engine script API\n\n";
+    out += "Read only the page your task needs. The kb-engine `api_reference` tool returns one page by `topic` ";
+    out += "(a group such as `Physics`, a function such as `Physics.Raycast`, a component such as `Rigidbody`) ";
+    out += "or finds topics by `search` text; the same pages are files next to this one.\n\n";
+    out += "## How scripts work\n\n";
+    out += "A `Behaviour` component runs a script asset on its entity: Lua (`.lua`), Visual Graph (`.kbgraph`) or native C++. ";
+    out += "A Lua script defines global functions named after lifecycle events, each receiving `(self, dt)`: ";
+    for (std::size_t index = 0; index < catalog.lifecycleEvents.size(); ++index) {
+        out += (index == 0U ? "`" : ", `") + catalog.lifecycleEvents[index] + "`";
+    }
+    out += ". A custom event `Name` calls `function Name(self, event)`.\n\n";
+    out += "`self` has `entity`, `asset`, `backend`, `variables` and the methods `HasComponent(name)`, ";
+    out += "`GetProperty(component, property)`, `SetProperty(component, property, value)`, `GetVariable(name)`, `SetVariable(name, value)`. ";
+    out += "The sandbox has no `io`, `os`, `require` or `load`; it adds `Emit`, `EmitTo`, `SetShared`, `GetShared`, `Import`, ";
+    out += "`CallFunction(name, args)` and `Log`. Visual Graphs call the same functions as `Function.<name>` nodes.\n\n";
+    out += "## Function groups\n\n";
+    for (const auto& [group, functions] : FunctionGroups(catalog)) {
+        out += "- [" + group + "](" + GroupPagePath(group) + ") - " + std::to_string(functions.size()) + " functions: ";
+        for (std::size_t index = 0; index < functions.size() && index < 6U; ++index) {
+            out += (index == 0U ? "" : ", ") + FunctionShortName(functions[index]->name);
+        }
+        out += functions.size() > 6U ? ", ...\n" : "\n";
+    }
+    out += "\n## Components\n\n";
+    out += "Read and change their properties with `self:GetProperty` and `self:SetProperty`, or the `component_edit` tool.\n\n";
+    for (const ScriptApiCatalogComponent& component : catalog.components) {
+        out += "- [" + component.name + "](" + ComponentPagePath(component.name) + ") - " + std::to_string(component.properties.size()) + " properties\n";
+    }
+    return out;
+}
+
+[[nodiscard]] std::string GroupPage(const ScriptApiCatalog& catalog, const std::string& group, const std::vector<const ScriptApiCatalogFunction*>& functions) {
+    std::string out = "# " + group + " functions\n\n| Function | Lua call | What it does |\n|---|---|---|\n";
+    for (const ScriptApiCatalogFunction* function : functions) {
+        out += "| [`" + function->name + "`](" + PageFileName(group) + "/" + PageFileName(FunctionShortName(function->name)) + ".md) | `" +
+            LuaCall(catalog, *function) + "` | " + function->description + " |\n";
+    }
+    out += "\nEach function has its own page with its inputs, outputs and an example.\n";
+    return out;
+}
+
+[[nodiscard]] std::string FunctionPage(const ScriptApiCatalog& catalog, const ScriptApiCatalogFunction& function) {
+    std::string out = "# " + function.name + "\n\n" + function.description + "\n\n";
+    if (!function.inputs.empty()) {
+        out += "| Input | Type | Required |\n|---|---|---|\n";
+        for (const ScriptApiPin& pin : function.inputs) {
+            out += "| `" + pin.name + "` | " + std::string{ ToString(pin.type) } + " | " + (pin.required ? "yes" : "no") + " |\n";
+        }
+        out += '\n';
+    }
+    if (!function.outputs.empty()) {
+        out += "| Output | Type |\n|---|---|\n";
+        for (const ScriptApiPin& pin : function.outputs) {
+            out += "| `" + pin.name + "` | " + std::string{ ToString(pin.type) } + " |\n";
+        }
+        out += '\n';
+    }
+    const ScriptApiCatalogLuaBinding* binding = LuaBindingOf(catalog, function.name);
+    out += "Lua: `" + LuaCall(catalog, function) + "`";
+    if (binding != nullptr) {
+        out += " returns " + LuaBindingReturnSummary(catalog, *binding);
+    }
+    out += ".\n\n```lua\n";
+    out += function.outputs.empty() ? "" : "local result = ";
+    if (binding != nullptr) {
+        out += (binding->tableName.empty() ? std::string{} : binding->tableName + ".") + binding->luaName + "(";
+        for (std::size_t index = 0; index < function.inputs.size(); ++index) {
+            out += (index == 0U ? "" : ", ") + LuaExampleValue(function.inputs[index].type);
+        }
+        out += ")\n";
+    } else {
+        out += "CallFunction(\"" + function.name + "\", {";
+        for (std::size_t index = 0; index < function.inputs.size(); ++index) {
+            out += (index == 0U ? " " : ", ") + function.inputs[index].name + " = " + LuaExampleValue(function.inputs[index].type);
+        }
+        out += function.inputs.empty() ? "})\n" : " })\n";
+    }
+    out += "```\n\nVisual Graph: the `Function." + function.name + "` node.\n";
+    return out;
+}
+
+[[nodiscard]] std::string ComponentPage(const ScriptApiCatalogComponent& component) {
+    std::string out = "# " + component.name + " component\n\n";
+    out += "Script access: `self:GetProperty(\"" + component.name + "\", property)` and `self:SetProperty(\"" + component.name +
+        "\", property, value)`; tools: `component_edit` with `type: \"" + component.name + "\"` and `set: [\"property=value\"]`.\n\n";
+    out += "| Property | Type | Access |\n|---|---|---|\n";
+    for (const ScriptApiCatalogProperty& property : component.properties) {
+        out += "| `" + property.name + "` | " + std::string{ ToString(property.type) } + " | " + (property.writable ? "read/write" : "read-only") + " |\n";
+    }
+    return out;
+}
+
+} // namespace
+
+std::vector<ScriptApiReferencePage> ScriptApiExport::ToReferencePages(const ScriptApiCatalog& catalog) {
+    std::vector<ScriptApiReferencePage> pages;
+    pages.push_back({ "README.md", IndexPage(catalog) });
+    for (const auto& [group, functions] : FunctionGroups(catalog)) {
+        pages.push_back({ GroupPagePath(group), GroupPage(catalog, group, functions) });
+        for (const ScriptApiCatalogFunction* function : functions) {
+            pages.push_back({ FunctionPagePath(function->name), FunctionPage(catalog, *function) });
+        }
+    }
+    for (const ScriptApiCatalogComponent& component : catalog.components) {
+        pages.push_back({ ComponentPagePath(component.name), ComponentPage(component) });
+    }
+    return pages;
+}
+
+std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCatalog& catalog, std::string_view topic) {
+    std::string wanted = Lower(topic);
+    while (!wanted.empty() && wanted.back() == ' ') wanted.pop_back();
+    while (!wanted.empty() && wanted.front() == ' ') wanted.erase(wanted.begin());
+    std::ranges::replace(wanted, '/', '.');
+    if (wanted.empty() || wanted == "index" || wanted == "readme") {
+        return IndexPage(catalog);
+    }
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        if (Lower(function.name) == wanted) return FunctionPage(catalog, function);
+    }
+    const auto groups = FunctionGroups(catalog);
+    for (const auto& [group, functions] : groups) {
+        if (Lower(group) == wanted) return GroupPage(catalog, group, functions);
+    }
+    for (const ScriptApiCatalogComponent& component : catalog.components) {
+        if (Lower(component.name) == wanted) return ComponentPage(component);
+    }
+    // A function by its short name, when only one group has it.
+    const ScriptApiCatalogFunction* only = nullptr;
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        if (Lower(FunctionShortName(function.name)) == wanted) {
+            if (only != nullptr) return std::nullopt;
+            only = &function;
+        }
+    }
+    if (only != nullptr) return FunctionPage(catalog, *only);
+    return std::nullopt;
+}
+
+std::string ScriptApiExport::SearchReference(const ScriptApiCatalog& catalog, std::string_view text, std::size_t limit) {
+    std::vector<std::string> words;
+    std::string word;
+    for (const char character : Lower(text) + " ") {
+        if (std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '.' || character == '_') {
+            word += character;
+        } else if (!word.empty()) {
+            words.push_back(word);
+            word.clear();
+        }
+    }
+    const auto matches = [&words](const std::string& haystack) {
+        return std::ranges::all_of(words, [&haystack](const std::string& part) { return haystack.find(part) != std::string::npos; });
+    };
+    std::string out;
+    std::size_t found = 0U;
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        if (found < limit && !words.empty() && matches(Lower(function.name + " " + function.description))) {
+            out += "- `" + function.name + "` - " + function.description + "\n";
+            ++found;
+        }
+    }
+    for (const ScriptApiCatalogComponent& component : catalog.components) {
+        std::string haystack = Lower(component.name);
+        for (const ScriptApiCatalogProperty& property : component.properties) {
+            haystack += " " + Lower(property.name);
+        }
+        if (found < limit && !words.empty() && matches(haystack)) {
+            out += "- `" + component.name + "` - component with " + std::to_string(component.properties.size()) + " properties\n";
+            ++found;
+        }
+    }
+    if (found == 0U) {
+        return "Nothing in the script API matches \"" + std::string{ text } + "\". Ask for the index (no topic) to see the groups and components.\n";
+    }
+    return "Ask for one of these as the topic:\n\n" + out;
 }
 
 std::string ScriptApiExport::ToLuaStubs(const ScriptApiCatalog& catalog) {

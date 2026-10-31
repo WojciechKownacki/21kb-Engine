@@ -93,6 +93,7 @@ def requestedApplicationIcon = providers.gradleProperty("kbApplicationIcon")
 def requestedLegalAssets = providers.gradleProperty("kbLegalAssets")
 // Release public key and product id the player checks its pack against; written by packaging.
 def requestedTrustAnchor = providers.gradleProperty("kbTrustAnchor")
+def useAssetDelivery = providers.gradleProperty("kbAssetDelivery").orElse("false").get() == "true"
 
 def applicationIdValue = requestedApplicationId.get().trim()
 def versionNameValue = requestedVersionName.get().trim()
@@ -123,9 +124,12 @@ if (minSdkValue < 23 || targetSdkValue < minSdkValue || targetSdkValue > 37) {
     throw new GradleException("Android SDK levels must satisfy 23 <= minimum <= target <= 37")
 }
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(Locale.ROOT) }
+if (useAssetDelivery && requestedTaskNames.any { it.contains("assemble") }) {
+    throw new GradleException("Asset delivery requires a bundle task; standalone APKs must embed runtime assets")
+}
 if (requestedTargetProfile.isPresent()) {
     def expectedFlavor = requestedTargetProfile.get() == "Android.ASTC.arm64" ? "astc" : "etc2"
-    if (requestedTaskNames.any { it.contains("assemble") } &&
+    if (requestedTaskNames.any { it.contains("assemble") || it.contains("bundle") } &&
             !requestedTaskNames.any { it.contains(expectedFlavor) }) {
         throw new GradleException(
             "The requested Gradle flavor does not match kbTargetProfile=${requestedTargetProfile.get()}")
@@ -143,6 +147,7 @@ if (requestedApplicationIcon.isPresent()) {
 }
 
 android {
+    if (useAssetDelivery) assetPacks = [":runtimeassets"]
     namespace = "com.kbengine.runtime"
     compileSdk = Math.max(36, targetSdkValue)
     ndkVersion = "29.0.14206865"
@@ -162,6 +167,17 @@ android {
 
         externalNativeBuild {
             cmake {
+                def nativeJobs = providers.environmentVariable("CMAKE_BUILD_PARALLEL_LEVEL").getOrNull()
+                if (nativeJobs != null && !nativeJobs.isEmpty()) {
+                    if (!(nativeJobs ==~ /[1-9][0-9]*/)) {
+                        throw new GradleException("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
+                    }
+                    arguments += [
+                        "-DCMAKE_JOB_POOLS=kb_limit=${nativeJobs}",
+                        "-DCMAKE_JOB_POOL_COMPILE=kb_limit",
+                        "-DCMAKE_JOB_POOL_LINK=kb_limit"
+                    ]
+                }
                 targets += ["kb_game_android"]
                 arguments += [
                     "-DANDROID_STL=c++_shared",
@@ -255,7 +271,7 @@ tasks.register("stageRuntimeAssets", Sync) {
         }
     }
 
-    if (requestedAssetPackPath.isPresent()) {
+    if (requestedAssetPackPath.isPresent() && !useAssetDelivery) {
         from(new File(requestedAssetPackPath.get())) {
             rename { "game.kbpack" }
         }

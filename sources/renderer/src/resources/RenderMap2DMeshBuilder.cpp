@@ -169,10 +169,10 @@ std::optional<RenderMeshAssetData> RenderMap2DMeshBuilder::Build(const kb::asset
             .x1 = (static_cast<float>(x) + (1.0F + spriteWidth) * 0.5F + sprite.offsetX) * size,
             .z1 = (static_cast<float>(y + 1U) + sprite.offsetY) * size,
             .y = lift,
-            .u0 = (static_cast<float>(left) + 0.5F) / width,
-            .v0 = (static_cast<float>(top) + 0.5F) / height,
-            .u1 = (static_cast<float>(left + cellWidth) - 0.5F) / width,
-            .v1 = (static_cast<float>(top + cellHeight) - 0.5F) / height,
+            .u0 = static_cast<float>(left) / width,
+            .v0 = static_cast<float>(top) / height,
+            .u1 = static_cast<float>(left + cellWidth) / width,
+            .v1 = static_cast<float>(top + cellHeight) / height,
             .style = sprite,
         });
     };
@@ -231,6 +231,7 @@ std::optional<RenderMeshAssetData> RenderMap2DMeshBuilder::Build(const kb::asset
         RenderMeshEmbeddedMaterial fallback{};
         fallback.name = mesh.materialNames.back();
         fallback.desc.doubleSided = true;
+        fallback.desc.pointSampling = true;
         fallback.desc.baseColor[0] = fallback.desc.baseColor[1] = fallback.desc.baseColor[2] = 0;
         fallback.desc.metallicFactor = 1;
         fallback.desc.roughnessFactor = 1;
@@ -261,7 +262,7 @@ std::optional<RenderMeshAssetData> RenderMap2DMeshBuilder::Build(const kb::asset
             desc.emissiveStrength = 0; desc.metallicFactor = 0;
         }
         desc.alphaMode = (tint & 0xFFU) == 255U ? RenderMaterialAlphaMode::Mask : RenderMaterialAlphaMode::Blend;
-        desc.alphaCutoff = 0.5F; desc.doubleSided = true;
+        desc.alphaCutoff = 0.5F; desc.doubleSided = true; desc.pointSampling = true;
         desc.albedoTextureAssetId = desc.emissiveTextureAssetId = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath(kb::assets::Utf8Path(sheet.texture)) + ":RenderTexture").value;
         material.albedoTexturePath = material.emissiveTexturePath = sheet.texture;
         mesh.materialSlots.push_back(RenderMaterialSlotDesc{});

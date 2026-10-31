@@ -7,6 +7,7 @@
 #include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputModifiers.hpp"
 #include "engine/input/InputRebinding.hpp"
+#include "engine/input/InputRebindSession.hpp"
 #include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputText.hpp"
@@ -140,6 +141,40 @@ void TestSubsystemAndConsume() {
     subsystem.MutableDeviceState().SetKeyDown(InputKey::Space, false);
     subsystem.Evaluate(0.016F);
     Require(subsystem.WasActionReleased("Jump"), "Jump should report Released when Space goes up");
+}
+
+void TestModalGameplayInputQuarantine() {
+    auto action = MakeAction("Use", InputActionValueType::Bool, false);
+    auto mapping = std::make_shared<InputMappingContextAsset>();
+    mapping->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Space});
+    InputSubsystem input;
+    input.SetResolvers([action](std::uint64_t) { return action; }, [mapping](std::uint64_t) { return mapping; });
+    Require(input.AddMappingContext(1U, 0), "Modal test mapping failed");
+    auto& device = input.MutableDeviceState();
+    device.SetKeyDown(InputKey::Space, true);
+    device.SetKeyDown(InputKey::MouseLeft, true);
+    device.SetKeyDown(InputKey::GamepadFaceBottom, true, 3U);
+    const std::array contacts{InputTouchPoint{.id = 42U, .x = 10.0F, .y = 20.0F, .phase = InputTouchPhase::Began}};
+    device.SetTouchPoints(contacts);
+    input.Evaluate(.016F);
+    Require(input.IsActionPressed("Use"), "Gameplay should work before modal");
+    input.SetGameplayInputBlocked(true);
+    input.Evaluate(.016F);
+    Require(!input.IsActionPressed("Use") && input.FrameEvents().size() == 1U &&
+        input.FrameEvents()[0].phase == InputActionPhase::Canceled, "Modal must cancel gameplay without triggering a release action");
+    Require(device.IsKeyDown(InputKey::Space) && device.TouchPoints().size() == 1U,
+        "Modal must preserve physical input for UI");
+    input.SetGameplayInputBlocked(false);
+    input.Evaluate(.016F);
+    const auto& gameplay = input.GameplayDeviceState();
+    Require(!input.IsActionPressed("Use") && !gameplay.IsKeyDown(InputKey::MouseLeft) &&
+        !gameplay.IsKeyDown(InputKey::GamepadFaceBottom, 3U) && gameplay.TouchPoints().empty(),
+        "Closing modal must not leak held keyboard, mouse, controller or touch input");
+    device.Reset();
+    input.Evaluate(.016F);
+    device.SetKeyDown(InputKey::Space, true);
+    input.Evaluate(.016F);
+    Require(input.WasActionStarted("Use"), "Fresh press after modal must work");
 }
 
 void TestAxisScaleAndContinuous() {
@@ -568,6 +603,16 @@ void TestTextInputDeviceStateAndEncoding() {
     constexpr std::string_view utf8{"A\xC5\x82\xF0\x9F\x99\x82", 7U};
     std::array<char32_t, 3U> decoded{};
     const Utf8DecodeResult decodedUtf8 = DecodeUtf8(utf8, decoded);
+    std::string encodedText;
+    for (const auto scalar : decoded) {
+        std::array<char, 4U> bytes{};
+        const auto count = EncodeUtf8(scalar, bytes);
+        encodedText.append(bytes.data(), count);
+    }
+    Require(encodedText == utf8, "UTF-8 encoding must preserve BMP and supplementary scalars");
+    std::array<char, 4U> invalidOutput{'x', 'x', 'x', 'x'};
+    Require(EncodeUtf8(0xD800U, invalidOutput) == 0U && EncodeUtf8(0x110000U, invalidOutput) == 0U &&
+            invalidOutput[0] == 'x', "Invalid scalars must not write an encoded prefix");
     Require(decodedUtf8.wellFormed && !decodedUtf8.truncated &&
             decodedUtf8.codePointCount == decoded.size() &&
             decoded[0] == U'A' && decoded[1] == U'\u0142' &&
@@ -1173,6 +1218,60 @@ struct TestInputWorld {
     }
 };
 
+void TestRebindSessionWorkflow() {
+    const auto path = std::filesystem::temp_directory_path() / "kb_input_session_test.profile";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    TestInputWorld world;
+    world.actions = {{1U, MakeAction("Jump", InputActionValueType::Bool, true)},
+                     {2U, MakeAction("Use", InputActionValueType::Bool, true)}};
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings = {{.bindingId = 1, .actionId = 1, .key = InputKey::Space},
+                         {.bindingId = 2, .actionId = 2, .key = InputKey::E}};
+    world.contexts = {{10U, context}};
+    world.Install();
+    auto& input = world.subsystem;
+    Require(input.AddMappingContext(10, 0), "Session context did not resolve");
+    InputRebindSession session;
+    Require(session.Initialize(input, 10, *context, path), "Session did not open defaults");
+    auto& device = input.MutableDeviceState();
+    device.SetKeyDown(InputKey::MouseLeft, true);
+    Require(session.Begin(1, device) && session.Poll(input, device) == InputRebindSessionState::Listening,
+        "Capture accepted the button that opened the settings screen");
+    device.SetKeyDown(InputKey::Escape, true);
+    Require(session.Poll(input, device) == InputRebindSessionState::Canceled && input.RebindProfile(10).empty()
+        && !std::filesystem::exists(path), "Cancel changed live or persisted bindings");
+    device.Reset();
+    Require(session.Begin(1, device), "Capture did not restart");
+    device.SetKeyDown(InputKey::E, true);
+    Require(session.Poll(input, device) == InputRebindSessionState::Conflict && session.ConflictBinding() == 2
+        && input.RebindProfile(10).empty(), "Conflict was not reported without mutation");
+    Require(session.Poll(input, device, true) == InputRebindSessionState::Applied, "Conflict swap failed");
+    input.Evaluate(.016F);
+    Require(input.IsActionPressed("Jump") && !input.IsActionPressed("Use"), "Swapped key did not reach its new action");
+    device.Reset(); device.SetKeyDown(InputKey::Space, true); input.Evaluate(.016F);
+    Require(input.IsActionPressed("Use") && !input.IsActionPressed("Jump"), "Swap lost the other binding");
+    device.Reset();
+    Require(session.Begin(1, device), "Pad capture did not start");
+    device.SetAnalog(InputKey::GamepadLeftStickX, .2F, 1U);
+    Require(session.Poll(input, device) == InputRebindSessionState::Listening, "Stick drift was captured");
+    device.SetKeyDown(InputKey::GamepadFaceTop, true, 1U);
+    Require(session.Poll(input, device) == InputRebindSessionState::Applied, "Pad capture did not persist");
+    TestInputWorld restarted;
+    restarted.actions = world.actions; restarted.contexts = world.contexts; restarted.Install();
+    Require(restarted.subsystem.AddMappingContext(10, 0), "Restarted context did not resolve");
+    InputRebindSession reopened;
+    Require(reopened.Initialize(restarted.subsystem, 10, *context, path), "Restart did not load profile automatically");
+    auto& restoredDevice = restarted.subsystem.MutableDeviceState();
+    restoredDevice.SetKeyDown(InputKey::GamepadFaceTop, true, 0U); restarted.subsystem.Evaluate(.016F);
+    Require(!restarted.subsystem.IsActionPressed("Jump"), "Rebound pad leaked to another player");
+    restoredDevice.SetKeyDown(InputKey::GamepadFaceTop, true, 1U); restarted.subsystem.Evaluate(.016F);
+    Require(restarted.subsystem.IsActionPressed("Jump"), "Restart lost the rebound pad");
+    Require(reopened.Reset(restarted.subsystem) && ReadRebindProfile(path).asset.empty(), "Reset did not persist defaults");
+    Require(session.Initialize(input, 10, *context, path) && input.RebindProfile(10).empty(), "Restart lost the saved reset");
+    std::filesystem::remove(path, ec);
+}
+
 // A menu opened over gameplay while a key is held: the gameplay action stops at once and nothing is left pressed, the
 // menu action takes the key, and closing the menu hands the still-held key back to gameplay.
 void TestContextSwitchWithAHeldKeyLeavesNothingStuck() {
@@ -1408,15 +1507,18 @@ void TestWindowsCollectorAndHapticsHostCalls() {
         "A collector without a foreground owner must report no focus and no held keys or buttons");
 
     Win32XInputHapticsBackend backend;
-    const InputHapticsCapability missing = backend.Capability(7U);
+    constexpr std::uint32_t missingSlot = InputDeviceState::kMaxGamepads;
+    const InputHapticsCapability missing = backend.Capability(missingSlot);
     Require(!missing.supported && !missing.disabledReason.empty(), "A slot that does not exist must be unsupported with a reason");
     const InputHapticsCapability first = backend.Capability(0U);
-    Require(first.supported && first.dualMotor && first.maxGamepads == 4U, "Slot 0 must report dual motor support for four pads");
-    Require(!backend.SetVibration(9U, 0.5F, 0.5F), "Vibration on a slot that does not exist must fail");
+    Require(first.maxGamepads == InputDeviceState::kMaxGamepads && first.dualMotor == first.supported &&
+            (!first.connected || first.supported) && (first.supported || !first.disabledReason.empty()),
+        "XInput capability must describe its mapped actuator and logical slot range");
+    Require(!backend.SetVibration(missingSlot, 0.5F, 0.5F), "Vibration on a slot that does not exist must fail");
     const float notANumber = std::numeric_limits<float>::quiet_NaN();
     static_cast<void>(backend.SetVibration(0U, notANumber, notANumber));
     backend.StopAll();
-    Require(!backend.SetVibration(9U, 0.0F, 0.0F), "The backend must keep refusing missing slots after StopAll");
+    Require(!backend.SetVibration(missingSlot, 0.0F, 0.0F), "The backend must keep refusing missing slots after StopAll");
 }
 #endif
 
@@ -1426,6 +1528,7 @@ void RunInputTests() {
     TestModifiers();
     TestTriggers();
     TestSubsystemAndConsume();
+    TestModalGameplayInputQuarantine();
     TestAxisScaleAndContinuous();
     TestAssetRoundTrip();
     TestAssetDiscoveryAndResolve();
@@ -1435,6 +1538,7 @@ void RunInputTests() {
     TestTouchPoints();
     TestTextInputDeviceStateAndEncoding();
     TestMultiGamepadMapping();
+    TestRebindSessionWorkflow();
     TestContextSwitchWithAHeldKeyLeavesNothingStuck();
     TestInvalidAndAnalogBindingsAreHandled();
     TestGamepadRebindSurvivesARestart();

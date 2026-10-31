@@ -24,6 +24,7 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioMixerAssetIO.hpp
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
+    include/engine/audio/AudioDiagnostics.hpp
     include/engine/audio/AudioMetering.hpp
     include/engine/audio/AudioMixerPreview.hpp
     include/engine/audio/AudioSettings.hpp
@@ -219,6 +220,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAssetCopy.hpp
     include/engine/scene/AIBrainDecisionSnapshot.hpp
     include/engine/scene/SceneAssetMeta.hpp
+    include/engine/scene/SceneAssetUsers.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
     include/engine/scene/SceneCameraComponents.hpp
     include/engine/scene/SceneComponentQueries.hpp
@@ -338,12 +340,16 @@ add_library(kb_engine STATIC
     include/engine/ui/visual/UISprite.hpp
     include/engine/ui/visual/UIText.hpp
     include/engine/ui/visual/UITextLineBreaking.hpp
+    include/engine/ui/visual/UITextShaping.hpp
     include/engine/scene/SceneLocalization.hpp
     include/engine/scene/SceneNavigation.hpp
     include/engine/scene/ScenePortalVisibility.hpp
     include/engine/scene/SceneCrashReportConsent.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
+    include/engine/ui/UITheme.hpp
+    include/engine/ui/UIThemeIO.hpp
+    include/engine/ui/UIThemeAssetLoader.hpp
     include/engine/localization/LocalizationCatalogAssetLoader.hpp
     include/engine/localization/PluralRules.hpp
     include/engine/scene/SceneAnimators.hpp
@@ -369,6 +375,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
+    include/engine/scene/StatelessSceneSystem.hpp
     include/engine/scene/ParallelSceneSystem.hpp
     include/engine/scene/SceneSystemHandle.hpp
     include/engine/scene/SceneSystemContext.hpp
@@ -435,6 +442,7 @@ add_library(kb_engine STATIC
         include/engine/scene/ParticleEffectComponent.hpp
         include/engine/particles/ParticleRuntimeResult.hpp
         include/engine/particles/IParticleSimulationBackend.hpp
+        include/engine/particles/ParticleProcessAsset.hpp
         include/engine/particles/ParticlePlayback.hpp
         include/engine/particles/ParticleCompiledEffect.hpp
         include/engine/particles/ParticleCompiledEffectCache.hpp
@@ -590,6 +598,12 @@ add_library(kb_engine STATIC
     include/engine/modules/EngineModuleHost.hpp
     src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
+    src/modules/EngineModuleContext.cpp
+    src/private/assets/LibraryAssetLoader.hpp
+    include/engine/modules/EngineModuleSdk.h
+    include/engine/modules/EngineModuleCallback.hpp
+    src/private/modules/EngineModuleSdkAdapter.hpp
+    src/modules/EngineModuleSdkAdapter.cpp
     src/core/ConsoleCommands.cpp
     src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
@@ -708,6 +722,7 @@ add_library(kb_engine STATIC
     src/ecs/SystemScheduler.cpp
     src/ecs/SystemSchedulerTraceExport.cpp
     src/ecs/WorkerPool.cpp
+    src/ecs/WorkerPoolGraphExecutor.cpp
     src/ecs/TagStorage.cpp
     src/ecs/TagTypeRegistry.cpp
     src/ecs/TypeEntityCache.cpp
@@ -751,6 +766,7 @@ add_library(kb_engine STATIC
     src/scene/Scene.cpp
     src/scene/SceneComponentAuthoring.cpp
     src/scene/SceneCreateMenu.cpp
+    src/scene/ScenePlayerPreset.cpp
     src/scene/SceneSkeletalMeshSetup.cpp
     src/scene/SceneTemplates.cpp
     src/gameplay/GameInstance.cpp
@@ -805,6 +821,12 @@ add_library(kb_engine STATIC
     src/scene/SkeletalMeshAssetIO.cpp
     src/scene/SkeletalMeshAssetLoader.cpp
     src/scene/TimelineAssetIO.cpp
+    src/scene/TimelinePropertyTrack.cpp
+    src/scene/TimelineAudioPlayback.cpp
+    src/scene/TimelineSequencePlan.cpp
+    src/scene/BlendSpace2D.cpp
+    src/scene/BlendSpace2DAssetIO.cpp
+    src/scene/BlendSpace2DAssetLoader.cpp
     src/scene/TimelineAssetLoader.cpp
     src/scene/SceneTimelineService.cpp
     src/scene/AnimationRetargeting.cpp
@@ -816,6 +838,9 @@ add_library(kb_engine STATIC
     src/scene/SceneCrashReportConsent.cpp
     src/scene/modules/SceneLocalization.cpp
     src/localization/LocalizationCatalogIO.cpp
+    src/ui/UITheme.cpp
+    src/ui/UIThemeIO.cpp
+    src/ui/UIThemeAssetLoader.cpp
     src/localization/LocalizationCatalogAssetLoader.cpp
     src/localization/PluralRules.cpp
     src/scene/ParticleEffectAssetIO.cpp
@@ -824,6 +849,7 @@ add_library(kb_engine STATIC
     src/scene/ParticleEffectAssetSchema.cpp
     src/scene/ParticleEffectAssetValidation.cpp
     src/scene/ParticleEffectDependencyValidation.cpp
+    src/particles/ParticleProcessAsset.cpp
     src/particles/ParticlePlayback.cpp
     src/particles/ParticleCompiledEffect.cpp
     src/particles/ParticleCompiledEffectCache.cpp
@@ -833,6 +859,7 @@ add_library(kb_engine STATIC
     src/scene/SceneTagCatalog.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
+    src/scene/SceneRuntimeState.cpp
     src/scene/SceneRenderProxyComponentMask.cpp
     src/scene/SceneState.cpp
     src/scene/SceneTaskService.cpp
@@ -858,6 +885,7 @@ add_library(kb_engine STATIC
     src/scene/asset/io/SceneAssetMetaWriter.cpp
     src/scene/asset/io/SceneAssetReader.cpp
     src/scene/asset/io/SceneAssetWriter.cpp
+    src/scene/asset/SceneAssetUsers.cpp
     src/scene/assets/SceneAssetLoader.cpp
     src/scene/assets/ScenePrefabGuidAssetIndex.cpp
     src/scene/components/SceneCameraApi.cpp
@@ -1224,6 +1252,10 @@ add_library(kb_engine STATIC
     src/script/lua/api/PucLuaSelfApi.cpp
     src/script/lua/api/PucLuaSharedApi.cpp
     src/script/lua/api/PucLuaTaskApi.cpp
+    src/script/LuaDebugFileTransport.cpp
+    include/engine/script/LuaDebugFileTransport.hpp
+    src/script/LuaDebugSession.cpp
+    include/engine/script/LuaDebugSession.hpp
     src/script/lua/PucLuaDebugHook.cpp
     src/script/lua/PucLuaRuntimeApi.cpp
     src/script/lua/PucLuaSafeCall.cpp
@@ -1231,10 +1263,13 @@ add_library(kb_engine STATIC
     src/script/lua/PucLuaStateUtilities.cpp
     src/script/lua/PucLuaValueBridge.cpp
     src/script/PucLuaScriptRuntime.cpp
+    src/script/PucLuaRuntimeState.cpp
+    src/script/lua/PucLuaMemoryArena.cpp
     src/script/AudioShooterDemoProjectFiles.cpp
     src/script/ScriptAgentProjectFiles.cpp
     src/script/ScriptApiCatalog.cpp
     src/script/ScriptApiExport.cpp
+    src/script/ScriptAgentGuides.cpp
     src/script/ScriptApiNameCollector.cpp
     src/script/ScriptApiNameRegistry.cpp
     src/script/ScriptApiDeclarationParser.cpp
@@ -1253,6 +1288,7 @@ add_library(kb_engine STATIC
     src/private/script/ScriptFunctionDocumentation.hpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptInputRebindApi.cpp
     src/script/ScriptLocalizationApi.cpp
     src/script/ScriptMaterialInstanceApi.cpp
     src/script/ScriptMathApi.cpp
@@ -1605,6 +1641,8 @@ add_library(kb_engine STATIC
     src/visual/VisualGraphCompiler.cpp
     src/visual/VisualGraphDiagnostic.cpp
     src/visual/VisualGraphDocument.cpp
+    src/visual/VisualGraphAuthoringDocument.cpp
+    src/visual/VisualGraphLiteral.cpp
     src/visual/VisualGraphGeneratedCodeWriter.cpp
     src/visual/VisualGraphNativeBindingRegistry.cpp
     src/visual/VisualGraphNativeBuildPipeline.cpp
@@ -1710,6 +1748,7 @@ add_library(kb_engine STATIC
     src/input/InputAssetIO.cpp
     src/input/InputAssetLoaders.cpp
     src/input/InputRebinding.cpp
+    src/input/InputRebindSession.cpp
     src/input/InputRecording.cpp
     src/input/InputText.cpp
     src/input/InputModifiers.cpp
@@ -1727,10 +1766,23 @@ if(WIN32)
         include/engine/platform/win32/Win32InputKeyMap.hpp
         include/engine/platform/win32/Win32XInputHapticsBackend.hpp
         src/platform/win32/Win32InputCollector.cpp
+        src/platform/win32/Win32GamepadInput.cpp
+        src/platform/win32/Win32ClipboardText.cpp
+        src/platform/win32/Win32UITextClipboard.cpp
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
-    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt shell32)
+    target_link_libraries(kb_engine PRIVATE user32 xinput dinput8 dxguid bcrypt shell32 imm32)
+    if(BUILD_TESTING)
+        add_executable(kb_win32_gamepad_host_tests tests/Win32GamepadHostTests.cpp)
+        target_link_libraries(kb_win32_gamepad_host_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_win32_gamepad_host_tests)
+        add_test(NAME kb_win32_gamepad_host COMMAND kb_win32_gamepad_host_tests)
+        set_tests_properties(kb_win32_gamepad_host PROPERTIES TIMEOUT 30 LABELS "input;platform")
+        add_executable(kb_win32_pointer_host_tests tests/Win32PointerHostTests.cpp)
+        target_link_libraries(kb_win32_pointer_host_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_win32_pointer_host_tests)
+    endif()
 
     # Crash capture shared by the game and the editor. dbghelp and version are
     # loaded from System32 by the reporter's own thread, and WinHTTP is delay-loaded,
@@ -1778,6 +1830,7 @@ target_link_libraries(kb_engine
         kb_recast
         kb_ufbx
         kb_zstd
+        kb_ui_text_shaping
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -1838,6 +1891,11 @@ if(NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(kb_blend_space_2d_tests tests/BlendSpace2DTests.cpp src/scene/BlendSpace2D.cpp)
+    target_include_directories(kb_blend_space_2d_tests PRIVATE include)
+    kb_apply_quality_gates(kb_blend_space_2d_tests)
+    add_test(NAME kb_blend_space_2d_tests COMMAND kb_blend_space_2d_tests)
+    set_tests_properties(kb_blend_space_2d_tests PROPERTIES LABELS "animation;geometry" TIMEOUT 30)
     if(MSVC)
         find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
         add_executable(kb_test_process_error_tests tests/TestProcessErrorsProbe.cpp)
@@ -1863,6 +1921,70 @@ if(BUILD_TESTING)
     add_test(NAME kb_background_read_tests COMMAND $<TARGET_FILE:kb_background_read_tests>)
     set_tests_properties(kb_background_read_tests PROPERTIES TIMEOUT 60)
     kb_apply_quality_gates(kb_background_read_tests)
+
+    add_library(kb_module_asset_fixture SHARED tests/ModuleAssetFixture.cpp)
+    target_link_libraries(kb_module_asset_fixture PRIVATE kb_engine)
+    target_compile_definitions(kb_module_asset_fixture PRIVATE "KB_ASSET_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_asset.events\"")
+    kb_apply_quality_gates(kb_module_asset_fixture)
+    add_executable(kb_module_asset_lifetime_tests tests/ModuleAssetLifetimeTests.cpp)
+    target_link_libraries(kb_module_asset_lifetime_tests PRIVATE kb_engine)
+    target_compile_definitions(kb_module_asset_lifetime_tests PRIVATE
+        "KB_ASSET_PLUGIN=\"$<TARGET_FILE:kb_module_asset_fixture>\""
+        "KB_ASSET_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_asset.events\"")
+    add_dependencies(kb_module_asset_lifetime_tests kb_module_asset_fixture)
+    kb_apply_quality_gates(kb_module_asset_lifetime_tests)
+    add_test(NAME kb_module_asset_lifetime_tests COMMAND $<TARGET_FILE:kb_module_asset_lifetime_tests>)
+
+    add_library(kb_module_type_fixture SHARED tests/ModuleTypeFixture.cpp)
+    target_include_directories(kb_module_type_fixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    kb_apply_quality_gates(kb_module_type_fixture)
+    add_executable(kb_module_type_lifetime_tests tests/ModuleTypeLifetimeTests.cpp)
+    target_include_directories(kb_module_type_lifetime_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+    target_link_libraries(kb_module_type_lifetime_tests PRIVATE kb_engine flecs::flecs_static)
+    target_compile_definitions(kb_module_type_lifetime_tests PRIVATE
+        "KB_MODULE_TYPE_PATH=\"$<TARGET_FILE:kb_module_type_fixture>\"")
+    add_dependencies(kb_module_type_lifetime_tests kb_module_type_fixture)
+    kb_apply_quality_gates(kb_module_type_lifetime_tests)
+    add_test(NAME kb_module_type_lifetime_tests COMMAND $<TARGET_FILE:kb_module_type_lifetime_tests>)
+
+    add_executable(kb_engine_module_sdk_tests tests/EngineModuleSdkTests.cpp)
+    target_link_libraries(kb_engine_module_sdk_tests PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_engine_module_sdk_tests)
+    foreach(sdk_fault RANGE 1 4)
+        add_library(kb_engine_sdk_${sdk_fault} SHARED tests/EngineModuleSdkPlugin.c)
+        target_include_directories(kb_engine_sdk_${sdk_fault} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_features(kb_engine_sdk_${sdk_fault} PRIVATE c_std_11)
+        target_compile_definitions(kb_engine_sdk_${sdk_fault} PRIVATE
+            KB_SDK_FAULT=${sdk_fault} _CRT_SECURE_NO_WARNINGS
+            "KB_SDK_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/sdk_${sdk_fault}.events\"")
+        if(MSVC)
+            # A separate CRT proves that each side frees its own allocations.
+            set_property(TARGET kb_engine_sdk_${sdk_fault} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        endif()
+        kb_apply_quality_gates(kb_engine_sdk_${sdk_fault})
+        add_dependencies(kb_engine_module_sdk_tests kb_engine_sdk_${sdk_fault})
+        target_compile_definitions(kb_engine_module_sdk_tests PRIVATE
+            "KB_SDK_${sdk_fault}_PATH=\"$<TARGET_FILE:kb_engine_sdk_${sdk_fault}>\""
+            "KB_SDK_${sdk_fault}_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/sdk_${sdk_fault}.events\"")
+    endforeach()
+    add_test(NAME kb_engine_module_sdk_tests COMMAND $<TARGET_FILE:kb_engine_module_sdk_tests>)
+    set_tests_properties(kb_engine_module_sdk_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    foreach(fault RANGE 1 3)
+        add_library(kb_engine_module_fault_${fault} SHARED tests/EngineModuleFaultPlugin.cpp)
+        target_include_directories(kb_engine_module_fault_${fault} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_definitions(kb_engine_module_fault_${fault} PRIVATE
+            KB_MODULE_FAULT=${fault}
+            "KB_MODULE_FAULT_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_fault_${fault}.events\"")
+        kb_apply_quality_gates(kb_engine_module_fault_${fault})
+        if(MSVC)
+            # These fixtures deliberately throw from an exported C entry point.
+            target_compile_options(kb_engine_module_fault_${fault} PRIVATE /EHsc-)
+        endif()
+        set_property(SOURCE tests/EngineModuleTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+            "KB_MODULE_FAULT_${fault}_PATH=\"$<TARGET_FILE:kb_engine_module_fault_${fault}>\""
+            "KB_MODULE_FAULT_${fault}_TRACE=\"${CMAKE_CURRENT_BINARY_DIR}/module_fault_${fault}.events\"")
+    endforeach()
 
     add_library(kb_engine_old_abi_test_plugin SHARED
         tests/OldEngineModuleAbiPlugin.cpp
@@ -1906,6 +2028,15 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_21kb_particle_stage2_tests PRIVATE
         "KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH=\"$<TARGET_FILE:kb_engine_old_abi_test_plugin>\""
     )
+    foreach(variant RANGE 1 5)
+        add_library(kb_engine_abi_variant_${variant} SHARED tests/OldEngineModuleAbiPlugin.cpp)
+        target_include_directories(kb_engine_abi_variant_${variant} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_definitions(kb_engine_abi_variant_${variant} PRIVATE KB_TEST_ABI_VARIANT=${variant})
+        kb_apply_quality_gates(kb_engine_abi_variant_${variant})
+        add_dependencies(kb_21kb_particle_stage2_tests kb_engine_abi_variant_${variant})
+        target_compile_definitions(kb_21kb_particle_stage2_tests PRIVATE
+            "KB_ENGINE_ABI_VARIANT_${variant}_PATH=\"$<TARGET_FILE:kb_engine_abi_variant_${variant}>\"")
+    endforeach()
     add_test(NAME kb_21kb_particle_stage2_tests COMMAND $<TARGET_FILE:kb_21kb_particle_stage2_tests>)
     set_tests_properties(kb_21kb_particle_stage2_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_21kb_particle_stage2_tests)
@@ -1920,6 +2051,13 @@ if(BUILD_TESTING)
     )
 
     kb_apply_quality_gates(kb_native_script_test_plugin)
+
+    add_executable(kb_kernel_simd_tests tests/KernelSimdTests.cpp)
+    target_include_directories(kb_kernel_simd_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_features(kb_kernel_simd_tests PRIVATE cxx_std_20)
+    kb_apply_quality_gates(kb_kernel_simd_tests)
+    add_test(NAME kb_kernel_simd_tests COMMAND kb_kernel_simd_tests)
+    set_tests_properties(kb_kernel_simd_tests PROPERTIES TIMEOUT 30 LABELS "ecs;simd;contract")
 
     add_executable(kb_engine_tests
         tests/EcsComponentApiTests.cpp
@@ -1955,11 +2093,14 @@ if(BUILD_TESTING)
         tests/SkeletonAssetTests.cpp
         tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
+        tests/BlendSpace2DRuntimeTests.cpp
+    tests/TimelineAudioTests.cpp
         tests/LocalizationTests.cpp
         tests/LargeWorldTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
         tests/UITextLineBreakingTests.cpp
+        tests/UIThemeTests.cpp
         tests/CrashReportConsentTests.cpp
         tests/NavigationMeshTests.cpp
         tests/NavigationRuntimeTests.cpp
@@ -1990,6 +2131,8 @@ if(BUILD_TESTING)
         tests/SecurityTests.cpp
     )
 
+    add_dependencies(kb_engine_tests
+        kb_engine_module_fault_1 kb_engine_module_fault_2 kb_engine_module_fault_3)
     target_link_libraries(kb_engine_tests
         PRIVATE
             kb_engine
@@ -2004,6 +2147,13 @@ if(BUILD_TESTING)
     )
 
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    if(WIN32)
+        add_executable(kb_win32_clipboard_tests tests/Win32ClipboardTests.cpp)
+        target_link_libraries(kb_win32_clipboard_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_win32_clipboard_tests)
+        add_test(NAME kb_win32_clipboard COMMAND kb_win32_clipboard_tests)
+        set_tests_properties(kb_win32_clipboard PROPERTIES TIMEOUT 30 LABELS "ui;input;headless")
+    endif()
     add_test(NAME kb_engine_scene_transform_golden COMMAND $<TARGET_FILE:kb_engine_tests> scene-transform-golden)
     set_tests_properties(kb_engine_scene_transform_golden PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
     set_tests_properties(kb_engine_scene_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 RUN_SERIAL TRUE)
@@ -2185,6 +2335,7 @@ if(BUILD_TESTING)
     kb_add_ecs_test_target(kb_ecs_observer_identity_tests tests/EcsObserverIdentityTests.cpp)
     kb_add_ecs_test_target(kb_ecs_cascade_owner_tests tests/EcsCascadeOwnerTests.cpp)
     kb_add_ecs_test_target(kb_ecs_native_allocation_policy_tests tests/EcsNativeAllocationPolicyTests.cpp)
+    kb_add_ecs_test_target(kb_ecs_resource_handle_tests tests/EcsResourceHandleTests.cpp)
     kb_add_ecs_test_target(kb_ecs_retained_chunk_prefix_tests tests/EcsRetainedChunkPrefixTests.cpp)
     set_tests_properties(kb_ecs_retained_chunk_prefix_tests PROPERTIES LABELS "ecs;storage;correctness")
     set_tests_properties(kb_ecs_observer_identity_tests kb_ecs_cascade_owner_tests kb_ecs_native_allocation_policy_tests
@@ -2232,12 +2383,24 @@ if(BUILD_TESTING)
         tests/EcsSchedulerCorrectnessTestMain.cpp
         tests/EcsSystemSchedulerTests.cpp
         tests/EcsWorkerPoolTests.cpp
+        tests/SceneSystemParallelTests.cpp
     )
+    target_include_directories(kb_ecs_scheduler_correctness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+    if(WIN32)
+        add_library(kb_ecs_graph_module_fixture SHARED tests/EcsGraphModuleFixture.cpp)
+        target_link_libraries(kb_ecs_graph_module_fixture PRIVATE kb_engine)
+        add_executable(kb_ecs_graph_project_fixture tests/EcsGraphProjectFixture.cpp)
+        target_link_libraries(kb_ecs_graph_project_fixture PRIVATE kb_engine)
+        add_dependencies(kb_ecs_scheduler_correctness_tests kb_ecs_graph_module_fixture)
+        target_compile_definitions(kb_ecs_scheduler_correctness_tests PRIVATE
+            "KB_ECS_GRAPH_MODULE_PATH=\"$<TARGET_FILE:kb_ecs_graph_module_fixture>\"")
+    endif()
     set_tests_properties(kb_ecs_scheduler_correctness_tests PROPERTIES LABELS "ecs;scheduler;correctness;single-thread;multi-thread")
 
     kb_add_ecs_test_target(kb_ecs_deterministic_replay_tests
         tests/EcsDeterministicReplayTestMain.cpp
         tests/EcsDeterministicReplayTests.cpp
+        tests/SceneDeterministicReplayTests.cpp
     )
     set_tests_properties(kb_ecs_deterministic_replay_tests PROPERTIES LABELS "ecs;deterministic;replay")
 
@@ -2278,7 +2441,23 @@ if(BUILD_TESTING)
 
     kb_apply_quality_gates(kb_ecs_snapshot_scale_tests)
 
+    add_executable(kb_lua_state_tests tests/LuaRuntimeStateTests.cpp)
+    target_link_libraries(kb_lua_state_tests PRIVATE kb_engine)
+    add_dependencies(kb_lua_state_tests kb_engine_old_abi_test_plugin)
+    target_compile_definitions(kb_lua_state_tests PRIVATE
+        "KB_OLD_STATE_ABI_PLUGIN_PATH=\"$<TARGET_FILE:kb_engine_old_abi_test_plugin>\"")
+    kb_apply_quality_gates(kb_lua_state_tests)
+    add_test(NAME kb_lua_state_tests COMMAND $<TARGET_FILE:kb_lua_state_tests>)
+    set_tests_properties(kb_lua_state_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
     add_executable(kb_ecs_workload_benchmark tests/EcsWorkloadBenchmark.cpp)
-    target_link_libraries(kb_ecs_workload_benchmark PRIVATE kb_engine)
+    add_executable(kb_ecs_worker_scaling_benchmark tests/EcsWorkerScalingBenchmark.cpp)
+    target_link_libraries(kb_ecs_worker_scaling_benchmark PRIVATE kb_engine flecs::flecs_static)
+    kb_apply_quality_gates(kb_ecs_worker_scaling_benchmark)
+    target_link_libraries(kb_ecs_workload_benchmark PRIVATE kb_engine flecs::flecs_static)
+    if(WIN32)
+        target_link_libraries(kb_ecs_workload_benchmark PRIVATE psapi)
+        target_link_libraries(kb_ecs_worker_scaling_benchmark PRIVATE psapi)
+    endif()
     kb_apply_quality_gates(kb_ecs_workload_benchmark)
 endif()

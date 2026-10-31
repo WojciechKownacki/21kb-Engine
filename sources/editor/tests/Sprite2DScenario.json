@@ -1,49 +1,299 @@
 {
   "schema": "21kb.editor-automation/v1",
   "steps": [
-    {"op": "configure_runtime_rendering", "width": 960, "height": 540},
-    {"op": "create_scene", "name": "SpriteSample", "template": "Empty"},
-    {"op": "copy_fixture", "source": "fixtures/map2d/Tiles.png", "destination": "Assets/Sprites/Sheet.png"},
-    {"op": "discover_assets"},
-    {"op": "create_entity", "id": "cam", "name": "Cam", "preset": "Camera"},
-    {"op": "create_entity", "id": "hero", "name": "Hero", "preset": "Animated Sprite"},
-    {"op": "create_entity", "id": "still", "name": "Still", "preset": "Sprite 2D"},
-    {"op": "set_property", "entity": "cam", "component": "Camera", "property": "primary", "value": true},
-    {"op": "assert_component", "entity": "hero", "component": "Sprite2D"},
-    {"op": "assert_component", "entity": "still", "component": "Sprite2D"},
-    {"op": "assert_property", "entity": "hero", "component": "Sprite2D", "property": "frameCount", "value": 4},
-    {"op": "assert_property", "entity": "still", "component": "Sprite2D", "property": "frameCount", "value": 0},
-    {"op": "sprite2d_image", "entity": "hero", "asset": "/Game/Sprites/Sheet.png"},
-    {"op": "assert_property", "entity": "hero", "component": "Sprite2D", "property": "imageWidth", "value": 128},
-    {"op": "assert_property", "entity": "hero", "component": "Sprite2D", "property": "imageHeight", "value": 64},
-    {"op": "undo"},
-    {"op": "assert_property", "entity": "hero", "component": "Sprite2D", "property": "imageWidth", "value": 0},
-    {"op": "redo"},
-    {"op": "assert_property", "entity": "hero", "component": "Sprite2D", "property": "imageWidth", "value": 128},
-    {"op": "set_property", "entity": "hero", "component": "Sprite2D", "property": "cellWidth", "value": 32},
-    {"op": "set_property", "entity": "hero", "component": "Sprite2D", "property": "pixelsPerUnit", "value": 32.0},
-    {"op": "set_property", "entity": "hero", "component": "Sprite2D", "property": "framesPerSecond", "value": 6.0},
-    {"op": "set_property", "entity": "hero", "component": "Transform", "property": "localPosition.z", "value": 4.0},
-    {"op": "sprite2d_image", "entity": "still", "asset": "/Game/Sprites/Sheet.png"},
-    {"op": "set_property", "entity": "still", "component": "Sprite2D", "property": "cellWidth", "value": 64},
-    {"op": "set_property", "entity": "still", "component": "Sprite2D", "property": "pixelsPerUnit", "value": 64.0},
-    {"op": "set_property", "entity": "still", "component": "Sprite2D", "property": "flipX", "value": true},
-    {"op": "set_property", "entity": "still", "component": "Transform", "property": "localPosition.x", "value": 1.5},
-    {"op": "set_property", "entity": "still", "component": "Transform", "property": "localPosition.z", "value": 4.0},
-    {"op": "exact_colors"},
-    {"op": "save_scene"},
-    {"op": "open_scene", "path": "Assets/Scenes/SpriteSample.21kbscene"},
-    {"op": "assert_component", "entity": "hero", "component": "Sprite2D"},
-    {"op": "assert_property", "entity": "hero", "component": "Sprite2D", "property": "cellWidth", "value": 32},
-    {"op": "assert_property", "entity": "still", "component": "Sprite2D", "property": "flipX", "value": true},
-    {"op": "set_startup_scene", "path": "/Game/Scenes/SpriteSample.21kbscene"},
-    {"op": "play"},
-    {"op": "step", "frames": 30},
-    {"op": "pick_generated_visual", "entity": "hero"},
-    {"op": "capture_runtime", "checkpoint": "sprite-play", "require_non_uniform": true},
-    {"op": "assert_capture_color", "checkpoint": "sprite-play", "color": [129, 66, 26], "tolerance": 30, "min_pixels": 4000},
-    {"op": "assert_no_errors"},
-    {"op": "stop"},
-    {"op": "assert_no_errors"}
+    {
+      "op": "configure_runtime_rendering",
+      "width": 960,
+      "height": 540
+    },
+    {
+      "op": "create_scene",
+      "name": "SpriteSample",
+      "template": "Empty"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/map2d/Tiles.png",
+      "destination": "Assets/Sprites/Sheet.png"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "create_entity",
+      "id": "cam",
+      "name": "Cam",
+      "preset": "Camera"
+    },
+    {
+      "op": "create_entity",
+      "id": "hero",
+      "name": "Hero",
+      "preset": "Animated Sprite"
+    },
+    {
+      "op": "create_entity",
+      "id": "still",
+      "name": "Still",
+      "preset": "Sprite 2D"
+    },
+    {
+      "op": "set_property",
+      "entity": "cam",
+      "component": "Camera",
+      "property": "primary",
+      "value": true
+    },
+    {
+      "op": "assert_component",
+      "entity": "hero",
+      "component": "Sprite2D"
+    },
+    {
+      "op": "assert_component",
+      "entity": "still",
+      "component": "Sprite2D"
+    },
+    {
+      "op": "assert_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "frameCount",
+      "value": 4
+    },
+    {
+      "op": "assert_property",
+      "entity": "still",
+      "component": "Sprite2D",
+      "property": "frameCount",
+      "value": 0
+    },
+    {
+      "op": "sprite2d_image",
+      "entity": "hero",
+      "asset": "/Game/Sprites/Sheet.png"
+    },
+    {
+      "op": "assert_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "imageWidth",
+      "value": 128
+    },
+    {
+      "op": "assert_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "imageHeight",
+      "value": 64
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "imageWidth",
+      "value": 0
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "imageWidth",
+      "value": 128
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "cellWidth",
+      "value": 32
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "pixelsPerUnit",
+      "value": 32.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "framesPerSecond",
+      "value": 6.0
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "Transform",
+      "property": "localPosition.z",
+      "value": 4.0
+    },
+    {
+      "op": "sprite2d_image",
+      "entity": "still",
+      "asset": "/Game/Sprites/Sheet.png"
+    },
+    {
+      "op": "set_property",
+      "entity": "still",
+      "component": "Sprite2D",
+      "property": "cellWidth",
+      "value": 64
+    },
+    {
+      "op": "set_property",
+      "entity": "still",
+      "component": "Sprite2D",
+      "property": "pixelsPerUnit",
+      "value": 64.0
+    },
+    {
+      "op": "set_property",
+      "entity": "still",
+      "component": "Sprite2D",
+      "property": "flipX",
+      "value": true
+    },
+    {
+      "op": "set_property",
+      "entity": "still",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 1.5
+    },
+    {
+      "op": "set_property",
+      "entity": "still",
+      "component": "Transform",
+      "property": "localPosition.z",
+      "value": 4.0
+    },
+    {
+      "op": "exact_colors"
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/SpriteSample.21kbscene"
+    },
+    {
+      "op": "assert_component",
+      "entity": "hero",
+      "component": "Sprite2D"
+    },
+    {
+      "op": "assert_property",
+      "entity": "hero",
+      "component": "Sprite2D",
+      "property": "cellWidth",
+      "value": 32
+    },
+    {
+      "op": "assert_property",
+      "entity": "still",
+      "component": "Sprite2D",
+      "property": "flipX",
+      "value": true
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/SpriteSample.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 30
+    },
+    {
+      "op": "assert_sprite_visibility",
+      "entity": "hero",
+      "visible": true
+    },
+    {
+      "op": "assert_scene_ray_pick",
+      "entity": "hero",
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 100
+    },
+    {
+      "op": "step",
+      "frames": 2
+    },
+    {
+      "op": "assert_sprite_visibility",
+      "entity": "hero",
+      "visible": false
+    },
+    {
+      "op": "set_property",
+      "entity": "hero",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 0
+    },
+    {
+      "op": "step",
+      "frames": 2
+    },
+    {
+      "op": "assert_sprite_visibility",
+      "entity": "hero",
+      "visible": true
+    },
+    {
+      "op": "assert_scene_ray_pick",
+      "entity": "hero",
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    {
+      "op": "pick_generated_visual",
+      "entity": "hero"
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "sprite-play",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_color",
+      "checkpoint": "sprite-play",
+      "color": [
+        129,
+        66,
+        26
+      ],
+      "tolerance": 30,
+      "min_pixels": 4000
+    },
+    {
+      "op": "assert_no_errors"
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_no_errors"
+    }
   ]
 }

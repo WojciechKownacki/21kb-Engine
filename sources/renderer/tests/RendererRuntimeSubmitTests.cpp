@@ -1,6 +1,9 @@
 #include "RendererTestSupport.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "kb/render/RuntimeAssetShaderProvider.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
@@ -8,6 +11,7 @@
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include <functional>
+#include <future>
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -37,6 +41,8 @@
 #include "kb/render/shadow/ShadowMapResource.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/particles/ParticleGpuReadback.hpp"
+#include "kb/render/particles/ParticleGpuRenderer.hpp"
+#include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/particles/ParticleGpuVisualSimulation.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -49,6 +55,9 @@
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
+#include "kb/render/post/ScenePostProcessRenderer.hpp"
+#include "kb/render/frame/RenderFramePipeline.hpp"
+#include "kb/render/frame/RenderFrameState.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -66,6 +75,7 @@
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "../src/scene/submit/SceneMeshDrawCommandSubmitter.hpp"
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
+#include "renderer/RendererSceneLightingConfigResolver.hpp"
 #include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
 #include "../src/shadow/ShadowCasterBoundsCollector.hpp"
 
@@ -121,11 +131,16 @@ public:
 
 #if defined(_WIN32)
 struct ShaderRequestTrackingProvider final : ShaderBinaryProvider {
+    bool rejectLayeredGbuffer = false;
+    mutable std::uint32_t layeredGbufferReads = 0U;
     mutable std::uint32_t resolveReads = 0U;
     mutable std::uint32_t skyCaptureReads = 0U;
     mutable std::uint32_t skyPrefilterReads = 0U;
     bool ReadFixedShader(bgfx::RendererType::Enum backend, std::string_view name,
         std::vector<std::uint8_t>& bytes, std::uint64_t& revision) const override {
+        if (name == "fs_mesh_gbuffer_layered_instanced.sc") {
+            ++layeredGbufferReads; if (rejectLayeredGbuffer) return false;
+        }
         if (name == "fs_ssgi_resolve.sc") ++resolveReads;
         if (name == "fs_sky_capture.sc") ++skyCaptureReads;
         if (name == "fs_sky_prefilter.sc") ++skyPrefilterReads;
@@ -216,7 +231,9 @@ public:
 
     [[nodiscard]] bool Initialize(
         std::uint16_t width = NativeTestSurface::kExtent,
-        std::uint16_t height = NativeTestSurface::kExtent) {
+        std::uint16_t height = NativeTestSurface::kExtent,
+        bgfx::TextureFormat::Enum format = bgfx::TextureFormat::RGBA8) {
+        format_ = format;
         width_ = width;
         height_ = height;
         color_ = bgfx::createTexture2D(
@@ -224,7 +241,7 @@ public:
             height_,
             false,
             1U,
-            bgfx::TextureFormat::RGBA8,
+            format_,
             BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
         depth_ = bgfx::createTexture2D(
             width_,
@@ -238,7 +255,7 @@ public:
             height_,
             false,
             1U,
-            bgfx::TextureFormat::RGBA8,
+            format_,
             BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
         if (!bgfx::isValid(color_) || !bgfx::isValid(depth_) || !bgfx::isValid(readback_)) {
             Shutdown();
@@ -263,9 +280,16 @@ public:
                 .extent = RenderExtent{width_, height_},
                 .viewportIndex = 0U,
             },
-            .colorFormat = bgfx::TextureFormat::RGBA8,
+            .colorFormat = format_,
             .depthFormat = bgfx::TextureFormat::D24S8,
         };
+    }
+
+    [[nodiscard]] std::uint32_t QueuePixels(std::vector<std::uint8_t>& pixels) const {
+        pixels.resize(static_cast<std::size_t>(width_) * height_ * 4U);
+        bgfx::blit(kReadbackView, bgfx::TextureRegion{.handle = readback_},
+            bgfx::TextureRegion{.handle = color_, .width = width_, .height = height_});
+        return bgfx::read(bgfx::TextureRegion{.handle = readback_}, pixels.data());
     }
 
     [[nodiscard]] std::vector<std::uint8_t> ReadPixels() const {
@@ -277,6 +301,18 @@ public:
             frame = bgfx::frame();
         }
         Require(frame >= readyFrame, "Particle mesh readback did not complete within the bounded frame wait");
+        return pixels;
+    }
+
+    [[nodiscard]] std::vector<float> ReadFloatPixels() const {
+        Require(format_ == bgfx::TextureFormat::RGBA32F, "Float readback requires RGBA32F");
+        bgfx::blit(kReadbackView, bgfx::TextureRegion{.handle = readback_},
+            bgfx::TextureRegion{.handle = color_, .width = width_, .height = height_});
+        std::vector<float> pixels(static_cast<std::size_t>(width_) * height_ * 4U);
+        const auto ready = bgfx::read(bgfx::TextureRegion{.handle = readback_}, pixels.data());
+        auto frame = bgfx::frame();
+        for (unsigned guard = 0; frame < ready && guard < 8; ++guard) frame = bgfx::frame();
+        Require(frame >= ready, "HDR particle readback timed out");
         return pixels;
     }
 
@@ -306,6 +342,7 @@ private:
     bgfx::TextureHandle color_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depth_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureFormat::Enum format_ = bgfx::TextureFormat::RGBA8;
     std::uint16_t width_ = NativeTestSurface::kExtent;
     std::uint16_t height_ = NativeTestSurface::kExtent;
 };
@@ -1849,6 +1886,18 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     std::error_code removeError;
     std::filesystem::remove(path, removeError);
 
+    ScenePostProcessSettings invalid{};
+    invalid.bloomStrength = std::numeric_limits<float>::infinity();
+    Require(!PostProcessProfileAssetLoader::SaveProfile(path, invalid),
+        "Profile writer accepted infinite bloom that its loader cannot read");
+    for (const auto& field : {"bloomStrength", "bloomThreshold", "bloomRadiusPixels",
+             "outputTransform.autoExposure.brightAdaptationRate", "outputTransform.autoExposure.darkAdaptationRate"}) {
+        ScenePostProcessSettings candidate{};
+        Require(!PostProcessProfileAssetLoader::SetField(candidate, field, "-1"),
+            "Profile accepted a negative physical post-process parameter");
+    }
+    Require(!PostProcessProfileAssetLoader::SetField(invalid, "outputTransform.gamma", "0"),
+        "Profile accepted zero output gamma");
     ScenePostProcessSettings settings{};
     settings.bloomEnabled = false;
     settings.bloomStrength = 0.42F;
@@ -1879,6 +1928,14 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     settings.ambientOcclusionEnabled = true;
     settings.ambientOcclusionIntensity = 1.5F;
     settings.ambientOcclusionRadius = 0.9F;
+    settings.fogEnabled = true;
+    settings.fogProfile = SceneFogProfile::Web;
+    settings.fogDensity = 0.071F;
+    settings.fogHeightFalloff = 0.31F;
+    settings.fogBaseHeight = -12.0F;
+    settings.fogColorR = 0.2F;
+    settings.volumetricFogEnabled = true;
+    settings.fogAnisotropy = -0.7F;
 
     Require(PostProcessProfileAssetLoader::SaveProfile(path, settings), "PostProcess profile asset save failed");
     const std::optional<ScenePostProcessSettings> loaded = PostProcessProfileAssetLoader::LoadProfile(path);
@@ -1904,6 +1961,23 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(loaded->ambientOcclusionEnabled && NearlyEqual(loaded->ambientOcclusionIntensity, 1.5F) &&
             NearlyEqual(loaded->ambientOcclusionRadius, 0.9F),
         "PostProcess profile asset round trip lost the ambient occlusion");
+
+    Require(loaded->fogProfile == SceneFogProfile::Web && loaded->fogEnabled && loaded->volumetricFogEnabled &&
+            NearlyEqual(loaded->fogDensity, 0.071F) && NearlyEqual(loaded->fogHeightFalloff, 0.31F) &&
+            NearlyEqual(loaded->fogBaseHeight, -12.0F) && NearlyEqual(loaded->fogColorR, 0.2F) &&
+            NearlyEqual(loaded->fogAnisotropy, -0.7F), "Profile round trip lost fog fields");
+    Require(!PostProcessProfileAssetLoader::SetField(settings, "fogProfile", "Unknown"),
+        "Unknown fog profile was accepted");
+    SceneRenderLightingConfig fogConfig{};
+    RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(fogConfig, *loaded);
+    RendererSceneLightingConfigResolver::ResolveFogProfile(fogConfig, bgfx::RendererType::Direct3D11);
+    Require(fogConfig.fogProfile == SceneFogProfile::Web && !fogConfig.volumetricFogEnabled &&
+        NearlyEqual(fogConfig.fogDensity, loaded->fogDensity), "Profile application lost its fallback policy");
+    fogConfig.fogProfile = SceneFogProfile::Automatic;
+    fogConfig.volumetricFogEnabled = true;
+    RendererSceneLightingConfigResolver::ResolveFogProfile(fogConfig, bgfx::RendererType::OpenGLES);
+    Require(fogConfig.fogProfile == SceneFogProfile::Mobile && !fogConfig.volumetricFogEnabled,
+        "OpenGL ES did not select the mobile height-fog fallback");
 
     // A profile written before vignette and ambient occlusion existed loads with today's look.
     {
@@ -3387,6 +3461,7 @@ void RunRendererTransparentInterleaveGpuReadbackTest() {
     {
         ParticleMeshReadbackTarget target;
         Require(target.Initialize(), "Transparent pixel test could not create its readback target");
+        std::vector<std::uint8_t> lastImage;
         auto capture = [&](const SceneRenderCamera& camera, std::array<bool, 3U> visible) {
             for (std::size_t index = 0U; index < entities.size(); ++index) {
                 scene.Components().Visibility().Set(entities[index], kb::scene::VisibilityComponent{ .visible = visible[index] });
@@ -3398,6 +3473,7 @@ void RunRendererTransparentInterleaveGpuReadbackTest() {
             };
             SubmitLifecycleFrame(renderer, scene, desc, "Transparent pixel test could not submit its scene");
             const auto pixels = target.ReadPixels();
+            lastImage = pixels;
             constexpr std::size_t kCenter = (32U * NativeTestSurface::kExtent + 32U) * 4U;
             return std::array<int, 3U>{pixels[kCenter], pixels[kCenter + 1U], pixels[kCenter + 2U]};
         };
@@ -3428,6 +3504,34 @@ void RunRendererTransparentInterleaveGpuReadbackTest() {
         camera.view[10] = -1.0F;
         camera.view[14] = 1.0F;
         verify(camera, true);
+        // Crossing planes have no single per-pixel order. Verify the supported
+        // object-depth ordering remains deterministic across camera movement.
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            auto transform = TransformAt(0.0F, 0.0F, 0.4F + 0.1F * static_cast<float>(index));
+            const float angle = index == 0U ? -0.5F : (index == 2U ? 0.5F : 0.0F);
+            transform.localRotation = transform.worldRotation = {0.0F, std::sin(angle), 0.0F, std::cos(angle)};
+            scene.Transforms().Set(entities[index], transform);
+        }
+        for (unsigned step = 0U; step < 12U; ++step) {
+            camera = IdentityCamera();
+            camera.view[12] = -0.1F + static_cast<float>(step) * 0.02F;
+            capture(camera, {true, true, true});
+            const auto first = lastImage;
+            capture(camera, {false, false, false});
+            unsigned covered = 0U;
+            for (std::size_t pixel = 0U; pixel < first.size(); pixel += 4U)
+                if (std::abs(int(first[pixel]) - int(lastImage[pixel])) > 12 ||
+                    std::abs(int(first[pixel + 1U]) - int(lastImage[pixel + 1U])) > 12 ||
+                    std::abs(int(first[pixel + 2U]) - int(lastImage[pixel + 2U])) > 12) ++covered;
+            Require(covered > 16U, "Intersecting surfaces disappeared during the camera sweep");
+            capture(camera, {true, true, true});
+            Require(lastImage == first, "Intersecting transparency changed at an unchanged camera pose");
+            camera.view[12] += 0.01F;
+            capture(camera, {true, true, true});
+            camera.view[12] -= 0.01F;
+            capture(camera, {true, true, true});
+            Require(lastImage == first, "Intersecting transparency retained a previous camera ordering");
+        }
     }
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
@@ -3696,9 +3800,16 @@ void RunRendererReleaseSceneDropsRuntimeResourcesTest() {
     SubmitLifecycleFrame(renderer, first.scene, desc, "LIB-146 release test did not submit the first scene");
     SubmitLifecycleFrame(renderer, second.scene, desc, "LIB-146 release test did not submit the second scene");
     Require(renderer.RuntimeResourceStats().cachedMeshCount == 2U, "Two submitted scenes must cache one mesh resource each");
+    const auto loadedMemory = renderer.RuntimeResourceStats().memory;
+    Require(loadedMemory.meshBytes > 0U && loadedMemory.allocatedBytes >= loadedMemory.RetainedBytes(),
+        "Scene upload must expose retained and cumulative mesh allocation estimates");
 
     renderer.ReleaseScene(first.scene);
     Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U, "ReleaseScene must destroy exactly the released scene's cached resources");
+    const auto releasedMemory = renderer.RuntimeResourceStats().memory;
+    Require(releasedMemory.meshBytes < loadedMemory.meshBytes && releasedMemory.pendingMeshBytes > loadedMemory.pendingMeshBytes &&
+            releasedMemory.RetainedBytes() == loadedMemory.RetainedBytes(),
+        "Scene release must move its storage to deferred destruction without losing retained accounting");
     SubmitLifecycleFrame(renderer, second.scene, desc, "LIB-146 release test did not resubmit the surviving scene");
     Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "Releasing one scene must not break another scene's rendering");
     Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U, "The surviving scene's cache entry must be reused, not rebuilt");
@@ -3762,6 +3873,13 @@ void RunRendererPrunesUnreferencedResourcesAfterRetentionTest() {
     SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit the revived entity");
     Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
         "A pruned asset must be cleanly re-ensured when a new entity references it again");
+
+    fixture.scene.Entities().Destroy(revived);
+    Require(fixture.scene.Assets().Manager().Registry().Remove(kb::assets::AssetId{ fixture.meshAssetId }),
+        "Retired mesh source was not removed");
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "Retired source cleanup did not submit");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U,
+        "A removed mesh source must release its GPU resource without waiting for cache retention");
 
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
@@ -6660,6 +6778,8 @@ struct ShadowFloorScene {
     bool spot = false;
     bool lightCastsShadow = true;
     int extraPointLights = 0; // more shadow-casting point lights just beside the main one
+    bool stressAtlas = false;
+    std::vector<int>* atlasBrightness = nullptr;
     float pointIntensity = 3.0F;
     bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
     float fovDegrees = 40.0F;
@@ -6707,12 +6827,14 @@ struct ShadowFloorScene {
         .kind = setup.point ? kb::scene::LightKind::Point
               : setup.spot ? kb::scene::LightKind::Spot : kb::scene::LightKind::Directional,
         .intensity = setup.point ? setup.pointIntensity : setup.spot ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+    std::vector<kb::scene::SceneEntity> shadowLights{light};
     for (int extra = 0; extra < setup.extraPointLights; ++extra) {
         const float angle = static_cast<float>(extra) * 1.3F;
         const kb::scene::SceneEntity other = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Extra Shadow Light", .transform = TransformAt(0.4F * std::cos(angle), 6.0F, 0.4F * std::sin(angle)) });
         scene.Components().Lights().Set(other, kb::scene::LightComponent{
             .kind = kb::scene::LightKind::Point, .intensity = setup.pointIntensity, .range = 30.0F, .castsShadow = lightCastsShadow });
+        shadowLights.push_back(other);
     }
 
     NativeTestSurface surface;
@@ -6758,6 +6880,45 @@ struct ShadowFloorScene {
         // The camera looks at the world origin, which is the centre pixel.
         const std::size_t center = (32U * 64U + 32U) * 4U;
         brightness = static_cast<int>(pixels[center]) + pixels[center + 1U] + pixels[center + 2U];
+        if (setup.stressAtlas) {
+            struct Stage { std::uint32_t count, size; };
+            constexpr Stage stages[]{{41U, 2048U}, {6U, 512U}, {24U, 1024U}, {41U, 4096U}, {1U, 256U}, {41U, 2048U}};
+            for (const auto stage : stages) {
+                SceneRenderLightingConfig lighting{};
+                lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
+                lighting.maxForwardLights = kMaxSceneForwardPlusLights;
+                lighting.shadowMapSize = stage.size;
+                renderer.SetDefaultSceneLightingConfig(lighting);
+                for (std::size_t index = 0U; index < shadowLights.size(); ++index) {
+                    const float angle = static_cast<float>(index + stage.size) * 1.3F;
+                    scene.Transforms().Set(shadowLights[index], TransformAt(0.4F * std::cos(angle), 6.0F, 0.4F * std::sin(angle)));
+                    scene.Components().Lights().Set(shadowLights[index], kb::scene::LightComponent{
+                        .kind = kb::scene::LightKind::Point,
+                        .intensity = index < stage.count ? setup.pointIntensity * static_cast<float>(shadowLights.size()) / stage.count : 0.0F,
+                        .range = 30.0F,
+                        .castsShadow = lightCastsShadow && index < stage.count});
+                }
+                SubmitLifecycleFrame(renderer, scene, desc, "Resized point shadow atlas failed to submit");
+                SubmitLifecycleFrame(renderer, scene, desc, "Dynamic point shadow atlas failed to submit");
+                const auto stats = renderer.LastSceneSubmitStats();
+                const auto expectedSelected = lightCastsShadow ? std::min(stage.count, 32U) : 0U;
+                const auto expectedDropped = lightCastsShadow && stage.count > 32U ? stage.count - 32U : 0U;
+                Require(stats.selectedShadowLightCount == expectedSelected && stats.droppedShadowLightCount == expectedDropped,
+                    "Point shadow capacity diagnostics disagree with the atlas selection");
+                bool warned = false;
+                for (const auto& event : renderer.LastSceneDiagnostics().events)
+                    if (event.kind == SceneRenderDiagnosticKind::ShadowLightLimit && event.instanceCount == expectedDropped) warned = true;
+                Require(warned == (expectedDropped != 0U), "Point shadow limit warning is missing or stale");
+                const auto sample = target.ReadPixels();
+                const int value = sample[center] + sample[center + 1U] + sample[center + 2U];
+                if (setup.atlasBrightness != nullptr) setup.atlasBrightness->push_back(value);
+                Require(value > 0 && value < 750, "Resized atlas produced a black or saturated test frame");
+                std::fprintf(stderr, "shadow_atlas count=%u size=%u selected=%u dropped=%u center=%d bytes=%llu\n",
+                    stage.count, stage.size, stats.selectedShadowLightCount, stats.droppedShadowLightCount, value,
+                    static_cast<unsigned long long>(stats.shadowMapAllocationBytes));
+                if (stage.count == 41U) brightness = value;
+            }
+        }
     }
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
@@ -7021,19 +7182,62 @@ struct SsBox {
     SsMaterial material = SsMaterial::White;
 };
 
+struct SsSolidTexture {
+    std::uint64_t id;
+    std::array<std::uint8_t,4> rgba;
+    std::uint16_t width=1, height=1;
+    std::vector<std::uint8_t> pixels;
+    RenderTextureAssetColorSpace colorSpace=RenderTextureAssetColorSpace::Linear;
+};
+
+struct SsMaterialOptions {
+    std::optional<RenderMaterialDesc> glossy;
+    bool sphere = false;
+    std::shared_ptr<ShaderBinaryProvider> shaderProvider;
+    SceneRenderDiagnostics* diagnostics = nullptr;
+    std::vector<SsSolidTexture> solidTextures;
+    bool cameraInside=false;
+    std::optional<RenderMaterialGraphDocument> graph;
+};
+
+void WriteMaterialSphereObj(const std::filesystem::path& path) {
+    constexpr unsigned rings=32, slices=64;
+    std::ofstream out(path);
+    for(unsigned ring=0;ring<=rings;++ring) for(unsigned slice=0;slice<=slices;++slice) {
+        const double theta=3.141592653589793*ring/rings, phi=6.283185307179586*slice/slices;
+        const double x=std::sin(theta)*std::cos(phi), y=std::cos(theta), z=std::sin(theta)*std::sin(phi);
+        out << "v " << x << ' ' << y << ' ' << z << "\nvt " << double(slice)/slices << ' ' << double(ring)/rings
+            << "\nvn " << x << ' ' << y << ' ' << z << '\n';
+    }
+    const auto face=[&](unsigned a,unsigned b,unsigned c) {
+        out << "f " << a << '/' << a << '/' << a << ' ' << b << '/' << b << '/' << b << ' '
+            << c << '/' << c << '/' << c << '\n';
+    };
+    for(unsigned ring=0;ring<rings;++ring) for(unsigned slice=0;slice<slices;++slice) {
+        const unsigned a=ring*(slices+1)+slice+1,b=a+slices+1,c=a+1,d=b+1;
+        if(ring>0) face(a,c,b);
+        if(ring+1<rings) face(c,d,b);
+    }
+    Require(out.good(),"Material sphere fixture write failed");
+}
+
 [[nodiscard]] std::vector<std::uint8_t> RenderScreenSpaceScene(
     const std::vector<SsBox>& boxes, const std::vector<kb::scene::Vec3>& pointLights, bx::Vec3 eye, bx::Vec3 target,
     float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size,
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
     const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}, bool lightsCastShadow = false,
-    float lightIntensity = 1.27F, float lightRange = 40.0F) {  // 4 / pi: Unity's light convention
+    float lightIntensity = 1.27F, float lightRange = 40.0F, double* meanGpuMs = nullptr,
+    const std::function<void(Renderer&, ParticleMeshReadbackTarget&, RenderSceneSubmitDesc&, int)>& configureFrame = {},
+    float glossyRoughness = 0.05F, bgfx::RendererType::Enum backend = bgfx::RendererType::Direct3D11,
+    SceneRenderSubmitStats* finalStats = nullptr, const SsMaterialOptions* materialOptions = nullptr) {
     static int counter = 0;
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_ss_scene_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(counter++));
     std::error_code error;
     std::filesystem::create_directories(root, error);
     Require(!error, "Screen-space test could not create its asset directory");
-    WriteStressCubeObj(root / "cube.obj");
+    if (materialOptions && materialOptions->sphere) WriteMaterialSphereObj(root / "cube.obj");
+    else WriteStressCubeObj(root / "cube.obj");
 
     kb::scene::Scene scene;
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
@@ -7048,6 +7252,18 @@ struct SsBox {
     Require(meshMetadata != nullptr, "Screen-space test lost its cube mesh");
     // The id, not the registry entry: registering the materials below may move the registry's storage.
     const kb::assets::AssetId meshId = meshMetadata->id;
+    if (materialOptions) for (const auto& solid : materialOptions->solidTextures) {
+        const kb::assets::AssetId id{solid.id};
+        const auto name=std::string("Solid-")+std::to_string(solid.id);
+        Require(manager.RegisterAsset(kb::assets::AssetMetadata{.id=id,.type="RenderTexture",.name=name,
+            .virtualPath=std::string("/Game/")+name,.physicalPath=root/name,.contentHash=1U,.runtimeLoadable=true}),
+            "Material matrix texture registration failed");
+        auto data=std::make_shared<RenderTextureAssetData>(); data->width=solid.width; data->height=solid.height;
+        data->colorSpace=solid.colorSpace;
+        if (solid.pixels.empty()) data->rgba8.assign(solid.rgba.begin(),solid.rgba.end());
+        else data->rgba8=solid.pixels;
+        Require(manager.PublishRuntimeAsset(id,data),"Material matrix texture publication failed");
+    }
     const auto publishMaterial = [&](const char* name, std::array<float, 3> color, float roughness,
                                      RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque) {
         const kb::assets::AssetId id = kb::assets::MakeAssetId(name);
@@ -7061,14 +7277,17 @@ struct SsBox {
         data->desc.baseColor[2] = color[2];
         data->desc.roughnessFactor = roughness;
         data->desc.alphaMode = alphaMode;
+        if (materialOptions && materialOptions->glossy && std::string_view(name)=="SsGlossy")
+            data->desc=*materialOptions->glossy;
         data->graph = MakeDefaultRenderMaterialGraphDocument();
+        if (materialOptions && materialOptions->graph && std::string_view(name)=="SsGlossy") data->graph=*materialOptions->graph;
         if (alphaMode == RenderMaterialAlphaMode::Blend) data->graph.blendMode = "translucent";
         Require(manager.PublishRuntimeAsset(id, std::move(data)), "Screen-space test could not publish a material");
         return id.value;
     };
     const std::uint64_t blend = publishMaterial("SsBlend", { 1.0F, 1.0F, 1.0F }, 0.9F, RenderMaterialAlphaMode::Blend);
     const std::uint64_t red = publishMaterial("SsRed", { 0.8F, 0.05F, 0.05F }, 0.9F);
-    const std::uint64_t glossy = publishMaterial("SsGlossy", { 0.9F, 0.9F, 0.9F }, 0.05F);
+    const std::uint64_t glossy = publishMaterial("SsGlossy", { 0.9F, 0.9F, 0.9F }, glossyRoughness);
     for (const SsBox& box : boxes) {
         const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Box",
@@ -7091,8 +7310,10 @@ struct SsBox {
     Require(surface.IsValid(), "Screen-space test could not create a hidden D3D11 surface");
     DisplayConfig config{};
     config.syncMode = DisplaySyncMode::Uncapped;
-    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(backend);
     Renderer renderer;
+    if (materialOptions && materialOptions->shaderProvider)
+        Require(renderer.SetShaderBinaryProvider(materialOptions->shaderProvider),"Material matrix shader provider failed");
     Require(renderer.Initialize(surface, &config), "Screen-space test could not initialize the renderer");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
 
@@ -7105,7 +7326,7 @@ struct SsBox {
         Require(readback.Initialize(size, size), "Screen-space test could not create its readback target");
         SceneRenderLightingConfig frameLighting = lighting;
         frameLighting.shadowsEnabled = false;
-        const RenderSceneSubmitDesc desc{
+        RenderSceneSubmitDesc desc{
             .target = readback.Binding(),
             .cameraOverride = camera,
             .lightingConfig = frameLighting,
@@ -7117,10 +7338,24 @@ struct SsBox {
             .selectionMaskEnabled = false,
             .selectionOutlineEnabled = false,
         };
+        double gpuTotal = 0.0;
+        unsigned gpuSamples = 0U;
         for (int frame = 0; frame < frames; ++frame) {
             if (beforeFrame) beforeFrame(scene, frame);
+            if (configureFrame) configureFrame(renderer, readback, desc, frame);
             SubmitLifecycleFrame(renderer, scene, desc, "Screen-space test did not submit a frame");
+            if (frame >= 8 && meanGpuMs != nullptr) {
+                const auto* stats = bgfx::getStats();
+                if (stats && stats->gpuTimerFreq > 0 && stats->gpuTimeEnd > stats->gpuTimeBegin) {
+                    gpuTotal += static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) *
+                        1000.0 / static_cast<double>(stats->gpuTimerFreq);
+                    ++gpuSamples;
+                }
+            }
         }
+        if (meanGpuMs) *meanGpuMs = gpuSamples > 0U ? gpuTotal / gpuSamples : -1.0;
+        if (finalStats) *finalStats = renderer.LastSceneSubmitStats();
+        if (materialOptions && materialOptions->diagnostics) *materialOptions->diagnostics=renderer.LastSceneDiagnostics();
         pixels = readback.ReadPixels();
     }
     renderer.Shutdown();
@@ -7160,6 +7395,39 @@ void RunRendererRendersScreenSpaceAmbientOcclusionTest() {
     std::fprintf(stderr, "ao_pixels near off=%.1f on=%.1f far off=%.1f on=%.1f%c", nearOff, nearOn, farOff, farOn, 10);
     Require(nearOn < nearOff * 0.9, "AO test: the floor at the wall base must be darker with ambient occlusion");
     Require(farOn > farOff * 0.98, "AO test: open floor must stay unoccluded");
+    // Keep projection unchanged while varying the world-space scale and sampling radius.
+    for (const float scale : {0.25F, 2.0F}) {
+        auto scaled = boxes;
+        for (auto& box : scaled) { box.position = box.position * scale; box.scale = box.scale * scale; }
+        lighting.aoRadius = scale;
+        const auto pixels = RenderScreenSpaceScene(scaled, {}, {-2.0F * scale, 4.0F * scale, -8.0F * scale},
+            {2.55F * scale, 0, 0}, 30.0F, lighting, 12, kSize);
+        const double value = MeanBrightness(pixels, kSize, 28, 30, 36, 38);
+        Require(std::abs(value - nearOn) < nearOff * 0.15, "AO changed excessively under proportional scene scaling");
+    }
+    lighting.aoRadius = 1.0F;
+    auto thin = boxes;
+    thin[1].scale.x = 0.01F;
+    const auto thinPixels = RenderScreenSpaceScene(thin, {}, {-2, 4, -8}, {2.55F, 0, 0}, 30, lighting, 12, kSize);
+    Require(MeanBrightness(thinPixels, kSize, 4, 44, 12, 52) > farOff * 0.95,
+        "A thin AO occluder darkened distant open floor");
+    double previous = nearOn;
+    for (const float offset : {0.01F, 0.02F, 0.03F}) {
+        const auto pixels = RenderScreenSpaceScene(boxes, {}, {-2 + offset, 4, -8},
+            {2.55F + offset, 0, 0}, 30, lighting, 12, kSize);
+        const double value = MeanBrightness(pixels, kSize, 28, 30, 36, 38);
+        Require(std::abs(value - previous) < nearOff * 0.15, "AO flickered under a small camera movement");
+        previous = value;
+    }
+    double gpuOff = 0, gpuOn = 0;
+    for (const bool enabled : {false, true}) {
+        lighting.ambientOcclusionEnabled = enabled;
+        static_cast<void>(RenderScreenSpaceScene(boxes, {}, {-2, 4, -8}, {2.55F, 0, 0}, 30, lighting, 40, kSize,
+            SceneRenderMeshPassMode::OpaqueOnly, {}, false, 1.27F, 40.0F, enabled ? &gpuOn : &gpuOff));
+    }
+    Require(gpuOff > 0 && gpuOn > 0, "AO frame cost measurement has no GPU timer samples");
+    std::fprintf(stderr, "ao_cost whole_frame_mean_gpu_ms off=%.4f on=%.4f warmup=8 frames=40\n", gpuOff, gpuOn);
+
 }
 
 // Exponential height fog in the deferred lighting pass. A wall straight ahead is seen through the fog at a known
@@ -7265,6 +7533,328 @@ void RunRendererRendersFogTest() {
     Require(lampVolumetric > lampPlain + 1.0, "Fog test: volumetric fog must add the light that the lamp scatters in it");
 }
 
+void RunMaterialMatrixPixelsTest(bgfx::RendererType::Enum backend) {
+    constexpr std::uint16_t size=96;
+    using Pixels=std::vector<std::uint8_t>;
+    const auto directory=std::filesystem::current_path()/"material_matrix_tests"/std::to_string(int(backend));
+    std::filesystem::create_directories(directory);
+    const auto save=[&](const std::string& name,const Pixels& pixels) {
+        std::ofstream out(directory/(name+".ppm"),std::ios::binary);
+        out << "P6\n" << size << ' ' << size << "\n255\n";
+        for(std::size_t i=0;i<pixels.size();i+=4) out.write(reinterpret_cast<const char*>(pixels.data()+i),3);
+        Require(out.good(),"Material matrix image write failed");
+    };
+    const auto difference=[](const Pixels& a,const Pixels& b) {
+        Require(a.size()==b.size(),"Material matrix dimensions differ");
+        std::pair<int,double> result{};
+        for(std::size_t i=0;i<a.size();++i) if(i%4!=3) {
+            const int delta=std::abs(int(a[i])-int(b[i]));
+            result.first=std::max(result.first,delta); result.second+=delta;
+        }
+        result.second/=double(a.size()/4*3); return result;
+    };
+    bool parityPassed=true;
+    const auto close=[&](const Pixels& a,const Pixels& b,const char* message) {
+        const auto delta=difference(a,b);
+        std::printf("Material comparison %s: max=%d mean=%.5f\n",message,delta.first,delta.second);
+        std::fflush(stdout);
+        parityPassed=parityPassed && delta.first<=8 && delta.second<=0.6;
+    };
+    RenderMaterialDesc base{};
+    base.baseColor[0]=0.45F; base.baseColor[1]=0.25F; base.baseColor[2]=0.12F;
+    base.roughnessFactor=0.65F;
+    const auto capture=[&](std::string name,const RenderMaterialDesc& material,SceneRenderLightingPath path,
+                           kb::scene::Vec3 lamp,SsMaterialOptions options=SsMaterialOptions{},bool ambient=false) {
+        options.glossy=material; options.sphere=true;
+        SceneRenderLightingConfig lighting{}; lighting.lightingPath=path;
+        lighting.environmentMode=ambient ? SceneRenderEnvironmentMode::Constant : SceneRenderEnvironmentMode::Disabled;
+        lighting.ambientIntensity=ambient ? 1.0F : 0.0F;
+        SceneRenderSubmitStats stats{};
+        auto pixels=RenderScreenSpaceScene({{{0,0,0},{1,1,1},SsMaterial::Glossy}}, {lamp},
+            options.cameraInside ? bx::Vec3{0,0,0} : bx::Vec3{0,0,-4}, options.cameraInside ? bx::Vec3{0,0,1} : bx::Vec3{0,0,0},
+            40,lighting,6,size,material.alphaMode==RenderMaterialAlphaMode::Blend ? SceneRenderMeshPassMode::OpaqueAndTransparent : SceneRenderMeshPassMode::OpaqueOnly,{},false,
+            0.5F,40,nullptr,{},0.65F,backend,&stats,&options);
+        Require(stats.droppedInstanceCount==0 && stats.missingTextureResourceCount==0,
+            "Material matrix dropped geometry or a texture");
+        if(path==SceneRenderLightingPath::Deferred && material.subsurfaceFactor>0 && !options.shaderProvider)
+            Require(stats.shadingModelColorDrawCallCount>0,"Subsurface tint did not reach the fifth G-buffer target");
+        save(name,pixels); return pixels;
+    };
+    const kb::scene::Vec3 front{0,0,-4},side{2,1,-2},back{0,0,3};
+    const auto paired=[&](const std::string& name,const RenderMaterialDesc& material,kb::scene::Vec3 lamp,
+                          SsMaterialOptions options=SsMaterialOptions{},bool ambient=false) {
+        auto forward=capture(name+"-forward",material,SceneRenderLightingPath::Forward,lamp,options,ambient);
+        auto deferred=capture(name+"-deferred",material,SceneRenderLightingPath::Deferred,lamp,options,ambient);
+        close(forward,deferred,name.c_str()); return forward;
+    };
+    const auto plain=paired("base",base,front);
+    Require(MeanBrightness(plain,size,40,40,56,56)>5,"Material reference sphere is dark or missing");
+    auto coat=base; coat.clearcoatFactor=1; coat.clearcoatRoughnessFactor=0.12F;
+    const auto coated=paired("lacquer",coat,front);
+    Require(difference(plain,coated).first>8,"Clearcoat has no visible highlight");
+    for(float roughness:{0.3F,0.7F}) {
+        auto material=coat; material.clearcoatRoughnessFactor=roughness;
+        auto pixels=paired("lacquer-rough-"+std::to_string(roughness),material,side);
+        Require(difference(pixels,paired("lacquer-smooth-"+std::to_string(roughness),coat,side)).first>4,
+            "Clearcoat roughness does not change its lobe");
+    }
+    auto skin=base; skin.subsurfaceFactor=0.8F;
+    skin.subsurfaceColor[0]=0.9F; skin.subsurfaceColor[1]=0.08F; skin.subsurfaceColor[2]=0.025F;
+    const auto skinBack=paired("skin-back",skin,back);
+    const auto plainBack=paired("base-back",base,back);
+    Require(MeanBrightness(skinBack,size,40,40,56,56)>MeanBrightness(plainBack,size,40,40,56,56)+5,
+        "Subsurface does not transmit back lighting");
+    const auto skinFront=paired("skin-front",skin,front); paired("skin-side",skin,side);
+    auto layered=skin; layered.clearcoatFactor=1; layered.clearcoatRoughnessFactor=0.12F;
+    const auto both=paired("layered-front",layered,front);
+    const auto bothBack=paired("layered-back",layered,back);
+    // The coat attenuates transmission slightly. Compare to the scattering control,
+    // allowing the one-byte quantization of this linear, non-tonemapped readback.
+    Require(difference(both,skinFront).first>8 &&
+        MeanBrightness(bothBack,size,40,40,56,56)>0.7*MeanBrightness(skinBack,size,40,40,56,56),
+        "Combining coat and subsurface discarded the scattering layer");
+    SsMaterialOptions textures{}; textures.solidTextures={ {91001,{0,255,255,255}}, {91002,{255,128,0,255}} };
+    auto noCoat=coat; noCoat.clearcoatTextureAssetId=91001;
+    close(paired("coat-texture-zero",noCoat,front,textures),plain,"Clearcoat uses the texture red channel");
+    auto textured=coat; textured.clearcoatRoughnessFactor=0.6F; textured.clearcoatRoughnessTextureAssetId=91002;
+    auto scalar=coat; scalar.clearcoatRoughnessFactor=0.6F*128.0F/255.0F;
+    close(paired("coat-rough-texture",textured,side,textures),paired("coat-rough-scalar",scalar,side),
+        "Clearcoat roughness uses the texture green channel");
+    for(float metal:{0.0F,1.0F}) for(float roughness:{0.15F,0.5F,1.0F}) {
+        auto material=base; material.metallicFactor=metal; material.roughnessFactor=roughness;
+        paired("pbr-"+std::to_string(metal)+"-"+std::to_string(roughness),material,side);
+    }
+    auto emissive=base; emissive.emissiveColor[0]=0.2F; emissive.emissiveColor[1]=0.05F;
+    emissive.emissiveStrength=2;
+    const auto glow=paired("emissive",emissive,back);
+    Require(MeanBrightness(glow,size,40,40,56,56)>MeanBrightness(plainBack,size,40,40,56,56)+30,
+        "Emissive factor/color are not rendered");
+    paired("layered-environment",layered,side,{},true);
+    const auto same=[&](const Pixels& actual,const Pixels& expected,const char* message) {
+        const auto delta=difference(actual,expected);
+        std::printf("Material control %s: max=%d mean=%.5f\n",message,delta.first,delta.second);
+        std::fflush(stdout);
+        Require(delta.first<=1,message);
+    };
+    SsMaterialOptions controls{};
+    controls.solidTextures={{92001,{255,128,0,255}}, {92002,{0,255,255,255}},
+        {92003,{255,0,0,255}}, {92004,{255,128,128,255}}, {92005,{255,255,255,0}},
+        {92006,{0,0,0,0},2,1,{255,0,0,255,0,255,0,255}},
+        {92007,{128,128,128,255},1,1,{},RenderTextureAssetColorSpace::Srgb}};
+    auto srgb=base; srgb.albedoTextureAssetId=92007;
+    auto linearColor=base;
+    const float grayLinear=std::pow((128.0F/255.0F+0.055F)/1.055F,2.4F);
+    for(unsigned channel=0;channel<3;++channel) linearColor.baseColor[channel]*=grayLinear;
+    same(paired("albedo-srgb",srgb,front,controls),paired("albedo-linear-control",linearColor,front),
+        "Albedo sRGB samples decode before multiplying linear base color");
+    auto mr=base; mr.metallicFactor=1; mr.metallicRoughnessTextureAssetId=92001;
+    auto mrControl=base; mrControl.roughnessFactor*=128.0F/255.0F;
+    same(paired("metal-rough-texture",mr,side,controls),paired("metal-rough-control",mrControl,side),
+        "Metallic/roughness texture uses linear blue/green channels");
+    auto ao=base; ao.occlusionTextureAssetId=92002;
+    same(paired("ao-direct",ao,front,controls),plain,"AO preserves direct lighting");
+    const auto ambientPlain=paired("ambient-base",base,back,{},true);
+    const auto ambientOccluded=paired("ao-ambient",ao,back,controls,true);
+    Require(difference(ambientPlain,ambientOccluded).first>4,"AO does not attenuate environment lighting");
+    ao.occlusionStrength=0;
+    same(paired("ao-disabled",ao,back,controls,true),ambientPlain,"Zero AO strength restores environment");
+    auto glowTexture=emissive; glowTexture.emissiveTextureAssetId=92003;
+    auto glowControl=emissive; glowControl.emissiveColor[1]=0;
+    same(paired("emissive-texture",glowTexture,back,controls),paired("emissive-control",glowControl,back),
+        "Emissive texture multiplies authored color");
+    auto normal=base; normal.normalTextureAssetId=92004; normal.normalScale=0;
+    same(paired("normal-zero",normal,front,controls),plain,"Zero normal scale preserves geometry normal");
+    normal.normalScale=1;
+    // This low-intensity linear reference peaks below eight bytes. Require a
+    // broad image change beyond quantization, not an unreachable highlight peak.
+    const auto normalDifference=difference(paired("normal-tilted",normal,front,controls),plain);
+    Require(normalDifference.first>=5 && normalDifference.second>0.5,
+        "Normal map does not change lighting");
+    auto masked=base; masked.alphaMode=RenderMaterialAlphaMode::Mask; masked.albedoTextureAssetId=92005;
+    Require(MeanBrightness(paired("mask-discard",masked,front,controls),size,40,40,56,56)==0,
+        "Alpha mask does not discard transparent texels");
+    masked.alphaCutoff=0;
+    same(paired("mask-zero-cutoff",masked,front,controls),plain,"Zero alpha cutoff retains surface color");
+    auto blend=base; blend.alphaMode=RenderMaterialAlphaMode::Blend;
+    same(paired("blend-opaque",blend,front),plain,"Unit alpha preserves opaque shading");
+    blend.baseColor[3]=0.5F;
+    auto half=plain; for(std::size_t i=0;i<half.size();++i) if(i%4!=3) half[i]=std::uint8_t(half[i]/2);
+    same(paired("blend-half",blend,front),half,"Half alpha composites over black");
+    auto uv=base; uv.albedoTextureAssetId=92006; uv.pointSampling=true; uv.uvTiling[0]=0;
+    auto red=base; red.baseColor[1]=red.baseColor[2]=0;
+    auto green=base; green.baseColor[0]=green.baseColor[2]=0;
+    const auto redControl=paired("albedo-red-control",red,front);
+    uv.uvOffset[0]=0.25F;
+    same(paired("uv-red",uv,front,controls),redControl,"UV offset selects red texel");
+    uv.uvOffset[0]=0.75F;
+    const auto greenControl=paired("albedo-green-control",green,front);
+    same(paired("uv-green",uv,front,controls),greenControl,
+        "UV offset selects green texel");
+    uv.uvOffset[0]=1.25F;
+    same(paired("uv-point-clamp",uv,front,controls),greenControl,
+        "Sprite point sampling clamps transformed UVs at the edge texel");
+    uv.pointSampling=false;
+    same(paired("uv-repeat",uv,front,controls),redControl,"UV repeat wraps transformed coordinates");
+    SsMaterialOptions inside{}; inside.cameraInside=true;
+    const kb::scene::Vec3 interiorLamp{0,0,0};
+    const auto culled=paired("inside-one-sided",base,interiorLamp,inside);
+    Require(MeanBrightness(culled,size,40,40,56,56)==0,"One-sided mesh backfaces were not culled");
+    auto twoSided=base; twoSided.doubleSided=true;
+    const auto interior=paired("inside-two-sided",twoSided,interiorLamp,inside);
+    Require(MeanBrightness(interior,size,40,40,56,56)>5,"Two-sided surface normals do not face interior lighting");
+    // Exercise the actual absent optional program, using the four-target fallback.
+    auto provider=std::make_shared<ShaderRequestTrackingProvider>(); provider->rejectLayeredGbuffer=true;
+    SceneRenderDiagnostics diagnostics{}; SsMaterialOptions fallback{};
+    fallback.shaderProvider=provider; fallback.diagnostics=&diagnostics;
+    const auto fallbackSkin=capture("fallback-skin",skin,SceneRenderLightingPath::Deferred,back,fallback);
+    Require(provider->layeredGbufferReads==1,"Missing optional layer shader was repeatedly requested");
+    Require(std::any_of(diagnostics.events.begin(),diagnostics.events.end(),[](const auto& event) {
+        return event.kind==SceneRenderDiagnosticKind::MaterialShadingFallback;
+    }),"Four-target fallback did not report loss of the authored scattering tint");
+    auto tinted=skin; std::copy(std::begin(base.baseColor),std::begin(base.baseColor)+3,std::begin(tinted.subsurfaceColor));
+    close(fallbackSkin,capture("fallback-skin-reference",tinted,SceneRenderLightingPath::Forward,back),
+        "Four-target subsurface fallback must use base-color tint");
+    const auto fallbackBoth=capture("fallback-layered",layered,SceneRenderLightingPath::Deferred,front,fallback);
+    close(fallbackBoth,coated,"Four-target combined layers must preserve coat priority");
+    Require(parityPassed,"Material image comparisons exceeded the fixed parity tolerance");
+}
+
+void RunFogProfilePixelsTest(bgfx::RendererType::Enum backend) {
+    constexpr std::uint16_t size = 64U;
+    const std::vector<SsBox> wall{{{0,2,30.5F},{80,80,1}}};
+    const std::vector<kb::scene::Vec3> lamp{{0,4,2}};
+    const bx::Vec3 eye{0,2,-5}, target{0,2,30};
+    SceneRenderLightingConfig lighting{};
+    lighting.fogEnabled = true;
+    lighting.fogDensity = 0.05F;
+    lighting.fogHeightFalloff = 0.0001F;
+    lighting.fogColor = {0,0,0};
+    using Configure = std::function<void(Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc&,int)>;
+    const auto capture = [&](SceneFogProfile profile, bool volumetric, const Configure& configure = {},
+                             bool transparent = false, std::uint16_t extent = 64U) {
+        auto config = lighting; config.fogProfile = profile; config.volumetricFogEnabled = volumetric;
+        auto boxes = wall;
+        if (transparent) boxes.front().material = SsMaterial::Blend;
+        SceneRenderSubmitStats stats{};
+        auto pixels = RenderScreenSpaceScene(boxes,lamp,eye,target,30,config,8,extent,
+            transparent ? SceneRenderMeshPassMode::OpaqueAndTransparent : SceneRenderMeshPassMode::OpaqueOnly,{},false,
+            1.27F,40,nullptr,configure,0.05F,backend,&stats);
+        Require(stats.droppedInstanceCount == 0 && stats.missingTextureResourceCount == 0,
+            "Fog profile fixture dropped geometry or texture resources");
+        Require(stats.fogProfile == static_cast<std::uint32_t>(profile) &&
+            stats.fogMode == (volumetric && profile == SceneFogProfile::Desktop ? 2U : 1U),
+            "Fog diagnostics disagree with the resolved profile");
+        return pixels;
+    };
+    const auto mean = [](const auto& pixels, unsigned extent=64U) {
+        return MeanBrightness(pixels,static_cast<std::uint16_t>(extent),extent/2-4,extent/2-4,extent/2+4,extent/2+4);
+    };
+    const auto maxDifference = [](const auto& a,const auto& b) {
+        Require(a.size()==b.size(),"Fog comparison has mismatched dimensions");
+        int difference=0;
+        for(std::size_t i=0;i<a.size();++i) difference=std::max(difference,std::abs(int(a[i])-int(b[i])));
+        return difference;
+    };
+    const auto save = [&](const char* name,const std::vector<std::uint8_t>& pixels,unsigned extent=64U) {
+        const auto directory=std::filesystem::current_path()/"fog_profile_tests"/std::to_string(int(backend));
+        std::filesystem::create_directories(directory);
+        std::ofstream output(directory/(std::string(name)+".ppm"),std::ios::binary);
+        output << "P6\n" << extent << ' ' << extent << "\n255\n";
+        for(std::size_t i=0;i<pixels.size();i+=4) output.write(reinterpret_cast<const char*>(pixels.data()+i),3);
+        Require(output.good(),"Fog reference image write failed");
+    };
+    const auto height=capture(SceneFogProfile::Desktop,false);
+    const auto volume=capture(SceneFogProfile::Desktop,true);
+    save("height",height); save("volumetric",volume);
+    Require(mean(volume)>mean(height)+1,"Desktop fog has no visible light scattering");
+    for(auto profile:{SceneFogProfile::Mobile,SceneFogProfile::Web}) {
+        const auto fallback=capture(profile,true);
+        Require(maxDifference(fallback,height)<=1,"Mobile/Web fallback differs from height-only final image");
+        save(profile==SceneFogProfile::Mobile ? "mobile" : "web",fallback);
+        const auto transparent=capture(profile,true,{},true);
+        Require(std::abs(mean(transparent)-mean(height))<3,
+            "Forward transparent surface did not receive height fog");
+        save(profile==SceneFogProfile::Mobile ? "mobile-transparent" : "web-transparent",transparent);
+    }
+    const auto cut=capture(SceneFogProfile::Desktop,true,[](Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc& desc,int frame) {
+        desc.resetTemporalHistory=frame==7;
+    });
+    Require(maxDifference(volume,cut)<=1,"Fog retained a dependency on stale temporal history at a camera cut");
+    const auto reenabled=capture(SceneFogProfile::Desktop,true,[](Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc& desc,int frame) {
+        desc.lightingConfig.fogEnabled=frame!=6;
+    });
+    Require(maxDifference(volume,reenabled)<=1,"Fog off/on retained stale frame data");
+    const auto moved=capture(SceneFogProfile::Desktop,true,[](Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc& desc,int frame) {
+        if(frame==6) bx::mtxLookAt(desc.cameraOverride->view.data(),bx::Vec3{0,20,-5},bx::Vec3{0,2,30});
+        if(frame==7) bx::mtxLookAt(desc.cameraOverride->view.data(),bx::Vec3{0,2,-5},bx::Vec3{0,2,30});
+    });
+    Require(maxDifference(volume,moved)<=1,"Camera motion left ghost fog after returning to its pose");
+    const auto resized=capture(SceneFogProfile::Desktop,true,[](Renderer&,ParticleMeshReadbackTarget& readback,RenderSceneSubmitDesc& desc,int frame) {
+        if(frame==4) {
+            readback.Shutdown(); Require(readback.Initialize(96,96),"Fog target resize failed"); desc.target=readback.Binding();
+        }
+    });
+    const auto freshLarge=capture(SceneFogProfile::Desktop,true,{},false,96);
+    Require(maxDifference(resized,freshLarge)<=1,"Resized fog differs from a fresh target");
+    save("resized",resized,96);
+    const auto phase=[&](float anisotropy) {
+        SceneRenderLightingConfig config=lighting; config.volumetricFogEnabled=true;
+        config.fogProfile=SceneFogProfile::Desktop; config.fogAnisotropy=anisotropy;
+        return RenderScreenSpaceScene(wall,{{0,2,60}},eye,target,30,config,8,size,
+            SceneRenderMeshPassMode::OpaqueOnly,{},false,40,100,nullptr,{},0.05F,backend);
+    };
+    const auto forwardPhase=phase(0.8F), backwardPhase=phase(-0.8F);
+    Require(mean(forwardPhase)>mean(backwardPhase)+1,"Fog anisotropy did not favor forward scattering");
+    save("anisotropy-forward",forwardPhase); save("anisotropy-backward",backwardPhase);
+    auto room = wall;
+    room.push_back({{0,-0.5F,10},{12,1,40}});
+    room.push_back({{0,7.5F,10},{12,1,40}});
+    room.push_back({{-6.5F,3.5F,10},{1,8,40}});
+    room.push_back({{6.5F,3.5F,10},{1,8,40}});
+    room.push_back({{0,3.5F,-10.5F},{12,8,1}});
+    room.push_back({{0,3,2},{6,0.5F,10}}); // blocks the lamp from the fog below it
+    const auto darkRoom = [&](bool lampOn, bool volumeOn, bool shadows) {
+        auto config=lighting; config.environmentMode=SceneRenderEnvironmentMode::Disabled;
+        config.ambientIntensity=0; config.volumetricFogEnabled=volumeOn;
+        return RenderScreenSpaceScene(room,lampOn ? lamp : std::vector<kb::scene::Vec3>{},eye,target,30,config,8,size,
+            SceneRenderMeshPassMode::OpaqueOnly,
+            [](kb::scene::Scene& scene,int frame) {
+                if(frame!=0) return;
+                std::vector<std::pair<kb::scene::SceneEntity,kb::scene::MeshRendererComponent>> meshes;
+                scene.Components().Visitors().ForEachMeshRenderer(
+                    [](kb::scene::SceneEntity entity,const kb::scene::TransformComponent&,
+                       const kb::scene::MeshRendererComponent& mesh,void* context) {
+                        static_cast<decltype(meshes)*>(context)->push_back({entity,mesh});
+                    },&meshes);
+                for(auto [entity,mesh]:meshes) { mesh.castsShadow=true; scene.Components().MeshRenderers().Set(entity,mesh); }
+            },true,20,40,nullptr,
+            [shadows](Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc& desc,int) {
+                desc.shadowPassEnabled=shadows; desc.lightingConfig.shadowsEnabled=shadows;
+            },0.05F,backend);
+    };
+    const auto dark=darkRoom(false,true,false), litRoom=darkRoom(true,true,false);
+    const auto plainRoom=darkRoom(true,false,false), shadowRoom=darkRoom(true,true,true), shadowPlain=darkRoom(true,false,true);
+    const double openScattering=mean(litRoom)-mean(plainRoom), shadowScattering=mean(shadowRoom)-mean(shadowPlain);
+    Require(mean(dark)<1,"Unlit closed interior invented fog illumination");
+    Require(openScattering>1,"Point light failed to illuminate fog in a dark interior");
+    Require(shadowScattering<openScattering-0.5,"Occluder failed to shadow volumetric scattering");
+    save("dark-room",dark); save("lit-room",litRoom); save("shadowed-room",shadowRoom);
+    std::fprintf(stderr,"fog_room backend=%s dark=%.4f lit=%.4f open_scattering=%.4f shadow_scattering=%.4f\n",
+        bgfx::getRendererName(backend),mean(dark),mean(litRoom),openScattering,shadowScattering);
+    // A downward ray from far above the layer used to multiply an overflow by zero.
+    SceneRenderLightingConfig extreme=lighting; extreme.fogHeightFalloff=2; extreme.fogBaseHeight=0;
+    const auto high=RenderScreenSpaceScene({{{0,-0.5F,0},{1000,1,1000}}},{},bx::Vec3{0,1000,-5},bx::Vec3{0,0,0},30,
+        extreme,8,size,SceneRenderMeshPassMode::OpaqueOnly,{},false,1.27F,40,nullptr,
+        [](Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc& desc,int) {
+            SceneDepthPolicy::MakePerspective(desc.cameraOverride->projection.data(),30,1,0.1F,2000,
+                SceneDepthPolicy::HomogeneousDepth());
+        },0.05F,backend);
+    Require(mean(high)>30,"High camera produced invalid/black height fog");
+    save("high-camera",high);
+    std::fprintf(stderr,"fog_profiles backend=%s height=%.4f volume=%.4f transparent_mobile_web=PASS cut=PASS reenable=PASS motion=PASS resize=PASS phase_forward=%.4f phase_backward=%.4f high=%.4f\n",
+        bgfx::getRendererName(backend),mean(height),mean(volume),mean(forwardPhase),mean(backwardPhase),mean(high));
+}
+
 // A glossy floor in front of a lit red wall must show the wall's reflection once screen-space
 // reflections are on: the floor region where the mirror image of the wall appears turns red.
 void RunRendererRendersScreenSpaceReflectionsTest() {
@@ -7300,6 +7890,76 @@ void RunRendererRendersScreenSpaceReflectionsTest() {
     const double with = redExcess(on);
     std::fprintf(stderr, "ssr_pixels red_minus_blue without=%.1f with=%.1f%c", without, with, 10);
     Require(with > without + 15.0, "SSR test: the glossy floor must reflect the red wall when screen-space reflections are on");
+}
+
+// Missing or invalid history must fall back to the environment without stale reflections.
+void RunScreenSpaceReflectionLifecycleTest() {
+    constexpr std::uint16_t size = 128U;
+    const std::vector<SsBox> boxes{
+        {{0,-0.5F,0},{40,1,40},SsMaterial::Glossy},
+        {{3,3,0},{0.5F,6,20},SsMaterial::Red}};
+    const std::vector<kb::scene::Vec3> lights{{-1,5,0}};
+    const bx::Vec3 eye{-6,1,-3}, target{2,0,0};
+    const auto redExcess = [](const std::vector<std::uint8_t>& pixels) {
+        double sum = 0.0;
+        for (unsigned y=72; y<108; ++y) for (unsigned x=24; x<104; ++x) {
+            const auto at=(y*size+x)*4U; sum += int(pixels[at])-int(pixels[at+2]);
+        }
+        return sum/(36.0*80.0);
+    };
+    using Configure = std::function<void(Renderer&, ParticleMeshReadbackTarget&, RenderSceneSubmitDesc&, int)>;
+    const auto capture = [&](bool enabled, float roughness, const Configure& configure = {},
+                             const std::function<void(kb::scene::Scene&,int)>& mutate = {}) {
+        SceneRenderLightingConfig lighting{};
+        lighting.screenSpaceReflectionsEnabled=enabled;
+        return RenderScreenSpaceScene(boxes,lights,eye,target,40,lighting,8,size,
+            SceneRenderMeshPassMode::OpaqueOnly,mutate,false,10,40,nullptr,configure,roughness);
+    };
+    const double baseline=redExcess(capture(false,0.05F));
+    const double reflected=redExcess(capture(true,0.05F));
+    Require(reflected>baseline+15,"SSR lifecycle fixture has no visible reflection");
+    const auto cut=capture(true,0.05F,[](Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc& desc,int frame) {
+        desc.resetTemporalHistory=frame==7;
+    });
+    Require(std::abs(redExcess(cut)-baseline)<3,"Camera cut retained stale SSR radiance with TAA disabled");
+    const auto reenabled=capture(true,0.05F,[](Renderer&,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc& desc,int frame) {
+        desc.lightingConfig.screenSpaceReflectionsEnabled=frame!=6;
+    });
+    Require(std::abs(redExcess(reenabled)-baseline)<3,"Re-enabled SSR sampled an old effect history");
+    const auto gap=capture(true,0.05F,[](Renderer& renderer,ParticleMeshReadbackTarget&,RenderSceneSubmitDesc&,int frame) {
+        if(frame==7) { Require(renderer.BeginFrame(),"SSR skipped frame failed"); renderer.EndFrame(); }
+    });
+    Require(std::abs(redExcess(gap)-baseline)<3,"SSR reused radiance across a skipped viewport frame");
+    double previous=reflected-baseline;
+    for(float roughness : {0.45F,0.9F}) {
+        const double difference=redExcess(capture(true,roughness))-redExcess(capture(false,roughness));
+        std::fprintf(stderr,"ssr_roughness value=%.2f reflected_excess=%.4f\n",roughness,difference);
+        Require(difference<previous+1.0,"Roughness increased screen-space reflection confidence");
+        if(roughness>0.7F) Require(std::abs(difference)<1.0,"Rough surface did not use the environment fallback");
+        previous=difference;
+    }
+    const auto removeWall=[](kb::scene::Scene& scene,int frame) {
+        if(frame!=7) return;
+        std::vector<kb::scene::SceneEntity> entities;
+        scene.Components().Visitors().ForEachMeshRenderer(
+            [](kb::scene::SceneEntity entity,const kb::scene::TransformComponent&,
+               const kb::scene::MeshRendererComponent& mesh,void* state) {
+                if(mesh.materialAssetId==kb::assets::MakeAssetId("SsRed").value)
+                    static_cast<std::vector<kb::scene::SceneEntity>*>(state)->push_back(entity);
+            },&entities);
+        Require(entities.size()==1,"SSR missing-depth control did not find its wall");
+        for(auto entity:entities) scene.Entities().Destroy(entity);
+    };
+    const double removed=redExcess(capture(true,0.05F,{},removeWall));
+    const double removedOff=redExcess(capture(false,0.05F,{},removeWall));
+    Require(std::abs(removed-removedOff)<2,"SSR reflected a wall whose depth was unloaded");
+    auto offscreen=boxes; offscreen[1].position={100,3,0};
+    SceneRenderLightingConfig lighting{}; lighting.screenSpaceReflectionsEnabled=true;
+    const double outside=redExcess(RenderScreenSpaceScene(offscreen,lights,eye,target,40,lighting,8,size,
+        SceneRenderMeshPassMode::OpaqueOnly,{},false,10));
+    Require(std::abs(outside-removedOff)<2,"SSR invented offscreen reflection data");
+    std::fprintf(stderr,"ssr_lifecycle baseline=%.4f reflected=%.4f cut=%.4f reenabled=%.4f gap=%.4f removed=%.4f offscreen=%.4f\n",
+        baseline,reflected,redExcess(cut),redExcess(reenabled),redExcess(gap),removed,outside);
 }
 
 // The scene's post-process profile owns screen-space ambient occlusion: with the lighting config
@@ -7350,6 +8010,83 @@ void RunRendererPostProcessProfileDrivesAmbientOcclusionTest() {
 
 // The profile's vignette darkens the corners of the final composite and leaves its centre; off,
 // a uniform image stays uniform. The composite runs the shipped present shader on the GPU.
+void RunBloomOutputProfilePixelsTest() {
+    NativeTestSurface surface;
+    DisplayConfig config{};
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Bloom renderer init failed");
+    {
+        constexpr unsigned size = 64U;
+        std::vector<float> input(size * size * 4U, 0.0F);
+        for (unsigned y = 0; y < size; ++y) for (unsigned x = 0; x < size; ++x) {
+            const auto at = (y * size + x) * 4U;
+            input[at + 3U] = 1.0F;
+            if (x >= 28 && x < 36 && y >= 28 && y < 36)
+                input[at] = input[at + 1U] = input[at + 2U] = 8.0F;
+        }
+        const auto source = bgfx::createTexture2D(size, size, false, 1, bgfx::TextureFormat::RGBA32F,
+            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+            bgfx::copy(input.data(), static_cast<std::uint32_t>(input.size() * sizeof(float))));
+        ScenePostProcessTargets targets;
+        ScenePostProcessRenderer post;
+        FinalCompositePass composite;
+        Require(bgfx::isValid(source) && targets.Ensure({.extent = {size, size}, .colorPolicy = SceneColorFormatPolicy::Rgba16F}) &&
+            post.Initialize() && composite.Initialize(), "Bloom HDR resources failed");
+        const auto views = RenderViewportViewIdAllocator::ForViewportIndex(0U);
+        const auto capture = [&](bool bloom, FullscreenTextureTonemapOperator tonemap, float strength = 1.0F) {
+            RenderFrameState frameState;
+            frameState.Begin(1U);
+            const auto plan = RenderFramePipeline{}.Build({.frameIndex = 1U,
+                .viewports = {{.id = {1U}, .extent = {size, size}, .viewportIndex = 0U}}});
+            Require(plan.Succeeded() && frameState.RegisterViewportPlan(plan.viewports.front()), "Bloom view graph order failed");
+            const auto remap = frameState.BgfxViewRemap();
+            bgfx::setViewOrder(0U, static_cast<std::uint16_t>(remap.size()), remap.data());
+            ScenePostProcessSettings settings{};
+            settings.temporalAntiAliasingEnabled = false;
+            settings.bloomEnabled = bloom;
+            settings.bloomStrength = strength;
+            const auto color = post.Submit({.sceneColor = source, .target = targets.Binding(),
+                .viewIds = views, .settings = settings});
+            Require(bgfx::isValid(color), "Bloom submit failed");
+            FinalCompositeReadbackTarget output;
+            Require(output.Initialize(), "Bloom output target failed");
+            const auto binding = output.Binding();
+            SceneDisplayOutputTransform transform{};
+            transform.tonemap = tonemap;
+            transform.gamma = 2.2F;
+            transform.autoExposure.enabled = false;
+            Require(composite.Submit({.viewId = views.finalComposite, .postProcessColor = color,
+                .frameBuffer = binding.frameBuffer, .extent = binding.extent, .outputRect = binding.outputRect,
+                .outputTransform = transform, .clearTarget = true}), "Bloom output composite failed");
+            bgfx::frame();
+            return output.ReadPixels();
+        };
+        for (const auto tonemap : {FullscreenTextureTonemapOperator::None, FullscreenTextureTonemapOperator::Aces,
+                 FullscreenTextureTonemapOperator::AgxApprox}) {
+            const auto off = capture(false, tonemap);
+            const auto on = capture(true, tonemap);
+            const double haloOff = MeanBrightness(off, size, 20, 28, 26, 36);
+            const double haloOn = MeanBrightness(on, size, 20, 28, 26, 36);
+            Require(haloOff < 1.0 && haloOn > haloOff + 4.0, "Bloom did not spread HDR highlights into neighboring pixels");
+            const auto extreme = capture(true, tonemap, std::numeric_limits<float>::max());
+            Require(MeanBrightness(extreme, size, 28, 28, 36, 36) > 300.0,
+                "Extreme bloom overflowed HDR storage and corrupted the bright highlight");
+            const auto repeat = capture(true, tonemap);
+            unsigned maximumDifference = 0U;
+            for (std::size_t i = 0; i < on.size(); ++i)
+                maximumDifference = std::max(maximumDifference, static_cast<unsigned>(std::abs(int(on[i]) - int(repeat[i]))));
+            std::fprintf(stderr, "bloom_repeat max_difference=%u halo=%.3f repeat=%.3f\n", maximumDifference,
+                haloOn, MeanBrightness(repeat, size, 20, 28, 26, 36));
+            Require(maximumDifference <= 1U, "Stable bloom input flickered across identical output profiles");
+            std::fprintf(stderr, "bloom_pixels tonemap=%u halo_off=%.2f halo_on=%.2f\n",
+                static_cast<unsigned>(tonemap), haloOff, haloOn);
+        }
+        bgfx::destroy(source);
+    }
+    renderer.Shutdown();
+}
+
 void RunRendererVignetteDarkensFinalCompositeCornersTest() {
     NativeTestSurface surface;
     Require(surface.IsValid(), "Vignette test could not create a hidden native surface");
@@ -7577,16 +8314,35 @@ void RunVoxelGridKeepsThinWallsAndOpeningsTest() {
         SceneRenderResourceMap bindings;
         bindings.BindMesh(1U, registerMesh(solidVertices, solidIndices, false));
         bindings.BindMesh(2U, registerMesh(holedVertices, holedIndices, false));
-        bindings.BindMesh(3U, registerMesh(solidVertices, solidIndices, true));
+        const auto dynamicHandle = registerMesh(solidVertices, solidIndices, true);
+        bindings.BindMesh(3U, dynamicHandle);
+        const auto originalMemory = resources.Stats().memory;
+        Require(originalMemory.meshBytes == (solidVertices.size() * 2U + holedVertices.size()) * sizeof(RenderStaticMeshVertexP3N3UV2)
+                + (solidIndices.size() * 2U + holedIndices.size()) * sizeof(std::uint16_t),
+            "Mesh payload estimate must include vertex and index storage");
+        const auto smallTexture = resources.RegisterTexture({.width = 16U, .height = 16U, .format = bgfx::TextureFormat::RGBA8});
+        Require(resources.ContainsTexture(smallTexture) && resources.Stats().memory.textureBytes == 1024U,
+            "Texture upload allocation is missing from the payload estimate");
+        resources.DestroyTexture(smallTexture);
+        resources.DestroyTexture(smallTexture);
+        const auto largeTexture = resources.RegisterTexture({.width = 32U, .height = 32U, .format = bgfx::TextureFormat::RGBA8});
+        const auto resizedMemory = resources.Stats().memory;
+        Require(resizedMemory.textureBytes == 4096U && resizedMemory.pendingTextureBytes == 1024U &&
+                resizedMemory.peakRetainedBytes == originalMemory.meshBytes + 5120U,
+            "Texture resize must retain the old allocation until deferred destruction");
+        for (int frame = 0; frame < 3; ++frame) resources.TickFrame();
+        Require(resources.Stats().memory.pendingTextureBytes == 0U && resources.Stats().memory.releasedBytes == 1024U,
+            "Deferred texture destruction did not release exactly one allocation");
+        resources.DestroyTexture(largeTexture);
         struct Result { std::uint32_t occupied; std::uint32_t geometry; std::uint32_t box; };
-        const auto voxelize = [&](std::uint64_t meshAssetId) {
+        const auto voxelize = [&](std::uint64_t meshAssetId, std::array<float, 3> focus = {}) {
             RenderScene scene;
             MeshRenderProxyDesc desc{ .entityId = 1U, .meshAssetId = meshAssetId };
             desc.model[0] = desc.model[5] = desc.model[10] = desc.model[15] = 1.0F;
             static_cast<void>(scene.UpsertMesh(desc));
             SceneGiVoxelGrid grid;
             Require(grid.Initialize(), "Voxel wall test could not create the voxel grid");
-            grid.Update(scene, resources, bindings, { 0.0F, 0.0F, 0.0F }, 0.25F);
+            grid.Update(scene, resources, bindings, focus, 0.25F);
             return Result{ grid.OccupiedVoxelCount(), grid.GeometryMeshCount(), grid.BoundingBoxMeshCount() };
         };
         const Result solid = voxelize(1U);
@@ -7604,6 +8360,47 @@ void RunVoxelGridKeepsThinWallsAndOpeningsTest() {
             "Voxel wall test: a mesh without triangles must be counted as filled by its bounding box");
         // The same wall as a bounding box has the voxels of the slab only, but a thick bounding box would fill many more.
         Require(dynamic.occupied >= solid.occupied, "Voxel wall test: the bounding box fill can only be as large as the geometry fill or larger");
+        RenderMeshProxyGeometry prepared;
+        for (const auto& vertex : holedVertices) prepared.positions.insert(prepared.positions.end(), {vertex.x, vertex.y, vertex.z});
+        prepared.indices.assign(holedIndices.begin(), holedIndices.end());
+        Require(resources.SetMeshProxyGeometry(dynamicHandle, prepared), "Preparing GI triangles for a dynamic mesh failed");
+        prepared.positions[0] = 500.0F; // caller mutation must not change the retained immutable copy
+        const auto preparedResult = voxelize(3U);
+        Require(preparedResult.geometry == 1U && preparedResult.box == 0U && preparedResult.occupied == holed.occupied,
+            "Prepared GI proxy did not retain its opening or was aliased to caller memory");
+        const auto previousVersion = resources.FindMesh(dynamicHandle)->version;
+        prepared.indices[0] = 0xffffffffU;
+        Require(!resources.SetMeshProxyGeometry(dynamicHandle, prepared) && resources.FindMesh(dynamicHandle)->version == previousVersion,
+            "Invalid GI proxy must leave the previous proxy and resource revision intact");
+        prepared.indices.assign(holedIndices.begin(), holedIndices.end());
+        prepared.positions[0] = std::numeric_limits<float>::quiet_NaN();
+        Require(!resources.SetMeshProxyGeometry(dynamicHandle, prepared) && resources.FindMesh(dynamicHandle)->version == previousVersion,
+            "Non-finite GI positions must preserve the previous geometry");
+        prepared.positions.clear();
+        for (const auto& vertex : holedVertices) prepared.positions.insert(prepared.positions.end(),
+            {vertex.x * 1.0e20F, vertex.y * 1.0e20F, vertex.z * 1.0e20F});
+        Require(resources.SetMeshProxyGeometry(dynamicHandle, prepared), "Finite large-coordinate GI proxy was rejected");
+        const auto largeWall = voxelize(3U, {1.5e20F, 0.0F, 0.0F});
+        Require(largeWall.geometry == 1U && largeWall.box == 0U && largeWall.occupied >= 64U,
+            "Finite geometry overflow lost the wall beside its opening");
+        Require(voxelize(3U).occupied == 0U, "Large-coordinate GI proxy filled its central opening");
+        Require(resources.UpdateMeshVertices(dynamicHandle, {.vertexData = solidVertices.data(),
+            .vertexCount = static_cast<std::uint32_t>(solidVertices.size()), .vertexFormat = RenderVertexFormat::P3N3UV2},
+            0U, static_cast<std::uint32_t>(solidVertices.size())), "Dynamic proxy test upload failed");
+        Require(voxelize(3U).box == 1U && resources.FindMesh(dynamicHandle)->proxyGeometry == nullptr,
+            "A dynamic upload must invalidate stale GI triangles until they are republished");
+        Require(resources.Stats().memory.meshBytes == originalMemory.meshBytes,
+            "An in-place vertex upload must not count as a new GPU allocation");
+        Require(resources.SetMeshProxyGeometry(dynamicHandle, {}), "Clearing an explicit GI proxy failed");
+        resources.DestroyMesh(dynamicHandle);
+        Require(!resources.SetMeshProxyGeometry(dynamicHandle, prepared), "Destroyed mesh accepted a GI proxy");
+        Require(resources.Stats().memory.pendingMeshBytes == solidVertices.size() * sizeof(RenderStaticMeshVertexP3N3UV2)
+                + solidIndices.size() * sizeof(std::uint16_t), "Destroyed mesh must remain in deferred payload accounting");
+        resources.Shutdown();
+        const auto finalMemory = resources.Stats().memory;
+        Require(finalMemory.RetainedBytes() == 0U && finalMemory.allocatedBytes == finalMemory.releasedBytes &&
+                finalMemory.peakRetainedBytes == resizedMemory.peakRetainedBytes,
+            "Registry unload must balance lifetime allocation counters while retaining the peak");
     }
     renderer.Shutdown();
 }
@@ -8207,7 +9004,9 @@ void RunRendererSortsAlphaGpuParticlesTest() {
 // and the pixels are read back. Particles leave the origin along +x at 4 m/s, so after one second the
 // right half of the image holds a bright line and the left half stays dark.
 std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingPlane = false, bool gpuPreferred = true,
-    bool screenDepth = false, bool orderedMotion = false, bgfx::RendererType::Enum backend = bgfx::RendererType::Direct3D11) {
+    bool screenDepth = false, bool orderedMotion = false, bgfx::RendererType::Enum backend = bgfx::RendererType::Direct3D11,
+    std::optional<kb::scene::ParticleSortMode> sortFixture = std::nullopt,
+    kb::scene::ParticleBlendMode sortBlend = kb::scene::ParticleBlendMode::Alpha) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_particle_file_to_pixel_" + std::to_string(GetCurrentProcessId()));
     std::error_code error;
@@ -8257,6 +9056,22 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
         add(kb::scene::ParticleModuleType::AxisRotation, kb::scene::ParticleAxisRotationModule{.axis = {1.0F, 0.0F, 0.0F}, .degreesPerSecond = 60.0F});
         add(kb::scene::ParticleModuleType::Attraction, kb::scene::ParticleAttractionModule{.point = {-2.0F, 0.0F, 3.0F}, .strength = 2.0F});
     }
+    if (sortFixture) {
+        emitter.output.sort = *sortFixture;
+        emitter.output.blend = sortBlend;
+        emitter.output.softParticles = false;
+        emitter.spawn.mode = kb::scene::ParticleSpawnMode::Burst;
+        emitter.spawn.bursts = {{.timeSeconds = 0.0F, .count = 1U}, {.timeSeconds = 0.8F, .count = 1U}};
+        emitter.spawn.direction = {0.0F, 0.0F, -1.0F};
+        emitter.spawn.speedMin = emitter.spawn.speedMax = 5.0F;
+        emitter.spawn.startSize = 3.0F;
+        emitter.modules.push_back({.moduleId = 1U, .type = kb::scene::ParticleModuleType::ColorOverLife,
+            .payload = kb::scene::ParticleColorOverLifeModule{.gradient = {.stops = {
+                {.time = 0.0F, .color = {1.0F, 0.0F, 0.0F, 0.8F}},
+                {.time = 0.2F, .color = {1.0F, 0.0F, 0.0F, 0.8F}},
+                {.time = 0.45F, .color = {0.0F, 0.0F, 1.0F, 0.8F}},
+                {.time = 1.0F, .color = {0.0F, 0.0F, 1.0F, 0.8F}}}}}});
+    }
     effect.emitters.push_back(std::move(emitter));
     Require(kb::scene::ParticleEffectAssetIO::Save(root / "spark.kbvfx", effect), "File-to-pixel test could not write its effect file");
 
@@ -8293,7 +9108,7 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
     Require(bgfx::getRendererType() == backend, "File-to-pixel test used an unexpected backend");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
     SceneRenderCamera camera{};
-    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 1.2F, 0.0F, 0.0F });
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ sortFixture ? 0.0F : 1.2F, 0.0F, 0.0F });
     SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
 
     std::vector<std::uint8_t> pixels;
@@ -8335,7 +9150,8 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
             const auto draws = renderer.GpuParticleDraws(scene);
             Require(draws.size() == 1U && draws[0].key.instanceId == ids[0] && draws[0].key.emitterId == 1U,
                 "Renderer inspection lost the actual particle emitter identity");
-            const auto expectedBytes = 4096U * (144U + (draws[0].params->NeedsState() ? 64U : 0U));
+            const auto expectedBytes = 4096U * (144U + (draws[0].params->NeedsState() ? 64U : 0U) +
+                (sortFixture && *sortFixture != kb::scene::ParticleSortMode::None && sortBlend == kb::scene::ParticleBlendMode::Alpha ? 96U : 0U));
             Require(draws[0].requestedBufferBytes == expectedBytes && renderer.GpuEmitterAllocatedBytes() == expectedBytes,
                 "Renderer inspection changed particle requested buffer accounting");
             ParticleGpuReadback capture;
@@ -8353,6 +9169,13 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
         static_cast<unsigned>(backend), right, left, consumer ? 1 : 0, gpuRoute ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
     Require(gpuRoute == gpuPreferred, "File-to-pixel test used an unexpected simulation route or fallback");
     Require(!gpuPreferred || cpuParticles == 0U, "GPU contact test retained CPU-simulated particles");
+    if (sortFixture) {
+        Require(consumer && gpuDrawCalls >= 1U, "Authored sort emitter did not draw");
+        std::fprintf(stderr, "particle_file_sort seed=%llu backend=%u sort=%u blend=%u\n",
+            static_cast<unsigned long long>(effect.determinismSeed), static_cast<unsigned>(backend),
+            static_cast<unsigned>(*sortFixture), static_cast<unsigned>(sortBlend));
+        return pixels;
+    }
     if (killingPlane) {
         Require(consumer && gpuDrawCalls >= 1U && (gpuPreferred || cpuParticles > 0U),
             "File-to-pixel test: a killing plane must render particles before contact");
@@ -8523,6 +9346,92 @@ void RunRendererMillionParticleFileTest() {
         SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
     const auto green = [&](std::size_t x, std::size_t y) { return static_cast<int>(pixels[(y * kSize + x) * 4U + 1U]); };
     return {green(32U, 32U), green(4U, 60U)};
+}
+
+[[nodiscard]] std::vector<std::uint8_t> DepthParticlePixels(
+    bool volume, unsigned count, float particleSize, float rotation, bool resize,
+    bool missingDepth, double* gpuMs = nullptr, float volumeHeight = 1.0F) {
+    SnapshotBackend backend;
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U; emitter.effectAssetId = 2U; emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U; emitter.materialAssetId = 1U;
+    emitter.particleCount = count; emitter.liveParticleCount = count;
+    emitter.output = volume ? kb::particles::ParticleRenderOutput::Volumetric : kb::particles::ParticleRenderOutput::Decal;
+    emitter.blend = kb::particles::ParticleRenderBlendMode::Add;
+    emitter.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.decalDepth = 2.0F;
+    emitter.volumetricDensity = 1.0F;
+    emitter.volumetricRadiusScale = 0.5F;
+    emitter.volumetricLowQualitySteps = 8U; emitter.volumetricHighQualitySteps = 24U;
+    emitter.boundsMinimum = {-10.0F, -10.0F, -5.0F}; emitter.boundsMaximum = {10.0F, 10.0F, 15.0F};
+    const std::array emitters{emitter};
+    std::vector<kb::particles::ParticleRenderRecord> particles(count);
+    for (unsigned index = 0; index < count; ++index)
+        particles[index] = {.position = {0.0F, volume ? volumeHeight : 0.0F, 5.0F}, .size = particleSize,
+            .rotationRadians = rotation, .particleId = 11U + index, .packedColor = 0x4000FF00U};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame == 0)
+            Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded() &&
+                kb::particles::ParticlePlayback::WarmupRenderSnapshots(scene).Succeeded(), "Depth particle snapshot initialization failed");
+        if (count != 0U)
+            Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+                .revision = static_cast<std::uint64_t>(frame) + 1U, .fixedStepIndex = static_cast<std::uint64_t>(frame) + 1U,
+                .emitters = emitters, .particles = particles}).Succeeded(), "Depth particle snapshot failed");
+    };
+    const auto configure = [&](Renderer& renderer, ParticleMeshReadbackTarget& target, RenderSceneSubmitDesc& desc, int frame) {
+        if (resize && (frame == 6 || frame == 12)) {
+            const std::uint16_t extent = frame == 6 ? 128U : 64U;
+            target.Shutdown();
+            Require(target.Initialize(extent, extent), "Depth particle resize failed");
+            renderer.OnResize(extent, extent);
+            desc.target = target.Binding();
+        }
+        if (missingDepth && frame >= 20) desc.target.depthTexture = BGFX_INVALID_HANDLE;
+    };
+    return RenderScreenSpaceScene({SsBox{{0.0F, -0.5F, 5.0F}, {20.0F, 1.0F, 20.0F}}}, {},
+        {0.0F, 6.0F, -1.0F}, {0.0F, 0.0F, 5.0F}, 40.0F, {}, 40, 64U,
+        SceneRenderMeshPassMode::OpaqueAndTransparent, queue, false, 1.27F, 40.0F, gpuMs, configure);
+}
+
+void RunDepthParticleBoundaryPixelsTest() {
+    for (bool volume : {false, true}) {
+        const auto background = DepthParticlePixels(volume, 0U, 4.0F, 0.0F, false, false);
+        const auto single = DepthParticlePixels(volume, 1U, 4.0F, 0.0F, false, false);
+        const auto overlap = DepthParticlePixels(volume, 2U, 4.0F, 0.0F, false, false);
+        const auto smallerImage = DepthParticlePixels(volume, 1U, 2.0F, 0.0F, false, false);
+        const auto resized = DepthParticlePixels(volume, 1U, 4.0F, 0.0F, true, false);
+        const auto missing = DepthParticlePixels(volume, 1U, 4.0F, 0.0F, false, true);
+        Require(single == resized, "Depth particle target resize changed the restored reference image");
+        Require(missing == background, "Depth particle sampled unavailable scene depth");
+        unsigned singleCoverage = 0U, smallCoverage = 0U, addedOverlap = 0U;
+        for (std::size_t pixel = 0; pixel < single.size(); pixel += 4U) {
+            singleCoverage += int(single[pixel + 1U]) > int(background[pixel + 1U]) + 5;
+            smallCoverage += int(smallerImage[pixel + 1U]) > int(background[pixel + 1U]) + 5;
+            addedOverlap += int(overlap[pixel + 1U]) > int(single[pixel + 1U]) + 5;
+        }
+        std::fprintf(stderr, "depth_particle volume=%d coverage=%u small=%u overlap=%u\n", volume, singleCoverage, smallCoverage, addedOverlap);
+        Require(smallCoverage > 8U && singleCoverage > smallCoverage * 2U && addedOverlap > 8U,
+            "Depth particle scale or overlap did not preserve visible contributions");
+        if (!volume) {
+            const auto quarter = DepthParticlePixels(false, 1U, 4.0F, 1.57079633F, false, false);
+            const auto diagonal = DepthParticlePixels(false, 1U, 4.0F, 0.78539816F, false, false);
+            unsigned quarterDifference = 0U, diagonalDifference = 0U;
+            for (std::size_t pixel = 0; pixel < single.size(); pixel += 4U) {
+                quarterDifference += std::abs(int(single[pixel + 1U]) - int(quarter[pixel + 1U])) > 5;
+                diagonalDifference += std::abs(int(single[pixel + 1U]) - int(diagonal[pixel + 1U])) > 5;
+            }
+            Require(quarterDifference < 8U && diagonalDifference > 16U, "Decal projection did not rotate its square volume");
+        } else {
+            const auto occluded = DepthParticlePixels(true, 1U, 4.0F, 0.0F, false, false, nullptr, -3.0F);
+            Require(occluded == background, "Volumetric particle leaked through the opaque floor");
+            double oneMs = -1.0, eightMs = -1.0;
+            static_cast<void>(DepthParticlePixels(true, 1U, 4.0F, 0.0F, false, false, &oneMs));
+            static_cast<void>(DepthParticlePixels(true, 8U, 8.0F, 0.0F, false, false, &eightMs));
+            Require(oneMs > 0.0 && eightMs > 0.0, "Volumetric fill-rate GPU timings unavailable");
+            std::fprintf(stderr, "volumetric_frame_gpu_ms one_small=%.6f eight_large=%.6f\n", oneMs, eightMs);
+        }
+    }
 }
 
 void RunRendererProjectsParticleDecalsTest() {
@@ -8873,9 +9782,181 @@ void RunRendererRendersPointLightShadowTest() {
 }
 #endif
 
+void RunRendererAssetDecodeCancellationTest() {
+    std::string text = "v 0 0 0\nv 1 0 0\nv 0 1 0\n";
+    text.reserve(10'000'000U);
+    for (unsigned i = 0; i < 1'000'000U; ++i) text += "v 0 0 0\n";
+    text += "f 1 2 3\n";
+    const std::span<const std::uint8_t> bytes{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()};
+    kb::assets::AssetMetadata metadata{.type = "RenderMesh", .sourceExtension = ".obj"};
+    std::array<double, 16U> latency{};
+    for (auto& milliseconds : latency) {
+        auto cancellation = std::make_shared<kb::assets::AssetLoadCancellation>();
+        const kb::assets::AssetLoadRequest request{.metadata = metadata, .resolvedPath = "LargeMesh.obj",
+            .sourceBytes = bytes, .cancellation = cancellation};
+        std::promise<void> entered;
+        auto started = entered.get_future();
+        auto pending = std::async(std::launch::async, [&] {
+            RenderMeshAssetLoader loader;
+            entered.set_value();
+            return loader.Load(request);
+        });
+        started.wait();
+        Require(pending.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout,
+            "Large OBJ fixture completed before cancellation could exercise its decoder");
+        const auto start = std::chrono::steady_clock::now();
+        cancellation->requested.store(true, std::memory_order_release);
+        Require(pending.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready,
+            "Large OBJ decode did not observe cancellation within the bounded wait");
+        const auto result = pending.get();
+        milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        Require(!result.asset && result.error == "Asset load cancelled" && cancellation->observed.load(),
+            "Cancelled OBJ decode retained a partial mesh or lost the cancellation reason");
+    }
+    std::sort(latency.begin(), latency.end());
+    std::fprintf(stderr, "asset_obj_cancel source_bytes=%zu samples=16 p95_ms=%.6f p99_ms=%.6f\n",
+        text.size(), latency[15], latency[15]);
+}
+
+void RunRendererParticleBlendGoldensTest(bgfx::RendererType::Enum backend) {
+#if defined(_WIN32)
+    NativeTestSurface surface;
+    DisplayConfig config{};
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(backend);
+    Renderer host;
+    Require(host.Initialize(surface, &config), "Blend goldens could not initialize the requested backend");
+    Require(bgfx::getRendererType() == backend, "Blend goldens used a fallback backend");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(64U, 64U, bgfx::TextureFormat::RGBA32F), "Blend goldens need an HDR target");
+        ParticleGpuRenderer particles;
+        Require(particles.Initialize(), "Blend goldens could not initialize particle shaders");
+        RenderResourceRegistry resources;
+        SceneRenderResourceMap map;
+        const auto quad = BuildBuiltInParticleQuadMesh();
+        map.BindMesh(BuiltInParticleQuadMeshAssetId().value, resources.RegisterMesh(quad.desc));
+        const std::uint32_t white = 0xFFFFFFFFU;
+        map.BindTexture(72U, RenderTextureColorSpace::Srgb, resources.RegisterTexture({
+            .width = 1U, .height = 1U, .format = bgfx::TextureFormat::RGBA8,
+            .memory = bgfx::copy(&white, sizeof(white))}));
+        SceneRenderCamera camera{};
+        bx::mtxIdentity(camera.view.data());
+        SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F,
+            SceneDepthPolicy::HomogeneousDepth());
+        kb::particles::ParticleRenderSnapshotChannel channel;
+        Require(channel.Warmup(91U).Succeeded(), "Blend snapshot channel warmup failed");
+        std::uint64_t revision = 0U;
+        using Blend = kb::particles::ParticleRenderBlendMode;
+        const auto capture = [&](Blend blend, bool soft, std::optional<float> surfaceDepth) {
+            const kb::particles::ParticleRenderRecord record{.position = {0.0F, 0.0F, 5.0F},
+                .size = 2.0F, .particleId = 1U, .packedColor = 0x80C08040U};
+            kb::particles::ParticleRenderEmitterRecord emitter{};
+            emitter.instanceId = 1U; emitter.effectAssetId = 2U; emitter.emitterId = 1U;
+            emitter.assetGeneration = 1U; emitter.materialAssetId = 73U;
+            emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+            emitter.textureAtlasAssetId = 72U;
+            emitter.particleCount = emitter.liveParticleCount = 1U;
+            emitter.blend = blend;
+            emitter.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            emitter.colorIntensity = 4.0F;
+            if (soft) emitter.flags = kb::particles::ParticleRenderEmitterFlag::SoftParticles;
+            ++revision;
+            Require(channel.Publish(1U, {.revision = revision,
+                .emitters = std::span{&emitter, 1U}, .particles = std::span{&record, 1U}}).Succeeded(),
+                "Blend snapshot publish failed");
+            bgfx::TextureHandle depth = BGFX_INVALID_HANDLE;
+            if (surfaceDepth) {
+                const float clipDepth = camera.projection[10] + camera.projection[14] / *surfaceDepth;
+                const float deviceDepth = SceneDepthPolicy::HomogeneousDepth() ? clipDepth * 0.5F + 0.5F : clipDepth;
+                depth = bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::R32F,
+                    BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT,
+                    bgfx::copy(&deviceDepth, sizeof(deviceDepth)));
+                Require(bgfx::isValid(depth), "Blend depth fixture creation failed");
+            }
+            constexpr bgfx::ViewId view = 200U;
+            bgfx::setViewFrameBuffer(view, target.Binding().frameBuffer);
+            bgfx::setViewRect(view, 0U, 0U, 64U, 64U);
+            bgfx::setViewClear(view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x4080C0FFU, 0.0F);
+            bgfx::setViewTransform(view, camera.view.data(), camera.projection.data());
+            bgfx::touch(view);
+            const auto submitted = particles.Submit(view, *channel.Read(), camera, resources, map, depth);
+            Require(submitted.succeeded && submitted.submittedParticles == 1U, "Blend golden particle was not drawn");
+            bgfx::frame();
+            const auto pixels = target.ReadFloatPixels();
+            if (bgfx::isValid(depth)) bgfx::destroy(depth);
+            const auto offset = (32U * 64U + 32U) * 4U;
+            return std::array<float, 4>{pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]};
+        };
+        const float alpha = 128.0F / 255.0F;
+        const std::array<float, 3> background{64.0F / 255.0F, 128.0F / 255.0F, 192.0F / 255.0F};
+        for (const auto blend : {Blend::Opaque, Blend::Alpha, Blend::Add, Blend::Multiply, Blend::Subtract, Blend::Premultiplied}) {
+            const auto actual = capture(blend, false, std::nullopt);
+            const auto noDepth = capture(blend, true, std::nullopt);
+            std::array<float, 4> expected{};
+            for (std::size_t c = 0; c < 3; ++c) {
+                const float source = background[c] * 4.0F;
+                switch (blend) {
+                case Blend::Opaque: expected[c] = source; break;
+                case Blend::Alpha: expected[c] = source * alpha + background[c] * (1.0F - alpha); break;
+                case Blend::Add: expected[c] = source * alpha + background[c]; break;
+                case Blend::Multiply: expected[c] = source * background[c]; break;
+                case Blend::Subtract: expected[c] = background[c] - source * alpha; break;
+                case Blend::Premultiplied: expected[c] = source + background[c] * (1.0F - alpha); break;
+                }
+            }
+            expected[3] = blend == Blend::Opaque ? alpha :
+                (blend == Blend::Multiply || blend == Blend::Subtract ? 1.0F : 1.0F - alpha);
+            for (std::size_t c = 0; c < 4; ++c) {
+                Require(std::isfinite(actual[c]) && std::abs(actual[c] - expected[c]) < 0.015F,
+                    "HDR blend RGBA golden differs from the blend equation");
+                Require(std::abs(actual[c] - noDepth[c]) < 0.0001F,
+                    "Soft particles without depth corrupted color or alpha");
+            }
+            std::fprintf(stderr, "particle_blend_golden backend=%s mode=%u rgba=%.6f,%.6f,%.6f,%.6f no_depth=equal\n",
+                bgfx::getRendererName(backend), static_cast<unsigned>(blend), actual[0], actual[1], actual[2], actual[3]);
+        }
+        for (const float gap : {-0.05F, 0.0F, 0.05F, 0.1F, 0.2F}) {
+            const auto actual = capture(Blend::Add, true, 5.0F + gap);
+            const float fade = std::clamp(gap / 0.1F, 0.0F, 1.0F);
+            for (std::size_t c = 0; c < 3; ++c)
+                Require(std::abs(actual[c] - (background[c] + background[c] * 4.0F * alpha * fade)) < 0.015F,
+                    "Soft depth intersection HDR golden differs from the expected fade");
+            Require(std::abs(actual[3] - (1.0F - alpha * fade)) < 0.015F, "Soft depth fade corrupted scene alpha");
+            std::fprintf(stderr, "particle_soft_golden gap=%.3f rgba=%.6f,%.6f,%.6f,%.6f\n",
+                gap, actual[0], actual[1], actual[2], actual[3]);
+        }
+        particles.Shutdown();
+        resources.Shutdown();
+    }
+    host.Shutdown();
+#else
+    throw std::runtime_error("Particle blend goldens require the Windows renderer");
+#endif
+}
+
 void RunRendererParticleSortModesTest() {
 #if defined(_WIN32)
     RunRendererSortsAlphaGpuParticlesTest();
+#if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    using Sort = kb::scene::ParticleSortMode;
+    using Blend = kb::scene::ParticleBlendMode;
+    const auto image = [](Sort sort, Blend blend) {
+        return RunRendererDrawsAuthoredParticleFileTest(false, true, false, false,
+            bgfx::RendererType::Direct3D11, sort, blend);
+    };
+    const auto back = image(Sort::BackToFront, Blend::Alpha);
+    const auto front = image(Sort::FrontToBack, Blend::Alpha);
+    constexpr std::size_t center = (32U * 64U + 32U) * 4U;
+    std::fprintf(stderr, "particle_file_sort_rgba back=%u,%u,%u front=%u,%u,%u\n",
+        back[center], back[center + 1], back[center + 2], front[center], front[center + 1], front[center + 2]);
+    Require(back[center + 2] > front[center + 2] + 10 && front[center] > back[center] + 10,
+        "Sorting the real emitter asset did not change overlap in the authored direction");
+    const auto additiveSorted = image(Sort::BackToFront, Blend::Add);
+    const auto additiveUnsorted = image(Sort::None, Blend::Add);
+    for (std::size_t i = 0; i < additiveSorted.size(); ++i)
+        Require(std::abs(int(additiveSorted[i]) - int(additiveUnsorted[i])) <= 2,
+            "BackToFront changed additive emitter color or alpha");
+#endif
 #else
     throw std::runtime_error("Particle sort readback requires the Windows renderer");
 #endif
@@ -8945,6 +10026,197 @@ void RunRendererParticleContactDeathTest() {
     Require(contactDifference > reference.size() / 2U, "Contact deaths did not visibly remove the free-flying particles");
 #else
     throw std::runtime_error("Particle collision readback requires the Windows renderer and particle provider module");
+#endif
+}
+
+void RunVoxelGiDynamicScenePixelsTest() {
+#if defined(_WIN32)
+    constexpr std::uint16_t size=64;
+    const std::vector<SsBox> boxes{{{0,-0.5F,0},{40,1,40}},{{-4,3,0},{0.5F,6,20},SsMaterial::Red}};
+    const auto capture=[&](bool enabled,unsigned change,bool destinationFromStart=false) {
+        kb::scene::SceneEntity wall{},light{};
+        kb::scene::TransformComponent wallTransform{};
+        kb::scene::MeshRendererComponent wallMesh{};
+        const auto mutate=[&](kb::scene::Scene& scene,int frame) {
+            if(frame==0) {
+                struct Found { kb::scene::SceneEntity* entity; kb::scene::TransformComponent* transform;
+                    kb::scene::MeshRendererComponent* mesh; } found{&wall,&wallTransform,&wallMesh};
+                scene.Components().Visitors().ForEachMeshRenderer(
+                    [](kb::scene::SceneEntity entity,const kb::scene::TransformComponent& transform,
+                       const kb::scene::MeshRendererComponent& mesh,void* context) {
+                        if(mesh.materialAssetId==kb::assets::MakeAssetId("SsRed").value) {
+                            auto& result=*static_cast<Found*>(context);
+                            *result.entity=entity; *result.transform=transform; *result.mesh=mesh;
+                        }
+                    },&found);
+                scene.Components().Visitors().ForEachLight(
+                    [](kb::scene::SceneEntity entity,const kb::scene::TransformComponent&,
+                       const kb::scene::LightComponent&,void* context) {
+                        *static_cast<kb::scene::SceneEntity*>(context)=entity;
+                    },&light);
+                Require(scene.Entities().IsAlive(wall)&&scene.Entities().IsAlive(light),"Dynamic GI fixture lost its wall/light");
+            }
+            if(frame==(destinationFromStart?0:16)) {
+                if(change==1||change==2) scene.Transforms().SetLocalTranslation(light,{100,100,100});
+                if(change==3||change==4) scene.Transforms().SetLocalTranslation(wall,{100,3,0});
+                if(change==5||change==6) scene.Entities().Destroy(wall);
+            }
+            if(frame==32&&!destinationFromStart) {
+                if(change==2) scene.Transforms().SetLocalTranslation(light,{-1,5,0});
+                if(change==4) scene.Transforms().Set(wall,wallTransform);
+                if(change==6) {
+                    wall=scene.Entities().CreateEntity({.name="ReloadedWall",.transform=wallTransform});
+                    scene.Components().MeshRenderers().Set(wall,wallMesh);
+                }
+            }
+        };
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination=enabled?SceneRenderGlobalIlluminationMode::VoxelGrid:SceneRenderGlobalIlluminationMode::Disabled;
+        lighting.giHistoryWeight=0.7F;
+        double gpuMs=0;
+        const auto pixels=RenderScreenSpaceScene(boxes,{{-1,5,0}},{0,3,-6},{0,0,2},30,lighting,64,size,
+            SceneRenderMeshPassMode::OpaqueOnly,mutate,false,6,40,&gpuMs);
+        double excess=0;
+        for(unsigned y=28;y<36;++y) for(unsigned x=28;x<36;++x) {
+            const auto at=(y*size+x)*4U;excess+=int(pixels[at])-int(pixels[at+2]);
+        }
+        Require(gpuMs>0,"Dynamic GI GPU timing was unavailable");
+        std::fprintf(stderr,"voxel_dynamic mode=%u gi=%u excess=%.4f whole_frame_gpu_sample_mean_ms=%.4f\n",
+            change,enabled?1U:0U,excess/64.0,gpuMs);
+        return excess/64.0;
+    };
+    const double steady=capture(true,0)-capture(false,0);
+    Require(steady>8,"Dynamic GI fixture has no visible bounce");
+    for(unsigned change=1;change<=6;++change) {
+        const double bounce=capture(true,change)-capture(false,change);
+        if(change%2==1) {
+            // Ambient sky still lights a wall after its point light moves away. Compare
+            // with the same destination rendered from a fresh history, not zero GI.
+            const double destination=capture(true,change,true)-capture(false,change,true);
+            Require(std::abs(bounce-destination)<1,"Moved/unloaded GI contributor retained stale radiance versus a fresh destination");
+            Require(bounce<steady-5,"Moving/unloading the contributor did not visibly change the GI");
+        } else Require(std::abs(bounce-steady)<3,"Returning/reloaded GI contributor did not restore its bounce");
+    }
+#endif
+}
+
+void RunVoxelGridStreamingLifecycleTest() {
+#if defined(_WIN32)
+    HeadlessSurface surface;
+    DisplayConfig config{}; config.allowHeadlessNoop=true;
+    config.preferredBgfxRendererType=static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface,&config),"Voxel streaming fixture failed");
+    {
+        const std::array<RenderStaticMeshVertexP3N3UV2,4> vertices{
+            RenderStaticMeshVertexP3N3UV2{-1,-1,-1}, {1,-1,1}, {-1,1,1}, {1,1,-1}};
+        const std::array<std::uint16_t,12> indices{0,1,2,0,3,1,0,2,3,1,3,2};
+        RenderResourceRegistry resources; SceneRenderResourceMap bindings; RenderScene scene;
+        SceneGiVoxelGrid grid; Require(grid.Initialize(),"Voxel streaming textures failed");
+        const auto mesh=resources.RegisterMesh({.vertexData=vertices.data(),.vertexCount=4,
+            .indices=indices.data(),.indexCount=12,.vertexFormat=RenderVertexFormat::P3N3UV2,
+            .bounds={.radius=2},.boundsBox={.center={0,0,0},.halfExtents={1,1,1}}});
+        Require(resources.ContainsMesh(mesh),"Voxel streaming mesh registration failed");
+        MeshRenderProxyDesc desc{.entityId=1,.meshAssetId=1}; bx::mtxIdentity(desc.model.data());
+        bindings.BindMesh(1,mesh); static_cast<void>(scene.UpsertMesh(desc));
+        grid.Update(scene,resources,bindings,{0,0,0},0.25F); bgfx::frame();
+        const auto occupied=grid.OccupiedVoxelCount();
+        Require(occupied>0 && grid.LastUpdateStats().rebuilt,"Voxel stream did not populate its grid");
+        grid.Update(scene,resources,bindings,{0,0,0},0.25F);
+        Require(!grid.LastUpdateStats().rebuilt && grid.LastUpdateStats().uploadedBytes==0,
+            "Unchanged voxel geometry repeated the full rebuild/upload");
+        std::vector<double> times;
+        for(std::uint64_t cycle=0;cycle<24;++cycle) {
+            Require(scene.RemoveMesh(desc.entityId),"Voxel stream unload lost the entity");
+            grid.Update(scene,resources,bindings,{0,0,0},0.25F); bgfx::frame();
+            Require(grid.OccupiedVoxelCount()==0 && grid.LastUpdateStats().cachedMaskBytes==0,
+                "Streamed-out voxel geometry retained occupancy or mesh masks");
+            desc.entityId=cycle+2; desc.meshAssetId=cycle+2;
+            bindings.BindMesh(desc.meshAssetId,mesh); static_cast<void>(scene.UpsertMesh(desc));
+            grid.Update(scene,resources,bindings,{0,0,0},0.25F); bgfx::frame();
+            times.push_back(grid.LastUpdateStats().updateMilliseconds);
+            Require(grid.OccupiedVoxelCount()==occupied && grid.LastUpdateStats().maskBuildCount==1,
+                "Reloaded voxel geometry changed its surface or reused an unrelated mask");
+        }
+        desc.model[12]=100; static_cast<void>(scene.UpsertMesh(desc));
+        grid.Update(scene,resources,bindings,{0,0,0},0.25F); bgfx::frame();
+        Require(grid.OccupiedVoxelCount()==0,"Moving a voxel object out of range retained old occupancy");
+        desc.model[12]=0; static_cast<void>(scene.UpsertMesh(desc));
+        grid.Update(scene,resources,bindings,{0,0,0},0.25F); bgfx::frame();
+        Require(grid.OccupiedVoxelCount()==occupied,"Returning voxel geometry changed its surface");
+        desc.color[0]=0.25F; static_cast<void>(scene.UpsertMesh(desc));
+        grid.Update(scene,resources,bindings,{0,0,0},0.25F); bgfx::frame();
+        Require(grid.LastUpdateStats().rebuilt && grid.LastUpdateStats().maskBuildCount==0,
+            "Material changes did not update voxel radiance or rebuilt unchanged geometry masks");
+        for(std::uint64_t index=0;index<70;++index) {
+            auto added=desc; added.entityId=100+index; added.meshAssetId=100+index;
+            bindings.BindMesh(added.meshAssetId,mesh); static_cast<void>(scene.UpsertMesh(added));
+        }
+        grid.Update(scene,resources,bindings,{0,0,0},0.25F); bgfx::frame();
+        const auto pressure=grid.LastUpdateStats();
+        Require(pressure.maskBuildCount==70 && pressure.cachedMaskBytes<=SceneGiVoxelGrid::kMaskCacheBudgetBytes &&
+                grid.OccupiedVoxelCount()==occupied && grid.BoundingBoxMeshCount()==0,
+            "Voxel mask budget changed geometry or exceeded its resident payload limit");
+        std::sort(times.begin(),times.end());
+        const double p95=times[times.size()*95/100];
+        Require(p95<25.0,"Single tetrahedron reload exceeded the 25 ms CPU test budget");
+        std::fprintf(stderr,"voxel_stream samples=%zu rebuild_cpu_p95_ms=%.4f mask_pressure_ms=%.4f cache_bytes=%llu cpu_payload_bytes=%llu gpu_payload_bytes=%llu upload_bytes=%llu\n",
+            times.size(),p95,pressure.updateMilliseconds,static_cast<unsigned long long>(pressure.cachedMaskBytes),
+            static_cast<unsigned long long>(pressure.cpuPayloadBytes),static_cast<unsigned long long>(pressure.gpuPayloadBytes),
+            static_cast<unsigned long long>(pressure.uploadedBytes));
+        grid.Shutdown(); Require(grid.LastUpdateStats().cpuPayloadBytes==0,"Voxel shutdown retained payload accounting");
+        resources.Shutdown();
+    }
+    renderer.Shutdown();
+#endif
+}
+
+void RunRendererScreenEffectLifecycleTests() {
+#if defined(_WIN32)
+    {
+        HeadlessSurface surface;
+        DisplayConfig config{}; config.allowHeadlessNoop=true;
+        config.preferredBgfxRendererType=static_cast<std::int32_t>(bgfx::RendererType::Noop);
+        Renderer renderer;
+        Require(renderer.Initialize(surface,&config),"GI history ownership fixture failed");
+        {
+            SceneGiHistory history;
+            Require(history.Ensure({64,64},bgfx::TextureFormat::RGBA8),"GI history targets failed");
+            SceneGiHistory::FrameOwner owner{.scene=1,.viewport=1,.camera=1,.effects=1};
+            std::array<float,16> matrix{}; bx::mtxIdentity(matrix.data());
+            std::uint64_t frame=1;
+            history.BeginFrame(owner,frame,false); history.CommitResolve(matrix);
+            history.BeginFrame(owner,++frame,false);
+            Require(history.Binding().active,"Stable GI owner lost its history");
+            for(unsigned change=0;change<7;++change) {
+                history.CommitResolve(matrix);
+                switch(change) {
+                case 0: ++owner.scene; break;
+                case 1: ++owner.viewport; break;
+                case 2: ++owner.camera; break;
+                case 3: owner.cameraOverride=true; break;
+                case 4: owner.orthographic=true; break;
+                case 5: owner.effects=2; break;
+                default: ++frame; break;
+                }
+                history.BeginFrame(owner,++frame,false);
+                Require(!history.Binding().active,"GI history survived an incompatible viewport owner");
+            }
+            history.CommitResolve(matrix); history.BeginFrame(owner,++frame,true);
+            Require(!history.Binding().active,"GI history survived a camera cut");
+            history.CommitResolve(matrix); history.ReleaseScene(owner.scene);
+            Require(!history.Binding().active,"Released scene retained GI history");
+            history.CommitResolve(matrix);
+            Require(history.Ensure({96,96},bgfx::TextureFormat::RGBA8)&&!history.Binding().active,
+                "GI resize retained old surface radiance");
+        }
+        renderer.Shutdown();
+    }
+    RunScreenSpaceReflectionLifecycleTest();
+    RunVoxelGridStreamingLifecycleTest();
+    RunVoxelGiDynamicScenePixelsTest();
+#else
+    throw std::runtime_error("Screen effect lifecycle requires native GPU readback");
 #endif
 }
 
@@ -9080,6 +10352,18 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
 
 // The screen-space effects and the voxel GI alone: gathered GI, its temporal smoothing, ambient
 // occlusion, reflections and the world-space bounce.
+void RunRendererFogProfileTests(bgfx::RendererType::Enum backend) {
+#if defined(_WIN32)
+    RunFogProfilePixelsTest(backend);
+#endif
+}
+
+void RunRendererMaterialMatrixTests(bgfx::RendererType::Enum backend) {
+#if defined(_WIN32)
+    RunMaterialMatrixPixelsTest(backend);
+#endif
+}
+
 void RunRendererScreenSpaceEffectTests() {
 #if defined(_WIN32)
     RunRendererRendersScreenSpaceGiBounceTest();
@@ -9091,6 +10375,56 @@ void RunRendererScreenSpaceEffectTests() {
     RunRendererShadowsVoxelGiBounceTest();
     RunVoxelGridFollowsMeshGeometryTest();
     RunVoxelGridKeepsThinWallsAndOpeningsTest();
+#endif
+}
+
+void RunRendererDiagnosticsTests() {
+    RunRendererReleaseSceneDropsRuntimeResourcesTest();
+#if defined(_WIN32)
+    RunVoxelGridKeepsThinWallsAndOpeningsTest();
+    std::uint64_t proxyAsset = 0U;
+    std::shared_ptr<const RenderMeshProxyGeometry> originalProxy;
+    SceneRenderLightingConfig voxelLighting{};
+    voxelLighting.lightingPath = SceneRenderLightingPath::Deferred;
+    voxelLighting.globalIllumination = SceneRenderGlobalIlluminationMode::VoxelGrid;
+    static_cast<void>(RenderScreenSpaceScene({{{0, 0, 0}, {2, 2, 2}}}, {}, {0, 2, -6}, {0, 0, 0}, 40,
+        voxelLighting, 4, 64, SceneRenderMeshPassMode::OpaqueOnly,
+        [&](kb::scene::Scene& scene, int) { proxyAsset = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj")->id.value; },
+        false, 1.27F, 40.0F, nullptr,
+        [&](Renderer& renderer, ParticleMeshReadbackTarget&, RenderSceneSubmitDesc&, int frame) {
+            if (frame == 0) return;
+            auto* resources = renderer.SceneResources();
+            const auto handle = renderer.SceneResourceMap()->ResolveMesh(proxyAsset);
+            if (frame == 1) {
+                originalProxy = resources->FindMesh(handle)->proxyGeometry;
+                Require(originalProxy != nullptr && resources->SetMeshProxyGeometry(handle, {}), "GI integration could not clear retained geometry");
+            } else {
+                const auto stats = renderer.LastSceneSubmitStats();
+                bool warned = false;
+                for (const auto& event : renderer.LastSceneDiagnostics().events)
+                    if (event.kind == SceneRenderDiagnosticKind::GiBoundingBoxFallback && event.instanceCount == 1U) warned = true;
+                Require(stats.giBoundingBoxMeshCount == (frame == 2 ? 1U : 0U) && warned == (frame == 2),
+                    "GI fallback must be visible in frame statistics and diagnostics, and clear after preparation");
+                if (frame == 2) Require(resources->SetMeshProxyGeometry(handle, *originalProxy), "GI integration could not restore prepared geometry");
+                else Require(stats.giGeometryMeshCount == 1U, "Prepared GI geometry did not reach the renderer");
+            }
+        }));
+    std::vector<int> lit, shadowed;
+    const ShadowFloorScene base{.extraPointLights = 40, .stressAtlas = true, .atlasBrightness = &lit, .pointIntensity = 0.025F};
+    auto unshadowed = base;
+    unshadowed.lightCastsShadow = false;
+    static_cast<void>(RenderShadowFloorBrightness(unshadowed));
+    auto withShadow = base;
+    withShadow.atlasBrightness = &shadowed;
+    static_cast<void>(RenderShadowFloorBrightness(withShadow));
+    Require(lit.size() == 6U && shadowed.size() == lit.size(), "Atlas stress did not capture all resize stages");
+    for (std::size_t index = 0U; index < lit.size(); ++index) {
+        Require(shadowed[index] + 3 < lit[index], "Resized atlas lost the occluder's shadow");
+    }
+    Require(std::abs(shadowed.front() - shadowed.back()) <= 3,
+        "Restoring the same atlas configuration did not restore the same shadow image");
+#else
+    throw std::runtime_error("Renderer diagnostics readback requires a supported native GPU test surface");
 #endif
 }
 
@@ -10051,6 +11385,8 @@ void RunRendererParticleVolumetricSnapshotSubmitTest() {
     RunRendererSubmitsParticleStripSnapshotsTest();
 #if defined(_WIN32)
     RunRendererDrawsVolumetricParticleSnapshotPixelsTest();
+    RunRendererProjectsParticleDecalsTest();
+    RunDepthParticleBoundaryPixelsTest();
 #endif
 }
 
@@ -10171,6 +11507,113 @@ void RunRendererScreenUiSubmitTests() {
     RunRendererKeepsSceneWhenUIFrameRefusesTest();
     RunRendererKeepsUIWhenTextCannotBePreparedTest();
     RunRendererDetachedViewportFinalCompositePixelsTest();
+}
+
+
+void RunRendererStreamingLifetimeTests() {
+    RunRendererReleaseSceneDropsRuntimeResourcesTest();
+    RunRendererPrunesUnreferencedResourcesAfterRetentionTest();
+#if defined(_WIN32)
+    const auto root = std::filesystem::temp_directory_path() /
+        ("21kb_shared_scene_lifetime_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    LifecycleSceneFixture first, second;
+    PrepareLifecycleScene(first, root);
+    PrepareLifecycleScene(second, root);
+    WriteTexture(root / "shared.kbtex", 180U, 90U, 40U);
+    std::uint64_t materialId = 0U;
+    for (auto* fixture : { &first, &second }) {
+        auto& manager = fixture->scene.Assets().Manager();
+        Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+                manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Shared scene loaders failed");
+        static_cast<void>(manager.DiscoverMountedAssets());
+        const auto textureId = manager.Registry().FindByPath("/Game/shared.kbtex")->id.value;
+        WriteMaterial(root / "shared.kbmat", textureId, 0U, 0U, 0U, 0U);
+        { std::ofstream material{root / "shared.kbmat", std::ios::app}; material << "doubleSided true\n"; }
+        static_cast<void>(manager.DiscoverMountedAssets());
+        const auto id = manager.Registry().FindByPath("/Game/shared.kbmat")->id.value;
+        Require(materialId == 0U || materialId == id, "Both scenes must share the same material asset ID");
+        materialId = id;
+        fixture->scene.Components().MeshRenderers().Set(fixture->entity,
+            kb::scene::MeshRendererComponent{.meshAssetId = fixture->meshAssetId, .materialAssetId = materialId});
+    }
+    NativeTestSurface surface;
+    DisplayConfig config{};
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Shared scene hardware renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget firstTarget, secondTarget;
+        Require(firstTarget.Initialize() && secondTarget.Initialize(), "Shared scene readback targets failed");
+        auto firstDesc = LifecycleSubmitDesc(1U);
+        firstDesc.target = firstTarget.Binding();
+        bx::mtxLookAt(firstDesc.cameraOverride->view.data(), bx::Vec3{0.0F, 0.0F, -1.0F}, bx::Vec3{0.0F, 0.0F, 0.0F});
+        SceneDepthPolicy::MakePerspective(firstDesc.cameraOverride->projection.data(), 30.0F, 1.0F, 0.1F, 100.0F,
+            SceneDepthPolicy::HomogeneousDepth());
+        firstDesc.clearRgba = 0x101020FFU;
+        firstDesc.editorSceneOverlaysEnabled = false;
+        firstDesc.postProcessEnabled = false;
+        auto secondDesc = firstDesc;
+        secondDesc.target = secondTarget.Binding();
+        secondDesc.target.viewport.id = RenderViewportId{2U};
+        secondDesc.target.viewport.viewportIndex = 1U;
+        const auto submitBoth = [&] {
+            Require(renderer.BeginFrame() && renderer.SubmitScene(first.scene, firstDesc) &&
+                    renderer.SubmitScene(second.scene, secondDesc), "Shared scenes failed to submit");
+            renderer.EndFrame();
+        };
+        submitBoth();
+        submitBoth();
+        const auto baseline = secondTarget.ReadPixels();
+        bool varied = false;
+        for (std::size_t pixel = 4U; pixel < baseline.size(); pixel += 4U)
+            varied |= baseline[pixel] != baseline[0] || baseline[pixel + 1U] != baseline[1] || baseline[pixel + 2U] != baseline[2];
+        Require(varied, "Shared material hardware image was empty");
+        Require(renderer.RuntimeResourceStats().cachedMaterialCount == 2U &&
+                renderer.RuntimeResourceStats().cachedTextureCount == 2U, "Shared assets must have isolated scene cache entries");
+        Require(renderer.BeginFrame() && renderer.SubmitScene(first.scene, firstDesc), "First queued scene failed");
+        const auto oldMesh = renderer.SceneResourceMap()->ResolveMesh(first.meshAssetId);
+        const auto oldMaterial = renderer.SceneResourceMap()->ResolveMaterial(materialId);
+        Require(renderer.SubmitScene(second.scene, secondDesc), "Second queued scene failed");
+        const auto liveMesh = renderer.SceneResourceMap()->ResolveMesh(second.meshAssetId);
+        const auto liveMaterial = renderer.SceneResourceMap()->ResolveMaterial(materialId);
+        Require(oldMesh != liveMesh && oldMaterial != liveMaterial, "Scene-specific resource handles must remain isolated");
+        // Release after both draw command streams are queued, before bgfx consumes this frame.
+        renderer.ReleaseScene(first.scene);
+        const auto* resources = renderer.SceneResources();
+        Require(resources->FindMesh(oldMesh) == nullptr && resources->FindMaterial(oldMaterial) == nullptr &&
+                resources->FindMesh(liveMesh) != nullptr && resources->FindMaterial(liveMaterial) != nullptr,
+            "Releasing one scene invalidated shared assets in the other scene");
+        Require(resources->Stats().pendingDestroyCount >= 3U, "Queued GPU resources must be retired through deferred destruction");
+        renderer.EndFrame();
+        Require(firstTarget.ReadPixels() == baseline && secondTarget.ReadPixels() == baseline,
+            "Queued draws used freed resources or shared material output changed after scene release");
+        Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U &&
+                renderer.RuntimeResourceStats().cachedMaterialCount == 1U &&
+                renderer.RuntimeResourceStats().cachedTextureCount == 1U, "Scene release retained duplicate shared resources");
+        second.scene.Entities().Destroy(second.entity);
+        for (std::uint32_t frame = 0U; frame < Renderer::kRuntimeAssetRetentionFrames + 5U; ++frame) {
+            SubmitLifecycleFrame(renderer, second.scene, secondDesc, "Shared material retention frame failed");
+            if (frame < Renderer::kRuntimeAssetRetentionFrames / 2U)
+                Require(renderer.RuntimeResourceStats().cachedMaterialCount == 1U &&
+                        renderer.RuntimeResourceStats().cachedTextureCount == 1U, "Shared assets were pruned inside retention");
+        }
+        Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U &&
+                renderer.RuntimeResourceStats().cachedMaterialCount == 0U &&
+                renderer.RuntimeResourceStats().cachedTextureCount == 0U && resources->Stats().pendingDestroyCount == 0U,
+            "Retention or deferred GPU destruction was not bounded");
+        second.entity = second.scene.Entities().CreateEntity();
+        second.scene.Components().MeshRenderers().Set(second.entity,
+            kb::scene::MeshRendererComponent{.meshAssetId = second.meshAssetId, .materialAssetId = materialId});
+        SubmitLifecycleFrame(renderer, second.scene, secondDesc, "Pruned shared material could not be revived");
+        Require(secondTarget.ReadPixels() == baseline, "Revived shared assets changed the rendered image");
+        renderer.ReleaseAllScenes();
+        std::cout << "scene_resource_lifetime backend=D3D11 scenes=2 shared_material=1 queued_release=PASS retention_frames="
+                  << Renderer::kRuntimeAssetRetentionFrames << " image_parity=PASS\n";
+    }
+    renderer.Shutdown();
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+#endif
 }
 
 void RunRendererRuntimeSubmitTests() {
@@ -10322,7 +11765,160 @@ void RunRendererPostProcessProfileAuthoringTests() {
 #if defined(_WIN32)
     RunRendererRendersScreenSpaceAmbientOcclusionTest();
     RunRendererPostProcessProfileDrivesAmbientOcclusionTest();
+    RunBloomOutputProfilePixelsTest();
     RunRendererVignetteDarkensFinalCompositeCornersTest();
+#endif
+}
+
+void CaptureRetargetExport(const char* inputPath, const char* outputPrefix, const char* temporalMode) {
+#if defined(_WIN32)
+    kb::scene::Scene scene;
+    auto& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+        manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+        manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "retarget render loaders failed");
+    std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack;
+    if (std::filesystem::is_directory(inputPath)) {
+        Require(scene.Assets().MountProject(inputPath) && scene.Assets().Discover() > 0U, "retarget project mount failed");
+    } else {
+        pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
+        Require(pack->Mount(inputPath, kb::assets::bake::WindowsX64BakeTargetProfile()) ==
+            kb::assets::bake::RuntimeAssetPackStatus::Success && manager.MountRuntimePack(pack), "retarget pack mount failed");
+    }
+    const auto* metadata = manager.Registry().FindByPath("/Game/Scenes/RetargetExport.21kbscene");
+    Require(metadata != nullptr, "retarget scene missing");
+    const auto document = manager.Load<kb::scene::SceneDocument>(metadata->id);
+    Require(document.IsLoaded() && kb::scene::SceneDocumentService::LoadIntoScene(scene, *document), "retarget scene load failed");
+    NativeTestSurface surface(256U, 256U);
+    Require(surface.IsValid(), "retarget surface failed");
+    Renderer renderer;
+    if (pack) {
+        std::string error;
+        auto provider = RuntimeAssetShaderProvider::Create(pack, error);
+        Require(provider != nullptr && renderer.SetShaderBinaryProvider(provider), "retarget package shaders failed");
+    }
+    DisplayConfig config{};
+    config.enableEditorRendering = false;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Require(renderer.Initialize(surface, &config), "retarget renderer init failed");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(256U, 256U), "retarget readback target failed");
+        RenderSceneSubmitDesc desc{.target = target.Binding(), .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false, .screenUIEnabled = false, .shadowPassEnabled = false,
+            .postProcessEnabled = false, .selectionMaskEnabled = false, .selectionOutlineEnabled = false};
+        const bool temporal = temporalMode != nullptr;
+        SceneRenderTarget sceneTarget;
+        ScenePostProcessTargets postTargets;
+        if (temporal) {
+            Require(sceneTarget.Ensure(SceneRenderTargetDesc{.extent = RenderExtent{256U, 256U}}) &&
+                postTargets.Ensure(ScenePostProcessTargetsDesc{.extent = RenderExtent{256U, 256U}}), "temporal targets failed");
+            desc.target.frameBuffer = sceneTarget.FrameBuffer();
+            desc.target.colorTexture = sceneTarget.ColorTexture();
+            desc.target.resolvedColorTexture = sceneTarget.ResolvedColorTexture();
+            desc.target.depthTexture = sceneTarget.DepthTexture();
+            desc.target.colorFormat = sceneTarget.ColorSelection().format;
+            desc.postProcess = postTargets.Binding();
+            desc.finalComposite = RenderFinalCompositeTargetBinding{
+                .frameBuffer = target.Binding().frameBuffer, .extent = RenderExtent{256U, 256U},
+                .outputRect = RenderViewportRect{.extent = RenderExtent{256U, 256U}}, .enabled = true, .clearTarget = true};
+            desc.postProcessEnabled = true;
+            desc.postProcessSettings = ScenePostProcessSettings{};
+            auto& settings = *desc.postProcessSettings;
+            settings.bloomEnabled = false;
+            settings.outputTransform.autoExposure.enabled = false;
+            settings.temporalAntiAliasingEnabled = std::string_view{temporalMode}.find("fxaa") == std::string_view::npos;
+            settings.temporalJitterEnabled = settings.temporalAntiAliasingEnabled;
+            settings.fxaaEnabled = !settings.temporalAntiAliasingEnabled;
+        }
+        scene.Runtime().SetPlaying(true);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(renderer.BeginFrame(), "temporal initialization synchronization failed");
+        renderer.EndFrame();
+        std::array<std::vector<std::uint8_t>, 30U> captured;
+        std::uint32_t lastReadback = 0U;
+        for (unsigned frame = 1U; frame <= 30U; ++frame) {
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            Require(scene.Runtime().DrainSceneSystemErrors().empty(), "retarget animation runtime failed");
+            renderer.SetFrameDeltaSeconds(1.0F / 60.0F);
+            if (temporal) {
+                SceneRenderCamera camera{};
+                const float x = 0.5F + 0.004F * frame + (frame >= 16U ? 0.15F : 0.0F);
+                bx::mtxLookAt(camera.view.data(), bx::Vec3{x, 0.0F, -4.0F}, bx::Vec3{x, 0.0F, 0.0F});
+                if (std::string_view{temporalMode}.starts_with("ortho"))
+                    SceneDepthPolicy::MakeOrthographic(camera.projection.data(), 3.0F, 1.0F, 0.05F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+                else
+                    SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.05F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+                desc.cameraOverride = camera;
+                if (frame >= 2U) {
+                    for (unsigned blend = 0; blend < 3U; ++blend) {
+                        kb::particles::ParticleGpuEmitterCommand command{};
+                        command.key = {900U + blend, 1U};
+                        command.simTime = static_cast<double>(frame - 2U) / 60.0;
+                        if (frame == 2U) {
+                            command.hasParams = true;
+                            command.params.capacity = 4U;
+                            command.params.blend = blend == 0U ? kb::particles::ParticleRenderBlendMode::Alpha :
+                                (blend == 1U ? kb::particles::ParticleRenderBlendMode::Add : kb::particles::ParticleRenderBlendMode::Premultiplied);
+                            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+                            command.params.color.fill({1.0F, 0.1F * blend, 0.2F, 0.6F});
+                            command.params.size.fill(0.2F);
+                            command.spawns.push_back({.position = {-0.4F + 0.5F * blend, -0.6F, -0.5F},
+                                .velocity = {0.7F, 0.3F, 0.0F}, .lifetime = 4.0F});
+                        }
+                        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+                    }
+                }
+            }
+            desc.resetTemporalHistory = temporal && (std::string_view{temporalMode}.find("reset") != std::string_view::npos || frame == 16U);
+            if (temporal) {
+                Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc), "temporal scene submit failed");
+                renderer.EndFrame();
+                lastReadback = target.QueuePixels(captured[frame - 1U]);
+            } else {
+                SubmitLifecycleFrame(renderer, scene, desc, "retarget scene submit failed");
+            }
+            if (temporal && frame >= 3U)
+                Require(renderer.LastSceneSubmitStats().submittedParticleDrawCallCount >= 3U, "temporal sequence did not render its three particle blend modes");
+            if (temporal && desc.postProcessSettings->temporalAntiAliasingEnabled && frame > 1U) {
+                const auto trace = renderer.LastAaPipelineTraceLines();
+                const bool expectHistory = desc.postProcessSettings->temporalAntiAliasingEnabled && !desc.resetTemporalHistory;
+                const std::string expected = expectHistory ? "historyValid=true" : "historyValid=false";
+                Require(std::ranges::any_of(trace, [&](const std::string& line) { return line.find(expected) != std::string::npos; }),
+                    ("temporal frame " + std::to_string(frame) + " expected " + expected + (trace.empty() ? " empty trace" : " " + trace.front())).c_str());
+            }
+            Require(!renderer.LastSceneDiagnostics().HasErrors() && !renderer.LastSceneSubmitStats().HasMissingResources(),
+                "retarget draw has missing resources");
+            if (!temporal && (frame == 1U || frame == 30U)) {
+                const auto pixels = target.ReadPixels();
+                std::ofstream output(std::string{outputPrefix} + std::to_string(frame) + ".ppm", std::ios::binary);
+                output << "P6\n256 256\n255\n";
+                for (std::size_t offset = 0; offset < pixels.size(); offset += 4U)
+                    output.write(reinterpret_cast<const char*>(pixels.data() + offset), 3);
+                Require(output.good(), "retarget image write failed");
+            }
+        }
+        if (temporal) {
+            // Drain after the complete sequence: advancing bgfx during a synchronous read
+            // would introduce skipped scene frames and invalidate TAA history.
+            auto completed = bgfx::frame();
+            for (unsigned guard = 0U; completed < lastReadback && guard < 8U; ++guard) completed = bgfx::frame();
+            Require(completed >= lastReadback, "temporal sequence readback timed out");
+            for (unsigned frame = 1U; frame <= captured.size(); ++frame) {
+                std::ofstream output(std::string{outputPrefix} + std::to_string(frame) + ".ppm", std::ios::binary);
+                output << "P6\n256 256\n255\n";
+                const auto& pixels = captured[frame - 1U];
+                for (std::size_t offset = 0; offset < pixels.size(); offset += 4U)
+                    output.write(reinterpret_cast<const char*>(pixels.data() + offset), 3);
+                Require(output.good(), "temporal image write failed");
+            }
+        }
+        renderer.ReleaseScene(scene);
+    }
+    renderer.Shutdown();
+#else
+    static_cast<void>(inputPath); static_cast<void>(outputPrefix); static_cast<void>(temporalMode);
+    Require(false, "retarget GPU export probe requires Windows D3D11");
 #endif
 }
 

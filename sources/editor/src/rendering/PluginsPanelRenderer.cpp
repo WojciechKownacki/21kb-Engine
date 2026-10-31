@@ -3,6 +3,7 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorPluginCatalog.hpp"
@@ -40,6 +41,11 @@ constexpr int kCategoryColumnRight = 430;
 
 [[nodiscard]] RECT ProviderAddRect(const RECT& content) noexcept {
     return { content.right - 154, content.top + 9, content.right - 86, content.top + 33 };
+}
+
+// Shown in the header while plugin changes wait for the scene to be rebuilt.
+[[nodiscard]] RECT ReloadSceneRect(const RECT& content) noexcept {
+    return { content.right - 124, content.top + 9, content.right - 14, content.top + 33 };
 }
 
 [[nodiscard]] RECT ProviderCancelRect(const RECT& content) noexcept {
@@ -130,13 +136,9 @@ void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int poin
     return category;
 }
 
-void DrawCheckbox(HDC dc, RECT rect, const EditorTheme& theme, bool enabled) {
-    const COLORREF fill = enabled ? Color(theme.accent) : Color(theme.chrome);
-    const COLORREF border = enabled ? Color(theme.accent) : Color(theme.borderPanel);
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    if (enabled) {
-        DrawText(dc, rect, "x", Color(theme.textPrimary), 12, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+// The on/off switch at the start of a plugin row; drawing and hit-testing share it.
+[[nodiscard]] RECT ToggleRect(const RECT& row) noexcept {
+    return RECT{ row.left + 10, row.top + 10, row.left + 40, row.top + 26 };
 }
 
 void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme) {
@@ -159,7 +161,10 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
         DrawText(dc, ProviderCancelRect(content), EditorText("common.cancel", "Cancel"), Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else if (sceneContext.Plugins().HasPendingReload()) {
         const RECT header = HeaderRect(content);
-        DrawText(dc, RECT{ header.left + 110, header.top, header.right - kPadding, header.bottom }, EditorText("plugins.pendingReload", "Pending scene reload"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        const RECT reload = ReloadSceneRect(content);
+        DrawText(dc, RECT{ header.left + 110, header.top, reload.left - 10, header.bottom }, EditorText("plugins.pendingReload", "Pending scene reload"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        GdiDrawing::DrawSharpFrame(dc, reload, Color(theme.accent), Color(theme.accent));
+        DrawText(dc, reload, EditorText("plugins.reloadScene", "Reload Scene"), Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -188,12 +193,11 @@ void DrawRow(HDC dc, const RECT& row, const EditorTheme& theme, std::size_t inde
         GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
     }
 
-    const RECT checkbox{ row.left + 8, row.top + 8, row.left + 24, row.top + 24 };
-    DrawCheckbox(dc, checkbox, theme, enabled);
-    DrawText(dc, RECT{ row.left + 34, row.top + 1, row.left + kPluginColumnRight - 10, row.top + 18 }, PluginDisplayName(*plugin), Color(theme.textPrimary), 12, FW_SEMIBOLD);
-    DrawText(dc, RECT{ row.left + 34, row.top + 17, row.left + kPluginColumnRight - 10, row.bottom }, plugin->id, Color(theme.textDisabled), 11);
-    const std::string status = std::string{ enabled ? EditorText("plugins.enabled", "Enabled") : EditorText("plugins.disabled", "Disabled") } +
-        (pendingReload ? "*" : "");
+    EditorDialogStyle::PaintSwitch(dc, ToggleRect(row), theme, enabled);
+    DrawText(dc, RECT{ row.left + 50, row.top + 1, row.left + kPluginColumnRight - 10, row.top + 18 }, PluginDisplayName(*plugin), Color(theme.textPrimary), 12, FW_SEMIBOLD);
+    DrawText(dc, RECT{ row.left + 50, row.top + 17, row.left + kPluginColumnRight - 10, row.bottom }, plugin->id, Color(theme.textDisabled), 11);
+    // While a reload is pending the header says so and every status reads amber until it happens.
+    const std::string_view status = enabled ? EditorText("plugins.enabled", "Enabled") : EditorText("plugins.disabled", "Disabled");
     DrawText(dc, RECT{ row.left + kPluginColumnRight, row.top, row.left + kStatusColumnRight, row.bottom }, status, pendingReload ? RGB(223, 178, 91) : (enabled ? RGB(126, 201, 143) : RGB(136, 145, 156)), 12);
     DrawText(dc, RECT{ row.left + kStatusColumnRight, row.top, row.left + kCategoryColumnRight, row.bottom }, PluginCategory(plugin->category), Color(theme.textSecondary), 12);
 
@@ -257,6 +261,9 @@ PluginsPanelRenderer::Hit PluginsPanelRenderer::HitTest(const RECT& content, con
         if (PointInRect(add, x, y)) return { .kind = PluginsPanelHitKind::ParticleProviderAdd, .rect = add };
         const RECT cancel = ProviderCancelRect(content);
         if (PointInRect(cancel, x, y)) return { .kind = PluginsPanelHitKind::ParticleProviderCancel, .rect = cancel };
+    } else if (sceneContext.Plugins().HasPendingReload()) {
+        const RECT reload = ReloadSceneRect(content);
+        if (PointInRect(reload, x, y)) return { .kind = PluginsPanelHitKind::ReloadScene, .rect = reload };
     }
     const RECT thumb = ScrollbarThumbRect(content, sceneContext);
     if (PointInRect(thumb, x, y)) {
@@ -281,9 +288,9 @@ PluginsPanelRenderer::Hit PluginsPanelRenderer::HitTest(const RECT& content, con
     const std::size_t index = static_cast<std::size_t>(rawIndex);
     const int rowTop = rows.top + static_cast<int>((rawIndex * kRowHeight) - offset);
     const RECT row{ rows.left, rowTop, rows.right, rowTop + kRowHeight };
-    const RECT checkbox{ row.left + 8, row.top + 8, row.left + 24, row.top + 24 };
-    if (PointInRect(checkbox, x, y)) {
-        return Hit{ .kind = PluginsPanelHitKind::Toggle, .index = index, .rect = checkbox };
+    const RECT toggle = ToggleRect(row);
+    if (PointInRect(toggle, x, y)) {
+        return Hit{ .kind = PluginsPanelHitKind::Toggle, .index = index, .rect = toggle };
     }
     return Hit{ .kind = PluginsPanelHitKind::Row, .index = index, .rect = row };
 }

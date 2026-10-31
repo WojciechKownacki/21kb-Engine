@@ -33,7 +33,9 @@ constexpr std::array<BuildGameRowSpec, 3> kWebApplicationRows{{
     { BuildGameField::ExecutableName, [] { return EditorText("buildGame.field.bundleName", "Bundle name"); }, BuildGameRowKind::Text, true },
     { BuildGameField::ApplicationIcon, [] { return EditorText("buildGame.field.applicationIcon", "Application icon"); }, BuildGameRowKind::IconPicker, false },
 }};
-constexpr std::array<BuildGameRowSpec, 5> kAndroidApplicationRows{{
+constexpr std::array<BuildGameRowSpec, 7> kAndroidApplicationRows{{
+    { BuildGameField::AndroidFormat, [] { return EditorText("buildGame.field.androidFormat", "Package format (apk/aab)"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::AndroidBundletool, [] { return EditorText("buildGame.field.androidBundletool", "Bundletool JAR (AAB)"); }, BuildGameRowKind::Text, false },
     { BuildGameField::ProductName, [] { return EditorText("buildGame.field.productName", "Product name"); }, BuildGameRowKind::Text, true },
     { BuildGameField::AndroidApplicationId, [] { return EditorText("buildGame.field.applicationId", "Application id"); }, BuildGameRowKind::Text, true },
     { BuildGameField::AndroidVersionCode, [] { return EditorText("buildGame.field.versionCode", "Version code"); }, BuildGameRowKind::Text, true },
@@ -235,6 +237,8 @@ std::string BuildGamePanelModel::Value(BuildGameField field, kb::packaging::Pack
     case BuildGameField::AndroidLabel: return project.androidLabel;
     case BuildGameField::AndroidKeystore: return targetSettings.androidKeystore.empty() ? std::string{ EditorText("buildGame.value.developmentOnly", "Development only") } : targetSettings.androidKeystore.generic_string();
     case BuildGameField::AndroidKeyAlias: return targetSettings.androidKeyAlias.empty() ? std::string{ EditorText("buildGame.value.developmentOnly", "Development only") } : targetSettings.androidKeyAlias;
+    case BuildGameField::AndroidFormat: return targetSettings.androidFormat;
+    case BuildGameField::AndroidBundletool: return targetSettings.androidBundletool.generic_string();
     case BuildGameField::AndroidStorePassword:
     case BuildGameField::AndroidKeyPassword: return std::string{ EditorText("buildGame.value.oneBuildOnly", "Entered for one build only") };
     case BuildGameField::OutputDirectory: return targetSettings.outputDirectory.empty() ? std::string{ EditorText("buildGame.value.selectFolder", "Select folder...") } : targetSettings.outputDirectory.generic_string();
@@ -302,6 +306,12 @@ BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget
         !kb::platform::IsAllowedCrashUploadEndpoint(Trimmed(project.crashReportUploadUrl)))
         return { false, std::string{ EditorText("buildGame.invalid.crashReportUrl", "Crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1.") } };
     const EditorBuildGameTargetSettings& targetSettings = local.For(target);
+    if (spec->needsAndroidMetadata) {
+        if (targetSettings.androidFormat != "apk" && targetSettings.androidFormat != "aab")
+            return {false, "Android package format must be apk or aab."};
+        if (targetSettings.androidFormat == "aab" && targetSettings.androidBundletool.empty())
+            return {false, "Select the bundletool JAR for AAB export."};
+    }
     if (release && spec->needsAndroidMetadata) {
         if (targetSettings.androidKeystore.empty()) return { false, Missing(EditorText("buildGame.required.androidKeystore", "Android keystore")) };
         if (!package_input::IsValidAndroidKeyAlias(Trimmed(targetSettings.androidKeyAlias)))
@@ -380,6 +390,14 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
     }
     case BuildGameField::AndroidLabel: project.androidLabel = text; return true;
     case BuildGameField::AndroidKeyAlias: local.For(target).androidKeyAlias = text; return true;
+    case BuildGameField::AndroidFormat:
+        if (text != "apk" && text != "aab") {
+            error = "Android package format must be apk or aab.";
+            return false;
+        }
+        local.For(target).androidFormat = text;
+        return true;
+    case BuildGameField::AndroidBundletool: local.For(target).androidBundletool = text; return true;
     case BuildGameField::BuilderExecutable: local.builderExecutable = text; return true;
     case BuildGameField::BuildRoot: local.buildRoot = text; return true;
     case BuildGameField::EmsdkRoot: local.emsdkRoot = text; return true;

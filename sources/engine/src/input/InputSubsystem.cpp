@@ -2,6 +2,7 @@
 
 #include "engine/input/InputMappingEvaluator.hpp"
 
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -47,7 +48,41 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
     EvaluateWithDeviceState(deviceState_, deltaSeconds);
 }
 
-void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, float deltaSeconds) {
+void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& physical, float deltaSeconds) {
+    gameplayDevice_ = physical;
+    gameplayInputFiltered_ = gameplayInputBlocked_;
+    for (std::size_t index = 0U; index < InputDeviceState::kKeyCount; ++index) {
+        const auto key = static_cast<InputKey>(index);
+        if (key == InputKey::TouchDown) continue;
+        const std::uint8_t slots = DeviceKindOf(key) == InputDeviceKind::Gamepad ? InputDeviceState::kMaxGamepads : 1U;
+        for (std::uint8_t pad = 0U; pad < slots; ++pad) {
+            const bool relative = DeviceKindOf(key) == InputDeviceKind::Mouse && IsAnalogKey(key);
+            const float neutral = DeviceKindOf(key) == InputDeviceKind::Gamepad && IsAnalogKey(key) ? 0.2F : 0.0F;
+            const bool held = !relative && std::abs(physical.GetValue(key, pad)) > neutral;
+            const bool suppress = gameplayInputBlocked_ || suppressedControls_.IsKeyDown(key, pad);
+            suppressedControls_.SetKeyDown(key, suppress && held, pad);
+            if (suppress) {
+                gameplayDevice_.SetKeyDown(key, false, pad);
+                gameplayDevice_.SetAnalog(key, 0.0F, pad);
+                gameplayInputFiltered_ = true;
+            }
+        }
+    }
+    std::array<InputTouchPoint, InputDeviceState::kMaxTouchPoints> touches{};
+    std::array<std::uint32_t, InputDeviceState::kMaxTouchPoints> heldTouches{};
+    std::size_t touchCount = 0U, heldCount = 0U;
+    for (const auto& touch : physical.TouchPoints()) {
+        const bool suppressed = gameplayInputBlocked_ ||
+            std::find(suppressedTouches_.begin(), suppressedTouches_.end(), touch.id) != suppressedTouches_.end();
+        if (suppressed) {
+            gameplayInputFiltered_ = true;
+            if (IsTouchActive(touch.phase)) heldTouches[heldCount++] = touch.id;
+        } else touches[touchCount++] = touch;
+    }
+    suppressedTouches_.assign(heldTouches.begin(), heldTouches.begin() + static_cast<std::ptrdiff_t>(heldCount));
+    gameplayDevice_.SetTouchPoints(std::span{touches}.first(touchCount));
+    if (gameplayInputBlocked_) gameplayDevice_.ClearTextInput();
+    const InputDeviceState& device = gameplayDevice_;
     // Snapshot last frame's combined states (used for edge events and chords),
     // then rebuild this frame's action states from scratch.
     previousCombined_.clear();
@@ -56,6 +91,27 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, flo
     }
     actionStates_.clear();
     frameEvents_.clear();
+
+    if (gameplayInputBlocked_) {
+        // A modal cancels held gameplay, rather than synthesizing a key release
+        // that could fire a Tap/Released trigger underneath the dialog.
+        for (auto& context : stack_.Active()) {
+            for (auto& mapping : context.mappings) {
+                mapping.modifierState = {};
+                for (auto& trigger : mapping.triggerStates) trigger = {};
+            }
+            for (auto& composite : context.composites) {
+                composite.modifierState = {};
+                for (auto& trigger : composite.triggerStates) trigger = {};
+            }
+        }
+        for (const auto& [name, previous] : previousCombined_) {
+            if (previous == TriggerState::None) continue;
+            actionStates_[name].canceled = true;
+            frameEvents_.push_back({name, InputActionPhase::Canceled, InputValue{}});
+        }
+        return;
+    }
 
     // Keyed by (key, gamepadIndex) - the SAME InputKey value on two different
     // gamepads is a different physical control, so consumption must not alias
@@ -172,6 +228,13 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, flo
 
         state.started = prev == TriggerState::None && state.combined != TriggerState::None;
         state.triggered = state.combined == TriggerState::Triggered;
+        state.completed = prev == TriggerState::Triggered && state.combined == TriggerState::None;
+        state.canceled = prev == TriggerState::Ongoing && state.combined == TriggerState::None;
+        if (state.completed) {
+            frameEvents_.push_back({name, InputActionPhase::Completed, state.value});
+        } else if (state.canceled) {
+            frameEvents_.push_back({name, InputActionPhase::Canceled, state.value});
+        }
 
         if (state.started) {
             frameEvents_.push_back({name, InputActionPhase::Started, state.value});

@@ -197,6 +197,13 @@ private:
     bgfx::UniformHandle emissiveSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle terrainLayerWeightSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
+    mutable std::array<bool, 2> layeredGbufferUnavailable_{};
+    bgfx::UniformHandle clearcoatSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle clearcoatRoughnessSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle materialLayersUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle materialSubsurfaceUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fogParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fogColorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialEmissiveUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialFlagsUniform_ = BGFX_INVALID_HANDLE;

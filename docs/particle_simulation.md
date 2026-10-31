@@ -491,3 +491,119 @@ measurement covering an empty provider, effect admission, four retained batches,
 steady updates and unload. Windows reports working set, process commit and
 their peaks; other hosts explicitly report unavailable process counters.
 These counters include allocator and runtime overhead, unlike particle capacity.
+
+Identical eligible local-space instances share the simulation of the lowest
+dense instance index. Effect, seed, rate and capacity must match; parameters,
+events, finite non-looping effects and GPU visual execution exclude sharing.
+Grouping uses fixed-capacity scratch storage: one pass over parameter ownership
+and eligible instances, followed by sorting only when multiple groups exist.
+It therefore avoids comparing every pair of instances and does not allocate.
+Pausing, releasing or compacting instances rebuilds group leadership each step.
+
+`kb_21kb_particle_cpu_backend_tests --sharing-benchmark` measures warmed fixed
+steps at 32, 64, 128 and 256 instances with identical and distinct seeds. It
+reports wall-time p50/p95/p99 across 31 batches of 64 steps and requires zero
+allocations. The zero-emission fixture isolates instance bookkeeping from
+particle integration; it is not a rendered-scene performance claim. The regular
+suite separately checks shifted particle output, changing seeds and parameters,
+paused leaders and dense-slot compaction.
+
+Both `vfx-profile` and the packaged player's `--particle-diagnostics` report
+CPU capacity, spawn-budget and event-budget rejections, plus their dropped total
+per emitter. These counters describe the last fixed step, not the entire run;
+GPU update rejection records remain separate. `configured_cpu_particle_limit`
+is explicitly labelled as a capacity ceiling, never measured throughput.
+The CLI and cooked-player integration tests fill a two-particle emitter with
+ten births per step and require two live render records and ten rejected births
+once full, independently of the scene's much larger configured ceiling.
+
+## External effect events
+
+`EmitEffectAsset` queues independent effect instances at the event's world position,
+with the source owner's rotation and scale. The target's emitter offsets still apply.
+Requests are dispatched after the current simulation pass; events produced while a
+child prewarms wait for a later pass. Dependencies resolve through the runtime asset
+manager, so source files are not required by a mounted or already loaded effect.
+
+Binding depth continues across effect boundaries. Dependency cycles are rejected;
+the binding budget, fixed-step spawn budget, bounded request queue and scene instance
+limit also apply. `StepTelemetry::spawnedEffects` and `rejectedEffects` report child
+instance admissions separately from particle births.
+
+Children keep the original scene owner but do not follow its transform. Releasing
+the source instance leaves admitted children running. Finite effects release their
+instances after their particles and queued events finish; looping effects remain
+owned by the scene and drain when their owner dies. The headless editor test
+`kb_21kb_particle_editor_tests --external-effects` exercises the provider, preview
+snapshot, lifecycle, depth and binding budget, dependency cycles and baked cache.
+
+## Appearance curve sampling accuracy
+
+CPU particles evaluate the authored size and alpha curves (including easing) and
+color gradient at normalized age. GPU appearance uses eight uniform samples,
+including ages zero and one, with linear interpolation and clamped age. Source
+save/reload and the compiled bake cache preserve all keys, easing and gradient
+stops; the LUT is derived data and does not replace the authored curves.
+
+The table is an approximation. A peak narrower than its sample spacing can be
+missed completely. For piecewise linear curves/gradient channels, the exact
+maximum absolute interpolation error occurs at the union of authored knots and
+LUT sample ages. For a unit quadratic curve, the bound is `1 / (4 * (N-1)^2)`.
+Eased curves, HDR intensity and multiplied gradient/alpha values need their own
+error analysis; no universal small error or monotonic improvement is promised.
+
+The focused headless test `kb_21kb_particle_editor_tests --curve-sampling` checks
+the actual provider's eight-sample GPU commands, CPU lifetime and editor snapshots,
+source persistence and cooked-cache keys/values. It compares reference tables of
+4, 8, 16 and 32 samples (alternative resolutions are test references, not runtime
+settings), including knot ages and their immediate float neighbors:
+
+| Unit-amplitude fixture | 4 samples | 8 samples | 16 samples | 32 samples |
+| --- | ---: | ---: | ---: | ---: |
+| Linear curve/gradient | 0 | 0 | 0 | 0 |
+| Quadratic curve | 0.027778 | 0.005103 | 0.001112 | 0.000261 |
+| Triangular peak, ages 0.499/0.500/0.501 | 1 | 1 | 1 | 1 |
+| Ramp from zero at 0.499 to one at 0.501 | 0.497 | 0.493 | 0.485 | 0.469 |
+
+Entries are maximum absolute errors, with `0.00002` test tolerance for float
+arithmetic. The interpolation comparison executes the shader's sampling arithmetic
+on the host; this test does not assert device readback or bitwise GPU agreement.
+
+## GPU event lifecycle verification
+
+The opt-in headless editor test `kb_21kb_particle_editor_tests --gpu-events`
+requires a real D3D11 device. It reads back compute-produced child instances for
+birth and lifetime events, verifies their event positions and subsequent motion,
+and checks that restarting clears both scheduled deaths and GPU instance buffers.
+An 8193-parent death burst verifies the bounded 8192-event queue and binding
+budget, including rejection counters visible in the editor snapshot. A plane
+collision uses the reported `collision-event` CPU fallback for the source emitter
+and dispatches its children to the GPU. Collision events are not read back from
+the GPU as part of normal simulation. Releasing the preview must free all emitter
+buffers. Other graphics backends require separate execution evidence.
+
+
+Per-emitter host work profiling
+------------------------------
+
+`ParticlePlayback::SetEmitterProfilingEnabled(scene, true)` enables per-emitter
+`cpuEmissionNanoseconds` and `cpuIntegrationNanoseconds` in render snapshots. The
+setting defaults to false. `vfx-profile` and particle editor previews enable it and
+show whether a reading is available. A measured zero can mean work below the clock
+resolution; unavailable readings are distinct from zero. Turning it off clears the readings at the next
+fixed step. Retained snapshots keep their own readings.
+
+These are host elapsed times for the emission loop and each particle's module/integration
+loop in the last fixed step. They include profiling overhead and exclude shared
+scheduler work, age/event processing, separation-grid preparation, snapshot packing and
+GPU execution. They are not a decomposition of total process CPU time. The CLI retains
+whole-effect process/thread CPU and GPU-frame distributions, per-emitter routing/fallback,
+CPU render payload bytes and GPU capture buffer requests. GPU buffer requests are logical
+resource costs rather than measured physical residency; GPU-frame timings are not
+attributed to individual emitters sharing a compute view.
+
+The CPU regression workload uses eight emitters with birth-event children, bounded
+per-emitter capacities and per-binding event budgets. It compares replay state with
+profiling disabled and enabled and reports whole-workload host/process CPU time, live
+particles, capacity, rejected births/events, and process private/working-set memory.
+Process memory includes the engine and test host; capacity is a limit, not throughput.

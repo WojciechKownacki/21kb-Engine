@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <string_view>
+#include <sstream>
 #include <unordered_map>
 #include <utility>
 
@@ -235,16 +236,30 @@ SkeletonBoneMapping MapSkeletonBones(const SkeletonAsset& source, const Skeleton
     return mapping;
 }
 
-std::optional<AnimationClip> RetargetAnimationClip(
+static std::optional<AnimationClip> RetargetAnimationClipImpl(
     const AnimationClip& clip, const SkeletonAsset& source,
     const SkeletonAsset& target, std::uint64_t targetSkeletonAssetId, std::uint64_t targetCompatibilitySignature,
-    AnimationRetargetReport* report, std::string* error) {
+    AnimationRetargetReport* report, std::string* error, const AnimationRetargetProfile* profile) {
     const auto fail = [error](std::string message) -> std::optional<AnimationClip> {
         if (error != nullptr) *error = std::move(message);
         return std::nullopt;
     };
     if (!ValidateSkeletonAsset(source).valid || !ValidateSkeletonAsset(target).valid) return fail("a skeleton is not valid");
-    const SkeletonBoneMapping mapping = MapSkeletonBones(source, target);
+    SkeletonBoneMapping mapping;
+    if (profile != nullptr) {
+        if (profile->sourceSignature != SkeletonCompatibilitySignature(source) ||
+            profile->targetSignature != SkeletonCompatibilitySignature(target) ||
+            profile->sourceOfTarget.size() != target.bones.size())
+            return fail("retarget profile does not match the source and target skeletons");
+        mapping.sourceOfTarget = profile->sourceOfTarget;
+        for (const auto index : mapping.sourceOfTarget) {
+            if (index < -1 || (index >= 0 && static_cast<std::size_t>(index) >= source.bones.size()))
+                return fail("retarget profile contains an invalid source bone index");
+            if (index >= 0) ++mapping.mappedCount;
+        }
+    } else {
+        mapping = MapSkeletonBones(source, target);
+    }
 
     std::vector<const AnimationBoneTrack*> sourceTrack(source.bones.size(), nullptr);
     std::unordered_map<SkeletonBoneId, std::size_t> sourceIndex;
@@ -406,6 +421,52 @@ std::optional<AnimationClip> RetargetAnimationClip(
     }
     if (report != nullptr) *report = std::move(result);
     return retargeted;
+}
+
+AnimationRetargetProfile MakeAnimationRetargetProfile(const SkeletonAsset& source, const SkeletonAsset& target) {
+    return {SkeletonCompatibilitySignature(source), SkeletonCompatibilitySignature(target),
+        MapSkeletonBones(source, target).sourceOfTarget};
+}
+
+std::string SerializeAnimationRetargetProfile(const AnimationRetargetProfile& profile) {
+    std::ostringstream output;
+    output << "21kb.retarget 1\n" << profile.sourceSignature << ' ' << profile.targetSignature << ' '
+        << profile.sourceOfTarget.size() << '\n';
+    for (const auto index : profile.sourceOfTarget) output << index << '\n';
+    return output.str();
+}
+
+std::optional<AnimationRetargetProfile> ParseAnimationRetargetProfile(std::string_view text) {
+    if (text.size() > 1024U * 1024U) return std::nullopt;
+    std::istringstream input{std::string{text}};
+    std::string magic;
+    unsigned version = 0U;
+    std::size_t count = 0U;
+    AnimationRetargetProfile profile;
+    if (!(input >> magic >> version >> profile.sourceSignature >> profile.targetSignature >> count) ||
+        magic != "21kb.retarget" || version != 1U || profile.sourceSignature == 0U ||
+        profile.targetSignature == 0U || count == 0U || count > 65536U) return std::nullopt;
+    profile.sourceOfTarget.resize(count);
+    for (auto& index : profile.sourceOfTarget) if (!(input >> index) || index < -1) return std::nullopt;
+    input >> std::ws;
+    if (!input.eof()) return std::nullopt;
+    return profile;
+}
+
+std::optional<AnimationClip> RetargetAnimationClip(
+    const AnimationClip& clip, const SkeletonAsset& source, const SkeletonAsset& target,
+    std::uint64_t targetSkeletonAssetId, std::uint64_t targetCompatibilitySignature,
+    AnimationRetargetReport* report, std::string* error) {
+    return RetargetAnimationClipImpl(clip, source, target, targetSkeletonAssetId,
+        targetCompatibilitySignature, report, error, nullptr);
+}
+
+std::optional<AnimationClip> RetargetAnimationClip(
+    const AnimationClip& clip, const SkeletonAsset& source, const SkeletonAsset& target,
+    std::uint64_t targetSkeletonAssetId, std::uint64_t targetCompatibilitySignature,
+    const AnimationRetargetProfile& profile, AnimationRetargetReport* report, std::string* error) {
+    return RetargetAnimationClipImpl(clip, source, target, targetSkeletonAssetId,
+        targetCompatibilitySignature, report, error, &profile);
 }
 
 } // namespace kb::scene

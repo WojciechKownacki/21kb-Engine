@@ -68,6 +68,12 @@ bool ScriptLocalizationApi::Register(ScriptRuntimeHost& host) {
             if (context.scene == nullptr) return NoScene();
             return ScriptFunctionCallResult{ .executed = true, .outputs = { { "text", ScriptValue{ context.scene->Localization().FormatPluralNumber(Arg(arguments, "key")->AsString(), Arg(arguments, "number")->AsString()) } } } };
         }) && ok;
+    ok = RegisterFunction(host, "Localization.ResolveResource", {{"source", ScriptValueType::Hash, true}}, {{"asset", ScriptValueType::Hash, true}},
+        [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+            if (context.scene == nullptr) return NoScene();
+            return ScriptFunctionCallResult{.executed = true, .outputs = {{"asset", ScriptValue{
+                context.scene->Localization().ResolveResource(Arg(arguments, "source")->AsUInt64()), ScriptValueType::Hash}}}};
+        }) && ok;
     return ok;
 }
 

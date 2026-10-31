@@ -79,6 +79,8 @@ public:
     // (both work as sockets).
     [[nodiscard]] std::vector<std::string> SocketNames(SceneEntity entity) const;
     [[nodiscard]] SocketAttachmentStatus SocketAttachment(SceneEntity attachedEntity) const;
+    // Samples a named curve from the current blend trees, transition and weighted layers.
+    [[nodiscard]] std::optional<float> Curve(SceneEntity entity, std::string_view name) const;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
     [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
 
@@ -132,6 +134,8 @@ public:
         const AnimatorIkTarget& target) noexcept;
     [[nodiscard]] bool ClearIkTarget(
         SceneEntity entity, std::string_view name) noexcept;
+    // Samples a named curve from the current blend trees, transition and weighted layers.
+    [[nodiscard]] std::optional<float> Curve(SceneEntity entity, std::string_view name) const;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
     [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
     // Joins the in-flight asynchronous debug snapshot build, so the next

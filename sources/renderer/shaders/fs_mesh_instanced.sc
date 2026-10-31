@@ -4,6 +4,9 @@ $input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, 
 #include "light_grid.sh"
 #include "shadow_cascades.sh"
 #include "point_shadow.sh"
+#include "gbuffer_contract.sh"
+#include "shading_models.sh"
+#include "pbr_builtin_layers.sh"
 
 SAMPLER2D(s_albedo, 0);
 SAMPLER2D(s_normal, 1);
@@ -29,6 +32,7 @@ uniform vec4 u_environmentZenith;
 uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
 #include "sky_reflection.sh"
+#include "height_fog.sh"
 uniform vec4 u_shadowParams;
 uniform vec4 u_terrainLayerParams;
 
@@ -86,7 +90,7 @@ float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
 }
 
 // Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
-vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness)
+vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, vec3 layers)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -130,12 +134,13 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
         }
     }
 
-    float nDotL = max(dot(normal, lightVector), 0.0);
-    if (nDotL <= 0.0) {
+    float nDotLRaw = dot(normal, lightVector);
+    float nDotL = max(nDotLRaw, 0.0);
+    if (nDotL <= 0.0 && layers.z <= 0.0) {
         return vec3(0.0, 0.0, 0.0);
     }
 
-    vec3 halfVector = normalize(viewDir + lightVector);
+    vec3 halfVector = ((viewDir + lightVector) / max(length(viewDir + lightVector), 0.00001));
     float nDotV = max(dot(normal, viewDir), 0.0001);
     float nDotH = max(dot(normal, halfVector), 0.0);
     float hDotV = max(dot(halfVector, viewDir), 0.0);
@@ -149,7 +154,8 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
-    return (diffuse + specular) * radiance * nDotL;
+    return KbLayeredPbrLight(layers.x, layers.y, layers.z, u_materialSubsurface.rgb, normal, viewDir, lightVector,
+        nDotLRaw, albedo, metallic, roughness, diffuse, specular) * radiance;
 }
 
 vec3 EnvironmentColor(vec3 direction)
@@ -235,6 +241,7 @@ void main()
         normalSample.xy *= u_materialParams.z;
         normal = normalize(v_tangent * normalSample.x + v_bitangent * normalSample.y + normal * normalSample.z);
     }
+    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) normal = -normal;
     vec4 metallicRoughness = texture2D(s_metallicRoughness, materialUv);
     float metallic = clamp(u_materialParams.x * metallicRoughness.b, 0.0, 1.0);
     float roughness = clamp(u_materialParams.y * metallicRoughness.g, 0.04, 1.0);
@@ -252,12 +259,19 @@ void main()
             }
         }
     }
+    vec3 layers = KbBuiltinLayers(materialUv);
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);
+    if (layers.x > 0.0 && u_environmentParams.x > 0.5) {
+        vec3 direction = reflect(-viewDir, normal);
+        lighting = KbClearCoatEnvironment(lighting,
+            KbSkyReflection(direction, layers.y, EnvironmentColor(direction)) * u_environmentParams.z,
+            dot(normal, viewDir), layers.x);
+    }
     vec2 lightList = KbLightGridList(v_worldPos, u_lightParams.x);
     for (int entry = 0; entry < int(lightList.y); ++entry) {
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
-            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness);
+            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness, layers);
             lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, v_worldPos, normal);
         }
     }
@@ -265,5 +279,5 @@ void main()
     // Opaque and masked surfaces cover what is behind them (the scene colour alpha is 1, SceneColorAlphaPolicy);
     // only a blended material has an opacity. A terrain layer blends by its weight.
     float outputAlpha = (u_materialFlags.x < 1.5 ? 1.0 : albedo.a) * terrainLayerOpacity;
-    gl_FragColor = vec4(lighting + emissive, outputAlpha);
+    gl_FragColor = vec4(KbApplyHeightFog(lighting + emissive, u_cameraPosition.xyz, v_worldPos), outputAlpha);
 }

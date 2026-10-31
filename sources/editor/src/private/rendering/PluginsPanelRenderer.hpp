@@ -23,6 +23,7 @@ enum class PluginsPanelHitKind : std::uint8_t {
     ScrollbarTrack,
     ParticleProviderAdd,
     ParticleProviderCancel,
+    ReloadScene,
 };
 #endif
 

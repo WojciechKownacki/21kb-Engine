@@ -658,8 +658,8 @@ void StoreDecodedTexture(
         error = "Packaged texture manifest entry is missing";
         return std::nullopt;
     }
-    constexpr std::array<std::string_view, 4U> preference{
-        "bc-extended", "astc", "etc2", "bc-baseline"
+    constexpr std::array<std::string_view, 5U> preference{
+        "rgba8-atlas", "bc-extended", "astc", "etc2", "bc-baseline"
     };
     bool foundVariant = false;
     std::optional<RenderTextureAssetData> decodeFallback;
@@ -875,11 +875,7 @@ RenderTextureUploadPath SelectRenderTextureUploadPath(
     if (!asset.gpuBlocks.has_value() || asset.gpuBlocks->blocks.empty()) {
         return RenderTextureUploadPath::DecodedRgba8;
     }
-    // A baked payload that somehow says RGBA8 is not a block format and has nothing to gain
-    // from this path; treat it as unbaked rather than inventing a second RGBA8 upload route.
-    if (asset.gpuBlocks->format == bgfx::TextureFormat::RGBA8) {
-        return RenderTextureUploadPath::DecodedRgba8;
-    }
+    // Cooked atlases also upload their RGBA8 payload directly, preserving their single level.
     return deviceSupportsBakedFormat ? RenderTextureUploadPath::GpuBlocks : RenderTextureUploadPath::DecodedRgba8;
 }
 
@@ -917,6 +913,14 @@ std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTex
     }
 
     const auto format = static_cast<bimg::TextureFormat::Enum>(asset.gpuBlocks->format);
+    if (format == bimg::TextureFormat::RGBA8) {
+        if (asset.mipCount != 1U || asset.gpuBlocks->blocks.size() != static_cast<std::size_t>(asset.width) * asset.height * 4U) return std::nullopt;
+        auto decoded = asset;
+        decoded.rgba8 = asset.gpuBlocks->blocks;
+        decoded.gpuBlocks.reset();
+        decoded.streaming.reset();
+        return decoded;
+    }
     // Only a block format is decoded back. bimg's uncompressed fall-through fills the target
     // with a checkerboard for anything it does not know, and a checkerboard rendered as if it
     // were the texture is precisely the silent wrongness this fallback exists to prevent.
@@ -987,9 +991,13 @@ kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::Ass
             .error = error.empty() ? "Render texture asset load failed" : std::move(error),
         };
     }
+    const std::uint64_t residentBytes = sizeof(RenderTextureAssetData) + texture->rgba8.capacity() +
+        (texture->gpuBlocks ? texture->gpuBlocks->blocks.capacity() : 0U) +
+        (texture->streaming ? texture->streaming->streamedLevelBytes.capacity() * sizeof(std::uint32_t) : 0U);
     return kb::assets::AssetLoadResult{
         .asset = std::make_shared<RenderTextureAssetData>(std::move(*texture)),
         .error = {},
+        .residentBytes = residentBytes,
     };
 }
 

@@ -27,6 +27,8 @@ Commands:
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
                a template: Basic (camera, sun, sky, floor; default) or Empty.
                  --parent <dir> --name <Name> [--template Basic|Empty]
+  layout       Save, restore or reset the editor workspace for the next session.
+                 list|save|restore|reset --project <dir> [--name <name>]
   scene-new    Create a scene from a template, as File > New Scene does.
                  --project <dir> --name <Name> [--folder Assets/Scenes]
                  [--template Basic|Empty] [--default yes|no]
@@ -121,6 +123,17 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                      [--remove-effect <Id> ...] [--move-effect Id=index ...]
                      [--set-effect Id.parameter=value ...]  (indexes start at 0)
                new/set accept --dry-run; new/set/show accept --json.
+  blend-space  Author a 2D animation blend asset; every edit is validated and atomic.
+  graph        Author gameplay nodes, typed values and connections; validate and save atomically.
+                 new|show --project <dir> --space /Game/Animation/Motion.kbblend2d
+                 add --project <dir> --space <path> --at x,y --clip <path>
+                 set --project <dir> --space <path> --index <0..255> [--at x,y] [--clip <path>]
+                 remove --project <dir> --space <path> --index <0..255>
+                 sample --project <dir> --space <path> --at x,y
+                 assign --project <dir> --space <path> --controller <path> --state <Name>
+                     --x-param <FloatParameter> --y-param <FloatParameter> [--layer <Name>]
+               assign replaces the named state's motion and creates missing Float axes.
+               Outputs versioned JSON with sample indices, triangles and query weights.
   animator     Build an Animator Controller, the state machine that picks a character's
                animation; every change is validated and saved at once.
                  new --project <dir> --name <Name> --clip <clip> [--clip ...]
@@ -198,10 +211,11 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  block|unblock --project <dir> --map <path> --at x,y[,floor] [--to x,y]
                  borderize --project <dir> --map <path> [--floor n]
                  set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]
-                     [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds]
+                     [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds] [--camera-zoom n]
                      [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera, see docs/world_2d_camera.md)
                  view --project <dir> --entity <Name>   (update the Map Camera and painted collision)
                  info --project <dir> --map <path>
+                 schema --project <dir> --map <path> --name <field> --type bool|int|float|string --default <value> [--rename-from <field>]
                  path --project <dir> --map <path> --from x,y --to x,y [--floor n] [--clearance 0..8]
                      [--diagonal none|safe|free] [--cost-property <name>] [--max-visited 1..1048576]
                      [--timeout-ms <milliseconds>] (default 25 ms; JSON; exits 0 found, 2 no path, 3 budget)
@@ -210,10 +224,14 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
                  --project <dir> --effect /Game/<path>.kbvfx
+  particle-process-cook  Compile a particle simulation: --source <file.particle.sc> --output <file.kbpsim> [--profile all]
+  render-effect-run  Run a native compute effect in a hidden renderer: --manifest <effect.kbfx> [--frames 8] (Windows)
+  render-effect-export  Export a native compute effect and compiled shader variants: --manifest <effect.kbfx> --output <directory>
   renderer-info  Print the graphics backend a hidden bgfx host selects as JSON: capabilities, limits,
                  formats and the reason for every quality fallback (Windows).
                  [--backend auto|d3d11|d3d12|vulkan|opengl] [--allow-fallback]
                  Exits 1 when an explicit backend is not the one selected, unless --allow-fallback.
+  debug        Control a local Lua debugger endpoint (connect, breakpoints, step_into/over/out, continue, stack, locals, evaluate, disconnect).
   vfx-profile  Profile an isolated effect with a hidden bgfx GPU host (Windows).
                  --project <dir> --effect /Game/<path>.kbvfx
                  [--backend d3d11|d3d12|vulkan|opengl] [--warmup 60] [--frames 180]
@@ -253,13 +271,11 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
-                 --name then defaults to the item. --create 'Platformer Player' or 'Top Down Player'
-                 makes a ready-made 2D player named Player: a CharacterController, a copy of
-                 Platformer2DPlayer.lua or TopDown2DPlayer.lua in Assets/Scripts (never overwritten;
-                 speed, jumpSpeed, coyoteTime, jumpBuffer are its @expose lines), default Move and
-                 Jump input when the project has no input context, and every map of the scene
-                 following the player; --physics 2d makes it a Character Controller 2D on the
-                 2D physics with Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua;
+                 --name then defaults to the item. --create 'Platformer Player', 'Top Down Player' or 'Platformer Navigator'
+                 makes a 2D player named Player with Sprite2D, CharacterController2D, a following
+                 orthographic camera and Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua.
+                 Existing scripts and input contexts are preserved; a new project gets Move/Jump
+                 bindings. --physics 3d selects the legacy CharacterController and scripts.
                  see docs/world_2d_presets.md)
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
@@ -279,8 +295,15 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  (vectors at once: --set localPosition=0,2,-8; Transform rotation in
                  degrees: --set rotation=35,30,0)
   schema       List components and their properties.
-  api          Generate the script API contract (Lua stubs, Markdown, JSON).
+  api          Generate the script API contract (Lua stubs, reference pages, JSON),
+               or print one page of it: a group, function or component by --topic,
+               the index with --topic index, or topics matching --search text.
                  --project <dir> | --out <dir> | --print markdown|json|lua
+                 | --topic <name> | --search <text>
+  guide        Print a short how-to for one kind of task (objects and materials,
+               physics, scripts, characters, combat and AI, 2D maps, checking your
+               work); without --topic, the list of guides.
+                 [--topic <name>]
   api-check    Compare the current API surface against a committed baseline
                and fail on breaking changes (CI compatibility gate).
                  --baseline <path> [--project <dir>] [--update-baseline]
@@ -327,10 +350,12 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on errors,
                124 on playback timeout, or 130 on cancellation.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
-                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai] [--pcm-frames <n>]
+                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai|determinism] [--pcm-frames <n>]
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
+                 [--workers <1..64>] [--ecs-history <1..256> with --report ecs]
+                 [--ecs-parallelism systems|chunks|combined] [--deterministic]
                Replay uses recorded per-tick durations and controller slots; --frames
                may select a prefix. --dt and audio probes cannot override replay timing.
                Recording captures input before each completed tick, including a partial
@@ -338,6 +363,9 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                Playback limits are cooperative between ticks and during paced waits;
                startup, an executing callback, and shutdown are not forcibly interrupted.
                Create the cancellation file to stop; the command does not remove it.
+               --deterministic orders ECS/scene dispatch and makes fixed ticks independent
+               of CPU duration; --report determinism exposes the active policy and scope.
+               Content queries, RNG ownership and backend tolerances remain caller contracts.
                Reports are versioned JSON on stdout; logs go to stderr.
                Audio probes use explicit offline PCM rendering (up to 600 ticks
                and 1920000 total PCM frames). --pcm-frames overrides audio frames
@@ -439,10 +467,20 @@ Global options:
                run --report, api --print json, batch) keeps it unchanged. mcp ignores --json.
                Native compiler logs go to process stderr and never precede the JSON object.
   --dry-run    Only for the commands that name it (audio-mixer new/set).
+  --command-timeout-ms <1..86400000>  Bound the entire command on Windows.
+  --command-cancel-file <path>       Stop when this caller-owned file exists.
+               Put these options before the command (optionally after --json).
+               The supervisor stops its command and descendants, including external
+               build tools. Text output streams; interrupted JSON is one result
+               with reason timeout|cancelled|supervisor-error. JSON capture is
+               limited to 16 MiB. Interruption does not roll back completed writes.
+               Example: kb_cli --json --command-timeout-ms 30000 script-build --project .
 
 Exit codes: normally 0 on success and 1 on failure (bad arguments, an unknown
 command, a failed check or build, or inaccessible files). Commands may document
 additional codes; run returns 124 on timeout and 130 on cancellation.
+Command supervision returns 124 on timeout, 130 on cancellation and 125 on a
+supervisor error; otherwise it preserves the child command's exit code.
 help, --help, -h and no command at all print this text and exit 0.
 
 Scene paths may be physical (relative to the project root) or virtual
@@ -454,9 +492,35 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-constexpr std::array<std::string_view, 15> kFlagNames{
+// `help <command>`: only that command's lines of the usage text (its row and the indented
+// lines under it), so asking about one command does not print all of them.
+void PrintCommandUsage(std::ostream& output, std::string_view command) {
+    std::string usage;
+    for (const auto part : kUsageParts) usage += part;
+    std::istringstream lines{ usage };
+    std::string block;
+    bool inside = false;
+    for (std::string line; std::getline(lines, line);) {
+        const bool commandRow = line.size() > 2U && line[0] == ' ' && line[1] == ' ' && line[2] != ' ';
+        if (commandRow) {
+            if (inside) break;
+            const std::string_view name = std::string_view{ line }.substr(2U, line.find(' ', 2U) - 2U);
+            inside = name == command;
+        } else if (inside && line.find_first_not_of(' ') == std::string::npos) {
+            break;
+        }
+        if (inside) block += line + '\n';
+    }
+    if (block.empty()) {
+        PrintUsage(output);
+        return;
+    }
+    output << block;
+}
+
+constexpr std::array<std::string_view, 16> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
-    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime" };
+    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic" };
 
 #if KB_CLI_RENDERER
 constexpr bool kRendererAvailable = true;
@@ -465,11 +529,15 @@ constexpr bool kRendererAvailable = false;
 #endif
 
 constexpr CliCommandDescriptor kCommands[]{
+    {"debug", &RunLuaDebugCommand, CliCommandKind::Normal, true, ""},
     {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, ""},
+    {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space"},
+    {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph"},
     {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, ""},
     {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, ""},
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
     {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference"},
+    {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
     {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
@@ -482,6 +550,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script"},
     {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list"},
     {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach"},
+    {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}},
     {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
     {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
     {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, ""},
@@ -506,6 +575,9 @@ constexpr CliCommandDescriptor kCommands[]{
     {"post-process-new", &RunPostProcessNewCommand, CliCommandKind::Normal, true, {}},
     {"post-process-set", &RunPostProcessSetCommand, CliCommandKind::Normal, true, {}},
     {"scene-post-process", &RunScenePostProcessCommand, CliCommandKind::Normal, true, {}},
+    {"particle-process-cook", &RunParticleProcessCookCommand, CliCommandKind::Normal, true, {}},
+    {"render-effect-run", &RunRenderEffectRunCommand, CliCommandKind::Normal, true, {}},
+    {"render-effect-export", &RunRenderEffectExportCommand, CliCommandKind::Normal, true, {}},
     {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}},
     {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}},
 #else
@@ -520,6 +592,9 @@ constexpr CliCommandDescriptor kCommands[]{
     {"post-process-new", nullptr, CliCommandKind::Normal, false, {}},
     {"post-process-set", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-post-process", nullptr, CliCommandKind::Normal, false, {}},
+    {"particle-process-cook", nullptr, CliCommandKind::Normal, false, {}},
+    {"render-effect-run", nullptr, CliCommandKind::Normal, false, {}},
+    {"render-effect-export", nullptr, CliCommandKind::Normal, false, {}},
     {"renderer-info", nullptr, CliCommandKind::Normal, false, {}},
     {"vfx-profile", nullptr, CliCommandKind::Normal, false, {}},
 #endif
@@ -559,7 +634,10 @@ std::optional<int> RunNamedCommand(
             return RunCli(words, in, target);
         });
     case CliCommandKind::Mcp: return RunMcpCommand(arguments, in, io);
-    case CliCommandKind::Help: PrintUsage(io.out); return 0;
+    case CliCommandKind::Help:
+        if (!arguments.Positionals().empty()) PrintCommandUsage(io.out, arguments.Positionals().front());
+        else PrintUsage(io.out);
+        return 0;
     case CliCommandKind::Catalog: {
         using kb::core::JsonValue;
         auto result = JsonValue::MakeObject();

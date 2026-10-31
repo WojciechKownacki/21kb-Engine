@@ -376,7 +376,8 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
     bgfx::setViewRect(desc.viewId, 0, 0, ClampToViewExtent(desc.extent.width), ClampToViewExtent(desc.extent.height));
     bgfx::setViewTransform(desc.viewId, identity.data(), identity.data());
-    SetSceneViewClear(desc.viewId, BGFX_CLEAR_COLOR, desc.clearColor, 1.0F, 0U, desc.clearPaletteViewport);
+    SetSceneViewClear(desc.viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, desc.clearColor,
+        SceneDepthPolicy::ClearDepth(), 0U, desc.clearPaletteViewport);
     bgfx::touch(desc.viewId);
 
     if (desc.lightingConfig.debugView == SceneRenderDebugView::GBufferNormal) {
@@ -509,14 +510,10 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
     {
         const SceneRenderLightingConfig& config = desc.lightingConfig;
-        const std::array<float, 4> fogParams{ std::max(config.fogDensity, 0.0F), std::max(config.fogHeightFalloff, 0.0F),
-            config.fogBaseHeight, config.fogEnabled ? 1.0F : 0.0F };
-        const std::array<float, 4> fogColor{ config.fogColor[0], config.fogColor[1], config.fogColor[2],
-            std::clamp(config.fogAnisotropy, -0.9F, 0.9F) };
         // Volumetric fog is marched over the first 100 m.
         const std::array<float, 4> fogVolumetric{ config.volumetricFogEnabled ? 1.0F : 0.0F, 100.0F, 0.0F, 0.0F };
-        bgfx::setUniform(fogParamsUniform_, fogParams.data());
-        bgfx::setUniform(fogColorUniform_, fogColor.data());
+        bgfx::setUniform(fogParamsUniform_, lighting.fogParams.data());
+        bgfx::setUniform(fogColorUniform_, lighting.fogColor.data());
         bgfx::setUniform(fogVolumetricUniform_, fogVolumetric.data());
         // The sky the scene clears to is part of what the fog covers: the pass rewrites those pixels with
         // the fog in front of them instead of leaving the clear colour.
@@ -525,7 +522,10 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         bgfx::setUniform(fogSkyUniform_, fogSky.data());
     }
     lightGrid_.Bind(lighting.lightGrid, 7U);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    // Preserve opaque depth for the transparent pass on the resolved target.
+    constexpr std::uint64_t resolveState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS;
+    bgfx::setState(resolveState);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
 
@@ -534,7 +534,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     {
         std::ostringstream message;
         message << "Submit end ok drawCalls=" << stats.submittedDrawCallCount
-                << " state=0x" << std::hex << (BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) << std::dec;
+                << " state=0x" << std::hex << resolveState << std::dec;
         WriteRendererDebugLog("deferred_lighting", message.str());
         WriteRendererMaterialGraphDebugLog("deferred", message.str());
     }

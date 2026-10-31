@@ -26,13 +26,19 @@ enum class EditorAssetBrowserDoubleClickResult {
     SkeletalMeshEditorOpened,
     AnimationClipEditorOpened,
     AnimatorEditorOpened,
+    TimelineEditorOpened,
+    BlendSpace2DEditorOpened,
+    GameplayGraphEditorOpened,
     ParticleEditorOpened,
     PrefabEditorOpened,
+    LocalizationPreviewChanged,
 };
 
 class EditorAssetBrowserDoubleClickHandler {
 public:
     EditorAssetBrowserDoubleClickHandler() = delete;
+    [[nodiscard]] static bool PreviewLocalization(EditorSceneContext& context,
+        kb::assets::AssetId catalog, std::string_view language);
 
     [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleMaterialAssetDoubleClick(
         const kb::assets::AssetMetadata& metadata,

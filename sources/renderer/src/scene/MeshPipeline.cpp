@@ -7,8 +7,74 @@
 #include "scene/pipeline/MeshPipelineGpuDrivenRecorder.hpp"
 #include "scene/batch/SceneMeshBatchSourceResolver.hpp"
 #include "scene/pass/MeshPassProcessor.hpp"
+#include "scene/pipeline/MeshPipelineVisibility.hpp"
+
+#include <algorithm>
 
 namespace kb::render {
+namespace {
+// Meshlets retain the section's vertex binding: their index ranges already
+// reference that binding. Splitting changes index spans and conservative bounds.
+void ExpandMeshletCommands(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result) {
+    if (!desc.gpuDrivenSupport.meshletSubmitSupported || !desc.gpuDrivenSupport.runtimeGpuDispatchSupported) return;
+    if (std::none_of(result.commands.begin(), result.commands.end(), [](const MeshDrawCommand& draw) {
+        return draw.gpuFrustumCull && draw.meshResource != nullptr &&
+            draw.meshResource->meshletCullingEnabled && draw.meshletCount != 0U;
+    })) return;
+    constexpr std::size_t maximumInstanceRecords = 1U << 20U;
+    constexpr std::size_t maximumMeshletDraws = 4096U;
+    std::vector<MeshDrawCommand> expanded;
+    expanded.reserve(result.commands.size());
+    std::size_t instanceRecords = 0U;
+    for (auto& command : result.commands) {
+        const auto* mesh = command.meshResource;
+        bool valid = command.gpuFrustumCull && mesh != nullptr && mesh->meshletCullingEnabled &&
+            command.meshletCount != 0U && command.firstMeshlet <= mesh->meshlets.size() &&
+            command.meshletCount <= mesh->meshlets.size() - command.firstMeshlet;
+        std::uint64_t nextIndex = command.indexStart;
+        if (valid) {
+            valid = command.meshletCount <= maximumMeshletDraws - std::min(expanded.size(), maximumMeshletDraws) &&
+                command.instances.size() <= (maximumInstanceRecords - std::min(instanceRecords, maximumInstanceRecords)) / command.meshletCount;
+            for (std::uint32_t i = 0U; valid && i < command.meshletCount; ++i) {
+                const auto& m = mesh->meshlets[command.firstMeshlet + i];
+                valid = m.IsValid() && m.sectionIndex == command.sectionIndex && m.lodLevel == command.lodLevel &&
+                    m.indexStart == nextIndex && m.indexStart >= command.indexStart &&
+                    m.indexCount <= static_cast<std::uint64_t>(command.indexStart) + command.indexCount - nextIndex;
+                nextIndex += m.indexCount;
+            }
+            valid = valid && nextIndex == static_cast<std::uint64_t>(command.indexStart) + command.indexCount;
+        }
+        if (!valid) {
+            expanded.push_back(std::move(command));
+            if (command.gpuFrustumCull && mesh != nullptr && mesh->meshletCullingEnabled) ++result.stats.gpuDrivenFallbackCount;
+            continue;
+        }
+        for (std::uint32_t i = 0U; i < command.meshletCount; ++i) {
+            const auto index = command.firstMeshlet + i;
+            const auto& meshlet = mesh->meshlets[index];
+            auto& draw = expanded.emplace_back(command);
+            draw.firstMeshlet = index;
+            draw.meshletCount = 1U;
+            draw.indexStart = meshlet.indexStart;
+            draw.indexCount = meshlet.indexCount;
+            draw.gpuMeshletDraw = true;
+            draw.instanceRevision = 0U;
+            const auto margin = MeshPipelineVisibility::MaterialBoundsMargin(command.materialResource);
+            for (auto& instance : draw.instances) {
+                const auto local = instance.boundsOverride.IsValid() ? instance.boundsOverride : meshlet.bounds;
+                instance.worldBounds = MeshPipelineVisibility::GrowBounds(
+                    MeshPipelineVisibility::TransformBounds(local, instance.model), margin);
+            }
+            instanceRecords += draw.instances.size();
+        }
+    }
+    result.commands = std::move(expanded);
+    result.stats.meshPipelineCommandCount = static_cast<std::uint32_t>(result.commands.size());
+    result.stats.meshPipelineCommandCapacity = static_cast<std::uint32_t>(result.commands.capacity());
+    result.stats.meshPipelineSortKeyCount = result.stats.meshPipelineCommandCount;
+}
+} // namespace
+
 
 const char* MeshPassTypeName(MeshPassType pass) noexcept {
     switch (pass) {
@@ -94,7 +160,8 @@ MeshPipelineBuildResult MeshPipelineProcessor::Build(const MeshPipelineBuildDesc
 }
 
 void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result) noexcept {
-    auto* batchCache = desc.pass != MeshPassType::BaseTransparent && desc.selectedEntityIds.empty() &&
+    auto* batchCache = !desc.gpuDrivenSupport.meshletSubmitSupported &&
+        desc.pass != MeshPassType::BaseTransparent && desc.selectedEntityIds.empty() &&
         desc.visibilityBlockers.empty() && desc.portalVisibility == nullptr ? desc.batchCommandCache : nullptr;
     if (batchCache == nullptr && desc.batchCommandCache != nullptr) desc.batchCommandCache->Reset();
     if (batchCache != nullptr) batchCache->BeginBuild(desc.pass, result);
@@ -144,7 +211,9 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .resourceValidation = desc.resourceValidation,
         .terrainLayersOnly = desc.terrainLayersOnly,
         .batchCommandCache = batchCache,
+        .gpuDrivenSupport = desc.gpuDrivenSupport,
     }, result);
+    ExpandMeshletCommands(desc, result);
     SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
     result.meshBatchScratch.clear();
     MeshPipelineGpuDrivenRecorder::Finalize(result, desc.gpuDrivenSupport, desc.maxDroppedInstances);

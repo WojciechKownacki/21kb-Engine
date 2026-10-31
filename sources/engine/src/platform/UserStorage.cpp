@@ -41,6 +41,10 @@ UserStorage::UserStorage(std::filesystem::path root, std::uintmax_t quotaBytes)
 }
 
 UserStorage::~UserStorage() {
+    WaitForPendingWrites();
+}
+
+void UserStorage::WaitForPendingWrites() {
     std::lock_guard lock{ writesMutex_ };
     if (writes_ != nullptr) {
         writes_->Drain();

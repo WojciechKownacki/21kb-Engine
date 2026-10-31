@@ -105,7 +105,7 @@ if(NOT WIN32 AND (KB_BUILD_PACKAGED_GAME_HOST OR (ANDROID AND KB_BUILD_ANDROID_H
         "KB_GAME_TARGET_PROFILE_ID=\"${KB_GAME_TARGET_PROFILE_ID}\""
     )
     target_link_libraries(kb_packaged_game_host_core
-        PUBLIC kb_game_core
+        PUBLIC kb_game_core kb_net
         PRIVATE
             kb_physics_jolt_plugin
             kb_audio_miniaudio_plugin
@@ -178,12 +178,19 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND KB_BUILD_PACKAGED_GAME_HOST)
     find_package(X11 REQUIRED)
-    add_executable(kb_game_linux src/linux/LinuxGameHost.cpp)
+    add_executable(kb_game_linux src/linux/LinuxGameHost.cpp src/linux/LinuxGamepadInput.cpp)
     target_link_libraries(kb_game_linux PRIVATE kb_packaged_game_host_core X11::X11)
     set_target_properties(kb_game_linux PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
     kb_apply_quality_gates(kb_game_linux)
+    if(BUILD_TESTING)
+        add_executable(kb_linux_gamepad_tests
+            tests/LinuxGamepadInputTests.cpp src/linux/LinuxGamepadInput.cpp)
+        target_include_directories(kb_linux_gamepad_tests PRIVATE src/private)
+        target_link_libraries(kb_linux_gamepad_tests PRIVATE kb_engine)
+        kb_apply_quality_gates(kb_linux_gamepad_tests)
+    endif()
 endif()
 
 if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
@@ -193,13 +200,14 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         set(KB_GAME_WEB_TARGET kb_game_webgl)
     endif()
     add_executable(${KB_GAME_WEB_TARGET} src/web/WebGameHost.cpp src/web/WebTouchInput.cpp
-        src/web/WebGamepadInput.cpp)
+        src/web/WebGamepadInput.cpp src/web/WebGamepadHaptics.cpp)
     target_link_libraries(${KB_GAME_WEB_TARGET} PRIVATE kb_packaged_game_host_core)
     target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
         "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html"
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebWasmLoader.js\""
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js\""
         "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js\""
+        "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGamepadHaptics.js\""
         "-lidbfs.js"
         "-sEXPORTED_RUNTIME_METHODS=requestFullscreen"
         "-sALLOW_MEMORY_GROWTH=1"
@@ -211,8 +219,13 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebWasmLoader.js"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebPresentation.js"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGamepadHaptics.js")
     if(KB_WEB_RENDERER STREQUAL "WEBGPU")
+        target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
+            "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGpuSupport.js\"")
+        set_property(TARGET ${KB_GAME_WEB_TARGET} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGpuSupport.js")
         target_compile_definitions(${KB_GAME_WEB_TARGET} PRIVATE KB_WEB_RENDERER_WEBGPU=1)
         target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE "--use-port=emdawnwebgpu")
         target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
@@ -252,6 +265,7 @@ add_executable(kb_game WIN32
 target_link_libraries(kb_game
     PRIVATE
         kb_game_core
+        kb_net
         kb_crash_reporting
         user32
         gdi32
@@ -266,6 +280,13 @@ set_target_properties(kb_game PROPERTIES
 # a sibling build directory, so it is staged beside the runtime executable - on
 # every build, so a rebuilt provider replaces the copy even when kb_game does not relink.
 add_dependencies(kb_game kb_21kb_particle_plugin)
+# Runtime providers share engine structures with the host and must match its build.
+foreach(_kb_game_provider IN ITEMS kb_physics_jolt_plugin kb_audio_miniaudio_plugin
+        kb_basic_lighting_plugin kb_ai_plugin kb_world2d_plugin)
+    if(TARGET ${_kb_game_provider})
+        add_dependencies(kb_game ${_kb_game_provider})
+    endif()
+endforeach()
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
     add_custom_target(kb_game_stage_particle_plugin
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:kb_game>
@@ -285,6 +306,18 @@ kb_target_copy_bgfx_runtime_shaders(kb_game)
 kb_target_stage_material_graph_shader_cache(kb_game)
 
 if(BUILD_TESTING)
+    add_executable(kb_game_window_tests tests/GameWindowTests.cpp src/GameWindow.cpp)
+    target_include_directories(kb_game_window_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/private")
+    target_link_libraries(kb_game_window_tests PRIVATE kb_game_core user32)
+    kb_apply_quality_gates(kb_game_window_tests)
+    add_test(NAME kb_game_window_dpi COMMAND kb_game_window_tests)
+    set_tests_properties(kb_game_window_dpi PROPERTIES TIMEOUT 30 LABELS "game;ui;headless")
+    add_executable(kb_web_text_clipboard_tests tests/WebTextClipboardTests.cpp)
+    target_include_directories(kb_web_text_clipboard_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/private")
+    target_link_libraries(kb_web_text_clipboard_tests PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_web_text_clipboard_tests)
+    add_test(NAME kb_web_text_clipboard COMMAND kb_web_text_clipboard_tests)
+    set_tests_properties(kb_web_text_clipboard PROPERTIES TIMEOUT 30 LABELS "game;ui;input;headless")
     add_library(kb_windows_runtime_module_test_plugin SHARED
         tests/WindowsRuntimeModuleTestPlugin.cpp
     )
@@ -420,6 +453,91 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_touch_script_package PROPERTIES
             LABELS "game;runtime;packaging;input" TIMEOUT 360)
+        add_test(NAME kb_game_text_shaping_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/TextShapingPackagedTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/text_shaping_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_text_shaping_package PROPERTIES
+            LABELS "game;runtime;packaging;text;gpu" TIMEOUT 360)
+        add_test(NAME kb_game_localization_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/LocalizationPackagedTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/localization_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_localization_package PROPERTIES
+            LABELS "game;runtime;packaging;text;gpu" TIMEOUT 360)
+        add_test(NAME kb_game_ui_visual_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/UIVisualPackagedTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/ui_visual_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_ui_visual_package PROPERTIES
+            LABELS "game;runtime;packaging;ui;gpu" TIMEOUT 360)
+        add_test(NAME kb_game_ui_input_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/UIInputPackagedTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/ui_input_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_ui_input_package PROPERTIES
+            LABELS "game;runtime;packaging;ui;input" TIMEOUT 360)
+        add_test(NAME kb_game_ui_modal_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/UIModalPackagedTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/ui_modal_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_ui_modal_package PROPERTIES
+            LABELS "game;runtime;packaging;ui;input" TIMEOUT 360)
         add_test(NAME kb_game_native_sdk_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkPackagedTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"
@@ -454,6 +572,23 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_script_budget_package PROPERTIES
             LABELS "game;runtime;packaging;script" TIMEOUT 240)
+        add_test(NAME kb_game_physics_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicsPackagedTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/physics_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_physics_package PROPERTIES
+            LABELS "game;runtime;packaging;physics" TIMEOUT 240)
         add_test(NAME kb_game_prefab_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/PrefabPackagedTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"
@@ -488,6 +623,29 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_audio_dsp_package PROPERTIES
             LABELS "game;runtime;packaging;audio" TIMEOUT 180)
+        add_test(NAME kb_game_reference_3d_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/Reference3DWorkflowTests.py"
+            --cli $<TARGET_FILE:kb_cli> --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+            --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/reference_3d_workflow_tests"
+            --shaderc "${_kb_particle_test_shaderc}" ${_kb_touch_test_runtime_args}
+            --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+            --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_21kb_particle_plugin>
+            --plugin $<TARGET_FILE:kb_ai_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
+        set_tests_properties(kb_game_reference_3d_package PROPERTIES
+            LABELS "game;runtime;animation;streaming;packaging" TIMEOUT 1200)
+        if(TARGET kb_dedicated_server)
+            add_test(NAME kb_game_native_network_package COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeNetworkPackageTests.py"
+                --cli $<TARGET_FILE:kb_cli> --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                --server $<TARGET_FILE:kb_dedicated_server> --engine-root "${CMAKE_SOURCE_DIR}"
+                --test-root "${CMAKE_BINARY_DIR}/native_network_package_tests"
+                --shaderc "${_kb_particle_test_shaderc}" ${_kb_touch_test_runtime_args}
+                --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_21kb_particle_plugin>
+                --plugin $<TARGET_FILE:kb_ai_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
+            set_tests_properties(kb_game_native_network_package PROPERTIES
+                LABELS "game;runtime;network;packaging" TIMEOUT 300)
+        endif()
         add_test(NAME kb_game_audio_reference_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/AudioReferenceProjectTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"
