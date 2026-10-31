@@ -204,7 +204,6 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
         client.right - client.left,
         client.bottom - client.top,
         metrics.menuHeight,
-        metrics.toolbarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
@@ -305,8 +304,6 @@ void ActivatePanel(
                 if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Duplicate)) {
                     sceneViewport.RequestPresent();
                 }
-            } else if (*row == 3) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Plugins, DockArea::Right);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
             const EditorLayoutMenuRow* layoutRow = shellInteraction.LayoutMenu().Row(*row);
@@ -361,8 +358,10 @@ void ActivatePanel(
             } else if (*row == 2) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
             } else if (*row == 3) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, DockArea::Center);
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Plugins, DockArea::Right);
             } else if (*row == 4) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, DockArea::Center);
+            } else if (*row == 5) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::AudioMixer, DockArea::Center);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {

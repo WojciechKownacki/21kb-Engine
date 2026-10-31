@@ -43,11 +43,13 @@ namespace {
     }
     for (const InspectorComponentCategory& entry : InspectorComponentCatalog::Categories()) {
         const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::InCategory(entry.name);
-        if (std::ranges::any_of(tiles, [pluginEnabled](const InspectorComponentTile* tile) {
-                return tile != nullptr && IsAvailable(*tile, pluginEnabled);
-            })) {
+        const auto available = std::ranges::count_if(tiles, [pluginEnabled](const InspectorComponentTile* tile) {
+            return tile != nullptr && IsAvailable(*tile, pluginEnabled);
+        });
+        if (available > 0) {
             rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Category,
-                .label = std::string{ InspectorComponentCatalog::CategoryLabel(entry.name) }, .icon = entry.icon, .id = entry.name });
+                .label = std::string{ InspectorComponentCatalog::CategoryLabel(entry.name) }, .icon = entry.icon, .id = entry.name,
+                .count = static_cast<int>(available) });
         }
     }
     return rows;

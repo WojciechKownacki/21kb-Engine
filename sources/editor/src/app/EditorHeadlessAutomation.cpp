@@ -1313,7 +1313,7 @@ bool EditorHeadlessAutomation::VerifyUI2DEditing() {
     if (!CaptureBitmap(artifactRoot_ / "screenshots" / "ui-2d-toolbar.bmp", ScreenshotDimensions{700, 40, 96},
                        [&](HDC dc) {
                            SceneViewportToolbarRenderer::Paint(dc, RECT{0, 0, 700, 40}, MakeEditorDarkTheme(),
-                                                               context_.ViewportPreview(1U));
+                                                               context_.ViewportPreview(1U), context_.Gizmo().toolMode);
                        }))
         return false;
     const auto overlays = EditorUIRectInteraction::Overlays(context_, width, height);
@@ -2885,7 +2885,6 @@ EditorHeadlessAutomation::ProfileIdleSceneFrame(std::size_t steps) {
             client.right - client.left,
             client.bottom - client.top,
             metrics.menuHeight,
-            metrics.toolbarHeight,
             metrics.tabStripHeight,
             metrics.tabMinWidth,
             metrics.tabWidth,
@@ -3120,7 +3119,7 @@ EditorHeadlessAutomation::VerifyWorkspaceLayoutPersistence() {
     // it - so the arrangement proves the tree itself made the round trip.
     const EditorMetrics metrics{};
     const DockLayout layout = arranged.Queries().BuildLayout(
-        1600, 960, metrics.menuHeight, metrics.toolbarHeight, metrics.tabStripHeight,
+        1600, 960, metrics.menuHeight, metrics.tabStripHeight,
         metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
     if (layout.splitters.empty()) {
         Trace("assert_workspace_layout_persistence", false, "no-splitters");

@@ -11,7 +11,6 @@ DockLayout DockLayoutBuilder::Build(
     int clientWidth,
     int clientHeight,
     int menuHeight,
-    int toolbarHeight,
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
@@ -25,8 +24,9 @@ DockLayout DockLayoutBuilder::Build(
 
     DockLayout layout{};
     layout.menu = DockGeometry::MakeRect(0, 0, clientWidth, menuHeight);
-    layout.toolbar = DockGeometry::MakeRect(0, menuHeight, clientWidth, toolbarHeight);
-    layout.workspace = DockGeometry::MakeRect(0, menuHeight + toolbarHeight, clientWidth, clientHeight - menuHeight - toolbarHeight);
+    // One top bar: the menus on its left, the transport and Save on the rest of the same row.
+    layout.toolbar = layout.menu;
+    layout.workspace = DockGeometry::MakeRect(0, menuHeight, clientWidth, clientHeight - menuHeight);
 
     if (root != nullptr && !layout.workspace.Empty()) {
         DockNodeLayoutBuilder{}.Build(*root, layout.workspace, layout, settings);

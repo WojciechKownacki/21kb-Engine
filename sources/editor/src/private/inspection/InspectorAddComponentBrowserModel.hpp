@@ -23,6 +23,7 @@ struct AddComponentRow {
     std::string label;
     HeroIconKind icon = HeroIconKind::Cube;
     std::string id; // category name (Category) or component id (Component)
+    int count = 0;  // components a Category row holds that can be added now
 };
 
 // Pure layout for the Add Component menu: which rows are visible in

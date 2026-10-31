@@ -406,12 +406,8 @@ inline void DrawBoolPairRow(
             values[index] ? Color(theme.accent) : (hovered ? HoverFill(theme) : Color(theme.chrome)),
             values[index] || hovered ? Color(theme.accent) : Color(theme.borderPanel));
         if (values[index]) {
-            ScopedFont markFont(10, FW_SEMIBOLD);
-            const ScopedGdiObject selectedFont(dc, markFont.handle);
-            RECT glyph = box;
-            glyph.top -= 1;
-            glyph.bottom -= 1;
-            TextW(dc, glyph, L"\u2714", Color(theme.textPrimary));
+            HeroIconPainter::Draw(dc, Rect(box.left + 3, box.top + 3, box.right - 3, box.bottom - 3), HeroIconKind::Check,
+                Color(theme.textPrimary), 1);
         }
     }
 }
@@ -579,12 +575,8 @@ inline void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const Inspec
         checked ? Color(theme.accent) : (hovered ? HoverFill(theme) : Color(theme.chrome)),
         checked || hovered ? Color(theme.accent) : Color(theme.borderPanel));
     if (checked) {
-        ScopedFont markFont(10, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, markFont.handle);
-        RECT glyph = box;
-        glyph.top -= 1;
-        glyph.bottom -= 1;
-        TextW(dc, glyph, L"\u2714", Color(theme.textPrimary));
+        HeroIconPainter::Draw(dc, Rect(box.left + 3, box.top + 3, box.right - 3, box.bottom - 3), HeroIconKind::Check,
+            Color(theme.textPrimary), 1);
     }
 }
 

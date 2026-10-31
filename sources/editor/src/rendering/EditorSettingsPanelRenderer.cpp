@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
@@ -26,7 +27,9 @@ constexpr int kSectionHeaderHeight = 26;
 constexpr int kRowHeight = 34;
 constexpr int kRowGap = 6;
 constexpr int kLabelWidth = 150;
-constexpr int kCheckboxSize = 18;
+// The autosave toggle is a switch: wider than tall.
+constexpr int kCheckboxSize = 16;
+constexpr int kCheckboxWidth = 30;
 constexpr int kIntervalButtonWidth = 72;
 constexpr int kIntervalButtonGap = 6;
 constexpr int kLanguageFieldWidth = 240;
@@ -78,7 +81,7 @@ struct EditorSettingsLayout {
     rects.autosaveCheckbox = {
         left + kLabelWidth,
         checkboxTop,
-        left + kLabelWidth + kCheckboxSize,
+        left + kLabelWidth + kCheckboxWidth,
         checkboxTop + kCheckboxSize,
     };
 
@@ -154,19 +157,7 @@ void DrawOptionButton(
 }
 
 void DrawCheckbox(HDC dc, const RECT& rect, const EditorTheme& theme, bool checked) {
-    const COLORREF fill = Color(checked ? theme.accent : theme.chrome);
-    const COLORREF border = Color(checked ? theme.accent : theme.borderPanel);
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    if (checked) {
-        DrawText(
-            dc,
-            rect,
-            "x",
-            Color(theme.textPrimary),
-            12,
-            FW_BOLD,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+    EditorDialogStyle::PaintSwitch(dc, rect, theme, checked);
 }
 
 [[nodiscard]] int AutosaveIntervalIndex(std::uint32_t minutes) noexcept {

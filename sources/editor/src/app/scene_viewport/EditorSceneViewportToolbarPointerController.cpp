@@ -5,9 +5,11 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
+#include <optional>
 
 namespace kb::editor {
 namespace {
@@ -166,6 +168,19 @@ namespace {
     return PointInRect(toolbar.panel, x, y);
 }
 
+[[nodiscard]] std::optional<EditorTransformToolMode> ToolModeAt(const SceneViewportToolbarRects& toolbar, int x, int y) noexcept {
+    if (PointInRect(toolbar.moveToolButton, x, y)) {
+        return EditorTransformToolMode::Translate;
+    }
+    if (PointInRect(toolbar.rotateToolButton, x, y)) {
+        return EditorTransformToolMode::Rotate;
+    }
+    if (PointInRect(toolbar.scaleToolButton, x, y)) {
+        return EditorTransformToolMode::Scale;
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 EditorSceneViewportToolbarPointerController::EditorSceneViewportToolbarPointerController(EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) noexcept
@@ -182,6 +197,18 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
         return true;
     }
     if (SelectDropdownValue(preview, toolbar, x, y)) {
+        sceneViewport_.RequestPresent();
+        return true;
+    }
+    if (const std::optional<EditorTransformToolMode> mode = ToolModeAt(toolbar, x, y); mode.has_value()) {
+        preview.CloseToolbarDropdown();
+        EditorSceneGizmoState& gizmo = sceneContext_.Gizmo();
+        if (gizmo.toolMode != *mode && !gizmo.IsDragging()) {
+            gizmo.toolMode = *mode;
+            gizmo.hoveredAxis = -1;
+            gizmo.draggedAxis = -1;
+            sceneContext_.MarkSceneRenderDirty();
+        }
         sceneViewport_.RequestPresent();
         return true;
     }

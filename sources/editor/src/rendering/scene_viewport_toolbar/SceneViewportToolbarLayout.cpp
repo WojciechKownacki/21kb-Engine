@@ -75,6 +75,10 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
     int cursor = rects.toolbar.left + SceneViewportToolbarMetrics::PaddingX;
     rects.fpsCounter = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::FpsCounterWidth);
     AddGroupGap(cursor);
+    rects.moveToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);
+    rects.rotateToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);
+    rects.scaleToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);
+    AddGroupGap(cursor);
     rects.renderProfileButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ProfileButtonWidth);
     AddGroupGap(cursor);
     rects.gridToggleButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::IconButtonWidth);

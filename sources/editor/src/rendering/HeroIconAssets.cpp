@@ -149,6 +149,118 @@ static constexpr std::array<HeroIconPath, 3> kSave{
     HeroIconPath{ "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7", false },
     HeroIconPath{ "M7 3v4a1 1 0 0 0 1 1h7", false },
 };
+// Editor command glyphs: Lucide (ISC), drawn as 2 px strokes like "save".
+// Lucide "undo-2" (ISC).
+static constexpr std::array<HeroIconPath, 2> kUndo{
+    HeroIconPath{ "M9 14L4 9L9 4", false },
+    HeroIconPath{ "M4 9H14.5A5.5 5.5 0 0 1 14.5 20H11", false },
+};
+// Lucide "redo-2" (ISC).
+static constexpr std::array<HeroIconPath, 2> kRedo{
+    HeroIconPath{ "M15 14L20 9L15 4", false },
+    HeroIconPath{ "M20 9H9.5A5.5 5.5 0 0 0 9.5 20H13", false },
+};
+// Lucide "copy" (ISC).
+static constexpr std::array<HeroIconPath, 2> kDuplicate{
+    HeroIconPath{ "M10 8H20A2 2 0 0 1 22 10V20A2 2 0 0 1 20 22H10A2 2 0 0 1 8 20V10A2 2 0 0 1 10 8Z", false },
+    HeroIconPath{ "M4 16C2.9 16 2 15.1 2 14V4C2 2.9 2.9 2 4 2H14C15.1 2 16 2.9 16 4", false },
+};
+// Lucide "plug" (ISC).
+static constexpr std::array<HeroIconPath, 4> kPlug{
+    HeroIconPath{ "M12 22V17", false },
+    HeroIconPath{ "M9 8V2", false },
+    HeroIconPath{ "M15 8V2", false },
+    HeroIconPath{ "M18 8V13A4 4 0 0 1 14 17H10A4 4 0 0 1 6 13V8Z", false },
+};
+// Lucide "move" (ISC).
+static constexpr std::array<HeroIconPath, 6> kMove{
+    HeroIconPath{ "M5 9L2 12L5 15", false },
+    HeroIconPath{ "M9 5L12 2L15 5", false },
+    HeroIconPath{ "M15 19L12 22L9 19", false },
+    HeroIconPath{ "M19 9L22 12L19 15", false },
+    HeroIconPath{ "M2 12H22", false },
+    HeroIconPath{ "M12 2V22", false },
+};
+// Lucide "rotate-cw" (ISC).
+static constexpr std::array<HeroIconPath, 2> kRotate{
+    HeroIconPath{ "M21 12A9 9 0 1 1 12 3C14.52 3 16.93 4 18.74 5.74L21 8", false },
+    HeroIconPath{ "M21 3V8H16", false },
+};
+// Lucide "maximize-2" (ISC).
+static constexpr std::array<HeroIconPath, 4> kScale{
+    HeroIconPath{ "M15 3H21V9", false },
+    HeroIconPath{ "M9 21H3V15", false },
+    HeroIconPath{ "M21 3L14 10", false },
+    HeroIconPath{ "M3 21L10 14", false },
+};
+// Lucide "grid-3x3" (ISC).
+static constexpr std::array<HeroIconPath, 5> kGrid{
+    HeroIconPath{ "M5 3H19A2 2 0 0 1 21 5V19A2 2 0 0 1 19 21H5A2 2 0 0 1 3 19V5A2 2 0 0 1 5 3Z", false },
+    HeroIconPath{ "M3 9H21", false },
+    HeroIconPath{ "M3 15H21", false },
+    HeroIconPath{ "M9 3V21", false },
+    HeroIconPath{ "M15 3V21", false },
+};
+// Lucide "magnet" (ISC).
+static constexpr std::array<HeroIconPath, 3> kMagnet{
+    HeroIconPath{ "M6 15L2 11L8.75 4.23A7.79 7.79 0 0 1 19.75 15.23L13 22L9 18L15.39 11.64A2.14 2.14 0 0 0 12.39 8.64L6 15", false },
+    HeroIconPath{ "M5 8L9 12", false },
+    HeroIconPath{ "M12 15L16 19", false },
+};
+// Lucide "map" (ISC).
+static constexpr std::array<HeroIconPath, 3> kMap{
+    HeroIconPath{ "M14.106 5.553A2 2 0 0 0 15.894 5.553L19.553 3.723A1 1 0 0 1 21 4.619V17.383A1 1 0 0 1 20.447 18.277L15.894 20.554A2 2 0 0 1 14.106 20.554L9.894 18.448A2 2 0 0 0 8.106 18.448L4.447 20.278A1 1 0 0 1 3 19.381V6.618A1 1 0 0 1 3.553 5.724L8.106 3.447A2 2 0 0 1 9.894 3.447Z", false },
+    HeroIconPath{ "M15 5.764V20.764", false },
+    HeroIconPath{ "M9 3.236V18.236", false },
+};
+// Lucide "layers" (ISC).
+static constexpr std::array<HeroIconPath, 3> kLayers{
+    HeroIconPath{ "M12.83 2.18A2 2 0 0 0 11.17 2.18L2.6 6.08A1 1 0 0 0 2.6 7.91L11.18 11.82A2 2 0 0 0 12.84 11.82L21.42 7.92A1 1 0 0 0 21.42 6.09Z", false },
+    HeroIconPath{ "M22 17.65L12.83 21.81A2 2 0 0 1 11.17 21.81L2 17.65", false },
+    HeroIconPath{ "M22 12.65L12.83 16.81A2 2 0 0 1 11.17 16.81L2 12.65", false },
+};
+// Lucide "activity" (ISC).
+static constexpr std::array<HeroIconPath, 1> kActivity{
+    HeroIconPath{ "M22 12H18L15 21L9 3L6 12H2", false },
+};
+// Lucide "download" (ISC).
+static constexpr std::array<HeroIconPath, 3> kDownload{
+    HeroIconPath{ "M21 15V19A2 2 0 0 1 19 21H5A2 2 0 0 1 3 19V15", false },
+    HeroIconPath{ "M7 10L12 15L17 10", false },
+    HeroIconPath{ "M12 15V3", false },
+};
+// Lucide "upload" (ISC).
+static constexpr std::array<HeroIconPath, 3> kUpload{
+    HeroIconPath{ "M21 15V19A2 2 0 0 1 19 21H5A2 2 0 0 1 3 19V15", false },
+    HeroIconPath{ "M17 8L12 3L7 8", false },
+    HeroIconPath{ "M12 3V15", false },
+};
+// Lucide "navigation" (ISC).
+static constexpr std::array<HeroIconPath, 1> kNavigation{
+    HeroIconPath{ "M3 11L22 2L13 21L11 13L3 11Z", false },
+};
+// Lucide "book-open" (ISC).
+static constexpr std::array<HeroIconPath, 2> kBookOpen{
+    HeroIconPath{ "M2 3H8A4 4 0 0 1 12 7V21A3 3 0 0 0 9 18H2Z", false },
+    HeroIconPath{ "M22 3H16A4 4 0 0 0 12 7V21A3 3 0 0 1 15 18H22Z", false },
+};
+// Lucide "info" (ISC).
+static constexpr std::array<HeroIconPath, 3> kInfo{
+    HeroIconPath{ "M12 22A10 10 0 1 0 12 2A10 10 0 0 0 12 22Z", false },
+    HeroIconPath{ "M12 16V12", false },
+    HeroIconPath{ "M12 8H12.01", false },
+};
+// Lucide "flag" (ISC).
+static constexpr std::array<HeroIconPath, 2> kFlag{
+    HeroIconPath{ "M4 15C4 15 5 14 8 14C11 14 13 16 16 16C19 16 20 15 20 15V3C20 3 19 4 16 4C13 4 11 2 8 2C5 2 4 3 4 3Z", false },
+    HeroIconPath{ "M4 22V15", false },
+};
+// Lucide "monitor" (ISC).
+static constexpr std::array<HeroIconPath, 3> kMonitor{
+    HeroIconPath{ "M4 3H20A2 2 0 0 1 22 5V15A2 2 0 0 1 20 17H4A2 2 0 0 1 2 15V5A2 2 0 0 1 4 3Z", false },
+    HeroIconPath{ "M8 21H16", false },
+    HeroIconPath{ "M12 17V21", false },
+};
 // Platform marks and the dedicated-server glyph, vendored rather than drawn. Brand marks
 // name a build target here, which is what they are for. Sources and licences are recorded
 // in third_party/devicon and third_party/fluentui-system-icons.
@@ -362,6 +474,82 @@ HeroIconGlyph HeroIconAssets::DisclosureCollapsed() noexcept {
 
 HeroIconGlyph HeroIconAssets::DisclosureExpanded() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDisclosureExpanded } };
+}
+
+HeroIconGlyph HeroIconAssets::Undo() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kUndo }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Redo() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kRedo }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Duplicate() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDuplicate }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Plug() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlug }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Move() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kMove }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Rotate() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kRotate }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Scale() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kScale }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Grid() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kGrid }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Magnet() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kMagnet }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Map() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kMap }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Layers() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kLayers }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Activity() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kActivity }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Download() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDownload }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Upload() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kUpload }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Navigation() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kNavigation }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::BookOpen() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kBookOpen }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Info() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kInfo }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Flag() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kFlag }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Monitor() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kMonitor }, .strokeWidth = 2.0F };
 }
 
 } // namespace kb::editor

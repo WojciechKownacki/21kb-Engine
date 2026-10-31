@@ -196,7 +196,6 @@ constexpr int kMaxMessagesPerPump = 128;
         client.right - client.left,
         client.bottom - client.top,
         state.metrics.menuHeight,
-        state.metrics.toolbarHeight,
         state.metrics.tabStripHeight,
         state.metrics.tabMinWidth,
         state.metrics.tabWidth,

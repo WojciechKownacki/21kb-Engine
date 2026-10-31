@@ -896,7 +896,7 @@ void ScenePanelContentRenderer::Paint(
     EditorSceneBgfxViewport* sceneViewport,
     HWND sceneViewportHost) const {
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
-    SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
+    SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState, sceneContext.Gizmo().toolMode);
     SceneViewportToolbarRenderer::PaintTerrainTools(dc, content, theme, sceneContext);
     SceneViewportToolbarRenderer::PaintPrefabEditBar(dc, content, theme, sceneContext);
 

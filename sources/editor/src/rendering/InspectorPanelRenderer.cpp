@@ -197,11 +197,9 @@ constexpr std::size_t kMaterialPreviewMaxMissingRows = 2U;
 constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
-constexpr int kAddComponentButtonHeight = 34;
-constexpr int kAddComponentButtonWidthPercent = 60;
-constexpr int kAddComponentButtonMinimumWidth = 150;
-constexpr int kAddComponentBrowserWidth = 240;
-constexpr int kAddComponentBrowserMaxHeight = 300;
+constexpr int kAddComponentButtonHeight = 32;
+constexpr int kAddComponentBrowserWidth = 320;
+constexpr int kAddComponentBrowserMaxHeight = 400;
 constexpr int kAddComponentSearchHeight = 24;
 constexpr int kAddComponentRowHeight = 26;
 constexpr int kAddComponentBackHeaderHeight = 24;
@@ -449,11 +447,8 @@ void DrawDivider(HDC dc, int left, int right, int y) {
     const int inset = std::min<int>(10, std::max<int>(0, static_cast<int>(content.right - content.left) / 8));
     const int availableLeft = content.left + inset;
     const int availableRight = content.right - inset;
-    const int availableWidth = std::max(0, availableRight - availableLeft);
-    const int preferredWidth = availableWidth * kAddComponentButtonWidthPercent / 100;
-    const int width = std::min(availableWidth, std::max(kAddComponentButtonMinimumWidth, preferredWidth));
-    const int left = availableLeft + (availableWidth - width) / 2;
-    return Rect(left, y, left + width, y + kAddComponentButtonHeight);
+    // The full width of the Inspector, as Unity and Unreal place it under the components.
+    return Rect(availableLeft, y, std::max(availableLeft, availableRight), y + kAddComponentButtonHeight);
 }
 
 [[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
@@ -521,9 +516,13 @@ void DrawDivider(HDC dc, int left, int right, int y) {
     return inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch ? std::string_view{ inspector.EditBuffer() } : std::string_view{};
 }
 
-void DrawAddComponentBrowserRow(HDC dc, RECT row, const EditorTheme& theme, HeroIconKind icon, std::string_view label, bool isCategory, bool hovered) {
-    EditorDialogStyle::PaintMenuRow(dc, row, theme, label, icon, hovered);
+void DrawAddComponentBrowserRow(HDC dc, RECT row, const EditorTheme& theme, const AddComponentRow& entry, bool hovered) {
+    const bool isCategory = entry.kind == AddComponentRowKind::Category;
+    EditorDialogStyle::PaintMenuRow(dc, row, theme, entry.label, entry.icon, hovered);
     if (isCategory) {
+        // How many components the category holds, beside the chevron that opens it.
+        EditorDialogStyle::PaintText(dc, Rect(row.right - 64, row.top, row.right - 22, row.bottom), std::to_string(entry.count),
+            Color(theme.textDisabled), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         const int chevronSize = 12;
         const int chevronTop = row.top + (static_cast<int>(row.bottom - row.top) - chevronSize) / 2;
         HeroIconPainter::Draw(dc, Rect(row.right - 16, chevronTop, row.right - 4, chevronTop + chevronSize), HeroIconKind::ChevronRight, Color(theme.textSecondary), 1);
@@ -614,7 +613,7 @@ void DrawAddComponentBrowser(
             const int rowTop = list.top - scroll + i * kAddComponentRowHeight;
             const RECT rowRect = Rect(inner.left + offsetX, rowTop, inner.right + offsetX, rowTop + kAddComponentRowHeight);
             const bool hovered = inspector.IsHovered(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentOption, i);
-            DrawAddComponentBrowserRow(dc, rowRect, theme, rows[static_cast<std::size_t>(i)].icon, rows[static_cast<std::size_t>(i)].label, rows[static_cast<std::size_t>(i)].kind == AddComponentRowKind::Category, hovered);
+            DrawAddComponentBrowserRow(dc, rowRect, theme, rows[static_cast<std::size_t>(i)], hovered);
         }
     }
     RestoreDC(dc, savedListDc);

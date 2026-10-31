@@ -72,7 +72,6 @@ constexpr DWORD kToolbarFpsRefreshMs = 250U;
         client.right - client.left,
         client.bottom - client.top,
         metrics.menuHeight,
-        metrics.toolbarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

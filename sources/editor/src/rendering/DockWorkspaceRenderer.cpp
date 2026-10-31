@@ -15,7 +15,6 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int wi
         width,
         height,
         metrics.menuHeight,
-        metrics.toolbarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

@@ -69,6 +69,17 @@ void SceneViewportToolbarDrawing::DrawIconButton(HDC dc, RECT rect, HeroIconKind
     HeroIconPainter::Draw(dc, CenteredRect(rect, SceneViewportToolbarMetrics::IconSize), icon, iconColor, 1);
 }
 
+void SceneViewportToolbarDrawing::DrawToolButton(
+    HDC dc, RECT rect, HeroIconKind icon, std::string_view key, const EditorTheme& theme, bool active) {
+    DrawBase(dc, rect, theme, active);
+    const int iconTop = rect.top + ((rect.bottom - rect.top - SceneViewportToolbarMetrics::IconSize) / 2);
+    const RECT iconRect{ rect.left + 7, iconTop, rect.left + 7 + SceneViewportToolbarMetrics::IconSize, iconTop + SceneViewportToolbarMetrics::IconSize };
+    HeroIconPainter::Draw(dc, iconRect, icon, active ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(theme.textSecondary), 1);
+    RECT keyRect{ iconRect.right + 2, rect.top, rect.right - 4, rect.bottom };
+    GdiDrawing::DrawTabText(dc, keyRect, key,
+        active ? RGB(200, 228, 240) : GdiDrawing::ToColorRef(theme.textDisabled));
+}
+
 void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view value, const EditorTheme& theme, bool active) {
     DrawBase(dc, rect, theme, active);
     const RECT iconRect{

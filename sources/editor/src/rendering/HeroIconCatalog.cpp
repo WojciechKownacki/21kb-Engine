@@ -86,6 +86,44 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::DisclosureCollapsed();
     case HeroIconKind::DisclosureExpanded:
         return HeroIconAssets::DisclosureExpanded();
+    case HeroIconKind::Undo:
+        return HeroIconAssets::Undo();
+    case HeroIconKind::Redo:
+        return HeroIconAssets::Redo();
+    case HeroIconKind::Duplicate:
+        return HeroIconAssets::Duplicate();
+    case HeroIconKind::Plug:
+        return HeroIconAssets::Plug();
+    case HeroIconKind::Move:
+        return HeroIconAssets::Move();
+    case HeroIconKind::Rotate:
+        return HeroIconAssets::Rotate();
+    case HeroIconKind::Scale:
+        return HeroIconAssets::Scale();
+    case HeroIconKind::Grid:
+        return HeroIconAssets::Grid();
+    case HeroIconKind::Magnet:
+        return HeroIconAssets::Magnet();
+    case HeroIconKind::Map:
+        return HeroIconAssets::Map();
+    case HeroIconKind::Layers:
+        return HeroIconAssets::Layers();
+    case HeroIconKind::Activity:
+        return HeroIconAssets::Activity();
+    case HeroIconKind::Download:
+        return HeroIconAssets::Download();
+    case HeroIconKind::Upload:
+        return HeroIconAssets::Upload();
+    case HeroIconKind::Navigation:
+        return HeroIconAssets::Navigation();
+    case HeroIconKind::BookOpen:
+        return HeroIconAssets::BookOpen();
+    case HeroIconKind::Info:
+        return HeroIconAssets::Info();
+    case HeroIconKind::Flag:
+        return HeroIconAssets::Flag();
+    case HeroIconKind::Monitor:
+        return HeroIconAssets::Monitor();
     default:
         return {};
     }

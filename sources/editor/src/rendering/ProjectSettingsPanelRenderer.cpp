@@ -3,6 +3,7 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
@@ -113,12 +114,7 @@ void DrawOptionButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::s
 }
 
 void DrawCheckbox(HDC dc, const RECT& rect, const EditorTheme& theme, bool checked) {
-    const COLORREF boxFill = Color(checked ? theme.accent : theme.chrome);
-    const COLORREF boxBorder = Color(checked ? theme.accent : theme.borderPanel);
-    GdiDrawing::DrawSharpFrame(dc, rect, boxFill, boxBorder);
-    if (checked) {
-        DrawText(dc, rect, "x", Color(theme.textPrimary), 12, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+    EditorDialogStyle::PaintSwitch(dc, rect, theme, checked);
 }
 
 void DrawDropdownList(HDC dc, const RECT& fieldBox, const EditorTheme& theme, const std::vector<std::string>& options, const std::string& selected, int hoveredOption) {

@@ -17,7 +17,9 @@ constexpr int kSectionHeaderHeight = 26;
 constexpr int kRowHeight = 34;
 constexpr int kRowGap = 6;
 constexpr int kLabelWidth = 150;
-constexpr int kCheckboxSize = 18;
+// The on/off toggles are switches: wider than tall.
+constexpr int kCheckboxSize = 16;
+constexpr int kCheckboxWidth = 30;
 constexpr int kOptionHeight = 28;
 constexpr int kBackendButtonWidth = 86;
 constexpr int kMsaaButtonWidth = 58;
@@ -31,7 +33,7 @@ constexpr int kQualityButtonGap = 6;
 }
 
 [[nodiscard]] RECT CheckboxForRow(int left, int rowTop) noexcept {
-    return RECT{ left + kLabelWidth, rowTop + (kRowHeight - kCheckboxSize) / 2, left + kLabelWidth + kCheckboxSize, rowTop + (kRowHeight + kCheckboxSize) / 2 };
+    return RECT{ left + kLabelWidth, rowTop + (kRowHeight - kCheckboxSize) / 2, left + kLabelWidth + kCheckboxWidth, rowTop + (kRowHeight + kCheckboxSize) / 2 };
 }
 
 } // namespace
@@ -57,7 +59,7 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     const int row2Top = row1Top + kRowHeight + kRowGap;
     rects.enabledLabel = RECT{ left, row2Top, left + kLabelWidth, row2Top + kRowHeight };
     const int checkTop = row2Top + (kRowHeight - kCheckboxSize) / 2;
-    rects.enabledCheckbox = RECT{ left + kLabelWidth, checkTop, left + kLabelWidth + kCheckboxSize, checkTop + kCheckboxSize };
+    rects.enabledCheckbox = RECT{ left + kLabelWidth, checkTop, left + kLabelWidth + kCheckboxWidth, checkTop + kCheckboxSize };
 
     const int graphicsRowTop = rects.sectionHeader.bottom + kRowGap;
     rects.backendLabel = RECT{ left, graphicsRowTop, left + kLabelWidth, graphicsRowTop + kRowHeight };

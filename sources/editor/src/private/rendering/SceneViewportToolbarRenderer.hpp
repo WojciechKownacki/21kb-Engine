@@ -17,6 +17,7 @@
 namespace kb::editor {
 
 class EditorSceneContext;
+enum class EditorTransformToolMode : std::uint8_t;
 
 #if defined(_WIN32)
 
@@ -25,6 +26,10 @@ struct SceneViewportToolbarRects {
     RECT row{};
     RECT fpsCounter{};
     RECT pipelineStats{};
+    // Move / Rotate / Scale: the same tools W / E / R pick from the keyboard.
+    RECT moveToolButton{};
+    RECT rotateToolButton{};
+    RECT scaleToolButton{};
     RECT renderProfileButton{};
     RECT gridToggleButton{};
     RECT gridStepButton{};
@@ -74,7 +79,12 @@ public:
         const EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static TerrainViewportToolbarRects ResolveTerrainTools(const RECT& content) noexcept;
     static void RecordFrameMilliseconds(double milliseconds) noexcept;
-    static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
+    static void Paint(
+        HDC dc,
+        const RECT& content,
+        const EditorTheme& theme,
+        const EditorViewportPreviewState& state,
+        EditorTransformToolMode toolMode);
     static void PaintPrefabEditBar(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext);
     static void PaintTerrainTools(
         HDC dc,

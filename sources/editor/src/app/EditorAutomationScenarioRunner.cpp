@@ -1358,7 +1358,7 @@ ReadScriptValue(
             // A resize or a change of screen must not lose a panel: each visible docked panel has a frame in the layout.
             const EditorMetrics metrics{};
             const DockLayout layout = state.dock.Queries().BuildLayout(
-                static_cast<int>(*fitsWidth), static_cast<int>(*fitsHeight), metrics.menuHeight, metrics.toolbarHeight,
+                static_cast<int>(*fitsWidth), static_cast<int>(*fitsHeight), metrics.menuHeight,
                 metrics.tabStripHeight, metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
             for (const DockPanel& panel : state.dock.Queries().Panels()) {
                 if (!panel.visible || panel.area == DockArea::Floating) continue;

@@ -69,9 +69,11 @@ std::unique_ptr<DockNode> DefaultDockWorkspace::CreateRoot(std::uint32_t& nextNo
     auto center = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 2 });
     auto right = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 4 });
     auto bottom = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 5, 6 });
-    auto middle = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.72F, std::move(center), std::move(right));
-    auto top = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.18F, std::move(left), std::move(middle));
-    return DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Vertical, 0.73F, std::move(top), std::move(bottom));
+    // The Inspector runs the full height on the right, as in Unity and Unreal, so a long component
+    // list is not cut by the Project Files strip; that strip sits under the Hierarchy and the scene.
+    auto top = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.23F, std::move(left), std::move(center));
+    auto main = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Vertical, 0.69F, std::move(top), std::move(bottom));
+    return DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.78F, std::move(main), std::move(right));
 }
 
 std::uint32_t DefaultDockWorkspace::Next(std::uint32_t& nextNodeId) noexcept {

@@ -169,7 +169,6 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paint.width,
         paint.height,
         paintContext->metrics->menuHeight,
-        paintContext->metrics->toolbarHeight,
         paintContext->metrics->tabStripHeight,
         paintContext->metrics->tabMinWidth,
         paintContext->metrics->tabWidth,
@@ -305,7 +304,6 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
             return client.bottom - client.top;
         }(window),
         metrics.menuHeight,
-        metrics.toolbarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,

@@ -479,12 +479,14 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
             kb::editor::DrawTextUtf8(dc, field.value.c_str(), -1, &value,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             if (editable) {
-                SetTextColor(dc, RGB(132, 143, 156));
-                RECT affordance{ value.right + 3, row.top, row.right - 5, row.bottom };
-                kb::editor::DrawTextUtf8(dc,
+                // A list opens from a chevron, an asset picker from an ellipsis, as in the Inspector.
+                constexpr int iconSize = 12;
+                const int iconLeft = static_cast<int>(value.right) + 3 + (static_cast<int>(row.right) - 5 - static_cast<int>(value.right) - 3 - iconSize) / 2;
+                const int iconTop = static_cast<int>(row.top) + (static_cast<int>(row.bottom - row.top) - iconSize) / 2;
+                HeroIconPainter::Draw(dc, RECT{ iconLeft, iconTop, iconLeft + iconSize, iconTop + iconSize },
                     field.action == SkeletalMeshEditorDetailsAction::SectionMaterial ||
-                    field.action == SkeletalMeshEditorDetailsAction::PreviewLod ? "v" : "...",
-                    -1, &affordance, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                    field.action == SkeletalMeshEditorDetailsAction::PreviewLod ? HeroIconKind::ChevronDown : HeroIconKind::EllipsisHorizontal,
+                    RGB(132, 143, 156), 1);
             }
             y += kDetailsFieldHeight;
         }

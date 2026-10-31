@@ -44,7 +44,6 @@ namespace {
         1280,
         720,
         metrics.menuHeight,
-        metrics.toolbarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
@@ -230,7 +229,7 @@ void RunDockedPanelsShareEdgesWithoutVisibleGapsTest() {
     const kb::editor::EditorMetrics metrics{};
     const kb::editor::DockLayout layout = BuildDefaultLayout(model);
 
-    kb::editor::tests::Require(layout.workspace.y == metrics.menuHeight + metrics.toolbarHeight, "Dock workspace should start directly below the toolbar");
+    kb::editor::tests::Require(layout.workspace.y == metrics.menuHeight, "Dock workspace should start directly below the toolbar");
 
     const kb::editor::DockLeafLayout* hierarchy = FindLeafForPanel(layout, 1U);
     const kb::editor::DockLeafLayout* scene = FindLeafForPanel(layout, 2U);

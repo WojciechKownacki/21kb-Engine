@@ -114,12 +114,21 @@ public:
         HeroIconKind icon,
         bool hovered,
         bool enabled = true,
-        bool showIcon = true);
+        bool showIcon = true,
+        std::string_view shortcut = {});
     static void PaintCheckbox(
         HDC dc,
         const RECT& bounds,
         const EditorTheme& theme,
         bool checked,
+        bool enabled = true);
+    // On/off switch for a setting that takes effect by itself, as Plugins and the settings
+    // pages use it. The knob sits right and the track is green while on.
+    static void PaintSwitch(
+        HDC dc,
+        const RECT& bounds,
+        const EditorTheme& theme,
+        bool on,
         bool enabled = true);
     static void PaintScrollbar(
         HDC dc,

@@ -31,8 +31,8 @@ struct EditorTheme {
 };
 
 struct EditorMetrics {
-    int menuHeight = 24;
-    int toolbarHeight = 48;
+    // The single top bar that holds the menus, the transport controls and Save.
+    int menuHeight = 40;
     int floatingChromeHeight = 24;
     int floatingControlWidth = 34;
     int floatingResizeBorder = 6;
