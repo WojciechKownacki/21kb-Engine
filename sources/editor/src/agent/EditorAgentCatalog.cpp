@@ -132,16 +132,19 @@ struct Preset {
     }
     {
         // Codex: the engine's MCP server is passed as configuration overrides, so nothing is
-        // written to the user's Codex configuration.
+        // written to the user's Codex configuration. Its tools are approved up front: exec runs
+        // with no one to ask, and a tool that waits for approval is refused there.
         EditorAgent agent;
         agent.runArguments = { "exec", "--json", "--skip-git-repo-check", "-C", "{project}", "-s", "workspace-write",
             "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
-            "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]" };
+            "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]",
+            "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"" };
         // A follow-up continues the thread (the process already runs in the project folder; resume
         // takes no -C or -s), with the request read from standard input.
         agent.resumeRunArguments = { "exec", "resume", "{session}", "--json", "--skip-git-repo-check",
             "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
-            "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]", "-" };
+            "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]",
+            "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"", "-" };
         agent.statusArguments = { "login", "status" };
         // The model stays the one in the user's Codex configuration; only the effort is offered.
         agent.efforts = { "minimal", "low", "medium", "high" };
