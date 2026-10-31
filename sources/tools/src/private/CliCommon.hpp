@@ -73,6 +73,9 @@ private:
 // A colour as a person writes it: "#RRGGBB" (or "#RRGGBBAA" when `channels` is 4) is sRGB, as
 // every colour picker shows it, and comes back linear; "r,g,b[,a]" are linear values in 0..1.
 [[nodiscard]] std::optional<std::array<float, 4>> ParseColorText(std::string_view text, std::size_t channels);
+// A number as kb_cli prints it: at most four decimals, no trailing zeros and no "-0", so it can be
+// pasted back into --set or --position (1, 0.5, -2.25).
+[[nodiscard]] std::string FormatCliNumber(double value);
 
 // Finds an asset by virtual path ("/Game/...") or by physical file path.
 [[nodiscard]] const kb::assets::AssetMetadata* FindAssetByFlexiblePath(

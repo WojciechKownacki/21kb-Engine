@@ -4393,11 +4393,13 @@ void RunCliJsonTests() {
     const std::string boundaries = "\xE0\xA0\x80\xED\x9F\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF";
     Require(kb::cli::ToValidUtf8(boundaries) == boundaries, "Valid Unicode boundary scalars must remain unchanged");
 
-    // Without --json nothing changes: text, the error on stderr, the usage after it, exit code 1.
+    // Without --json: one line on stderr that says where the commands are, not the whole usage
+    // text (an agent reads it on every wrong guess), and exit code 1.
     const CliRun unknownText = RunCliProgram({ "no-such-command" });
     Require(unknownText.exitCode == 1 && unknownText.out.empty() &&
-            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "Exit codes:"),
-        "an unknown command must print the error and the usage on stderr and exit 1");
+            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "kb_cli commands") &&
+            !Contains(unknownText.err, "Exit codes:"),
+        "an unknown command must print one short error on stderr and exit 1");
 
     // An unknown command with --json: one object, the exit code in the process and in the object.
     const CliRun unknown = RunCliProgram({ "--json", "no-such-command" });
@@ -4408,7 +4410,7 @@ void RunCliJsonTests() {
     Require(unknownResult.Find("command")->AsString() == "no-such-command" && unknownResult.Find("output")->AsString().empty(),
         "the result must name the command");
     Require(unknownResult.Find("errors")->Size() == 1U &&
-            unknownResult.Find("errors")->At(0U)->AsString() == "unknown command 'no-such-command'",
+            unknownResult.Find("errors")->At(0U)->AsString().starts_with("unknown command 'no-such-command'"),
         "the result must list the error without the 'error: ' prefix and without the usage");
 
     // A command that succeeds: ok, exit code 0, its text in "output".
@@ -4537,6 +4539,19 @@ void RunCommandCatalogTests() {
     Require(Contains(page("api_reference", R"({"topic":"Physics.Raycast"})"), "# Physics.Raycast"), "api_reference must return one function page");
     Require(Contains(page("api_reference", R"({"search":"raycast"})"), "Physics.Raycast"), "api_reference must find topics by text");
     Require(Contains(page("guide", R"({"topic":"objects-and-materials"})"), "material-new"), "guide must return one how-to");
+    // Reading the scene back: what component_edit wrote, without opening the scene file.
+    const std::string shown = page("entity_edit", R"({"action":"show","name":"Probe","scene":"/Game/Scenes/McpScene.21kbscene"})");
+    Require(Contains(shown, "localPosition=3,4,5") && Contains(shown, "localScale=2,2,2"),
+        "entity_edit show must read back what component_edit wrote: " + shown);
+    // A coloured shape with physics in one call, and run reporting where it went.
+    Require(Contains(page("entity_edit", R"({"action":"add","name":"Ball","create":"Sphere","scene":"/Game/Scenes/RunnerScene.21kbscene","position":"0,5,0","color":"#E03C31"})"),
+                "with material /Game/Materials/Ball.kbmat"),
+        "entity_edit add must make a coloured shape in one call");
+    const std::string ball = page("entity_edit", R"({"action":"show","name":"Ball","scene":"/Game/Scenes/RunnerScene.21kbscene"})");
+    Require(Contains(ball, "material=/Game/Materials/Ball.kbmat"), "the one-call ball must carry its material: " + ball);
+    Require(Contains(page("scene_list", R"({"scene":"/Game/Scenes/RunnerScene.21kbscene"})"), "Ball components: MeshRenderer") &&
+            Contains(page("scene_list", R"({"scene":"/Game/Scenes/RunnerScene.21kbscene"})"), "@ 0,5,0"),
+        "scene_list must print each node's position");
     Require(RunCliProgram({"scene-new", "--project", root, "--name", "CliScene", "--template", "Empty"}).exitCode == 0 &&
         RunCliProgram({"entity", "add", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--name", "Probe", "--position", "1,2,3"}).exitCode == 0 &&
         RunCliProgram({"component", "set", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--entity", "Probe", "--type", "Transform",

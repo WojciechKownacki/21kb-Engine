@@ -562,19 +562,18 @@ namespace {
 }
 
 // How a script calls the function: its Lua convenience call when there is one, otherwise
-// CallFunction.
+// CallFunction with the inputs by name (a positional table is not read).
 [[nodiscard]] std::string LuaCall(const ScriptApiCatalog& catalog, const ScriptApiCatalogFunction& function) {
     std::string arguments;
+    std::string named;
     for (const ScriptApiPin& pin : function.inputs) {
-        if (!arguments.empty()) {
-            arguments += ", ";
-        }
-        arguments += pin.name;
+        arguments += (arguments.empty() ? "" : ", ") + pin.name;
+        named += (named.empty() ? "" : ", ") + pin.name + " = " + pin.name;
     }
     if (const ScriptApiCatalogLuaBinding* binding = LuaBindingOf(catalog, function.name); binding != nullptr) {
         return (binding->tableName.empty() ? std::string{} : binding->tableName + ".") + binding->luaName + "(" + arguments + ")";
     }
-    return "CallFunction(\"" + function.name + "\", { " + arguments + " })";
+    return "CallFunction(\"" + function.name + "\", { " + named + " })";
 }
 
 [[nodiscard]] std::map<std::string, std::vector<const ScriptApiCatalogFunction*>> FunctionGroups(const ScriptApiCatalog& catalog) {
@@ -611,10 +610,11 @@ namespace {
         out += functions.size() > 6U ? ", ...\n" : "\n";
     }
     out += "\n## Components\n\n";
-    out += "Read and change their properties with `self:GetProperty` and `self:SetProperty`, or the `component_edit` tool.\n\n";
-    for (const ScriptApiCatalogComponent& component : catalog.components) {
-        out += "- [" + component.name + "](" + ComponentPagePath(component.name) + ") - " + std::to_string(component.properties.size()) + " properties\n";
+    out += "Each has a page `components/<Name>.md` (topic: its name). Scripts use `self:GetProperty` and `self:SetProperty`.\n\n";
+    for (std::size_t index = 0; index < catalog.components.size(); ++index) {
+        out += (index == 0U ? "" : ", ") + catalog.components[index].name;
     }
+    out += "\n";
     return out;
 }
 
@@ -644,27 +644,14 @@ namespace {
         }
         out += '\n';
     }
+    // One line on calling it; what comes back is the output table above (CallFunction gives nil for
+    // no output, the value itself for one, a table of the outputs for several).
     const ScriptApiCatalogLuaBinding* binding = LuaBindingOf(catalog, function.name);
     out += "Lua: `" + LuaCall(catalog, function) + "`";
-    if (binding != nullptr) {
+    if (binding != nullptr && binding->returnKind != ScriptApiCatalogLuaReturnKind::Default) {
         out += " returns " + LuaBindingReturnSummary(catalog, *binding);
     }
-    out += ".\n\n```lua\n";
-    out += function.outputs.empty() ? "" : "local result = ";
-    if (binding != nullptr) {
-        out += (binding->tableName.empty() ? std::string{} : binding->tableName + ".") + binding->luaName + "(";
-        for (std::size_t index = 0; index < function.inputs.size(); ++index) {
-            out += (index == 0U ? "" : ", ") + LuaExampleValue(function.inputs[index].type);
-        }
-        out += ")\n";
-    } else {
-        out += "CallFunction(\"" + function.name + "\", {";
-        for (std::size_t index = 0; index < function.inputs.size(); ++index) {
-            out += (index == 0U ? " " : ", ") + function.inputs[index].name + " = " + LuaExampleValue(function.inputs[index].type);
-        }
-        out += function.inputs.empty() ? "})\n" : " })\n";
-    }
-    out += "```\n\nVisual Graph: the `Function." + function.name + "` node.\n";
+    out += ".\n";
     return out;
 }
 

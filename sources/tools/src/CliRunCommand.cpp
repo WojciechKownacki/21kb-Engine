@@ -19,7 +19,11 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -41,6 +45,7 @@
 #include <system_error>
 #include <thread>
 #include <unordered_set>
+#include <cstdio>
 #include <vector>
 
 namespace kb::cli {
@@ -290,6 +295,50 @@ struct DiagnosticPrinter {
     report.Set("samples", JsonValue::MakeNumber(static_cast<double>(memory.samples)));
     report.Set("categories", std::move(categories));
     return report;
+}
+
+// Where every dynamic body of the scene is, so a run can say how far each one moved: the proof
+// that something falls, bounces or is pushed, without opening the editor.
+struct BodyPosition {
+    kb::scene::SceneEntity entity{};
+    std::string name;
+    kb::math::DVec3 position{};
+};
+
+[[nodiscard]] std::vector<BodyPosition> DynamicBodyPositions(kb::scene::Scene& scene) {
+    std::vector<BodyPosition> bodies;
+    std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    while (!pending.empty() && bodies.size() < 64U) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        const kb::scene::RigidbodyComponent* body = scene.Components().Rigidbodies().TryGet(entity);
+        if (body != nullptr && body->bodyType == kb::scene::RigidbodyBodyType::Dynamic) {
+            bodies.push_back({ entity, scene.Entities().Name(entity), scene.Transforms().WorldTranslation(entity) });
+        }
+        for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
+            pending.push_back(child);
+        }
+    }
+    return bodies;
+}
+
+void PrintBodyMovement(kb::scene::Scene& scene, const std::vector<BodyPosition>& before, std::ostream& out) {
+    const auto text = [](const kb::math::DVec3& value) {
+        char buffer[96]{};
+        std::snprintf(buffer, sizeof(buffer), "%.2f,%.2f,%.2f", value.x, value.y, value.z);
+        return std::string{ buffer };
+    };
+    for (const BodyPosition& start : before) {
+        if (!scene.Entities().IsAlive(start.entity)) {
+            out << "moved: " << start.name << " was destroyed\n";
+            continue;
+        }
+        const kb::math::DVec3 end = scene.Transforms().WorldTranslation(start.entity);
+        const double distance = std::sqrt((end.x - start.position.x) * (end.x - start.position.x) +
+            (end.y - start.position.y) * (end.y - start.position.y) + (end.z - start.position.z) * (end.z - start.position.z));
+        out << "moved: " << start.name << ' ' << text(start.position) << " -> " << text(end)
+            << (distance < 0.005 ? " (at rest)" : "") << '\n';
+    }
 }
 
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
@@ -662,6 +711,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     if (ecsReport != nullptr) {
         scene.Runtime().SetEcsProfilerEnabled(true);
     }
+    const std::vector<BodyPosition> bodiesAtStart = DynamicBodyPositions(scene);
     const auto playbackStarted = std::chrono::steady_clock::now();
     int stopCode = 0;
     std::string stopReason = "completed";
@@ -890,6 +940,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         if (!inputReport->good()) { io.err << "error: input report could not be written\n"; return 1; }
     }
 
+    PrintBodyMovement(scene, bodiesAtStart, io.out);
     io.out << "done: " << completedFrames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";
     if (particleReport != nullptr) {

@@ -265,10 +265,11 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
   script-build Build the project's C++ scripts (or one), as Play and the cooker
                do. Exits 1 when a build fails.
                  --project <dir> [--script <path>]
-  entity       Add or remove a scene entity (the project's startup scene unless --scene).
+  entity       Add, remove or show a scene entity (the project's startup scene unless --scene).
                  add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
                      [--create <Item>] [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
-                     [--material /Game/<path>.kbmat (a shape's material, at once)]
+                     [--color #RRGGBB (a new material named after it) | --material /Game/<path>.kbmat]
+                     [--body Static|Dynamic|Kinematic (adds a Rigidbody)]
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
@@ -287,6 +288,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                         at the socket - or bone - every frame after animation; the offset is in
                         the socket's space, --scale is the object's own size)
                  detach --project <dir> [--scene <path>] --name <Object>
+                 show --project <dir> [--scene <path>] --name <Object>
+                     (its parent, children, transform and every component value, assets as paths)
                  (--name, --parent and --entity take a name or a path: Parent/Child;
                  names are unique among siblings, --occurrence picks one of several
                  same-named entities made elsewhere)
@@ -342,7 +345,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                importMaterials, combineMeshes, importSkeletalMesh)
   validate     Validate Lua behaviour scripts (syntax + sandbox load).
                  [--project <dir>] <file.lua> [more files...]
-  scene-list   List nodes, components, and behaviours of a scene file.
+  scene-list   List nodes, components, behaviours and world positions (@ x,y,z) of a scene.
                  [--project <dir>] --scene <path>
   scene-attach Attach a behaviour asset to a scene node and save the scene.
                  --project <dir> --scene <path> --node <name> --script <path>
@@ -514,7 +517,7 @@ void PrintCommandUsage(std::ostream& output, std::string_view command) {
         if (inside) block += line + '\n';
     }
     if (block.empty()) {
-        PrintUsage(output);
+        output << "kb_cli has no command '" << command << "'; kb_cli commands lists them\n";
         return;
     }
     output << block;
@@ -790,11 +793,9 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
         if (const std::optional<int> code = RunNamedCommand(command, arguments, in, target)) {
             return *code;
         }
-        target.err << "error: unknown command '" << command << "'\n";
-        if (!json) {
-            target.err << '\n';
-            PrintUsage(target.err);
-        }
+        // One line, not the whole usage text: an agent that guessed a name reads it on every mistake.
+        target.err << "error: unknown command '" << command << "'; kb_cli commands lists them, kb_cli help <command> shows one\n";
+        static_cast<void>(json);
         return 1;
     };
 

@@ -3,6 +3,7 @@
 
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryManifestComparison.hpp"
+#include "engine/platform/FileSystemPath.hpp"
 #include "engine/project/ProjectCreator.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -395,6 +396,17 @@ int RunInitAgentCommand(const ArgumentList& arguments, CommandIo io) {
         }
     }
 
+    // Agents outside the editor (Claude Code and others in a terminal) find the engine's tools in
+    // .mcp.json; a file the user already has is kept.
+    const std::filesystem::path mcpFile = std::filesystem::path{ *project } / ".mcp.json";
+    if (std::error_code mcpError; !std::filesystem::exists(mcpFile, mcpError)) {
+        const std::string kbcli = kb::platform::RunningExecutablePath().generic_string();
+        const std::string root = std::filesystem::absolute(std::filesystem::path{ *project }, mcpError).generic_string();
+        std::string error;
+        if (WriteTextFile(mcpFile, "{\"mcpServers\":{\"kb-engine\":{\"command\":\"" + kbcli + "\",\"args\":[\"mcp\",\"--project\",\"" + root + "\"]}}}\n", error)) {
+            written.writtenFiles.push_back(mcpFile);
+        }
+    }
     for (const std::filesystem::path& path : written.writtenFiles) {
         io.out << "wrote " << path.generic_string() << '\n';
     }

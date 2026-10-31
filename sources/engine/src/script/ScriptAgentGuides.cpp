@@ -9,67 +9,61 @@ namespace {
 
 constexpr std::string_view kObjectsAndMaterials = R"md(# Objects and materials
 
-Every line is one `kb_cli` command run from the project folder (through the kb-engine `kb_cli`
-tool, pass the words after `kb_cli` as `args`; the project is filled in for you). Commands work
-on the startup scene unless you add `--scene <path>`.
+Each line is one `kb_cli` command (through the kb-engine `kb_cli` tool: the words after `kb_cli`
+as `args`). Commands change the startup scene unless you add `--scene <path>`; commands sent
+together are safe, edits of one scene simply wait for each other.
 
-A red cube three metres up: the material first, then the shape with it.
+One command makes a shape with its colour (a material named after it) and, if wanted, physics:
 
 ```
-kb_cli material-new --project . --name Red --set "Base Color=#E03C31" --set Roughness=0.4
-kb_cli entity add --project . --create Cube --name RedCube --position 0,3,0 --material /Game/Materials/Red.kbmat
+kb_cli entity add --project . --create Sphere --name RedBall --position 0,5,0 --color "#E03C31" --body Dynamic
 ```
 
-Several objects and materials: make every material first, then every object with its
-`--material`; independent commands can go out together.
-
-- `--create` makes what the editor's Create menu makes: Cube, Sphere, Capsule, Cylinder, Cone,
-  Plane, Quad, Directional Light, Point Light, Spot Light, Area Light, Camera, Environment,
-  Particle System, Audio Source, Audio Listener, and UI items (Canvas, Text, Button, ...).
-  Shapes come with a Mesh Renderer and a Collider.
-- Place it with `--position x,y,z`, `--rotation x,y,z` (degrees) and `--scale x,y,z`, or later with
-  `kb_cli component set --project . --entity RedCube --type Transform --set localPosition=0,3,0`.
-- Material fields: Base Color, Roughness, Metallic, Emissive Color, Emissive Strength,
-  Normal Scale, Occlusion Strength, Alpha Cutoff. A colour is `#RRGGBB` or linear `r,g,b` (0..1).
-  Textures: Base Color Texture, Normal Texture, Metallic Roughness Texture, Occlusion Texture,
-  Emissive Texture, each an image of the project (`/Game/Textures/Albedo.png`) or `none`.
-- Give an existing object a material:
-  `kb_cli component set --project . --entity RedCube --type MeshRenderer --set material=/Game/Materials/Red.kbmat`.
-- Change a material later: `kb_cli material-set --project . --material /Game/Materials/Red.kbmat --set Metallic=1`;
-  print it: `kb_cli material-show --project . --material /Game/Materials/Red.kbmat`.
-- A light: `kb_cli entity add --project . --create "Point Light" --position 0,4,0`, then
-  `kb_cli component set --project . --entity "Point Light" --type Light --set intensity=8 --set range=10`.
-- See what a scene holds: `kb_cli scene-list --project . --scene Assets/Scenes/Main.21kbscene`.
-- Remove or rename: `kb_cli entity remove --project . --name RedCube`,
-  `kb_cli entity rename --project . --name RedCube --to Crate`.
-
-Check with `kb_cli run --project . --frames 30`; it must end with `0 diagnostics`.
+- `--create`: Cube, Sphere, Capsule, Cylinder, Cone, Plane, Quad, Directional Light, Point
+  Light, Spot Light, Area Light, Camera, Environment, Particle System, Audio Source, Audio
+  Listener, UI items (Canvas, Text, Button, ...). Shapes come with a Mesh Renderer and a Collider.
+- `--position x,y,z`, `--rotation x,y,z` (degrees; forward is +Z, `90,0,0` faces straight
+  down), `--scale x,y,z`, `--parent <Name>`.
+- `--color` makes `/Game/Materials/<Name>.kbmat`; `--material /Game/...kbmat` uses an existing
+  one instead. `--body Static|Dynamic|Kinematic` adds a Rigidbody.
+- More material fields: `kb_cli material-new --project . --name Gold --set "Base Color=#D4AF37" --set Metallic=1 --set Roughness=0.3`,
+  later `material-set --material /Game/Materials/Gold.kbmat --set ...`. Fields: Base Color,
+  Roughness, Metallic, Emissive Color, Emissive Strength, Normal Scale, Occlusion Strength,
+  Alpha Cutoff, and textures (Base Color Texture, Normal Texture, ... = `/Game/Textures/x.png`).
+- Change anything later: `kb_cli component set --project . --entity RedBall --type Transform --set localPosition=0,3,0`
+  (any component: `--type MeshRenderer --set material=/Game/Materials/Gold.kbmat`,
+  `--type Light --set intensity=8 --set range=10`).
+- Read the scene: `kb_cli scene-list --project .` gives every object with its position
+  (`@ x,y,z`); `kb_cli entity show --project . --name RedBall` gives one object's transform and
+  every component value.
+- A camera from above: `kb_cli entity add --project . --create Camera --name TopCamera --position 0,12,0 --rotation 90,0,0`,
+  then `component set --entity TopCamera --type Camera --set primary=true` and the old camera
+  `primary=false`.
+- Remove or rename: `entity remove --name RedBall`, `entity rename --name RedBall --to Ball`.
 )md";
 
 constexpr std::string_view kPhysics = R"md(# Physics
 
-Shapes made with `entity add --create` already have a Collider; give them a Rigidbody to move.
+A ball that falls and collides, in one command (shapes already have a Collider):
 
 ```
-kb_cli entity add --project . --create Cube --name Crate --position 0,5,0
-kb_cli component add --project . --entity Crate --type Rigidbody --set bodyType=Dynamic --set mass=2
+kb_cli entity add --project . --create Sphere --name Ball --position 0,5,0 --color "#E03C31" --body Dynamic
+kb_cli run --project . --frames 120
 ```
+
+`run` ends with a `moved:` line per dynamic body (`Ball 0,5,0 -> 0,0.5,0`): the proof it fell.
 
 - Rigidbody: `bodyType` Static, Dynamic or Kinematic; `mass`, `gravityScale`, `useGravity`,
   `linearDamping`, `angularDamping`, `lockRotation`, `useContinuousCollision`,
-  `linearVelocity.x/y/z`.
-- Collider: `shape` (Box, Sphere, Capsule, Mesh), `boxSize.x/y/z`, `radius`, `height`,
-  `center.x/y/z`, `trigger`, `friction`, `restitution`, `layer`. An entity has one Collider;
-  change it with `component set`, not `component add`.
-- A floor that never moves: a Plane or Cube with a Static Rigidbody, or no Rigidbody at all.
-- Character movement: the Character Controller component (`radius`, `height`,
-  `slopeLimitDegrees`, `stepOffset`), or `entity add --create "Top Down Player"` /
-  `"Platformer Player"` for a ready player with input.
-- Scripts react with `function OnCollisionEnter(self, event)` (the other entity is
-  `event.args.other`); raycasts and forces are in the `Physics` API group (`api_reference`
-  topic `Physics`).
-
-Check with `kb_cli run --project . --frames 120`: falling bodies must not report diagnostics.
+  `linearVelocity=x,y,z`. Add one later: `component add --entity Crate --type Rigidbody --set bodyType=Dynamic`.
+- Collider: `shape` (Box, Sphere, Capsule, Mesh), `boxSize=x,y,z`, `radius`, `height`,
+  `center=x,y,z`, `trigger`, `friction`, `restitution` (bounce, 0..1). An entity has one
+  Collider: change it with `component set`, not `component add`.
+- Something that never moves (a floor) needs no Rigidbody, only its Collider.
+- Character movement: `entity add --create Capsule --name Hero`, `component add --entity Hero --type CharacterController`,
+  then a controller script (guide `scripts`); 2D players: `--create "Top Down Player"` or `"Platformer Player"`.
+- Scripts: `function OnCollisionEnter(self, event)` (the other entity is `event.args.other`);
+  raycasts and forces: `api_reference` topic `Physics`.
 )md";
 
 constexpr std::string_view kScripts = R"md(# Behaviour scripts (Lua)
@@ -137,7 +131,8 @@ kb_cli entity attach --project . --name Sword --to Hero --socket weapon_r --scal
 
 - Clips of another rig (Mixamo, Unreal, Rigify) play too: bones are matched by name and role;
   `animator check --character` shows how many bones follow each clip.
-- Scripts drive animation through the `Animator` API group (`api_reference` topic `Animator`).
+- Scripts drive animation with `CallFunction("Animator.<Function>", { name = value, ... })`;
+  the functions are `api_reference` topic `Animator`.
 )md";
 
 constexpr std::string_view kCombatAndAi = R"md(# Combat and AI
@@ -150,20 +145,22 @@ kb_cli component add --project . --entity Hero --type Combatant --set team=1 --s
 # A whole AI in one line: Combatant + AI Brain from a preset (Melee, Ranged, Guard, Coward, Wanderer).
 kb_cli entity add --project . --name Goblin --create Capsule --position 0,1,8
 kb_cli ai make --project . --entity Goblin --preset Melee --health 60
-kb_cli ai rule --project . --entity Goblin --rule 4 --when HealthBelowPercent=20 --do Flee
+kb_cli ai rule --project . --entity Goblin --rule 1 --when HealthBelowPercent=20 --do Flee
 kb_cli ai show --project . --entity Goblin
 ```
 
 - Teams 1 and 2 are enemies; 0 is nobody's.
-- The AI Brain is up to 8 rules, "when <condition> do <action>", checked from the top.
-  Conditions: Always SeesEnemy KnowsEnemy EnemyCloserThan EnemyFartherThan HealthBelowPercent
-  ManaAbovePercent AbilityReady FarFromHome. Actions: Idle Wander ReturnHome Chase UseAbility
-  KeepDistance Flee. It walks the navigation mesh with a NavAgent and drives the Animator
-  (float `Speed`, triggers `Attack`, `Hit`, `Die`, bool `Dead`).
-- Scripts: `Gameplay.ApplyDamage`, `Gameplay.Heal`, `Gameplay.UseAbility`, `Gameplay.Health`,
-  `Gameplay.NearestEnemy` (`api_reference` topic `Gameplay`); a combatant's script receives
-  `OnDamaged`, `OnHealed`, `OnDeath`, `OnRevived`, `OnAbilityUsed`, `OnEnemySpotted`,
-  `OnEnemyLost` with details in `event.args`.
+- The AI Brain is up to 8 rules, "when <condition> do <action>", checked from the top; `--rule N`
+  replaces rule N, and rules after an `Always` rule never run. Conditions: Always SeesEnemy
+  KnowsEnemy EnemyCloserThan EnemyFartherThan HealthBelowPercent ManaAbovePercent AbilityReady
+  FarFromHome. Actions: Idle Wander ReturnHome Chase UseAbility KeepDistance Flee. It walks the
+  navigation mesh with a NavAgent and drives the Animator (float `Speed`, triggers `Attack`,
+  `Hit`, `Die`, bool `Dead`).
+- Scripts call the gameplay functions by name with named inputs:
+  `CallFunction("Gameplay.ApplyDamage", { target = enemy, amount = 10 })`; the functions are
+  `api_reference` topic `Gameplay`. A combatant's script receives `OnDamaged`, `OnHealed`,
+  `OnDeath`, `OnRevived`, `OnAbilityUsed`, `OnEnemySpotted`, `OnEnemyLost` with details in
+  `event.args`.
 )md";
 
 constexpr std::string_view kMaps2D = R"md(# 2D tile maps
@@ -206,13 +203,60 @@ kb_cli scene-list --project . --scene Assets/Scenes/Main.21kbscene   # what the 
   tools, never by editing or parsing the files.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 7> kGuides{ {
+constexpr std::string_view kUiAudioParticles = R"md(# UI, sound and particles
+
+```
+# A "Score: 0" label on screen: a Canvas with a Text under it.
+kb_cli entity add --project . --create Canvas --name HUD
+kb_cli entity add --project . --create Text --name Score --parent HUD
+kb_cli component set --project . --entity HUD/Score --type Text --set "content=Score: 0" --set fontSize=32
+
+# A sound on start: a .wav under Assets/ (copied there or `kb_cli import`).
+kb_cli entity add --project . --create "Audio Source" --name Music
+kb_cli component set --project . --entity Music --type AudioSource --set clipAssetId=/Game/Audio/Music.wav --set autoplay=true --set loop=true
+
+# Particles: a particle effect asset, then a Particle System that plays it.
+kb_cli vfx-new --project . --name Sparks
+kb_cli entity add --project . --create "Particle System" --name Sparks --position 0,1,0
+kb_cli component set --project . --entity Sparks --type "Particle Effect" --set effectAssetId=/Game/Particles/Sparks.kbvfx
+```
+
+- UI items for `--create`: Canvas, Text, Image, Button, Toggle, Slider, Progress Bar, Input
+  Field, Dropdown, Scroll View, Horizontal Box, Vertical Box, Grid; put them under a Canvas.
+- Scripts change text with `self:SetProperty("Text", "content", "Score: " .. score)`.
+- Check sound and particles: `kb_cli run --project . --frames 60 --report audio` (or
+  `--report particles`).
+)md";
+
+constexpr std::string_view kWaterAndLook = R"md(# Water, sky, fog and post-processing
+
+```
+# Water: a translucent material with the water shading model on a plane without a collider.
+kb_cli material-new --project . --name Water --set "Base Color=0.1,0.3,0.6,0.5" --set Roughness=0.05
+kb_cli material-graph --project . setting --material /Game/Materials/Water.kbmat --name "Blend Mode" --value translucent
+kb_cli material-graph --project . setting --material /Game/Materials/Water.kbmat --name "Shading Model" --value singleLayerWater
+kb_cli entity add --project . --create Plane --name Water --scale 3,1,3 --material /Game/Materials/Water.kbmat
+kb_cli component remove --project . --entity Water --type Collider
+
+# Fog, bloom and vignette for the scene, and the sky colour.
+kb_cli post-process-new --project . --name Look --set fogEnabled=1 --set fogDensity=0.03 --set bloomEnabled=1 --set vignetteEnabled=1
+kb_cli scene-post-process --project . --profile /Game/PostProcess/Look.kbppfx
+kb_cli component set --project . --entity Environment --type WorldBackdrop --set skyTint=0.4,0.6,1
+```
+
+- Any translucent material: the alpha of Base Color plus `Blend Mode` translucent.
+- `kb_cli help material-graph` and `kb_cli help post-process-new` list every setting.
+)md";
+
+constexpr std::array<ScriptAgentGuide, 9> kGuides{ {
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },
     { "characters-and-animation", "Characters and animation", "Import a character, state machines, blends, sockets and weapons.", kCharacters },
     { "combat-and-ai", "Combat and AI", "Abilities, health and teams, AI brains from presets and rules.", kCombatAndAi },
     { "maps-2d", "2D tile maps", "Tile maps with grounds, borders, objects and floors; 2D players.", kMaps2D },
+    { "ui-audio-particles", "UI, sound and particles", "On-screen text and buttons, sounds that play, particle effects.", kUiAudioParticles },
+    { "water-and-look", "Water, sky, fog and post-processing", "Translucent water, sky colour, fog, bloom and other post effects.", kWaterAndLook },
     { "verify", "Checking your work", "Validate scripts and run scenes headless before you finish.", kVerify },
 } };
 

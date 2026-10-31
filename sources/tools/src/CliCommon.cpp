@@ -210,4 +210,13 @@ std::optional<std::array<float, 4>> ParseColorText(std::string_view text, const 
     return color;
 }
 
+std::string FormatCliNumber(double value) {
+    if (!std::isfinite(value)) return std::to_string(value);
+    value = std::round(value * 10000.0) / 10000.0;
+    if (value == 0.0) value = 0.0; // -0 prints as 0
+    char buffer[64];
+    const auto [end, code] = std::to_chars(buffer, buffer + sizeof(buffer), value);
+    return code == std::errc{} ? std::string{ buffer, end } : std::to_string(value);
+}
+
 } // namespace kb::cli

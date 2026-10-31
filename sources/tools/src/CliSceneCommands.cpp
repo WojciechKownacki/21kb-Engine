@@ -1,6 +1,7 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -18,6 +19,8 @@
 #endif
 
 #include <optional>
+#include <span>
+#include <vector>
 #include <string>
 
 namespace kb::cli {
@@ -74,6 +77,36 @@ namespace {
         return kb::scene::BehaviourTickGroup::Presentation;
     }
     return std::nullopt;
+}
+
+// Each node's world position from its own and its parents' local transforms, composed as the scene
+// does: parent position + parent rotation * (parent scale * local position).
+[[nodiscard]] std::vector<kb::math::Vec3> NodeWorldPositions(std::span<const kb::scene::ScenePrefabNodeDesc> nodes) {
+    struct Pose {
+        kb::math::Vec3 position{};
+        kb::math::Quat rotation{};
+        kb::math::Vec3 scale{ 1.0F, 1.0F, 1.0F };
+    };
+    std::vector<std::optional<Pose>> poses(nodes.size());
+    const auto resolve = [&](const auto& self, std::size_t index, std::size_t depth) -> Pose {
+        if (poses[index].has_value()) return *poses[index];
+        const kb::scene::TransformComponent& local = nodes[index].transform;
+        Pose pose{ local.localPosition, local.localRotation, local.localScale };
+        const std::uint32_t parent = nodes[index].parentNode;
+        if (parent != kb::scene::ScenePrefabNodeDesc::NoParent && parent < nodes.size() && depth < nodes.size()) {
+            const Pose up = self(self, parent, depth + 1U);
+            const kb::math::Vec3 scaled{ up.scale.x * pose.position.x, up.scale.y * pose.position.y, up.scale.z * pose.position.z };
+            pose.position = up.position + kb::math::Rotate(up.rotation, scaled);
+            pose.rotation = up.rotation * pose.rotation;
+            pose.scale = kb::math::Vec3{ up.scale.x * pose.scale.x, up.scale.y * pose.scale.y, up.scale.z * pose.scale.z };
+        }
+        poses[index] = pose;
+        return pose;
+    };
+    std::vector<kb::math::Vec3> positions;
+    positions.reserve(nodes.size());
+    for (std::size_t index = 0U; index < nodes.size(); ++index) positions.push_back(resolve(resolve, index, 0U).position);
+    return positions;
 }
 
 [[nodiscard]] std::string ComponentSummary(const kb::scene::ScenePrefabNodeDesc& node) {
@@ -179,6 +212,7 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
 
     io.out << "scene: " << loaded.document.name << " (" << loaded.document.worldPrefab.NodeCount() << " nodes)\n";
     const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
+    const std::vector<kb::math::Vec3> world = NodeWorldPositions(nodes);
     for (std::size_t index = 0U; index < nodes.size(); ++index) {
         const kb::scene::ScenePrefabNodeDesc& node = nodes[index];
         io.out << "  [" << index << "] " << node.name;
@@ -206,7 +240,8 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
                    << (behaviour.enabled ? "" : ", disabled")
                    << ")";
         }
-        io.out << '\n';
+        io.out << " @ " << FormatCliNumber(world[index].x) << ',' << FormatCliNumber(world[index].y) << ','
+               << FormatCliNumber(world[index].z) << '\n';
     }
     return 0;
 }

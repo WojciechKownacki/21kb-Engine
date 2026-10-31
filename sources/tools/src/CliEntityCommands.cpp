@@ -1,6 +1,7 @@
 #include "CliCommands.hpp"
 #include "CliPlayerPreset.hpp"
 
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
@@ -33,7 +34,11 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -50,6 +55,19 @@
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
 
+#include <sstream>
+#include <chrono>
+#include <memory>
+#include <thread>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -67,11 +85,54 @@ namespace kb::cli {
 namespace {
 
 // A loaded, editable scene of a project; Save() writes it back where it came from.
+// One edit of a scene at a time: held from reading the scene to writing it back, so commands an
+// agent sends together wait for each other instead of writing over each other (two writers left
+// the scene and its .meta out of step). The lock file goes away with its handle, even when the
+// process dies.
+class SceneFileLock final {
+public:
+    explicit SceneFileLock(const std::filesystem::path& scene) {
+#if defined(_WIN32)
+        const std::wstring path = scene.wstring() + L".lock";
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 60 };
+        while (true) {
+            handle_ = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                FILE_ATTRIBUTE_TEMPORARY | FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+            if (handle_ != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION ||
+                std::chrono::steady_clock::now() > deadline) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        }
+#else
+        descriptor_ = ::open((scene.string() + ".lock").c_str(), O_CREAT | O_RDWR, 0644);
+        if (descriptor_ >= 0) static_cast<void>(::flock(descriptor_, LOCK_EX));
+#endif
+    }
+    ~SceneFileLock() {
+#if defined(_WIN32)
+        if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
+#else
+        if (descriptor_ >= 0) ::close(descriptor_);
+#endif
+    }
+    SceneFileLock(const SceneFileLock&) = delete;
+    SceneFileLock& operator=(const SceneFileLock&) = delete;
+
+private:
+#if defined(_WIN32)
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    int descriptor_ = -1;
+#endif
+};
+
 struct SceneSession {
     kb::project::ProjectDescriptor descriptor;
     std::unique_ptr<kb::scene::Scene> scene;
     std::filesystem::path path;
     std::string name;
+    std::shared_ptr<SceneFileLock> lock;
 
     [[nodiscard]] bool Save() { return kb::scene::SceneDocumentService::Save(*scene, path, name); }
 };
@@ -128,6 +189,7 @@ struct SceneSession {
             return std::nullopt;
         }
     }
+    session.lock = std::make_shared<SceneFileLock>(session.path);
     const kb::scene::SceneDocumentLoadResult document = kb::scene::SceneDocumentService::Load(session.path);
     if (!document.succeeded) {
         io.err << "error: could not load scene " << session.path.generic_string() << ": " << document.error << '\n';
@@ -628,6 +690,31 @@ void ListProperties(std::string_view component, std::ostream& out) {
         io.err << "error: entity add requires --name <Name> or --create <Item>\n";
         return 1;
     }
+    // --color makes (or recolours) a material named after the entity before the scene is opened,
+    // so the scene's asset registry already sees it: a coloured shape in one command.
+    std::optional<std::string> material = arguments.Option("--material");
+#if KB_CLI_RENDERER
+    if (const std::optional<std::string> color = arguments.Option("--color"); color.has_value()) {
+        if (material.has_value()) {
+            io.err << "error: pass --color or --material, not both\n";
+            return 1;
+        }
+        const std::string project = arguments.Option("--project").value_or("");
+        const std::string materialName = kb::assets::AssetFileNameError(*name).empty() ? *name : std::string{ "Material" };
+        const std::string virtualPath = "/Game/Materials/" + materialName + ".kbmat";
+        const bool exists = std::filesystem::exists(Utf8Path(project) / "Assets" / "Materials" / Utf8Path(materialName + ".kbmat"));
+        const std::vector<std::string> words = exists
+            ? std::vector<std::string>{ "--project", project, "--material", virtualPath, "--set", "Base Color=" + *color }
+            : std::vector<std::string>{ "--project", project, "--name", materialName, "--set", "Base Color=" + *color };
+        std::ostringstream quiet;
+        const ArgumentList materialArguments{ words };
+        const CommandIo materialIo{ .out = quiet, .err = io.err };
+        if ((exists ? RunMaterialSetCommand(materialArguments, materialIo) : RunMaterialNewCommand(materialArguments, materialIo)) != 0) {
+            return 1;
+        }
+        material = virtualPath;
+    }
+#endif
     std::optional<SceneSession> session = OpenScene(arguments, io);
     if (!session.has_value()) return 1;
     kb::scene::Scene& scene = *session->scene;
@@ -693,17 +780,35 @@ void ListProperties(std::string_view component, std::ostream& out) {
             return 1;
         }
     }
-    // A shape and its material in one command instead of two.
-    if (const std::optional<std::string> material = arguments.Option("--material"); material.has_value()) {
+    // A shape, its material and its physics in one command instead of three.
+    std::string added = "added entity '" + *name + "'";
+    if (material.has_value()) {
         if (scene.Components().MeshRenderers().TryGet(entity) == nullptr) {
-            io.err << "error: --material needs an entity with a Mesh Renderer (a shape from --create)\n";
+            io.err << "error: --material and --color need an entity with a Mesh Renderer (a shape from --create)\n";
             return 1;
         }
         if (!ApplySetting(scene, entity, "MeshRenderer", "material=" + *material, io)) {
             return 1;
         }
+        added += " with material " + *material;
     }
-    return Saved(*session, "added entity '" + *name + "'", io);
+    if (const std::optional<std::string> body = arguments.Option("--body"); body.has_value()) {
+        if (!kb::scene::SceneComponentAuthoring::Has(scene, entity, "Rigidbody")) {
+            const kb::scene::SceneComponentAddResult rigidbody =
+                kb::scene::SceneComponentAuthoring::Add(scene, entity, "Rigidbody", session->descriptor);
+            if (rigidbody.status != kb::scene::SceneComponentAddStatus::Added) {
+                const kb::scene::SceneComponentAddAdvice advice =
+                    kb::scene::SceneComponentAuthoring::AddAdvice(rigidbody.status, rigidbody.kind, "Rigidbody", *name);
+                io.err << "error: " << advice.cause << ". Fix: " << advice.commandLineRemedy << '\n';
+                return 1;
+            }
+        }
+        if (!ApplySetting(scene, entity, "Rigidbody", "bodyType=" + *body, io)) {
+            return 1;
+        }
+        added += std::string{ material.has_value() ? " and a " : " with a " } + *body + " Rigidbody";
+    }
+    return Saved(*session, added, io);
 }
 
 [[nodiscard]] int EntityRemove(const ArgumentList& arguments, CommandIo io) {
@@ -900,6 +1005,151 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
     session->scene->Components().SocketAttachments().Remove(*object);
     return Saved(*session, "detached '" + *name + "' (it stays where it is, under the same parent)", io);
+}
+
+// Text as `entity show` prints it: bare when it is one word, else quoted.
+[[nodiscard]] std::string ShownText(std::string_view text) {
+    if (!text.empty() && text.find_first_of(" \t\"=") == std::string_view::npos) return std::string{ text };
+    std::string quoted{ '"' };
+    for (const char character : text) {
+        if (character == '"' || character == '\\') quoted += '\\';
+        quoted += character;
+    }
+    return quoted + '"';
+}
+
+[[nodiscard]] std::string ShownTriple(double x, double y, double z) {
+    return FormatCliNumber(x) + "," + FormatCliNumber(y) + "," + FormatCliNumber(z);
+}
+
+// An asset reference as `component set` takes it: /Engine/Shapes/... or /Game/..., none when unset.
+[[nodiscard]] std::string ShownAsset(kb::scene::Scene& scene, std::uint64_t id) {
+    if (id == 0U) return "none";
+    for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) {
+        if (kb::assets::BuiltInShapeId(shape.shape).value == id) return std::string{ shape.virtualPath };
+    }
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ id });
+    return metadata != nullptr ? metadata->virtualPath.generic_string() : std::to_string(id);
+}
+
+[[nodiscard]] bool IsAssetProperty(std::string_view name) noexcept {
+    return name.ends_with("AssetId") || name == "assetId" || name.starts_with("ability");
+}
+
+[[nodiscard]] std::string ShownValue(kb::scene::Scene& scene, const kb::script::ScriptSceneComponentPropertyDesc& desc,
+    const kb::script::ScriptValue& value) {
+    using enum kb::script::ScriptValueType;
+    switch (value.Type()) {
+    case Bool: return value.AsBool() ? "true" : "false";
+    case Int: {
+        const int number = value.AsInt();
+        if (number >= 0 && static_cast<std::size_t>(number) < desc.enumNames.size()) {
+            return std::string{ desc.enumNames[static_cast<std::size_t>(number)] };
+        }
+        return std::to_string(number);
+    }
+    case Int64: return std::to_string(value.AsInt64());
+    case UInt32: return std::to_string(value.AsUInt32());
+    case Float: return FormatCliNumber(value.AsFloat());
+    case Double: return FormatCliNumber(value.AsDouble());
+    case String: case Name: case Guid: return ShownText(value.AsString());
+    case Hash: return IsAssetProperty(desc.name) ? ShownAsset(scene, value.AsUInt64()) : std::to_string(value.AsUInt64());
+    case Entity: {
+        const kb::scene::SceneEntity other{ value.AsUInt64() };
+        return other.IsValid() && scene.Entities().IsAlive(other) ? ShownText(EntityPath(scene, other)) : std::string{ "none" };
+    }
+    default: return "?";
+    }
+}
+
+// One line: `Rigidbody: bodyType=Dynamic mass=1 ...`, vectors once (`color=1,0.5,0.25`) and assets by
+// path, in the names and forms `component set --set` accepts.
+void PrintComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view component, std::ostream& out) {
+    std::string line{ component };
+    line += ':';
+    if (component == "MeshRenderer") {
+        const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
+        line += " mesh=" + ShownAsset(scene, renderer->meshAssetId) + " material=" + ShownAsset(scene, renderer->materialAssetId);
+    }
+    if (component == "Behaviour") {
+        const kb::scene::BehaviourComponent* behaviour = scene.Components().Behaviours().TryGet(entity);
+        line += " script=" + ShownAsset(scene, behaviour->behaviourAssetId);
+    }
+    std::string vector;
+    for (const kb::script::ScriptSceneComponentPropertyDesc& desc : kb::script::ScriptSceneComponentApi::ComponentProperties(component)) {
+        const kb::script::ScriptSceneComponentPropertyResult read =
+            kb::script::ScriptSceneComponentApi::GetProperty(scene, entity, component, desc.name);
+        if (!read.succeeded) continue;
+        const std::string value = ShownValue(scene, desc, read.value);
+        const std::string_view name = desc.name;
+        const std::size_t dot = name.rfind('.');
+        if (dot != std::string_view::npos && dot + 2U == name.size() && std::string_view{ "xyzw" }.find(name.back()) != std::string_view::npos) {
+            const std::string_view base = name.substr(0, dot);
+            if (name.back() != 'x' && vector == base) {
+                line += ',' + value;
+                continue;
+            }
+            vector = base;
+            line += ' ' + std::string{ base } + '=' + value;
+            continue;
+        }
+        vector.clear();
+        line += ' ' + std::string{ name } + '=' + value;
+    }
+    out << line << '\n';
+}
+
+// What an agent needs instead of reading the scene file: where the entity is, what holds it, and
+// every component's values.
+void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::ostream& out) {
+    scene.Runtime().SynchronizeTransforms(); // world translations are fresh after the transform sync
+    out << "entity: " << EntityPath(scene, entity) << '\n';
+    const kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity);
+    out << "parent: " << (parent.IsValid() ? EntityPath(scene, parent) : std::string{ "none" }) << '\n';
+    const std::vector<kb::scene::SceneEntity> children = scene.Hierarchy().ChildEntities(entity);
+    out << "children:" << (children.empty() ? " none" : "");
+    for (std::size_t index = 0U; index < children.size(); ++index) {
+        out << (index == 0U ? " " : ", ") << scene.Entities().Name(children[index]);
+    }
+    out << '\n';
+    if (const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity); transform != nullptr) {
+        const kb::math::DVec3 local = scene.Transforms().LocalTranslation(entity, *transform);
+        const kb::math::DVec3 world = scene.Transforms().WorldTranslation(entity, *transform);
+        const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(transform->localRotation);
+        out << "Transform: localPosition=" << ShownTriple(local.x, local.y, local.z)
+            << " rotation=" << ShownTriple(degrees.x, degrees.y, degrees.z)
+            << " localScale=" << ShownTriple(transform->localScale.x, transform->localScale.y, transform->localScale.z)
+            << " worldPosition=" << ShownTriple(world.x, world.y, world.z) << '\n';
+    }
+    std::vector<std::string_view> shown;
+    for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+        if (!kb::scene::SceneComponentAuthoring::Has(scene, entity, kind.id)) continue;
+        PrintComponent(scene, entity, kind.id, out);
+        shown.push_back(kind.id);
+    }
+    // Behaviour and UI components are scriptable but not in the Inspector's add table; Visibility,
+    // on every entity, is left out.
+    for (const std::string_view listed : kb::script::ScriptSceneComponentApi::ComponentNames()) {
+        const std::string_view name = kb::scene::SceneComponentAuthoring::CanonicalName(listed);
+        if (name == "Transform" || name == "Visibility" || std::ranges::find(shown, name) != shown.end() ||
+            !kb::script::ScriptSceneComponentApi::HasComponent(scene, entity, name)) continue;
+        PrintComponent(scene, entity, name, out);
+        shown.push_back(name);
+    }
+}
+
+[[nodiscard]] int EntityShow(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!name.has_value()) {
+        io.err << "error: entity show requires --name <Name|Parent/Name>\n";
+        return 1;
+    }
+    std::optional<SceneSession> session = OpenScene(arguments, io);
+    if (!session.has_value()) return 1;
+    const std::optional<kb::scene::SceneEntity> entity = FindEntity(*session->scene, *name, io);
+    if (!entity.has_value()) return 1;
+    PrintEntity(*session->scene, *entity, io.out);
+    return 0; // read only: the scene is not saved
 }
 
 [[nodiscard]] int ComponentCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
@@ -1422,7 +1672,8 @@ int RunEntityCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "rename") return EntityRename(arguments, io);
     if (action == "attach") return EntityAttach(arguments, io);
     if (action == "detach") return EntityDetach(arguments, io);
-    io.err << "error: entity expects add, remove, rename, attach or detach\n";
+    if (action == "show") return EntityShow(arguments, io);
+    io.err << "error: entity expects add, remove, rename, attach, detach or show\n";
     return 1;
 }
 
@@ -1490,6 +1741,17 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
             io.out << '\n';
             if (kind.id == "Transform") io.out << "Transform rotation is in degrees: --set rotation=x,y,z\n";
             if (kind.id == "MeshRenderer") io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+            if (kind.id == "Animator") io.out << "Animator references: controller=<asset path of a .kbanimcontroller>\n";
+            return 0;
+        }
+        // Transform and the UI components (Text, Canvas, ...) are not in the add table but are set the same way.
+        const std::span<const kb::script::ScriptSceneComponentPropertyDesc> properties =
+            kb::script::ScriptSceneComponentApi::ComponentProperties(name);
+        if (!properties.empty()) {
+            io.out << name << ':';
+            ListProperties(name, io.out);
+            io.out << '\n';
+            if (name == "Transform") io.out << "Transform rotation is in degrees: --set rotation=x,y,z\n";
             return 0;
         }
         io.err << "error: no component called '" << *wanted << "'; schema without --component lists them all\n";
@@ -1498,14 +1760,16 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     // Every component with every property is long; by default the names, one component's
     // properties on request (--component), or all of them with --all.
     if (!arguments.Flag("--all")) {
-        io.out << "Components (their properties: component_schema with component, or kb_cli schema --component <Name>):";
+        io.out << "Components (their properties: component_schema with component, or kb_cli schema --component <Name>): Transform";
         for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
             io.out << ' ' << kind.id;
         }
+        io.out << "\nUI components:";
+        for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) io.out << " '" << component.displayName << '\'';
         io.out << "\nentity add --create items:";
         for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) io.out << " '" << item.id << '\'';
         for (const auto& preset : kb::scene::UIComponentPresetCatalog()) io.out << " '" << preset.name << '\'';
-        io.out << " 'Platformer Player' 'Top Down Player'\n";
+        io.out << '\n';
         io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
         return 0;
     }
