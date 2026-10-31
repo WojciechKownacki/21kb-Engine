@@ -323,6 +323,15 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
+    // An entity runs one behaviour: replacing another one silently would drop its logic.
+    if (const auto& current = target->components.behaviour;
+        current.has_value() && current->behaviourAssetId != component->behaviourAssetId && !arguments.Flag("--replace")) {
+        const kb::assets::AssetMetadata* running = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ current->behaviourAssetId });
+        io.err << "error: '" << *nodeName << "' already runs "
+               << (running != nullptr ? running->virtualPath.generic_string() : std::string{ "a behaviour" })
+               << "; an entity runs one behaviour - put both in one script, attach it to a child entity, or pass --replace\n";
+        return 1;
+    }
     target->components.behaviour = *component;
 
     if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {

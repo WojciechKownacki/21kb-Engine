@@ -3,7 +3,9 @@
 
 #include "engine/core/JsonValue.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -349,7 +351,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  [--project <dir>] --scene <path>
   scene-attach Attach a behaviour asset to a scene node and save the scene.
                  --project <dir> --scene <path> --node <name> --script <path>
-                 [--tick-group <group>] [--execution-order <n>] [--disabled]
+                 [--tick-group <group>] [--execution-order <n>] [--disabled] [--replace]
+               (an entity runs one behaviour; --replace swaps a different one out)
 )",
 R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on errors,
@@ -499,7 +502,7 @@ void PrintUsage(std::ostream& output) {
 
 // `help <command>`: only that command's lines of the usage text (its row and the indented
 // lines under it), so asking about one command does not print all of them.
-void PrintCommandUsage(std::ostream& output, std::string_view command) {
+std::string CommandUsageBlock(std::string_view command) {
     std::string usage;
     for (const auto part : kUsageParts) usage += part;
     std::istringstream lines{ usage };
@@ -516,11 +519,57 @@ void PrintCommandUsage(std::ostream& output, std::string_view command) {
         }
         if (inside) block += line + '\n';
     }
+    return block;
+}
+
+void PrintCommandUsage(std::ostream& output, std::string_view command) {
+    const std::string block = CommandUsageBlock(command);
     if (block.empty()) {
         output << "kb_cli has no command '" << command << "'; kb_cli commands lists them\n";
         return;
     }
     output << block;
+}
+
+std::size_t EditDistance(std::string_view a, std::string_view b) {
+    std::vector<std::size_t> row(b.size() + 1U);
+    for (std::size_t j = 0; j <= b.size(); ++j) row[j] = j;
+    for (std::size_t i = 1; i <= a.size(); ++i) {
+        std::size_t diagonal = row[0];
+        row[0] = i;
+        for (std::size_t j = 1; j <= b.size(); ++j) {
+            const std::size_t above = row[j];
+            row[j] = std::min({ row[j] + 1U, row[j - 1U] + 1U, diagonal + (a[i - 1U] == b[j - 1U] ? 0U : 1U) });
+            diagonal = above;
+        }
+    }
+    return row[b.size()];
+}
+
+// A misspelled option must fail, not be ignored: for these commands the options accepted are the
+// ones their usage block names, plus the global ones. The other commands check their own.
+constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "api", "validate", "scene-list",
+    "scene-attach", "scene-new", "run", "material-new", "material-set", "material-show", "input-action", "prefab" };
+
+bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
+    if (std::ranges::find(kUsageCheckedCommands, command) == std::end(kUsageCheckedCommands)) return false;
+    const std::string block = CommandUsageBlock(command);
+    if (block.empty()) return false;
+    std::vector<std::string> known{ "--json", "--dry-run", "--project", "--help", "--command-timeout-ms", "--command-cancel-file" };
+    for (std::size_t at = block.find("--"); at != std::string::npos; at = block.find("--", at + 2U)) {
+        std::size_t end = at + 2U;
+        while (end < block.size() && (std::isalnum(static_cast<unsigned char>(block[end])) != 0 || block[end] == '-')) ++end;
+        if (end > at + 2U) known.emplace_back(block.substr(at, end - at));
+    }
+    const std::vector<std::string_view> allowed{ known.begin(), known.end() };
+    const std::vector<std::string> unknown = arguments.UnknownOptions(allowed);
+    if (unknown.empty()) return false;
+    const std::string& wrong = unknown.front();
+    const auto closest = std::ranges::min_element(known, {}, [&](const std::string& name) { return EditDistance(name, wrong); });
+    err << "error: " << command << " has no option '" << wrong << '\'';
+    if (EditDistance(*closest, wrong) <= 2U) err << "; did you mean " << *closest << '?';
+    err << " (kb_cli help " << command << " lists its options)\n";
+    return true;
 }
 
 constexpr std::array<std::string_view, 17> kFlagNames{
@@ -790,6 +839,7 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
             }
             return 1;
         }
+        if (RejectUnknownOptions(command, arguments, target.err)) return 1;
         if (const std::optional<int> code = RunNamedCommand(command, arguments, in, target)) {
             return *code;
         }

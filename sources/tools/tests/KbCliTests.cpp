@@ -4321,6 +4321,12 @@ void RunPlaybackStopTests() {
         "function Destroyed(self, dt) Log('playback shutdown complete') end\n");
     Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "stop fixture must attach its shutdown observer");
+    // A second, different behaviour must not silently replace the first.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Other.lua", "function Tick(self, dt) end\n");
+    const CliRun replaced = RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Other.lua"});
+    Require(replaced.exitCode == 1 && Contains(replaced.err, "already runs /Game/Logic/Player.lua") && Contains(replaced.err, "--replace"),
+        "attaching a different behaviour must refuse to drop the current one: " + replaced.err);
     const auto verifyStopped = [](const CliRun& result, int code, std::string_view reason) {
         JsonValue report;
         std::string error;
@@ -4400,6 +4406,11 @@ void RunCliJsonTests() {
             Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "kb_cli commands") &&
             !Contains(unknownText.err, "Exit codes:"),
         "an unknown command must print one short error on stderr and exit 1");
+
+    // A misspelled option fails before anything is written and names the closest option.
+    const CliRun misspelled = RunCliProgram({ "entity", "add", "--project", root, "--naem", "Box" });
+    Require(misspelled.exitCode == 1 && Contains(misspelled.err, "entity has no option '--naem'; did you mean --name?"),
+        "a misspelled entity option must be refused with the closest option");
 
     // An unknown command with --json: one object, the exit code in the process and in the object.
     const CliRun unknown = RunCliProgram({ "--json", "no-such-command" });
