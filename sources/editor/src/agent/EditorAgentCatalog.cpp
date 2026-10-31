@@ -102,10 +102,31 @@ struct Preset {
         // Claude Code: one request on stdin, line-delimited JSON events, the engine's tools handed
         // over for this run only and allowed without asking, file edits accepted.
         EditorAgent agent;
-        agent.runArguments = { "-p", "--output-format", "stream-json", "--verbose", "--mcp-config", "{mcpconfig}",
-            "--allowedTools", "mcp__kb-engine", "--permission-mode", "acceptEdits" };
+        // Every step resends the tool definitions, so the agent gets only what it uses: the engine's
+        // tools (--strict-mcp-config leaves out the MCP servers of the user's own setup) and the five
+        // file tools for scripts (--tools); this halves the context of each step and lets the engine
+        // tools load at once instead of through a search.
+        agent.runArguments = { "-p", "--output-format", "stream-json", "--verbose", "--mcp-config", "{mcpconfig}", "--strict-mcp-config",
+            "--tools", "Read", "Edit", "Write", "Glob", "Grep",
+            // No skills or slash commands in the context, no per-session sections (date, git status)
+            // that keep a new conversation from reusing the cached prompt, and no permission prompt
+            // that would stall a run nobody can answer.
+            "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections", "--permission-prompts", "none",
+            "--allowedTools", "mcp__kb-engine", "--disallowedTools", "Bash", "PowerShell", "--permission-mode", "acceptEdits",
+            "--append-system-prompt",
+            "You work inside the 21kb editor on the open project. Keep the request small: AGENTS.md says where things are; "
+            "read only the one guide (kb-engine guide tool) or API page (api_reference with a topic) the task needs. "
+            "Change scenes, entities, components and assets with the kb-engine tools (kb_cli runs any command); "
+            "do not run shell commands or parse the project's binary files." };
         agent.resumeArguments = { "--resume", "{session}" };
+        agent.persistentArguments = { "--input-format", "stream-json" };
+        agent.requestTemplate = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":{request}}}\n";
         agent.statusArguments = { "auth", "status", "--json" };
+        // Aliases always name the newest model of each line, so the list never goes stale.
+        agent.models = { "fable", "opus", "sonnet", "haiku" };
+        agent.modelArguments = { "--model", "{model}" };
+        agent.efforts = { "low", "medium", "high", "xhigh", "max" };
+        agent.effortArguments = { "--effort", "{effort}" };
         agent.output = EditorAgentOutputFormat::ClaudeStreamJson;
         presets.push_back({ "Claude Code", L"claude", L".claude", L"CLAUDE_CONFIG_DIR", agent });
     }
@@ -116,7 +137,15 @@ struct Preset {
         agent.runArguments = { "exec", "--json", "--skip-git-repo-check", "-C", "{project}", "-s", "workspace-write",
             "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
             "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]" };
+        // A follow-up continues the thread (the process already runs in the project folder; resume
+        // takes no -C or -s), with the request read from standard input.
+        agent.resumeRunArguments = { "exec", "resume", "{session}", "--json", "--skip-git-repo-check",
+            "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
+            "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]", "-" };
         agent.statusArguments = { "login", "status" };
+        // The model stays the one in the user's Codex configuration; only the effort is offered.
+        agent.efforts = { "minimal", "low", "medium", "high" };
+        agent.effortArguments = { "-c", "model_reasoning_effort=\"{effort}\"" };
         agent.output = EditorAgentOutputFormat::CodexJson;
         presets.push_back({ "Codex", L"codex", L".codex", L"CODEX_HOME", agent });
     }
@@ -135,6 +164,8 @@ struct Preset {
     {
         EditorAgent agent;
         agent.runArguments = { "-p", "{prompt}", "--cwd", "{project}", "--always-approve" };
+        agent.efforts = { "low", "medium", "high" };
+        agent.effortArguments = { "--reasoning-effort", "{effort}" };
         presets.push_back({ "Grok", L"grok", L"", L"", agent });
     }
     return presets;
@@ -240,7 +271,11 @@ std::vector<EditorAgent> DetectEditorAgents() {
             local.profile = "default";
             local.executable = *executable;
             local.statusArguments.clear();
+            local.efforts.clear();
+            local.effortArguments.clear();
             local.runArguments.insert(local.runArguments.end(), { "--oss", "--local-provider", "ollama" });
+            // resume has no --oss: a local conversation starts each request afresh.
+            local.resumeRunArguments.clear();
             agents.push_back(std::move(local));
         }
     }

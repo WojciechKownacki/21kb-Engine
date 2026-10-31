@@ -39,6 +39,22 @@ struct EditorAgent {
     // Continues the previous conversation with this session id ({session}); empty when each
     // request starts a new one.
     std::vector<std::string> resumeArguments;
+    // For a CLI whose continuation is a command of its own (codex exec resume <id>): these replace
+    // runArguments when a session continues, and resumeArguments are not added.
+    std::vector<std::string> resumeRunArguments;
+    // An agent that stays running between requests of one conversation: started once with these
+    // arguments added, each request then goes to its standard input as `requestTemplate` with
+    // {request} filled in (JSON-escaped), and a turn ends at its result event. Saves starting the
+    // agent and its tools for every request.
+    std::vector<std::string> persistentArguments;
+    std::string requestTemplate;
+    // Models to choose from, by the names the CLI takes; empty means only its own default.
+    // {model} in modelArguments receives the choice; nothing is passed for the default.
+    std::vector<std::string> models;
+    std::vector<std::string> modelArguments;
+    // Reasoning (effort) levels, lowest first, and how a chosen level is passed ({effort}).
+    std::vector<std::string> efforts;
+    std::vector<std::string> effortArguments;
     EditorAgentOutputFormat output = EditorAgentOutputFormat::PlainText;
     bool custom = false;
 

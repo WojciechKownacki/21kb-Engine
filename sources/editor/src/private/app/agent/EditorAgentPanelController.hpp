@@ -26,12 +26,17 @@ public:
     [[nodiscard]] bool HandleKeyDown(HWND owner, WPARAM key);
     // Sends the typed request, or stops the one in progress.
     bool SendOrStop();
+    // One menu for the agent bar: every agent with its models, then the reasoning level. It opens
+    // upwards from `screenAnchor`, its bottom-left corner.
+    void ShowModelMenu(HWND owner, POINT screenAnchor);
 
     // The project folder and the kb_cli beside the editor.
     [[nodiscard]] static EditorAgentWorkspace Workspace();
 
 private:
     void ShowAgentMenu(HWND owner, const RECT& anchor);
+    // The model (`models`) or reasoning level picker.
+    void ShowChoiceMenu(HWND owner, const RECT& anchor, bool models);
 
     EditorSceneContext& sceneContext_;
 };

@@ -609,27 +609,57 @@ void UpdateDrawerForWindowHeight(EditorApplicationState& state) noexcept {
 // assets read back from disk, unless you edited the scene meanwhile.
 void PumpAgentPanel(EditorApplicationState& state) {
     EditorAgentPanelState& agent = state.sceneContext.AgentPanel();
-    if (EditorPanelContentResolver::Resolve(DockPanelKind::Agent, state.window, state.window, state.dockModel, state.floatingWindows, state.metrics).has_value()) {
+    const bool docked = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, state.window, state.window, state.dockModel, state.floatingWindows, state.metrics).has_value();
+    if (docked) {
         agent.Prepare();
     }
-    bool finished = false;
-    if (agent.Pump(finished)) {
-        InvalidatePanelKind(state, DockPanelKind::Agent);
+    // The bar's dock and undock buttons: the conversation moves between the bar over the Scene
+    // View and the Agent tab of the bottom drawer, which comes forward or steps back.
+    switch (agent.TakeDockRequest()) {
+    case EditorAgentPanelState::DockRequest::Dock:
+        static_cast<void>(state.dockModel.Commands().SetDrawerCollapsed(false));
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+        agent.FocusInput(true);
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+        break;
+    case EditorAgentPanelState::DockRequest::Undock:
+        // The panel closes wherever it was docked; the bubble takes over, and docking brings it back.
+        for (const DockPanel& panel : state.dockModel.Queries().Panels()) {
+            if (panel.kind == DockPanelKind::Agent) {
+                static_cast<void>(state.dockModel.Commands().ClosePanel(panel.id));
+            }
+        }
+        agent.FocusInput(true);
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+        break;
+    case EditorAgentPanelState::DockRequest::None:
+        break;
     }
-    if (!finished || !agent.ChangedProject()) {
+    bool projectChanged = false;
+    if (agent.Pump(projectChanged)) {
+        InvalidatePanelKind(state, DockPanelKind::Agent);
+        if (!docked) {
+            // The bar lives in an overlay the main window's paint places and repaints.
+            InvalidateRect(state.window, nullptr, FALSE);
+        }
+    }
+    // A change that lands during Play or while a prefab is open is shown once that ends.
+    static bool reloadPending = false;
+    reloadPending = reloadPending || projectChanged;
+    if (!reloadPending || state.playMode.IsPlaying() || state.sceneContext.InPrefabEditMode()) {
         return;
     }
+    reloadPending = false;
     if (state.sceneContext.SceneDocumentDirty()) {
         agent.Add(EditorAgentEntryKind::Info, "The scene has edits made while the agent worked, so it was not reloaded. Save or reopen it to see both.");
         InvalidatePanelKind(state, DockPanelKind::Agent);
         return;
     }
-    const std::filesystem::path scene = state.sceneContext.CurrentScenePath();
-    std::error_code error;
-    const bool reloaded = !scene.empty() && std::filesystem::exists(scene, error)
-        ? state.sceneContext.OpenScene(scene)
-        : state.sceneContext.ReloadSceneFromProject();
-    if (reloaded) {
+    // A full project reload: the scene from its file and every asset mounted again, so materials,
+    // textures and scripts the agent changed or added show too, not only the scene.
+    if (state.sceneContext.ReloadSceneFromProject()) {
         agent.Add(EditorAgentEntryKind::Info, "Reloaded the scene and assets with the agent's changes.");
     }
     state.sceneViewport.RequestPresent();
@@ -1678,9 +1708,10 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         if (stressEnabled) {
             StressFrameStages() = {};
         }
+        // No autosave while an agent works: it writes the same files, and the later writer would win.
         if (state.sceneContext.TickAutosave(
                 wallDeltaSeconds,
-                EditorEditCommandPolicy::CanExecute(state.sceneContext))) {
+                EditorEditCommandPolicy::CanExecute(state.sceneContext) && !state.sceneContext.AgentPanel().AnyRunning())) {
             InvalidateRect(state.window, nullptr, FALSE);
         }
         const auto playStart = stressEnabled ? std::chrono::steady_clock::now()
@@ -1764,7 +1795,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 EditorAudioAssetPreview::HasActivePreview() ||
                 state.sceneContext.AssetImportInProgress() ||
                 state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
-                state.sceneContext.AgentPanel().Running() || state.sceneContext.AgentPanel().CheckingAccount() ||
+                state.sceneContext.AgentPanel().AnyRunning() || state.sceneContext.AgentPanel().CheckingAccount() ||
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {

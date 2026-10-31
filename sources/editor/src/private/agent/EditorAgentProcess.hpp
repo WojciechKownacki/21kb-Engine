@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -13,8 +14,9 @@
 namespace kb::editor {
 
 // One command-line agent (or its status command) running in the background: its standard input
-// gets the request text and is closed, its output (standard output and error together) is read
-// on a worker thread and handed over line by line. Stopping ends the whole process tree.
+// gets the request text and is closed - or, for an agent that takes one request after another,
+// stays open for Write - and its output (standard output and error together) is read on a worker
+// thread and handed over line by line. Stopping ends the whole process tree.
 class EditorAgentProcess final {
 public:
     EditorAgentProcess() = default;
@@ -31,7 +33,12 @@ public:
         const std::filesystem::path& workingDirectory,
         const std::vector<std::pair<std::wstring, std::wstring>>& environment,
         std::string input,
-        std::string& error);
+        std::string& error,
+        bool keepInputOpen = false);
+    // Writes more input to a process started with keepInputOpen; false once it has ended.
+    [[nodiscard]] bool Write(std::string_view text);
+    // Whether the process is still running (it may be idle, waiting for input).
+    [[nodiscard]] bool Alive() const noexcept { return process_ != nullptr && !finished_; }
 
     // Complete output lines that arrived since the last call, as UTF-8.
     [[nodiscard]] std::vector<std::string> TakeLines();
@@ -46,6 +53,8 @@ private:
 
     void* process_ = nullptr;
     void* job_ = nullptr;
+    void* input_ = nullptr;
+    std::mutex inputMutex_;
     std::thread reader_;
     mutable std::mutex mutex_;
     std::deque<std::string> lines_;

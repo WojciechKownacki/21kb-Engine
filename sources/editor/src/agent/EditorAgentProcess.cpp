@@ -77,7 +77,8 @@ bool EditorAgentProcess::Start(
     const std::filesystem::path& workingDirectory,
     const std::vector<std::pair<std::wstring, std::wstring>>& environment,
     std::string input,
-    std::string& error) {
+    std::string& error,
+    bool keepInputOpen) {
     if (process_ != nullptr && !finished_) {
         error = "the agent is still working";
         return false;
@@ -157,13 +158,21 @@ bool EditorAgentProcess::Start(
     CloseHandle(info.hThread);
     process_ = info.hProcess;
     job_ = job;
+    if (keepInputOpen) {
+        const std::lock_guard lock(inputMutex_);
+        input_ = inputWrite;
+    }
 
-    reader_ = std::thread([this, outputRead, inputWrite, input = std::move(input)]() {
-        DWORD written = 0;
-        if (!input.empty()) {
-            WriteFile(inputWrite, input.data(), static_cast<DWORD>(input.size()), &written, nullptr);
+    reader_ = std::thread([this, outputRead, inputWrite, keepInputOpen, input = std::move(input)]() {
+        if (keepInputOpen) {
+            static_cast<void>(Write(input));
+        } else {
+            DWORD written = 0;
+            if (!input.empty()) {
+                WriteFile(inputWrite, input.data(), static_cast<DWORD>(input.size()), &written, nullptr);
+            }
+            CloseHandle(inputWrite);
         }
-        CloseHandle(inputWrite);
         std::string pending;
         char buffer[4096];
         DWORD read = 0;
@@ -190,6 +199,16 @@ bool EditorAgentProcess::Start(
         finished_ = true;
     });
     return true;
+}
+
+bool EditorAgentProcess::Write(std::string_view text) {
+    const std::lock_guard lock(inputMutex_);
+    if (input_ == nullptr || finished_) {
+        return false;
+    }
+    DWORD written = 0;
+    return text.empty() || (WriteFile(static_cast<HANDLE>(input_), text.data(), static_cast<DWORD>(text.size()), &written, nullptr) != 0 &&
+        written == text.size());
 }
 
 std::vector<std::string> EditorAgentProcess::TakeLines() {
@@ -225,6 +244,13 @@ void EditorAgentProcess::Stop() noexcept {
 void EditorAgentProcess::Join() noexcept {
     if (reader_.joinable()) {
         reader_.join();
+    }
+    {
+        const std::lock_guard lock(inputMutex_);
+        if (input_ != nullptr) {
+            CloseHandle(static_cast<HANDLE>(input_));
+            input_ = nullptr;
+        }
     }
     if (process_ != nullptr) {
         CloseHandle(static_cast<HANDLE>(process_));

@@ -597,7 +597,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     // keys back to the editor (W/E/R, Delete, shortcuts).
     if (!panelHit.inAgentPanel && sceneContext_.AgentPanel().InputFocused()) {
         sceneContext_.AgentPanel().FocusInput(false);
+        sceneContext_.AgentPanel().SetModelMenuOpen(false);
         EditorWindowInvalidator::InvalidateDockPanel(mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Agent);
+        // The agent bar repaints with the main window.
+        InvalidateRect(mainWindow_, nullptr, FALSE);
     }
     if (panelHit.inAgentPanel) {
         static_cast<void>(EditorAgentPanelController{ sceneContext_ }.HandlePointerDown(messageWindow, *panelHit.agentContent, x, y));

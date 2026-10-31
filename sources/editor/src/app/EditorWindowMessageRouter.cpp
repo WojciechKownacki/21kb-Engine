@@ -729,8 +729,15 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (wparam == 'K' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
-            // From anywhere: the Agent panel comes forward (its drawer opens) with the request box ready.
-            static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+            // From anywhere: the request box gets the keyboard - the docked Agent panel's when it is
+            // on screen, otherwise the bar over the Scene View; with neither, the panel comes forward.
+            const bool docked = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, context_.mainWindow, context_.mainWindow,
+                context_.dockModel, context_.floatingWindows, context_.metrics).has_value();
+            const bool sceneShown = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, context_.mainWindow, context_.mainWindow,
+                context_.dockModel, context_.floatingWindows, context_.metrics).has_value();
+            if (!docked && !sceneShown) {
+                static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+            }
             context_.sceneContext.AgentPanel().Prepare();
             context_.sceneContext.AgentPanel().FocusInput(true);
             context_.sceneViewport.RequestPresent();
