@@ -62,6 +62,11 @@ class EditorViewportPreviewState {
 public:
     [[nodiscard]] bool Is2D() const noexcept { return twoD_; }
     void Toggle2D() noexcept { twoD_ = !twoD_; }
+    // Realtime: the view is redrawn every editor frame while the editor is the foreground
+    // application, so time-driven content and the frame counter stay current. Off, the view
+    // is redrawn only when something it shows changes.
+    [[nodiscard]] bool Realtime() const noexcept { return realtime_; }
+    void ToggleRealtime() noexcept { realtime_ = !realtime_; }
     [[nodiscard]] float UIZoom() const noexcept { return uiZoom_; }
     [[nodiscard]] kb::math::Vec2 UIPan() const noexcept { return uiPan_; }
     void ZoomUI(float steps, kb::math::Vec2 pointer) noexcept;
@@ -121,6 +126,7 @@ public:
 
 private:
     bool twoD_ = false;
+    bool realtime_ = true;
     float uiZoom_ = 1.0F;
     kb::math::Vec2 uiPan_{}, uiPanPointer_{};
     EditorViewportProfileKind profile_ = EditorViewportProfileKind::Free;

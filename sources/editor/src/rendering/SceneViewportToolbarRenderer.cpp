@@ -240,6 +240,7 @@ void SceneViewportToolbarRenderer::Paint(
     GdiDrawing::FillRectColor(dc, rects.row, SceneViewportToolbarDrawing::ToolbarRowColor(theme));
 
     SceneViewportToolbarInfoRenderer::PaintFpsCounter(dc, rects.fpsCounter, theme);
+    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.realtimeButton, HeroIconKind::Bolt, theme, state.Realtime());
     SceneViewportToolbarDrawing::DrawToolButton(
         dc, rects.moveToolButton, HeroIconKind::Move, "W", theme, toolMode == EditorTransformToolMode::Translate);
     SceneViewportToolbarDrawing::DrawToolButton(

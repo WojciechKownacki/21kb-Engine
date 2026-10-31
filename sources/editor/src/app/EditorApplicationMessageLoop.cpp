@@ -561,6 +561,34 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     return presented;
 }
 
+// Whether a visible Scene View has Realtime on and may draw every frame. Only while the editor
+// is the application in front: behind another window it would spend the GPU on frames nobody
+// watches, so it pauses there and its counter falls back to IDLE.
+[[nodiscard]] bool SceneRealtimeActive(EditorApplicationState& state) {
+    DWORD foregroundProcess = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
+    if (foregroundProcess != GetCurrentProcessId() || state.window == nullptr || IsIconic(state.window) != 0) {
+        return false;
+    }
+    const auto realtimeIn = [&state](HWND host) {
+        if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0) {
+            return false;
+        }
+        const std::optional<EditorResolvedPanelContent> panel = EditorPanelContentResolver::ResolvePanel(
+            DockPanelKind::Scene, host, state.window, state.dockModel, state.floatingWindows, state.metrics);
+        return panel.has_value() && state.sceneContext.ViewportPreview(panel->panelId).Realtime();
+    };
+    if (realtimeIn(state.window)) {
+        return true;
+    }
+    for (HWND window : state.floatingWindows.Queries().Windows()) {
+        if (realtimeIn(window)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] bool PresentVisibleViewports(EditorApplicationState& state) {
     const bool refreshToolbar = ShouldRefreshSceneToolbars();
     const bool explicitPresentRequested = state.sceneViewport.PresentRequested();
@@ -590,7 +618,8 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     const bool thumbnailPresent =
         EditorMaterialThumbnailCache().HasPendingWork() ||
         EditorParticleThumbnailCache().HasPendingWork();
-    const bool continuousPresent = playPresent || materialPresent || particlePresent;
+    const bool realtimePresent = !playPresent && SceneRealtimeActive(state);
+    const bool continuousPresent = playPresent || materialPresent || particlePresent || realtimePresent;
     // The toolbar refresh only repaints cached counters. It must not manufacture a GPU frame:
     // doing so submitted every visible viewport exactly four times per second while idle.
     if (continuousPresent || thumbnailPresent) {
@@ -626,6 +655,7 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
             << " reason(explicit=" << (explicitPresentRequested ? 1 : 0)
             << ",toolbar=" << (refreshToolbar ? 1 : 0)
             << ",play=" << (playPresent ? 1 : 0)
+            << ",realtime=" << (realtimePresent ? 1 : 0)
             << ",material=" << (materialPresent ? 1 : 0)
             << ",thumbnail=" << (thumbnailPresent ? 1 : 0)
             << ",import=" << (importedItems > 0U ? 1 : 0)

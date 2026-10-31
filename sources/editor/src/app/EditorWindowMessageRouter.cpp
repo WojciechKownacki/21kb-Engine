@@ -624,6 +624,21 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             }
             return 0;
         }
+        if (wparam == 'R' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
+            !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
+            // Realtime for every Scene View, as the toolbar button sets it for one.
+            for (const DockPanel& panel : context_.dockModel.Queries().Panels()) {
+                if (panel.kind == DockPanelKind::Scene) {
+                    context_.sceneContext.ViewportPreview(panel.id).ToggleRealtime();
+                }
+            }
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            for (HWND window : context_.floatingWindows.Queries().Windows()) {
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (wparam == 'P' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
             !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
             if (context_.playMode.Mode() == EditorPlayMode::Stopped) {

@@ -74,6 +74,7 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
 
     int cursor = rects.toolbar.left + SceneViewportToolbarMetrics::PaddingX;
     rects.fpsCounter = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::FpsCounterWidth);
+    rects.realtimeButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::IconButtonWidth);
     AddGroupGap(cursor);
     rects.moveToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);
     rects.rotateToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);

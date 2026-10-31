@@ -25,6 +25,7 @@ struct SceneViewportToolbarRects {
     RECT toolbar{};
     RECT row{};
     RECT fpsCounter{};
+    RECT realtimeButton{};
     RECT pipelineStats{};
     // Move / Rotate / Scale: the same tools W / E / R pick from the keyboard.
     RECT moveToolButton{};

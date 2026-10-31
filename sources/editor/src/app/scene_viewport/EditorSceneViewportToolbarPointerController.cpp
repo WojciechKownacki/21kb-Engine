@@ -200,6 +200,12 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
         sceneViewport_.RequestPresent();
         return true;
     }
+    if (PointInRect(toolbar.realtimeButton, x, y)) {
+        preview.CloseToolbarDropdown();
+        preview.ToggleRealtime();
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     if (const std::optional<EditorTransformToolMode> mode = ToolModeAt(toolbar, x, y); mode.has_value()) {
         preview.CloseToolbarDropdown();
         EditorSceneGizmoState& gizmo = sceneContext_.Gizmo();
