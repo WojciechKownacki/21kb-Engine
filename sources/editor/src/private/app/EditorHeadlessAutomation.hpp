@@ -193,6 +193,11 @@ public:
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
+    // The "What to show" window of the profiler, and the profiler's counters and graph laid over an
+    // earlier scene viewport capture.
+    [[nodiscard]] bool CaptureProfilerWindow(std::string_view checkpoint, int width, int height);
+    [[nodiscard]] bool ClickProfilerWindow(int x, int y, int width, int height);
+    [[nodiscard]] bool CaptureProfilerOverlay(std::string_view checkpoint, std::string_view sceneCheckpoint);
     [[nodiscard]] bool CaptureTimelinePreview(std::string_view checkpoint);
     [[nodiscard]] bool CaptureBlendSpace2DPreview(std::string_view checkpoint);
     // The Material Editor's preview of the open material, presented as the panel presents it.

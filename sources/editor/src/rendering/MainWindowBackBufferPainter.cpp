@@ -17,6 +17,7 @@
 #include "rendering/InspectorAddComponentOverlayWindow.hpp"
 #include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
 #include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
+#include "rendering/ProfilerSelectionOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -275,6 +276,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] ProfilerSelectionOverlayWindow& MainProfilerSelectionOverlay() {
+    static ProfilerSelectionOverlayWindow overlay;
+    return overlay;
+}
+
 [[nodiscard]] InspectorAddComponentOverlayWindow& MainAddComponentOverlay() {
     static InspectorAddComponentOverlayWindow overlay;
     return overlay;
@@ -297,6 +303,7 @@ void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
     MainDeleteConfirmOverlay().Hide();
     MainFilterMenuOverlay().Hide();
     MainSceneToolbarDropdownOverlay().Hide();
+    MainProfilerSelectionOverlay().Hide();
     MainAddComponentOverlay().Hide();
     MainToolbarMenuOverlay().Hide();
     MainAgentBarOverlay().Hide();
@@ -373,6 +380,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
     } else {
         MainAddComponentOverlay().Hide();
     }
+    MainProfilerSelectionOverlay().Show(window, theme, sceneContext, sceneViewport);
     // Shown last so that, of the popups, the open menu is the one on top.
     if (shellInteraction.OpenMenu() != EditorMenuCommand::None) {
         MainToolbarMenuOverlay().Show(window, ToRect(layout.menu), theme, shellInteraction);

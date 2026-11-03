@@ -364,6 +364,11 @@ void EditorDialogStyle::PaintScrollbar(
     GdiDrawing::FillRectColor(dc, thumb, Color(dragging ? theme.accent : theme.textDisabled));
 }
 
+void EditorDialogStyle::PaintBadge(HDC dc, const RECT& bounds, const EditorTheme& theme, std::string_view text) {
+    FillRound(dc, bounds, Color(theme.accent), Color(theme.accent), Height(bounds));
+    PaintText(dc, bounds, text, Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
 void EditorDialogStyle::PaintDivider(HDC dc, const RECT& bounds, const EditorTheme& theme) {
     GdiDrawing::FillRectColor(dc, bounds, Color(theme.borderChrome));
 }

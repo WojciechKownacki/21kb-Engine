@@ -136,12 +136,12 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
         viewport_.SetFailureDetail("Viewport text overlay settings were missing from its present batch.");
         return false;
     }
-    if (overlaySettings->viewportTextLabels.empty()) {
+    if (overlaySettings->viewportTextLabels.empty() && overlaySettings->viewportOverlayShapes.empty()) {
         surface->textOverlay.Hide();
     } else if (!surface->textOverlay.Ensure(
                    viewport_.instance_, surface->clipWindow,
                    RectWidth(surface->rect), RectHeight(surface->rect)) ||
-        !surface->textOverlay.Update(overlaySettings->viewportTextLabels)) {
+        !surface->textOverlay.Update(overlaySettings->viewportTextLabels, overlaySettings->viewportOverlayShapes)) {
         viewport_.SetFailureDetail("Viewport text overlay could not rasterize or present its labels.");
         return false;
     }

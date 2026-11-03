@@ -29,7 +29,9 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
+#include "profiler/ProfilerOverlayLayout.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
+#include "rendering/ProfilerSelectionOverlayWindow.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
@@ -3684,6 +3686,49 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     return CaptureScene("capture_scene_viewport", checkpoint, [this] {
         return impl_->RenderSceneViewport(context_, sceneViewportKey);
     });
+}
+
+bool EditorHeadlessAutomation::CaptureProfilerWindow(std::string_view checkpoint, int width, int height) {
+    if (width < 800 || width > 3840 || height < 400 || height > 2160) return false;
+    const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");
+    const bool saved = CaptureBitmap(path, ScreenshotDimensions{ width, height, 96 }, [this, width, height](HDC memory) {
+        ProfilerSelectionOverlayWindow window;
+        window.PaintInto(memory, RECT{ 0, 0, width, height }, MakeEditorDarkTheme(), context_);
+    });
+    Trace("capture_profiler_window", saved, path.filename().string());
+    return saved;
+}
+
+bool EditorHeadlessAutomation::ClickProfilerWindow(int x, int y, int width, int height) {
+    ProfilerSelectionOverlayWindow window;
+    const bool hit = window.ClickAt(RECT{ 0, 0, width, height }, x, y, MakeEditorDarkTheme(), context_, impl_->viewport);
+    Trace("click_profiler_window", hit, std::to_string(x) + "," + std::to_string(y));
+    return hit;
+}
+
+bool EditorHeadlessAutomation::CaptureProfilerOverlay(std::string_view checkpoint, std::string_view sceneCheckpoint) {
+    const std::filesystem::path source = artifactRoot_ / "screenshots" / (SafeCheckpoint(sceneCheckpoint) + ".png");
+    const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Bitmap scene(source.c_str());
+    if (scene.GetLastStatus() != Gdiplus::Ok) {
+        Trace("capture_profiler_overlay", false, "scene-capture-unreadable");
+        return false;
+    }
+    const int width = static_cast<int>(scene.GetWidth());
+    const int height = static_cast<int>(scene.GetHeight());
+    const ProfilerOverlayOptions& options = context_.EditorConfig().profiler.overlay;
+    ProfilerOverlayContent content;
+    AppendProfilerOverlay(content, context_.Profiler().Overlay(), options, MakeEditorDarkTheme(),
+        ProfilerOverlayMetrics::ForTextSize(options.textSize), static_cast<float>(width), static_cast<float>(height));
+    const bool saved = CaptureBitmap(path, ScreenshotDimensions{ width, height, 96 }, [&](HDC memory) {
+        Gdiplus::Graphics graphics(memory);
+        graphics.DrawImage(&scene, 0, 0, width, height);
+        EditorSceneViewportTextOverlay renderer;
+        static_cast<void>(renderer.Paint(memory, RECT{ 0, 0, width, height }, content.labels, content.shapes));
+    });
+    Trace("capture_profiler_overlay", saved, path.filename().string());
+    return saved;
 }
 
 bool EditorHeadlessAutomation::CaptureTimelinePreview(std::string_view checkpoint) {

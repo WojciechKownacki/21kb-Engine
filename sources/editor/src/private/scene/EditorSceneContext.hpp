@@ -39,6 +39,7 @@
 #include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
 #include "settings/EditorConfigurationStore.hpp"
+#include "profiler/EditorProfilerState.hpp"
 #include "settings/EditorBuildGameSettingsStore.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
@@ -261,6 +262,9 @@ public:
     // Config/EditorSettings.ini. One reader and one writer, both here.
     [[nodiscard]] const EditorConfiguration& EditorConfig() const noexcept;
     [[nodiscard]] bool SaveEditorConfig(EditorConfiguration configuration);
+    // The performance counters: their values, what the scene shows of them and the window that
+    // chooses them. The choice itself is part of EditorConfig().
+    [[nodiscard]] EditorProfilerState& Profiler() const noexcept { return profiler_; }
     [[nodiscard]] EditorPluginsState& Plugins() noexcept;
     [[nodiscard]] const EditorPluginsState& Plugins() const noexcept;
     [[nodiscard]] EditorScriptEditorState& ScriptEditor() noexcept;
@@ -1638,6 +1642,8 @@ private:
     std::uint64_t assetUsersRevision_ = ~std::uint64_t{ 0U };
     std::uint64_t assetUsersGeneration_ = ~std::uint64_t{ 0U };
     EditorConfiguration editorConfig_;
+    // Written while a const scene context paints, like the other per-frame caches here.
+    mutable EditorProfilerState profiler_;
     EditorPluginsState plugins_;
     bool particleProviderMigrationResolved_ = false;
     EditorScriptEditorState scriptEditor_;

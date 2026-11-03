@@ -67,6 +67,7 @@ public:
         float editorUIScale = 1.0F;
         kb::math::Vec2 editorUIOffset{};
         std::vector<EditorSceneViewportTextLabel> viewportTextLabels;
+        std::vector<EditorSceneViewportOverlayShape> viewportOverlayShapes;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         render::SceneRenderLightingConfig lightingConfig{};

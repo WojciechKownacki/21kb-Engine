@@ -235,11 +235,12 @@ void SceneViewportToolbarRenderer::Paint(
     const RECT& content,
     const EditorTheme& theme,
     const EditorViewportPreviewState& state,
-    EditorTransformToolMode toolMode) {
+    EditorTransformToolMode toolMode,
+    bool profilerWindowOpen) {
     const SceneViewportToolbarRects rects = SceneViewportToolbarLayout::Resolve(content, state);
     GdiDrawing::FillRectColor(dc, rects.row, SceneViewportToolbarDrawing::ToolbarRowColor(theme));
 
-    SceneViewportToolbarInfoRenderer::PaintFpsCounter(dc, rects.fpsCounter, theme);
+    SceneViewportToolbarInfoRenderer::PaintFpsCounter(dc, rects.fpsCounter, theme, profilerWindowOpen);
     SceneViewportToolbarDrawing::DrawIconButton(dc, rects.realtimeButton, HeroIconKind::Bolt, theme, state.Realtime());
     SceneViewportToolbarDrawing::DrawToolButton(
         dc, rects.moveToolButton, HeroIconKind::Move, "W", theme, toolMode == EditorTransformToolMode::Translate);

@@ -80,7 +80,7 @@ void SceneViewportToolbarDrawing::DrawToolButton(
         active ? RGB(200, 228, 240) : GdiDrawing::ToColorRef(theme.textDisabled));
 }
 
-void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view value, const EditorTheme& theme, bool active) {
+void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view value, const EditorTheme& theme, bool active, bool dimmed) {
     DrawBase(dc, rect, theme, active);
     const RECT iconRect{
         rect.left + 7,
@@ -91,7 +91,8 @@ void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKin
     const COLORREF iconColor = active ? RGB(220, 246, 255) : GdiDrawing::ToColorRef(theme.textDisabled);
     HeroIconPainter::Draw(dc, iconRect, icon, iconColor, 1);
 
-    const COLORREF textColor = active ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(theme.textPrimary);
+    // A dimmed value is one that is no longer current, such as a frame rate held while nothing draws.
+    const COLORREF textColor = active ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(dimmed ? theme.textDisabled : theme.textPrimary);
     RECT textRect = rect;
     textRect.left += 23;
     textRect.right -= 18;

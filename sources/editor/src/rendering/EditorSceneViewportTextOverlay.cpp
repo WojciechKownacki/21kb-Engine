@@ -75,19 +75,10 @@ LRESULT CALLBACK TextOverlayWindowProc(HWND window, UINT message, WPARAM wparam,
     return RegisterClassExW(&windowClass) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
-} // namespace
-
-struct EditorSceneViewportTextOverlay::Impl {
-    HINSTANCE instance = nullptr;
-    HWND window = nullptr;
-    HDC memoryDc = nullptr;
-    HBITMAP bitmap = nullptr;
-    HGDIOBJ previousBitmap = nullptr;
-    void* pixels = nullptr;
-    std::uint32_t width = 0U;
-    std::uint32_t height = 0U;
-    bool hasContent = false;
-    Gdiplus::PrivateFontCollection fonts;
+// The overlay's font: Roboto from the editor's content, in the sizes asked for.
+struct OverlayFonts {
+    // Created once GDI+ is running: a collection made before that is unusable.
+    std::unique_ptr<Gdiplus::PrivateFontCollection> fonts;
     std::unique_ptr<Gdiplus::FontFamily[]> fontFamilies;
     INT fontFamilyCount = 0;
     std::unordered_map<int, std::unique_ptr<Gdiplus::Font>> fontByPixelHeight;
@@ -95,15 +86,16 @@ struct EditorSceneViewportTextOverlay::Impl {
     [[nodiscard]] bool EnsureFont() {
         if (fontFamilies != nullptr && fontFamilyCount > 0) return true;
         HeroIconGdiplusRuntime::EnsureStarted();
+        fonts = std::make_unique<Gdiplus::PrivateFontCollection>();
         const std::filesystem::path path = RobotoFontPath();
         if (path.empty() || !std::filesystem::exists(path) ||
-            fonts.AddFontFile(path.c_str()) != Gdiplus::Ok) return false;
-        fontFamilyCount = fonts.GetFamilyCount();
+            fonts->AddFontFile(path.c_str()) != Gdiplus::Ok) return false;
+        fontFamilyCount = fonts->GetFamilyCount();
         if (fontFamilyCount <= 0) return false;
         fontFamilies = std::make_unique<Gdiplus::FontFamily[]>(
             static_cast<std::size_t>(fontFamilyCount));
         INT found = 0;
-        if (fonts.GetFamilies(fontFamilyCount, fontFamilies.get(), &found) != Gdiplus::Ok ||
+        if (fonts->GetFamilies(fontFamilyCount, fontFamilies.get(), &found) != Gdiplus::Ok ||
             found <= 0) {
             fontFamilies.reset();
             fontFamilyCount = 0;
@@ -127,6 +119,92 @@ struct EditorSceneViewportTextOverlay::Impl {
         fontByPixelHeight.emplace(quantizedHeight, std::move(font));
         return result;
     }
+};
+
+[[nodiscard]] Gdiplus::Color ToColor(const std::array<std::uint8_t, 4U>& color) {
+    return Gdiplus::Color(color[3], color[0], color[1], color[2]);
+}
+
+void DrawShape(Gdiplus::Graphics& graphics, const EditorSceneViewportOverlayShape& shape) {
+    if (shape.points.size() < 2U) return;
+    if (shape.kind == EditorSceneViewportOverlayShape::Kind::RoundedRect) {
+        const float left = std::min(shape.points[0][0], shape.points[1][0]);
+        const float top = std::min(shape.points[0][1], shape.points[1][1]);
+        const float width = std::abs(shape.points[1][0] - shape.points[0][0]);
+        const float height = std::abs(shape.points[1][1] - shape.points[0][1]);
+        const float diameter = std::min({ shape.radius * 2.0F, width, height });
+        Gdiplus::GraphicsPath path;
+        path.AddArc(left, top, diameter, diameter, 180.0F, 90.0F);
+        path.AddArc(left + width - diameter, top, diameter, diameter, 270.0F, 90.0F);
+        path.AddArc(left + width - diameter, top + height - diameter, diameter, diameter, 0.0F, 90.0F);
+        path.AddArc(left, top + height - diameter, diameter, diameter, 90.0F, 90.0F);
+        path.CloseFigure();
+        const Gdiplus::SolidBrush brush(ToColor(shape.color));
+        graphics.FillPath(&brush, &path);
+        return;
+    }
+    Gdiplus::Pen pen(ToColor(shape.color), shape.thickness);
+    if (shape.dashed) pen.SetDashStyle(Gdiplus::DashStyleDash);
+    std::vector<Gdiplus::PointF> points;
+    points.reserve(shape.points.size());
+    for (const auto& point : shape.points) points.emplace_back(point[0], point[1]);
+    graphics.DrawLines(&pen, points.data(), static_cast<INT>(points.size()));
+}
+
+// Shapes first, so labels lie on top of them.
+[[nodiscard]] bool DrawContent(Gdiplus::Graphics& graphics, OverlayFonts& fonts,
+    std::span<const EditorSceneViewportTextLabel> labels, std::span<const EditorSceneViewportOverlayShape> shapes) {
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+    graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
+    for (const EditorSceneViewportOverlayShape& shape : shapes) DrawShape(graphics, shape);
+
+    Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
+    format.SetFormatFlags(Gdiplus::StringFormatFlagsNoClip | Gdiplus::StringFormatFlagsNoWrap);
+    Gdiplus::StringFormat rightFormat(&format);
+    rightFormat.SetAlignment(Gdiplus::StringAlignmentFar);
+    const Gdiplus::SolidBrush shadow(Gdiplus::Color(220U, 0U, 0U, 0U));
+    // A right-aligned label is laid out in a box that ends at its x.
+    constexpr float kRightBoxWidth = 4096.0F;
+    for (const EditorSceneViewportTextLabel& label : labels) {
+        if (!std::isfinite(label.x) || !std::isfinite(label.y) ||
+            !std::isfinite(label.pixelHeight) || label.pixelHeight < 1.0F || label.text.empty()) continue;
+        Gdiplus::Font* font = fonts.FontFor(label.pixelHeight);
+        const std::wstring text = Utf8ToWide(label.text);
+        if (font == nullptr || text.empty()) return false;
+        const bool right = label.align == EditorSceneViewportTextAlign::Right;
+        const auto draw = [&](float offset, const Gdiplus::Brush* brush) {
+            if (right) {
+                const Gdiplus::RectF box{ label.x + offset - kRightBoxWidth, label.y + offset, kRightBoxWidth, label.pixelHeight * 1.5F };
+                graphics.DrawString(text.data(), static_cast<INT>(text.size()), font, box, &rightFormat, brush);
+            } else {
+                graphics.DrawString(text.data(), static_cast<INT>(text.size()), font,
+                    Gdiplus::PointF{ label.x + offset, label.y + offset }, &format, brush);
+            }
+        };
+        if (label.shadow) draw(1.0F, &shadow);
+        const Gdiplus::SolidBrush foreground(ToColor(label.color));
+        draw(0.0F, &foreground);
+    }
+    graphics.Flush(Gdiplus::FlushIntentionSync);
+    return true;
+}
+
+} // namespace
+
+struct EditorSceneViewportTextOverlay::Impl {
+    HINSTANCE instance = nullptr;
+    HWND window = nullptr;
+    HDC memoryDc = nullptr;
+    HBITMAP bitmap = nullptr;
+    HGDIOBJ previousBitmap = nullptr;
+    void* pixels = nullptr;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    bool hasContent = false;
+    OverlayFonts fonts;
 
     void ReleaseBitmap() noexcept {
         if (memoryDc != nullptr && previousBitmap != nullptr) {
@@ -181,7 +259,7 @@ EditorSceneViewportTextOverlay::~EditorSceneViewportTextOverlay() {
 bool EditorSceneViewportTextOverlay::Ensure(
     HINSTANCE instance, HWND parent, std::uint32_t width, std::uint32_t height) {
     if (instance == nullptr || parent == nullptr || width == 0U || height == 0U ||
-        !EnsureWindowClass(instance) || !impl_->EnsureFont()) return false;
+        !EnsureWindowClass(instance) || !impl_->fonts.EnsureFont()) return false;
     impl_->instance = instance;
     POINT destination{ 0, 0 };
     if (ClientToScreen(parent, &destination) == 0) return false;
@@ -209,14 +287,18 @@ bool EditorSceneViewportTextOverlay::Ensure(
             nullptr);
         if (impl_->window == nullptr) return false;
     }
+    // Placement only: the popup is above its owner's children from the moment it is shown, and
+    // raising it again on every frame would put it above the editor's own popups, such as the
+    // profiler's window.
     if (SetWindowPos(impl_->window, HWND_TOP, destination.x, destination.y,
             static_cast<int>(width),
-            static_cast<int>(height), SWP_NOACTIVATE | SWP_NOOWNERZORDER) == 0) return false;
+            static_cast<int>(height), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER) == 0) return false;
     return impl_->EnsureBitmap(width, height);
 }
 
 bool EditorSceneViewportTextOverlay::Update(
-    std::span<const EditorSceneViewportTextLabel> labels) {
+    std::span<const EditorSceneViewportTextLabel> labels,
+    std::span<const EditorSceneViewportOverlayShape> shapes) {
     if (impl_->window == nullptr || impl_->memoryDc == nullptr || impl_->pixels == nullptr ||
         impl_->width == 0U || impl_->height == 0U) return false;
     std::memset(impl_->pixels, 0,
@@ -227,30 +309,7 @@ bool EditorSceneViewportTextOverlay::Update(
         static_cast<INT>(impl_->width * sizeof(std::uint32_t)),
         PixelFormat32bppPARGB, static_cast<BYTE*>(impl_->pixels));
     Gdiplus::Graphics graphics(&bitmap);
-    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-    graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
-    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
-    Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
-    format.SetFormatFlags(Gdiplus::StringFormatFlagsNoClip | Gdiplus::StringFormatFlagsNoWrap);
-    Gdiplus::SolidBrush shadow(Gdiplus::Color(220U, 0U, 0U, 0U));
-
-    for (const EditorSceneViewportTextLabel& label : labels) {
-        if (!std::isfinite(label.x) || !std::isfinite(label.y) ||
-            !std::isfinite(label.pixelHeight) || label.pixelHeight < 1.0F || label.text.empty()) continue;
-        Gdiplus::Font* font = impl_->FontFor(label.pixelHeight);
-        const std::wstring text = Utf8ToWide(label.text);
-        if (font == nullptr || text.empty()) return false;
-        const Gdiplus::PointF shadowPosition{ label.x + 1.0F, label.y + 1.0F };
-        graphics.DrawString(text.data(), static_cast<INT>(text.size()), font,
-            shadowPosition, &format, &shadow);
-        const Gdiplus::SolidBrush foreground(Gdiplus::Color(
-            label.color[3], label.color[0], label.color[1], label.color[2]));
-        const Gdiplus::PointF position{ label.x, label.y };
-        graphics.DrawString(text.data(), static_cast<INT>(text.size()), font,
-            position, &format, &foreground);
-    }
-    graphics.Flush(Gdiplus::FlushIntentionSync);
+    if (!DrawContent(graphics, impl_->fonts, labels, shapes)) return false;
 
     HDC screenDc = GetDC(nullptr);
     if (screenDc == nullptr) return false;
@@ -269,6 +328,15 @@ bool EditorSceneViewportTextOverlay::Update(
     ReleaseDC(nullptr, screenDc);
     impl_->hasContent = updated != 0;
     return impl_->hasContent;
+}
+
+bool EditorSceneViewportTextOverlay::Paint(HDC dc, const RECT& area,
+    std::span<const EditorSceneViewportTextLabel> labels, std::span<const EditorSceneViewportOverlayShape> shapes) {
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetClip(Gdiplus::Rect(area.left, area.top, area.right - area.left, area.bottom - area.top));
+    graphics.TranslateTransform(static_cast<Gdiplus::REAL>(area.left), static_cast<Gdiplus::REAL>(area.top));
+    return DrawContent(graphics, impl_->fonts, labels, shapes);
 }
 
 void EditorSceneViewportTextOverlay::Show() noexcept {
@@ -297,9 +365,10 @@ void EditorSceneViewportTextOverlay::Destroy() noexcept {
         DestroyWindow(impl_->window);
     }
     impl_->window = nullptr;
-    impl_->fontByPixelHeight.clear();
-    impl_->fontFamilies.reset();
-    impl_->fontFamilyCount = 0;
+    impl_->fonts.fontByPixelHeight.clear();
+    impl_->fonts.fontFamilies.reset();
+    impl_->fonts.fonts.reset();
+    impl_->fonts.fontFamilyCount = 0;
     impl_->hasContent = false;
 }
 

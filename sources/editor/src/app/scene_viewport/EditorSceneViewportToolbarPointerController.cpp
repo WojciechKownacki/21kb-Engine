@@ -200,6 +200,14 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
         sceneViewport_.RequestPresent();
         return true;
     }
+    if (PointInRect(toolbar.fpsCounter, x, y)) {
+        preview.CloseToolbarDropdown();
+        EditorProfilerState& profiler = sceneContext_.Profiler();
+        profiler.SetWindowOpen(!profiler.WindowOpen());
+        InvalidateRect(GetActiveWindow(), nullptr, FALSE);
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     if (PointInRect(toolbar.realtimeButton, x, y)) {
         preview.CloseToolbarDropdown();
         preview.ToggleRealtime();

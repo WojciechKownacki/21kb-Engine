@@ -64,7 +64,7 @@
 #include "engine/core/EngineLog.hpp"
 #include "engine/core/EngineAssertions.hpp"
 #include "engine/core/DebugDraw.hpp"
-#include "engine/core/ProfilerCounters.hpp"
+#include "app/EditorProfilerAutomation.hpp"
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/library/EngineLibraryManifest.hpp"
@@ -1982,15 +1982,9 @@ ReadScriptValue(
                                                            : "debug draw contract rejected" };
     }
 
-    if (*operation == "assert_profiler") {
-        kb::core::ProfilerCounters profiler;
-        { auto scope = profiler.BeginScope("tick"); profiler.Counter("entities", 42U); profiler.Allocation(); }
-        const bool valid = kb::core::ProfilerCounters::Enabled() && profiler.scopes == 1U &&
-            profiler.timelineEvents == 1U && profiler.allocations == 1U &&
-            profiler.Counters().size() == 1U && profiler.Counters().front().value == 42U &&
-            profiler.TimelineEvents().size() == 1U;
-        return { valid, valid ? "debug-only profiler scopes, counters, timeline and allocations"
-                              : "profiler contract rejected" };
+    // The profiler's steps, including the debug-only counters contract.
+    if (const auto profiler = EditorProfilerAutomation::Run(*operation, step, state.context, state.automation)) {
+        return { profiler->first, profiler->second };
     }
 
     if (*operation == "assert_console_command") {

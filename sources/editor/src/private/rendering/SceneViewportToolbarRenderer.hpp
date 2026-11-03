@@ -85,7 +85,8 @@ public:
         const RECT& content,
         const EditorTheme& theme,
         const EditorViewportPreviewState& state,
-        EditorTransformToolMode toolMode);
+        EditorTransformToolMode toolMode,
+        bool profilerWindowOpen = false);
     static void PaintPrefabEditBar(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext);
     static void PaintTerrainTools(
         HDC dc,

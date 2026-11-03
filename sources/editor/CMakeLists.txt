@@ -13,6 +13,7 @@ add_executable(kb_editor WIN32
     src/app/EditorAutomationScenarioRunner.cpp
     src/app/EditorSelfTest.cpp
     src/app/EditorHeadlessAutomation.cpp
+    src/app/EditorProfilerAutomation.cpp
     src/app/EditorEditCommandPolicy.cpp
     src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
@@ -471,6 +472,15 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectBootstrap.hpp
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/settings/EditorConfigurationStore.hpp
+    src/private/profiler/EditorProfilerSampler.hpp
+    src/private/profiler/EditorProfilerState.hpp
+    src/private/profiler/ProfilerOverlayLayout.hpp
+    src/private/profiler/ProfilerOverlayModel.hpp
+    src/private/profiler/ProfilerPalette.hpp
+    src/private/profiler/ProfilerSelection.hpp
+    src/private/profiler/ProfilerText.hpp
+    src/private/rendering/ProfilerSelectionOverlayWindow.hpp
+    src/private/app/EditorProfilerAutomation.hpp
     src/private/settings/EditorLayoutLibrary.hpp
     src/private/settings/EditorLayoutMenuModel.hpp
     src/private/settings/EditorPanelSessionText.hpp
@@ -953,6 +963,12 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
     src/settings/EditorConfigurationStore.cpp
+    src/profiler/EditorProfilerSampler.cpp
+    src/profiler/ProfilerOverlayLayout.cpp
+    src/profiler/ProfilerOverlayModel.cpp
+    src/profiler/ProfilerSelection.cpp
+    src/profiler/ProfilerText.cpp
+    src/rendering/ProfilerSelectionOverlayWindow.cpp
     src/settings/EditorLayoutLibrary.cpp
     src/settings/EditorLayoutMenuModel.cpp
     src/settings/EditorPanelSessionText.cpp
@@ -1337,6 +1353,7 @@ if(BUILD_TESTING)
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorSettingsTests.cpp
+        tests/EditorProfilerTests.cpp
         tests/EditorLocalizationTests.cpp
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
@@ -1398,6 +1415,9 @@ if(BUILD_TESTING)
         src/docking/EditorDockModelCommands.cpp
         src/docking/EditorDockModelQueries.cpp
             src/settings/EditorConfigurationStore.cpp
+            src/profiler/ProfilerOverlayLayout.cpp
+            src/profiler/ProfilerOverlayModel.cpp
+            src/profiler/ProfilerSelection.cpp
             src/docking/EditorWorkspaceArrangement.cpp
             src/rendering/FloatingPanelGeometry.cpp
             src/rendering/gdi/EditorFontCache.cpp
@@ -1672,6 +1692,7 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME kb_editor_script_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests> script-editor)
+    add_test(NAME kb_editor_profiler_tests COMMAND $<TARGET_FILE:kb_editor_tests> profiler)
     set_tests_properties(kb_editor_script_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     add_test(NAME kb_editor_input_rebind_headless
@@ -2039,6 +2060,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-PrefabWorkflow")
     set_tests_properties(kb_editor_prefab_workflow_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;prefab" TIMEOUT 180)
+    add_test(NAME kb_editor_profiler_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessProfilerScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Profiler")
+    set_tests_properties(kb_editor_profiler_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;profiler" TIMEOUT 180)
     add_test(NAME kb_editor_workspace_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorkspaceScenario.json"

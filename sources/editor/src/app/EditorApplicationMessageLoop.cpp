@@ -27,6 +27,7 @@
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "profiler/EditorProfilerSampler.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewPresentSettings.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -792,6 +793,11 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
     }
     if (mainPresented || floatingPresented) {
         state.sceneViewport.ClearPresentRequest();
+        // The cost of this present is the frame the profiler reports.
+        const ProfilerSelection& profilerSelection = state.sceneContext.EditorConfig().profiler;
+        EditorProfilerState& profiler = state.sceneContext.Profiler();
+        EditorProfilerSampler::Sample(profiler, profilerSelection, state.sceneContext.Scene(), presentMs);
+        profiler.RefreshOverlay(profilerSelection, std::chrono::steady_clock::now());
     }
     if (scenePresented) {
         state.sceneContext.AcknowledgeSceneRenderSubmitted();

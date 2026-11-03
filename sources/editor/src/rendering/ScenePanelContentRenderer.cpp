@@ -1,4 +1,5 @@
 #include "platform/win32/EditorMap2DWindow.hpp"
+#include "profiler/ProfilerOverlayLayout.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 
 #if defined(_WIN32)
@@ -785,6 +786,12 @@ void AppendNavigationMesh(
     const float unitsPerPixel = 20.0F / static_cast<float>(std::max(1U,renderHeight));
     const float centerX = static_cast<float>(renderWidth)*0.5F, centerY = static_cast<float>(renderHeight)*0.5F;
     const EditorViewportCameraAxes flatAxes{.position={((centerX-pan.x)/zoom-centerX)*unitsPerPixel,-((centerY-pan.y)/zoom-centerY)*unitsPerPixel,-100},.forward={0,0,1},.right={1,0,0},.up={0,1,0}};
+    // The profiler's counters and graph lie over the finished image, so they are placed in the
+    // size it is rendered at.
+    const ProfilerOverlayOptions& profilerOptions = sceneContext.EditorConfig().profiler.overlay;
+    ProfilerOverlayContent profilerOverlay;
+    AppendProfilerOverlay(profilerOverlay, sceneContext.Profiler().Overlay(), profilerOptions, MakeEditorDarkTheme(),
+        ProfilerOverlayMetrics::ForTextSize(profilerOptions.textSize), static_cast<float>(renderWidth), static_cast<float>(renderHeight));
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
@@ -836,6 +843,8 @@ void AppendNavigationMesh(
         .editorUIOverlays = editorOverlaysEnabled && screenUIVisible ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), twoD ? viewportState.UIZoom() : 1.0F) : std::vector<kb::scene::SceneUIFrameElement>{},
         .editorUIScale = twoD ? viewportState.UIZoom() : 1.0F,
         .editorUIOffset = twoD ? viewportState.UIPan() : kb::math::Vec2{},
+        .viewportTextLabels = std::move(profilerOverlay.labels),
+        .viewportOverlayShapes = std::move(profilerOverlay.shapes),
         .editorSelectionBox = editorOverlaysEnabled ? SelectionBoxDesc(sceneContext, panelId) : kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc{},
         .meshPassMode = renderProfile.meshPassMode,
         .lightingConfig = lightingConfig,
@@ -896,7 +905,7 @@ void ScenePanelContentRenderer::Paint(
     EditorSceneBgfxViewport* sceneViewport,
     HWND sceneViewportHost) const {
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
-    SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState, sceneContext.Gizmo().toolMode);
+    SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState, sceneContext.Gizmo().toolMode, sceneContext.Profiler().WindowOpen());
     SceneViewportToolbarRenderer::PaintTerrainTools(dc, content, theme, sceneContext);
     SceneViewportToolbarRenderer::PaintPrefabEditBar(dc, content, theme, sceneContext);
 

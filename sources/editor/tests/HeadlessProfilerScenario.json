@@ -1,0 +1,315 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "configure_runtime_rendering",
+      "width": 640,
+      "height": 360
+    },
+    {
+      "op": "create_scene",
+      "name": "ProfilerSample",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "cam",
+      "name": "Cam",
+      "preset": "Camera"
+    },
+    {
+      "op": "set_property",
+      "entity": "cam",
+      "component": "Camera",
+      "property": "primary",
+      "value": true
+    },
+    {
+      "op": "set_entity_position",
+      "entity": "cam",
+      "x": 0.0,
+      "y": 3.0,
+      "z": -8.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cam",
+      "component": "Transform",
+      "property": "localRotation.x",
+      "value": 0.12187
+    },
+    {
+      "op": "set_property",
+      "entity": "cam",
+      "component": "Transform",
+      "property": "localRotation.w",
+      "value": 0.99255
+    },
+    {
+      "op": "create_entity",
+      "id": "sun",
+      "name": "Sun",
+      "preset": "Directional Light"
+    },
+    {
+      "op": "create_entity",
+      "id": "floor",
+      "name": "Floor",
+      "preset": "Plane"
+    },
+    {
+      "op": "create_entity",
+      "id": "cube",
+      "name": "Cube",
+      "preset": "Cube"
+    },
+    {
+      "op": "set_entity_position",
+      "entity": "cube",
+      "x": -1.5,
+      "y": 0.5,
+      "z": 0.0
+    },
+    {
+      "op": "create_entity",
+      "id": "ball",
+      "name": "Ball",
+      "preset": "Sphere"
+    },
+    {
+      "op": "set_entity_position",
+      "entity": "ball",
+      "x": 1.5,
+      "y": 0.5,
+      "z": 0.0
+    },
+    {
+      "op": "capture_scene_viewport",
+      "checkpoint": "profiler-scene"
+    },
+    {
+      "op": "profiler_select",
+      "preset": "minimal",
+      "areas": [
+        "cpu"
+      ],
+      "list": true,
+      "graph": true
+    },
+    {
+      "op": "profiler_sample",
+      "frames": 240,
+      "frame_ms": [
+        14.2,
+        15.1,
+        16.4,
+        15.8,
+        14.9,
+        15.3,
+        16.0,
+        15.5,
+        14.7,
+        15.9,
+        16.2,
+        15.0,
+        14.8,
+        15.6,
+        16.1,
+        15.2
+      ]
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "frame_ms",
+      "available": true,
+      "min": 14.0,
+      "max": 17.0
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "fps",
+      "available": true,
+      "min": 58.0,
+      "max": 72.0
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "gpu_ms",
+      "available": false
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "draw_calls",
+      "available": false,
+      "min": 0.0
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "process_memory_mb",
+      "available": false
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "ecs_entities",
+      "available": false
+    },
+    {
+      "op": "profiler_select",
+      "preset": "everything"
+    },
+    {
+      "op": "capture_scene_viewport",
+      "checkpoint": "profiler-scene"
+    },
+    {
+      "op": "profiler_sample",
+      "frames": 240,
+      "frame_ms": [
+        14.2,
+        15.1,
+        16.4,
+        15.8,
+        14.9,
+        15.3,
+        16.0,
+        15.5,
+        14.7,
+        15.9,
+        16.2,
+        15.0,
+        14.8,
+        15.6,
+        16.1,
+        15.2
+      ]
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "draw_calls",
+      "available": true,
+      "min": 0.0
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "triangles",
+      "available": true,
+      "min": 0.0
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "process_memory_mb",
+      "available": true,
+      "min": 10.0
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "ecs_entities",
+      "available": true,
+      "min": 5.0
+    },
+    {
+      "op": "profiler_select",
+      "preset": "rendering"
+    },
+    {
+      "op": "profiler_sample",
+      "frames": 240,
+      "frame_ms": [
+        14.2,
+        15.1,
+        16.4,
+        15.8,
+        14.9,
+        15.3,
+        16.0,
+        15.5,
+        14.7,
+        15.9,
+        16.2,
+        15.0,
+        14.8,
+        15.6,
+        16.1,
+        15.2
+      ]
+    },
+    {
+      "op": "capture_profiler_overlay",
+      "checkpoint": "profiler-overlay",
+      "scene": "profiler-scene"
+    },
+    {
+      "op": "capture_profiler_window",
+      "checkpoint": "profiler-window",
+      "width": 1180,
+      "height": 740
+    },
+    {
+      "op": "capture",
+      "panel": "scene",
+      "checkpoint": "profiler-toolbar",
+      "width": 900,
+      "height": 240
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 152,
+      "y": 56
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "Areas=cpu,gpu"
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "SceneCounters=fps,frame_ms,gpu_ms"
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 20,
+      "y": 344
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "Areas=cpu,gpu,memory"
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 673,
+      "y": 170
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "SceneCounters=frame_ms,gpu_ms"
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "PanelCounters=fps,frame_ms,gpu_ms"
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 719,
+      "y": 426
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "ListVisible=0"
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 990,
+      "y": 717
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "SceneCounters=fps,frame_ms,gpu_ms"
+    }
+  ]
+}

@@ -46,6 +46,10 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorSceneAudioInspectorTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "profiler") {
+        kb::editor::tests::RunEditorProfilerTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "inspector") {
         kb::editor::tests::RunEditorInspectorTests();
         return 0;
@@ -66,6 +70,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorDockingTests();
     kb::editor::tests::RunEditorProjectTests();
     kb::editor::tests::RunEditorSettingsTests();
+    kb::editor::tests::RunEditorProfilerTests();
     kb::editor::tests::RunEditorLocalizationTests();
     kb::editor::tests::RunEditorInspectorTests();
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();

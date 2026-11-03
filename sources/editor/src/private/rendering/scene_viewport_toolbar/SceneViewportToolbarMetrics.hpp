@@ -7,7 +7,7 @@ struct SceneViewportToolbarMetrics {
     static constexpr int ButtonGap = 4;
     static constexpr int GroupGap = 10;
     static constexpr int ButtonHeight = 24;
-    static constexpr int FpsCounterWidth = 66;
+    static constexpr int FpsCounterWidth = 104;
     static constexpr int PipelineStatsWidth = 206;
     static constexpr int IconButtonWidth = 34;
     static constexpr int ToolButtonWidth = 40;

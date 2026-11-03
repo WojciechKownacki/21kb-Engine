@@ -147,6 +147,8 @@ public:
         const EditorTheme& theme,
         bool dragging = false);
     static void PaintDivider(HDC dc, const RECT& bounds, const EditorTheme& theme);
+    // A round marker holding a short text, such as the number of a step.
+    static void PaintBadge(HDC dc, const RECT& bounds, const EditorTheme& theme, std::string_view text);
     static void PaintText(
         HDC dc,
         RECT bounds,

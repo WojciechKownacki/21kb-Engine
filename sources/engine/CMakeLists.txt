@@ -4,6 +4,7 @@ add_library(kb_engine STATIC
     include/engine/core/EngineAssertions.hpp
     include/engine/core/DebugDraw.hpp
     include/engine/core/ProfilerCounters.hpp
+    include/engine/core/ProfilerRegistry.hpp
     include/engine/core/ConsoleCommands.hpp
     include/engine/core/CrashReport.hpp
     include/engine/core/ExecutionAffinity.hpp
@@ -605,6 +606,7 @@ add_library(kb_engine STATIC
     src/private/modules/EngineModuleSdkAdapter.hpp
     src/modules/EngineModuleSdkAdapter.cpp
     src/core/ConsoleCommands.cpp
+    src/core/ProfilerRegistry.cpp
     src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
     src/audio/AudioMixerAssetIO.cpp
@@ -1896,6 +1898,11 @@ if(BUILD_TESTING)
     kb_apply_quality_gates(kb_blend_space_2d_tests)
     add_test(NAME kb_blend_space_2d_tests COMMAND kb_blend_space_2d_tests)
     set_tests_properties(kb_blend_space_2d_tests PROPERTIES LABELS "animation;geometry" TIMEOUT 30)
+    add_executable(kb_profiler_registry_tests tests/ProfilerRegistryTests.cpp src/core/ProfilerRegistry.cpp)
+    target_include_directories(kb_profiler_registry_tests PRIVATE include)
+    kb_apply_quality_gates(kb_profiler_registry_tests)
+    add_test(NAME kb_profiler_registry_tests COMMAND kb_profiler_registry_tests)
+    set_tests_properties(kb_profiler_registry_tests PROPERTIES LABELS "profiler" TIMEOUT 30)
     if(MSVC)
         find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
         add_executable(kb_test_process_error_tests tests/TestProcessErrorsProbe.cpp)
