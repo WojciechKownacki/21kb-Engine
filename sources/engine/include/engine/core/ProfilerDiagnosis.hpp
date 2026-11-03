@@ -23,6 +23,10 @@ struct DiagnosisFinding {
     double value = 0.0;
     double limit = 0.0;
     double gainMilliseconds = 0.0;
+
+    // What names the finding from one run of the diagnosis to the next, while its position among
+    // the findings changes: the rule and where it found the problem.
+    [[nodiscard]] std::string Key() const { return rule + "/" + subject; }
 };
 
 // What a rule looks at: the counters with their history and thresholds, and the regions of the

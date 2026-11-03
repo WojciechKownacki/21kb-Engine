@@ -12,7 +12,8 @@ constexpr std::size_t kHistory = ProfilerRegistry::HistoryFrames();
 // A region is worth a finding when it holds this part of its frame and at least this much time.
 constexpr double kHotShare = 0.4;
 constexpr double kHotMilliseconds = 1.0;
-// Memory counts as growing at this much between the first and the last quarter of the history.
+// Memory counts as growing at this much from the start to the end of the newer half of the history,
+// when it is still rising in the end (a scene that has loaded and settled is not a leak).
 constexpr double kGrowthMegabytes = 16.0;
 constexpr double kGrowthFraction = 0.05;
 constexpr double kNanosecondsPerMillisecond = 1'000'000.0;
@@ -67,7 +68,8 @@ private:
     DiagnosisCategory category_;
 };
 
-// Process memory that is higher in the last quarter of the history than in the first.
+// Process memory that keeps rising through the newer half of the history: in its four parts the
+// last is well above the first, and the last step is still a good part of the whole rise.
 class MemoryGrowthRule final : public DiagnosisRule {
 public:
     std::string_view Id() const noexcept override { return "memory_growth"; }
@@ -75,21 +77,26 @@ public:
         std::array<double, kHistory> samples{};
         const std::size_t count = input.registry.Samples(Index(ProfilerBuiltIn::ProcessMemory), samples);
         if (count < kHistory / 2U) return;
-        const std::size_t quarter = count / 4U;
-        const auto mean = [&](std::size_t from) {
-            return std::accumulate(samples.begin() + static_cast<std::ptrdiff_t>(from), samples.begin() + static_cast<std::ptrdiff_t>(from + quarter), 0.0) / static_cast<double>(quarter);
+        constexpr std::size_t kParts = 4U;
+        const std::size_t part = (count - count / 2U) / kParts;
+        const std::size_t begin = count - kParts * part;
+        const auto mean = [&](std::size_t index) {
+            const auto from = samples.begin() + static_cast<std::ptrdiff_t>(begin + index * part);
+            return std::accumulate(from, from + static_cast<std::ptrdiff_t>(part), 0.0) / static_cast<double>(part);
         };
         const double first = mean(0U);
-        const double growth = mean(count - quarter) - first;
-        if (growth < std::max(kGrowthMegabytes, first * kGrowthFraction)) return;
+        const double growth = mean(kParts - 1U) - first;
+        const double lastStep = mean(kParts - 1U) - mean(kParts - 2U);
+        if (growth < std::max(kGrowthMegabytes, first * kGrowthFraction) || lastStep < growth / 6.0) return;
         findings.push_back(DiagnosisFinding{ .rule = std::string{ Id() }, .severity = DiagnosisSeverity::Warning, .category = DiagnosisCategory::Memory,
             .subject = "process_memory_mb", .value = growth, .limit = static_cast<double>(count) });
     }
 };
 
-// A region whose work holds a large part of its frame. Waiting (for the previous frame, for a
-// vsync) is not work that can be made smaller, so a waiting region is never named and the time
-// waited inside a region is not counted for it.
+// A region whose own work holds a large part of its frame. The own time is what the region spends
+// outside the regions inside it, so a container (a tick, a present) that only holds other regions
+// is not named, and neither is waiting (for the previous frame, for a vsync): it is no work that
+// can be made smaller.
 class HotRegionRule final : public DiagnosisRule {
 public:
     std::string_view Id() const noexcept override { return "hot_region"; }
@@ -98,7 +105,7 @@ public:
         if (frame == nullptr || frame->FrameNanoseconds() == 0U) return;
         const double frameNanoseconds = static_cast<double>(frame->FrameNanoseconds());
         std::vector<const ProfilerRegionRow*> hot;
-        const auto work = [](const ProfilerRegionRow& row) { return static_cast<double>(row.totalNanoseconds - std::min(row.waitNanoseconds, row.totalNanoseconds)); };
+        const auto work = [](const ProfilerRegionRow& row) { return static_cast<double>(row.selfNanoseconds); };
         for (const ProfilerRegionRow& row : frame->rows) {
             if (row.waiting || row.depth < 1U) continue;
             if (work(row) / frameNanoseconds >= kHotShare && work(row) >= kHotMilliseconds * kNanosecondsPerMillisecond) hot.push_back(&row);
@@ -108,7 +115,7 @@ public:
         for (std::size_t index = 0U; index < std::min(hot.size(), kMost); ++index) {
             findings.push_back(DiagnosisFinding{ .rule = std::string{ Id() }, .severity = DiagnosisSeverity::Warning, .category = DiagnosisCategory::Cpu,
                 .subject = hot[index]->name, .value = 100.0 * work(*hot[index]) / frameNanoseconds,
-                .limit = 100.0 * kHotShare, .gainMilliseconds = static_cast<double>(hot[index]->selfNanoseconds) / kNanosecondsPerMillisecond });
+                .limit = 100.0 * kHotShare, .gainMilliseconds = work(*hot[index]) / kNanosecondsPerMillisecond });
         }
     }
 };

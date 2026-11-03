@@ -163,18 +163,30 @@ void MemoryThatKeepsGrowing() {
     Require(!Find(ProfilerDiagnosis{}.Run({ registry, frames }), "memory_growth"), "Steady memory raises nothing");
     for (std::size_t index = 0U; index < 240U; ++index) registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::ProcessMemory), 500.0 + static_cast<double>(index));
     const DiagnosisFinding* growth = Find(ProfilerDiagnosis{}.Run({ registry, frames }), "memory_growth");
-    Require(growth && growth->category == DiagnosisCategory::Memory && growth->value > 100.0, "Memory that rises 240 MB in 240 frames is growth");
+    Require(growth && growth->category == DiagnosisCategory::Memory && growth->value > 50.0, "Memory that rises 240 MB in 240 frames is growth");
+    // A scene that loads for 100 frames and then settles is not a leak, however much it took.
+    for (std::size_t index = 0U; index < 240U; ++index) registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::ProcessMemory), 500.0 + 2.0 * static_cast<double>(std::min<std::size_t>(index, 100U)));
+    Require(!Find(ProfilerDiagnosis{}.Run({ registry, frames }), "memory_growth"), "A rise that has stopped is loading, not a leak");
+    // One that settles only a few dozen frames before the end has also stopped.
+    for (std::size_t index = 0U; index < 240U; ++index) registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::ProcessMemory), 500.0 + 2.0 * static_cast<double>(std::min<std::size_t>(index, 150U)));
+    Require(!Find(ProfilerDiagnosis{}.Run({ registry, frames }), "memory_growth"), "A rise that ended 90 frames ago is not a leak");
+    for (std::size_t index = 0U; index < 240U; ++index) registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::ProcessMemory), 500.0 + 2.0 * static_cast<double>(index) + (index % 2U == 0U ? 3.0 : 0.0));
+    Require(Find(ProfilerDiagnosis{}.Run({ registry, frames }), "memory_growth") != nullptr, "A steady rise to the last frame is a leak, also with some noise");
 }
 
 void ARegionThatEatsTheFrame() {
     ProfilerRegistry registry;
     ProfilerFrameRegions frames;
     Require(!Find(ProfilerDiagnosis{}.Run({ registry, frames }), "hot_region"), "No frame, no finding");
-    frames.Capture(1U, OneFrame());  // Update holds 8 of 16 ms
+    frames.Capture(1U, OneFrame());  // Update holds 8 of 16 ms, but only 3 ms are its own: the rest is Physics and the scripts
+    Require(!Find(ProfilerDiagnosis{}.Run({ registry, frames }), "hot_region"), "A container that holds other regions is not named for their time");
+    frames.Capture(2U, {
+        { "Physics", 2 * kMs, 2 * kMs, 2U }, { "Update", 1 * kMs, 12 * kMs, 1U },
+        { "Present", 13 * kMs, 3 * kMs, 1U }, { "Frame", 0U, 20 * kMs, 0U } });  // Update: 10 ms of its own in 20
     const auto findings = ProfilerDiagnosis{}.Run({ registry, frames });
     const DiagnosisFinding* hot = Find(findings, "hot_region");
-    Require(hot && hot->subject == "Update" && std::abs(hot->value - 50.0) < 1e-9 && std::abs(hot->gainMilliseconds - 3.0) < 1e-9, "Update holds half the frame and 3 ms of its own work");
-    Require(std::ranges::count(findings, std::string{ "hot_region" }, &DiagnosisFinding::rule) == 1, "Present (31%) and the rest are under the threshold");
+    Require(hot && hot->subject == "Update" && std::abs(hot->value - 50.0) < 1e-9 && std::abs(hot->gainMilliseconds - 10.0) < 1e-9, "Update's own 10 ms are half the frame");
+    Require(std::ranges::count(findings, std::string{ "hot_region" }, &DiagnosisFinding::rule) == 1, "Physics (2 ms) and Present (3 ms) are under the threshold");
 }
 
 // A frame of 20 ms whose Present takes 16, `waited` of them waiting for the previous frame.
@@ -189,8 +201,8 @@ std::vector<ProfilerTimelineEvent> FrameWithPresent(std::uint64_t waited) {
 void WaitingIsNotWork() {
     const std::vector<ProfilerRegionRow> rows = ProfilerFrameRegions::Aggregate(FrameWithPresent(14 * kMs));
     Require(rows.size() == 3U && rows[2].waiting && !rows[1].waiting && !rows[0].waiting, "Only the region recorded as waiting is waiting");
-    Require(rows[2].waitNanoseconds == 14 * kMs && rows[1].waitNanoseconds == 14 * kMs && rows[0].waitNanoseconds == 14 * kMs, "The time waited counts for every region that contains the wait");
     Require(rows[1].selfNanoseconds == 2 * kMs, "Present less the wait is 2 ms of its own work");
+    Require(rows[2].selfNanoseconds == 14 * kMs, "The wait has the time that the diagnosis must still not name");
 
     ProfilerRegistry registry;
     ProfilerFrameRegions frames;

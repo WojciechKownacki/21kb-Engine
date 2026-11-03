@@ -81,12 +81,16 @@ public:
     // How many readings the counter has ever had; a tool that records frames compares it between
     // two frames to tell a fresh reading from one left over.
     [[nodiscard]] std::uint64_t PublishCount(std::size_t counter) const;
+    // The readings the counter holds now: the last of its history, fewer after the history is cleared.
+    [[nodiscard]] std::size_t SampleCount(std::size_t counter) const { return entries_.at(counter).count; }
     // Replaces the thresholds a counter turns Warning and Alarm at (zero: none).
     void SetThresholds(std::size_t counter, double budget, double alarm);
     // Back to the thresholds the counter was built with (none for a custom counter).
     void ResetThresholds(std::size_t counter);
     // Forgets the readings, not the counters.
     void ClearHistory() noexcept;
+    // Forgets the readings of the counters of one area, which is no longer measured.
+    void ClearHistory(ProfilerArea area) noexcept;
     [[nodiscard]] ProfilerCounterStats Stats(std::size_t counter) const;
     // Oldest to newest; returns the number of readings written, at most out.size().
     [[nodiscard]] std::size_t Samples(std::size_t counter, std::span<double> out) const;

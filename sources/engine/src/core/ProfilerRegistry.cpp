@@ -106,6 +106,14 @@ void ProfilerRegistry::ClearHistory() noexcept {
     }
 }
 
+void ProfilerRegistry::ClearHistory(ProfilerArea area) noexcept {
+    for (Entry& entry : entries_) {
+        if (entry.info.area != area) continue;
+        entry.head = 0U;
+        entry.count = 0U;
+    }
+}
+
 void ProfilerRegistry::SetThresholds(std::size_t counter, double budget, double alarm) {
     ProfilerCounterInfo& info = entries_.at(counter).info;
     info.budget = budget;
