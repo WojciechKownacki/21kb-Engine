@@ -29,12 +29,13 @@ struct ProfilerPanelState {
     int hierarchyScroll = 0;
     int countersScroll = 0;
     int findingsScroll = 0;
-    // The finding the details show: its position among the findings that are listed.
-    int selectedFinding = -1;
+    // The finding the details show, by DiagnosisFinding::Key(); empty when none is picked. The list
+    // is rebuilt and sorted by every run of the diagnosis, so a position would drift to another one.
+    std::string selectedFinding;
     std::array<bool, 3> showSeverity{ true, true, true };
     std::array<bool, 4> showCategory{ true, true, true, true };
     bool showIgnored = false;
-    // "rule/subject" of findings the user chose to ignore, until the next session.
+    // DiagnosisFinding::Key() of findings the user chose to ignore, until the next session.
     std::set<std::string> ignored;
     // Where the last recording or snapshot went, or why it did not.
     std::string lastSaved;
@@ -79,6 +80,24 @@ public:
         synced_ = true;
     }
 
+    // What an area that is not measured keeps is stale: its readings would be shown as live and
+    // the diagnosis would judge them. Only what is measured stays, and a frame's regions are CPU's.
+    void ForgetUnmeasured(const ProfilerSelection& selection) {
+        for (const kb::core::ProfilerArea area : { kb::core::ProfilerArea::Cpu, kb::core::ProfilerArea::Gpu, kb::core::ProfilerArea::Render,
+                 kb::core::ProfilerArea::Ecs, kb::core::ProfilerArea::Memory }) {
+            if (!selection.AreaMeasured(area)) registry_.ClearHistory(area);
+        }
+        if (!selection.AreaMeasured(kb::core::ProfilerArea::Cpu)) frameRegions_.Clear();
+    }
+
+    // Whether the GPU time of the bgfx frame `frame` is one not taken yet; bgfx repeats a result
+    // until the next is ready.
+    [[nodiscard]] bool NewGpuFrame(std::uint32_t frame) noexcept {
+        if (gpuFrame_ == frame) return false;
+        gpuFrame_ = frame;
+        return true;
+    }
+
     // Runs the diagnosis over what has been measured; the panel's list of findings is its result.
     void Diagnose() { findings_ = diagnosis_.Run({ registry_, frameRegions_ }); }
 
@@ -99,7 +118,7 @@ public:
         frameRegions_.Clear();
         findings_.clear();
         panel_.selectedFrame.reset();
-        panel_.selectedFinding = -1;
+        panel_.selectedFinding.clear();
     }
 
     // Rebuilds the scene's model when the refresh interval has passed, or at once when asked to.
@@ -127,6 +146,7 @@ private:
     std::uint64_t frame_ = 0U;
     std::uint64_t recordingStartNanoseconds_ = 0U;
     std::optional<double> gameTickMilliseconds_;
+    std::optional<std::uint32_t> gpuFrame_;
     bool synced_ = false;
     bool windowOpen_ = false;
 };

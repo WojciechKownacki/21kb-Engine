@@ -1020,6 +1020,59 @@
       "id": "frame_ms",
       "available": true,
       "samples": 10
+    },
+    {
+      "op": "profiler_select",
+      "preset": "everything"
+    },
+    {
+      "op": "profiler_sample",
+      "frames": 240,
+      "frame_ms": [
+        30.0
+      ],
+      "game_ms": [
+        14.0
+      ]
+    },
+    {
+      "op": "assert_profiler_finding",
+      "rule": "frame_over_budget",
+      "present": true
+    },
+    {
+      "op": "profiler_select",
+      "areas": []
+    },
+    {
+      "op": "profiler_sample",
+      "frames": 16,
+      "frame_ms": [
+        30.0
+      ],
+      "game_ms": [
+        14.0
+      ]
+    },
+    {
+      "op": "assert_profiler_counter",
+      "id": "frame_ms",
+      "available": false
+    },
+    {
+      "op": "assert_profiler_finding",
+      "rule": "frame_over_budget",
+      "present": false
+    },
+    {
+      "op": "assert_profiler_finding",
+      "rule": "hot_region",
+      "present": false
+    },
+    {
+      "op": "assert_profiler_finding",
+      "rule": "frame_spikes",
+      "present": false
     }
   ]
 }

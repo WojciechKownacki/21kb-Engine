@@ -320,6 +320,7 @@ private:
     void ReportAaTrace(std::string_view message, bool force = false);
     void ReportAaRouteTrace(std::string_view message, bool force = false);
     void ReportGpuParticleRejection();
+    void NoteTextOverlayResult(bool drawn);
     void SetFailureDetail(std::string detail);
     void TrackPaintHost(HWND parent) noexcept;
     void FailRender(const char* reason) noexcept;
@@ -342,6 +343,7 @@ private:
     bool presentRequested_ = true;
     bool renderFailed_ = false;
     bool renderFailureReported_ = false;
+    bool textOverlayFailureReported_ = false;
     // MAT-72: wall-clock between submitted frames so animated graph materials (Time / Panner / Rotator)
     // advance u_time in the live editor, not only in tests.
     std::chrono::steady_clock::time_point lastFrameClock_{};

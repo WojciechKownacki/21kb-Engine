@@ -92,6 +92,8 @@ struct ProfilerCounterRow {
 
 // The findings the panel lists: those the filters let through.
 [[nodiscard]] std::vector<const kb::core::DiagnosisFinding*> ProfilerVisibleFindings(const EditorProfilerState& profiler);
+// The finding the details show: the picked one, if it is still listed; nullptr when none.
+[[nodiscard]] const kb::core::DiagnosisFinding* ProfilerSelectedFinding(const EditorProfilerState& profiler);
 
 // The hits of the current tab: buttons, rows, cells and chart areas.
 [[nodiscard]] std::vector<ProfilerPanelHit> ProfilerPanelHits(const ProfilerPanelGeometry& geometry,
@@ -101,8 +103,12 @@ struct ProfilerCounterRow {
 [[nodiscard]] int ProfilerFrameOffsetAt(const RECT& plot, int x, std::size_t samples);
 [[nodiscard]] int ProfilerFrameX(const RECT& plot, std::size_t offsetFromNewest);
 
-// The number of the frame the panel shows: the selected one while it is still in the history,
-// else the latest. Empty before any frame.
+// The oldest frame the charts still hold: the frames are numbered as they are sampled, but the
+// charts and the regions hold only what was measured since the measurements were last cleared or an
+// area was last switched on, so the newest readings are the newest frames and no more.
+[[nodiscard]] std::uint64_t ProfilerOldestFrame(const EditorProfilerState& profiler);
+// The number of the frame the panel shows: the selected one while it is still held, else the
+// latest. Empty before any frame.
 [[nodiscard]] std::optional<std::uint64_t> ProfilerShownFrame(const EditorProfilerState& profiler);
 
 #endif

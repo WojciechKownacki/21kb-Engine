@@ -218,9 +218,10 @@ using Outcome = std::pair<bool, std::string>;
     const auto& findings = context.Profiler().Findings();
     const auto found = std::ranges::find(findings, *rule, &kb::core::DiagnosisFinding::rule);
     std::string detail = "finding " + *rule + (found == findings.end() ? " absent" : " present");
-    if (found == findings.end() || !severity) return { !present.value(), detail };
+    if ((found != findings.end()) != present.value()) return { false, detail };
+    if (found == findings.end() || !severity) return { true, detail };
     const std::array<std::string_view, 3> names{ "problem", "warning", "tip" };
-    return { present.value() && names[static_cast<std::size_t>(found->severity)] == *severity, detail + " as " + std::string{ names[static_cast<std::size_t>(found->severity)] } };
+    return { names[static_cast<std::size_t>(found->severity)] == *severity, detail + " as " + std::string{ names[static_cast<std::size_t>(found->severity)] } };
 }
 
 // Opens the panel as the Options menu does, then checks where it went: shown, in a group of its own

@@ -1,14 +1,21 @@
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
+#include "profiler/EditorProfilerRegions.hpp"
 #include "profiler/ProfilerOverlayLayout.hpp"
+#include "profiler/ProfilerFiles.hpp"
 #include "profiler/ProfilerPanelLayout.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "settings/EditorConfigurationStore.hpp"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
+#include <set>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -119,7 +126,11 @@ void RunFramePickingTest() {
 
     EditorProfilerState profiler;
     Require(!ProfilerShownFrame(profiler), "No frame before any is sampled");
-    for (int frame = 0; frame < 300; ++frame) profiler.NextFrame();
+    const auto sampleFrame = [&] {
+        profiler.NextFrame();
+        profiler.Registry().Publish(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime), 10.0);
+    };
+    for (int frame = 0; frame < 300; ++frame) sampleFrame();
     Require(ProfilerShownFrame(profiler) == 300U, "Following the latest frame");
     profiler.Panel().selectedFrame = 60U;
     Require(ProfilerShownFrame(profiler) == 300U, "A frame that left the history is not shown");
@@ -127,6 +138,16 @@ void RunFramePickingTest() {
     Require(ProfilerShownFrame(profiler) == 150U, "A frame still in the history is");
     profiler.Panel().selectedFrame = 400U;
     Require(ProfilerShownFrame(profiler) == 300U, "A frame that does not exist yet is not shown");
+
+    // After the measurements are cleared the charts hold only the frames sampled since, so the frames
+    // before are gone from them (their number is no column of a chart) and the oldest is not 61.
+    profiler.ClearMeasurements();
+    for (int frame = 0; frame < 50; ++frame) sampleFrame();
+    Require(ProfilerOldestFrame(profiler) == 301U && ProfilerShownFrame(profiler) == 350U, "Fifty frames since the clear: 301 to 350");
+    profiler.Panel().selectedFrame = 300U;
+    Require(ProfilerShownFrame(profiler) == 350U, "A frame from before the clear is not shown");
+    profiler.Panel().selectedFrame = 320U;
+    Require(ProfilerShownFrame(profiler) == 320U && ProfilerFrameOffsetAt(RECT{ 170, 0, 770, 64 }, ProfilerFrameX(RECT{ 170, 0, 770, 64 }, 30U), 50U) == 30, "A frame since the clear is, 30 columns from the newest");
 }
 
 void RunFindingFiltersTest() {
@@ -137,6 +158,23 @@ void RunFindingFiltersTest() {
     }
     profiler.Diagnose();
     Require(ProfilerVisibleFindings(profiler).size() == 2U, "Draw calls and triangles over their thresholds");
+    // The picked finding is the one whose details show, wherever the next run puts it in the list.
+    profiler.Panel().selectedFinding = ProfilerVisibleFindings(profiler)[1]->Key();
+    Require(ProfilerSelectedFinding(profiler) != nullptr && ProfilerSelectedFinding(profiler)->rule == "draw_calls_high", "The triangles are a problem and come first, so the draw calls are the second");
+    for (int index = 0; index < 240; ++index) profiler.Registry().Publish(ProfilerRegistry::Id(ProfilerBuiltIn::Triangles), 100.0);
+    profiler.Diagnose();
+    Require(ProfilerVisibleFindings(profiler).size() == 1U && ProfilerSelectedFinding(profiler) != nullptr && ProfilerSelectedFinding(profiler)->rule == "draw_calls_high",
+        "The draw calls moved to the first place and are still the picked finding");
+    for (int index = 0; index < 240; ++index) profiler.Registry().Publish(ProfilerRegistry::Id(ProfilerBuiltIn::DrawCalls), 100.0);
+    profiler.Diagnose();
+    Require(ProfilerSelectedFinding(profiler) == nullptr, "A picked finding that is gone shows no details");
+    for (int index = 0; index < 240; ++index) {
+        profiler.Registry().Publish(ProfilerRegistry::Id(ProfilerBuiltIn::DrawCalls), 3000.0);
+        profiler.Registry().Publish(ProfilerRegistry::Id(ProfilerBuiltIn::Triangles), 6'000'000.0);
+    }
+    profiler.Diagnose();
+    Require(ProfilerSelectedFinding(profiler) != nullptr && ProfilerSelectedFinding(profiler)->rule == "draw_calls_high", "A finding that comes back is the picked one again");
+    profiler.Panel().selectedFinding.clear();
     profiler.Panel().showSeverity[static_cast<std::size_t>(kb::core::DiagnosisSeverity::Problem)] = false;
     Require(ProfilerVisibleFindings(profiler).size() == 1U && ProfilerVisibleFindings(profiler)[0]->rule == "draw_calls_high", "The severity filter hides the problem");
     profiler.Panel().showSeverity[static_cast<std::size_t>(kb::core::DiagnosisSeverity::Problem)] = true;
@@ -149,6 +187,62 @@ void RunFindingFiltersTest() {
     Require(ProfilerVisibleFindings(profiler).size() == 2U, "Unless ignored ones are asked for");
     profiler.ClearMeasurements();
     Require(profiler.Findings().empty() && !profiler.Registry().Stats(ProfilerRegistry::Id(ProfilerBuiltIn::DrawCalls)).available, "Clearing forgets the measurements and the findings");
+}
+
+void RunGpuFramesTest() {
+    EditorProfilerState profiler;
+    Require(profiler.NewGpuFrame(7U), "The first GPU result is new");
+    Require(!profiler.NewGpuFrame(7U) && !profiler.NewGpuFrame(7U), "bgfx repeats a result until the next is ready, and a repeat is no reading");
+    Require(profiler.NewGpuFrame(8U) && profiler.NewGpuFrame(7U), "A result of another frame is a reading");
+}
+
+void RunSavedFilesTest() {
+    const std::filesystem::path folder = EditorProjectPaths::ProjectRoot() / "Saved" / "Profiler";
+    const auto recordings = [&] {
+        std::set<std::filesystem::path> found;
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(folder, error)) {
+            if (entry.path().filename().string().starts_with("recording-")) found.insert(entry.path());
+        }
+        return found;
+    };
+    const std::set<std::filesystem::path> before = recordings();
+    EditorProfilerState profiler;
+    const std::string first = ProfilerFiles::SaveRecording(profiler);
+    const std::string second = ProfilerFiles::SaveRecording(profiler);
+    std::set<std::filesystem::path> created = recordings();
+    std::error_code error;
+    for (const std::filesystem::path& path : before) created.erase(path);
+    for (const std::filesystem::path& path : created) std::filesystem::remove(path, error);
+    Require(created.size() == 2U && first != second, "Two recordings saved in the same second are two files, the second does not overwrite the first");
+}
+
+void RunFrameRegionsTest() {
+    // A 17 ms frame: 8 ms of game tick whose update took 6 (1 of them syncing transforms) and ran two
+    // systems that took 4 and 8 ms of CPU on several threads, then a 10 ms present that waited 5.
+    constexpr std::uint64_t kMs = 1'000'000U;
+    const std::array<kb::ecs::SystemSchedulerSystemCounters, 2> systems{ kb::ecs::SystemSchedulerSystemCounters{ .systemName = "A", .cpuTimeNanoseconds = 4 * kMs },
+        kb::ecs::SystemSchedulerSystemCounters{ .systemName = "B", .cpuTimeNanoseconds = 8 * kMs } };
+    kb::core::ProfilerCounters regions{ true };
+    RecordProfilerRegions(regions, EditorProfilerFrame{ .presentMilliseconds = 10.0, .beginMilliseconds = 1.0, .mainMilliseconds = 2.0,
+        .endMilliseconds = 6.0, .waitMilliseconds = 5.0, .gameTickMilliseconds = 8.0 },
+        EditorProfilerSceneTimes{ .updateNanoseconds = 6 * kMs, .transformSyncNanoseconds = 1 * kMs, .systems = systems });
+    const std::vector<kb::core::ProfilerRegionRow> rows = kb::core::ProfilerFrameRegions::Aggregate(regions.TimelineEvents());
+    const auto row = [&](std::string_view name) -> const kb::core::ProfilerRegionRow* {
+        const auto found = std::ranges::find(rows, name, &kb::core::ProfilerRegionRow::name);
+        return found == rows.end() ? nullptr : &*found;
+    };
+    const auto within = [](std::uint64_t value, std::uint64_t expected) { return value + 10U >= expected && value <= expected + 10U; };
+    const kb::core::ProfilerRegionRow* update = row("Scene update");
+    const kb::core::ProfilerRegionRow* sync = row("Transform sync");
+    const kb::core::ProfilerRegionRow* a = row("A");
+    const kb::core::ProfilerRegionRow* b = row("B");
+    Require(update && sync && a && b && row("Game tick") && row("Present"), "The frame has its regions");
+    Require(sync->depth == update->depth + 1U && a->depth == update->depth + 1U && b->depth == update->depth + 1U, "The systems and the transform sync are inside the scene update");
+    Require(within(a->totalNanoseconds + b->totalNanoseconds, 5 * kMs) && b->totalNanoseconds > a->totalNanoseconds, "Systems that took 12 ms of CPU in a 5 ms update show their shares of the 5 ms");
+    Require(within(update->selfNanoseconds, 0U) && within(row("Game tick")->selfNanoseconds, 2 * kMs), "The update is its systems and its sync, and the tick has the 2 ms outside it");
+    Require(row("Wait for the previous frame") != nullptr && row("Wait for the previous frame")->waiting && within(row("Wait for the previous frame")->totalNanoseconds, 5 * kMs), "The wait is a waiting region of 5 ms");
+    Require(within(row("End frame")->selfNanoseconds, 1 * kMs) && within(row("Present")->selfNanoseconds, 1 * kMs), "The end of the frame is 1 ms of work and a wait, the present has 1 ms outside its stages");
 }
 
 void RunOverlayAvoidTest() {
@@ -184,6 +278,9 @@ void RunEditorProfilerPanelTests() {
     RunPanelHitsTest();
     RunFramePickingTest();
     RunFindingFiltersTest();
+    RunGpuFramesTest();
+    RunSavedFilesTest();
+    RunFrameRegionsTest();
     RunOverlayAvoidTest();
 #endif
 }

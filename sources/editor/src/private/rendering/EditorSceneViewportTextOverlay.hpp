@@ -27,6 +27,8 @@ struct EditorSceneViewportTextLabel {
     std::array<std::uint8_t, 4U> color{ 255U, 255U, 255U, 255U };
     EditorSceneViewportTextAlign align = EditorSceneViewportTextAlign::Left;
     bool shadow = true;
+
+    [[nodiscard]] bool operator==(const EditorSceneViewportTextLabel&) const = default;
 };
 
 // A translucent panel or a line drawn under the labels. RoundedRect takes two opposite corners;
@@ -39,6 +41,8 @@ struct EditorSceneViewportOverlayShape {
     float radius = 0.0F;
     bool dashed = false;
     std::array<std::uint8_t, 4U> color{ 255U, 255U, 255U, 255U };
+
+    [[nodiscard]] bool operator==(const EditorSceneViewportOverlayShape&) const = default;
 };
 
 #if defined(_WIN32)
@@ -52,6 +56,8 @@ public:
     EditorSceneViewportTextOverlay& operator=(const EditorSceneViewportTextOverlay&) = delete;
 
     [[nodiscard]] bool Ensure(HINSTANCE instance, HWND parent, std::uint32_t width, std::uint32_t height);
+    // Rasterizes the content and puts it on the window; content that is what is already there, at the
+    // place it already is, costs nothing (drawing it again took several milliseconds a frame).
     [[nodiscard]] bool Update(std::span<const EditorSceneViewportTextLabel> labels,
         std::span<const EditorSceneViewportOverlayShape> shapes);
     // Draws the same content on a device context, inside `area` and with its corner as the origin.

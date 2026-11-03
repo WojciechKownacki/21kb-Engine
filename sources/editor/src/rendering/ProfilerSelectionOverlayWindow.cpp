@@ -129,6 +129,8 @@ struct ProfilerSelectionOverlayWindow::Layout {
     RECT preview{}, appearanceHeader{}, linesHeader{};
     RECT panelCaption{}, sceneCaption{};
     int countersContent = 0;
+    // Where the counters list is scrolled to: what the wheel set, held inside the list at this size.
+    int countersScroll = 0;
     std::vector<Item> items;
 };
 
@@ -159,6 +161,7 @@ void ProfilerSelectionOverlayWindow::Show(HWND parent, const EditorTheme& theme,
 void ProfilerSelectionOverlayWindow::Hide() noexcept {
     popup_.Hide();
     hovered_ = -1;
+    counterScroll_ = 0;
     // The preview's fonts are GDI+ objects, which must not outlive the program's GDI+ session.
     previewRenderer_.Destroy();
 }
@@ -268,17 +271,25 @@ ProfilerSelectionOverlayWindow::Layout ProfilerSelectionOverlayWindow::BuildLayo
     layout.sceneCaption = RECT{ layout.countersColumn.right - kCellWidth, layout.countersCaption.top, layout.countersColumn.right, layout.countersCaption.bottom };
     layout.panelCaption = RECT{ layout.sceneCaption.left - kCellWidth, layout.countersCaption.top, layout.sceneCaption.left, layout.countersCaption.bottom };
     std::string_view lastGroup;
+    int total = 0;
+    for (std::size_t counter = 0U; counter < registry.CounterCount(); ++counter) {
+        total += (registry.Info(counter).group != lastGroup ? 2 : 1) * kRowHeight;
+        lastGroup = registry.Info(counter).group;
+    }
+    // A window made taller since the wheel was used holds more of the list, so the scroll is held inside it.
+    layout.countersScroll = std::clamp(counterScroll_, 0, std::max(0, total - static_cast<int>(layout.countersList.bottom - layout.countersList.top)));
+    lastGroup = {};
     int content = 0;
     for (std::size_t counter = 0U; counter < registry.CounterCount(); ++counter) {
         const kb::core::ProfilerCounterInfo& info = registry.Info(counter);
         if (info.group != lastGroup) {
             lastGroup = info.group;
-            const int top = layout.countersList.top + content - counterScroll_;
+            const int top = layout.countersList.top + content - layout.countersScroll;
             add({ .kind = Kind::GroupHeader, .bounds = RECT{ layout.countersList.left, top, layout.countersList.right, top + kRowHeight },
                   .text = std::string{ ProfilerText::Group(info.group) } });
             content += kRowHeight;
         }
-        const int top = layout.countersList.top + content - counterScroll_;
+        const int top = layout.countersList.top + content - layout.countersScroll;
         const RECT row{ layout.countersList.left, top, layout.countersList.right, top + kRowHeight };
         const bool measured = selection.AreaMeasured(info.area);
         add({ .kind = Kind::CounterName, .bounds = row, .text = std::string{ ProfilerText::Counter(info) }, .enabled = measured });
@@ -519,7 +530,7 @@ void ProfilerSelectionOverlayWindow::PaintOverlay(HDC dc, const RECT& client) {
     if (layout.countersContent > listHeight) {
         const RECT track{ layout.countersList.right - 8, layout.countersList.top, layout.countersList.right - 2, layout.countersList.bottom };
         const int thumbHeight = std::max(24, listHeight * listHeight / layout.countersContent);
-        const int thumbTop = track.top + counterScroll_ * (listHeight - thumbHeight) / (layout.countersContent - listHeight);
+        const int thumbTop = track.top + layout.countersScroll * (listHeight - thumbHeight) / (layout.countersContent - listHeight);
         EditorDialogStyle::PaintScrollbar(dc, track, RECT{ track.left, thumbTop, track.right, thumbTop + thumbHeight }, theme);
     }
 }
@@ -620,7 +631,7 @@ bool ProfilerSelectionOverlayWindow::HandleOverlayMessage(UINT message, WPARAM w
         if (!Contains(layout.countersColumn, point.x, point.y)) return true;
         const int listHeight = layout.countersList.bottom - layout.countersList.top;
         const int most = std::max(0, layout.countersContent - listHeight);
-        counterScroll_ = std::clamp(counterScroll_ - GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA * 3 * kRowHeight, 0, most);
+        counterScroll_ = std::clamp(layout.countersScroll - GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA * 3 * kRowHeight, 0, most);
         popup_.Invalidate();
         return true;
     }

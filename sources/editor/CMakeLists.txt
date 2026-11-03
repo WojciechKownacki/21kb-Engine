@@ -473,6 +473,7 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/settings/EditorConfigurationStore.hpp
     src/private/profiler/EditorProfilerSampler.hpp
+    src/private/profiler/EditorProfilerRegions.hpp
     src/private/profiler/ProfilerFiles.hpp
     src/private/profiler/ProfilerPanel.hpp
     src/private/profiler/ProfilerPanelLayout.hpp
@@ -967,6 +968,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneViewportStateStore.cpp
     src/settings/EditorConfigurationStore.cpp
     src/profiler/EditorProfilerSampler.cpp
+    src/profiler/EditorProfilerRegions.cpp
     src/profiler/ProfilerFiles.cpp
     src/profiler/ProfilerFindingText.cpp
     src/profiler/ProfilerPanelController.cpp
@@ -1427,6 +1429,8 @@ if(BUILD_TESTING)
             src/profiler/ProfilerOverlayLayout.cpp
             src/profiler/ProfilerOverlayModel.cpp
             src/profiler/ProfilerPanelLayout.cpp
+            src/profiler/EditorProfilerRegions.cpp
+            src/profiler/ProfilerFiles.cpp
             src/profiler/ProfilerSelection.cpp
             src/docking/EditorWorkspaceArrangement.cpp
             src/rendering/FloatingPanelGeometry.cpp

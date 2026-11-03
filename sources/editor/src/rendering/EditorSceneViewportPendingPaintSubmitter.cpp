@@ -138,12 +138,14 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
     }
     if (overlaySettings->viewportTextLabels.empty() && overlaySettings->viewportOverlayShapes.empty()) {
         surface->textOverlay.Hide();
-    } else if (!surface->textOverlay.Ensure(
-                   viewport_.instance_, surface->clipWindow,
-                   RectWidth(surface->rect), RectHeight(surface->rect)) ||
-        !surface->textOverlay.Update(overlaySettings->viewportTextLabels, overlaySettings->viewportOverlayShapes)) {
-        viewport_.SetFailureDetail("Viewport text overlay could not rasterize or present its labels.");
-        return false;
+    } else {
+        // The overlay is the numbers over the scene: when it cannot be drawn the scene still is.
+        const bool drawn = surface->textOverlay.Ensure(
+                               viewport_.instance_, surface->clipWindow,
+                               RectWidth(surface->rect), RectHeight(surface->rect)) &&
+            surface->textOverlay.Update(overlaySettings->viewportTextLabels, overlaySettings->viewportOverlayShapes);
+        if (!drawn) surface->textOverlay.Hide();
+        viewport_.NoteTextOverlayResult(drawn);
     }
     surface->presentedInCurrentPaint = true;
     return true;

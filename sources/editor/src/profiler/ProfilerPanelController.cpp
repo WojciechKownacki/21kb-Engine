@@ -74,11 +74,6 @@ void EditThreshold(HWND owner, EditorSceneContext& context, std::size_t counter,
     Commit(context, selection);
 }
 
-[[nodiscard]] std::uint64_t OldestFrame(const EditorProfilerState& profiler) {
-    const std::uint64_t latest = profiler.Frame();
-    return latest > ProfilerRegistry::HistoryFrames() ? latest - ProfilerRegistry::HistoryFrames() + 1U : 1U;
-}
-
 void StartOrStopRecording(EditorSceneContext& context) {
     EditorProfilerState& profiler = context.Profiler();
     ProfilerPanelState& panel = profiler.Panel();
@@ -113,11 +108,11 @@ void Activate(HWND owner, const ProfilerPanelGeometry& geometry, const ProfilerP
     case Action::Record: StartOrStopRecording(context); selectionChanged = false; break;
     case Action::Pause: panel.paused = !panel.paused; selectionChanged = false; break;
     case Action::Clear: profiler.ClearMeasurements(); selectionChanged = false; break;
-    case Action::FirstFrame: if (profiler.Frame() > 0U) panel.selectedFrame = OldestFrame(profiler); selectionChanged = false; break;
+    case Action::FirstFrame: if (profiler.Frame() > 0U) panel.selectedFrame = ProfilerOldestFrame(profiler); selectionChanged = false; break;
     case Action::PreviousFrame: case Action::NextFrame: {
         const std::optional<std::uint64_t> shown = ProfilerShownFrame(profiler);
         if (shown) {
-            panel.selectedFrame = hit.action == Action::PreviousFrame ? std::max(OldestFrame(profiler), *shown - (*shown > 1U ? 1U : 0U)) : std::min(profiler.Frame(), *shown + 1U);
+            panel.selectedFrame = hit.action == Action::PreviousFrame ? std::max(ProfilerOldestFrame(profiler), *shown - (*shown > 1U ? 1U : 0U)) : std::min(profiler.Frame(), *shown + 1U);
         }
         selectionChanged = false;
         break;
@@ -158,17 +153,20 @@ void Activate(HWND owner, const ProfilerPanelGeometry& geometry, const ProfilerP
         selectionChanged = false;
         break;
     }
-    case Action::Severity: panel.showSeverity[static_cast<std::size_t>(hit.argument)] = !panel.showSeverity[static_cast<std::size_t>(hit.argument)]; panel.selectedFinding = -1; selectionChanged = false; break;
-    case Action::Category: panel.showCategory[static_cast<std::size_t>(hit.argument)] = !panel.showCategory[static_cast<std::size_t>(hit.argument)]; panel.selectedFinding = -1; selectionChanged = false; break;
-    case Action::ShowIgnored: panel.showIgnored = !panel.showIgnored; panel.selectedFinding = -1; selectionChanged = false; break;
-    case Action::Finding: panel.selectedFinding = hit.argument; selectionChanged = false; break;
+    case Action::Severity: panel.showSeverity[static_cast<std::size_t>(hit.argument)] = !panel.showSeverity[static_cast<std::size_t>(hit.argument)]; panel.selectedFinding.clear(); selectionChanged = false; break;
+    case Action::Category: panel.showCategory[static_cast<std::size_t>(hit.argument)] = !panel.showCategory[static_cast<std::size_t>(hit.argument)]; panel.selectedFinding.clear(); selectionChanged = false; break;
+    case Action::ShowIgnored: panel.showIgnored = !panel.showIgnored; panel.selectedFinding.clear(); selectionChanged = false; break;
+    case Action::Finding: {
+        const std::vector<const kb::core::DiagnosisFinding*> findings = ProfilerVisibleFindings(profiler);
+        if (hit.argument >= 0 && hit.argument < static_cast<int>(findings.size())) panel.selectedFinding = findings[static_cast<std::size_t>(hit.argument)]->Key();
+        selectionChanged = false;
+        break;
+    }
     case Action::ShowInMeasurements: panel.tab = ProfilerPanelTab::Measurements; selectionChanged = false; break;
     case Action::IgnoreFinding: {
-        const std::vector<const kb::core::DiagnosisFinding*> findings = ProfilerVisibleFindings(profiler);
-        if (panel.selectedFinding >= 0 && panel.selectedFinding < static_cast<int>(findings.size())) {
-            const kb::core::DiagnosisFinding& finding = *findings[static_cast<std::size_t>(panel.selectedFinding)];
-            panel.ignored.insert(finding.rule + "/" + finding.subject);
-            panel.selectedFinding = -1;
+        if (const kb::core::DiagnosisFinding* finding = ProfilerSelectedFinding(profiler)) {
+            panel.ignored.insert(finding->Key());
+            panel.selectedFinding.clear();
         }
         selectionChanged = false;
         break;

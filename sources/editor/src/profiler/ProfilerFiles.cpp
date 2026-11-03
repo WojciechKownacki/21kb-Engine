@@ -12,13 +12,16 @@
 namespace kb::editor {
 namespace {
 
-// Writes `text` to a new file `<kind>-<time>.csv` and says where it went.
+// Writes `text` to a new file `<kind>-<time>.csv` (`<kind>-<time>-2.csv` when that second already has
+// one, so a file is never overwritten) and says where it went.
 [[nodiscard]] std::string Write(std::string_view kind, const std::string& text) {
     const std::filesystem::path folder = EditorProjectPaths::ProjectRoot() / "Saved" / "Profiler";
     std::error_code error;
     std::filesystem::create_directories(folder, error);
     const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-    const std::filesystem::path path = folder / std::format("{}-{:%Y%m%d-%H%M%S}.csv", kind, now);
+    const std::string stem = std::format("{}-{:%Y%m%d-%H%M%S}", kind, now);
+    std::filesystem::path path = folder / (stem + ".csv");
+    for (int copy = 2; std::filesystem::exists(path, error); ++copy) path = folder / std::format("{}-{}.csv", stem, copy);
     std::ofstream output{ path, std::ios::binary | std::ios::trunc };
     if (error || !output.is_open() || !(output << text).flush()) {
         return EditorLocalization::Format("profiler.panel.save_failed", "Could not write {path}", { { "path", path.generic_string() } });

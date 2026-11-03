@@ -691,7 +691,7 @@ private:
         double gain = 0.0;
         bool overBudget = false;
         for (const kb::core::DiagnosisFinding& finding : profiler_.Findings()) {
-            if (state.ignored.contains(finding.rule + "/" + finding.subject)) continue;
+            if (state.ignored.contains(finding.Key())) continue;
             if (finding.rule == "frame_over_budget") { gain = std::max(0.0, finding.gainMilliseconds); overBudget = true; }
             else if (!overBudget) gain += std::max(0.0, finding.gainMilliseconds);
         }
@@ -728,8 +728,8 @@ private:
             const RECT r = Rect(list.left, list.top + static_cast<int>(index) * kFindingHeight - state.findingsScroll, list.right,
                 list.top + static_cast<int>(index + 1U) * kFindingHeight - state.findingsScroll);
             if (r.bottom <= list.top || r.top >= list.bottom) continue;
-            const bool ignored = state.ignored.contains(finding.rule + "/" + finding.subject);
-            if (static_cast<int>(index) == state.selectedFinding) c.Fill(r, theme_.tabActive);
+            const bool ignored = state.ignored.contains(finding.Key());
+            if (!state.selectedFinding.empty() && finding.Key() == state.selectedFinding) c.Fill(r, theme_.tabActive);
             c.Fill(Rect(r.left, r.bottom - 1, r.right, r.bottom), theme_.borderChrome);
             const EditorColor tone = SeverityTone(finding.severity);
             c.Pill(Rect(r.left + kPad, r.top + 14, r.left + kPad + 80, r.top + 34), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));
@@ -746,14 +746,13 @@ private:
         const RECT r = geometry_.right;
         c.Fill(r, theme_.strip);
         c.Fill(Rect(r.left, r.top, r.left + 1, r.bottom), theme_.borderChrome);
-        const std::vector<const kb::core::DiagnosisFinding*> findings = ProfilerVisibleFindings(profiler_);
-        const int selected = profiler_.Panel().selectedFinding;
+        const kb::core::DiagnosisFinding* selected = ProfilerSelectedFinding(profiler_);
         PaintSectionHeader(Rect(r.left + 1, r.top, r.right, r.top + 28), std::string{ EditorText("profiler.diagnosis.details", "Details") });
-        if (selected < 0 || selected >= static_cast<int>(findings.size())) {
+        if (selected == nullptr) {
             c.Text(Rect(r.left + 12, r.top + 40, r.right - 12, r.top + 100), std::string{ EditorText("profiler.diagnosis.pick", "Pick a finding to see why it hurts and what to do.") }, theme_.textDisabled, 11, FW_NORMAL, DT_LEFT | DT_TOP | DT_WORDBREAK);
             return;
         }
-        const kb::core::DiagnosisFinding& finding = *findings[static_cast<std::size_t>(selected)];
+        const kb::core::DiagnosisFinding& finding = *selected;
         const EditorColor tone = SeverityTone(finding.severity);
         int y = r.top + 38;
         c.Pill(Rect(r.left + 12, y, r.left + 12 + 80, y + 20), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));

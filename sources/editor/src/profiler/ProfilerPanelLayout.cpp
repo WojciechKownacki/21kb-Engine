@@ -187,12 +187,19 @@ std::vector<const kb::core::DiagnosisFinding*> ProfilerVisibleFindings(const Edi
     const ProfilerPanelState& state = profiler.Panel();
     std::vector<const kb::core::DiagnosisFinding*> visible;
     for (const kb::core::DiagnosisFinding& finding : profiler.Findings()) {
-        const bool ignored = state.ignored.contains(finding.rule + "/" + finding.subject);
-        if (ignored && !state.showIgnored) continue;
+        if (state.ignored.contains(finding.Key()) && !state.showIgnored) continue;
         if (!state.showSeverity[static_cast<std::size_t>(finding.severity)] || !state.showCategory[static_cast<std::size_t>(finding.category)]) continue;
         visible.push_back(&finding);
     }
     return visible;
+}
+
+const kb::core::DiagnosisFinding* ProfilerSelectedFinding(const EditorProfilerState& profiler) {
+    const std::string& key = profiler.Panel().selectedFinding;
+    for (const kb::core::DiagnosisFinding* finding : ProfilerVisibleFindings(profiler)) {
+        if (!key.empty() && finding->Key() == key) return finding;
+    }
+    return nullptr;
 }
 
 ProfilerCounterColumns ResolveProfilerCounterColumns(const RECT& rows) {
@@ -223,12 +230,17 @@ int ProfilerFrameX(const RECT& plot, std::size_t offsetFromNewest) {
     return static_cast<int>(std::lround(plot.right - static_cast<double>(offsetFromNewest) * step));
 }
 
+std::uint64_t ProfilerOldestFrame(const EditorProfilerState& profiler) {
+    const std::uint64_t latest = profiler.Frame();
+    const std::uint64_t held = std::min<std::uint64_t>(profiler.Registry().SampleCount(ProfilerRegistry::Id(kb::core::ProfilerBuiltIn::FrameTime)), latest);
+    return held == 0U ? latest : latest - held + 1U;
+}
+
 std::optional<std::uint64_t> ProfilerShownFrame(const EditorProfilerState& profiler) {
     const std::uint64_t latest = profiler.Frame();
     if (latest == 0U) return std::nullopt;
-    const std::uint64_t oldest = latest > ProfilerRegistry::HistoryFrames() ? latest - ProfilerRegistry::HistoryFrames() + 1U : 1U;
     const std::optional<std::uint64_t>& selected = profiler.Panel().selectedFrame;
-    return selected && *selected >= oldest && *selected <= latest ? *selected : latest;
+    return selected && *selected >= ProfilerOldestFrame(profiler) && *selected <= latest ? *selected : latest;
 }
 
 std::vector<ProfilerPanelHit> ProfilerPanelHits(const ProfilerPanelGeometry& geometry, const EditorProfilerState& profiler, const ProfilerSelection& selection) {

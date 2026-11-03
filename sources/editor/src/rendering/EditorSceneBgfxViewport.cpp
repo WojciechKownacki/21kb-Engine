@@ -151,6 +151,8 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "local shadow light limit reached; remaining lights render without shadows";
     case render::SceneRenderDiagnosticKind::MaterialShadingFallback:
         return "four-target material fallback: extra scattering color or iris data omitted; builtin clearcoat takes precedence over subsurface";
+    case render::SceneRenderDiagnosticKind::ReflectionProbeUnavailable:
+        return "reflection probe unavailable: use at most two valid cube textures with axis-aligned box or sphere bounds";
     case render::SceneRenderDiagnosticKind::GiBoundingBoxFallback:
         return "GI uses solid bounds for meshes without CPU triangles; prepare a mesh GI proxy";
     case render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected:
@@ -932,6 +934,20 @@ void EditorSceneBgfxViewport::ReportAaRouteTrace(std::string_view message, bool 
     }
     lastConsoleAaRouteTrace_ = std::string{ message };
     aaTraceReporter_(lastConsoleAaRouteTrace_);
+}
+
+// A text overlay that cannot be drawn (a missing font, a lost window) costs the viewport its numbers,
+// not its picture: the console names the failure once until the overlay draws again.
+void EditorSceneBgfxViewport::NoteTextOverlayResult(bool drawn) {
+    if (drawn) {
+        textOverlayFailureReported_ = false;
+        return;
+    }
+    if (textOverlayFailureReported_) return;
+    textOverlayFailureReported_ = true;
+    if (errorReporter_) {
+        errorReporter_("The viewport text overlay could not be drawn (Content/EditorShell/Fonts/Roboto-Regular.ttf or its window); the scene keeps presenting without it.");
+    }
 }
 
 void EditorSceneBgfxViewport::ReportGpuParticleRejection() {
