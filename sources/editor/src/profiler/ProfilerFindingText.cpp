@@ -1,4 +1,5 @@
 #include "profiler/ProfilerText.hpp"
+#include "profiler/ProfilerNumber.hpp"
 
 #include "localization/EditorLocalization.hpp"
 
@@ -11,8 +12,8 @@ namespace {
 
 using Values = std::initializer_list<std::pair<std::string_view, std::string>>;
 
-[[nodiscard]] std::string One(double value) { return std::format("{:.1f}", value); }
-[[nodiscard]] std::string Whole(double value) { return std::format("{:.0f}", value); }
+[[nodiscard]] std::string One(double value) { return ProfilerNumber::Fixed(value, 1); }
+[[nodiscard]] std::string Whole(double value) { return ProfilerNumber::Fixed(value, 0); }
 [[nodiscard]] std::string Words(std::string_view text) { return std::string{ text }; }
 
 } // namespace

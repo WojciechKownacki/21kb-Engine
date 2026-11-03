@@ -5,6 +5,7 @@
 #include "engine/core/ProfilerFrameRegions.hpp"
 #include "engine/core/ProfilerRecorder.hpp"
 #include "profiler/ProfilerOverlayModel.hpp"
+#include "scene/EditorHierarchySearchState.hpp"
 
 #include <array>
 #include <chrono>
@@ -41,6 +42,14 @@ struct ProfilerPanelState {
     std::string lastSaved;
 };
 
+// What the "What to show" window is doing: how far its counters list is scrolled and which field's
+// list of choices is open (the window's Item::Kind of the field, -1 when none). It lives with the
+// profiler's state, like the panel's, so a window painted anew for each step still has it.
+struct ProfilerWindowState {
+    int counterScroll = 0;
+    int openField = -1;
+};
+
 // The editor's profiler: the measured values, the regions of each frame, the recording, what the
 // diagnosis found, what the scene shows of them and what the panel and its window are doing. The
 // numbers on the scene change at the pace the options ask for instead of at the pace of the
@@ -59,8 +68,21 @@ public:
     [[nodiscard]] ProfilerPanelState& Panel() noexcept { return panel_; }
     [[nodiscard]] const ProfilerPanelState& Panel() const noexcept { return panel_; }
 
+    // The search box over the counters of the "What to show" window; the editor's keyboard goes to it
+    // while it is focused, like the Console's filter.
+    [[nodiscard]] EditorHierarchySearchState& CounterSearch() noexcept { return counterSearch_; }
+    [[nodiscard]] const EditorHierarchySearchState& CounterSearch() const noexcept { return counterSearch_; }
+
+    [[nodiscard]] ProfilerWindowState& Window() noexcept { return window_; }
+
     [[nodiscard]] bool WindowOpen() const noexcept { return windowOpen_; }
-    void SetWindowOpen(bool open) noexcept { windowOpen_ = open; }
+    void SetWindowOpen(bool open) noexcept {
+        windowOpen_ = open;
+        if (!open) {
+            counterSearch_.Focus(false);
+            window_ = {};
+        }
+    }
 
     [[nodiscard]] const ProfilerOverlayModel& Overlay() const noexcept { return overlay_; }
 
@@ -99,7 +121,21 @@ public:
     }
 
     // Runs the diagnosis over what has been measured; the panel's list of findings is its result.
-    void Diagnose() { findings_ = diagnosis_.Run({ registry_, frameRegions_ }); }
+    void Diagnose() {
+        const auto start = std::chrono::steady_clock::now();
+        findings_ = diagnosis_.Run({ registry_, frameRegions_ });
+        AddOwnCost(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
+
+    // The time the profiler itself took since the last frame was sampled, outside the sampling: the
+    // diagnosis, the scene's numbers, the drawing of the overlay. The next sample adds its own and
+    // publishes the sum as the counter "Profiler (own time)".
+    void AddOwnCost(double milliseconds) noexcept { pendingCostMilliseconds_ += milliseconds; }
+    [[nodiscard]] double TakeOwnCost() noexcept {
+        const double cost = pendingCostMilliseconds_;
+        pendingCostMilliseconds_ = 0.0;
+        return cost;
+    }
 
     // How long the scene's update took before the frame being presented; empty outside Play Mode.
     void NoteGameTick(std::optional<double> milliseconds) noexcept { gameTickMilliseconds_ = milliseconds; }
@@ -128,8 +164,10 @@ public:
         const std::uint8_t rate = selection.overlay.refreshPerSecond;
         const bool due = rate == 0U || now - lastRefresh_ >= std::chrono::milliseconds{ 1000 / rate };
         if (!force && !due) return;
+        const auto start = std::chrono::steady_clock::now();
         overlay_ = BuildProfilerOverlayModel(registry_, selection);
         lastRefresh_ = now;
+        AddOwnCost(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
     }
 
 private:
@@ -140,9 +178,12 @@ private:
     kb::core::ProfilerDiagnosis diagnosis_;
     std::vector<kb::core::DiagnosisFinding> findings_;
     ProfilerPanelState panel_;
+    EditorHierarchySearchState counterSearch_;
+    ProfilerWindowState window_;
     ProfilerOverlayModel overlay_;
     std::vector<ProfilerThreshold> syncedThresholds_;
     std::chrono::steady_clock::time_point lastRefresh_{};
+    double pendingCostMilliseconds_ = 0.0;
     std::uint64_t frame_ = 0U;
     std::uint64_t recordingStartNanoseconds_ = 0U;
     std::optional<double> gameTickMilliseconds_;

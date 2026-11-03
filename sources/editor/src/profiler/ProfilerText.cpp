@@ -2,7 +2,21 @@
 
 #include "localization/EditorLocalization.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+
 namespace kb::editor {
+
+bool ProfilerText::CounterMatches(const kb::core::ProfilerCounterInfo& info, std::string_view query) {
+    const auto lower = [](std::string_view text) {
+        std::string result{ text };
+        std::ranges::transform(result, result.begin(), [](unsigned char ch) { return static_cast<char>(ch < 0x80U ? std::tolower(ch) : ch); });
+        return result;
+    };
+    const std::string wanted = lower(query);
+    return lower(Counter(info)).find(wanted) != std::string::npos || lower(info.id).find(wanted) != std::string::npos;
+}
 
 std::string_view ProfilerText::Counter(const kb::core::ProfilerCounterInfo& info) {
     const std::string_view id = info.id;
@@ -14,6 +28,7 @@ std::string_view ProfilerText::Counter(const kb::core::ProfilerCounterInfo& info
     if (id == "culled_instances") return EditorText("profiler.counter.culled", "Culled instances");
     if (id == "render_thread_ms") return EditorText("profiler.counter.render_thread", "Render thread");
     if (id == "gpu_ms") return EditorText("profiler.counter.gpu", "GPU");
+    if (id == "profiler_ms") return EditorText("profiler.counter.profiler", "Profiler (own time)");
     if (id == "draw_calls") return EditorText("profiler.counter.draw_calls", "Draw calls");
     if (id == "triangles") return EditorText("profiler.counter.triangles", "Triangles");
     if (id == "compute_dispatches") return EditorText("profiler.counter.compute", "Compute dispatches");

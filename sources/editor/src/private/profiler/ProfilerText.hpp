@@ -15,6 +15,9 @@ struct ProfilerText final {
     ProfilerText() = delete;
 
     [[nodiscard]] static std::string_view Counter(const kb::core::ProfilerCounterInfo& info);
+    // Whether the counter answers a search typed into the "What to show" window: the query is a part of
+    // its name in the editor's language or of its id, whatever the case; an empty query matches all.
+    [[nodiscard]] static bool CounterMatches(const kb::core::ProfilerCounterInfo& info, std::string_view query);
     [[nodiscard]] static std::string_view Group(std::string_view englishGroup);
     [[nodiscard]] static std::string_view Area(kb::core::ProfilerArea area);
 

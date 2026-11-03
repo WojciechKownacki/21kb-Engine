@@ -40,7 +40,8 @@ ProfilerPanelGeometry ResolveProfilerPanelGeometry(const RECT& content, const Pr
     ProfilerPanelGeometry geometry;
     geometry.content = content;
     const int width = content.right - content.left;
-    const int leftWidth = width >= 760 ? ProfilerPanelGeometry::kLeftWidth : 200;
+    // The left pane gives room to the table when the panel is not wide.
+    const int leftWidth = width >= 1100 ? ProfilerPanelGeometry::kLeftWidth : width >= 760 ? 220 : 200;
     const int rightWidth = state.tab == ProfilerPanelTab::Diagnosis && width >= 900 ? ProfilerPanelGeometry::kRightWidth : 0;
     geometry.tabs = Rect(content.left, content.top, content.right, content.top + kTabsHeight);
     geometry.toolbar = Rect(content.left, geometry.tabs.bottom, content.right, geometry.tabs.bottom + kToolbarHeight);
@@ -205,15 +206,15 @@ const kb::core::DiagnosisFinding* ProfilerSelectedFinding(const EditorProfilerSt
 ProfilerCounterColumns ResolveProfilerCounterColumns(const RECT& rows) {
     ProfilerCounterColumns columns;
     columns.end = rows.right - 12;
-    columns.scene = columns.end - 48;
+    columns.scene = columns.end - 56;
     columns.spark = columns.scene - 80;
-    columns.alarm = columns.spark - 70;
-    columns.budget = columns.alarm - 70;
-    columns.p95 = columns.budget - 60;
-    columns.maximum = columns.p95 - 60;
-    columns.minimum = columns.maximum - 60;
-    columns.average = columns.minimum - 60;
-    columns.now = columns.average - 72;
+    columns.alarm = columns.spark - 60;
+    columns.budget = columns.alarm - 60;
+    columns.p95 = columns.budget - 58;
+    columns.maximum = columns.p95 - 58;
+    columns.minimum = columns.maximum - 58;
+    columns.average = columns.minimum - 58;
+    columns.now = columns.average - 64;
     columns.name = rows.left + 12 + 24;
     columns.check = rows.left + 12;
     return columns;

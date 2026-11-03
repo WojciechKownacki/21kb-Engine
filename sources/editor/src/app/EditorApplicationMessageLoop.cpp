@@ -797,6 +797,7 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
         const ProfilerSelection& profilerSelection = state.sceneContext.EditorConfig().profiler;
         EditorProfilerState& profiler = state.sceneContext.Profiler();
         const kb::render::SceneRenderSubmitStats renderStats = state.sceneViewport.LastSceneSubmitStats();
+        profiler.AddOwnCost(state.sceneViewport.LastTextOverlayMilliseconds());
         EditorProfilerSampler::Sample(profiler, profilerSelection, state.sceneContext.Scene(),
             EditorProfilerFrame{ .presentMilliseconds = presentMs, .beginMilliseconds = beginMs, .mainMilliseconds = mainMs,
                 .floatingMilliseconds = floatMs, .endMilliseconds = endMs, .waitMilliseconds = state.sceneViewport.LastEndFrameMilliseconds(),

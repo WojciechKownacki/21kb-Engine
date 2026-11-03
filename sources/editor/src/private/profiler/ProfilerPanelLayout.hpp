@@ -67,7 +67,7 @@ struct ProfilerPanelGeometry {
     static constexpr int kFindingHeight = 48;
     static constexpr int kLeftWidth = 250;
     static constexpr int kRightWidth = 272;
-    static constexpr int kLabelWidth = 170;
+    static constexpr int kLabelWidth = 190;
 };
 
 [[nodiscard]] ProfilerPanelGeometry ResolveProfilerPanelGeometry(const RECT& content, const ProfilerPanelState& state, const ProfilerSelection& selection);

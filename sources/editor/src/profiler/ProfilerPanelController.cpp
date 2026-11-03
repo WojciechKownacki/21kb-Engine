@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorTextEntryDialog.hpp"
+#include "profiler/ProfilerNumber.hpp"
 #include "profiler/ProfilerFiles.hpp"
 #include "profiler/ProfilerPanelLayout.hpp"
 #include "profiler/ProfilerText.hpp"
@@ -60,7 +61,7 @@ void EditThreshold(HWND owner, EditorSceneContext& context, std::size_t counter,
     const std::optional<std::string> text = EditorTextEntryDialog::Show(owner, EditorTextEntryDialogDescriptor{
         .title = std::string{ ProfilerText::Counter(info) },
         .label = std::string{ alarm ? EditorText("profiler.panel.alarm_label", "Alarm") : EditorText("profiler.panel.budget_label", "Budget") },
-        .value = current > 0.0 ? std::format("{:g}", current) : std::string{},
+        .value = current > 0.0 ? ProfilerNumber::General(current) : std::string{},
         .hint = std::string{ EditorText("profiler.panel.threshold_hint", "A number; empty for none. Clear both to restore the built-in thresholds.") },
     });
     if (!text) return;

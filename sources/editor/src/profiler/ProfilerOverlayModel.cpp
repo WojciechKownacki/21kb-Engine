@@ -1,4 +1,5 @@
 #include "profiler/ProfilerOverlayModel.hpp"
+#include "profiler/ProfilerNumber.hpp"
 
 #include <algorithm>
 #include <array>
@@ -33,13 +34,13 @@ constexpr std::array<SeriesSource, 3> kSeries{{
 
 std::string FormatProfilerValue(const kb::core::ProfilerCounterInfo& info, double value) {
     switch (info.unit) {
-    case ProfilerUnit::Milliseconds: return std::format("{:.1f} ms", value);
-    case ProfilerUnit::FramesPerSecond: return std::format("{:.1f}", value);
-    case ProfilerUnit::Percent: return std::format("{:.1f}%", value);
+    case ProfilerUnit::Milliseconds: return ProfilerNumber::Fixed(value, 1) + " ms";
+    case ProfilerUnit::FramesPerSecond: return ProfilerNumber::Fixed(value, 1);
+    case ProfilerUnit::Percent: return ProfilerNumber::Fixed(value, 1) + "%";
     case ProfilerUnit::Megabytes:
-        return value >= 1024.0 ? std::format("{:.2f} GB", value / 1024.0) : std::format("{:.0f} MB", value);
+        return value >= 1024.0 ? ProfilerNumber::Fixed(value / 1024.0, 2) + " GB" : ProfilerNumber::Fixed(value, 0) + " MB";
     case ProfilerUnit::Count:
-        return value >= 1'000'000.0 ? std::format("{:.1f} M", value / 1'000'000.0) : std::format("{:.0f}", value);
+        return value >= 1'000'000.0 ? ProfilerNumber::Fixed(value / 1'000'000.0, 1) + " M" : ProfilerNumber::Fixed(value, 0);
     }
     return {};
 }

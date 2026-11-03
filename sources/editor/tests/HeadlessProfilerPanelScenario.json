@@ -364,6 +364,13 @@
     },
     {
       "op": "assert_profiler_counter",
+      "id": "profiler_ms",
+      "available": true,
+      "max_average": 0.25,
+      "samples": 240
+    },
+    {
+      "op": "assert_profiler_counter",
       "id": "frame_ms",
       "available": true,
       "min": 28.0,
@@ -1039,6 +1046,139 @@
       "op": "assert_profiler_finding",
       "rule": "frame_over_budget",
       "present": true
+    },
+    {
+      "op": "assert_profiler_gdi_stable",
+      "frames": 300,
+      "tolerance": 6
+    },
+    {
+      "op": "profiler_panel_click",
+      "action": "tab",
+      "argument": 0,
+      "width": 1920,
+      "height": 300
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab0-100pct",
+      "width": 1920,
+      "height": 300,
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab0-150pct",
+      "width": 1280,
+      "height": 240,
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab0-200pct",
+      "width": 960,
+      "height": 200,
+      "text_fits": true
+    },
+    {
+      "op": "profiler_panel_click",
+      "action": "tab",
+      "argument": 1,
+      "width": 1920,
+      "height": 300
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab1-100pct",
+      "width": 1920,
+      "height": 300,
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab1-150pct",
+      "width": 1280,
+      "height": 240,
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab1-200pct",
+      "width": 960,
+      "height": 200,
+      "text_fits": true
+    },
+    {
+      "op": "profiler_panel_click",
+      "action": "tab",
+      "argument": 2,
+      "width": 1920,
+      "height": 300
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab2-100pct",
+      "width": 1920,
+      "height": 300,
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab2-150pct",
+      "width": 1280,
+      "height": 240,
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "profiler",
+      "checkpoint": "panel-tab2-200pct",
+      "width": 960,
+      "height": 200,
+      "text_fits": true
+    },
+    {
+      "op": "capture_profiler_window",
+      "checkpoint": "window-100pct",
+      "width": 1180,
+      "height": 740,
+      "text_fits": true
+    },
+    {
+      "op": "capture_profiler_window",
+      "checkpoint": "window-150pct",
+      "width": 1180,
+      "height": 680,
+      "text_fits": true
+    },
+    {
+      "op": "capture_profiler_window",
+      "checkpoint": "window-200pct",
+      "width": 920,
+      "height": 500,
+      "text_fits": true
+    },
+    {
+      "op": "capture_profiler_window",
+      "checkpoint": "window-minpct",
+      "width": 900,
+      "height": 500,
+      "text_fits": true
+    },
+    {
+      "op": "profiler_panel_click",
+      "action": "tab",
+      "argument": 0,
+      "width": 1920,
+      "height": 300
     },
     {
       "op": "profiler_select",

@@ -130,6 +130,8 @@ public:
     // How long the last EndFrame took: bgfx::frame waits there for the render thread to finish the
     // previous frame, so this is time spent waiting more than working.
     [[nodiscard]] double LastEndFrameMilliseconds() const noexcept { return lastEndFrameMilliseconds_; }
+    // What drawing the text overlays of the last paint took; an overlay that did not change costs nothing.
+    [[nodiscard]] double LastTextOverlayMilliseconds() const noexcept { return lastTextOverlayMilliseconds_; }
     // Advances renderer-owned asynchronous readbacks without rebuilding or
     // submitting a scene. Used only when no visible viewport advanced the
     // renderer since the previous poll.
@@ -336,6 +338,7 @@ private:
     std::uint64_t rendererBackendGeneration_ = 0;
     std::uint8_t rendererMsaaSamples_ = 0;
     double lastEndFrameMilliseconds_ = 0.0;
+    double lastTextOverlayMilliseconds_ = 0.0;
     HWND contextWindow_ = nullptr;
     HWND paintParent_ = nullptr;
     std::vector<HWND> paintHosts_;

@@ -157,6 +157,12 @@ public:
         int pointSize = 12,
         int weight = FW_NORMAL,
         UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    // How wide a single line of the text is, in pixels, at that size and weight.
+    [[nodiscard]] static int TextWidth(HDC dc, std::string_view text, int pointSize, int weight = FW_NORMAL);
+    // The largest size from `pointSize` down to `smallest` at which the text fits `room` pixels on a
+    // line; `smallest` when none does.
+    [[nodiscard]] static int FittingSize(HDC dc, std::string_view text, int room, int pointSize, int weight = FW_NORMAL, int smallest = 10);
 };
 
 #endif

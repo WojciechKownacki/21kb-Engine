@@ -96,6 +96,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::Submit(std::span<const Pend
 }
 
 bool EditorSceneBgfxViewport::PendingPaintSubmitter::BuildPendingSubmissions(std::span<const PendingPresentBatch> batches) {
+    viewport_.lastTextOverlayMilliseconds_ = 0.0;
     for (const PendingPresentBatch& batch : batches) {
         HostSurface* surface = nullptr;
         if (!PrepareHostSurfaceBatch(batch, surface)) {
@@ -140,10 +141,12 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
         surface->textOverlay.Hide();
     } else {
         // The overlay is the numbers over the scene: when it cannot be drawn the scene still is.
+        const auto overlayStart = std::chrono::steady_clock::now();
         const bool drawn = surface->textOverlay.Ensure(
                                viewport_.instance_, surface->clipWindow,
                                RectWidth(surface->rect), RectHeight(surface->rect)) &&
             surface->textOverlay.Update(overlaySettings->viewportTextLabels, overlaySettings->viewportOverlayShapes);
+        viewport_.lastTextOverlayMilliseconds_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - overlayStart).count();
         if (!drawn) surface->textOverlay.Hide();
         viewport_.NoteTextOverlayResult(drawn);
     }

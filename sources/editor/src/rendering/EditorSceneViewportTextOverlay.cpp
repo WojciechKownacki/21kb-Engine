@@ -205,10 +205,7 @@ struct EditorSceneViewportTextOverlay::Impl {
     std::uint32_t height = 0U;
     bool hasContent = false;
     // What the window shows now, and where: the next Update that asks for the same changes nothing.
-    std::vector<EditorSceneViewportTextLabel> shownLabels;
-    std::vector<EditorSceneViewportOverlayShape> shownShapes;
-    POINT shownAt{};
-    bool shownValid = false;
+    EditorSceneViewportOverlayMemory shown;
     OverlayFonts fonts;
 
     void ReleaseBitmap() noexcept {
@@ -223,7 +220,7 @@ struct EditorSceneViewportTextOverlay::Impl {
         memoryDc = nullptr;
         width = 0U;
         height = 0U;
-        shownValid = false;
+        shown.Forget();
     }
 
     [[nodiscard]] bool EnsureBitmap(std::uint32_t requestedWidth, std::uint32_t requestedHeight) {
@@ -310,9 +307,8 @@ bool EditorSceneViewportTextOverlay::Update(
     RECT windowRect{};
     if (GetWindowRect(impl_->window, &windowRect) == 0) return false;
     POINT destination{ windowRect.left, windowRect.top };
-    if (impl_->shownValid && impl_->hasContent && destination.x == impl_->shownAt.x && destination.y == impl_->shownAt.y &&
-        std::ranges::equal(labels, impl_->shownLabels) && std::ranges::equal(shapes, impl_->shownShapes)) return true;
-    impl_->shownValid = false;
+    if (impl_->hasContent && impl_->shown.Shows(labels, shapes, destination.x, destination.y)) return true;
+    impl_->shown.Forget();
     std::memset(impl_->pixels, 0,
         static_cast<std::size_t>(impl_->width) * impl_->height * sizeof(std::uint32_t));
 
@@ -333,12 +329,7 @@ bool EditorSceneViewportTextOverlay::Update(
         0U, &blend, ULW_ALPHA);
     ReleaseDC(nullptr, screenDc);
     impl_->hasContent = updated != 0;
-    if (impl_->hasContent) {
-        impl_->shownLabels.assign(labels.begin(), labels.end());
-        impl_->shownShapes.assign(shapes.begin(), shapes.end());
-        impl_->shownAt = destination;
-        impl_->shownValid = true;
-    }
+    if (impl_->hasContent) impl_->shown.Remember(labels, shapes, destination.x, destination.y);
     return impl_->hasContent;
 }
 

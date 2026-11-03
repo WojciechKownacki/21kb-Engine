@@ -35,7 +35,7 @@ struct ProfilerCounterInfo {
 
 // The counters every tool knows by name; their position in the registry is the enumerator value.
 enum class ProfilerBuiltIn : std::uint8_t {
-    FramesPerSecond, FrameTime, GameThreadTime, RenderThreadTime, GpuTime,
+    FramesPerSecond, FrameTime, GameThreadTime, RenderThreadTime, GpuTime, ProfilerCost,
     DrawCalls, Triangles, VisibleMeshes, CulledInstances, SceneLights, ComputeDispatches, Views,
     ProcessMemory, GpuMemory, TextureMemory, RenderTargetMemory,
     EcsEntities, EcsChunks, EcsPayload, EcsEntityRecords, EcsOccupancy, EcsStorageAllocations,

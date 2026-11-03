@@ -1,4 +1,5 @@
 #include "profiler/ProfilerOverlayLayout.hpp"
+#include "profiler/ProfilerNumber.hpp"
 
 #include "localization/EditorLocalization.hpp"
 #include "profiler/ProfilerPalette.hpp"
@@ -51,7 +52,7 @@ constexpr std::size_t kLabelCharacters = 16U;
 // Whole seconds, but a short history that is not a whole number of them is told in tenths.
 [[nodiscard]] std::string Seconds(double seconds) {
     const bool whole = seconds >= 10.0 || std::abs(seconds - std::round(seconds)) < 0.05;
-    return whole ? std::format("{:.0f}", seconds) : std::format("{:.1f}", seconds);
+    return whole ? ProfilerNumber::Fixed(seconds, 0) : ProfilerNumber::Fixed(seconds, 1);
 }
 
 [[nodiscard]] std::size_t Characters(std::string_view text) noexcept {
@@ -108,7 +109,7 @@ void AppendGraph(ProfilerOverlayContent& content, const ProfilerOverlayModel& mo
             : series.role == ProfilerSeriesRole::RenderThread ? "Render thread" : "GPU";
         const char* key = series.role == ProfilerSeriesRole::Frame ? "profiler.line.frame"
             : series.role == ProfilerSeriesRole::RenderThread ? "profiler.line.render" : "profiler.line.gpu";
-        const std::string text = std::format("{} {:.1f}", EditorText(key, name), series.latest);
+        const std::string text = std::string{ EditorText(key, name) } + " " + ProfilerNumber::Fixed(series.latest, 1);
         const float swatch = 8.0F * scale;
         content.shapes.push_back(Shape{ .kind = Shape::Kind::RoundedRect,
             .points = { { legendX, legendTop + (kGraphLegendRow * scale - swatch) * 0.5F }, { legendX + swatch, legendTop + (kGraphLegendRow * scale + swatch) * 0.5F } },
@@ -139,7 +140,7 @@ void AppendGraph(ProfilerOverlayContent& content, const ProfilerOverlayModel& mo
         const float y = level(milliseconds);
         content.shapes.push_back(Shape{ .points = { { plotLeft, y }, { plotRight, y } }, .dashed = true, .color = Rgba(color) });
         content.labels.push_back(Label{ .x = plotRight + 8.0F * scale, .y = y - 7.0F * scale, .pixelHeight = 10.5F * scale,
-            .text = std::format("{:.1f} ms ({})", milliseconds, EditorText(key, name)), .color = Rgba(color), .shadow = false });
+            .text = ProfilerNumber::Fixed(milliseconds, 1) + " ms (" + std::string{ EditorText(key, name) } + ")", .color = Rgba(color), .shadow = false });
     };
     threshold(model.alarmMs, profiler_palette::kAlarm, "profiler.line.alarm", "alarm");
     threshold(model.budgetMs, profiler_palette::kBudget, "profiler.line.budget", "budget");

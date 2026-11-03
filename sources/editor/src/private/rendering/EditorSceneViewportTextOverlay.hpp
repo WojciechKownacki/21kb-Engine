@@ -6,6 +6,7 @@
 #include <Windows.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -43,6 +44,32 @@ struct EditorSceneViewportOverlayShape {
     std::array<std::uint8_t, 4U> color{ 255U, 255U, 255U, 255U };
 
     [[nodiscard]] bool operator==(const EditorSceneViewportOverlayShape&) const = default;
+};
+
+// What an overlay window shows and where, to tell an update that would change nothing: drawing the same
+// content again at the same place took several milliseconds a frame.
+class EditorSceneViewportOverlayMemory {
+public:
+    [[nodiscard]] bool Shows(std::span<const EditorSceneViewportTextLabel> labels, std::span<const EditorSceneViewportOverlayShape> shapes,
+        int x, int y) const {
+        return valid_ && x == x_ && y == y_ && std::ranges::equal(labels, labels_) && std::ranges::equal(shapes, shapes_);
+    }
+    void Remember(std::span<const EditorSceneViewportTextLabel> labels, std::span<const EditorSceneViewportOverlayShape> shapes, int x, int y) {
+        labels_.assign(labels.begin(), labels.end());
+        shapes_.assign(shapes.begin(), shapes.end());
+        x_ = x;
+        y_ = y;
+        valid_ = true;
+    }
+    // The window's picture is gone or about to be replaced: the next update must draw.
+    void Forget() noexcept { valid_ = false; }
+
+private:
+    std::vector<EditorSceneViewportTextLabel> labels_;
+    std::vector<EditorSceneViewportOverlayShape> shapes_;
+    int x_ = 0;
+    int y_ = 0;
+    bool valid_ = false;
 };
 
 #if defined(_WIN32)

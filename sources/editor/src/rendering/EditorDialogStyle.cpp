@@ -396,5 +396,24 @@ void EditorDialogStyle::PaintText(
     kb::editor::DrawTextWide(dc, wide.data(), wideLength, &bounds, format | DT_NOPREFIX);
 }
 
+int EditorDialogStyle::TextWidth(HDC dc, std::string_view text, int pointSize, int weight) {
+    const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (length <= 0) return 0;
+    std::wstring wide(static_cast<std::size_t>(length), wchar_t{});
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), length);
+    ScopedFont font{pointSize, weight};
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    RECT measured{0, 0, 0, 0};
+    DrawTextW(dc, wide.data(), length, &measured, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    return static_cast<int>(measured.right - measured.left);
+}
+
+int EditorDialogStyle::FittingSize(HDC dc, std::string_view text, int room, int pointSize, int weight, int smallest) {
+    for (int size = pointSize; size > smallest; --size) {
+        if (TextWidth(dc, text, size, weight) <= room) return size;
+    }
+    return smallest;
+}
+
 } // namespace kb::editor
 #endif

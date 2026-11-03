@@ -1,4 +1,5 @@
 #include "profiler/ProfilerPanel.hpp"
+#include "profiler/ProfilerNumber.hpp"
 
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
@@ -41,6 +42,18 @@ struct Canvas {
     }
     void TextRight(RECT rect, std::string_view text, EditorColor color, int size = 11, int weight = FW_NORMAL) const {
         Text(rect, text, color, size, weight, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+    // A text that may be longer than its room: on one line when it fits, else on two, and only past that is it cut.
+    void Wrapped(RECT rect, std::string_view text, EditorColor color, int size = 11, int weight = FW_NORMAL, UINT align = DT_LEFT) const {
+        if (Width(text, size, weight) <= static_cast<int>(rect.right - rect.left)) {
+            Text(rect, text, color, size, weight, align | DT_VCENTER | DT_SINGLELINE);
+            return;
+        }
+        Text(rect, text, color, size, weight, align | DT_WORDBREAK | DT_END_ELLIPSIS);
+    }
+    // How wide a single line of the text is, in pixels.
+    [[nodiscard]] int Width(std::string_view text, int size, int weight = FW_NORMAL) const {
+        return EditorDialogStyle::TextWidth(dc, text, size, weight);
     }
     void Stroke(const std::vector<POINT>& points, EditorColor color, int style = PS_SOLID, int width = 1) const {
         if (points.size() < 2U) return;
@@ -102,7 +115,7 @@ struct Reading {
 
 [[nodiscard]] std::string ThresholdText(const kb::core::ProfilerCounterInfo& info, double value, bool alarm) {
     if (value <= 0.0) return "-";
-    const std::string number = value >= 1'000'000.0 ? std::format("{:g} M", value / 1'000'000.0) : std::format("{:g}", value);
+    const std::string number = value >= 1'000'000.0 ? ProfilerNumber::General(value / 1'000'000.0) + " M" : ProfilerNumber::General(value);
     return info.lowerIsWorse ? (alarm ? "< " : ">= ") + number : number;
 }
 
@@ -253,8 +266,8 @@ private:
             const RECT r = Rect(list.left, top, list.right - 1, top + ProfilerPanelGeometry::kRowHeight);
             if (r.bottom > list.top && r.top < list.bottom) {
                 EditorDialogStyle::PaintCheckbox(c.dc, Rect(r.left + kPad, r.top + 4, r.left + kPad + 14, r.top + 18), theme_, shown, measured);
-                c.Text(Rect(r.left + kPad + 24, r.top, r.right - 84, r.bottom), ProfilerText::Counter(info), measured && shown ? theme_.textPrimary : measured ? theme_.textSecondary : theme_.textDisabled);
-                c.TextRight(Rect(r.right - 82, r.top, r.right - kPad, r.bottom), measured ? ValueText(registry_, row.counter) : std::string{ "-" }, theme_.textDisabled, 10);
+                c.Text(Rect(r.left + kPad + 24, r.top, r.right - 62, r.bottom), ProfilerText::Counter(info), measured && shown ? theme_.textPrimary : measured ? theme_.textSecondary : theme_.textDisabled);
+                c.TextRight(Rect(r.right - 60, r.top, r.right - kPad, r.bottom), measured ? ValueText(registry_, row.counter) : std::string{ "-" }, theme_.textDisabled, 10);
             }
             top += ProfilerPanelGeometry::kRowHeight;
         }
@@ -316,8 +329,10 @@ private:
     void PaintLegend(const RECT& label, int line, EditorColor swatch, std::string_view name, std::string_view value) const {
         const int top = label.top + 24 + line * 16;
         canvas_.Fill(Rect(label.left + kPad, top + 5, label.left + kPad + 8, top + 13), swatch);
-        canvas_.Text(Rect(label.left + kPad + 14, top, label.right - 52, top + 18), name, theme_.textSecondary, 10);
-        canvas_.TextRight(Rect(label.right - 52, top, label.right - kPad, top + 18), value, theme_.textPrimary, 10);
+        // The reading takes the room its digits need, and the name what is left.
+        const int valueLeft = label.right - kPad - std::max(40, canvas_.Width(value, 10) + 4);
+        canvas_.Text(Rect(label.left + kPad + 14, top, valueLeft - 4, top + 18), name, theme_.textSecondary, 10);
+        canvas_.TextRight(Rect(valueLeft, top, label.right - kPad, top + 18), value, theme_.textPrimary, 10);
     }
 
     void PaintFrameChart(const ProfilerChartRow& chart) const {
@@ -328,7 +343,7 @@ private:
         const kb::core::ProfilerCounterStats stats = registry_.Stats(id);
         const std::string fps = ValueText(registry_, ProfilerRegistry::Id(ProfilerBuiltIn::FramesPerSecond));
         PaintChartLabel(chart, theme_.textSecondary, ProfilerText::Counter(info), stats.available ? FormatProfilerValue(info, stats.now) : "-",
-            EditorLocalization::Format("profiler.panel.fps_target", "{fps} FPS, target {target} ms", { { "fps", fps }, { "target", std::format("{:g}", info.budget) } }));
+            EditorLocalization::Format("profiler.panel.fps_target", "{fps} FPS, target {target} ms", { { "fps", fps }, { "target", ProfilerNumber::General(info.budget) } }));
         c.Fill(chart.plot, theme_.panel);
         if (values.empty()) { PaintUnavailable(chart.plot, std::string{ EditorText("profiler.unavailable", "unavailable") }); return; }
         const double axis = AxisMaximum({ values }, info.budget, info.alarm);
@@ -340,8 +355,8 @@ private:
             const ProfilerSeverity severity = ProfilerRegistry::Severity(info, values[index]);
             c.Fill(Rect(x - barWidth, y, x, chart.plot.bottom), severity == ProfilerSeverity::Alarm ? palette::kAlarm : severity == ProfilerSeverity::Warning ? palette::kWarning : palette::kBlue);
         }
-        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, std::string{ EditorText("profiler.panel.budget", "budget") } + " " + std::format("{:g}", info.budget));
-        PaintThreshold(chart.plot, info.alarm, axis, palette::kAlarm, std::format("{:g}", info.alarm) + " " + std::string{ EditorText("profiler.panel.alarm", "alarm") });
+        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, std::string{ EditorText("profiler.panel.budget", "budget") } + " " + ProfilerNumber::General(info.budget));
+        PaintThreshold(chart.plot, info.alarm, axis, palette::kAlarm, ProfilerNumber::General(info.alarm) + " " + std::string{ EditorText("profiler.panel.alarm", "alarm") });
         PaintCursor(chart.plot);
     }
 
@@ -359,7 +374,7 @@ private:
         }
         const kb::core::ProfilerCounterInfo& info = registry_.Info(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime));
         const double axis = AxisMaximum({ game, render }, info.budget, 0.0);
-        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, std::format("{:g}", info.budget));
+        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, ProfilerNumber::General(info.budget));
         PaintLine(chart.plot, game, axis, palette::kBlue);
         PaintLine(chart.plot, render, axis, palette::kGreen);
         PaintCursor(chart.plot);
@@ -376,7 +391,7 @@ private:
         }
         const kb::core::ProfilerCounterInfo& info = registry_.Info(id);
         const double axis = AxisMaximum({ values }, info.budget, 0.0);
-        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, std::format("{:g}", info.budget));
+        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, ProfilerNumber::General(info.budget));
         PaintLine(chart.plot, values, axis, palette::kWarning);
         PaintCursor(chart.plot);
     }
@@ -443,7 +458,7 @@ private:
         const RECT pill = Rect(geometry_.ruler.left + kPad, geometry_.ruler.top + 4, geometry_.ruler.left + kPad + 14 + static_cast<int>(live.size()) * 7, geometry_.ruler.bottom - 4);
         c.Pill(pill, live, state.paused || state.selectedFrame ? theme_.textSecondary : palette::kBudget, c.Mix(theme_.panel, state.paused || state.selectedFrame ? theme_.textSecondary : palette::kBudget, 18));
         c.Text(Rect(pill.right + 12, geometry_.ruler.top, geometry_.ruler.right - 260, geometry_.ruler.bottom),
-            EditorLocalization::Format("profiler.panel.last_frames", "last {frames} frames ({seconds} s)", { { "frames", std::to_string(frames) }, { "seconds", std::format("{:.1f}", seconds) } }),
+            EditorLocalization::Format("profiler.panel.last_frames", "last {frames} frames ({seconds} s)", { { "frames", std::to_string(frames) }, { "seconds", ProfilerNumber::Fixed(seconds, 1) } }),
             theme_.textSecondary, 10);
         const std::optional<std::uint64_t> shown = ProfilerShownFrame(profiler_);
         c.TextRight(Rect(geometry_.ruler.right - 260, geometry_.ruler.top, geometry_.ruler.right - kPad, geometry_.ruler.bottom),
@@ -464,7 +479,7 @@ private:
         if (record != nullptr) {
             c.TextRight(Rect(geometry_.hierarchyTabs.right - 300, geometry_.hierarchyTabs.top, geometry_.hierarchyTabs.right - kPad, geometry_.hierarchyTabs.bottom),
                 EditorLocalization::Format("profiler.panel.frame_info", "Frame #{frame} - {ms} ms", { { "frame", std::to_string(record->frame) },
-                    { "ms", std::format("{:.2f}", static_cast<double>(record->FrameNanoseconds()) / 1e6) } }), theme_.textSecondary, 10);
+                    { "ms", ProfilerNumber::Fixed(static_cast<double>(record->FrameNanoseconds()) / 1e6, 2) } }), theme_.textSecondary, 10);
         }
         // Column header: name, share of the frame, time in all, time of its own, calls.
         const RECT header = geometry_.hierarchyHeader;
@@ -506,9 +521,9 @@ private:
                 if (row.calls > 1U) name += std::format("  (x{})", row.calls);
                 c.Text(Rect(r.left + indent, r.top, bar - 4, r.bottom), name, flagged ? palette::kWarning : row.waiting ? theme_.textDisabled : theme_.textPrimary);
                 c.Fill(Rect(bar + 6, r.top + 4, bar + 6 + static_cast<int>(share * 100.0), r.bottom - 4), c.Mix(theme_.panel, palette::kBlue, 30));
-                c.Text(Rect(bar + 12, r.top, total, r.bottom), std::format("{:.1f}%", share * 100.0), theme_.textPrimary, 10);
-                c.TextRight(Rect(total, r.top, own - 6, r.bottom), std::format("{:.2f}", static_cast<double>(row.totalNanoseconds) / 1e6), theme_.textPrimary);
-                c.TextRight(Rect(own, r.top, calls - 6, r.bottom), std::format("{:.2f}", static_cast<double>(row.selfNanoseconds) / 1e6), theme_.textSecondary);
+                c.Text(Rect(bar + 12, r.top, total, r.bottom), ProfilerNumber::Fixed(share * 100.0, 1) + "%", theme_.textPrimary, 10);
+                c.TextRight(Rect(total, r.top, own - 6, r.bottom), ProfilerNumber::Fixed(static_cast<double>(row.totalNanoseconds) / 1e6, 2), theme_.textPrimary);
+                c.TextRight(Rect(own, r.top, calls - 6, r.bottom), ProfilerNumber::Fixed(static_cast<double>(row.selfNanoseconds) / 1e6, 2), theme_.textSecondary);
                 c.TextRight(Rect(calls, r.top, header.right - kPad, r.bottom), std::to_string(row.calls), theme_.textSecondary);
             }
             top += ProfilerPanelGeometry::kRowHeight;
@@ -558,8 +573,8 @@ private:
         pill(alarm, EditorLocalization::Format("profiler.panel.pill_alarm", "{count} over alarm", { { "count", std::to_string(alarm) } }), palette::kAlarm);
         pill(budget, EditorLocalization::Format("profiler.panel.pill_budget", "{count} over budget", { { "count", std::to_string(budget) } }), palette::kWarning);
         pill(normal, EditorLocalization::Format("profiler.panel.pill_normal", "{count} fine", { { "count", std::to_string(normal) } }), palette::kGreen);
-        c.TextRight(Rect(x, geometry_.summary.top, geometry_.summary.right - 12, geometry_.summary.bottom),
-            std::string{ EditorText("profiler.panel.thresholds_hint", "Click a budget or an alarm to change it; the same line is drawn on the charts and the scene.") }, theme_.textSecondary, 10);
+        c.Wrapped(Rect(x, geometry_.summary.top, geometry_.summary.right - 12, geometry_.summary.bottom),
+            std::string{ EditorText("profiler.panel.thresholds_hint", "Click a budget or an alarm to change it; the same line is drawn on the charts and the scene.") }, theme_.textSecondary, 10, FW_NORMAL, DT_RIGHT);
 
         const ProfilerCounterColumns columns = ResolveProfilerCounterColumns(geometry_.tableRows);
         const RECT header = geometry_.tableHeader;
@@ -679,6 +694,22 @@ private:
         return severity == kb::core::DiagnosisSeverity::Problem ? palette::kAlarm : severity == kb::core::DiagnosisSeverity::Warning ? palette::kWarning : palette::kBlue;
     }
 
+    // The pills of severity and category are as wide as the longest word of their kind in the language.
+    [[nodiscard]] int SeverityPillWidth() const {
+        int width = 80;
+        for (const auto severity : { kb::core::DiagnosisSeverity::Problem, kb::core::DiagnosisSeverity::Warning, kb::core::DiagnosisSeverity::Tip }) {
+            width = std::max(width, canvas_.Width(ProfilerText::Severity(severity), 10, FW_SEMIBOLD) + 20);
+        }
+        return width;
+    }
+    [[nodiscard]] int CategoryPillWidth() const {
+        int width = 60;
+        for (const auto category : { kb::core::DiagnosisCategory::Cpu, kb::core::DiagnosisCategory::Gpu, kb::core::DiagnosisCategory::Memory, kb::core::DiagnosisCategory::Frame }) {
+            width = std::max(width, canvas_.Width(ProfilerText::Category(category), 10, FW_SEMIBOLD) + 20);
+        }
+        return width;
+    }
+
     void PaintDiagnosis() const {
         const Canvas& c = canvas_;
         const std::vector<const kb::core::DiagnosisFinding*> findings = ProfilerVisibleFindings(profiler_);
@@ -696,11 +727,14 @@ private:
             else if (!overBudget) gain += std::max(0.0, finding.gainMilliseconds);
         }
         if (frame.available) gain = std::min(gain, frame.average);
-        c.Text(Rect(geometry_.summary.left + 12, geometry_.summary.top + 4, geometry_.summary.left + 130, geometry_.summary.top + 34),
-            gain > 0.0 ? "-" + std::format("{:.1f} ms", gain) : std::string{ EditorText("profiler.diagnosis.nothing", "Nothing to fix") }, gain > 0.0 ? palette::kBlue : palette::kGreen, 18, FW_SEMIBOLD);
-        c.Text(Rect(geometry_.summary.left + 140, geometry_.summary.top + 4, geometry_.summary.right - 12, geometry_.summary.top + 34),
+        // The figure takes the room its words need, in any language; the explanation is what is left.
+        const std::string gainText = gain > 0.0 ? "-" + ProfilerNumber::Fixed(gain, 1) + " ms" : std::string{ EditorText("profiler.diagnosis.nothing", "Nothing to fix") };
+        const int gainWidth = c.Width(gainText, 18, FW_SEMIBOLD) + 6;
+        c.Text(Rect(geometry_.summary.left + 12, geometry_.summary.top + 4, geometry_.summary.left + 12 + gainWidth, geometry_.summary.top + 34),
+            gainText, gain > 0.0 ? palette::kBlue : palette::kGreen, 18, FW_SEMIBOLD);
+        c.Wrapped(Rect(geometry_.summary.left + 12 + gainWidth + 12, geometry_.summary.top + 4, geometry_.summary.right - 12, geometry_.summary.top + 34),
             gain > 0.0 && frame.available && frame.average > 0.0
-                ? EditorLocalization::Format("profiler.diagnosis.recoverable", "to win back ({percent}% of the frame) by fixing what was measured", { { "percent", std::format("{:.0f}", 100.0 * gain / frame.average) } })
+                ? EditorLocalization::Format("profiler.diagnosis.recoverable", "to win back ({percent}% of the frame) by fixing what was measured", { { "percent", ProfilerNumber::Fixed(100.0 * gain / frame.average, 0) } })
                 : std::string{ EditorText("profiler.diagnosis.from_measurements", "Findings come from the measurements of the last frames.") },
             theme_.textSecondary, 11);
         c.Text(Rect(geometry_.summary.left + 12, geometry_.summary.top + 34, geometry_.summary.right - 12, geometry_.summary.bottom - 2),
@@ -710,9 +744,10 @@ private:
         c.Fill(header, theme_.strip);
         c.Fill(Rect(header.left, header.bottom - 1, header.right, header.bottom), theme_.borderChrome);
         const int gainLeft = header.right - kPad - 70;
-        const int whereLeft = gainLeft - 200;
-        c.Text(Rect(header.left + kPad, header.top, header.left + kPad + 80, header.bottom), std::string{ EditorText("profiler.diagnosis.col_severity", "Severity") }, theme_.textDisabled, 10);
-        c.Text(Rect(header.left + kPad + 92, header.top, whereLeft, header.bottom), std::string{ EditorText("profiler.diagnosis.col_what", "What is wrong") }, theme_.textDisabled, 10);
+        const int whereLeft = gainLeft - std::clamp(static_cast<int>(header.right - header.left) / 4, 90, 200);
+        const int pillWidth = SeverityPillWidth();
+        c.Text(Rect(header.left + kPad, header.top, header.left + kPad + pillWidth, header.bottom), std::string{ EditorText("profiler.diagnosis.col_severity", "Severity") }, theme_.textDisabled, 10);
+        c.Text(Rect(header.left + kPad + pillWidth + 12, header.top, whereLeft, header.bottom), std::string{ EditorText("profiler.diagnosis.col_what", "What is wrong") }, theme_.textDisabled, 10);
         c.Text(Rect(whereLeft, header.top, gainLeft, header.bottom), std::string{ EditorText("profiler.diagnosis.col_where", "Where") }, theme_.textDisabled, 10);
         c.TextRight(Rect(gainLeft, header.top, header.right - kPad, header.bottom), std::string{ EditorText("profiler.diagnosis.col_gain", "Gain") }, theme_.textDisabled, 10);
 
@@ -732,11 +767,11 @@ private:
             if (!state.selectedFinding.empty() && finding.Key() == state.selectedFinding) c.Fill(r, theme_.tabActive);
             c.Fill(Rect(r.left, r.bottom - 1, r.right, r.bottom), theme_.borderChrome);
             const EditorColor tone = SeverityTone(finding.severity);
-            c.Pill(Rect(r.left + kPad, r.top + 14, r.left + kPad + 80, r.top + 34), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));
-            c.Text(Rect(r.left + kPad + 92, r.top + 5, whereLeft - 8, r.top + 25), ProfilerText::FindingTitle(finding, registry_), ignored ? theme_.textDisabled : theme_.textPrimary, 12, FW_SEMIBOLD);
-            c.Text(Rect(r.left + kPad + 92, r.top + 25, whereLeft - 8, r.bottom - 3), ProfilerText::FindingDetail(finding), theme_.textSecondary, 10);
-            c.Text(Rect(whereLeft, r.top, gainLeft, r.bottom), ProfilerText::FindingWhere(finding, registry_), theme_.textSecondary);
-            c.TextRight(Rect(gainLeft, r.top, r.right - kPad, r.bottom), finding.gainMilliseconds > 0.0 ? "-" + std::format("{:.1f} ms", finding.gainMilliseconds) : "-", finding.gainMilliseconds > 0.0 ? palette::kBlue : theme_.textDisabled, 12, FW_SEMIBOLD);
+            c.Pill(Rect(r.left + kPad, r.top + 14, r.left + kPad + pillWidth, r.top + 34), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));
+            c.Wrapped(Rect(r.left + kPad + pillWidth + 12, r.top + 5, whereLeft - 8, r.top + 25), ProfilerText::FindingTitle(finding, registry_), ignored ? theme_.textDisabled : theme_.textPrimary, 12, FW_SEMIBOLD);
+            c.Wrapped(Rect(r.left + kPad + pillWidth + 12, r.top + 25, whereLeft - 8, r.bottom - 3), ProfilerText::FindingDetail(finding), theme_.textSecondary, 10);
+            c.Wrapped(Rect(whereLeft, r.top, gainLeft, r.bottom), ProfilerText::FindingWhere(finding, registry_), theme_.textSecondary);
+            c.TextRight(Rect(gainLeft, r.top, r.right - kPad, r.bottom), finding.gainMilliseconds > 0.0 ? "-" + ProfilerNumber::Fixed(finding.gainMilliseconds, 1) + " ms" : "-", finding.gainMilliseconds > 0.0 ? palette::kBlue : theme_.textDisabled, 12, FW_SEMIBOLD);
         }
         RestoreDC(c.dc, saved);
     }
@@ -755,9 +790,10 @@ private:
         const kb::core::DiagnosisFinding& finding = *selected;
         const EditorColor tone = SeverityTone(finding.severity);
         int y = r.top + 38;
-        c.Pill(Rect(r.left + 12, y, r.left + 12 + 80, y + 20), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));
-        c.Pill(Rect(r.left + 100, y, r.left + 100 + 60, y + 20), ProfilerText::Category(finding.category), theme_.textSecondary, c.Mix(theme_.panel, theme_.textSecondary, 18));
-        c.TextRight(Rect(r.right - 110, y, r.right - 12, y + 20), finding.gainMilliseconds > 0.0 ? "-" + std::format("{:.1f} ms", finding.gainMilliseconds) : "", palette::kBlue, 14, FW_SEMIBOLD);
+        const int severityWidth = SeverityPillWidth();
+        c.Pill(Rect(r.left + 12, y, r.left + 12 + severityWidth, y + 20), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));
+        c.Pill(Rect(r.left + 12 + severityWidth + 8, y, r.left + 12 + severityWidth + 8 + CategoryPillWidth(), y + 20), ProfilerText::Category(finding.category), theme_.textSecondary, c.Mix(theme_.panel, theme_.textSecondary, 18));
+        c.TextRight(Rect(r.right - 110, y, r.right - 12, y + 20), finding.gainMilliseconds > 0.0 ? "-" + ProfilerNumber::Fixed(finding.gainMilliseconds, 1) + " ms" : "", palette::kBlue, 14, FW_SEMIBOLD);
         y += 28;
         c.Text(Rect(r.left + 12, y, r.right - 12, y + 40), ProfilerText::FindingTitle(finding, registry_), theme_.textPrimary, 13, FW_SEMIBOLD, DT_LEFT | DT_TOP | DT_WORDBREAK);
         y += 48;
@@ -777,7 +813,7 @@ private:
         y += 32;
         if (finding.limit > 0.0 && finding.rule != "memory_growth") {
             c.Text(Rect(r.left + 12, y, r.right - 90, y + 18), std::string{ EditorText("profiler.diagnosis.measured", "measured") }, theme_.textSecondary, 10);
-            c.TextRight(Rect(r.right - 90, y, r.right - 12, y + 18), std::format("{:.1f}", finding.value), theme_.textPrimary, 10);
+            c.TextRight(Rect(r.right - 90, y, r.right - 12, y + 18), ProfilerNumber::Fixed(finding.value, 1), theme_.textPrimary, 10);
             y += 20;
             const int barWidth = r.right - r.left - 24;
             const double ratio = std::clamp(finding.value / std::max(finding.value, finding.limit), 0.0, 1.0);
@@ -785,7 +821,7 @@ private:
             c.Fill(Rect(r.left + 12, y, r.left + 12 + static_cast<int>(barWidth * ratio), y + 6), tone);
             y += 12;
             c.Text(Rect(r.left + 12, y, r.right - 90, y + 18), std::string{ EditorText("profiler.diagnosis.limit", "limit") }, theme_.textSecondary, 10);
-            c.TextRight(Rect(r.right - 90, y, r.right - 12, y + 18), std::format("{:.1f}", finding.limit), theme_.textPrimary, 10);
+            c.TextRight(Rect(r.right - 90, y, r.right - 12, y + 18), ProfilerNumber::Fixed(finding.limit, 1), theme_.textPrimary, 10);
             y += 20;
             const double limitRatio = std::clamp(finding.limit / std::max(finding.value, finding.limit), 0.0, 1.0);
             c.Fill(Rect(r.left + 12, y, r.left + 12 + barWidth, y + 6), theme_.background);
@@ -809,7 +845,7 @@ private:
         }
         c.Text(Rect(geometry_.status.left + 12, geometry_.status.top, geometry_.status.left + 360, geometry_.status.bottom), left, theme_.textSecondary, 10);
         c.Text(Rect(geometry_.status.left + 370, geometry_.status.top, geometry_.status.left + 620, geometry_.status.bottom),
-            info.budget > 0.0 ? EditorLocalization::Format("profiler.panel.target", "Target: {fps} FPS ({ms} ms)", { { "fps", std::format("{:.0f}", 1000.0 / info.budget) }, { "ms", std::format("{:g}", info.budget) } }) : std::string{},
+            info.budget > 0.0 ? EditorLocalization::Format("profiler.panel.target", "Target: {fps} FPS ({ms} ms)", { { "fps", ProfilerNumber::Fixed(1000.0 / info.budget, 0) }, { "ms", ProfilerNumber::General(info.budget) } }) : std::string{},
             theme_.textSecondary, 10);
         c.TextRight(Rect(geometry_.status.left + 630, geometry_.status.top, geometry_.status.right - 12, geometry_.status.bottom), profiler_.Panel().lastSaved, theme_.textDisabled, 10);
     }

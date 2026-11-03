@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <string>
 #include <utility>
 
@@ -110,6 +111,7 @@ void SampleEcs(EditorProfilerState& profiler, const kb::scene::Scene& scene) {
 void EditorProfilerSampler::Sample(EditorProfilerState& profiler, const ProfilerSelection& selection,
     const kb::scene::Scene& scene, const EditorProfilerFrame& frame, const kb::render::SceneRenderSubmitStats* renderStats) {
     if (profiler.Panel().paused) return;
+    const auto sampleStart = std::chrono::steady_clock::now();
     profiler.SyncThresholds(selection);
     profiler.ForgetUnmeasured(selection);
     const double gameMilliseconds = frame.gameTickMilliseconds.value_or(0.0);
@@ -137,6 +139,12 @@ void EditorProfilerSampler::Sample(EditorProfilerState& profiler, const Profiler
             .transformSyncNanoseconds = hotPath.runtimeTransformSyncNanoseconds, .systems = runtime.LastEcsProfilerTrace().systemCounters });
         profiler.FrameRegions().Capture(number, profiler.Regions().TimelineEvents());
         profiler.Regions().ResetTimeline();
+    }
+    // Its own cost: this sampling and what the profiler took outside it since the last frame.
+    const double outsideSampling = profiler.TakeOwnCost();
+    if (selection.AreaMeasured(ProfilerArea::Cpu)) {
+        Publish(profiler, ProfilerBuiltIn::ProfilerCost,
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sampleStart).count() + outsideSampling);
     }
     profiler.Recorder().Capture(profiler.Registry(), number,
         static_cast<double>(ProfilerCounters::NowNanoseconds() - profiler.RecordingStartNanoseconds()) / kNanosecondsPerMillisecond);

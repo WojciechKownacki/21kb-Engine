@@ -279,7 +279,7 @@
     {
       "op": "profiler_window_click",
       "x": 673,
-      "y": 170
+      "y": 206
     },
     {
       "op": "assert_file",
@@ -310,6 +310,72 @@
       "op": "assert_file",
       "path": "Config/EditorSettings.ini",
       "contains": "SceneCounters=fps,frame_ms,gpu_ms"
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 1083,
+      "y": 426
+    },
+    {
+      "op": "capture_profiler_window",
+      "checkpoint": "profiler-window-dropdown",
+      "width": 1180,
+      "height": 740
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 1083,
+      "y": 503
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "ListCorner=2"
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 1083,
+      "y": 538
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 1083,
+      "y": 640
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "ListCorner=2"
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 500,
+      "y": 130
+    },
+    {
+      "op": "profiler_search_type",
+      "text": "draw"
+    },
+    {
+      "op": "capture_profiler_window",
+      "checkpoint": "profiler-window-search",
+      "width": 1180,
+      "height": 740
+    },
+    {
+      "op": "profiler_window_click",
+      "x": 669,
+      "y": 97
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "not_contains": "draw_calls"
+    },
+    {
+      "op": "assert_file",
+      "path": "Config/EditorSettings.ini",
+      "contains": "frame_ms"
     }
   ]
 }

@@ -1,12 +1,17 @@
 #include "app/EditorProfilerAutomation.hpp"
 
 #include "engine/core/ProfilerCounters.hpp"
+#include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "profiler/EditorProfilerSampler.hpp"
+#include "profiler/ProfilerOverlayLayout.hpp"
 #include "profiler/ProfilerPanel.hpp"
 #include "profiler/ProfilerPanelLayout.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "rendering/gdi/CutTextAudit.hpp"
+#include "rendering/EditorSceneViewportTextOverlay.hpp"
+#include "rendering/ProfilerSelectionOverlayWindow.hpp"
 
 #include <algorithm>
 #include <array>
@@ -120,6 +125,8 @@ using Outcome = std::pair<bool, std::string>;
     const std::optional<double> minimum = Number(step, "min", error, false);
     const std::optional<double> maximum = Number(step, "max", error, false);
     const std::optional<double> samples = Number(step, "samples", error, false);
+    // The most the average of the held readings may be, for a counter that has a cost.
+    const std::optional<double> maximumAverage = Number(step, "max_average", error, false);
     if (!id || !available || !error.empty()) return { false, error };
     const kb::core::ProfilerRegistry& registry = context.Profiler().Registry();
     const std::optional<std::size_t> counter = registry.Find(*id);
@@ -128,6 +135,7 @@ using Outcome = std::pair<bool, std::string>;
     const std::string message = std::format("{} {}", *id, stats.available ? std::format("= {}", stats.now) : "is unavailable");
     if (stats.available != available.value()) return { false, message };
     if (samples && static_cast<double>(stats.samples) != *samples) return { false, message + std::format(" with {} samples", stats.samples) };
+    if (maximumAverage && stats.available && stats.average > *maximumAverage) return { false, message + std::format(", average {}", stats.average) };
     return { !stats.available || ((!minimum || stats.now >= *minimum) && (!maximum || stats.now <= *maximum)), message };
 }
 
@@ -224,6 +232,71 @@ using Outcome = std::pair<bool, std::string>;
     return { names[static_cast<std::size_t>(found->severity)] == *severity, detail + " as " + std::string{ names[static_cast<std::size_t>(found->severity)] } };
 }
 
+// The characters of the keyboard, typed into the search box of the "What to show" window while it has the focus.
+[[nodiscard]] Outcome TypeSearch(EditorSceneContext& context, const JsonValue& step) {
+    std::string error;
+    const std::optional<std::string> text = Text(step, "text", error);
+    if (!text || !error.empty()) return { false, error };
+    EditorHierarchySearchState& search = context.Profiler().CounterSearch();
+    if (!search.IsFocused()) return { false, "the counter search box has no focus" };
+    for (const char character : *text) search.AppendAscii(static_cast<wchar_t>(character));
+    return { true, "profiler search: " + std::string{ search.Query() } };
+}
+
+// The GDI objects of the process: a leak of the profiler's drawing shows as a count that keeps growing.
+[[nodiscard]] DWORD GdiObjects() { return GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS); }
+
+// What the profiler draws in a live editor, `frames` times over: a frame sampled, the scene's overlay
+// drawn, the panel painted with its tabs in turn, and every thirtieth frame the "What to show" window
+// opened, painted and closed. The count of GDI objects must be where it was, give or take `tolerance`
+// (the first frames are not counted: they fill the caches of fonts and brushes that live on).
+[[nodiscard]] Outcome CheckGdiStable(EditorSceneContext& context, EditorHeadlessAutomation& automation, const JsonValue& step) {
+    std::string error;
+    const int frames = static_cast<int>(Number(step, "frames", error, false).value_or(300.0));
+    const int tolerance = static_cast<int>(Number(step, "tolerance", error, false).value_or(6.0));
+    if (!error.empty() || frames < 30 || frames > 100000 || tolerance < 0) return { false, error.empty() ? "profiler GDI check needs 30..100000 frames and a tolerance of zero or more" : error };
+    constexpr int kWarmUp = 40;
+    constexpr int kWidth = 1180;
+    constexpr int kHeight = 740;
+    const EditorTheme theme = MakeEditorDarkTheme();
+    const ProfilerSelection& selection = context.EditorConfig().profiler;
+    const kb::render::SceneRenderSubmitStats renderStats = automation.SceneSubmitStats();
+    const HDC screen = GetDC(nullptr);
+    const HDC memory = CreateCompatibleDC(screen);
+    const HBITMAP bitmap = CreateCompatibleBitmap(screen, kWidth, kHeight);
+    const HGDIOBJ previous = SelectObject(memory, bitmap);
+    EditorSceneViewportTextOverlay overlay;
+    DWORD before = 0U;
+    const bool wasOpen = context.Profiler().WindowOpen();
+    for (int frame = 0; frame < kWarmUp + frames; ++frame) {
+        if (frame == kWarmUp) before = GdiObjects();
+        EditorProfilerSampler::Sample(context.Profiler(), selection, context.Scene(), EditorProfilerFrame{ .presentMilliseconds = 8.0 }, &renderStats);
+        context.Profiler().RefreshOverlay(selection, std::chrono::steady_clock::now(), true);
+        ProfilerOverlayContent content;
+        AppendProfilerOverlay(content, context.Profiler().Overlay(), selection.overlay, theme, ProfilerOverlayMetrics::ForTextSize(selection.overlay.textSize), 1337.0F, 640.0F);
+        static_cast<void>(overlay.Paint(memory, RECT{ 0, 0, 1337, 640 }, content.labels, content.shapes));
+        context.Profiler().Panel().tab = static_cast<ProfilerPanelTab>(frame % 3);
+        ProfilerPanel::Paint(memory, RECT{ 0, 0, 1000, 600 }, theme, context);
+        if (frame % 30 == 0) {
+            context.Profiler().SetWindowOpen(true);
+            ProfilerSelectionOverlayWindow window;
+            window.PaintInto(memory, RECT{ 0, 0, kWidth, kHeight }, theme, context);
+            window.Hide();
+            context.Profiler().SetWindowOpen(false);
+        }
+    }
+    const DWORD after = GdiObjects();
+    context.Profiler().SetWindowOpen(wasOpen);
+    overlay.Destroy();
+    SelectObject(memory, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    const std::string message = std::format("GDI objects {} before and {} after {} profiler frames", before, after, frames);
+    // A count of zero is the call failing, not a process without objects.
+    return { before > 0U && after > 0U && after <= before + static_cast<DWORD>(tolerance), message };
+}
+
 // Opens the panel as the Options menu does, then checks where it went: shown, in a group of its own
 // (the one of the Console), with the Scene View still the shown panel of its own group.
 [[nodiscard]] Outcome OpenPanel(EditorDockModel& dock) {
@@ -257,6 +330,8 @@ std::optional<std::pair<bool, std::string>> EditorProfilerAutomation::Run(std::s
     std::string error;
     if (operation == "profiler_open_panel") return OpenPanel(dock);
     if (operation == "profiler_select") return Select(context, step);
+    if (operation == "assert_profiler_gdi_stable") return CheckGdiStable(context, automation, step);
+    if (operation == "profiler_search_type") return TypeSearch(context, step);
     if (operation == "profiler_sample") return Sample(context, automation, step);
     if (operation == "assert_profiler_counter") return CheckCounter(context, step);
     if (operation == "profiler_panel_click") return ClickPanel(context, step);
@@ -281,7 +356,19 @@ std::optional<std::pair<bool, std::string>> EditorProfilerAutomation::Run(std::s
         if (operation == "capture_profiler_window") {
             const std::optional<std::string> checkpoint = Text(step, "checkpoint", error);
             if (!checkpoint || !error.empty()) return Outcome{ false, error };
-            return Outcome{ automation.CaptureProfilerWindow(*checkpoint, static_cast<int>(width), static_cast<int>(height)), "profiler window:" + *checkpoint };
+            // "text_fits": no single-line text of the window may be cut (a translation must fit too).
+            const bool textFits = Flag(step, "text_fits", error, false).value_or(false);
+            std::vector<CutText> cut;
+            if (textFits) CutTextSink() = &cut;
+            const bool captured = automation.CaptureProfilerWindow(*checkpoint, static_cast<int>(width), static_cast<int>(height));
+            CutTextSink() = nullptr;
+            if (!captured) return Outcome{ false, "profiler window:" + *checkpoint };
+            if (cut.empty()) return Outcome{ true, "profiler window:" + *checkpoint };
+            std::string message = "profiler window: " + std::to_string(cut.size()) + " cut text(s):";
+            for (std::size_t index = 0U; index < cut.size() && index < 8U; ++index) {
+                message += " \"" + cut[index].text + "\" needs " + std::to_string(cut[index].needed) + " px, has " + std::to_string(cut[index].available) + " px;";
+            }
+            return Outcome{ false, message };
         }
         const std::optional<double> x = Number(step, "x", error);
         const std::optional<double> y = Number(step, "y", error);

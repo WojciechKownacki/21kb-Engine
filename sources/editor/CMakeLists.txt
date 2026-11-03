@@ -473,6 +473,7 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/settings/EditorConfigurationStore.hpp
     src/private/profiler/EditorProfilerSampler.hpp
+    src/private/profiler/ProfilerNumber.hpp
     src/private/profiler/EditorProfilerRegions.hpp
     src/private/profiler/ProfilerFiles.hpp
     src/private/profiler/ProfilerPanel.hpp
@@ -968,6 +969,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneViewportStateStore.cpp
     src/settings/EditorConfigurationStore.cpp
     src/profiler/EditorProfilerSampler.cpp
+    src/profiler/ProfilerNumber.cpp
     src/profiler/EditorProfilerRegions.cpp
     src/profiler/ProfilerFiles.cpp
     src/profiler/ProfilerFindingText.cpp
@@ -1430,6 +1432,9 @@ if(BUILD_TESTING)
             src/profiler/ProfilerOverlayModel.cpp
             src/profiler/ProfilerPanelLayout.cpp
             src/profiler/EditorProfilerRegions.cpp
+            src/profiler/ProfilerNumber.cpp
+            src/profiler/ProfilerText.cpp
+            src/profiler/ProfilerFindingText.cpp
             src/profiler/ProfilerFiles.cpp
             src/profiler/ProfilerSelection.cpp
             src/docking/EditorWorkspaceArrangement.cpp
@@ -2088,6 +2093,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-ProfilerPanel")
     set_tests_properties(kb_editor_profiler_panel_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;profiler" TIMEOUT 180)
+    add_test(NAME kb_editor_profiler_languages_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessProfilerLanguagesScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-ProfilerLanguages")
+    set_tests_properties(kb_editor_profiler_languages_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;profiler" TIMEOUT 300)
     add_test(NAME kb_editor_workspace_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorkspaceScenario.json"

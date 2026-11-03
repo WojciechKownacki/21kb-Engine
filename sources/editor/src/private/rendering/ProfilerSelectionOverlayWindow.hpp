@@ -51,6 +51,9 @@ private:
     [[nodiscard]] int ItemAt(const Layout& layout, int x, int y) const;
     void PaintOverlay(HDC dc, const RECT& client) override;
     bool HandleOverlayMessage(UINT message, WPARAM wparam, LPARAM lparam) override;
+    // A press at `index` of the layout (-1: on nothing): it picks a choice of an open list, closes the
+    // list, or acts on what it hit. Returns whether the window took the press.
+    bool Press(const Layout& layout, int index);
     void Activate(const Item& item);
     // Stores the new choice, so the window, the scene and the next session all show it.
     void Commit(const ProfilerSelection& selection);
@@ -61,7 +64,6 @@ private:
     EditorSceneContext* sceneContext_ = nullptr;
     EditorSceneBgfxViewport* sceneViewport_ = nullptr;
     int hovered_ = -1;
-    int counterScroll_ = 0;
 #endif
 };
 

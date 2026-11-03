@@ -683,7 +683,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         if (HandleSearchFieldChar(context_.sceneContext.Console().Filter(), wparam,
                 [&] { RefreshConsoleFilter(context_, messageWindow); }) ||
             HandleSearchFieldChar(context_.sceneContext.ProjectSettings().Search(), wparam,
-                [&] { RefreshSettingsSearch(context_, messageWindow); })) {
+                [&] { RefreshSettingsSearch(context_, messageWindow); }) ||
+            HandleSearchFieldChar(context_.sceneContext.Profiler().CounterSearch(), wparam,
+                [&] { InvalidateRect(context_.mainWindow, nullptr, FALSE); })) {
             return 0;
         }
         if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleCharacter(static_cast<wchar_t>(wparam))) {
@@ -833,7 +835,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         if (HandleSearchFieldKeyDown(context_.sceneContext.Console().Filter(), messageWindow, wparam,
                 [&] { RefreshConsoleFilter(context_, messageWindow); }) ||
             HandleSearchFieldKeyDown(context_.sceneContext.ProjectSettings().Search(), messageWindow, wparam,
-                [&] { RefreshSettingsSearch(context_, messageWindow); })) {
+                [&] { RefreshSettingsSearch(context_, messageWindow); }) ||
+            HandleSearchFieldKeyDown(context_.sceneContext.Profiler().CounterSearch(), messageWindow, wparam,
+                [&] { InvalidateRect(context_.mainWindow, nullptr, FALSE); })) {
             return 0;
         }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {

@@ -3,7 +3,10 @@
 
 #include "profiler/EditorProfilerRegions.hpp"
 #include "profiler/ProfilerOverlayLayout.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "profiler/ProfilerFiles.hpp"
+#include "profiler/ProfilerNumber.hpp"
+#include "profiler/ProfilerText.hpp"
 #include "profiler/ProfilerPanelLayout.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "settings/EditorConfigurationStore.hpp"
@@ -189,6 +192,62 @@ void RunFindingFiltersTest() {
     Require(profiler.Findings().empty() && !profiler.Registry().Stats(ProfilerRegistry::Id(ProfilerBuiltIn::DrawCalls)).available, "Clearing forgets the measurements and the findings");
 }
 
+void RunNumberFormatTest() {
+    // What a person reads follows the language: a comma in Polish, a point in English. The CSV is for
+    // machines and keeps the point in both.
+    kb::core::ProfilerRegistry registry;
+    const std::size_t frame = ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime);
+    registry.Publish(frame, 12.34);
+    kb::core::ProfilerRecorder recorder;
+    recorder.Start(registry, { frame });
+    registry.Publish(frame, 12.34);
+    recorder.Capture(registry, 1U, 0.0);
+    const kb::core::DiagnosisFinding finding{ .rule = "hot_region", .subject = "Update", .value = 50.0, .limit = 40.0, .gainMilliseconds = 3.5 };
+    std::string error;
+    Require(EditorLocalization::SetLanguage("en", {}, error) && FormatProfilerValue(registry.Info(frame), 12.34) == "12.3 ms", "English writes a point");
+    Require(ProfilerText::FindingDetail(finding).find("3.5") != std::string::npos, "English diagnosis writes a point");
+    Require(EditorLocalization::SetLanguage("pl", KB_EDITOR_LOCALIZATION_DIR, error), "The Polish catalog loads");
+    Require(FormatProfilerValue(registry.Info(frame), 12.34) == "12,3 ms" && ProfilerNumber::Fixed(0.5, 2) == "0,50" && ProfilerNumber::General(16.6) == "16,6",
+        "Polish writes a comma in what the overlay and the panel show");
+    Require(ProfilerText::FindingDetail(finding).find("3,5") != std::string::npos, "Polish diagnosis writes a comma");
+    Require(recorder.ToCsv(registry).find("12.3400") != std::string::npos, "The CSV keeps the point in Polish");
+    Require(ProfilerNumber::Localized("1.5", "de") == "1,5" && ProfilerNumber::Localized("1.5", "ja") == "1.5" && ProfilerNumber::Localized("1.5", "pt-BR") == "1,5",
+        "The languages that write a comma are the ones of CLDR");
+    Require(EditorLocalization::SetLanguage("en", {}, error), "Back to English");
+}
+
+void RunOverlayMemoryTest() {
+    // A scene overlay that does not change is not drawn again: the memory knows what the window shows.
+    const std::vector<EditorSceneViewportTextLabel> labels{ EditorSceneViewportTextLabel{ .x = 10.0F, .y = 20.0F, .text = "FPS 60" } };
+    std::vector<EditorSceneViewportOverlayShape> shapes{ EditorSceneViewportOverlayShape{ .points = { { 0.0F, 0.0F }, { 4.0F, 4.0F } } } };
+    EditorSceneViewportOverlayMemory memory;
+    Require(!memory.Shows(labels, shapes, 5, 6), "A window with nothing remembered must be drawn");
+    memory.Remember(labels, shapes, 5, 6);
+    Require(memory.Shows(labels, shapes, 5, 6), "The same content at the same place is not drawn again");
+    Require(!memory.Shows(labels, shapes, 5, 7), "A window that moved is drawn again");
+    std::vector<EditorSceneViewportTextLabel> changed = labels;
+    changed[0].text = "FPS 61";
+    Require(!memory.Shows(changed, shapes, 5, 6), "A changed label is drawn again");
+    shapes[0].points[1][0] = 5.0F;
+    Require(!memory.Shows(labels, shapes, 5, 6), "A changed shape is drawn again");
+    memory.Forget();
+    Require(!memory.Shows(labels, std::vector<EditorSceneViewportOverlayShape>{ shapes }, 5, 6), "A forgotten picture is drawn again");
+}
+
+void RunCounterSearchTest() {
+    kb::core::ProfilerRegistry registry;
+    const kb::core::ProfilerCounterInfo& draws = registry.Info(ProfilerRegistry::Id(ProfilerBuiltIn::DrawCalls));
+    const kb::core::ProfilerCounterInfo& gpu = registry.Info(ProfilerRegistry::Id(ProfilerBuiltIn::GpuTime));
+    std::string error;
+    Require(EditorLocalization::SetLanguage("en", {}, error), "English");
+    Require(ProfilerText::CounterMatches(draws, "") && ProfilerText::CounterMatches(draws, "DRAW") && ProfilerText::CounterMatches(draws, "calls") && !ProfilerText::CounterMatches(gpu, "draw"),
+        "A search is a part of the name, whatever the case; an empty one lists everything");
+    Require(ProfilerText::CounterMatches(draws, "draw_c") && ProfilerText::CounterMatches(gpu, "gpu_ms"), "The id answers a search too");
+    Require(EditorLocalization::SetLanguage("pl", KB_EDITOR_LOCALIZATION_DIR, error) && ProfilerText::CounterMatches(draws, "rysow") && !ProfilerText::CounterMatches(draws, "draw calls"),
+        "The name searched is the one in the editor's language");
+    Require(EditorLocalization::SetLanguage("en", {}, error), "Back to English");
+}
+
 void RunGpuFramesTest() {
     EditorProfilerState profiler;
     Require(profiler.NewGpuFrame(7U), "The first GPU result is new");
@@ -278,6 +337,9 @@ void RunEditorProfilerPanelTests() {
     RunPanelHitsTest();
     RunFramePickingTest();
     RunFindingFiltersTest();
+    RunNumberFormatTest();
+    RunOverlayMemoryTest();
+    RunCounterSearchTest();
     RunGpuFramesTest();
     RunSavedFilesTest();
     RunFrameRegionsTest();

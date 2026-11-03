@@ -22,6 +22,8 @@ constexpr std::array<ProfilerCounterInfo, static_cast<std::size_t>(ProfilerBuilt
     C("game_thread_ms", "Game thread", "Game", "Frame", Area::Cpu, Unit::Milliseconds, 16.6, 33.3),
     C("render_thread_ms", "Render thread", "Render", "Frame", Area::Cpu, Unit::Milliseconds, 16.6, 33.3),
     C("gpu_ms", "GPU", "GPU", "Frame", Area::Gpu, Unit::Milliseconds, 16.6, 33.3),
+    // What the profiler itself costs a frame: a part of a 60 FPS frame is its budget, double that its alarm.
+    C("profiler_ms", "Profiler (own time)", "Profiler", "Frame", Area::Cpu, Unit::Milliseconds, 1.0, 2.0),
     C("draw_calls", "Draw calls", "Draws", "Drawing", Area::Render, Unit::Count, 2000.0, 5000.0),
     C("triangles", "Triangles", "Tris", "Drawing", Area::Render, Unit::Count, 2'000'000.0, 5'000'000.0),
     C("visible_meshes", "Visible meshes", "Visible", "Drawing", Area::Render, Unit::Count),
