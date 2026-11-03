@@ -43,7 +43,7 @@ std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
         DockPanel{ .id = 21, .kind = DockPanelKind::BlendSpace2DEditor, .title = PanelTitle(DockPanelKind::BlendSpace2DEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
         DockPanel{ .id = 20, .kind = DockPanelKind::TimelineEditor, .title = PanelTitle(DockPanelKind::TimelineEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
         DockPanel{ .id = 19, .kind = DockPanelKind::AudioMixer, .title = PanelTitle(DockPanelKind::AudioMixer), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1000, 640 } },
-        DockPanel{ .id = 18, .kind = DockPanelKind::Profiler, .title = PanelTitle(DockPanelKind::Profiler), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 900, 640 } },
+        DockPanel{ .id = 18, .kind = DockPanelKind::Profiler, .title = PanelTitle(DockPanelKind::Profiler), .area = DockArea::Bottom, .visible = false, .floatingRect = DockRect{ 152, 144, 900, 640 } },
         DockPanel{ .id = 17, .kind = DockPanelKind::TilemapEditor, .title = PanelTitle(DockPanelKind::TilemapEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 720 } },
         DockPanel{ .id = 1, .kind = DockPanelKind::Hierarchy, .title = PanelTitle(DockPanelKind::Hierarchy), .area = DockArea::Left, .floatingRect = DockRect{ 96, 96, 360, 520 } },
         DockPanel{ .id = 2, .kind = DockPanelKind::Scene, .title = PanelTitle(DockPanelKind::Scene), .area = DockArea::Center, .floatingRect = DockRect{ 128, 128, 720, 520 } },

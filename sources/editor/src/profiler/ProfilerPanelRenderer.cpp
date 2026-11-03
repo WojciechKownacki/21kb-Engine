@@ -504,7 +504,7 @@ private:
                 if (flagged) c.Fill(Rect(r.left + 2, r.top + 6, r.left + 8, r.top + 16), palette::kWarning);
                 std::string name{ ProfilerText::Region(row.name) };
                 if (row.calls > 1U) name += std::format("  (x{})", row.calls);
-                c.Text(Rect(r.left + indent, r.top, bar - 4, r.bottom), name, flagged ? palette::kWarning : theme_.textPrimary);
+                c.Text(Rect(r.left + indent, r.top, bar - 4, r.bottom), name, flagged ? palette::kWarning : row.waiting ? theme_.textDisabled : theme_.textPrimary);
                 c.Fill(Rect(bar + 6, r.top + 4, bar + 6 + static_cast<int>(share * 100.0), r.bottom - 4), c.Mix(theme_.panel, palette::kBlue, 30));
                 c.Text(Rect(bar + 12, r.top, total, r.bottom), std::format("{:.1f}%", share * 100.0), theme_.textPrimary, 10);
                 c.TextRight(Rect(total, r.top, own - 6, r.bottom), std::format("{:.2f}", static_cast<double>(row.totalNanoseconds) / 1e6), theme_.textPrimary);

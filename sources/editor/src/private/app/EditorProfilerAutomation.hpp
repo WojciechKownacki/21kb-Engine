@@ -10,6 +10,7 @@
 
 namespace kb::editor {
 
+class EditorDockModel;
 class EditorHeadlessAutomation;
 
 // The profiler's steps of a headless scenario: choose what it shows, feed it frames, ask what it
@@ -21,7 +22,7 @@ public:
 
     // The outcome (succeeded, what happened) of a profiler step, or nothing for any other step.
     [[nodiscard]] static std::optional<std::pair<bool, std::string>> Run(std::string_view operation,
-        const kb::core::JsonValue& step, EditorSceneContext& context, EditorHeadlessAutomation& automation);
+        const kb::core::JsonValue& step, EditorSceneContext& context, EditorHeadlessAutomation& automation, EditorDockModel& dock);
 };
 
 } // namespace kb::editor

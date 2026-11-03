@@ -2,6 +2,7 @@
 
 #include "engine/core/ProfilerCounters.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "docking/EditorDockModel.hpp"
 #include "profiler/EditorProfilerSampler.hpp"
 #include "profiler/ProfilerPanel.hpp"
 #include "profiler/ProfilerPanelLayout.hpp"
@@ -222,11 +223,38 @@ using Outcome = std::pair<bool, std::string>;
     return { present.value() && names[static_cast<std::size_t>(found->severity)] == *severity, detail + " as " + std::string{ names[static_cast<std::size_t>(found->severity)] } };
 }
 
+// Opens the panel as the Options menu does, then checks where it went: shown, in a group of its own
+// (the one of the Console), with the Scene View still the shown panel of its own group.
+[[nodiscard]] Outcome OpenPanel(EditorDockModel& dock) {
+    if (!dock.Commands().ActivatePanelKind(DockPanelKind::Profiler, ProfilerPanel::kOpenArea)) return { false, "the workspace has no Profiler panel" };
+    const EditorMetrics metrics{};
+    const DockLayout layout = dock.Queries().BuildLayout(1600, 960, metrics.menuHeight, metrics.statusBarHeight,
+        metrics.tabStripHeight, metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
+    const auto entryOf = [&](DockPanelKind kind) -> const DockPanelLayout* {
+        for (const DockPanel& panel : dock.Queries().Panels()) {
+            if (panel.kind != kind) continue;
+            const auto found = std::ranges::find(layout.panels, panel.id, &DockPanelLayout::panelId);
+            return found == layout.panels.end() ? nullptr : &*found;
+        }
+        return nullptr;
+    };
+    const DockPanelLayout* profiler = entryOf(DockPanelKind::Profiler);
+    const DockPanelLayout* scene = entryOf(DockPanelKind::Scene);
+    const DockPanelLayout* console = entryOf(DockPanelKind::Console);
+    if (profiler == nullptr || scene == nullptr || console == nullptr) return { false, "the Profiler, the Scene View or the Console has no place in the layout" };
+    if (!profiler->active || profiler->content.Empty()) return { false, "the Profiler is not the shown panel of its group" };
+    if (profiler->leafId == scene->leafId) return { false, "the Profiler opened in the group of the Scene View" };
+    if (!scene->active || scene->content.Empty()) return { false, "the Scene View is no longer shown" };
+    if (profiler->leafId != console->leafId) return { false, "the Profiler is not in the group of the Console" };
+    return { true, "profiler panel opened beside the Console" };
+}
+
 } // namespace
 
 std::optional<std::pair<bool, std::string>> EditorProfilerAutomation::Run(std::string_view operation,
-    const kb::core::JsonValue& step, EditorSceneContext& context, EditorHeadlessAutomation& automation) {
+    const kb::core::JsonValue& step, EditorSceneContext& context, EditorHeadlessAutomation& automation, EditorDockModel& dock) {
     std::string error;
+    if (operation == "profiler_open_panel") return OpenPanel(dock);
     if (operation == "profiler_select") return Select(context, step);
     if (operation == "profiler_sample") return Sample(context, automation, step);
     if (operation == "assert_profiler_counter") return CheckCounter(context, step);

@@ -142,6 +142,8 @@ void RecordRegions(EditorProfilerState& profiler, const kb::scene::Scene& scene,
         regions.RecordRegion(name, stageStart, length, 2U);
         stageStart += length;
     }
+    // bgfx::frame waits for the render thread inside the end of the frame, and the wait is no work.
+    regions.RecordRegion("Wait for the previous frame", stageStart - std::min(Nanoseconds(frame.endMilliseconds), present), std::min(Nanoseconds(frame.waitMilliseconds), std::min(Nanoseconds(frame.endMilliseconds), present)), 3U, true);
 }
 
 } // namespace

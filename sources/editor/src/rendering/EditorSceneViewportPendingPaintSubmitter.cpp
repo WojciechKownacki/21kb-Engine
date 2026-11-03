@@ -226,6 +226,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     viewport_.ReportGpuParticleRejection();
     const double endMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - endStart).count();
+    viewport_.lastEndFrameMilliseconds_ = endMs;
     if (endMs >= kSlowStageMs) {
         std::ostringstream detail;
         detail << frameDetail();

@@ -23,6 +23,8 @@ struct EditorProfilerFrame {
     double mainMilliseconds = 0.0;
     double floatingMilliseconds = 0.0;
     double endMilliseconds = 0.0;
+    // Of the end of the frame, the time the renderer waited for the previous frame to finish.
+    double waitMilliseconds = 0.0;
     // The scene's update before the present; empty while the scene is not simulating.
     std::optional<double> gameTickMilliseconds;
 };

@@ -1,6 +1,7 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
 #include "app/EditorEditCommandPolicy.hpp"
+#include "profiler/ProfilerPanel.hpp"
 #include "app/EditorSceneFileCommands.hpp"
 
 #if defined(_WIN32)
@@ -367,7 +368,7 @@ void ActivatePanel(
                 static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Plugins)));
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 4) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, DockArea::Center);
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, ProfilerPanel::kOpenArea);
             } else if (*row == 5) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::AudioMixer, DockArea::Center);
             } else if (*row == 6) {

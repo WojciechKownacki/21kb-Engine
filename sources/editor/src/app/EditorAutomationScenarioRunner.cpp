@@ -1983,7 +1983,7 @@ ReadScriptValue(
     }
 
     // The profiler's steps, including the debug-only counters contract.
-    if (const auto profiler = EditorProfilerAutomation::Run(*operation, step, state.context, state.automation)) {
+    if (const auto profiler = EditorProfilerAutomation::Run(*operation, step, state.context, state.automation, state.dock)) {
         return { profiler->first, profiler->second };
     }
 

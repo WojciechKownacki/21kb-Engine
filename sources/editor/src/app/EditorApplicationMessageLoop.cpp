@@ -799,7 +799,8 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
         const kb::render::SceneRenderSubmitStats renderStats = state.sceneViewport.LastSceneSubmitStats();
         EditorProfilerSampler::Sample(profiler, profilerSelection, state.sceneContext.Scene(),
             EditorProfilerFrame{ .presentMilliseconds = presentMs, .beginMilliseconds = beginMs, .mainMilliseconds = mainMs,
-                .floatingMilliseconds = floatMs, .endMilliseconds = endMs, .gameTickMilliseconds = profiler.GameTick() },
+                .floatingMilliseconds = floatMs, .endMilliseconds = endMs, .waitMilliseconds = state.sceneViewport.LastEndFrameMilliseconds(),
+                .gameTickMilliseconds = profiler.GameTick() },
             &renderStats);
         const auto sampled = std::chrono::steady_clock::now();
         profiler.RefreshOverlay(profilerSelection, sampled);

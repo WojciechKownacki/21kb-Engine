@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/editor/docking/DockTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -20,6 +21,10 @@ namespace kb::editor {
 class ProfilerPanel final {
 public:
     ProfilerPanel() = delete;
+
+    // Where the panel opens: in the bottom group, beside the Console. In the group of the Scene View
+    // it would hide the scene, and a scene that is not drawn makes no frames to measure.
+    static constexpr DockArea kOpenArea = DockArea::Bottom;
 
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext);
     // A left click at (x, y); true when the panel took it. `owner` hosts the dialog that edits a threshold.

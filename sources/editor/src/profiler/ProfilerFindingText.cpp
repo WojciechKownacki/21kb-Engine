@@ -27,6 +27,7 @@ std::string_view ProfilerText::Region(std::string_view name) {
     if (name == "Queue main window") return EditorText("profiler.region.queue_main", "Queue main window");
     if (name == "Queue floating windows") return EditorText("profiler.region.queue_floating", "Queue floating windows");
     if (name == "End frame") return EditorText("profiler.region.end_frame", "End frame");
+    if (name == "Wait for the previous frame") return EditorText("profiler.region.wait_frame", "Waiting for the previous frame");
     return name;
 }
 

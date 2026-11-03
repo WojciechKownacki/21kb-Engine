@@ -2,6 +2,9 @@
   "schema": "21kb.editor-automation/v1",
   "steps": [
     {
+      "op": "profiler_open_panel"
+    },
+    {
       "op": "configure_runtime_rendering",
       "width": 640,
       "height": 360
