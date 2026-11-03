@@ -40,6 +40,7 @@ target_link_libraries(kb_cli_core PUBLIC kb_engine)
 target_include_directories(kb_cli_core PRIVATE ../editor/src/private ../editor/include)
 target_sources(kb_cli_core PRIVATE
     ../editor/src/settings/EditorConfigurationStore.cpp
+    ../editor/src/profiler/ProfilerSelection.cpp
     ../editor/src/settings/EditorPanelSessionText.cpp
     ../editor/src/settings/EditorLayoutLibrary.cpp
     ../editor/src/docking/DefaultDockWorkspace.cpp
