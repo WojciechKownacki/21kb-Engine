@@ -1,10 +1,13 @@
 #include "profiler/EditorProfilerSampler.hpp"
 
+#include "profiler/ProfilerFiles.hpp"
+
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldTelemetry.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -15,13 +18,17 @@
 #include <psapi.h>
 #endif
 
+#include <algorithm>
+#include <array>
 #include <string>
+#include <utility>
 
 namespace kb::editor {
 namespace {
 
 using kb::core::ProfilerArea;
 using kb::core::ProfilerBuiltIn;
+using kb::core::ProfilerCounters;
 using kb::core::ProfilerRegistry;
 
 constexpr double kBytesPerMegabyte = 1024.0 * 1024.0;
@@ -36,7 +43,7 @@ void Publish(EditorProfilerState& profiler, ProfilerBuiltIn counter, double valu
 }
 
 // The renderer's own figures; they describe the frame that finished before this one.
-void SampleRenderer(EditorProfilerState& profiler, const ProfilerSelection& selection) {
+void SampleBgfx(EditorProfilerState& profiler, const ProfilerSelection& selection) {
     const bgfx::Stats* stats = bgfx::getStats();
     if (stats == nullptr) return;
     if (selection.AreaMeasured(ProfilerArea::Cpu) && stats->cpuTimerFreq > 0 && stats->cpuTimeEnd > stats->cpuTimeBegin) {
@@ -95,17 +102,86 @@ void SampleEcs(EditorProfilerState& profiler, const kb::scene::Scene& scene) {
     }
 }
 
+[[nodiscard]] std::uint64_t Nanoseconds(double milliseconds) {
+    return static_cast<std::uint64_t>(std::max(0.0, milliseconds) * kNanosecondsPerMillisecond);
+}
+
+// The frame as regions: the scene's update (with the systems of the scheduler inside it) and the
+// present (with its stages). The regions follow one another from the start of the frame; their
+// lengths are what was measured.
+void RecordRegions(EditorProfilerState& profiler, const kb::scene::Scene& scene, const EditorProfilerFrame& frame) {
+    ProfilerCounters& regions = profiler.Regions();
+    const std::uint64_t start = ProfilerCounters::NowNanoseconds();
+    const std::uint64_t game = frame.gameTickMilliseconds ? Nanoseconds(*frame.gameTickMilliseconds) : 0U;
+    const std::uint64_t present = Nanoseconds(frame.presentMilliseconds);
+    regions.RecordRegion("Editor frame", start, game + present, 0U);
+    std::uint64_t cursor = start;
+    if (frame.gameTickMilliseconds) {
+        regions.RecordRegion("Game tick", cursor, game, 1U);
+        const auto runtime = scene.Runtime();
+        const kb::scene::SceneRuntimeHotPathReport hotPath = runtime.HotPathReport();
+        const std::uint64_t update = std::min(static_cast<std::uint64_t>(hotPath.runtimeUpdateNanoseconds), game);
+        const std::uint64_t transform = std::min(static_cast<std::uint64_t>(hotPath.runtimeTransformSyncNanoseconds), game - update);
+        regions.RecordRegion("Scene update", cursor, update, 2U);
+        std::uint64_t systemStart = cursor;
+        for (const kb::ecs::SystemSchedulerSystemCounters& system : runtime.LastEcsProfilerTrace().systemCounters) {
+            const std::uint64_t length = std::min(system.cpuTimeNanoseconds, update);
+            regions.RecordRegion(system.systemName, systemStart, length, 3U);
+            systemStart += length;
+        }
+        regions.RecordRegion("Transform sync", cursor + update, transform, 2U);
+        cursor += game;
+    }
+    regions.RecordRegion("Present", cursor, present, 1U);
+    std::uint64_t stageStart = cursor;
+    const std::array<std::pair<const char*, double>, 4> stages{ {
+        { "Begin layout", frame.beginMilliseconds }, { "Queue main window", frame.mainMilliseconds },
+        { "Queue floating windows", frame.floatingMilliseconds }, { "End frame", frame.endMilliseconds } } };
+    for (const auto& [name, milliseconds] : stages) {
+        const std::uint64_t length = std::min(Nanoseconds(milliseconds), present);
+        regions.RecordRegion(name, stageStart, length, 2U);
+        stageStart += length;
+    }
+}
+
 } // namespace
 
 void EditorProfilerSampler::Sample(EditorProfilerState& profiler, const ProfilerSelection& selection,
-    const kb::scene::Scene& scene, double frameMilliseconds) {
+    const kb::scene::Scene& scene, const EditorProfilerFrame& frame, const kb::render::SceneRenderSubmitStats* renderStats) {
+    if (profiler.Panel().paused) return;
+    profiler.SyncThresholds(selection);
+    const double gameMilliseconds = frame.gameTickMilliseconds.value_or(0.0);
+    const double frameMilliseconds = frame.presentMilliseconds + gameMilliseconds;
     if (selection.AreaMeasured(ProfilerArea::Cpu) && frameMilliseconds > 0.0) {
         Publish(profiler, ProfilerBuiltIn::FrameTime, frameMilliseconds);
         Publish(profiler, ProfilerBuiltIn::FramesPerSecond, 1000.0 / frameMilliseconds);
+        if (frame.gameTickMilliseconds) Publish(profiler, ProfilerBuiltIn::GameThreadTime, gameMilliseconds);
     }
-    SampleRenderer(profiler, selection);
+    SampleBgfx(profiler, selection);
+    if (renderStats != nullptr && selection.AreaMeasured(ProfilerArea::Render)) {
+        Publish(profiler, ProfilerBuiltIn::VisibleMeshes, renderStats->visibleMeshCount);
+        Publish(profiler, ProfilerBuiltIn::CulledInstances, renderStats->culledInstanceCount);
+        Publish(profiler, ProfilerBuiltIn::SceneLights, renderStats->sceneLightCount);
+    }
     if (selection.AreaMeasured(ProfilerArea::Memory)) SampleProcessMemory(profiler);
     if (selection.AreaMeasured(ProfilerArea::Ecs)) SampleEcs(profiler, scene);
+
+    // The frame's regions are filed under its number, and the recording takes its counters.
+    const std::uint64_t number = profiler.NextFrame();
+    if (selection.AreaMeasured(ProfilerArea::Cpu)) {
+        RecordRegions(profiler, scene, frame);
+        profiler.FrameRegions().Capture(number, profiler.Regions().TimelineEvents());
+        profiler.Regions().ResetTimeline();
+    }
+    profiler.Recorder().Capture(profiler.Registry(), number,
+        static_cast<double>(ProfilerCounters::NowNanoseconds() - profiler.RecordingStartNanoseconds()) / kNanosecondsPerMillisecond);
+    // A recording that filled up is written out and starts over, so nothing is lost silently.
+    if (profiler.Recorder().Full()) {
+        profiler.Panel().lastSaved = ProfilerFiles::SaveRecording(profiler);
+        profiler.Recorder().Clear();
+    }
+    constexpr std::uint64_t kDiagnoseEvery = 15U;
+    if (number % kDiagnoseEvery == 1U) profiler.Diagnose();
 }
 
 } // namespace kb::editor

@@ -1,6 +1,7 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorKeyState.hpp"
 #include "app/EditorMouseWheelRouter.hpp"
+#include "profiler/ProfilerPanel.hpp"
 
 #if defined(_WIN32)
 #include "app/console/EditorConsolePointerController.hpp"
@@ -269,6 +270,12 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         EditorAgentPanelState& agent = sceneContext_.AgentPanel();
         agent.ScrollBy(wheelDelta / WHEEL_DELTA * 54, AgentPanelRenderer::MaximumScroll(*agentContent, agent));
         EditorWindowInvalidator::InvalidatePanel(messageWindow_, *agentContent);
+        return true;
+    }
+
+    if (const std::optional<RECT> profilerContent = EditorPanelContentResolver::Resolve(DockPanelKind::Profiler, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        profilerContent.has_value() && ProfilerPanel::Wheel(*profilerContent, x, y, wheelDelta, sceneContext_)) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *profilerContent);
         return true;
     }
 

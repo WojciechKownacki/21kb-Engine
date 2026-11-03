@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/scene/SceneRenderTypes.hpp"
+
 #include "app/EditorKeyState.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputKey.hpp"
@@ -195,6 +197,7 @@ public:
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
     // The "What to show" window of the profiler, and the profiler's counters and graph laid over an
     // earlier scene viewport capture.
+    [[nodiscard]] kb::render::SceneRenderSubmitStats SceneSubmitStats() const;
     [[nodiscard]] bool CaptureProfilerWindow(std::string_view checkpoint, int width, int height);
     [[nodiscard]] bool ClickProfilerWindow(int x, int y, int width, int height);
     [[nodiscard]] bool CaptureProfilerOverlay(std::string_view checkpoint, std::string_view sceneCheckpoint);

@@ -8,6 +8,10 @@ std::string_view ProfilerText::Counter(const kb::core::ProfilerCounterInfo& info
     const std::string_view id = info.id;
     if (id == "fps") return EditorText("profiler.counter.fps", "FPS");
     if (id == "frame_ms") return EditorText("profiler.counter.frame", "Frame time");
+    if (id == "game_thread_ms") return EditorText("profiler.counter.game_thread", "Game thread");
+    if (id == "visible_meshes") return EditorText("profiler.counter.visible_meshes", "Visible meshes");
+    if (id == "scene_lights") return EditorText("profiler.counter.scene_lights", "Scene lights");
+    if (id == "culled_instances") return EditorText("profiler.counter.culled", "Culled instances");
     if (id == "render_thread_ms") return EditorText("profiler.counter.render_thread", "Render thread");
     if (id == "gpu_ms") return EditorText("profiler.counter.gpu", "GPU");
     if (id == "draw_calls") return EditorText("profiler.counter.draw_calls", "Draw calls");

@@ -47,6 +47,15 @@ struct ProfilerOverlayOptions {
     [[nodiscard]] bool operator==(const ProfilerOverlayOptions&) const noexcept = default;
 };
 
+// The budget and alarm the user set for a counter, in place of the ones it was built with.
+struct ProfilerThreshold {
+    std::string counter;
+    double budget = 0.0;
+    double alarm = 0.0;
+
+    [[nodiscard]] bool operator==(const ProfilerThreshold&) const noexcept = default;
+};
+
 // What the user asked to see: the areas to measure, the counters to show in the panel and the
 // ones to show on the scene (two lists, by counter id), and how the scene shows them. A counter
 // is shown only while its area is measured.
@@ -55,6 +64,7 @@ public:
     std::vector<std::string> areas;
     std::vector<std::string> panelCounters;
     std::vector<std::string> sceneCounters;
+    std::vector<ProfilerThreshold> thresholds;
     ProfilerOverlayOptions overlay;
 
     ProfilerSelection();
@@ -65,6 +75,8 @@ public:
     void SetAreaMeasured(kb::core::ProfilerArea area, bool measured);
     void SetInPanel(std::string_view counterId, bool shown);
     void SetOnScene(std::string_view counterId, bool shown);
+    // Zero for both puts the counter's own thresholds back.
+    void SetThreshold(std::string_view counterId, double budget, double alarm);
 
     // Replaces the areas and both counter lists, and turns the scene's list and graph on.
     void ApplyPreset(ProfilerPreset preset, const kb::core::ProfilerRegistry& registry);

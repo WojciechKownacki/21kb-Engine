@@ -796,8 +796,19 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
         // The cost of this present is the frame the profiler reports.
         const ProfilerSelection& profilerSelection = state.sceneContext.EditorConfig().profiler;
         EditorProfilerState& profiler = state.sceneContext.Profiler();
-        EditorProfilerSampler::Sample(profiler, profilerSelection, state.sceneContext.Scene(), presentMs);
-        profiler.RefreshOverlay(profilerSelection, std::chrono::steady_clock::now());
+        const kb::render::SceneRenderSubmitStats renderStats = state.sceneViewport.LastSceneSubmitStats();
+        EditorProfilerSampler::Sample(profiler, profilerSelection, state.sceneContext.Scene(),
+            EditorProfilerFrame{ .presentMilliseconds = presentMs, .beginMilliseconds = beginMs, .mainMilliseconds = mainMs,
+                .floatingMilliseconds = floatMs, .endMilliseconds = endMs, .gameTickMilliseconds = profiler.GameTick() },
+            &renderStats);
+        const auto sampled = std::chrono::steady_clock::now();
+        profiler.RefreshOverlay(profilerSelection, sampled);
+        // The Profiler panel follows the frames, ten times a second at most.
+        static std::chrono::steady_clock::time_point lastProfilerPanelRepaint{};
+        if (sampled - lastProfilerPanelRepaint >= std::chrono::milliseconds{ 100 }) {
+            lastProfilerPanelRepaint = sampled;
+            EditorWindowInvalidator::InvalidateDockPanel(state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Profiler);
+        }
     }
     if (scenePresented) {
         state.sceneContext.AcknowledgeSceneRenderSubmitted();
@@ -1722,7 +1733,11 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         }
         const auto playStart = stressEnabled ? std::chrono::steady_clock::now()
             : std::chrono::steady_clock::time_point{};
+        const auto gameTickStart = std::chrono::steady_clock::now();
         TickPlayMode(state, deltaSeconds);
+        state.sceneContext.Profiler().NoteGameTick(state.playMode.IsPlaying()
+            ? std::optional<double>{ std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gameTickStart).count() }
+            : std::nullopt);
         const double playMs = stressEnabled ? std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - playStart).count() : 0.0;
         static_cast<void>(TickPointerDragFrame(state));

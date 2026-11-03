@@ -1,5 +1,6 @@
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "profiler/ProfilerOverlayLayout.hpp"
+#include "rendering/AgentBarRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 
 #if defined(_WIN32)
@@ -683,7 +684,8 @@ void AppendNavigationMesh(
     DockPanelKind panelKind,
     const EditorViewportPreviewState& viewportState,
     const EditorRenderBackendSettings& renderBackendSettings,
-    const SceneViewportToolbarRects& sceneRects) {
+    const SceneViewportToolbarRects& sceneRects,
+    const RECT& content) {
     static_cast<void>(panelKind);
     const EditorViewportProfile profile = viewportState.Profile();
     const SceneViewportRenderProfileDesc renderProfile = RenderProfileDesc(viewportState.RenderProfile());
@@ -790,8 +792,17 @@ void AppendNavigationMesh(
     // size it is rendered at.
     const ProfilerOverlayOptions& profilerOptions = sceneContext.EditorConfig().profiler.overlay;
     ProfilerOverlayContent profilerOverlay;
+    ProfilerOverlayMetrics profilerMetrics = ProfilerOverlayMetrics::ForTextSize(profilerOptions.textSize);
+    // The agent bar floats over the bottom of an edit-mode scene, and the counters keep clear of it.
+    if (!continuousRuntimeFrames) {
+        const RECT bar = AgentBarRenderer::WindowRect(content, sceneContext.AgentPanel());
+        if (bar.right > bar.left) {
+            profilerMetrics.avoid = { static_cast<float>(bar.left - sceneRects.renderArea.left), static_cast<float>(bar.top - sceneRects.renderArea.top),
+                static_cast<float>(bar.right - sceneRects.renderArea.left), static_cast<float>(bar.bottom - sceneRects.renderArea.top) };
+        }
+    }
     AppendProfilerOverlay(profilerOverlay, sceneContext.Profiler().Overlay(), profilerOptions, MakeEditorDarkTheme(),
-        ProfilerOverlayMetrics::ForTextSize(profilerOptions.textSize), static_cast<float>(renderWidth), static_cast<float>(renderHeight));
+        profilerMetrics, static_cast<float>(renderWidth), static_cast<float>(renderHeight));
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
@@ -874,7 +885,7 @@ EditorSceneBgfxViewport::PresentSettings ScenePanelContentRenderer::BuildSetting
     const EditorRenderBackendSettings& renderBackendSettings) {
     const auto& state = sceneContext.ViewportPreview(panel.id);
     return BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, state, renderBackendSettings,
-        SceneViewportToolbarRenderer::Resolve(content,state,sceneContext));
+        SceneViewportToolbarRenderer::Resolve(content,state,sceneContext), content);
 }
 
 void ScenePanelContentRenderer::PresentViewport(
@@ -914,7 +925,7 @@ void ScenePanelContentRenderer::Paint(
     }
 
     const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState, sceneContext);
-    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects);
+    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects, content);
     if (sceneViewportHost != nullptr) {
         sceneViewport->Present(dc, sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), theme, settings);
     } else {

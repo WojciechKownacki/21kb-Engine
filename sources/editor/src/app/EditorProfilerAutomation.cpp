@@ -3,12 +3,18 @@
 #include "engine/core/ProfilerCounters.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "profiler/EditorProfilerSampler.hpp"
+#include "profiler/ProfilerPanel.hpp"
+#include "profiler/ProfilerPanelLayout.hpp"
+#include "project/EditorProjectPaths.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <sstream>
 #include <vector>
 
 namespace kb::editor {
@@ -82,18 +88,24 @@ using Outcome = std::pair<bool, std::string>;
 }
 
 // `frames` frames, the n-th costing the n-th of "frame_ms" in turn.
-[[nodiscard]] Outcome Sample(EditorSceneContext& context, const JsonValue& step) {
+[[nodiscard]] Outcome Sample(EditorSceneContext& context, EditorHeadlessAutomation& automation, const JsonValue& step) {
     std::string error;
     const std::optional<double> frames = Number(step, "frames", error);
     const JsonValue* costs = Field(step, "frame_ms", JsonValue::Kind::Array, error, true);
+    const JsonValue* games = Field(step, "game_ms", JsonValue::Kind::Array, error, false);
     if (!frames || costs == nullptr || costs->Size() == 0U || *frames < 1.0 || *frames > 100000.0) {
         return { false, error.empty() ? "profiler_sample needs 1..100000 frames and a non-empty frame_ms" : error };
     }
     std::vector<double> milliseconds;
     for (std::size_t index = 0U; index < costs->Size(); ++index) milliseconds.push_back(costs->At(index)->AsNumber());
     const ProfilerSelection& selection = context.EditorConfig().profiler;
+    std::vector<double> gameMilliseconds;
+    for (std::size_t index = 0U; games != nullptr && index < games->Size(); ++index) gameMilliseconds.push_back(games->At(index)->AsNumber());
+    const kb::render::SceneRenderSubmitStats renderStats = automation.SceneSubmitStats();
     for (std::size_t frame = 0U; frame < static_cast<std::size_t>(*frames); ++frame) {
-        EditorProfilerSampler::Sample(context.Profiler(), selection, context.Scene(), milliseconds[frame % milliseconds.size()]);
+        EditorProfilerFrame sampled{ .presentMilliseconds = milliseconds[frame % milliseconds.size()] };
+        if (!gameMilliseconds.empty()) sampled.gameTickMilliseconds = gameMilliseconds[frame % gameMilliseconds.size()];
+        EditorProfilerSampler::Sample(context.Profiler(), selection, context.Scene(), sampled, &renderStats);
     }
     context.Profiler().RefreshOverlay(selection, std::chrono::steady_clock::now(), true);
     return { true, std::format("profiler frames: {}", static_cast<std::size_t>(*frames)) };
@@ -106,6 +118,7 @@ using Outcome = std::pair<bool, std::string>;
     const std::optional<bool> available = Flag(step, "available", error);
     const std::optional<double> minimum = Number(step, "min", error, false);
     const std::optional<double> maximum = Number(step, "max", error, false);
+    const std::optional<double> samples = Number(step, "samples", error, false);
     if (!id || !available || !error.empty()) return { false, error };
     const kb::core::ProfilerRegistry& registry = context.Profiler().Registry();
     const std::optional<std::size_t> counter = registry.Find(*id);
@@ -113,7 +126,100 @@ using Outcome = std::pair<bool, std::string>;
     const kb::core::ProfilerCounterStats stats = registry.Stats(*counter);
     const std::string message = std::format("{} {}", *id, stats.available ? std::format("= {}", stats.now) : "is unavailable");
     if (stats.available != available.value()) return { false, message };
+    if (samples && static_cast<double>(stats.samples) != *samples) return { false, message + std::format(" with {} samples", stats.samples) };
     return { !stats.available || ((!minimum || stats.now >= *minimum) && (!maximum || stats.now <= *maximum)), message };
+}
+
+[[nodiscard]] std::optional<ProfilerPanelAction> ActionNamed(std::string_view name) {
+    static constexpr std::array<std::pair<std::string_view, ProfilerPanelAction>, 25> names{ {
+        { "tab", ProfilerPanelAction::Tab }, { "record", ProfilerPanelAction::Record }, { "pause", ProfilerPanelAction::Pause },
+        { "clear", ProfilerPanelAction::Clear }, { "first_frame", ProfilerPanelAction::FirstFrame }, { "previous_frame", ProfilerPanelAction::PreviousFrame },
+        { "next_frame", ProfilerPanelAction::NextFrame }, { "live", ProfilerPanelAction::Live }, { "snapshot", ProfilerPanelAction::Snapshot },
+        { "what_to_show", ProfilerPanelAction::WhatToShow }, { "areas_all", ProfilerPanelAction::AreasAll }, { "areas_none", ProfilerPanelAction::AreasNone },
+        { "counters_all", ProfilerPanelAction::CountersAll }, { "counters_none", ProfilerPanelAction::CountersNone }, { "area", ProfilerPanelAction::Area },
+        { "left_counter", ProfilerPanelAction::LeftCounter }, { "pick_frame", ProfilerPanelAction::PickFrame }, { "counter_panel", ProfilerPanelAction::CounterPanel },
+        { "counter_scene", ProfilerPanelAction::CounterScene }, { "severity", ProfilerPanelAction::Severity }, { "category", ProfilerPanelAction::Category },
+        { "show_ignored", ProfilerPanelAction::ShowIgnored }, { "finding", ProfilerPanelAction::Finding },
+        { "show_in_measurements", ProfilerPanelAction::ShowInMeasurements }, { "ignore_finding", ProfilerPanelAction::IgnoreFinding } } };
+    const auto found = std::ranges::find(names, name, &std::pair<std::string_view, ProfilerPanelAction>::first);
+    return found == names.end() ? std::nullopt : std::optional<ProfilerPanelAction>{ found->second };
+}
+
+// A click on the part of the panel that has `action` (and `argument`), at its center; "pick_offset" places
+// the click of a chart on the column that many frames before the newest. A threshold cell is left to the
+// person, since it opens a dialog.
+[[nodiscard]] Outcome ClickPanel(EditorSceneContext& context, const JsonValue& step) {
+    std::string error;
+    const std::optional<std::string> name = Text(step, "action", error);
+    const int argument = static_cast<int>(Number(step, "argument", error, false).value_or(0.0));
+    const std::optional<double> offset = Number(step, "pick_offset", error, false);
+    const int width = static_cast<int>(Number(step, "width", error, false).value_or(1000.0));
+    const int height = static_cast<int>(Number(step, "height", error, false).value_or(600.0));
+    if (!name || !error.empty()) return { false, error };
+    const std::optional<ProfilerPanelAction> action = ActionNamed(*name);
+    if (!action) return { false, "unknown profiler panel action '" + *name + "'" };
+    const RECT content{ 0, 0, width, height };
+    const ProfilerSelection& selection = context.EditorConfig().profiler;
+    const ProfilerPanelGeometry geometry = ResolveProfilerPanelGeometry(content, context.Profiler().Panel(), selection);
+    for (const ProfilerPanelHit& hit : ProfilerPanelHits(geometry, context.Profiler(), selection)) {
+        if (hit.action != *action || hit.argument != argument) continue;
+        const int y = (hit.bounds.top + hit.bounds.bottom) / 2;
+        const int x = offset ? ProfilerFrameX(hit.bounds, static_cast<std::size_t>(*offset)) : (hit.bounds.left + hit.bounds.right) / 2;
+        return { ProfilerPanel::Pointer(nullptr, content, x, y, context), "profiler panel " + *name };
+    }
+    return { false, "the profiler panel has nothing to click for '" + *name + "' " + std::to_string(argument) };
+}
+
+[[nodiscard]] Outcome WheelPanel(EditorSceneContext& context, const JsonValue& step) {
+    std::string error;
+    const std::optional<double> x = Number(step, "x", error);
+    const std::optional<double> y = Number(step, "y", error);
+    const std::optional<double> notches = Number(step, "notches", error);
+    const int width = static_cast<int>(Number(step, "width", error, false).value_or(1000.0));
+    const int height = static_cast<int>(Number(step, "height", error, false).value_or(600.0));
+    if (!x || !y || !notches || !error.empty()) return { false, error };
+    return { ProfilerPanel::Wheel(RECT{ 0, 0, width, height }, static_cast<int>(*x), static_cast<int>(*y), static_cast<int>(-*notches * WHEEL_DELTA), context), "profiler panel wheel" };
+}
+
+// The newest file of Saved/Profiler that starts with `kind`: its first line holds `header` and it has
+// at least `minLines` lines in all.
+[[nodiscard]] Outcome CheckFile(const JsonValue& step) {
+    std::string error;
+    const std::optional<std::string> kind = Text(step, "kind", error);
+    const std::optional<std::string> header = Text(step, "header", error);
+    const int minimum = static_cast<int>(Number(step, "min_lines", error, false).value_or(2.0));
+    if (!kind || !header || !error.empty()) return { false, error };
+    const std::filesystem::path folder = EditorProjectPaths::ProjectRoot() / "Saved" / "Profiler";
+    std::filesystem::path newest;
+    std::error_code fileError;
+    for (const auto& entry : std::filesystem::directory_iterator(folder, fileError)) {
+        const std::string name = entry.path().filename().string();
+        if (name.starts_with(*kind) && (newest.empty() || entry.last_write_time() > std::filesystem::last_write_time(newest))) newest = entry.path();
+    }
+    if (newest.empty()) return { false, "no " + *kind + " file in Saved/Profiler" };
+    std::ifstream input{ newest };
+    std::string line;
+    std::getline(input, line);
+    int lines = 1;
+    for (std::string rest; std::getline(input, rest);) ++lines;
+    if (line != *header) return { false, newest.filename().string() + " starts with: " + line };
+    return { lines >= minimum, std::format("{} has {} lines", newest.filename().string(), lines) };
+}
+
+// Whether the diagnosis of the measurements holds (or lacks) a finding of a rule, at a severity.
+[[nodiscard]] Outcome CheckFinding(EditorSceneContext& context, const JsonValue& step) {
+    std::string error;
+    const std::optional<std::string> rule = Text(step, "rule", error);
+    const std::optional<bool> present = Flag(step, "present", error);
+    const std::optional<std::string> severity = Text(step, "severity", error, false);
+    if (!rule || !present || !error.empty()) return { false, error };
+    context.Profiler().Diagnose();
+    const auto& findings = context.Profiler().Findings();
+    const auto found = std::ranges::find(findings, *rule, &kb::core::DiagnosisFinding::rule);
+    std::string detail = "finding " + *rule + (found == findings.end() ? " absent" : " present");
+    if (found == findings.end() || !severity) return { !present.value(), detail };
+    const std::array<std::string_view, 3> names{ "problem", "warning", "tip" };
+    return { present.value() && names[static_cast<std::size_t>(found->severity)] == *severity, detail + " as " + std::string{ names[static_cast<std::size_t>(found->severity)] } };
 }
 
 } // namespace
@@ -122,8 +228,12 @@ std::optional<std::pair<bool, std::string>> EditorProfilerAutomation::Run(std::s
     const kb::core::JsonValue& step, EditorSceneContext& context, EditorHeadlessAutomation& automation) {
     std::string error;
     if (operation == "profiler_select") return Select(context, step);
-    if (operation == "profiler_sample") return Sample(context, step);
+    if (operation == "profiler_sample") return Sample(context, automation, step);
     if (operation == "assert_profiler_counter") return CheckCounter(context, step);
+    if (operation == "profiler_panel_click") return ClickPanel(context, step);
+    if (operation == "profiler_panel_wheel") return WheelPanel(context, step);
+    if (operation == "assert_profiler_file") return CheckFile(step);
+    if (operation == "assert_profiler_finding") return CheckFinding(context, step);
     if (operation == "assert_profiler") {
         // The debug-only scopes, counters, timeline and allocations of kb::core::ProfilerCounters.
         kb::core::ProfilerCounters profiler;

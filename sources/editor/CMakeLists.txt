@@ -473,6 +473,9 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/settings/EditorConfigurationStore.hpp
     src/private/profiler/EditorProfilerSampler.hpp
+    src/private/profiler/ProfilerFiles.hpp
+    src/private/profiler/ProfilerPanel.hpp
+    src/private/profiler/ProfilerPanelLayout.hpp
     src/private/profiler/EditorProfilerState.hpp
     src/private/profiler/ProfilerOverlayLayout.hpp
     src/private/profiler/ProfilerOverlayModel.hpp
@@ -964,6 +967,11 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneViewportStateStore.cpp
     src/settings/EditorConfigurationStore.cpp
     src/profiler/EditorProfilerSampler.cpp
+    src/profiler/ProfilerFiles.cpp
+    src/profiler/ProfilerFindingText.cpp
+    src/profiler/ProfilerPanelController.cpp
+    src/profiler/ProfilerPanelLayout.cpp
+    src/profiler/ProfilerPanelRenderer.cpp
     src/profiler/ProfilerOverlayLayout.cpp
     src/profiler/ProfilerOverlayModel.cpp
     src/profiler/ProfilerSelection.cpp
@@ -1354,6 +1362,7 @@ if(BUILD_TESTING)
         tests/EditorProjectTests.cpp
         tests/EditorSettingsTests.cpp
         tests/EditorProfilerTests.cpp
+        tests/EditorProfilerPanelTests.cpp
         tests/EditorLocalizationTests.cpp
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
@@ -1417,6 +1426,7 @@ if(BUILD_TESTING)
             src/settings/EditorConfigurationStore.cpp
             src/profiler/ProfilerOverlayLayout.cpp
             src/profiler/ProfilerOverlayModel.cpp
+            src/profiler/ProfilerPanelLayout.cpp
             src/profiler/ProfilerSelection.cpp
             src/docking/EditorWorkspaceArrangement.cpp
             src/rendering/FloatingPanelGeometry.cpp
@@ -2066,6 +2076,13 @@ if(BUILD_TESTING)
             --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
             --selftest-task "SELFTEST-Profiler")
     set_tests_properties(kb_editor_profiler_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;profiler" TIMEOUT 180)
+    add_test(NAME kb_editor_profiler_panel_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessProfilerPanelScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-ProfilerPanel")
+    set_tests_properties(kb_editor_profiler_panel_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;profiler" TIMEOUT 180)
     add_test(NAME kb_editor_workspace_headless
         COMMAND $<TARGET_FILE:kb_editor>

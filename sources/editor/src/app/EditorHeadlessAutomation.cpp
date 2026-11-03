@@ -3688,6 +3688,10 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     });
 }
 
+kb::render::SceneRenderSubmitStats EditorHeadlessAutomation::SceneSubmitStats() const {
+    return impl_->viewport.LastSceneSubmitStats();
+}
+
 bool EditorHeadlessAutomation::CaptureProfilerWindow(std::string_view checkpoint, int width, int height) {
     if (width < 800 || width > 3840 || height < 400 || height > 2160) return false;
     const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");

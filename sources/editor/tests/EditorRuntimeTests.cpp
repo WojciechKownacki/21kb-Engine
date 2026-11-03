@@ -48,6 +48,7 @@ int main(int argumentCount, char** arguments) {
     }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "profiler") {
         kb::editor::tests::RunEditorProfilerTests();
+        kb::editor::tests::RunEditorProfilerPanelTests();
         return 0;
     }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "inspector") {
@@ -71,6 +72,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorProjectTests();
     kb::editor::tests::RunEditorSettingsTests();
     kb::editor::tests::RunEditorProfilerTests();
+    kb::editor::tests::RunEditorProfilerPanelTests();
     kb::editor::tests::RunEditorLocalizationTests();
     kb::editor::tests::RunEditorInspectorTests();
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();

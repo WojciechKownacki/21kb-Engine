@@ -38,10 +38,14 @@ constexpr std::size_t kLabelCharacters = 16U;
 
 // Where a box of the given size sits in the viewport for a corner.
 [[nodiscard]] std::array<float, 2> Anchor(ProfilerCorner corner, float width, float height,
-    float viewportWidth, float viewportHeight) noexcept {
+    float viewportWidth, float viewportHeight, const std::array<float, 4>& avoid) noexcept {
     const bool right = corner == ProfilerCorner::TopRight || corner == ProfilerCorner::BottomRight;
     const bool bottom = corner == ProfilerCorner::BottomLeft || corner == ProfilerCorner::BottomRight;
-    return { right ? viewportWidth - kMargin - width : kMargin, bottom ? viewportHeight - kMargin - height : kMargin };
+    const float x = right ? viewportWidth - kMargin - width : kMargin;
+    float y = bottom ? viewportHeight - kMargin - height : kMargin;
+    const bool covered = avoid[2] > avoid[0] && x < avoid[2] && x + width > avoid[0] && y < avoid[3] && y + height > avoid[1];
+    if (bottom && covered) y = std::max(kMargin, avoid[1] - kMargin - height);
+    return { x, y };
 }
 
 // Whole seconds, but a short history that is not a whole number of them is told in tenths.
@@ -65,10 +69,11 @@ constexpr std::size_t kLabelCharacters = 16U;
 }
 
 void AppendList(ProfilerOverlayContent& content, const ProfilerOverlayModel& model,
-    const ProfilerOverlayOptions& options, const EditorTheme& theme, float scale, float viewportWidth, float viewportHeight) {
+    const ProfilerOverlayOptions& options, const EditorTheme& theme, float scale, float viewportWidth, float viewportHeight,
+    const std::array<float, 4>& avoid) {
     const float width = kListWidth * scale;
     const float height = (static_cast<float>(model.lines.size()) * kListRow + kListPaddingY * 2.0F) * scale;
-    const auto [left, top] = Anchor(options.listCorner, width, height, viewportWidth, viewportHeight);
+    const auto [left, top] = Anchor(options.listCorner, width, height, viewportWidth, viewportHeight, avoid);
     content.shapes.push_back(Shape{ .kind = Shape::Kind::RoundedRect, .points = { { left, top }, { left + width, top + height } },
         .radius = 5.0F * scale, .color = Rgba(theme.menuBar, static_cast<float>(options.opacityPercent) / 100.0F) });
     float rowTop = top + kListPaddingY * scale;
@@ -90,7 +95,7 @@ void AppendGraph(ProfilerOverlayContent& content, const ProfilerOverlayModel& mo
     const float scale = metrics.scale;
     const float width = metrics.graphWidth;
     const float height = metrics.graphHeight;
-    const auto [left, top] = Anchor(options.graphCorner, width, height, viewportWidth, viewportHeight);
+    const auto [left, top] = Anchor(options.graphCorner, width, height, viewportWidth, viewportHeight, metrics.avoid);
     content.shapes.push_back(Shape{ .kind = Shape::Kind::RoundedRect, .points = { { left, top }, { left + width, top + height } },
         .radius = 5.0F * scale, .color = Rgba(theme.menuBar, static_cast<float>(options.opacityPercent) / 100.0F) });
 
@@ -173,7 +178,7 @@ void AppendProfilerOverlay(ProfilerOverlayContent& content, const ProfilerOverla
     const ProfilerOverlayOptions& options, const EditorTheme& theme, const ProfilerOverlayMetrics& metrics,
     float viewportWidth, float viewportHeight) {
     if (!model.lines.empty()) {
-        AppendList(content, model, options, theme, metrics.scale, viewportWidth, viewportHeight);
+        AppendList(content, model, options, theme, metrics.scale, viewportWidth, viewportHeight, metrics.avoid);
     }
     if (!model.series.empty() || model.budgetMs > 0.0 || model.alarmMs > 0.0) {
         AppendGraph(content, model, options, theme, metrics, viewportWidth, viewportHeight);

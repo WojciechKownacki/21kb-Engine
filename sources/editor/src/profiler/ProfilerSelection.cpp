@@ -3,6 +3,8 @@
 #include "engine/config/IniDocument.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <format>
 #include <span>
 
 namespace kb::editor {
@@ -42,6 +44,22 @@ void Set(std::vector<std::string>& list, std::string_view id, bool present) {
     return items;
 }
 
+// "counter:budget:alarm" items; a name may hold colons, so the numbers are read from the right.
+[[nodiscard]] std::vector<ProfilerThreshold> SplitThresholds(std::string_view text) {
+    std::vector<ProfilerThreshold> thresholds;
+    for (const std::string& item : Split(text)) {
+        const std::size_t alarmAt = item.rfind(':');
+        const std::size_t budgetAt = alarmAt == std::string::npos || alarmAt == 0U ? std::string::npos : item.rfind(':', alarmAt - 1U);
+        if (budgetAt == std::string::npos) continue;
+        ProfilerThreshold threshold{ item.substr(0U, budgetAt), 0.0, 0.0 };
+        const char* const end = item.data() + item.size();
+        const auto budget = std::from_chars(item.data() + budgetAt + 1U, item.data() + alarmAt, threshold.budget);
+        const auto alarm = std::from_chars(item.data() + alarmAt + 1U, end, threshold.alarm);
+        if (budget.ec == std::errc{} && alarm.ec == std::errc{} && threshold.budget >= 0.0 && threshold.alarm >= 0.0) thresholds.push_back(std::move(threshold));
+    }
+    return thresholds;
+}
+
 template <typename Enum>
 [[nodiscard]] Enum ReadEnum(const kb::config::IniDocument& document, std::string_view key, Enum fallback, int last) {
     const std::int64_t value = document.GetInt(kSection, key).value_or(static_cast<std::int64_t>(fallback));
@@ -69,6 +87,18 @@ bool ProfilerSelection::OnScene(std::string_view counterId) const noexcept { ret
 void ProfilerSelection::SetAreaMeasured(ProfilerArea area, bool measured) { Set(areas, AreaId(area), measured); }
 void ProfilerSelection::SetInPanel(std::string_view counterId, bool shown) { Set(panelCounters, counterId, shown); }
 void ProfilerSelection::SetOnScene(std::string_view counterId, bool shown) { Set(sceneCounters, counterId, shown); }
+
+void ProfilerSelection::SetThreshold(std::string_view counterId, double budget, double alarm) {
+    const auto found = std::ranges::find(thresholds, counterId, &ProfilerThreshold::counter);
+    if (budget == 0.0 && alarm == 0.0) {
+        if (found != thresholds.end()) thresholds.erase(found);
+    } else if (found != thresholds.end()) {
+        found->budget = budget;
+        found->alarm = alarm;
+    } else {
+        thresholds.push_back(ProfilerThreshold{ std::string{ counterId }, budget, alarm });
+    }
+}
 
 std::string_view ProfilerSelection::AreaId(ProfilerArea area) noexcept {
     switch (area) {
@@ -120,6 +150,7 @@ ProfilerSelection ProfilerSelection::Read(const kb::config::IniDocument& documen
     list("Areas", selection.areas);
     list("PanelCounters", selection.panelCounters);
     list("SceneCounters", selection.sceneCounters);
+    if (const auto text = document.GetString(kSection, "Thresholds")) selection.thresholds = SplitThresholds(*text);
     ProfilerOverlayOptions& options = selection.overlay;
     options.listVisible = document.GetBool(kSection, "ListVisible").value_or(options.listVisible);
     options.graphVisible = document.GetBool(kSection, "GraphVisible").value_or(options.graphVisible);
@@ -140,6 +171,9 @@ void ProfilerSelection::Write(kb::config::IniDocument& document) const {
     document.SetString(kSection, "Areas", Join(areas));
     document.SetString(kSection, "PanelCounters", Join(panelCounters));
     document.SetString(kSection, "SceneCounters", Join(sceneCounters));
+    std::vector<std::string> thresholdItems;
+    for (const ProfilerThreshold& threshold : thresholds) thresholdItems.push_back(std::format("{}:{}:{}", threshold.counter, threshold.budget, threshold.alarm));
+    document.SetString(kSection, "Thresholds", Join(thresholdItems));
     document.SetBool(kSection, "ListVisible", overlay.listVisible);
     document.SetBool(kSection, "GraphVisible", overlay.graphVisible);
     document.SetInt(kSection, "ListCorner", static_cast<std::int64_t>(overlay.listCorner));

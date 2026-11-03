@@ -20,6 +20,7 @@ void RunEditorDockingTests();
 void RunEditorProjectTests();
 void RunEditorSettingsTests();
 void RunEditorProfilerTests();
+void RunEditorProfilerPanelTests();
 void RunEditorLocalizationTests();
 void RunEditorInspectorTests();
 void RunEditorMaterialAssetAuthoringTests();

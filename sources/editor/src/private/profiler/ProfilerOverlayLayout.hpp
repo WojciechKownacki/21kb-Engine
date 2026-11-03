@@ -4,6 +4,7 @@
 #include "profiler/ProfilerOverlayModel.hpp"
 #include "rendering/EditorSceneViewportTextOverlay.hpp"
 
+#include <array>
 #include <vector>
 
 namespace kb::editor {
@@ -19,6 +20,9 @@ struct ProfilerOverlayMetrics {
     float scale = 1.0F;
     float graphWidth = 372.0F;
     float graphHeight = 186.0F;
+    // A rectangle (left, top, right, bottom; zeros for none) that something else covers; a panel that
+    // would overlap it at the bottom is moved up to sit above it.
+    std::array<float, 4> avoid{};
 
     [[nodiscard]] static ProfilerOverlayMetrics ForTextSize(ProfilerTextSize size) noexcept;
 };
