@@ -5,6 +5,9 @@ add_library(kb_engine STATIC
     include/engine/core/DebugDraw.hpp
     include/engine/core/ProfilerCounters.hpp
     include/engine/core/ProfilerRegistry.hpp
+    include/engine/core/ProfilerFrameRegions.hpp
+    include/engine/core/ProfilerRecorder.hpp
+    include/engine/core/ProfilerDiagnosis.hpp
     include/engine/core/ConsoleCommands.hpp
     include/engine/core/CrashReport.hpp
     include/engine/core/ExecutionAffinity.hpp
@@ -607,6 +610,9 @@ add_library(kb_engine STATIC
     src/modules/EngineModuleSdkAdapter.cpp
     src/core/ConsoleCommands.cpp
     src/core/ProfilerRegistry.cpp
+    src/core/ProfilerFrameRegions.cpp
+    src/core/ProfilerRecorder.cpp
+    src/core/ProfilerDiagnosis.cpp
     src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
     src/audio/AudioMixerAssetIO.cpp
@@ -1903,6 +1909,12 @@ if(BUILD_TESTING)
     kb_apply_quality_gates(kb_profiler_registry_tests)
     add_test(NAME kb_profiler_registry_tests COMMAND kb_profiler_registry_tests)
     set_tests_properties(kb_profiler_registry_tests PROPERTIES LABELS "profiler" TIMEOUT 30)
+    add_executable(kb_profiler_analysis_tests tests/ProfilerAnalysisTests.cpp src/core/ProfilerRegistry.cpp
+        src/core/ProfilerFrameRegions.cpp src/core/ProfilerRecorder.cpp src/core/ProfilerDiagnosis.cpp)
+    target_include_directories(kb_profiler_analysis_tests PRIVATE include)
+    kb_apply_quality_gates(kb_profiler_analysis_tests)
+    add_test(NAME kb_profiler_analysis_tests COMMAND kb_profiler_analysis_tests)
+    set_tests_properties(kb_profiler_analysis_tests PROPERTIES LABELS "profiler" TIMEOUT 30)
     if(MSVC)
         find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
         add_executable(kb_test_process_error_tests tests/TestProcessErrorsProbe.cpp)

@@ -35,8 +35,8 @@ struct ProfilerCounterInfo {
 
 // The counters every tool knows by name; their position in the registry is the enumerator value.
 enum class ProfilerBuiltIn : std::uint8_t {
-    FramesPerSecond, FrameTime, RenderThreadTime, GpuTime,
-    DrawCalls, Triangles, ComputeDispatches, Views,
+    FramesPerSecond, FrameTime, GameThreadTime, RenderThreadTime, GpuTime,
+    DrawCalls, Triangles, VisibleMeshes, CulledInstances, SceneLights, ComputeDispatches, Views,
     ProcessMemory, GpuMemory, TextureMemory, RenderTargetMemory,
     EcsEntities, EcsChunks, EcsPayload, EcsEntityRecords, EcsOccupancy, EcsStorageAllocations,
     EcsQueryCacheHits, EcsQueryCacheMisses, EcsQueryPrepare, EcsQueryKernels, EcsQueryTraffic,
@@ -78,6 +78,15 @@ public:
         return static_cast<std::size_t>(counter);
     }
     void Publish(std::size_t counter, double value);
+    // How many readings the counter has ever had; a tool that records frames compares it between
+    // two frames to tell a fresh reading from one left over.
+    [[nodiscard]] std::uint64_t PublishCount(std::size_t counter) const;
+    // Replaces the thresholds a counter turns Warning and Alarm at (zero: none).
+    void SetThresholds(std::size_t counter, double budget, double alarm);
+    // Back to the thresholds the counter was built with (none for a custom counter).
+    void ResetThresholds(std::size_t counter);
+    // Forgets the readings, not the counters.
+    void ClearHistory() noexcept;
     [[nodiscard]] ProfilerCounterStats Stats(std::size_t counter) const;
     // Oldest to newest; returns the number of readings written, at most out.size().
     [[nodiscard]] std::size_t Samples(std::size_t counter, std::span<double> out) const;
@@ -91,6 +100,7 @@ private:
         std::array<double, 240U> ring{};
         std::size_t head = 0U;  // where the next reading goes
         std::size_t count = 0U;
+        std::uint64_t published = 0U;
     };
 
     std::vector<Entry> entries_;  // reserved for every counter, so views into customId stay valid

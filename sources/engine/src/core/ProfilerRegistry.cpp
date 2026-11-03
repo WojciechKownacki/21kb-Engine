@@ -19,10 +19,14 @@ constexpr ProfilerCounterInfo C(std::string_view id, std::string_view label, std
 constexpr std::array<ProfilerCounterInfo, static_cast<std::size_t>(ProfilerBuiltIn::Count)> kBuiltIn{{
     C("fps", "FPS", "FPS", "Frame", Area::Cpu, Unit::FramesPerSecond, 60.0, 30.0, true),
     C("frame_ms", "Frame time", "Frame", "Frame", Area::Cpu, Unit::Milliseconds, 16.6, 33.3),
+    C("game_thread_ms", "Game thread", "Game", "Frame", Area::Cpu, Unit::Milliseconds, 16.6, 33.3),
     C("render_thread_ms", "Render thread", "Render", "Frame", Area::Cpu, Unit::Milliseconds, 16.6, 33.3),
     C("gpu_ms", "GPU", "GPU", "Frame", Area::Gpu, Unit::Milliseconds, 16.6, 33.3),
     C("draw_calls", "Draw calls", "Draws", "Drawing", Area::Render, Unit::Count, 2000.0, 5000.0),
     C("triangles", "Triangles", "Tris", "Drawing", Area::Render, Unit::Count, 2'000'000.0, 5'000'000.0),
+    C("visible_meshes", "Visible meshes", "Visible", "Drawing", Area::Render, Unit::Count),
+    C("culled_instances", "Culled instances", "Culled", "Drawing", Area::Render, Unit::Count),
+    C("scene_lights", "Scene lights", "Lights", "Drawing", Area::Render, Unit::Count),
     C("compute_dispatches", "Compute dispatches", "Compute", "Drawing", Area::Render, Unit::Count),
     C("views", "Render views", "Views", "Drawing", Area::Render, Unit::Count),
     C("process_memory_mb", "Process memory", "Mem", "Memory", Area::Memory, Unit::Megabytes, 3072.0, 6144.0),
@@ -83,6 +87,29 @@ void ProfilerRegistry::Publish(std::size_t counter, double value) {
     entry.ring[entry.head] = value;
     entry.head = (entry.head + 1U) % entry.ring.size();
     entry.count = std::min(entry.count + 1U, entry.ring.size());
+    ++entry.published;
+}
+
+std::uint64_t ProfilerRegistry::PublishCount(std::size_t counter) const {
+    return entries_.at(counter).published;
+}
+
+void ProfilerRegistry::ResetThresholds(std::size_t counter) {
+    const bool builtIn = counter < builtInCount_;
+    SetThresholds(counter, builtIn ? kBuiltIn[counter].budget : 0.0, builtIn ? kBuiltIn[counter].alarm : 0.0);
+}
+
+void ProfilerRegistry::ClearHistory() noexcept {
+    for (Entry& entry : entries_) {
+        entry.head = 0U;
+        entry.count = 0U;
+    }
+}
+
+void ProfilerRegistry::SetThresholds(std::size_t counter, double budget, double alarm) {
+    ProfilerCounterInfo& info = entries_.at(counter).info;
+    info.budget = budget;
+    info.alarm = alarm;
 }
 
 std::size_t ProfilerRegistry::Samples(std::size_t counter, std::span<double> out) const {
