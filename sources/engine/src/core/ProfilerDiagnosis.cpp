@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <functional>
 #include <numeric>
 
 namespace kb::core {
@@ -88,7 +87,9 @@ public:
     }
 };
 
-// A region that holds a large part of its frame.
+// A region whose work holds a large part of its frame. Waiting (for the previous frame, for a
+// vsync) is not work that can be made smaller, so a waiting region is never named and the time
+// waited inside a region is not counted for it.
 class HotRegionRule final : public DiagnosisRule {
 public:
     std::string_view Id() const noexcept override { return "hot_region"; }
@@ -97,15 +98,16 @@ public:
         if (frame == nullptr || frame->FrameNanoseconds() == 0U) return;
         const double frameNanoseconds = static_cast<double>(frame->FrameNanoseconds());
         std::vector<const ProfilerRegionRow*> hot;
+        const auto work = [](const ProfilerRegionRow& row) { return static_cast<double>(row.totalNanoseconds - std::min(row.waitNanoseconds, row.totalNanoseconds)); };
         for (const ProfilerRegionRow& row : frame->rows) {
-            const double share = static_cast<double>(row.totalNanoseconds) / frameNanoseconds;
-            if (row.depth >= 1U && share >= kHotShare && static_cast<double>(row.totalNanoseconds) >= kHotMilliseconds * kNanosecondsPerMillisecond) hot.push_back(&row);
+            if (row.waiting || row.depth < 1U) continue;
+            if (work(row) / frameNanoseconds >= kHotShare && work(row) >= kHotMilliseconds * kNanosecondsPerMillisecond) hot.push_back(&row);
         }
-        std::ranges::sort(hot, std::greater<>{}, &ProfilerRegionRow::totalNanoseconds);
+        std::ranges::sort(hot, [&](const ProfilerRegionRow* a, const ProfilerRegionRow* b) { return work(*a) > work(*b); });
         constexpr std::size_t kMost = 3U;
         for (std::size_t index = 0U; index < std::min(hot.size(), kMost); ++index) {
             findings.push_back(DiagnosisFinding{ .rule = std::string{ Id() }, .severity = DiagnosisSeverity::Warning, .category = DiagnosisCategory::Cpu,
-                .subject = hot[index]->name, .value = 100.0 * static_cast<double>(hot[index]->totalNanoseconds) / frameNanoseconds,
+                .subject = hot[index]->name, .value = 100.0 * work(*hot[index]) / frameNanoseconds,
                 .limit = 100.0 * kHotShare, .gainMilliseconds = static_cast<double>(hot[index]->selfNanoseconds) / kNanosecondsPerMillisecond });
         }
     }

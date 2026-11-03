@@ -177,6 +177,31 @@ void ARegionThatEatsTheFrame() {
     Require(std::ranges::count(findings, std::string{ "hot_region" }, &DiagnosisFinding::rule) == 1, "Present (31%) and the rest are under the threshold");
 }
 
+// A frame of 20 ms whose Present takes 16, `waited` of them waiting for the previous frame.
+std::vector<ProfilerTimelineEvent> FrameWithPresent(std::uint64_t waited) {
+    return {
+        { "Wait for the previous frame", 3 * kMs, waited, 2U, true },
+        { "Present", 2 * kMs, 16 * kMs, 1U },
+        { "Frame", 0U, 20 * kMs, 0U },
+    };
+}
+
+void WaitingIsNotWork() {
+    const std::vector<ProfilerRegionRow> rows = ProfilerFrameRegions::Aggregate(FrameWithPresent(14 * kMs));
+    Require(rows.size() == 3U && rows[2].waiting && !rows[1].waiting && !rows[0].waiting, "Only the region recorded as waiting is waiting");
+    Require(rows[2].waitNanoseconds == 14 * kMs && rows[1].waitNanoseconds == 14 * kMs && rows[0].waitNanoseconds == 14 * kMs, "The time waited counts for every region that contains the wait");
+    Require(rows[1].selfNanoseconds == 2 * kMs, "Present less the wait is 2 ms of its own work");
+
+    ProfilerRegistry registry;
+    ProfilerFrameRegions frames;
+    frames.Capture(1U, FrameWithPresent(14 * kMs));
+    Require(!Find(ProfilerDiagnosis{}.Run({ registry, frames }), "hot_region"), "A Present that is 14 ms of waiting is not a region to reduce, and the wait itself is never named");
+    frames.Capture(2U, FrameWithPresent(4 * kMs));
+    const std::vector<DiagnosisFinding> findings = ProfilerDiagnosis{}.Run({ registry, frames });
+    const DiagnosisFinding* hot = Find(findings, "hot_region");
+    Require(hot && hot->subject == "Present" && std::abs(hot->value - 60.0) < 1e-9 && std::abs(hot->gainMilliseconds - 12.0) < 1e-9, "With 12 ms of real work in a 20 ms frame it is 60% and worth naming");
+}
+
 void SpikesAndTheOrderOfFindings() {
     ProfilerRegistry registry;
     ProfilerFrameRegions frames;
@@ -205,6 +230,7 @@ int main() {
         WorkCountersAgainstTheirThresholds();
         MemoryThatKeepsGrowing();
         ARegionThatEatsTheFrame();
+        WaitingIsNotWork();
         SpikesAndTheOrderOfFindings();
     } catch (const std::exception& error) {
         std::cerr << "Profiler analysis test failed: " << error.what() << '\n';

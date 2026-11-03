@@ -52,12 +52,18 @@ std::vector<ProfilerRegionRow> ProfilerFrameRegions::Aggregate(const std::vector
         }
         nodes[index].row.totalNanoseconds += event->durationNanoseconds;
         ++nodes[index].row.calls;
+        if (event->waiting) nodes[index].row.waitNanoseconds += event->durationNanoseconds;
+        nodes[index].row.waiting = nodes[index].row.calls == 1U ? event->waiting : nodes[index].row.waiting && event->waiting;
         open.push_back(index);
     }
-    for (Node& node : nodes) {
+    // Children are created after their parents, so walking backwards adds each row's waiting time to its parent.
+    for (std::size_t index = nodes.size(); index-- > 0U;) {
+        Node& node = nodes[index];
         std::uint64_t inside = 0U;
         for (const std::size_t child : node.children) inside += nodes[child].row.totalNanoseconds;
         node.row.selfNanoseconds = node.row.totalNanoseconds > inside ? node.row.totalNanoseconds - inside : 0U;
+        if (node.parent != kNone && !node.row.waiting) nodes[node.parent].row.waitNanoseconds += node.row.waitNanoseconds;
+        else if (node.parent != kNone) nodes[node.parent].row.waitNanoseconds += node.row.totalNanoseconds;
     }
     std::vector<ProfilerRegionRow> rows;
     rows.reserve(nodes.size());

@@ -24,6 +24,9 @@ struct ProfilerTimelineEvent {
     std::uint64_t timestampNanoseconds = 0U;
     std::uint64_t durationNanoseconds = 0U;
     std::uint32_t depth = 0U;
+    // Time spent waiting for something else (a vsync, another thread), not working: a profiler does
+    // not count it as work that could be made smaller.
+    bool waiting = false;
 };
 
 // Debug helper for counting scopes, allocations, named counters and timeline regions.
@@ -99,8 +102,9 @@ public:
     }
 
     // A region measured elsewhere (a system of the scheduler), placed at `depth` in the timeline.
-    void RecordRegion(std::string_view name, std::uint64_t startNanoseconds, std::uint64_t durationNanoseconds, std::uint32_t depth) {
-        if (active_) Record(name, startNanoseconds, durationNanoseconds, depth);
+    void RecordRegion(std::string_view name, std::uint64_t startNanoseconds, std::uint64_t durationNanoseconds, std::uint32_t depth,
+        bool waiting = false) {
+        if (active_) Record(name, startNanoseconds, durationNanoseconds, depth, waiting);
     }
 
     // Forgets the regions of the frame that is over, so the next one starts with an empty timeline.
@@ -134,10 +138,10 @@ public:
     std::uint64_t allocations = 0U;
 
 private:
-    void Record(std::string_view name, std::uint64_t start, std::uint64_t duration, std::uint32_t depth) {
+    void Record(std::string_view name, std::uint64_t start, std::uint64_t duration, std::uint32_t depth, bool waiting = false) {
         ++timelineEvents;
         if (timeline_.size() >= MaxTimelineEvents()) { ++droppedTimeline_; return; }
-        timeline_.push_back({ std::string{ name }, start, duration, depth });
+        timeline_.push_back({ std::string{ name }, start, duration, depth, waiting });
     }
 
     bool active_ = Enabled();

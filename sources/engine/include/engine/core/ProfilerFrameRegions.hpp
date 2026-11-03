@@ -19,6 +19,10 @@ struct ProfilerRegionRow {
     // The part of `total` that no region inside it accounts for.
     std::uint64_t selfNanoseconds = 0U;
     std::uint32_t calls = 0U;
+    // The part of `total` spent waiting: all of it for a waiting region, else what the waiting
+    // regions inside it add up to.
+    std::uint64_t waitNanoseconds = 0U;
+    bool waiting = false;
 };
 
 struct ProfilerFrameRecord {
