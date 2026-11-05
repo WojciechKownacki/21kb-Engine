@@ -80,6 +80,7 @@ struct GameOptions {
     bool uncapped = false;
     bool profileFixedStep = false;
     bool profileSceneOverdraw = false;
+    bool profileGpuViews = false;
     bool particleDiagnostics = false;
     bool particleRequireGpu = false;
     std::uint32_t particleSamples = 64U;
@@ -119,6 +120,7 @@ Usage: kb_game [options]
   --input-replay=<file>             replay recorded input and time (needs --headless --frames)
   --profile-fixed-step              fixed time step while profiling (needs --headless)
   --profile-scene-overdraw           measure scene geometry and particle overdraw (needs --profile-file)
+  --profile-gpu-views                GPU time of every render view in the frame trace (needs --profile-file)
   --profile-lighting=Forward|ForwardPlus|Deferred
   --renderer=d3d11|d3d12|vulkan|opengl  graphics backend (default: the platform's)
   --help                            this text
@@ -191,11 +193,12 @@ std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::Wor
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 10U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 11U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
     L"--profile-scene-overdraw",
+    L"--profile-gpu-views",
     L"--profile-lighting=",
     L"--profile-file=",
     L"--screenshot-file=",
@@ -314,6 +317,8 @@ constexpr std::array<std::wstring_view, 10U> kDevelopmentSwitches{
             options.profileFixedStep = true;
         } else if (argument == L"--profile-scene-overdraw") {
             options.profileSceneOverdraw = true;
+        } else if (argument == L"--profile-gpu-views") {
+            options.profileGpuViews = true;
         } else if (HasPrefix(argument, L"--screenshot-file=")) {
             if (argument.size() == 18U) {
                 std::cerr << "kb_game: --screenshot-file requires a path\n";
@@ -377,6 +382,10 @@ constexpr std::array<std::wstring_view, 10U> kDevelopmentSwitches{
     }
     if (options.profileSceneOverdraw && options.profilePath.empty()) {
         std::cerr << "kb_game: --profile-scene-overdraw requires --profile-file\n";
+        return false;
+    }
+    if (options.profileGpuViews && options.profilePath.empty()) {
+        std::cerr << "kb_game: --profile-gpu-views requires --profile-file\n";
         return false;
     }
     if (!options.inputReplayPath.empty() && (!options.headless || options.frameLimit == 0U ||
@@ -693,6 +702,7 @@ int RunGame(const GameOptions& options) {
         profileRows.reserve(options.frameLimit);
         scene.Runtime().SetEcsProfilerEnabled(true);
         renderer.SetMeshCoverageEnabled(options.profileSceneOverdraw);
+        if (options.profileGpuViews) bgfx::setDebug(BGFX_DEBUG_PROFILER);
     }
     kb::input::Win32XInputHapticsBackend hapticsBackend;
     kb::input::InputHaptics::RegisterBackend(scene, hapticsBackend);
@@ -848,6 +858,20 @@ int RunGame(const GameOptions& options) {
             memory.Set("driver_basis", JsonValue::MakeString("backend-reported GPU memory; null when unavailable; asynchronous, backend-specific scope, including the entire adapter on D3D11/NVAPI; not scene or application residency"));
             rendering.Set("memory", std::move(memory));
             rendering.Set("gpu_ms", gpuMilliseconds >= 0.0 ? JsonValue::MakeNumber(gpuMilliseconds) : JsonValue::MakeNull());
+            if (options.profileGpuViews && gpu != nullptr && gpu->gpuTimerFreq > 0 && gpu->viewStats != nullptr) {
+                auto views = JsonValue::MakeArray();
+                for (std::uint16_t index = 0U; index < gpu->numViews; ++index) {
+                    const auto& view = gpu->viewStats[index];
+                    if (view.gpuTimeEnd <= view.gpuTimeBegin) continue;
+                    auto entry = JsonValue::MakeObject();
+                    entry.Set("name", JsonValue::MakeString(view.name));
+                    entry.Set("view", JsonValue::MakeNumber(view.view));
+                    entry.Set("gpu_ms", JsonValue::MakeNumber(
+                        static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * 1000.0 / static_cast<double>(gpu->gpuTimerFreq)));
+                    views.Append(std::move(entry));
+                }
+                rendering.Set("gpu_views", std::move(views));
+            }
             rendering.Set("bgfx_frame", JsonValue::MakeNumber(renderer.LastCompletedFrame()));
             rendering.Set("gpu_frame", gpu != nullptr ? JsonValue::MakeNumber(gpu->gpuFrameNum) : JsonValue::MakeNull());
             rendering.Set("gpu_time_basis", JsonValue::MakeString(options.profileSceneOverdraw
