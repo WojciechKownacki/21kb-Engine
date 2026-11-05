@@ -529,6 +529,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptRendererApi.hpp
     include/engine/script/ScriptLifecycle.hpp
+    include/engine/script/UISceneValidation.hpp
     include/engine/script/ScriptModule.hpp
     include/engine/script/ScriptRuntime.hpp
     include/engine/script/ScriptRuntimeAssetPreparer.hpp
@@ -1346,6 +1347,7 @@ add_library(kb_engine STATIC
     src/script/ScriptMap2DGeometryApi.cpp
     src/script/ScriptRendererApi.cpp
     src/script/ScriptLifecycle.cpp
+    src/script/UISceneValidation.cpp
     src/script/ScriptModule.cpp
     src/script/ScriptRuntime.cpp
     src/script/ScriptRuntimeAssetPreparer.cpp

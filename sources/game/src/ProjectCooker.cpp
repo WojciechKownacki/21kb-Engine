@@ -26,6 +26,7 @@
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/script/ScriptProjectFiles.hpp"
+#include "engine/script/UISceneValidation.hpp"
 #include "engine/security/Crypto.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "kb/render/ShaderManifest.hpp"
@@ -2695,6 +2696,16 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         }
     }
     diagnostics << "selected " << assets.size() << " assets in the runtime dependency closure\n";
+    {
+        // Mistakes that load fine but leave a widget invisible or dead.
+        const kb::script::UIProjectReport uiReport = kb::script::ValidateUIProject(assets);
+        for (const kb::script::UIProjectWarning& warning : uiReport.warnings) {
+            diagnostics << kb::script::FormatUIWarning(warning.scene, warning.warning) << '\n';
+        }
+        for (const std::string& unreadable : uiReport.errors) {
+            diagnostics << "warning: " << unreadable << '\n';
+        }
+    }
     const std::filesystem::path sourceSnapshotRoot =
         CreateCookSnapshotDirectory(request.cacheRoot, "source-snapshots", error);
     if (sourceSnapshotRoot.empty()) {

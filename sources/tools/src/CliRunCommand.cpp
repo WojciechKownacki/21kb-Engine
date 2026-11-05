@@ -34,6 +34,7 @@
 #include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/script/UISceneValidation.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
 
 #include <filesystem>
@@ -659,6 +660,13 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         if (!kb::scene::SceneDocumentService::LoadIntoScene(scene, sceneDocument.document)) {
             io.err << "error: could not load scene into runtime: " << scenePath.generic_string() << '\n';
             return 1;
+        }
+        // Mistakes that load fine but leave a widget invisible or dead.
+        const kb::script::UIScriptIndex uiScripts =
+            kb::script::UIScriptIndex::FromAssets(scene.Assets().Manager().Registry().All());
+        for (const kb::script::UISceneWarning& warning :
+            kb::script::ValidateUIScene(sceneDocument.document.worldPrefab.Nodes(), uiScripts)) {
+            io.err << kb::script::FormatUIWarning(scenePath.filename().generic_string(), warning) << '\n';
         }
     }
     kb::scene::SceneInputActivation::Apply(scene);

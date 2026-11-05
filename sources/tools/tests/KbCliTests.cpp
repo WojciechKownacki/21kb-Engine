@@ -4162,6 +4162,83 @@ struct CliRun {
     return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
 }
 
+// validate and run name UI mistakes that load fine: a widget outside a Canvas, a Text without a font, an event
+// name nothing answers, a Button nothing reacts to.
+void RunUiValidationCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const std::string scene = "Assets/Scenes/Ui.21kbscene";
+    const auto cli = [&](const std::vector<std::string>& words, std::string_view what) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        Require(exitCode == 0, std::string{ what } + ": " + out.str() + err.str());
+    };
+    const auto add = [&](const std::string& name, const std::string& parent,
+                         const std::vector<std::pair<std::string, std::string>>& components) {
+        std::vector<std::string> entity{ "entity", "add", "--project", root, "--scene", scene, "--name", name };
+        if (!parent.empty()) {
+            entity.push_back("--parent");
+            entity.push_back(parent);
+        }
+        cli(entity, "entity add " + name);
+        for (const auto& [type, set] : components) {
+            std::vector<std::string> component{ "component", "add", "--project", root, "--scene", scene, "--entity",
+                parent.empty() ? name : parent + "/" + name, "--type", type };
+            if (!set.empty()) {
+                component.push_back("--set");
+                component.push_back(set);
+            }
+            cli(component, "component add " + type);
+        }
+    };
+    cli({ "scene-new", "--project", root, "--name", "Ui", "--template", "Empty" }, "scene-new");
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Menu.lua", "function OnUIClicked(self, event)\n    Log(event.args.action)\nend\n");
+    add("Menu", "", { { "Canvas", "" } });
+    add("Answered", "Menu", { { "Button", "" }, { "Selectable", "eventName=Menu.Play" } });
+    cli({ "scene-attach", "--project", root, "--scene", scene, "--node", "Answered", "--script", "/Game/Logic/Menu.lua" },
+        "scene-attach");
+    add("Unanswered", "Menu", { { "Button", "" }, { "Selectable", "eventName=Menu.Quit" } });
+    add("Dead", "Menu", { { "Button", "" } });
+    add("Label", "Menu", { { "Text", "content=Play" } });
+    add("Orphan", "", { { "Button", "" } });
+
+    const CliRun checked = RunCliProgram({ "validate", "--project", root, scene });
+    const std::string report = checked.out + checked.err;
+    Require(checked.exitCode == 0 && Contains(checked.out, "OK   " + scene + " (5 warnings)"),
+        "validate must report the five UI mistakes as warnings and still pass: " + report);
+    Require(Contains(report, ":Menu/Unanswered: [ui-event-no-handler] event name \"Menu.Quit\""),
+        "validate must name the event nothing answers: " + report);
+    Require(Contains(report, ":Menu/Dead: [ui-button-no-reaction]"), "validate must name the Button that does nothing: " + report);
+    Require(Contains(report, ":Menu/Label: [ui-text-no-font]"), "validate must name the Text without a font: " + report);
+    Require(Contains(report, ":Orphan: [ui-no-canvas]") && Contains(report, ":Orphan: [ui-button-no-reaction]"),
+        "validate must name the widget outside a Canvas: " + report);
+    Require(!Contains(report, "Menu/Answered"), "a Button a script answers must not be reported: " + report);
+    const CliRun everyScene = RunCliProgram({ "validate", "--project", root });
+    Require(everyScene.exitCode == 0 && Contains(everyScene.out, "/Game/Scenes/Main.21kbscene:Player: [ui-no-canvas]") &&
+            Contains(everyScene.out, "/Game/Scenes/Ui.21kbscene:Menu/Dead:"),
+        "validate without files must check every scene of the project: " + everyScene.out + everyScene.err);
+
+    const CliRun ran = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "1" });
+    Require(ran.exitCode == 0 && Contains(ran.err, "[ui-no-canvas]") && Contains(ran.err, "[ui-button-no-reaction]"),
+        "run must print the same warnings before it plays: " + ran.err);
+
+    // The agent documentation: the Text topic shows the Text component beside the Text functions, the UI
+    // callbacks have a topic, and the button-to-script recipe is a guide.
+    const CliRun text = RunCliProgram({ "api", "--topic", "Text" });
+    Require(text.exitCode == 0 && Contains(text.out, "# Text functions") && Contains(text.out, "# Text component") &&
+            Contains(text.out, "`fontAssetId`"),
+        "api --topic Text must show the Text component with its font: " + text.out);
+    const CliRun events = RunCliProgram({ "api", "--topic", "OnUIClicked" });
+    Require(events.exitCode == 0 && Contains(events.out, "function OnUIClicked(self, event)") && Contains(events.out, "`pointerX`") &&
+            Contains(events.out, "`action`"),
+        "api --topic OnUIClicked must list the UI callbacks and their arguments: " + events.out);
+    const CliRun recipe = RunCliProgram({ "guide", "--topic", "menus-and-buttons" });
+    Require(recipe.exitCode == 0 && Contains(recipe.out, "OnUIClicked") && Contains(recipe.out, "ui-no-canvas"),
+        "guide menus-and-buttons must hold the button to script recipe: " + recipe.out);
+}
+
 void RunInputRecordingCliTests() {
     PrepareProject();
     const auto root = TestRoot();
@@ -5413,6 +5490,10 @@ int main(int argc, char** argv) {
         RunBatchSceneSessionTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "ui-validation") {
+        RunUiValidationCliTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
         RunInputRecordingCliTests();
         return EXIT_SUCCESS;
@@ -5469,6 +5550,7 @@ int main(int argc, char** argv) {
     RunInputActionAndPrefabTests();
     RunSceneShortcutTests();
     RunInputRecordingCliTests();
+    RunUiValidationCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();
     RunParticleReportCommandTests();

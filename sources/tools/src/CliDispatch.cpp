@@ -383,8 +383,11 @@ R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - bru
                  [--set field=value ...]
                (fields: scale, rotation, importMaterialSlots, importTextures,
                importMaterials, combineMeshes, importSkeletalMesh)
-  validate     Validate Lua behaviour scripts (syntax + sandbox load).
-                 [--project <dir>] <file.lua> [more files...]
+)"
+R"(  validate     Validate Lua behaviour scripts (syntax + sandbox load) and the UI of scenes: a widget
+               outside a Canvas, a Text without a font, an event name or Button nothing answers (WARN lines).
+                 [--project <dir>] <file.lua|scene.21kbscene> [more files...]
+                 --project <dir>   (no files: every scene of the project)
   scene-list   List nodes, components, behaviours and world positions (@ x,y,z) of a scene.
                  [--project <dir>] --scene <path>
   scene-attach Attach a behaviour asset to a scene node and save the scene.

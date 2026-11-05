@@ -263,6 +263,44 @@ kb_cli scene-list --project . --scene Assets/Scenes/Main.21kbscene   # what the 
   tools, never by editing or parsing the files.
 )md";
 
+constexpr std::string_view kMenusAndButtons = R"md(# Menus, buttons and UI events
+
+A menu is a Canvas with widgets under it; a button does something only when a script answers it.
+
+```
+kb_cli entity add --project . --create Canvas --name Menu
+kb_cli entity add --project . --create Button --name PlayButton --parent Menu
+kb_cli component set --project . --entity Menu/PlayButton --type Text --set "content=Play"
+kb_cli component set --project . --entity Menu/PlayButton --type Selectable --set eventName=PlayClicked
+kb_cli script-new --project . --name MenuController --language lua
+kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node PlayButton --script /Game/Scripts/MenuController.lua
+kb_cli validate --project . Assets/Scenes/Main.21kbscene Assets/Scripts/MenuController.lua
+```
+
+```lua
+function PlayClicked(self, event)        -- the button's eventName: a function of that name
+    Log("play pressed at " .. event.args.pointerX .. "," .. event.args.pointerY)
+end
+
+function OnUIClicked(self, event)        -- every click on the widget, with the name in event.args.action
+    Log("clicked " .. event.args.action)
+end
+```
+
+- A click sends two things to the widget's script: `OnUIClicked(self, event)`, and, when the
+  Selectable has an `eventName`, an event of that name (a plain identifier: `PlayClicked`, not
+  `Menu.Play`, unless you read it from `event.args.action`). Set `eventTarget` on the Selectable to
+  send the named event to another object, for example the script on the menu root.
+- Every widget callback (OnUIHoverEntered, OnUIPressed, OnUIChanged, OnUIDragged, ...) and its `event.args`
+  (`entity`, `pointerX`, `pointerY`, `value`, `text`, `action`, `other`): `api_reference` topic `UIEvents`.
+- Change widgets from the script: `self:SetProperty("Text", "content", "Score: 3")`, or another
+  object with `World.FindByName` and `World.SetPropertyFloat`.
+- `validate` warns about what loads fine but never works: a widget outside a Canvas
+  (`ui-no-canvas`), a Text without a font (`ui-text-no-font`), an `eventName` no script answers
+  (`ui-event-no-handler`) and a Button that reacts to nothing (`ui-button-no-reaction`). `run` and the
+  cook print the same warnings.
+)md";
+
 constexpr std::string_view kUiAudioParticles = R"md(# UI, sound and particles
 
 ```
@@ -284,6 +322,7 @@ kb_cli component set --project . --entity Sparks --type "Particle Effect" --set 
 - UI items for `--create`: Canvas, Text, Image, Button, Toggle, Slider, Progress Bar, Input
   Field, Dropdown, Scroll View, Horizontal Box, Vertical Box, Grid; put them under a Canvas.
 - Scripts change text with `self:SetProperty("Text", "content", "Score: " .. score)`.
+- A button that runs a script, and what `validate` says about UI: guide `menus-and-buttons`.
 - Check sound and particles: `kb_cli run --project . --frames 60 --report audio` (or
   `--report particles`).
 )md";
@@ -308,13 +347,14 @@ kb_cli component set --project . --entity Environment --type WorldBackdrop --set
 - `kb_cli help material-graph` and `kb_cli help post-process-new` list every setting.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 9> kGuides{ {
+constexpr std::array<ScriptAgentGuide, 10> kGuides{ {
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },
     { "characters-and-animation", "Characters and animation", "Import a character, state machines, blends, sockets and weapons.", kCharacters },
     { "combat-and-ai", "Combat and AI", "Abilities, health and teams, AI brains from presets and rules.", kCombatAndAi },
     { "maps-2d", "2D maps and platformers", "Tile maps with grounds, borders, objects and floors; 2D players and platforms with 2D physics.", kMaps2D },
+    { "menus-and-buttons", "Menus, buttons and UI events", "A menu or HUD with buttons that run a script: widgets, OnUIClicked, event names, what validate warns about.", kMenusAndButtons },
     { "ui-audio-particles", "UI, sound and particles", "On-screen text and buttons, sounds that play, particle effects.", kUiAudioParticles },
     { "water-and-look", "Water, sky, fog and post-processing", "Translucent water, sky colour, fog, bloom and other post effects.", kWaterAndLook },
     { "verify", "Checking your work", "Validate scripts and run scenes headless before you finish.", kVerify },

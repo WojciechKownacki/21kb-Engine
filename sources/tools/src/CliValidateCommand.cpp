@@ -2,10 +2,12 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptLifecycle.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/UISceneValidation.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -92,17 +94,44 @@ struct UnknownCall {
     return found;
 }
 
+// The UI of one scene (`sceneFile`) or of every scene of the project (empty): warnings, which do not fail
+// the command, and scenes that could not be read, which do. Returns the number of unreadable scenes.
+[[nodiscard]] int ValidateSceneUi(
+    kb::scene::Scene& scene, bool& mounted, const std::filesystem::path& projectRoot,
+    const std::filesystem::path& sceneFile, std::string_view label, CommandIo io) {
+    std::string error;
+    if (!mounted && !(mounted = MountProjectAssets(scene, projectRoot, error))) {
+        io.err << "FAIL " << label << ": " << error << '\n';
+        return 1;
+    }
+    const kb::script::UIProjectReport report =
+        kb::script::ValidateUIProject(scene.Assets().Manager().Registry().All(), sceneFile);
+    for (const std::string& unreadable : report.errors) io.err << "FAIL " << unreadable << '\n';
+    io.out << "OK   " << label;
+    if (!report.warnings.empty()) {
+        io.out << " (" << report.warnings.size() << (report.warnings.size() == 1U ? " warning)" : " warnings)");
+    }
+    io.out << '\n';
+    for (const kb::script::UIProjectWarning& warning : report.warnings) {
+        io.out << kb::script::FormatUIWarning(warning.scene, warning.warning) << '\n';
+    }
+    return static_cast<int>(report.errors.size());
+}
+
 } // namespace
 
 int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
-    if (arguments.Positionals().empty()) {
-        io.err << "error: validate expects one or more .lua files\n";
-        return 1;
-    }
-
     const std::filesystem::path projectRoot = arguments.Option("--project").value_or("");
     kb::script::PucLuaScriptRuntime luaRuntime;
     kb::scene::Scene scene;
+    bool projectMounted = false;
+    if (arguments.Positionals().empty()) {
+        if (projectRoot.empty()) {
+            io.err << "error: validate expects one or more .lua or .21kbscene files, or --project <dir> for every scene\n";
+            return 1;
+        }
+        return ValidateSceneUi(scene, projectMounted, projectRoot, {}, "project scenes", io) == 0 ? 0 : 1;
+    }
     const kb::script::ScriptRuntimeHost host{ scene };
     const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
     std::uint64_t nextAssetId = 1U;
@@ -110,6 +139,10 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
 
     for (const std::string& positional : arguments.Positionals()) {
         const std::filesystem::path path = ResolveInputPath(positional, projectRoot);
+        if (path.extension() == ".21kbscene") {
+            failures += ValidateSceneUi(scene, projectMounted, projectRoot, path, positional, io);
+            continue;
+        }
         std::string source;
         std::string error;
         if (!ReadTextFile(path, source, error)) {

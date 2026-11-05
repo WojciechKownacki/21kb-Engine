@@ -144,9 +144,10 @@ thread_local bool tDiscovery = false;
             ToolProperty{ "destination", "string", "Destination virtual folder, for example /Game/Fonts.", true, "--destination" },
         });
     if (command.name == "validate") return MakeToolDescriptor(command.mcpTool,
-        "Validates a Lua behaviour script (syntax and sandbox load) and reports errors with line numbers.",
+        "Validates a Lua behaviour script (syntax and sandbox load) and reports errors with line numbers; for a .21kbscene it names UI mistakes "
+        "(widget outside a Canvas, Text without a font, event name or Button nothing answers).",
         {
-            ToolProperty{ "path", "string", "Path to the .lua file, relative to the project root.", true, "" },
+            ToolProperty{ "path", "string", "Path to the .lua or .21kbscene file, relative to the project root.", true, "" },
         });
     if (command.name == "scene-list") return MakeToolDescriptor(command.mcpTool,
         "Lists the nodes of a .21kbscene file with their components, behaviours and world positions (@ x,y,z).",

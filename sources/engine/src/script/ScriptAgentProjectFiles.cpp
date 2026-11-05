@@ -40,7 +40,8 @@ guide or API page your task needs. Never read whole folders or the machine files
 
 - How-to guides with the exact commands for one kind of task, through the kb-engine `guide`
   tool (its name as `topic`) or `.kb/docs/<name>.md`: `objects-and-materials` (shapes, colours,
-  lights, cameras), `physics`, `scripts` (Lua), `ui-audio-particles`, `water-and-look` (water,
+  lights, cameras), `physics`, `scripts` (Lua), `menus-and-buttons` (UI that
+  runs scripts), `ui-audio-particles`, `water-and-look` (water,
   sky, fog, post effects), `characters-and-animation`, `combat-and-ai`, `maps-2d`, `verify`.
 - Script API, one page per function group, function and component: `api_reference` with a
   `topic` (`Physics`, `Physics.Raycast`, `Rigidbody`) or a `search` text; files in `.kb/api/`.

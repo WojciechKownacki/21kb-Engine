@@ -1,4 +1,5 @@
 #include "engine/script/ScriptApiExport.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "script/NativeAuthoringGuide.hpp"
 #include "script/PbrMaterialsGuide.hpp"
 #include "script/LightingGuide.hpp"
@@ -606,6 +607,7 @@ namespace {
     out += "or finds topics by `search` text; the same pages are files next to this one.\n\n";
     out += "Start with [C++ and Lua authoring](NativeAuthoring.md) (topic: `NativeAuthoring`).\n\n";
     out += "See [builtin PBR advanced materials](PbrMaterials.md) for sheen, transmission and anisotropy.\n\n";
+    out += "Buttons and other widgets call `OnUIClicked(self, event)` and its siblings: see [UI events](UIEvents.md) (topic: `UIEvents`).\n\n";
     out += "## How scripts work\n\n";
     out += "A `Behaviour` component runs a script asset on its entity: Lua (`.lua`), Visual Graph (`.kbgraph`) or native C++. ";
     out += "A Lua script defines global functions named after lifecycle events, each receiving `(self, dt)`: ";
@@ -686,6 +688,30 @@ namespace {
     return out;
 }
 
+[[nodiscard]] std::string UIEventsPage() {
+    std::string out = "# UI events (UIEvents)\n\n";
+    out += "A widget with a Selectable (a Button, Toggle, Slider, Input Field, ...) tells the Lua script on its own entity what the ";
+    out += "player did, as a global function receiving `(self, event)`:\n\n";
+    for (const kb::scene::SceneUIEventDescriptor& descriptor : kb::scene::SceneUIEventCatalog()) {
+        out += "- `function " + std::string{ descriptor.callbackName } + "(self, event)`\n";
+    }
+    out += "\n`event.args`:\n\n| Argument | Type | Meaning |\n|---|---|---|\n";
+    out += "| `entity` | Entity | The widget the event is about |\n";
+    out += "| `pointerX`, `pointerY` | Float | Pointer position in canvas pixels; `pointerAvailable` says whether there was a pointer |\n";
+    out += "| `value`, `value2` | Float | A Slider, Scrollbar or Toggle value; the drag delta in OnUIDragged |\n";
+    out += "| `text` | String | An Input Field's text, or the link of OnUILinkActivated |\n";
+    out += "| `action` | String | The Selectable's `eventName` (empty when none) |\n";
+    out += "| `other` | Entity | The dragged widget in OnUIDropped |\n\n";
+    out += "## Button to script\n\n";
+    out += "Give the Selectable an `eventName`; a click then also sends an event of that name, to the widget or to the object in its ";
+    out += "`eventTarget`. A plain identifier is a function of that name; any name arrives in `event.args.action`:\n\n";
+    out += "```lua\nfunction PlayClicked(self, event) Log(\"play at \" .. event.args.pointerX) end\n";
+    out += "function OnUIClicked(self, event) Log(event.args.action) end\n```\n\n";
+    out += "Events go only to the script on that object; they do not bubble to parents. `kb_cli validate <scene>` warns when an ";
+    out += "`eventName` or a Button has no script that answers it; guide: `menus-and-buttons`.\n";
+    return out;
+}
+
 } // namespace
 
 std::vector<ScriptApiReferencePage> ScriptApiExport::ToReferencePages(const ScriptApiCatalog& catalog) {
@@ -703,6 +729,7 @@ std::vector<ScriptApiReferencePage> ScriptApiExport::ToReferencePages(const Scri
     pages.push_back({ "Rig2D.md", std::string{kRig2DGuide} });
     pages.push_back({ "SpatialAudio.md", std::string{kSpatialAudioGuide} });
     pages.push_back({ "RuntimeUI.md", std::string{kRuntimeUIGuide} });
+    pages.push_back({ "UIEvents.md", UIEventsPage() });
     pages.push_back({ "SensorInput.md", std::string{kSensorInputGuide} });
     for (const auto& [group, functions] : FunctionGroups(catalog)) {
         pages.push_back({ GroupPagePath(group), GroupPage(catalog, group, functions) });
@@ -724,6 +751,10 @@ std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCata
     if (wanted == "nativeauthoring" || wanted == "nativeauthoring.md") return std::string{kNativeAuthoringGuide};
     if (wanted == "sensorinput" || wanted == "sensorinput.md") return std::string{kSensorInputGuide};
     if (wanted == "runtimeui" || wanted == "runtimeui.md") return std::string{kRuntimeUIGuide};
+    if (wanted == "uievents" || wanted == "uievents.md" || wanted == "ui events") return UIEventsPage();
+    for (const kb::scene::SceneUIEventDescriptor& descriptor : kb::scene::SceneUIEventCatalog()) {
+        if (Lower(descriptor.callbackName) == wanted) return UIEventsPage();
+    }
     if (wanted == "spatialaudio" || wanted == "spatialaudio.md") return std::string{kSpatialAudioGuide};
     if (wanted == "editorextensions" || wanted == "editorextensions.md") return std::string{kEditorExtensionGuide};
     if (wanted == "pythonauthoring" || wanted == "pythonauthoring.md") return std::string{kPythonAuthoringGuide};
@@ -742,7 +773,13 @@ std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCata
     }
     const auto groups = FunctionGroups(catalog);
     for (const auto& [group, functions] : groups) {
-        if (Lower(group) == wanted) return GroupPage(catalog, group, functions);
+        if (Lower(group) != wanted) continue;
+        std::string page = GroupPage(catalog, group, functions);
+        // A name can be both: the Text functions and the Text component (its content, font and color).
+        for (const ScriptApiCatalogComponent& component : catalog.components) {
+            if (Lower(component.name) == wanted) page += "\n" + ComponentPage(component);
+        }
+        return page;
     }
     for (const ScriptApiCatalogComponent& component : catalog.components) {
         if (Lower(component.name) == wanted) return ComponentPage(component);
@@ -777,6 +814,10 @@ std::string ScriptApiExport::SearchReference(const ScriptApiCatalog& catalog, st
     std::size_t found = 0U;
     if (found < limit && !words.empty() && matches(Lower(std::string{kSensorInputGuide}))) {
         out += "- `SensorInput` - accelerometer, gyroscope, SI units, provider lifecycle and explicit replay\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(UIEventsPage()))) {
+        out += "- `UIEvents` - OnUIClicked and the other widget callbacks, their event.args, button to script\n";
         ++found;
     }
     if (found < limit && !words.empty() && matches(Lower(std::string{kRuntimeUIGuide}))) {
