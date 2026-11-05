@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 #include "CliPlayerPreset.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -134,74 +135,148 @@ struct SceneSession {
     std::filesystem::path path;
     std::string name;
     std::shared_ptr<SceneFileLock> lock;
+    // Kept open by a SceneEditBatch: Save() only notes the change, the batch writes the scene once.
+    bool kept = false;
+    bool changed = false;
 
-    [[nodiscard]] bool Save() { return kb::scene::SceneDocumentService::Save(*scene, path, name); }
+    [[nodiscard]] bool Save() {
+        if (kept) {
+            changed = true;
+            return true;
+        }
+        return Write();
+    }
+    [[nodiscard]] bool Write() { return kb::scene::SceneDocumentService::Save(*scene, path, name); }
 };
+
+using SceneSessionPtr = std::shared_ptr<SceneSession>;
+
+// The scenes a SceneEditBatch holds open, each under the project and the --scene spellings that led to it.
+struct OpenScenes {
+    struct Entry {
+        std::filesystem::path projectFile;
+        std::vector<std::string> sceneOptions;
+        SceneSessionPtr session;
+    };
+    std::vector<Entry> entries;
+    bool keeping = false;
+
+    [[nodiscard]] SceneSessionPtr Find(const std::filesystem::path& projectFile, const std::string& sceneOption) const {
+        for (const Entry& entry : entries) {
+            if (entry.projectFile == projectFile && std::ranges::find(entry.sceneOptions, sceneOption) != entry.sceneOptions.end()) {
+                return entry.session;
+            }
+        }
+        return nullptr;
+    }
+    // The scene file is the same one however --scene spells it (/Game/..., Assets/..., none for the default scene).
+    [[nodiscard]] SceneSessionPtr FindFile(const std::filesystem::path& projectFile, const std::filesystem::path& file,
+        const std::string& sceneOption) {
+        for (Entry& entry : entries) {
+            std::error_code ec;
+            if (entry.projectFile == projectFile && std::filesystem::equivalent(entry.session->path, file, ec) && !ec) {
+                entry.sceneOptions.push_back(sceneOption);
+                return entry.session;
+            }
+        }
+        return nullptr;
+    }
+};
+
+thread_local OpenScenes* gOpenScenes = nullptr;
 
 [[nodiscard]] std::filesystem::path Utf8Path(std::string_view text) {
     return std::filesystem::path{ std::u8string{ reinterpret_cast<const char8_t*>(text.data()), text.size() } };
 }
 
-[[nodiscard]] std::optional<SceneSession> OpenScene(const ArgumentList& arguments, CommandIo io) {
+[[nodiscard]] SceneSessionPtr OpenScene(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
         io.err << "error: --project <dir> is required\n";
-        return std::nullopt;
+        return nullptr;
     }
     const std::filesystem::path root = Utf8Path(*project);
     std::string error;
     const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(root, error);
     if (projectFile.empty()) {
         io.err << "error: " << error << '\n';
-        return std::nullopt;
+        return nullptr;
+    }
+    const std::string requestedScene = arguments.Option("--scene").value_or("");
+    OpenScenes* const batch = gOpenScenes != nullptr && gOpenScenes->keeping ? gOpenScenes : nullptr;
+    if (batch != nullptr) {
+        if (SceneSessionPtr open = batch->Find(projectFile, requestedScene)) {
+            // As freshly loaded: the transforms the earlier operations changed are settled.
+            open->scene->Runtime().SynchronizeTransforms();
+            return open;
+        }
     }
     kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
     if (!loaded.succeeded) {
         io.err << "error: project descriptor could not be loaded: " << loaded.error << '\n';
-        return std::nullopt;
+        return nullptr;
     }
 
-    SceneSession session;
-    session.descriptor = std::move(loaded.descriptor);
-    session.scene = std::make_unique<kb::scene::Scene>(session.descriptor);
-    if (!MountProjectAssets(*session.scene, projectFile.parent_path(), error)) {
+    auto session = std::make_shared<SceneSession>();
+    session->descriptor = std::move(loaded.descriptor);
+    session->scene = std::make_unique<kb::scene::Scene>(session->descriptor);
+    if (!MountProjectAssets(*session->scene, projectFile.parent_path(), error)) {
         io.err << "error: " << error << '\n';
-        return std::nullopt;
+        return nullptr;
     }
     // Without --scene: the scene the game starts in (ProjectSettings::defaultMap).
-    std::string sceneOption = arguments.Option("--scene").value_or("");
+    std::string sceneOption = requestedScene;
     if (sceneOption.empty()) {
         const kb::project::ProjectSettingsLoadResult settings =
             kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectFile.parent_path()));
         sceneOption = settings.settings.defaultMap;
     }
-    if (session.scene->Assets().Manager().Mounts().Resolve(Utf8Path(sceneOption)).has_value()) {
+    if (session->scene->Assets().Manager().Mounts().Resolve(Utf8Path(sceneOption)).has_value()) {
         const kb::assets::AssetMetadata* metadata =
-            FindAssetByFlexiblePath(session.scene->Assets().Manager().Registry(), sceneOption);
+            FindAssetByFlexiblePath(session->scene->Assets().Manager().Registry(), sceneOption);
         if (metadata == nullptr) {
             io.err << "error: scene asset was not found: " << sceneOption << '\n';
-            return std::nullopt;
+            return nullptr;
         }
-        session.path = metadata->physicalPath;
+        session->path = metadata->physicalPath;
     } else {
-        session.path = ResolveProjectFile(Utf8Path(sceneOption), projectFile.parent_path(), error);
-        if (session.path.empty()) {
+        session->path = ResolveProjectFile(Utf8Path(sceneOption), projectFile.parent_path(), error);
+        if (session->path.empty()) {
             io.err << "error: " << error << '\n';
-            return std::nullopt;
+            return nullptr;
         }
     }
-    session.lock = std::make_shared<SceneFileLock>(session.path);
-    const kb::scene::SceneDocumentLoadResult document = kb::scene::SceneDocumentService::Load(session.path);
-    if (!document.succeeded) {
-        io.err << "error: could not load scene " << session.path.generic_string() << ": " << document.error << '\n';
-        return std::nullopt;
+    // The same scene under another spelling is one open scene: a second copy would wait for the first one's lock.
+    if (batch != nullptr) {
+        if (SceneSessionPtr open = batch->FindFile(projectFile, session->path, requestedScene)) {
+            open->scene->Runtime().SynchronizeTransforms();
+            return open;
+        }
     }
-    session.name = document.document.name;
-    if (!kb::scene::SceneDocumentService::LoadIntoScene(*session.scene, document.document)) {
-        io.err << "error: scene " << session.path.generic_string() << " could not be instantiated\n";
-        return std::nullopt;
+    session->lock = std::make_shared<SceneFileLock>(session->path);
+    const kb::scene::SceneDocumentLoadResult document = kb::scene::SceneDocumentService::Load(session->path);
+    if (!document.succeeded) {
+        io.err << "error: could not load scene " << session->path.generic_string() << ": " << document.error << '\n';
+        return nullptr;
+    }
+    session->name = document.document.name;
+    if (!kb::scene::SceneDocumentService::LoadIntoScene(*session->scene, document.document)) {
+        io.err << "error: scene " << session->path.generic_string() << " could not be instantiated\n";
+        return nullptr;
+    }
+    if (batch != nullptr) {
+        session->kept = true;
+        batch->entries.push_back(OpenScenes::Entry{ .projectFile = projectFile, .sceneOptions = { requestedScene }, .session = session });
     }
     return session;
+}
+
+// Files the kept scenes have not seen (a material just made) are looked for again.
+void RefreshOpenScenes() {
+    if (gOpenScenes == nullptr) return;
+    for (const OpenScenes::Entry& entry : gOpenScenes->entries) {
+        static_cast<void>(entry.session->scene->Assets().Discover());
+    }
 }
 
 void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::vector<kb::scene::SceneEntity>& out) {
@@ -783,10 +858,11 @@ void ListProperties(std::string_view component, std::ostream& out) {
             return 1;
         }
         material = virtualPath;
+        RefreshOpenScenes();
     }
 #endif
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
 
     std::optional<kb::scene::SceneEntity> parent;
@@ -899,8 +975,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
         io.err << "error: entity remove requires --name <Name>\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(*session->scene, *name, io);
     if (!entity.has_value()) return 1;
     session->scene->Entities().Destroy(*entity);
@@ -915,8 +991,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
         io.err << "error: prefab new requires --from-entity <Name> [--name <PrefabName>] [--folder Assets/Prefabs]\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
     if (!entity.has_value()) return 1;
@@ -949,8 +1025,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
         io.err << "error: prefab place requires --prefab /Game/<path>.kbprefab [--name <Name>] [--parent <Name>] [--position x,y,z] ...\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     static_cast<void>(scene.Assets().Discover());
     const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(*prefab));
@@ -1001,8 +1077,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
         io.err << "error: entity set requires --name <Name> and any of --position, --rotation, --scale, --look-at\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *name, io);
     if (!entity.has_value()) return 1;
@@ -1045,8 +1121,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
         io.err << "error: entity rename requires --name <Name|Parent/Name> --to <NewName> [--occurrence <n>]\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::vector<kb::scene::SceneEntity> matches = MatchEntities(scene, *name);
     kb::scene::SceneEntity entity{};
@@ -1138,8 +1214,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
                   " [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> object = FindEntity(scene, *name, io);
     if (!object.has_value()) return 1;
@@ -1208,8 +1284,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
         io.err << "error: entity detach requires --name <Object>\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     const std::optional<kb::scene::SceneEntity> object = FindEntity(*session->scene, *name, io);
     if (!object.has_value()) return 1;
     if (!session->scene->Components().SocketAttachments().Has(*object)) {
@@ -1357,8 +1433,8 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         io.err << "error: entity show requires --name <Name|Parent/Name>\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(*session->scene, *name, io);
     if (!entity.has_value()) return 1;
     PrintEntity(*session->scene, *entity, io.out);
@@ -1376,8 +1452,8 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         io.err << "error: component " << action << " requires --entity <Name> --type <Component>\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
     if (!entity.has_value()) return 1;
@@ -1574,8 +1650,8 @@ constexpr std::string_view kAiUsage =
         map.orientation = *orientation == "wall" ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat;
     }
     if (!EnsureDefaultPlugin(arguments, "World.Map2D", io)) return 1;
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     if (!NameFreeUnder(scene, kb::scene::SceneEntity{}, *name)) {
         io.err << "error: an entity named '" << *name << "' already exists at the scene root. Pass another --name.\n";
@@ -1621,8 +1697,8 @@ constexpr std::string_view kAiUsage =
         io.err << "error: map2d view requires --entity <Name>\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *name, io);
     if (!entity.has_value()) return 1;
@@ -1723,8 +1799,8 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
         return 1;
     }
     if (!EnsureAiPlugin(arguments, io)) return 1;
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
     if (!entity.has_value()) return 1;
@@ -1831,8 +1907,8 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
         return 1;
     }
     if (!EnsureAiPlugin(arguments, io)) return 1;
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
     if (!entity.has_value()) return 1;
@@ -1858,8 +1934,8 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
         io.err << "error: ai show requires --entity <Name>\n";
         return 1;
     }
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(*session->scene, *entityName, io);
     if (!entity.has_value()) return 1;
     PrintBrain(*session->scene, *entity, io.out);
@@ -1876,6 +1952,35 @@ int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments,
     return 1;
 }
 #endif
+
+struct SceneEditBatch::State : OpenScenes {};
+
+SceneEditBatch::SceneEditBatch() : state_(std::make_unique<State>()) { gOpenScenes = state_.get(); }
+
+SceneEditBatch::~SceneEditBatch() { gOpenScenes = nullptr; }
+
+bool SceneEditBatch::Prepare(std::string_view command, std::string& error) {
+    state_->keeping = command == "entity" || command == "component";
+    return state_->keeping || Commit(error);
+}
+
+bool SceneEditBatch::Commit(std::string& error) {
+    state_->keeping = false;
+    std::vector<OpenScenes::Entry> entries = std::move(state_->entries);
+    state_->entries.clear();
+    for (const OpenScenes::Entry& entry : entries) {
+        if (entry.session->changed && !entry.session->Write()) {
+            error = "scene " + entry.session->path.generic_string() + " could not be written";
+            return false;
+        }
+    }
+    return true;
+}
+
+void SceneEditBatch::Discard() noexcept {
+    state_->keeping = false;
+    state_->entries.clear();
+}
 
 int RunEntityCommand(const ArgumentList& arguments, CommandIo io) {
     const std::vector<std::string>& positionals = arguments.Positionals();
@@ -1901,8 +2006,8 @@ int RunComponentCommand(const ArgumentList& arguments, CommandIo io) {
 }
 
 bool PlaceSceneNavMesh(const ArgumentList& arguments, const std::filesystem::path& navMesh, CommandIo io) {
-    std::optional<SceneSession> session = OpenScene(arguments, io);
-    if (!session.has_value()) return false;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return false;
     kb::scene::Scene& scene = *session->scene;
     static_cast<void>(scene.Assets().Discover());
     const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), navMesh);

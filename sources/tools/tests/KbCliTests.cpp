@@ -4820,6 +4820,83 @@ void RunBatchCommandTests() {
     }
 }
 
+// Many entity and component operations of one batch edit the scene in memory and write it once; any other
+// command sees the files as they are, and a failure leaves the scene file as it was.
+void RunBatchSceneSessionTests() {
+    const std::filesystem::path parent = TestRoot() / "batch_scene_session";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path projectPath = parent / "Scena";
+    const std::string project = projectPath.string();
+    constexpr int kObjects = 200;
+    constexpr int kBarrierAfter = 100;
+
+    // The Light of an object is added through the other spelling of the same scene, as the scene of the project.
+    std::string operations;
+    for (int index = 1; index <= kObjects; ++index) {
+        const std::string name = "Obj" + std::to_string(index);
+        operations += "entity add --name " + name + " --position " + std::to_string(index) + ",0,0\n";
+        operations += "component add --scene /Game/Scenes/Main.21kbscene --entity " + name + " --type Light --set intensity=2\n";
+        if (index == kBarrierAfter) operations += "scene-list --scene Assets/Scenes/Main.21kbscene\n";
+    }
+    const std::filesystem::path file = parent / "many.txt";
+    WriteTextFile(file, operations);
+
+    const auto started = std::chrono::steady_clock::now();
+    const CliRun applied = RunCliProgram({ "batch", "--project", project, "--file", file.string(), "--json" });
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    JsonValue result;
+    std::string parseError;
+    Require(applied.exitCode == 0 && JsonValue::Parse(applied.out, result, parseError) && result.Find("applied")->AsBool(),
+        "a long batch of scene edits must apply: " + applied.out.substr(0U, 600U) + applied.err);
+    // Opening the scene for every operation took about a quarter of a second each: 400 operations ran for over a minute.
+    Require(elapsed < std::chrono::seconds{ 10 }, "400 scene edits of one batch must not reopen the scene for each one");
+
+    // The command that is not an edit saw the scene as written by the operations before it, and no later one.
+    const std::string& listing = result.Find("operations")->At(static_cast<std::size_t>(kBarrierAfter) * 2U)->Find("output")->AsString();
+    Require(Contains(listing, "Obj" + std::to_string(kBarrierAfter)) && !Contains(listing, "Obj" + std::to_string(kBarrierAfter + 1)),
+        "a command that is not an edit must see the scene as the operations before it left it: " + listing);
+
+    const CliRun last = RunCliProgram({ "entity", "show", "--project", project, "--name", "Obj" + std::to_string(kObjects) });
+    Require(last.exitCode == 0 && Contains(last.out, "Light:") && Contains(last.out, "worldPosition=" + std::to_string(kObjects) + ",0,0"),
+        "the batch must have written the last object with its Light: " + last.out + last.err);
+    const CliRun first = RunCliProgram({ "entity", "show", "--project", project, "--name", "Obj1" });
+    Require(first.exitCode == 0 && Contains(first.out, "Light:"), "the batch must have written the first object with its Light: " + first.out);
+
+    // An operation that fails late leaves the scene file, and everything else, as it was.
+    const auto before = Fingerprint(projectPath);
+    constexpr int kFailing = 150;
+    std::string failing;
+    for (int index = 1; index < kFailing; ++index) {
+        failing += "entity add --name Extra" + std::to_string(index) + " --position 0," + std::to_string(index) + ",0\n";
+    }
+    failing += "component add --entity Missing --type Light\n";
+    failing += "entity add --name Unreached\n";
+    const std::filesystem::path failingFile = parent / "failing.txt";
+    WriteTextFile(failingFile, failing);
+    const CliRun failed = RunCliProgram({ "batch", "--project", project, "--file", failingFile.string() });
+    Require(failed.exitCode == 1 && Contains(failed.out, "rolled back: operation " + std::to_string(kFailing) + " failed"),
+        "the failing operation must fail the batch: " + failed.out + failed.err);
+    Require(Fingerprint(projectPath) == before, "a batch that fails after 149 scene edits must leave every file as it was");
+
+#if KB_CLI_RENDERER
+    // --color makes a material before it edits the scene: the scene kept open from the first object must see the second one's.
+    const std::filesystem::path colored = parent / "colored.txt";
+    WriteTextFile(colored, "entity add --name Red --create Cube --color #FF0000\n"
+        "entity add --name Blue --create Cube --color #0000FF\n"
+        "entity add --name Green --create Cube --color #00FF00\n");
+    const CliRun paint = RunCliProgram({ "batch", "--project", project, "--file", colored.string() });
+    Require(paint.exitCode == 0, "--color in a batch must find the material it made: " + paint.out + paint.err);
+    for (const char* name : { "Red", "Blue", "Green" }) {
+        const CliRun shown = RunCliProgram({ "entity", "show", "--project", project, "--name", name });
+        Require(shown.exitCode == 0 && Contains(shown.out, std::string{ "/Game/Materials/" } + name + ".kbmat"),
+            std::string{ "the batch must give " } + name + " its own material: " + shown.out + shown.err);
+    }
+#endif
+}
+
 #if KB_CLI_RENDERER
 // The play camera of a map is set from the command line: pixel density, target, smoothing, drag margins, bounds.
 void RunMap2DCameraCliTests() {
@@ -5246,6 +5323,10 @@ int main(int argc, char** argv) {
         RunBatchCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "batch-scenes") {
+        RunBatchSceneSessionTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
         RunInputRecordingCliTests();
         return EXIT_SUCCESS;
@@ -5275,6 +5356,7 @@ int main(int argc, char** argv) {
     RunCliJsonTests();
     RunCommandCatalogTests();
     RunBatchCommandTests();
+    RunBatchSceneSessionTests();
     RunMiniJsonTests();
     RunArgumentListTests();
     RunFlexibleAssetPathTests();

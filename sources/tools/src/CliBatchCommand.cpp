@@ -551,6 +551,7 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
     Snapshot snapshot{ .root = root, .backup = fs::temp_directory_path(ec) / ("21kb-batch-" + std::to_string(
         static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()))), .listing = {} };
     bool snapshotTaken = false;
+    SceneEditBatch scenes;
     try {
         snapshotTaken = TakeSnapshot(snapshot, error);
         if (!snapshotTaken) report.errors.push_back(error);
@@ -559,7 +560,13 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
             std::ostringstream out;
             std::ostringstream err;
             try {
-                result.exitCode = run(operations[index], CommandIo{ .out = out, .err = err });
+                std::string sceneError;
+                if (scenes.Prepare(operations[index].front(), sceneError)) {
+                    result.exitCode = run(operations[index], CommandIo{ .out = out, .err = err });
+                } else {
+                    err << "error: " << sceneError << '\n';
+                    result.exitCode = 1;
+                }
             } catch (const std::exception& exception) {
                 err << "error: " << exception.what() << '\n';
                 result.exitCode = 1;
@@ -577,6 +584,14 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
         }
     } catch (const std::exception& exception) {
         report.errors.push_back(exception.what());
+    }
+
+    // The scenes the operations edited are written now, once, and closed before the files are compared.
+    if (report.errors.empty() && report.failedOperation == 0U) {
+        std::string sceneError;
+        if (!scenes.Commit(sceneError)) report.errors.push_back(sceneError);
+    } else {
+        scenes.Discard();
     }
 
     if (snapshotTaken) {
