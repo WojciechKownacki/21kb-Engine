@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorEngineInstallation.hpp"
 #include "scene/BlendSpace2DEditorState.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
 #include "engine/scene/SceneAssetUsers.hpp"
@@ -378,11 +379,9 @@ EditorSceneContext::EditorSceneContext()
     } else {
         console_.Error("Packaging", packageSettings.error);
     }
-#if defined(KB_EDITOR_BUILD_ROOT)
     if (buildGameSettings_.buildRoot.empty()) {
-        buildGameSettings_.buildRoot = KB_EDITOR_BUILD_ROOT;
+        buildGameSettings_.buildRoot = ResolveEditorEngineInstallation().build.string();
     }
-#endif
     buildGamePackageService_ = std::make_unique<EditorProjectPackageService>();
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");

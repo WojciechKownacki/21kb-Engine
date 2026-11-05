@@ -272,6 +272,8 @@ struct SceneRenderReflectionProbe {
     std::uint8_t maxMip = 1U;
     SceneRenderReflectionProbeShape shape = SceneRenderReflectionProbeShape::Infinite;
     bool parallaxCorrection = false;
+    // Optional authored cube texture; the runtime resolves this before submission.
+    std::uint64_t radianceAssetId = 0U;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(radianceTexture) && intensity > 0.0F && maxMip > 0U;
@@ -630,6 +632,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     ShadowLightLimit,
     GiBoundingBoxFallback,
     MaterialShadingFallback,
+    ReflectionProbeUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {

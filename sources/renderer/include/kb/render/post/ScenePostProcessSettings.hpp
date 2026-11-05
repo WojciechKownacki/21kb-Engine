@@ -20,6 +20,10 @@ struct ScenePostProcessSettings {
     float bloomThreshold = 1.0F;
     float bloomSoftKnee = 0.5F;
     float bloomRadiusPixels = 1.5F;
+    bool depthOfFieldEnabled = false;
+    float depthOfFieldFocusDistance = 10.0F;
+    float depthOfFieldFocusRange = 5.0F;
+    float depthOfFieldMaxRadiusPixels = 8.0F;
     bool temporalAntiAliasingEnabled = true;
     bool temporalJitterEnabled = true;
     float temporalHistoryBlend = 0.88F;

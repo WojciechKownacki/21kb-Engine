@@ -82,7 +82,7 @@ void FillIblStats(SceneRenderSubmitStats& stats, SceneRenderLightingConfig confi
         if (probe.shape != SceneRenderReflectionProbeShape::Infinite) {
             ++stats.localReflectionProbeCount;
         }
-        if (probe.parallaxCorrection || config.ibl.parallaxCorrection) {
+        if (probe.parallaxCorrection && config.ibl.parallaxCorrection) {
             ++stats.parallaxCorrectedProbeCount;
         }
     }
@@ -137,6 +137,7 @@ PackedSceneLighting SceneLightingPacker::Build(
     SceneRenderLightingConfig config,
     const SceneRenderCamera* camera) noexcept {
     PackedSceneLighting lighting{};
+    lighting.ibl = config.ibl;
     const std::uint32_t capacity = ClampedForwardLightBudget(config);
     lighting.params[1] = static_cast<float>(capacity);
     const float ambientIntensity = std::max(config.ambientIntensity, 0.0F);

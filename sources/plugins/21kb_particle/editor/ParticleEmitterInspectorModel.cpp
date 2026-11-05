@@ -92,6 +92,7 @@ namespace {
     case kb::scene::ParticleModuleType::Attraction: return ParticleText("particle.module.attraction", "Attraction");
     case kb::scene::ParticleModuleType::TorusSwirl: return ParticleText("particle.module.torus_swirl", "Torus Swirl");
     case kb::scene::ParticleModuleType::Separation: return ParticleText("particle.module.separation", "Separation");
+    case kb::scene::ParticleModuleType::CollisionGeometry: return "Geometry Collision (CPU)";
     }
     return ParticleText("particle.invalid", "Invalid");
 }

@@ -1,4 +1,5 @@
 #include "kb/render/Renderer.hpp"
+#include "kb/render/scene/LocalReflectionUniforms.hpp"
 #include "kb/render/effects/RenderEffectHost.hpp"
 
 #include "kb/render/BgfxContext.hpp"
@@ -1134,6 +1135,19 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     }
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
         RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
+    if (effectiveLightingConfig.ibl.reflectionProbeCount + renderScene.LocalReflectionProbes().size() > kMaxSampledLocalReflectionProbes) {
+        lastSceneDiagnostics_.events.push_back({.severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::ReflectionProbeUnavailable,
+            .instanceCount = effectiveLightingConfig.ibl.reflectionProbeCount + static_cast<std::uint32_t>(renderScene.LocalReflectionProbes().size())});
+        return false;
+    }
+    for (const auto& probe : renderScene.LocalReflectionProbes()) {
+        effectiveLightingConfig.ibl.reflectionProbes[effectiveLightingConfig.ibl.reflectionProbeCount++] = probe;
+    }
+    for (std::uint32_t index = 0; index < effectiveLightingConfig.ibl.reflectionProbeCount; ++index) {
+        const auto asset = effectiveLightingConfig.ibl.reflectionProbes[index].radianceAssetId;
+        if (asset != 0U) frameReferences_.MarkTexture({.sceneId = scene.Id(), .assetId = asset, .colorSpace = RenderTextureColorSpace::Linear});
+    }
     // The resolved profile (or a default the application set with ambient occlusion on) decides
     // the screen-space ambient occlusion; without either, the lighting config keeps its own.
     if (resolvedPostProcessSettings.has_value()) {
@@ -1318,6 +1332,23 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         opaqueClearColor = worldBackdrop->color;
     }
     bgfx::TextureHandle worldBackdropEnvironment = BGFX_INVALID_HANDLE;
+    for (std::uint32_t index = 0; index < effectiveLightingConfig.ibl.reflectionProbeCount; ++index) {
+        auto& probe = effectiveLightingConfig.ibl.reflectionProbes[index];
+        if (probe.radianceAssetId == 0U) continue;
+        probe.radianceTexture = BGFX_INVALID_HANDLE;
+        const auto handle = sceneRenderer_->ResourceMap().ResolveTexture(probe.radianceAssetId,RenderTextureColorSpace::Linear);
+        const auto* texture = sceneRenderer_->Resources().FindTexture(handle);
+        if (texture != nullptr && texture->dimension == RenderTextureDimension::TextureCube && texture->layers == 1U) {
+            probe.radianceTexture = texture->texture;
+            probe.maxMip = texture->mipCount;
+        }
+    }
+    if (!ValidLocalReflectionConfig(effectiveLightingConfig.ibl)) {
+        lastSceneDiagnostics_.events.push_back({.severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::ReflectionProbeUnavailable,
+            .instanceCount = effectiveLightingConfig.ibl.reflectionProbeCount});
+        return false;
+    }
     if (worldBackdrop.has_value() &&
         worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap &&
         worldBackdrop->environmentAssetId != 0U) {

@@ -35,6 +35,7 @@ namespace kb::scene {
 [[nodiscard]] bool IsUIComponentValid(const UIDropdown& component) noexcept;
 [[nodiscard]] bool IsUIComponentValid(const UIProgressBar& component) noexcept;
 [[nodiscard]] bool IsUIComponentValid(const UIWidgetSwitcher& component) noexcept;
+[[nodiscard]] bool IsUIComponentValid(const UIAccessibility& component) noexcept;
 [[nodiscard]] bool IsUIComponentSetValid(const UIComponentSet& components) noexcept;
 
 } // namespace kb::scene

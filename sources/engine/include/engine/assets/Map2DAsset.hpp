@@ -117,6 +117,8 @@ enum class Map2DOrientation : std::uint8_t {
     Wall,
 };
 
+enum class Map2DTopology : std::uint8_t { Rectangular, Isometric, Hexagonal };
+
 // How the map's play camera frames and follows. Every default keeps the plain camera: the view height
 // of the map, still, centred on the map.
 struct Map2DCamera {
@@ -167,7 +169,19 @@ struct Map2DAsset {
     Map2DProperties propertyDefaults;
     // Non-empty tiles by Map2DTileKey.
     std::map<std::uint64_t, Map2DTile> tiles;
+    Map2DTopology topology = Map2DTopology::Rectangular;
 };
+
+[[nodiscard]] std::string_view Map2DTopologyName(Map2DTopology topology) noexcept;
+// Projected X/down coordinates, in metres from the map's bounding top-left.
+// Integer grid boundaries surround half-integer cell centres. Hex cells use axial q/r.
+[[nodiscard]] std::array<double, 2> Map2DProjectedSize(const Map2DAsset& map) noexcept;
+[[nodiscard]] std::array<double, 2> Map2DProjectGrid(const Map2DAsset& map, double x, double y) noexcept;
+[[nodiscard]] std::optional<std::array<int, 2>> Map2DCellAtPlane(const Map2DAsset& map, double x, double down) noexcept;
+[[nodiscard]] std::array<double, 3> Map2DCellLocalPoint(const Map2DAsset& map, double x, double y, std::int32_t floor = 0, bool footpoint = false) noexcept;
+[[nodiscard]] double Map2DCellHeight(const Map2DAsset& map) noexcept;
+[[nodiscard]] std::span<const std::array<int, 2>> Map2DNeighbourOffsets(Map2DTopology topology, bool diagonals = false) noexcept;
+[[nodiscard]] std::span<const std::array<float, 2>> Map2DCellOutline(Map2DTopology topology) noexcept;
 
 // Ordered by floor, then row, then column. The floor is stored offset by 50 so lower floors sort first.
 [[nodiscard]] constexpr std::uint64_t Map2DTileKey(std::uint32_t x, std::uint32_t y, std::int32_t z) noexcept {

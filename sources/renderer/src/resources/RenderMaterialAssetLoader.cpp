@@ -182,6 +182,7 @@ void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::As
         stableId == "emissiveStrength" ||
         stableId == "alphaCutoff" ||
         stableId == "alphaMode" ||
+        stableId == "bakedLightmap" ||
         stableId == "doubleSided";
 }
 

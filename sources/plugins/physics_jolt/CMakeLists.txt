@@ -8,6 +8,7 @@ add_library(kb_physics_jolt_plugin ${KB_PHYSICS_JOLT_PLUGIN_LIBRARY_TYPE}
     JoltPhysicsModule.cpp
     JoltPhysicsSceneSystem.hpp
     JoltPhysicsSceneSystem.cpp
+    JoltPhysicsAssemblies.inl
 )
 
 target_include_directories(kb_physics_jolt_plugin
@@ -18,6 +19,7 @@ target_include_directories(kb_physics_jolt_plugin
 target_link_libraries(kb_physics_jolt_plugin
     PRIVATE
         kb_engine
+        flecs::flecs_static
         Jolt
 )
 

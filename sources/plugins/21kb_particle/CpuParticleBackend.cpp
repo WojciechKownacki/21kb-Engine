@@ -1,3 +1,4 @@
+#include "ParticleGeometryCollision.hpp"
 #include <chrono>
 #include "CpuParticleBackend.hpp"
 #include "ParticleEffectCompiler.hpp"
@@ -435,6 +436,16 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Create(
     if (compiledEffectIndex == kInvalidDenseIndex) {
         return Result(compileFailure);
     }
+    collisionScene_=&scene;
+    const auto& compiled=*compiledEffects_[compiledEffectIndex].effect;
+    for(std::uint8_t e=0;e<compiled.emitterCount;++e) for(std::uint8_t m=0;m<compiled.emitters[e].moduleCount;++m) {
+        const auto& module=compiled.emitters[e].modules[m];
+        if(module.enabled&&module.type==kb::scene::ParticleModuleType::CollisionGeometry&&
+            std::get<kb::scene::ParticleCollisionGeometryModule>(module.payload).kind==kb::scene::ParticleCollisionGeometryKind::PhysicsWorld&&!kb::scene::PhysicsBackend::HasBackend(scene)) {
+            lastEffectFailure_="physics-world particle collision requires an active physics provider";
+            ReleaseCompiledEffect(compiledEffectIndex);return Result(kb::particles::ParticleRuntimeStatus::BackendUnavailable);
+        }
+    }
     const kb::particles::ParticleRenderCapabilities renderCapabilities =
         kb::particles::ParticlePlayback::RenderCapabilities(scene);
     const kb::particles::ParticleGpuVisualAvailability gpuVisualAvailability =
@@ -769,6 +780,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     std::fill(renderRejectedByEventBudget_.begin(), renderRejectedByEventBudget_.end(), 0U);
     BeginEventStep();
     gpuScene_ = &scene;
+    collisionScene_ = &scene;
     gpuSimTime_ = static_cast<double>(scene.Runtime().FixedStepIndex() + 1U) * static_cast<double>(fixedDeltaSeconds);
     ReleaseDueGpuEvents();
     std::uint32_t remainingSpawnBudget = kb::scene::kParticleEffectMaxSpawnsPerStep;
@@ -1993,6 +2005,7 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
             const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
             if (!module.enabled) continue;
             switch (module.type) {
+            case kb::scene::ParticleModuleType::CollisionGeometry:
             case kb::scene::ParticleModuleType::InitialVelocity:
                 break;
             case kb::scene::ParticleModuleType::Gravity: {
@@ -2062,21 +2075,28 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         color.a *= alphaMultiplier;
         particleColors_[index] = color;
         particleSizes_[index] = size * particleSizeScales_[index];
+        const auto beforeCollision=particlePositions_[index];
         particlePositions_[index] = particlePositions_[index] + velocity * fixedDeltaSeconds;
         for (std::uint8_t moduleIndex = 0U; moduleIndex < emitter.moduleCount; ++moduleIndex) {
             const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
-            if (!module.enabled || module.type != kb::scene::ParticleModuleType::CollisionPlane) continue;
-            const kb::scene::ParticleCollisionPlaneModule& collision =
-                std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);
-            const float signedDistance = kb::math::Dot(collision.normal, particlePositions_[index]) -
-                PlaneDistance(collision);
-            if (signedDistance >= 0.0F) continue;
-            particlePositions_[index] = particlePositions_[index] - collision.normal * signedDistance;
-            const float normalVelocity = kb::math::Dot(velocity, collision.normal);
-            if (normalVelocity < 0.0F) {
-                const kb::math::Vec3 tangent = velocity - collision.normal * normalVelocity;
-                velocity = tangent * (1.0F - collision.friction) -
-                    collision.normal * (normalVelocity * collision.restitution);
+            if(!module.enabled) continue;
+            kb::scene::ParticleCollisionPlaneModule collision;
+            kb::math::Vec3 normal{};
+            if(module.type==kb::scene::ParticleModuleType::CollisionPlane) {
+                collision=std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);normal=collision.normal;
+                const float signedDistance=kb::math::Dot(normal,particlePositions_[index])-PlaneDistance(collision);
+                if(signedDistance>=0) continue;
+                particlePositions_[index]=particlePositions_[index]-normal*signedDistance;
+            } else if(module.type==kb::scene::ParticleModuleType::CollisionGeometry) {
+                const auto& geometry=std::get<kb::scene::ParticleCollisionGeometryModule>(module.payload);
+                if(!geometry_collision::Resolve(collisionScene_,geometry,beforeCollision,particlePositions_[index],simulationOrigin_,normal)) continue;
+                collision.restitution=geometry.restitution;collision.friction=geometry.friction;
+                collision.maxEventsPerStep=geometry.maxEventsPerStep;collision.killOnContact=geometry.killOnContact;
+            } else continue;
+            const float normalVelocity=kb::math::Dot(velocity,normal);
+            if(normalVelocity<0) {
+                const auto tangent=velocity-normal*normalVelocity;
+                velocity=tangent*(1-collision.friction)-normal*(normalVelocity*collision.restitution);
             }
             ++stepTelemetry_.collisions;
             const std::size_t collisionBudgetIndex =
@@ -2679,6 +2699,7 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
     for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
         const auto& module = emitter.modules[index];
         if (!module.enabled) continue;
+        if(module.type==kb::scene::ParticleModuleType::CollisionGeometry) return Reason::GeometryCollision;
         if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
             // Plane response uses world-space state; trails require a separate history representation.
             if (local) return Reason::LocalPlane;

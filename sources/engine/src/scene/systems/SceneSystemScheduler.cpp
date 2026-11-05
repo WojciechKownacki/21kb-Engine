@@ -49,9 +49,10 @@ bool SceneSystemScheduler::CollectRuntimeStateProviders(std::vector<RuntimeState
     std::vector<RuntimeStateBinding> bindings;
     bindings.reserve(systems_.size());
     for (const auto& entry : systems_) {
+        const auto& system = *entry.system;
         auto* provider = dynamic_cast<kb::core::IRuntimeStateProvider*>(entry.system.get());
         if (provider == nullptr && dynamic_cast<const IStatelessSceneSystem*>(entry.system.get()) == nullptr) {
-            error = "Scene system at index " + std::to_string(bindings.size()) + " (" + typeid(*entry.system).name()
+            error = "Scene system at index " + std::to_string(bindings.size()) + " (" + typeid(system).name()
                 + ") does not declare runtime checkpoint state ownership";
             return false;
         }

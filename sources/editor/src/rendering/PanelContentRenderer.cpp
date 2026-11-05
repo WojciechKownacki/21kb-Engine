@@ -1,3 +1,4 @@
+#include "extensions/EditorExtensionHost.hpp"
 #include "rendering/PanelContentRenderer.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "localization/EditorLocalization.hpp"
@@ -459,6 +460,8 @@ void PanelContentRenderer::Paint(
         EditorScriptEditorOverlay::Sync(sceneViewportHost, content, sceneContext);
         break;
     case DockPanelKind::Generic:
+        if(auto* extensions=EditorExtensionHost::Find(sceneContext)) static_cast<void>(extensions->Paint(dc,content,panel.id,theme));
+        break;
     default:
         break;
     }

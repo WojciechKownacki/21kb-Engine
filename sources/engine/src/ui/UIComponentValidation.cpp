@@ -124,7 +124,7 @@ bool IsUIComponentValid(const UIText& value) noexcept {
         Finite(value.lineSpacing) && value.lineSpacing > 0.0F && Utf8Terminated(value.localizationKey) &&
         EnumAtMost(value.overflow, UITextOverflow::Ellipsis) && Finite(value.minFontSize) && value.minFontSize > 0.0F &&
         Finite(value.characterSpacing) && Utf8Terminated(value.localizationNumber) && Utf8Terminated(value.fontVariations) &&
-        EnumAtMost(value.fontRenderMode, UITextFontRenderMode::SignedDistanceField) &&
+        EnumAtMost(value.fontRenderMode, UITextFontRenderMode::MultiChannelSignedDistanceField) &&
         (UITextLocalizationNumber(value).empty() ||
             kb::localization::ParsePluralOperands(UITextLocalizationNumber(value)).has_value());
 }
@@ -184,6 +184,11 @@ bool IsUIComponentValid(const UIProgressBar& value) noexcept {
 }
 bool IsUIComponentValid(const UIWidgetSwitcher&) noexcept { return true; }
 
+bool IsUIComponentValid(const UIAccessibility& value) noexcept {
+    return EnumAtMost(value.role,UIAccessibilityRole::List)&&
+        std::find(value.label.begin(),value.label.end(),'\0')!=value.label.end()&&
+        std::find(value.hint.begin(),value.hint.end(),'\0')!=value.hint.end();
+}
 bool IsUIComponentSetValid(const UIComponentSet& value) noexcept {
     const std::size_t layoutCount = static_cast<std::size_t>(value.horizontalLayout.has_value()) +
         static_cast<std::size_t>(value.verticalLayout.has_value()) + static_cast<std::size_t>(value.gridLayout.has_value()) +
@@ -198,7 +203,7 @@ bool IsUIComponentSetValid(const UIComponentSet& value) noexcept {
         OptionalValid(value.selectable) && OptionalValid(value.button) && OptionalValid(value.toggle) &&
         OptionalValid(value.slider) && OptionalValid(value.scrollbar) && OptionalValid(value.scrollView) &&
         OptionalValid(value.inputField) && OptionalValid(value.dropdown) && OptionalValid(value.progressBar) &&
-        OptionalValid(value.widgetSwitcher);
+        OptionalValid(value.widgetSwitcher) && OptionalValid(value.accessibility);
 }
 
 } // namespace kb::scene

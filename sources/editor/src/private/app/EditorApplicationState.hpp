@@ -1,3 +1,4 @@
+#include "extensions/EditorExtensionHost.hpp"
 #pragma once
 
 #include "docking/EditorDockController.hpp"
@@ -36,6 +37,7 @@ struct EditorApplicationState {
     EditorWindowClassRegistry windowClasses;
     EditorDockModel dockModel;
     EditorSceneContext sceneContext;
+    std::unique_ptr<EditorExtensionHost> extensions;
     EditorTheme theme = MakeEditorDarkTheme();
     EditorMetrics metrics;
     EditorGdiRenderer renderer;

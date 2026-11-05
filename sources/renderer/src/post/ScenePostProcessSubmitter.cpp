@@ -99,11 +99,11 @@ public:
                     << " bloom=" << BoolText(settings.bloomEnabled);
             WriteRendererDebugLog("aa_trace", message.str());
         }
-        if (!settings.bloomEnabled) {
+        if (!settings.bloomEnabled && !desc.settings.depthOfFieldEnabled) {
             return SubmitWithoutBloom(desc, postSource);
         }
 
-        SubmitBloomPyramid(desc, settings, postSource);
+        if (settings.bloomEnabled) SubmitBloomPyramid(desc, settings, postSource);
         SubmitBloomCombine(desc, settings, postSource);
         return SubmitFinalize(desc, desc.target.combineTexture);
     }
@@ -278,10 +278,17 @@ private:
             desc.target.combineFrameBuffer,
             desc.target.extent,
             "KB Post HDR Combine");
-        const float combineParams[4] = {settings.bloomStrength, settings.bloomMipCount, 0.0F, 0.0F};
+        const float combineParams[4] = {settings.bloomEnabled ? settings.bloomStrength : 0.0F, settings.bloomMipCount, 0.0F, 0.0F};
         bgfx::setUniform(renderer_.postParams_, combineParams);
+        const float dofParams[4] = {desc.settings.depthOfFieldFocusDistance, desc.settings.depthOfFieldFocusRange,
+            desc.settings.depthOfFieldEnabled ? desc.settings.depthOfFieldMaxRadiusPixels : 0.0F,
+            desc.temporal.jitterAndParams[3]};
+        bgfx::setUniform(renderer_.dofParamsUniform_, dofParams);
+        bgfx::setUniform(renderer_.dofViewDepthPlaneUniform_, desc.temporal.viewDepthPlane.data());
+        bgfx::setUniform(renderer_.inverseViewProjectionUniform_, desc.temporal.inverseCurrentViewProjection.data());
         bgfx::setTexture(0, renderer_.sourceSampler_, postSource);
         bgfx::setTexture(1, renderer_.bloomSampler_, desc.target.bloomTexture);
+        bgfx::setTexture(2, renderer_.depthSampler_, bgfx::isValid(desc.sceneDepth) ? desc.sceneDepth : postSource);
         SubmitFullscreen(desc.viewIds.postProcessHdrCombine, renderer_.combineProgram_, renderer_.fullscreenVertexBuffer_);
     }
 

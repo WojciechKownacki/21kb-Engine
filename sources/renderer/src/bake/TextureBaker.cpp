@@ -75,6 +75,46 @@ private:
     std::vector<std::uint8_t>* target_;
 };
 
+[[nodiscard]] bool StoreTextureArtifact(TextureBakeOutput& output, const BakeTargetProfile& profile,
+    kb::assets::bake::IBakedAssetSink& sink, const std::vector<std::uint8_t>& primaryBlock,
+    const std::vector<std::vector<std::uint8_t>>& streamedMips) {
+    BakedAssetDescriptor descriptor{};
+    descriptor.key = output.key;
+    descriptor.assetTypeId = std::string{ kTextureBakedAssetTypeId };
+    output.sinkStatus = sink.BeginAsset(descriptor);
+    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+        output.status = TextureBakeStatus::SinkRejected;
+        return false;
+    }
+    output.sinkStatus = sink.WritePrimaryBlock(primaryBlock, profile.packageBlockAlignmentBytes);
+    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+        sink.AbortAsset();
+        output.status = TextureBakeStatus::SinkRejected;
+        return false;
+    }
+    for (std::uint32_t level = 0U; level < streamedMips.size(); ++level) {
+        const std::string blockName = BakedTextureMipBlockName(level);
+        kb::assets::bake::BakedAssetBlock block{};
+        block.name = blockName;
+        block.residency = kb::assets::bake::BakedAssetBlockResidency::Streaming;
+        block.alignmentBytes = profile.packageBlockAlignmentBytes;
+        output.sinkStatus = sink.WriteAuxiliaryBlock(block, streamedMips[level]);
+        if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+            sink.AbortAsset();
+            output.status = TextureBakeStatus::SinkRejected;
+            return false;
+        }
+    }
+    output.sinkStatus = sink.CommitAsset();
+    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+        sink.AbortAsset();
+        output.status = TextureBakeStatus::SinkRejected;
+        return false;
+    }
+
+    return true;
+}
+
 // Whether anything actually samples this texture's alpha. The mesh shaders read a base colour
 // as `.rgba` but a normal, metallic-roughness, occlusion or emissive map through `.xyz`,
 // `.g`/`.b` or `.r` only, so an alpha channel on one of those is authoring residue and paying
@@ -297,7 +337,7 @@ TextureBakeOutput BakeTextureBytes(
         return output;
     }
     // bimg reports a 2D image with depth 0 or 1.
-    if (source->m_cubeMap || source->m_depth > 1U || source->m_numLayers != 1U) {
+    if (source->m_depth > 1U || source->m_numLayers != 1U) {
         output.status = TextureBakeStatus::UnsupportedSourceShape;
         return output;
     }
@@ -310,6 +350,46 @@ TextureBakeOutput BakeTextureBytes(
 
     const auto width = static_cast<std::uint16_t>(source->m_width);
     const auto height = static_cast<std::uint16_t>(source->m_height);
+
+    if (source->m_cubeMap) {
+        // Captured LDR cubes retain all six faces and their authored mips losslessly.
+        // No successful cube artifacts existed under the previous baker contract.
+        bimg::ImageContainer original{};
+        bx::Error originalError;
+        if (!bimg::imageParse(original, sourceBytes.data(), static_cast<std::uint32_t>(sourceBytes.size()), &originalError) ||
+            !originalError.isOk() || (original.m_format != bimg::TextureFormat::RGBA8 && original.m_format != bimg::TextureFormat::BGRA8) ||
+            width != height || (source->m_numMips != 1U && source->m_numMips != bimg::imageGetNumMips(bimg::TextureFormat::RGBA8,width,height))) {
+            output.status = TextureBakeStatus::UnsupportedSourceShape;
+            return output;
+        }
+        std::vector<std::uint8_t> pixels;
+        // KTX's writer consumes mip-major bytes; the runtime upload reader repacks face-major.
+        for (std::uint8_t lod = 0; lod < source->m_numMips; ++lod) {
+            for (std::uint8_t face = 0; face < 6; ++face) {
+                bimg::ImageMip mip{};
+                const auto mipWidth = std::max<std::uint32_t>(1U,width >> lod);
+                const auto mipHeight = std::max<std::uint32_t>(1U,height >> lod);
+                if (!bimg::imageGetRawData(*source,face,lod,source->m_data,source->m_size,mip) || !mip.m_data ||
+                    mip.m_format != bimg::TextureFormat::RGBA8 || mip.m_size != mipWidth*mipHeight*4U) {
+                    output.status = TextureBakeStatus::SourceUndecodable;
+                    return output;
+                }
+                pixels.insert(pixels.end(),mip.m_data,mip.m_data+mip.m_size);
+            }
+        }
+        std::vector<std::uint8_t> primaryBlock;
+        BlockWriter writer{primaryBlock};
+        bx::Error writeError;
+        bimg::imageWriteKtx(&writer,bimg::TextureFormat::RGBA8,true,width,height,1U,source->m_numMips,1U,
+            settings.colorSpace == RenderTextureAssetColorSpace::Srgb,pixels.data(),&writeError);
+        if (!writeError.isOk() || primaryBlock.empty()) {output.status = TextureBakeStatus::EncodeFailed;return output;}
+        if (!StoreTextureArtifact(output,profile,sink,primaryBlock,{})) return output;
+        output.status = TextureBakeStatus::Success;
+        output.format = bgfx::TextureFormat::RGBA8;
+        output.width = width;output.height = height;output.mipCount = source->m_numMips;
+        output.primaryBlock = std::move(primaryBlock);
+        return output;
+    }
 
     bimg::ImageMip baseLevel{};
     if (!bimg::imageGetRawData(*source, 0U, 0U, source->m_data, source->m_size, baseLevel) ||
@@ -499,39 +579,7 @@ TextureBakeOutput BakeTextureBytes(
             blocks.begin() + static_cast<std::ptrdiff_t>(levelOffsets[level + 1U]));
     }
 
-    BakedAssetDescriptor descriptor{};
-    descriptor.key = output.key;
-    descriptor.assetTypeId = std::string{ kTextureBakedAssetTypeId };
-    output.sinkStatus = sink.BeginAsset(descriptor);
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        output.status = TextureBakeStatus::SinkRejected;
-        return output;
-    }
-    output.sinkStatus = sink.WritePrimaryBlock(primaryBlock, profile.packageBlockAlignmentBytes);
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        sink.AbortAsset();
-        output.status = TextureBakeStatus::SinkRejected;
-        return output;
-    }
-    for (std::uint32_t level = 0U; level < streamedMipCount; ++level) {
-        const std::string blockName = BakedTextureMipBlockName(level);
-        kb::assets::bake::BakedAssetBlock block{};
-        block.name = blockName;
-        block.residency = kb::assets::bake::BakedAssetBlockResidency::Streaming;
-        block.alignmentBytes = profile.packageBlockAlignmentBytes;
-        output.sinkStatus = sink.WriteAuxiliaryBlock(block, streamedMips[level]);
-        if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-            sink.AbortAsset();
-            output.status = TextureBakeStatus::SinkRejected;
-            return output;
-        }
-    }
-    output.sinkStatus = sink.CommitAsset();
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        sink.AbortAsset();
-        output.status = TextureBakeStatus::SinkRejected;
-        return output;
-    }
+    if (!StoreTextureArtifact(output, profile, sink, primaryBlock, streamedMips)) return output;
 
     output.status = TextureBakeStatus::Success;
     output.format = format;

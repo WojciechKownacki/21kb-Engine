@@ -285,6 +285,8 @@ class SceneUIAccess {
     [[nodiscard]] std::span<const SceneUIEvent> Events() const noexcept;
     [[nodiscard]] std::vector<SceneUIEvent> DrainEvents();
     [[nodiscard]] bool SetFocus(SceneEntity entity);
+    // Activates through the same selectable backend and events as keyboard submit.
+    [[nodiscard]] bool Activate(SceneEntity entity);
     void ClearFocus() noexcept;
     [[nodiscard]] std::optional<SceneUITextInputState> TextInputState() const;
     // Applied during the next UI update using the field's normal validation and events.

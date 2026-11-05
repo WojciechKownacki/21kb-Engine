@@ -16,6 +16,10 @@
 #include <vector>
 
 namespace kb::cli {
+#if KB_CLI_RENDERER
+int RunCsgCommand(const ArgumentList&, CommandIo);
+int RunRig2DCommand(const ArgumentList&, CommandIo);
+#endif
 namespace {
 
 constexpr std::array<std::string_view, 3U> kUsageParts{
@@ -43,6 +47,7 @@ Commands:
                Source/NativeScripts/<Name>). Existing files are never overwritten.
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts]
+  scene-lightmap Bake static diffuse lighting and ray shadows into a UV0 texture.
   material-new Create a material, as the editor's Create > Material does, with
                its values set at once. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/Materials]
@@ -195,11 +200,14 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                e.g. a goblin pack: entity add --name Goblin --create Capsule; ai make --entity Goblin
                --preset Melee --health 60 --ability1 /Game/Abilities/Slash.kbability
 )"
-R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
+R"(  rig2d new/show/set/build --project <dir> [--name <Name> | --rig <path>] [--data <source object>]
+  vector2d-new --project <dir> --name <Name> [--kind Polygon|Line] [--points <JSON array>]
+  vector2d-set/show --project <dir> --shape <path> [--points <JSON array>] [--width <number>]
+  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
                Map component and Map Editor window do - grounds with automatic borders (Remere's Map
                Editor style), sprites as items or grounds, floors -50..50, a Map Camera for Play.
                  new --project <dir> --name <Entity> [--scene <path>] [--size 64x64]
-                     [--orientation flat|wall] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
+                     [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
                  ground new --project <dir> --name Grass --texture "/Game/2D Map Sprites/terrain.png"
                      [--cell-size 32] [--z 30] [--tiles 25] [--island 16] [--hole 19]
                      [--border n=<cell>,cse=<cell>,...]   (island: top-left sprite of a 3x3 island,
@@ -215,7 +223,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  erase --project <dir> --map <path> --at x,y[,floor] [--to x,y] [--items]
                  block|unblock --project <dir> --map <path> --at x,y[,floor] [--to x,y]
                  borderize --project <dir> --map <path> [--floor n]
-                 set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]
+                 set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view WxH]
                      [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds] [--camera-zoom n]
                      [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera, see docs/world_2d_camera.md)
                  view --project <dir> --entity <Name>   (update the Map Camera and painted collision)
@@ -645,7 +653,13 @@ constexpr CliCommandDescriptor kCommands[]{
     {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, ""},
     {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, ""},
 #if KB_CLI_RENDERER
+    {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}},
+    {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}},
+    {"vector2d-new", &RunVectorShapeNewCommand, CliCommandKind::Normal, true, {}},
+    {"vector2d-show", &RunVectorShapeShowCommand, CliCommandKind::Normal, true, {}},
+    {"vector2d-set", &RunVectorShapeSetCommand, CliCommandKind::Normal, true, {}},
     {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}},
+    {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
     {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
     {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}},
@@ -663,6 +677,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}},
 #else
     {"map2d", nullptr, CliCommandKind::Normal, false, {}},
+    {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
     {"material-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-set", nullptr, CliCommandKind::Normal, false, {}},
     {"material-show", nullptr, CliCommandKind::Normal, false, {}},

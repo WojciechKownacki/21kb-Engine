@@ -10,6 +10,8 @@
 #include <utility>
 
 namespace kb::script {
+bool RegisterCsgApi(ScriptRuntimeHost& host);
+bool RegisterRig2DApi(ScriptRuntimeHost& host);
 namespace {
 
 const ScriptValue* Arg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) {
@@ -242,7 +244,7 @@ bool ScriptAnimatorApi::Register(ScriptRuntimeHost& host) {
         { "x", ScriptValueType::Float, true }, { "y", ScriptValueType::Float, true }, { "z", ScriptValueType::Float, true },
         { "rotationX", ScriptValueType::Float, true }, { "rotationY", ScriptValueType::Float, true },
         { "rotationZ", ScriptValueType::Float, true }, { "rotationW", ScriptValueType::Float, true } };
-    return RegisterFunction(host, "Animator.Socket", Targeted({ { "socket", ScriptValueType::String, true } }), transform, &Socket) &&
+    return RegisterCsgApi(host) && RegisterRig2DApi(host) && RegisterFunction(host, "Animator.Socket", Targeted({ { "socket", ScriptValueType::String, true } }), transform, &Socket) &&
         RegisterFunction(host, "Animator.AttachToSocket", Targeted({
             { "object", ScriptValueType::Entity, true },
             { "socket", ScriptValueType::String, true },

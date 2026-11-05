@@ -218,6 +218,7 @@ void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noe
     state.Reset();
     const bool focused = OwnerProcessIsForeground(ownerWindow);
     state.SetHasFocus(focused);
+    static_cast<void>(state.SetSensors(motionSensors_.Poll(focused)));
     CollectWin32Gamepads(state, ownerWindow);
     if (!focused) {
         pendingRawMouseX_ = pendingRawMouseY_ = 0.0F;

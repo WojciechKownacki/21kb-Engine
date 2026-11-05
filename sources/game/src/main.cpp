@@ -17,6 +17,7 @@
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAccessibilityWindow.hpp"
 #include "engine/scene/SceneCrashReportConsent.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
@@ -567,6 +568,13 @@ int RunGame(const GameOptions& options) {
     staticModules.push_back(std::move(scriptModuleOwner));
 
     kb::scene::Scene scene{ std::move(projectRuntime.descriptor), std::move(staticModules) };
+    if (!options.headless) {
+        std::string accessibilityError;
+        if (!kb::scene::SceneAccessibilityWindow::Attach(scene,window.Handle(),accessibilityError)) {
+            std::cerr << "kb_game: " << accessibilityError << '\n';
+            return EXIT_FAILURE;
+        }
+    }
     kb::world::WorldPartitionRuntime{scene}.SetMemoryProbe(kb::world::WorldMemoryKind::Gpu,
         [&renderer] { return kb::render::ProcessGpuMemoryBytes(renderer); });
     const bool scriptActive = scene.IsModuleActive("Script");

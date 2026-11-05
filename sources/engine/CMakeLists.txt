@@ -462,11 +462,31 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneUI.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
+    include/engine/render/StaticLightmapBaker.hpp
+    src/render/StaticLightmapBaker.cpp
+    include/engine/scene/PhysicsAssembly.hpp
+    include/engine/math/Polygon2D.hpp
+    include/engine/audio/SpatialAudioPlayback.hpp
+    src/audio/SpatialAudioPlayback.cpp
+    include/engine/scene/Rig2DAsset.hpp
+    src/scene/CsgAsset.cpp
+    src/scene/SceneCsg.cpp
+    src/script/ScriptCsgApi.cpp
+    src/scene/Rig2DAsset.cpp
+    src/scene/SceneRig2D.cpp
+    src/script/ScriptRig2DApi.cpp
+    include/engine/scene/VectorShape2DAsset.hpp
+    include/engine/scene/VectorShape2DAssetLoader.hpp
+    include/engine/scene/SceneVectorShapes2D.hpp
+    src/scene/PhysicsAssembly.cpp
+    include/engine/scene/SceneSurfaceGeometry.hpp
+    src/scene/SceneSurfaceGeometry.cpp
     include/engine/render/postfx/PostProcessPipeline.hpp
     include/engine/script/LuaScriptBackend.hpp
     include/engine/script/NativeScriptBuildPipeline.hpp
     include/engine/script/NativeScriptBackend.hpp
     include/engine/script/NativeScriptPlugin.hpp
+    include/engine/script/NativeLinkedModules.hpp
     include/engine/script/NativeScriptPluginManager.hpp
     include/engine/script/NativeScriptPluginRegistrar.hpp
     include/engine/script/ScriptProjectFiles.hpp
@@ -632,6 +652,10 @@ add_library(kb_engine STATIC
     src/assets/AssetFolderOperations.cpp
     src/assets/AssetImportCatalog.cpp
     src/assets/Map2DAsset.cpp
+    src/assets/Map2DTopology.cpp
+    src/math/Polygon2D.cpp
+    src/scene/VectorShape2DAsset.cpp
+    src/scene/SceneVectorShapes2D.cpp
     src/assets/TerrainAsset.cpp
     src/assets/CollisionMeshAsset.cpp
     src/assets/TerrainAssetIO.cpp
@@ -919,6 +943,11 @@ add_library(kb_engine STATIC
     src/scene/components/SceneComponentStorage.cpp
     src/scene/components/SceneUIComponents.cpp
     src/scene/components/SceneUIComponentSet.cpp
+    src/scene/SceneAccessibilityWindow.cpp
+    src/scene/SceneAccessibility.cpp
+    src/script/ScriptUIMediaApi.cpp
+    src/scene/SceneUIMedia.cpp
+    src/scene/SceneVideoPlayers.cpp
     src/scene/SceneUI.cpp
     src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
@@ -1250,6 +1279,7 @@ add_library(kb_engine STATIC
     src/script/LuaScriptBackend.cpp
     src/script/NativeScriptBuildPipeline.cpp
     src/script/NativeScriptBackend.cpp
+    src/script/NativeLinkedModules.cpp
     src/script/NativeScriptPluginManager.cpp
     src/script/NativeScriptPluginRegistrar.cpp
     src/script/ScriptProjectFiles.cpp
@@ -1312,6 +1342,8 @@ add_library(kb_engine STATIC
     src/script/ScriptNetApi.cpp
     src/assets/Map2DNavigation.cpp
     src/script/ScriptPhysicsApi.cpp
+    src/script/ScriptPhysicsAssemblyApi.cpp
+    src/script/ScriptMap2DGeometryApi.cpp
     src/script/ScriptRendererApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptModule.cpp
@@ -1758,6 +1790,8 @@ add_library(kb_engine STATIC
     src/input/InputRebinding.cpp
     src/input/InputRebindSession.cpp
     src/input/InputRecording.cpp
+    src/input/InputRecordingPlayback.cpp
+    src/script/ScriptInputSensorApi.cpp
     src/input/InputText.cpp
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
@@ -1769,10 +1803,12 @@ add_library(kb_engine STATIC
 )
 
 if(WIN32)
+    target_link_libraries(kb_engine PRIVATE ole32 sapi mfuuid uiautomationcore comctl32)
     target_sources(kb_engine PRIVATE
         include/engine/platform/win32/Win32InputCollector.hpp
         include/engine/platform/win32/Win32InputKeyMap.hpp
         include/engine/platform/win32/Win32XInputHapticsBackend.hpp
+        src/platform/win32/Win32MotionSensors.cpp
         src/platform/win32/Win32InputCollector.cpp
         src/platform/win32/Win32GamepadInput.cpp
         src/platform/win32/Win32ClipboardText.cpp
@@ -1829,6 +1865,12 @@ target_include_directories(kb_engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src/private
         ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty
 )
+
+include("${CMAKE_SOURCE_DIR}/CMake/EnableManifold.cmake")
+target_link_libraries(kb_engine PRIVATE $<LINK_ONLY:manifold>)
+set_source_files_properties(src/scene/CsgAsset.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${_kb_csg_root}/include;${CMAKE_BINARY_DIR}/_deps/manifold-build/include"
+    COMPILE_DEFINITIONS "MANIFOLD_PAR=-1")
 
 target_link_libraries(kb_engine
     PRIVATE
@@ -1967,6 +2009,10 @@ if(BUILD_TESTING)
     add_test(NAME kb_module_type_lifetime_tests COMMAND $<TARGET_FILE:kb_module_type_lifetime_tests>)
 
     add_executable(kb_engine_module_sdk_tests tests/EngineModuleSdkTests.cpp)
+    add_executable(kb_linked_native_script_tests tests/LinkedNativeScriptTests.cpp)
+    target_link_libraries(kb_linked_native_script_tests PRIVATE kb_engine)
+    kb_apply_quality_gates(kb_linked_native_script_tests)
+    add_test(NAME kb_linked_native_script_tests COMMAND $<TARGET_FILE:kb_linked_native_script_tests>)
     target_link_libraries(kb_engine_module_sdk_tests PRIVATE kb_engine)
     kb_apply_quality_gates(kb_engine_module_sdk_tests)
     foreach(sdk_fault RANGE 1 4)
@@ -2165,6 +2211,10 @@ if(BUILD_TESTING)
             "KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH=\"$<TARGET_FILE:kb_native_script_test_plugin>\""
     )
 
+    add_test(NAME kb_engine_module_abi_current COMMAND $<TARGET_FILE:kb_engine_tests> engine-module)
+    set_tests_properties(kb_engine_module_abi_current PROPERTIES TIMEOUT 60 LABELS "engine;module;abi")
+    add_test(NAME kb_engine_input_sensors COMMAND $<TARGET_FILE:kb_engine_tests> input)
+    set_tests_properties(kb_engine_input_sensors PROPERTIES TIMEOUT 60 LABELS "engine;input")
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
     if(WIN32)
         add_executable(kb_win32_clipboard_tests tests/Win32ClipboardTests.cpp)

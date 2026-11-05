@@ -39,11 +39,12 @@ enum class UITextOverflow : std::uint8_t {
 enum class UITextFontRenderMode : std::uint8_t {
     Bitmap,
     SignedDistanceField,
+    MultiChannelSignedDistanceField,
 };
 
 struct UIText {
     static constexpr std::string_view StableId = "kb21.ui.text";
-    static constexpr std::uint32_t SchemaVersion = 6U;
+    static constexpr std::uint32_t SchemaVersion = 7U;
     static constexpr std::size_t MaxUtf8Bytes = 1024U;
     static constexpr std::size_t MaxLocalizationKeyBytes = 128U;
 

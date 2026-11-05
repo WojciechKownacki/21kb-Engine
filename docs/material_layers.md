@@ -2,14 +2,19 @@
 
 `builtin.pbr` evaluates clearcoat and subsurface together. Both use the same direct-light functions in the forward and deferred paths. Base color, metallic/roughness, normal, occlusion and emissive inputs retain their existing meanings.
 
+Sheen, transmission and anisotropy numeric parameters use the shared forward
+composition shader, including in deferred scenes. Read the generated `PbrMaterials`
+topic (`kb_cli api --topic PbrMaterials`) for public C++ fields, equivalent Lua
+asset assignment, parameter meanings and the screen-space/texture limitations.
+
 | Input | Meaning |
 | --- | --- |
-| `clearcoatFactor` | Dielectric coat weight, clamped to 0–1 |
+| `clearcoatFactor` | Dielectric coat weight, clamped to 0â€“1 |
 | `clearcoatRoughnessFactor` | Coat GGX roughness, independent of the base roughness; evaluated at a minimum of 0.02 |
 | `clearcoatTextureAssetId` | Linear texture, red channel multiplied by coat weight |
 | `clearcoatRoughnessTextureAssetId` | Linear texture, green channel multiplied by coat roughness |
-| `subsurfaceFactor` | Wrap and back-scattering strength, clamped to 0–1 |
-| `subsurfaceColor` | Linear scattering tint, clamped to 0–1 |
+| `subsurfaceFactor` | Wrap and back-scattering strength, clamped to 0â€“1 |
+| `subsurfaceColor` | Linear scattering tint, clamped to 0â€“1 |
 
 Missing unassigned coat textures use white. The coat attenuates base lighting by its Fresnel reflection and adds a separate direct and environment reflection lobe. Subsurface is a local wrap/back-scattering approximation, without screen-space diffusion, thickness transport or a subsurface texture input. Clearcoat uses the base shading normal; a separate coat-normal map is not supported.
 
@@ -23,7 +28,7 @@ Missing unassigned coat textures use white. The coat attenuates base lighting by
 
 The fallback emits `MaterialShadingFallback` for affected subsurface draws. It does not change authored data. The optional `scene_mesh_gbuffer_layered` program is requested lazily for subsurface draws; a missing variant is not retried every frame. Renderer shutdown clears that failure cache. A failure to allocate the extra target after selecting the full path reports `DeferredRendererUnavailable`.
 
-Graph shading models retain their own model selections and parameter contracts. Surface graphs using the fifth target also cook a `GBufferCompact` variant. OpenGLES and devices with fewer than five attachments select that four-target variant; other backends can use it if the full graph binary is absent. Graph evaluation, base parameters and model selection are preserved. The compact variant omits the extra scattering/fuzz color or iris normal: subsurface uses diffuse tint, cloth loses its extra colored fuzz, and eye shading uses its sclera normal. These draws emit `MaterialShadingFallback`. Sheen, transmission, anisotropy and material-layer blending fields in the built-in type remain unsupported and diagnosed by the material schema.
+Graph shading models retain their own model selections and parameter contracts. Surface graphs using the fifth target also cook a `GBufferCompact` variant. OpenGLES and devices with fewer than five attachments select that four-target variant; other backends can use it if the full graph binary is absent. Graph evaluation, base parameters and model selection are preserved. The compact variant omits the extra scattering/fuzz color or iris normal: subsurface uses diffuse tint, cloth loses its extra colored fuzz, and eye shading uses its sclera normal. These draws emit `MaterialShadingFallback`. The numeric sheen, transmission and anisotropy fields use forward composition. Their texture slots and unsupported material-layer blending fields remain diagnosed by the material schema.
 
 ## Assets and verification
 

@@ -804,10 +804,9 @@ void RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest() {
     const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
     Require(result.asset.has_value(), "KBMAT-0014: Asset should still be parsed with unsupported advanced PBR fields");
     Require(result.Succeeded() && result.HasWarnings(), "KBMAT-0014: Unsupported advanced PBR fields should keep the asset loadable and warning diagnostics visible");
-    Require(result.diagnostics.size() == 2U, "KBMAT-0014: Should report 2 unsupported advanced PBR field diagnostics");
+    Require(result.diagnostics.size() == 1U, "KBMAT-0014: Numeric anisotropy is supported; its texture remains unsupported");
     Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "KBMAT-0014: First diagnostic should be UnsupportedAdvancedField");
-    Require(result.diagnostics[0].field == "anisotropyStrength", "KBMAT-0014: First diagnostic should be for anisotropyStrength");
-    Require(result.diagnostics[1].field == "transmissionTexture", "KBMAT-0014: Second diagnostic should be for transmissionTexture");
+    Require(result.diagnostics[0].field == "transmissionTexture", "KBMAT-0014: Only the unsupported transmission texture should warn");
 }
 
 [[nodiscard]] std::string ActiveUnsupportedParameterLine(const RenderMaterialParameterSchema& parameter) {
@@ -1317,7 +1316,7 @@ void RunBuiltInPbrSchemaUnsupportedAdvancedFeaturesListedTest() {
         if (feature == "transmissionFactor") foundTransmission = true;
     }
     Require(!foundClearcoat, "Schema still lists supported clearcoat as unsupported");
-    Require(foundTransmission, "Schema should list transmissionFactor as unsupported advanced");
+    Require(!foundTransmission, "Schema must not list supported transmissionFactor as unsupported advanced");
 }
 
 void RunMaterialTypeMigrationTableAppliesLegacyFieldsTest() {
@@ -4232,7 +4231,7 @@ void RunMaterialParserDiagnosticsCarrySourceContextTest() {
             << "materialType builtin.pbr\n"
             << "materialTypeVersion 1\n"
             << "baseColor 1 1 1 1\n"
-            << "anisotropyStrength 0.25\n"
+            << "layerWeight 0.25\n"
             << "unknownMaterialField 7\n";
     }
 

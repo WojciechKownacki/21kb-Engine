@@ -10,6 +10,7 @@
 namespace kb::render {
 
 struct PackedSceneLighting {
+    SceneRenderIblConfig ibl{};
     SceneLightGridBinding lightGrid{};
     std::uint64_t primaryLightId = 0U;
     // Entity id of the light packed into each uniform slot, so point-light shadow slots can be

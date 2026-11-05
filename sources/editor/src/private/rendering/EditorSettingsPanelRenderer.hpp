@@ -20,6 +20,7 @@ enum class EditorSettingsHitKind : std::uint8_t {
     Choice,
     Category,
     Language,
+    CodeEditor,
 };
 
 // The categories of the sidebar, in order.
@@ -52,6 +53,7 @@ public:
     [[nodiscard]] static RECT ContentForPage(const RECT& page) noexcept;
     // The language field, where the Language list opens below.
     [[nodiscard]] static RECT LanguageField(const RECT& content) noexcept;
+    [[nodiscard]] static RECT CodeEditorField(const RECT& content) noexcept;
     // The category shown on the right (the panel's own view state, not saved).
     [[nodiscard]] static EditorSettingsCategory SelectedCategory() noexcept;
     static void SelectCategory(EditorSettingsCategory category) noexcept;

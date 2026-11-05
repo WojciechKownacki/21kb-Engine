@@ -658,8 +658,8 @@ void StoreDecodedTexture(
         error = "Packaged texture manifest entry is missing";
         return std::nullopt;
     }
-    constexpr std::array<std::string_view, 5U> preference{
-        "rgba8-atlas", "bc-extended", "astc", "etc2", "bc-baseline"
+    constexpr std::array<std::string_view, 6U> preference{
+        "rgba8-cube", "rgba8-atlas", "bc-extended", "astc", "etc2", "bc-baseline"
     };
     bool foundVariant = false;
     std::optional<RenderTextureAssetData> decodeFallback;
@@ -692,6 +692,7 @@ void StoreDecodedTexture(
         RenderTextureAssetData texture{};
         if (!kb::render::bake::ReadBakedTexture(payload.blocks.front().bytes, texture) ||
             !texture.gpuBlocks.has_value() ||
+            (texture.dimension == RenderTextureDimension::TextureCube) != (qualifier == "rgba8-cube") ||
             !kb::render::bake::BakedTextureFormatMatchesFamily(texture.gpuBlocks->format, qualifier)) {
             error = "Packaged texture encoding does not match its manifest qualifier";
             return std::nullopt;
@@ -999,6 +1000,10 @@ kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::Ass
         .error = {},
         .residentBytes = residentBytes,
     };
+}
+
+std::optional<RenderTextureAssetData> RenderTextureAssetLoader::DecodeImage(const void* data, std::size_t size) {
+    return LoadImageBytes(data, size);
 }
 
 std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(const std::filesystem::path& path) {

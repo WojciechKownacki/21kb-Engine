@@ -4,6 +4,7 @@
 #include "ecs/world/WorldInternalAccess.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/SceneUIMedia.hpp"
 #include "scene/transform/SceneTransformRootQueryCache.hpp"
 
 #include <flecs.h>
@@ -22,6 +23,8 @@ struct SceneValues {
 };
 
 bool CheckBoundary(const SceneState& state, std::string& error) {
+    if(state.uiMedia&&(!state.uiMedia->videos.empty()||state.uiMedia->readerEnabled||state.uiMedia->speech.id!=0)) {error="Runtime snapshots of active UI media are not supported; persist source assets and binding scripts";return false;}
+    if(!state.vectorShapes2D.empty()) {error="Runtime snapshots of active vector shapes are not supported; persist the authored asset and binding script";return false;}
     try { state.world.ValidateStructuralChangeAllowed("SceneRuntimeCheckpoint"); }
     catch (const std::exception& exception) { error = exception.what(); return false; }
     if (ecs_is_deferred(state.world.NativeHandle()) || ecs_stage_is_readonly(state.world.NativeHandle())) {

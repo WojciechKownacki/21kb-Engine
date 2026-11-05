@@ -55,6 +55,7 @@ KB_UI_SLOT(UIInputField, inputField)
 KB_UI_SLOT(UIDropdown, dropdown)
 KB_UI_SLOT(UIProgressBar, progressBar)
 KB_UI_SLOT(UIWidgetSwitcher, widgetSwitcher)
+KB_UI_SLOT(UIAccessibility, accessibility)
 
 #undef KB_UI_SLOT
 
@@ -550,6 +551,12 @@ constexpr std::array kProgressBarProperties{
     KB_ENTITY(UIProgressBar, fillRect),
 };
 constexpr std::array kWidgetSwitcherProperties{KB_UINT(UIWidgetSwitcher, visibleChildIndex)};
+constexpr std::array kAccessibilityProperties{
+    KB_ENUM(UIAccessibility, role),
+    StringBinding<UIAccessibility,&UIAccessibilityLabel,&SetUIAccessibilityLabel>("label"),
+    StringBinding<UIAccessibility,&UIAccessibilityHint,&SetUIAccessibilityHint>("hint"),
+    KB_BOOL(UIAccessibility, hidden),
+};
 
 #undef KB_RECT
 #undef KB_VEC4
@@ -628,6 +635,8 @@ constexpr std::array kWidgetSwitcherProperties{KB_UINT(UIWidgetSwitcher, visible
         return kProgressBarProperties;
     case UIComponentType::WidgetSwitcher:
         return kWidgetSwitcherProperties;
+    case UIComponentType::Accessibility:
+        return kAccessibilityProperties;
     }
     return {};
 }
@@ -677,6 +686,7 @@ template <typename Visitor>
         KB_VISIT(Dropdown, dropdown);
         KB_VISIT(ProgressBar, progressBar);
         KB_VISIT(WidgetSwitcher, widgetSwitcher);
+        KB_VISIT(Accessibility, accessibility);
     }
 #undef KB_VISIT
     return false;
@@ -691,7 +701,7 @@ template <typename Visitor>
 } // namespace
 
 std::span<const UIComponentPropertyDescriptor> UIComponentPropertyCatalog(UIComponentType component) noexcept {
-    constexpr std::size_t kComponentCount = static_cast<std::size_t>(UIComponentType::WidgetSwitcher) + 1U;
+    constexpr std::size_t kComponentCount = static_cast<std::size_t>(UIComponentType::Accessibility) + 1U;
     static const std::array<std::vector<UIComponentPropertyDescriptor>, kComponentCount> kDescriptors = [] {
         std::array<std::vector<UIComponentPropertyDescriptor>, kComponentCount> result;
         for (std::size_t index = 0U; index < result.size(); ++index) {

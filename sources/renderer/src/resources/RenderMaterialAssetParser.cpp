@@ -180,6 +180,7 @@ void AttachContext(RenderMaterialAssetParseResult& result, const RenderMaterialA
     return keyword == "alphaMode" ||
         keyword == "decalBlendMode" ||
         keyword == "layerBlendMode" ||
+        keyword == "bakedLightmap" ||
         keyword == "doubleSided";
 }
 

@@ -4,6 +4,9 @@ add_executable(kb_editor WIN32
     include/kb/editor/docking/DockTypes.hpp
     include/kb/editor/theme/EditorTheme.hpp
     src/app/EditorApplication.cpp
+    src/authoring/EditorAuthoringHost.cpp
+    src/authoring/EditorPythonRuntime.cpp
+    src/extensions/EditorExtensionHost.cpp
     src/app/EditorApplicationLifecycle.cpp
     src/app/EditorWorkspaceSession.cpp
     src/app/EditorCrashBreadcrumbs.cpp
@@ -473,6 +476,8 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/settings/EditorConfigurationStore.hpp
     src/private/profiler/EditorProfilerSampler.hpp
+    src/private/authoring/EditorAuthoringHost.hpp
+    src/private/extensions/EditorExtensionHost.hpp
     src/private/profiler/ProfilerNumber.hpp
     src/private/profiler/EditorProfilerRegions.hpp
     src/private/profiler/ProfilerFiles.hpp
@@ -1148,6 +1153,8 @@ add_custom_command(TARGET kb_editor POST_BUILD
         "$<TARGET_FILE_DIR:kb_editor>/Content/21kbParticle"
     VERBATIM
 )
+
+include("${CMAKE_SOURCE_DIR}/CMake/EnableEditorPython.cmake")
 
 target_link_libraries(kb_editor
     PRIVATE
@@ -1834,6 +1841,141 @@ if(BUILD_TESTING)
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/lua_debugger_tests")
                 set_tests_properties(kb_editor_lua_debugger_package PROPERTIES
                     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;script;packaged" TIMEOUT 240 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_advanced_pbr_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/AdvancedPbrWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/advanced_pbr_tests")
+                set_tests_properties(kb_editor_advanced_pbr_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;materials;packaged" TIMEOUT 360 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_lighting_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/LightingWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/lighting_tests")
+                set_tests_properties(kb_editor_lighting_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;lighting;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_physics_assembly_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicsAssemblyWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/physics_assembly_tests")
+                set_tests_properties(kb_editor_physics_assembly_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;physics;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_particle_geometry_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticleGeometryWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/particle_geometry_tests")
+                set_tests_properties(kb_editor_particle_geometry_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;particle;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_map2d_geometry_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DGeometryWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/map2d_geometry_tests")
+                set_tests_properties(kb_editor_map2d_geometry_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_rig2d_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Rig2DWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/rig2d_tests")
+                set_tests_properties(kb_editor_rig2d_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;animation;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                if(TARGET kb_steam_audio)
+                add_test(NAME kb_editor_spatial_audio_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/SpatialAudioWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/spatial_audio_tests")
+                set_tests_properties(kb_editor_spatial_audio_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;audio;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                endif()
+                if(TARGET kb_steam_audio)
+                if(KB_EDITOR_PYTHON_AVAILABLE)
+                add_test(NAME kb_editor_python_authoring
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PythonAuthoringWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/python_authoring_tests")
+                set_tests_properties(kb_editor_python_authoring PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;python;authoring" TIMEOUT 240 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_extension_sdk
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/EditorExtensionWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/editor_extension_tests")
+                set_tests_properties(kb_editor_extension_sdk PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;extension;authoring" TIMEOUT 240 RUN_SERIAL TRUE)
+                endif()
+                add_test(NAME kb_editor_input_sensors_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/InputSensorsWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/input_sensors_tests")
+                set_tests_properties(kb_editor_input_sensors_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;input;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                add_test(NAME kb_editor_csg_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/CsgWorkflowTests.py"
+                        --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/csg_tests")
+                set_tests_properties(kb_editor_csg_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;geometry;packaged" TIMEOUT 480 RUN_SERIAL TRUE)
+                endif()
+                find_program(KB_FFMPEG_EXECUTABLE ffmpeg HINTS "$ENV{LOCALAPPDATA}/Programs/ffmpeg")
+                if(WIN32 AND TARGET kb_steam_audio AND KB_FFMPEG_EXECUTABLE)
+                add_test(NAME kb_editor_runtime_ui_package
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/RuntimeUIWorkflowTests.py"
+                        --window-probe $<TARGET_FILE:kb_game_window_tests> --ffmpeg "${KB_FFMPEG_EXECUTABLE}" --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
+                        --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
+                        --shaderc $<TARGET_FILE:bgfx::shaderc>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
+                        --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
+                        --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/runtime_ui_tests")
+                set_tests_properties(kb_editor_runtime_ui_package PROPERTIES
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;ui;packaged" TIMEOUT 600 RUN_SERIAL TRUE)
+                endif()
                 add_test(NAME kb_editor_particle_authoring_package
                     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticleAuthoringWorkflowTests.py"
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/audio/AudioSettings.hpp"
+#include "engine/audio/SpatialAudioPlayback.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <miniaudio.h>
@@ -11,6 +12,7 @@
 namespace kb::audio_miniaudio {
 
 struct ResolvedAudioClip;
+class MiniaudioSpatialStream;
 
 struct MiniaudioSoundSettings {
     float volume = 1.0F;
@@ -46,7 +48,8 @@ public:
         const ResolvedAudioClip& clip,
         bool spatial,
         ma_sound_group* group = nullptr,
-        ma_uint64 initialFrame = 0U);
+        ma_uint64 initialFrame = 0U,
+        kb::audio::SpatialAudioMode mode = kb::audio::SpatialAudioMode::Panning);
     void Reset() noexcept;
 
     void Apply(const MiniaudioSoundSettings& settings) noexcept;
@@ -92,6 +95,7 @@ private:
     ma_sound sound_{};
     ma_sound flatSound_{};
     std::unique_ptr<MemoryDecoderState> memoryDecoder_;
+    std::unique_ptr<MiniaudioSpatialStream> spatialStream_;
     bool initialized_ = false;
     bool flatInitialized_ = false;
     float volume_ = 1.0F;

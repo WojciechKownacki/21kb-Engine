@@ -355,6 +355,7 @@ private:
     std::vector<InternalEvent> prewarmNextEvents_;
     std::uint64_t prewarmingInstanceId_ = 0U;
     kb::scene::Scene* gpuScene_ = nullptr;
+    kb::scene::Scene* collisionScene_ = nullptr;
     double gpuSimTime_ = 0.0;
     std::vector<GpuPending> gpuPending_;
     std::vector<ScheduledGpuEvent> gpuScheduledEvents_; // min-heap on due time

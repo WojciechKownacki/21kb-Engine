@@ -466,6 +466,7 @@ void ApplySkeletalRigConstraints(
     AnimatorInstanceSkeleton::PoseBuffer& pose,
     std::optional<std::uint32_t> extractedRootMotionBone);
 
+void ApplyPhysicsPose(Scene& scene, AnimatorRuntimeRecord& record, AnimatorInstanceSkeleton::PoseBuffer& pose);
 void ApplyMotionSkeletonRule(
     Scene& scene, AnimatorRuntimeRecord& record,
     AnimatorInstanceSkeleton::PoseBuffer& pose,
@@ -1589,6 +1590,7 @@ void EvaluateIndexedSkeletalPose(
         scene, instance, current, extractedRootMotionBone);
     ApplyMotionSkeletonRule(
         scene, instance, current, extractedRootMotionBone);
+    ApplyPhysicsPose(scene,instance,current);
     ++skeleton.hierarchySolveCount;
 }
 
@@ -2166,6 +2168,18 @@ void ApplySkeletalRigConstraints(
 //   SpaceCorrection the bone moves and turns onto the target, carrying its
 //                   children with it.
 // Rules with a target do nothing until that IK target is set on the Animator.
+void ApplyPhysicsPose(Scene& scene, AnimatorRuntimeRecord& record, AnimatorInstanceSkeleton::PoseBuffer& pose) {
+    if(record.physicsPose.empty()) return;
+    const auto* owner=scene.Transforms().TryGet(record.entity);
+    if(!owner||!record.skeleton) throw std::runtime_error("physics pose lost its skeleton owner");
+    for(const auto& bone:record.physicsPose) {
+        const auto found=record.skeleton->boneIndices.find(bone.boneId);
+        if(found==record.skeleton->boneIndices.end()) throw std::runtime_error("physics pose bone no longer belongs to the skeleton");
+        SetBoneComponentPose(*record.skeleton->asset,pose,found->second,
+            TargetToAnimatorPosition(scene,record.entity,*owner,bone.target),WorldToAnimatorRotation(*owner,bone.target.worldRotation),false);
+    }
+}
+
 void ApplyMotionSkeletonRule(
     Scene& scene, AnimatorRuntimeRecord& record,
     AnimatorInstanceSkeleton::PoseBuffer& pose,
@@ -3245,6 +3259,25 @@ bool SceneAnimatorService::SetFloat(Scene& scene, SceneEntity entity, std::strin
 
 bool SceneAnimatorService::SetTrigger(Scene& scene, SceneEntity entity, std::string_view name, bool value) noexcept {
     return SetParameter(scene, entity, name, AnimatorParameterType::Trigger, [value](AnimatorParameterValue& parameter) { parameter.boolValue = value; });
+}
+
+bool SceneAnimatorService::SetPhysicsPose(Scene& scene,SceneEntity entity,std::span<const AnimatorPhysicsBonePose> bones) noexcept {
+    auto* record=Find(SceneAccess::State(scene),entity);
+    const auto* animator=scene.Components().Animators().TryGet(entity);
+    if(!record||!record->skeleton||!animator||animator->rootMotionOwner!=AnimatorRootMotionOwner::None||bones.empty()||bones.size()>64) return false;
+    for(std::size_t i=0;i<bones.size();++i) {
+        if(!IsFinite(bones[i].target)||!record->skeleton->boneIndices.contains(bones[i].boneId)) return false;
+        for(std::size_t j=0;j<i;++j) if(bones[i].boneId==bones[j].boneId) return false;
+    }
+    record->physicsPose.assign(bones.begin(),bones.end());
+    for(auto& bone:record->physicsPose) bone.target.worldRotation=kb::math::Normalize(bone.target.worldRotation);
+    std::sort(record->physicsPose.begin(),record->physicsPose.end(),[&](const auto& a,const auto& b) {return record->skeleton->boneIndices.at(a.boneId)<record->skeleton->boneIndices.at(b.boneId);});
+    record->poseUpdateAccumulatorSeconds=1000000.0;
+    return true;
+}
+bool SceneAnimatorService::ClearPhysicsPose(Scene& scene,SceneEntity entity) noexcept {
+    auto* record=Find(SceneAccess::State(scene),entity);if(!record) return false;
+    record->physicsPose.clear();record->poseUpdateAccumulatorSeconds=1000000.0;return true;
 }
 
 bool SceneAnimatorService::SetIkTarget(

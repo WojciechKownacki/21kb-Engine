@@ -20,6 +20,13 @@
 #include "engine/project/ProjectCreator.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
 #if KB_CLI_RENDERER
+#include "engine/render/StaticLightmapBaker.hpp"
+#include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "engine/scene/SceneLightComponents.hpp"
+#include <fstream>
+#include <cmath>
 #include "Map2DEditing.hpp"
 #include "Map2DView.hpp"
 #include "Sprite2DRuntime.hpp"
@@ -544,6 +551,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(component);
     const auto* uiProperty = ui != nullptr ? kb::scene::FindUIComponentProperty(ui->type, name) : nullptr;
     if (((component == "AudioSource" && name == "clipAssetId") ||
+        ((component == "Ambient Radiance" || component == "WorldBackdrop") && name == "environmentAssetId") ||
         (component == "ContentInstance" && name == "assetId") ||
         (uiProperty != nullptr && uiProperty->type == kb::scene::UIComponentPropertyType::Asset)) && value.starts_with('/')) {
         const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
@@ -1642,6 +1650,14 @@ constexpr std::string_view kAiUsage =
         map.viewWidth = parsed->first;
         map.viewHeight = parsed->second;
     }
+    if (const auto topology = arguments.Option("--topology")) {
+        if (*topology != "rectangular" && *topology != "isometric" && *topology != "hexagonal") {
+            io.err << "error: --topology takes rectangular, isometric or hexagonal\n";
+            return 1;
+        }
+        map.topology = *topology == "hexagonal" ? kb::assets::Map2DTopology::Hexagonal :
+            *topology == "isometric" ? kb::assets::Map2DTopology::Isometric : kb::assets::Map2DTopology::Rectangular;
+    }
     if (const std::optional<std::string> orientation = arguments.Option("--orientation"); orientation.has_value()) {
         if (*orientation != "flat" && *orientation != "wall") {
             io.err << "error: --orientation takes flat or wall\n";
@@ -1945,6 +1961,129 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
 } // namespace
 
 #if KB_CLI_RENDERER
+#if KB_CLI_RENDERER
+int RunSceneLightmapCommand(const ArgumentList& arguments, CommandIo io) {
+    const auto name=arguments.Option("--entity"), output=arguments.Option("--out");
+    if(!name||!output) { io.err << "error: scene-lightmap requires --project --entity <receiver> --out /Game/path.tga [--resolution 128]\n";return 1; }
+    const SceneSessionPtr session=OpenScene(arguments,io); if(!session) return 1;
+    auto& scene=*session->scene; const auto receiver=FindEntity(scene,*name,io);if(!receiver) return 1;
+    // Use the asset-creation resolver: outputs do not need to exist yet.
+    std::string pathError;
+    const auto projectFile=kb::project::ProjectManager::FindProjectFile(Utf8Path(arguments.Option("--project").value_or("")),pathError);
+    const auto outputPath=Utf8Path(*output);
+    const auto parentText=outputPath.parent_path().generic_u8string();
+    const auto filename=outputPath.filename().generic_u8string();
+    const auto folder=kb::assets::ResolveProjectAssetFolder(projectFile.parent_path(),
+        std::string{reinterpret_cast<const char*>(parentText.data()),parentText.size()});
+    const auto nameError=kb::assets::AssetFileNameError(std::string{reinterpret_cast<const char*>(filename.data()),filename.size()});
+    if(projectFile.empty()||!folder.error.empty()||!nameError.empty()||outputPath.extension()!=".tga") {
+        io.err << "error: --out must name a new .tga asset in Assets: " << pathError << folder.error << nameError << '\n';return 1;
+    }
+    const auto texturePath=folder.folder/outputPath.filename();
+    const auto content=FindProjectContentRoot(arguments.Option("--project"),session->path,pathError);
+    if(!content) {io.err << "error: " << pathError << '\n';return 1;}
+    const auto relative=texturePath.lexically_relative(*content);
+    if(relative.empty()||*relative.begin()=="..") {io.err << "error: --out must be inside Assets\n";return 1;}
+    auto materialPath=texturePath;materialPath.replace_extension(".kbmat");
+    if(std::filesystem::exists(texturePath)||std::filesystem::exists(materialPath)) {io.err << "error: lightmap output already exists; choose a new asset path\n";return 1;}
+    kb::render::StaticLightmapSettings settings;
+    if(const auto resolution=arguments.Option("--resolution")) {
+        unsigned value=0;const auto [end,error]=std::from_chars(resolution->data(),resolution->data()+resolution->size(),value);
+        if(error!=std::errc{}||end!=resolution->data()+resolution->size()||value<4||value>1024) {io.err << "error: resolution must be 4..1024\n";return 1;}
+        settings.resolution=static_cast<std::uint16_t>(value);
+    }
+    const auto* receiverMesh=scene.Components().MeshRenderers().TryGet(*receiver);
+    if(!receiverMesh||receiverMesh->materialSlotOverrideCount!=0||receiverMesh->materialInstanceHandle!=0) {io.err << "error: receiver needs one static mesh material\n";return 1;}
+    kb::render::RuntimeRenderAssetDiscovery discovery;discovery.SetDiscoveryEnabled(false);discovery.Ensure(scene,0);
+    auto& assets=scene.Assets().Manager();
+    kb::render::RenderMaterialAssetData material;
+    if(receiverMesh->materialAssetId!=0) {
+        const auto original=assets.Load<kb::render::RenderMaterialAssetData>(kb::assets::AssetId{receiverMesh->materialAssetId});
+        if(!original.IsLoaded()) {io.err << "error: receiver material cannot be loaded\n";return 1;}
+        material=*original.Shared();
+        if(material.materialType!="builtin.pbr"||!material.graph.nodes.empty()||material.desc.metallicFactor!=0||
+            material.desc.alphaMode!=kb::render::RenderMaterialAlphaMode::Opaque||material.desc.transmissionFactor!=0||
+            material.desc.emissiveTextureAssetId!=0||!material.emissiveTexturePath.empty()||material.desc.normalTextureAssetId!=0||
+            !material.normalTexturePath.empty()||material.desc.occlusionTextureAssetId!=0||!material.occlusionTexturePath.empty()||
+            material.desc.clearcoatFactor!=0||material.desc.anisotropyStrength!=0||material.desc.sheenColor[0]!=0||
+            material.desc.sheenColor[1]!=0||material.desc.sheenColor[2]!=0||
+            (material.desc.emissiveStrength>0&&(material.desc.emissiveColor[0]!=0||material.desc.emissiveColor[1]!=0||material.desc.emissiveColor[2]!=0))) {io.err << "error: bake receiver must use opaque matte builtin PBR without emission or normal maps\n";return 1;}
+    }
+    scene.Runtime().SynchronizeTransforms();
+    std::vector<kb::render::LightmapTriangle> triangles,occluders;
+    std::vector<kb::render::LightmapLight> lights;
+    for(const auto entity:AllEntities(scene)) {
+        if(!scene.Entities().IsActive(entity)) continue;
+        const auto* transform=scene.Transforms().TryGet(entity);if(!transform) continue;
+        const auto position=scene.Transforms().WorldTranslation(entity,*transform);
+        if(std::max({std::abs(position.x),std::abs(position.y),std::abs(position.z)})>1000000.0) {io.err << "error: bake geometry exceeds supported world bounds\n";return 1;}
+        const kb::math::Vec3 translation{static_cast<float>(position.x),static_cast<float>(position.y),static_cast<float>(position.z)};
+        if(const auto* light=scene.Components().Lights().TryGet(entity);light&&light->mobility==kb::scene::LightMobility::Static) {
+            if((light->kind!=kb::scene::LightKind::Point&&light->kind!=kb::scene::LightKind::Directional)||light->useColorTemperature) {io.err << "error: lightmap supports static point/directional lights with RGB colour\n";return 1;}
+            lights.push_back({.position=translation,.direction=kb::math::Rotate(transform->worldRotation,kb::math::Vec3{0,0,1}),
+                .color=light->color,.intensity=light->intensity,.range=light->range,.directional=light->kind==kb::scene::LightKind::Directional,
+                .castsShadow=light->castsShadow});
+        }
+        const auto* mesh=scene.Components().MeshRenderers().TryGet(entity);
+        if(!mesh||(entity!=*receiver&&!mesh->castsShadow)) continue;
+        const auto source=assets.Load<kb::render::RenderMeshAssetData>(kb::assets::AssetId{mesh->meshAssetId});
+        if(!source.IsLoaded()) {io.err << "error: static bake mesh cannot be loaded\n";return 1;}
+        const auto& data=*source.Shared();
+        if(transform->worldScale.x==0||transform->worldScale.y==0||transform->worldScale.z==0) {io.err << "error: bake mesh has zero scale\n";return 1;}
+        const auto vertex=[&](std::uint32_t index) {
+            kb::render::LightmapVertex out;
+            const auto copy=[&](const auto& v) {
+                const auto p=kb::math::Rotate(transform->worldRotation,kb::math::Vec3{v.x*transform->worldScale.x,v.y*transform->worldScale.y,v.z*transform->worldScale.z});
+                out.position={translation.x+p.x,translation.y+p.y,translation.z+p.z};
+                out.normal=kb::math::Rotate(transform->worldRotation,kb::math::Vec3{v.nx/transform->worldScale.x,v.ny/transform->worldScale.y,v.nz/transform->worldScale.z});out.u=v.u;out.v=v.v;
+            };
+            if(data.vertices.empty()) copy(data.tangentVertices.at(index));else copy(data.vertices.at(index));return out;
+        };
+        const auto indexCount=data.indices32.empty()?data.indices16.size():data.indices32.size();
+        const auto vertexCount=data.vertices.empty()?data.tangentVertices.size():data.vertices.size();
+        for(const auto& section:data.sections) {
+            if(section.lodLevel!=0) continue;
+            if(section.terrainLayerIndex!=UINT8_MAX||section.indexCount%3!=0||static_cast<std::size_t>(section.indexStart)+section.indexCount>indexCount) {io.err << "error: unsupported or invalid bake geometry\n";return 1;}
+            for(std::size_t index=section.indexStart;index<section.indexStart+section.indexCount;index+=3) {
+                kb::render::LightmapTriangle triangle;
+                for(unsigned corner=0;corner<3;++corner) {
+                    const auto local=data.indices32.empty()?data.indices16[index+corner]:data.indices32[index+corner];
+                    const auto global=static_cast<std::size_t>(section.vertexStart)+local;
+                    if(global>=vertexCount) {io.err << "error: invalid bake vertex index\n";return 1;}
+                    triangle[corner]=vertex(static_cast<std::uint32_t>(global));
+                }
+                if(entity==*receiver) triangles.push_back(triangle);
+                if(mesh->castsShadow) occluders.push_back(triangle);
+            }
+        }
+    }
+    if(lights.empty()) {io.err << "error: no static point/directional light to bake\n";return 1;}
+    const auto baked=kb::render::BakeStaticLightmap(triangles,occluders,lights,settings);
+    if(!baked.Succeeded()) {io.err << "error: " << baked.error << '\n';return 1;}
+    std::error_code code;std::filesystem::create_directories(texturePath.parent_path(),code);
+    if(code) {io.err << "error: cannot create lightmap directory\n";return 1;}
+    // Uncompressed top-origin BGRA TGA: the ordinary texture loader and cooker own its runtime format.
+    std::array<unsigned char,18> header{};header[2]=2;header[12]=static_cast<unsigned char>(settings.resolution&255);
+    header[13]=static_cast<unsigned char>(settings.resolution>>8);header[14]=header[12];header[15]=header[13];header[16]=32;header[17]=0x28;
+    std::ofstream image(texturePath,std::ios::binary);image.write(reinterpret_cast<const char*>(header.data()),header.size());
+    for(std::size_t pixel=0;pixel<baked.rgba.size();pixel+=4) {
+        const char bgra[]{static_cast<char>(baked.rgba[pixel+2]),static_cast<char>(baked.rgba[pixel+1]),static_cast<char>(baked.rgba[pixel]),static_cast<char>(baked.rgba[pixel+3])};image.write(bgra,4);
+    }
+    image.close();
+    const auto removeOutputs=[&] {std::error_code ignored;std::filesystem::remove(texturePath,ignored);std::filesystem::remove(materialPath,ignored);};
+    material.desc.bakedLightmap=true;material.desc.emissiveTextureAssetId=0;material.emissiveTexturePath="/Game/"+relative.generic_string();
+    if(!image||!kb::render::RenderMaterialAssetWriter::Save(materialPath,material)) {removeOutputs();io.err << "error: cannot save baked lightmap assets\n";return 1;}
+    static_cast<void>(assets.DiscoverMountedAssets());
+    const auto materialRelative=materialPath.lexically_relative(*content);
+    if(!ApplySetting(scene,*receiver,"MeshRenderer","material=/Game/"+materialRelative.generic_string(),io)||!session->Save()) {
+        removeOutputs();io.err << "error: could not assign baked material to scene\n";return 1;
+    }
+    io.out << "baked " << baked.coveredTexels << " texels, " << baked.shadowedSamples << " occluded samples into /Game/" << relative.generic_string()
+        << "; assigned " << materialRelative.generic_string() << "; static lights are retained for other receivers\n";
+    return 0;
+}
+#endif
+
 int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
     if (action == "new") return Map2DNew(arguments, io);
     if (action == "view") return Map2DView(arguments, io);

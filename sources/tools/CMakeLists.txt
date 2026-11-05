@@ -63,6 +63,9 @@ if(KB_BUILD_RENDERER)
         src/CliParticleCommands.cpp
         src/CliParticleProfileCommand.cpp
         src/CliMap2DCommands.cpp
+        src/CliVectorShapeCommands.cpp
+        src/CliCsgCommands.cpp
+        src/CliRig2DCommands.cpp
         src/private/CliMaterialShared.hpp)
     target_link_libraries(kb_cli_core PUBLIC kb_world2d_core)
 endif()
@@ -231,6 +234,7 @@ if(BUILD_TESTING)
             "-DFLECS_LIBRARY=$<TARGET_FILE:flecs_static>"
             "-DPHYSICS_PLUGIN=$<TARGET_FILE:kb_physics_jolt_plugin>"
             "-DAUDIO_PLUGIN=$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "-DAUDIO_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:kb_audio_miniaudio_plugin>,|>"
             "-DLIGHTING_PLUGIN=$<TARGET_FILE:kb_basic_lighting_plugin>"
             "-DPARTICLES_PLUGIN=$<TARGET_FILE:kb_21kb_particle_plugin>"
             "-DAI_PLUGIN=$<TARGET_FILE:kb_ai_plugin>"
@@ -242,6 +246,7 @@ if(BUILD_TESTING)
             "-Drecast_LIBRARY=$<TARGET_FILE:kb_recast>"
             "-Dui_text_shaping_LIBRARY=$<TARGET_FILE:kb_ui_text_shaping>"
             "-Dharfbuzz_LIBRARY=$<TARGET_FILE:kb_harfbuzz>"
+            "-Dcsg_geometry_LIBRARY=$<TARGET_FILE:manifold>"
             "-Dsheenbidi_LIBRARY=$<TARGET_FILE:kb_sheenbidi>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkLayout.cmake")
         set_tests_properties(kb_native_sdk_layout PROPERTIES

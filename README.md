@@ -77,7 +77,7 @@ state machines, scripts and game builds.
 | **Lighting paths** | Forward, clustered Forward+, and Deferred with a four target GBuffer |
 | **Shadows** | Cascaded directional shadows with stable cascades and PCF filtering, skinned casters included |
 | **Post processing** | Bloom, TAA with motion vectors, FXAA, ACES tonemapping, GPU histogram auto exposure |
-| **GPU culling** | Optional compute pass that frustum culls mesh instances into a GPU visibility list on backends with compute shaders. Draws are still culled and submitted from the CPU: indirect draw and meshlet submit are not implemented, and the capability report and per frame stats name the path that ran |
+| **GPU culling** | Optional compute frustum culling with indexed indirect draws and bounded meshlet submission on supported backends. Transparent, selection and motion-vector passes retain CPU visibility; capability reports and per frame stats identify the path that ran. See [GPU culling](docs/gpu_culling.md) |
 | **Materials** | Node based Material Graph compiled to shaders, with function inlining, variant keys and a cook cache |
 | **Shaders** | One source, prebuilt for Direct3D 11, Direct3D 12, Vulkan, Metal, OpenGL and OpenGL ES. The build refuses to configure if any target is missing |
 | **Textures** | Bakers for BC1, BC3, BC5, BC7, ASTC 4x4 and ETC2 |

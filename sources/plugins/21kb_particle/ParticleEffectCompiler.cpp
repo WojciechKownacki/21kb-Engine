@@ -65,7 +65,7 @@ std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::Validat
             return candidate.moduleId == binding.sourceModuleId;
         });
         if (module == emitter->modules.end()) continue;
-        if (module->type != kb::scene::ParticleModuleType::CollisionPlane ||
+        if ((module->type != kb::scene::ParticleModuleType::CollisionPlane && module->type != kb::scene::ParticleModuleType::CollisionGeometry) ||
             binding.trigger != kb::scene::ParticleEventTrigger::Collision) {
             Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
                 "effect.eventBinding[" + std::to_string(bindingIndex) + "].sourceModuleId",
@@ -79,6 +79,12 @@ std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::Validat
             Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
                 "effect.emitter[" + std::to_string(emitterIndex) + "].customProcess",
                 "custom particle processes are unavailable in the selected capability set", emitter.emitterId);
+        for(const auto& module:emitter.modules) if(module.enabled && module.type==kb::scene::ParticleModuleType::CollisionGeometry)
+            diagnostics.push_back({.code=kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+                .severity=kb::scene::ParticleEffectDiagnosticSeverity::Warning,
+                .propertyPath="effect.emitter["+std::to_string(emitterIndex)+"].collisionGeometry",
+                .emitterId=emitter.emitterId,.moduleId=module.moduleId,
+                .message="geometry collision runs on CPU; GPU-preferred emitters report geometry-collision"});
         if (emitter.screenDepthCollision) {
             diagnostics.push_back({.code = kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
                 .severity = kb::scene::ParticleEffectDiagnosticSeverity::Warning,
@@ -318,6 +324,8 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
                 destinationModule.payload = std::get<kb::scene::ParticleAttractionModule>(sourceModule.payload); break;
             case kb::scene::ParticleModuleType::TorusSwirl:
                 destinationModule.payload = std::get<kb::scene::ParticleTorusSwirlModule>(sourceModule.payload); break;
+            case kb::scene::ParticleModuleType::CollisionGeometry:
+                destinationModule.payload = std::get<kb::scene::ParticleCollisionGeometryModule>(sourceModule.payload); break;
             case kb::scene::ParticleModuleType::Separation:
                 destinationModule.payload = std::get<kb::scene::ParticleSeparationModule>(sourceModule.payload); break;
             }

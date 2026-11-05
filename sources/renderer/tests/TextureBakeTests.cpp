@@ -975,25 +975,44 @@ void RunBakedTextureRefusalTest() {
                     .status == TextureBakeStatus::SourceUnreadable,
         "An empty source was not refused");
 
-    // A cube map: a shape this baker does not claim.
+    // Captured LDR cubes preserve six distinct faces through the baked container.
     const std::uint16_t faceEdge = 8U;
-    const std::vector<std::uint8_t> face = MakeRgba8Solid(faceEdge, faceEdge, { 8U, 16U, 32U, 255U });
     std::vector<std::uint8_t> cubeFaces;
     for (int side = 0; side < 6; ++side) {
-        cubeFaces.insert(cubeFaces.end(), face.begin(), face.end());
+        for (unsigned lod = 0; lod < 4; ++lod) {
+            const auto mipEdge = static_cast<std::uint16_t>(faceEdge >> lod);
+            const auto pixels = MakeRgba8Solid(mipEdge,mipEdge,{static_cast<std::uint8_t>(8 + side * 25),static_cast<std::uint8_t>(16 + lod * 40),32U,255U});
+            cubeFaces.insert(cubeFaces.end(),pixels.begin(),pixels.end());
+        }
+    }
+    std::vector<std::uint8_t> ktxMipMajor;
+    for (unsigned lod = 0; lod < 4; ++lod) {
+        for (int side = 0; side < 6; ++side) {
+            const auto mipEdge = static_cast<std::uint16_t>(faceEdge >> lod);
+            const auto pixels = MakeRgba8Solid(mipEdge,mipEdge,{static_cast<std::uint8_t>(8 + side * 25),static_cast<std::uint8_t>(16 + lod * 40),32U,255U});
+            ktxMipMajor.insert(ktxMipMajor.end(),pixels.begin(),pixels.end());
+        }
     }
     std::vector<std::uint8_t> cubeKtx;
     {
         VectorWriter writer{ cubeKtx };
         bx::Error error;
-        bimg::imageWriteKtx(&writer, bimg::TextureFormat::RGBA8, true, faceEdge, faceEdge, 1U, 1U, 1U, false,
-            cubeFaces.data(), &error);
+        bimg::imageWriteKtx(&writer, bimg::TextureFormat::RGBA8, true, faceEdge, faceEdge, 1U, 4U, 1U, false,
+            ktxMipMajor.data(), &error);
         Require(error.isOk() && !cubeKtx.empty(), "Refusal test could not build a cube map fixture");
     }
-    Require(BakeTextureBytes(cubeKtx, baseColor, DesktopTestProfile(),
-                    TextureCompressionFamily::BlockCompressedBaseline, sink)
-                    .status == TextureBakeStatus::UnsupportedSourceShape,
-        "A cube map was baked as if it were a 2D texture");
+    const auto cube = BakeTextureBytes(cubeKtx, baseColor, DesktopTestProfile(),
+        TextureCompressionFamily::BlockCompressedBaseline, sink);
+    RenderTextureAssetData cubeRead;
+    const bool cubeDecoded = kb::render::bake::ReadBakedTexture(cube.primaryBlock,cubeRead);
+    Require(cube.status == TextureBakeStatus::Success && cubeDecoded &&
+        cubeRead.dimension == RenderTextureDimension::TextureCube && cubeRead.layers == 1 && cubeRead.mipCount == 4 &&
+        cubeRead.gpuBlocks.has_value() && cubeRead.gpuBlocks->format == bgfx::TextureFormat::RGBA8 &&
+        cubeRead.gpuBlocks->blocks == cubeFaces, ("Captured cube lost face bytes or dimension during bake/readback: status=" +
+            std::string{kb::render::bake::ToString(cube.status)} + " decoded=" + std::to_string(cubeDecoded) +
+            " mips=" + std::to_string(cubeRead.mipCount) + " payload=" + std::to_string(cube.primaryBlock.size()) +
+            " pixels=" + std::to_string(cubeRead.gpuBlocks ? cubeRead.gpuBlocks->blocks.size() : 0) +
+            " expected=" + std::to_string(cubeFaces.size())).c_str());
 
     // A file that is not there.
     Require(kb::render::bake::BakeTexture(store.Root() / "no_such_source.png", baseColor, DesktopTestProfile(),

@@ -2,6 +2,7 @@
 
 #include "assets/MiniaudioClipResolver.hpp"
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/audio/SpatialAudioPlayback.hpp"
 #include "engine/audio/AudioMetering.hpp"
 #include "engine/audio/AudioMixerPreview.hpp"
 #include "playback/MiniaudioVoicePool.hpp"
@@ -26,7 +27,7 @@ class SceneSystemContext;
 namespace kb::audio_miniaudio {
 
 class MiniaudioPlaybackBackend final : public kb::audio::IAudioPlaybackBackend, public kb::audio::IAudioMeteringBackend,
-    public kb::audio::IAudioMixerPreviewBackend, public kb::audio::IAudioDiagnosticsBackend {
+    public kb::audio::IAudioMixerPreviewBackend, public kb::audio::IAudioDiagnosticsBackend, public kb::audio::ISpatialAudioPlaybackBackend {
 public:
     MiniaudioPlaybackBackend();
     ~MiniaudioPlaybackBackend() override;
@@ -36,6 +37,7 @@ public:
     void Shutdown() noexcept;
 
     [[nodiscard]] kb::audio::AudioPlayResult PlayOneShot(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) override;
+    [[nodiscard]] kb::audio::AudioPlayResult PlaySpatialAudio(kb::scene::Scene&,const kb::audio::AudioPlayDesc&,kb::audio::SpatialAudioMode) override;
     void StopAll(kb::scene::Scene& scene) noexcept override;
     [[nodiscard]] kb::audio::AudioSourceControlResult PlaySource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) override;
     [[nodiscard]] kb::audio::AudioSourceControlResult PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) override;
@@ -98,7 +100,7 @@ private:
     void AssertOwnerThread() const noexcept;
     [[nodiscard]] bool PlaybackAvailable() const noexcept;
     void SyncRouting(kb::scene::Scene& scene, bool routingAvailable);
-    [[nodiscard]] kb::audio::AudioPlayResult PlayOneShotInternal(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc, bool playbackAvailable);
+    [[nodiscard]] kb::audio::AudioPlayResult PlayOneShotInternal(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc, bool playbackAvailable, kb::audio::SpatialAudioMode mode=kb::audio::SpatialAudioMode::Panning);
     [[nodiscard]] kb::audio::AudioSourceControlResult PlaySourceInternal(kb::scene::Scene& scene, kb::scene::SceneEntity entity, bool playbackAvailable);
     [[nodiscard]] kb::audio::AudioDeviceStatus ReinitializeInternal(kb::scene::Scene& scene, bool forceNoDevice) noexcept;
 

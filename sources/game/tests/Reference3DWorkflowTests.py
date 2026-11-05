@@ -217,6 +217,11 @@ def main():
         entity(project,'MainCamera','Camera',camera_position)
         entity(project,'Sun','Directional Light')
         entity(project,'Environment','Environment')
+        # Compare cooked content without render-history inputs: asynchronous HDR
+        # metering and streaming completion do not follow the fixed simulation clock.
+        cli('post-process-new','--project',project,'--name','ReferenceLook',
+            '--set','autoExposureMetering=Manual','--set','temporalAntiAliasingEnabled=0')
+        cli('scene-post-process','--project',project,'--profile','/Game/PostProcess/ReferenceLook.kbppfx')
     create(animated)
     cli('import','--project',animated,'--destination','/Game/Characters',inputs/'SampleRig.gltf','--skeletal','yes')
     cli('animator','new','--project',animated,'--name','Motion','--clip','/Game/Characters/SampleRig_Sway.kbanim')
@@ -263,13 +268,18 @@ def main():
     script(world,'StreamProbe',WORLD_SCRIPT,'MainCamera')
     sys.path.insert(0,str(args.engine_root.resolve()/'scripts'))
     from png_readback import read_png
-    def playback(executable,project,frames,image,profile):
+    def playback(executable,project,frames,image,profile,verify_repeat=True):
         words=['--headless','--frames='+str(frames),'--uncapped','--width=640','--height=360',
             '--profile-fixed-step','--profile-file='+str(profile)]
         if project:words.insert(0,'--project='+str(project))
         if image:words+=['--screenshot-frame='+str(frames),'--screenshot-file='+str(image)]
         output=run(executable,*words,cwd=executable.resolve().parent)
         assert 'shutdown=clean' in output and 'errors=0' in output,output
+        if image and verify_repeat:
+            repeated_image=image.with_stem(image.stem+'-repeat')
+            repeated_profile=profile.with_stem(profile.stem+'-repeat')
+            playback(executable,project,frames,repeated_image,repeated_profile,verify_repeat=False)
+            assert read_png(image)==read_png(repeated_image),'Identical render changed between runs: '+str(image)
         return output
     packages,results = [],[]
     for project,frames,marker in [(animated,120,'reference-animated PASS'),(world,360,'reference-world returned-near PASS')]:
@@ -314,7 +324,8 @@ def main():
             for line in ('near-loaded','far-loaded-near-unloaded','returned-near PASS'):
                 assert 'reference-world '+line in shipped
         results.append(dict(project=project.name,result='PASS',sourceUnavailable=True,shippedPlayerPassed=True,
-            sourcePackageImageDifference=0,animated=bool(first),streamedWorld=not bool(first)))
+            sourcePackageImageDifference=0,identicalRunImageDifference=0,capturesPerFrame=2,
+            animated=bool(first),streamedWorld=not bool(first)))
     write_json(root/'result.json',dict(result='PASS',workflows=results,projectDocumentsAuthoredBy='public CLI',
         sourceInputs='standard glTF/OBJ/WAV and Lua behaviour code',sourceInputsUnavailable=True))
     print('3D reference workflows passed:',root)

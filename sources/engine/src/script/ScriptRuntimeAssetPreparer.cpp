@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/script/NativeLinkedModules.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptAsset.hpp"
@@ -458,7 +459,21 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
             return result;
         }
     }
-    if (nativeSettings_.loadPlugins && nativePlugins_ != nullptr && !descriptor->modulePath.empty()) {
+    if (nativeSettings_.loadPlugins && nativePlugins_ != nullptr && !descriptor->linkedModule.empty()) {
+        const NativeScriptPluginRegisterProc registration = NativeLinkedModules::Find(descriptor->linkedModule);
+        if (registration == nullptr) {
+            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native,
+                "native behaviour module '" + descriptor->linkedModule + "' is not linked into this build");
+            return result;
+        }
+        NativeScriptPluginLoadResult loaded = nativePlugins_->LoadLinked(
+            "asset:" + std::to_string(metadata.id.value), registration);
+        if (!loaded.Succeeded()) {
+            const std::string message = loaded.errors.empty() ? "linked native script module could not be registered" : loaded.errors.front();
+            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message);
+            return result;
+        }
+    } else if (nativeSettings_.loadPlugins && nativePlugins_ != nullptr && !descriptor->modulePath.empty()) {
         std::filesystem::path modulePath = descriptor->modulePath.is_absolute() ? descriptor->modulePath : metadata.physicalPath.parent_path() / descriptor->modulePath;
         if (packaged) {
             std::error_code pathError;

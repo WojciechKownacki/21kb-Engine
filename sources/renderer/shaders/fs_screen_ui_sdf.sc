@@ -83,8 +83,9 @@ void main()
     vec4 color = u_screenUIFillColor;
 
     if (kind > 3.5) {
-        float distance = texture2D(s_screenUITexture, v_texcoord0).a;
-        float edge = 128.0 / 255.0;
+        vec4 field = texture2D(s_screenUITexture, v_texcoord0);
+        float distance = kind > 4.5 ? max(min(field.r, field.g), min(max(field.r, field.g), field.b)) : field.a;
+        float edge = kind > 4.5 ? 0.5 : 128.0 / 255.0;
         float width = max(fwidth(distance), 1.0 / 1024.0);
         float fill = smoothstep(edge - width * 0.5, edge + width * 0.5, distance);
         float outlineEdge = edge - min(u_screenUIEffectParams.y, 0.45);

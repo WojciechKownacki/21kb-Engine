@@ -1,6 +1,7 @@
 #include "engine/input/InputAssetLoaders.hpp"
 
 #include "engine/input/InputAssetIO.hpp"
+#include "engine/input/InputRecording.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 
 #include <algorithm>
@@ -41,6 +42,14 @@ std::optional<std::string> ValidateActions(const InputAssetLoadResult<InputMappi
 }
 
 } // namespace
+
+std::string_view InputRecordingAssetLoader::Type() const noexcept {return "InputRecording";}
+std::type_index InputRecordingAssetLoader::PayloadType() const noexcept {return typeid(InputRecording);}
+std::vector<std::string> InputRecordingAssetLoader::Extensions() const {return {std::string{InputAssetFormat::RecordingExtension}};}
+kb::assets::AssetLoadResult InputRecordingAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
+    std::vector<std::uint8_t> bytes;std::string error;if(!request.ReadSourceBytes(bytes,error))return {.error=std::move(error)};
+    auto loaded=DecodeInputRecording(bytes);if(!loaded.succeeded)return {.error=std::move(loaded.error)};return {.asset=std::make_shared<InputRecording>(std::move(loaded.asset))};
+}
 
 std::string_view InputActionAssetLoader::Type() const noexcept {
     return "InputAction";

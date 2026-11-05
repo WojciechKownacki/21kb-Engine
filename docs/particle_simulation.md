@@ -607,3 +607,16 @@ per-emitter capacities and per-binding event budgets. It compares replay state w
 profiling disabled and enabled and reports whole-workload host/process CPU time, live
 particles, capacity, rejected births/events, and process private/working-set memory.
 Process memory includes the engine and test host; capacity is a limit, not throughput.
+
+## Geometry collisions
+
+`CollisionGeometry` uses synchronized physics-world swept sphere queries, sampled
+signed-distance grids, or bilinear heightfields on the existing CPU path.
+Bounce, friction, collision events and contact death share the plane collision
+stage. GPU-preferred effects report `geometry-collision`; GPU-required effects
+reject enabled geometry modules. The generated `ParticleGeometry` API topic
+describes native/Lua authoring, sample layout, bounded sampling and cook support.
+
+The existing 512 KiB source-effect limit also covers inline collision samples;
+multiple grid modules share that per-asset budget. Grid dimensions and the compiled
+cache additionally bound each module to 32768 finite samples.

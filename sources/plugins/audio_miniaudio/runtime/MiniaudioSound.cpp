@@ -1,4 +1,5 @@
 #include "runtime/MiniaudioSound.hpp"
+#include "runtime/MiniaudioSpatialStream.hpp"
 
 #include "assets/MiniaudioEncodingFormat.hpp"
 #include "assets/ResolvedAudioClip.hpp"
@@ -175,6 +176,7 @@ void MiniaudioSound::SetLooping(bool loop) noexcept {
 }
 
 void MiniaudioSound::SetPosition(const kb::scene::Vec3& position) noexcept {
+    if(spatialStream_) spatialStream_->SetPosition(position);
     if (initialized_) {
         ma_sound_set_position(&sound_, ValidOr(position.x, 0.0F), ValidOr(position.y, 0.0F), ValidOr(position.z, 0.0F));
     }
@@ -218,10 +220,17 @@ ma_result MiniaudioSound::Initialize(
     const ResolvedAudioClip& clip,
     bool spatial,
     ma_sound_group* group,
-    ma_uint64 initialFrame) {
+    ma_uint64 initialFrame,
+    kb::audio::SpatialAudioMode mode) {
     Reset();
     if (!clip.IsValid()) {
         return MA_INVALID_ARGS;
+    }
+    if(mode!=kb::audio::SpatialAudioMode::Panning) {
+        spatialStream_=std::make_unique<MiniaudioSpatialStream>();
+        auto result=spatialStream_->Initialize(engine,clip,mode,initialFrame);
+        if(result==MA_SUCCESS) result=ma_sound_init_from_data_source(&engine,spatialStream_->DataSource(),MA_SOUND_FLAG_NO_SPATIALIZATION,group,&sound_);
+        initialized_=result==MA_SUCCESS;if(!initialized_) Reset();return result;
     }
     if (!clip.IsMemoryBacked()) {
         ma_result result = InitStreamingSoundFromFile(
@@ -301,6 +310,7 @@ void MiniaudioSound::Reset() noexcept {
         ma_sound_uninit(&sound_);
         initialized_ = false;
     }
+    spatialStream_.reset();
     memoryDecoder_.reset();
     volume_ = 1.0F;
     muted_ = false;
@@ -328,6 +338,7 @@ void MiniaudioSound::Apply(const MiniaudioSoundSettings& settings) noexcept {
     if (!initialized_) {
         return;
     }
+    if(spatialStream_) spatialStream_->Update(settings);
     const float volume = NormalizeVolume(settings.volume);
     const float pitch = std::max(0.01F, ValidOr(settings.pitch, 1.0F));
     const float pan = NormalizePan(settings.pan);
@@ -344,7 +355,7 @@ void MiniaudioSound::Apply(const MiniaudioSoundSettings& settings) noexcept {
     ma_sound_set_pitch(&sound_, pitch);
     ma_sound_set_pan(&sound_, flatInitialized_ ? 0.0F : pan);
     ma_sound_set_looping(&sound_, settings.loop ? MA_TRUE : MA_FALSE);
-    ma_sound_set_spatialization_enabled(&sound_, settings.spatial ? MA_TRUE : MA_FALSE);
+    ma_sound_set_spatialization_enabled(&sound_, settings.spatial && !spatialStream_ ? MA_TRUE : MA_FALSE);
     ma_sound_set_attenuation_model(&sound_, ToMiniaudioAttenuationModel(settings.attenuationModel));
     ma_sound_set_min_distance(&sound_, minDistance);
     ma_sound_set_max_distance(&sound_, maxDistance);

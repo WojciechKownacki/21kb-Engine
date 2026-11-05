@@ -608,13 +608,13 @@ void ScreenUIDrawBatchBuilder::AppendTextLayer(const kb::scene::SceneUIFrameElem
         const float atlasHeight = static_cast<float>(std::max(useFallback ? run.fallbackAtlasHeight : run.atlasHeight, static_cast<std::uint16_t>(1U)));
         ScreenUIDrawStyle glyphStyle = style;
         if (glyph.distanceField) {
-            glyphStyle.fragmentKind = ScreenUIFragmentKind::DistanceFieldFont;
+            glyphStyle.fragmentKind = glyph.distanceField==2?ScreenUIFragmentKind::MultiChannelDistanceFieldFont:ScreenUIFragmentKind::DistanceFieldFont;
             // Encode the authored outline as an atlas distance. Derivatives are
             // reserved for antialiasing: using them for width changes the outline
             // with contour orientation and framebuffer resolution.
             const float glyphWidth = glyph.right - glyph.left;
             glyphStyle.fontOutlineWidth = glyphWidth > 0.0F
-                ? outlineWidth * (glyph.u1 - glyph.u0) * atlasWidth / glyphWidth * kFontDistanceFieldScale / 255.0F
+                ? outlineWidth * (glyph.u1 - glyph.u0) * atlasWidth / glyphWidth * (glyph.distanceField==2?1.0F/16.0F:kFontDistanceFieldScale/255.0F)
                 : 0.0F;
         }
         if (applyMarkupColor) {

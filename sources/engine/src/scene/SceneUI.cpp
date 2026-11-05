@@ -1,4 +1,5 @@
 #include "engine/scene/SceneUI.hpp"
+#include "scene/SceneUIMedia.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
@@ -337,7 +338,7 @@ class FrameUIComponentQueries {
             queried_ = hasQueried_ = present_ = 0U;
         }
     }
-    static constexpr auto kComponentCount = static_cast<std::size_t>(UIComponentType::WidgetSwitcher) + 1U;
+    static constexpr auto kComponentCount = static_cast<std::size_t>(UIComponentType::Accessibility) + 1U;
     SceneUIComponentQueries source_;
     const kb::ecs::World& world_;
     const kb::ecs::NativeArchetypeStorage& native_;
@@ -487,6 +488,7 @@ class FrameBuilder {
         KB_VALIDATE_COPY(UIDropdown, dropdown);
         KB_VALIDATE_COPY(UIProgressBar, progressBar);
         KB_VALIDATE(UIWidgetSwitcher);
+        KB_VALIDATE(UIAccessibility);
 #undef KB_VALIDATE_COPY
 #undef KB_VALIDATE_LAYOUT
 #undef KB_VALIDATE
@@ -2604,7 +2606,7 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
     return scrolled;
 }
 
-[[nodiscard]] bool Activate(Scene& scene, SceneState& state, SceneEntity entity, const SceneUIInput& input) {
+[[nodiscard]] bool ActivateUIElement(Scene& scene, SceneState& state, SceneEntity entity, const SceneUIInput& input) {
     SceneUIComponents ui = scene.Components().UI();
     if (state.uiDropdownList.has_value() && !state.uiDropdownList->closing) {
         if (entity == state.uiDropdownList->blocker)
@@ -2913,6 +2915,16 @@ std::vector<SceneUIEvent> SceneUIAccess::DrainEvents() {
 bool SceneUIAccess::SetFocus(SceneEntity entity) {
     return SetUIFocus(scene_, SceneAccess::State(scene_), entity);
 }
+bool SceneUIAccess::Activate(SceneEntity entity) {
+    auto& state=SceneAccess::State(scene_);
+    const auto* element=Find(state.uiFrame,entity);
+    if(!element||!element->interactionEnabled||scene_.Components().UI().Has<UIInputField>(entity)) return false;
+    if(!SetUIFocus(scene_,state,entity)) return false;
+    static_cast<void>(ActivateUIElement(scene_,state,entity,state.previousUIInput));
+    Queue(state,scene_,SceneUIEventType::Clicked,entity);
+    Queue(state,scene_,SceneUIEventType::Submitted,entity);
+    return true;
+}
 void SceneUIAccess::ClearFocus() noexcept {
     ClearUIFocus(scene_, SceneAccess::State(scene_));
 }
@@ -3037,6 +3049,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     for (const auto& touch : input.touchPoints) {
         if (!std::isfinite(touch.x) || !std::isfinite(touch.y) || touch.phase > kb::input::InputTouchPhase::Cancelled) return false;
     }
+    UpdateUIMedia(scene_);
     SceneUIFrame frame;
     if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
         // Keep the last good frame so hit testing still answers, but carry the refusal on it
@@ -3241,7 +3254,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         Queue(state, scene_, SceneUIEventType::Released, pressed, &input);
         const UIButton* button = scene_.Components().UI().TryGet<UIButton>(pressed);
         if (!dropped && pressed == hovered && (button == nullptr || button->submitOnRelease)) {
-            presentationDirty = Activate(scene_, state, pressed, input) || presentationDirty;
+            presentationDirty = ActivateUIElement(scene_, state, pressed, input) || presentationDirty;
             Queue(state, scene_, SceneUIEventType::Clicked, pressed, &input);
             const auto* link = input.pointerAvailable ? LinkAt(state, pressed, input.pointerPosition) : nullptr;
             const auto* linkElement = link ? Find(state.uiFrame, pressed) : nullptr;
@@ -3332,7 +3345,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         }
         if (rising(now.submitDown, before.submitDown) && state.uiFocused.IsValid()) {
             if (!scene_.Components().UI().Has<UIInputField>(state.uiFocused)) {
-                presentationDirty = Activate(scene_, state, state.uiFocused, input) || presentationDirty;
+                presentationDirty = ActivateUIElement(scene_, state, state.uiFocused, input) || presentationDirty;
                 Queue(state, scene_, SceneUIEventType::Clicked, state.uiFocused);
             }
             Queue(state, scene_, SceneUIEventType::Submitted, state.uiFocused);
@@ -3400,6 +3413,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         state.uiFrame = std::move(scrolled);
     }
     ResolveInteractionPresentation(scene_, state, input.primaryDown, deltaSeconds, previousFrame, state.uiFrame, true);
+    UpdateUIReader(scene_);
     return true;
 }
 

@@ -179,7 +179,11 @@ KB_PARTICLE_ENUM_NAMES(ParticleModuleType, {ParticleModuleType::InitialVelocity,
                        {ParticleModuleType::AxisRotation, "AxisRotation"},
                        {ParticleModuleType::Attraction, "Attraction"},
                        {ParticleModuleType::TorusSwirl, "TorusSwirl"},
-                       {ParticleModuleType::Separation, "Separation"});
+                       {ParticleModuleType::Separation, "Separation"},
+                       {ParticleModuleType::CollisionGeometry, "CollisionGeometry"});
+KB_PARTICLE_ENUM_NAMES(ParticleCollisionGeometryKind, {ParticleCollisionGeometryKind::PhysicsWorld, "PhysicsWorld"},
+                       {ParticleCollisionGeometryKind::SignedDistanceGrid, "SignedDistanceGrid"},
+                       {ParticleCollisionGeometryKind::Heightfield, "Heightfield"});
 KB_PARTICLE_ENUM_NAMES(ParticleEventTrigger, {ParticleEventTrigger::Birth, "Birth"},
                        {ParticleEventTrigger::Death, "Death"}, {ParticleEventTrigger::Collision, "Collision"},
                        {ParticleEventTrigger::WhileAlive, "WhileAlive"});
@@ -624,6 +628,27 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                         reader.Required(base + ".friction", payload.friction, ParseFloat);
                         reader.Required(base + ".maxEventsPerStep", payload.maxEventsPerStep, ParseUInt<std::uint32_t>);
                         static_cast<void>(reader.Optional(base + ".killOnContact", payload.killOnContact, ParseBool));
+                    } else if constexpr (std::is_same_v<T, ParticleCollisionGeometryModule>) {
+                        reader.Required(base + ".kind", payload.kind, ParseEnum<ParticleCollisionGeometryKind>, ParticleEffectDiagnosticCode::InvalidEnum);
+                        reader.Required(base + ".radius", payload.radius, ParseFloat);
+                        reader.Required(base + ".restitution", payload.restitution, ParseFloat);
+                        reader.Required(base + ".friction", payload.friction, ParseFloat);
+                        reader.Required(base + ".maxEventsPerStep", payload.maxEventsPerStep, ParseUInt<std::uint32_t>);
+                        static_cast<void>(reader.Optional(base + ".killOnContact", payload.killOnContact, ParseBool));
+                        if(payload.kind==ParticleCollisionGeometryKind::PhysicsWorld) {
+                            reader.Required(base + ".layerMask", payload.layerMask, ParseUInt<std::uint32_t>);
+                        } else {
+                            reader.Required(base + ".origin", payload.origin, ParseVec3);
+                            reader.Required(base + ".cellSize", payload.cellSize, ParseVec3);
+                            reader.Required(base + ".width", payload.width, ParseUInt<std::uint32_t>);
+                            reader.Required(base + ".height", payload.height, ParseUInt<std::uint32_t>);
+                            reader.Required(base + ".depth", payload.depth, ParseUInt<std::uint32_t>);
+                            std::uint32_t count=0;
+                            reader.RequiredBoundedCount(base + ".sampleCount", count, 32768U);
+                            payload.samples.resize(std::min(count,32768U));
+                            for(std::size_t n=0;n<payload.samples.size();++n)
+                                reader.Required(base + ".sample["+std::to_string(n)+"]", payload.samples[n], ParseFloat);
+                        }
                     } else if constexpr (std::is_same_v<T, ParticleNoiseModule>) {
                         reader.Required(base + ".strength", payload.strength, ParseFloat);
                         reader.Required(base + ".frequency", payload.frequency, ParseFloat);
@@ -1134,8 +1159,9 @@ std::optional<ParticleEffectAsset> ParticleEffectAssetIO::Load(const std::filesy
 std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffectAsset& asset,
                                                             std::vector<ParticleEffectDiagnostic>& diagnostics) {
     auto validation = ParticleEffectAssetValidator::ValidateStructure(asset);
+    const bool valid = validation.Succeeded();
     diagnostics = std::move(validation.diagnostics);
-    if (!validation.Succeeded())
+    if (!valid)
         return std::nullopt;
     std::string out = "21kb ParticleEffect 2\n";
     Line(out, "effect.formatVersion", std::to_string(asset.formatVersion));
@@ -1266,6 +1292,21 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
                         Line(out, base + ".friction", Float(p.friction));
                         Line(out, base + ".maxEventsPerStep", std::to_string(p.maxEventsPerStep));
                         if (p.killOnContact) BoolLine(out, base + ".killOnContact", true);
+                    } else if constexpr (std::is_same_v<T, ParticleCollisionGeometryModule>) {
+                        Line(out, base + ".kind", EnumText(p.kind));
+                        Line(out, base + ".radius", Float(p.radius));
+                        Line(out, base + ".restitution", Float(p.restitution));
+                        Line(out, base + ".friction", Float(p.friction));
+                        Line(out, base + ".maxEventsPerStep", std::to_string(p.maxEventsPerStep));
+                        if(p.killOnContact) BoolLine(out,base+".killOnContact",true);
+                        if(p.kind==ParticleCollisionGeometryKind::PhysicsWorld) {
+                            Line(out,base+".layerMask",std::to_string(p.layerMask));
+                        } else {
+                            VecLine(out,base+".origin",p.origin);VecLine(out,base+".cellSize",p.cellSize);
+                            Line(out,base+".width",std::to_string(p.width));Line(out,base+".height",std::to_string(p.height));Line(out,base+".depth",std::to_string(p.depth));
+                            Line(out,base+".sampleCount",std::to_string(p.samples.size()));
+                            for(std::size_t n=0;n<p.samples.size();++n) Line(out,base+".sample["+std::to_string(n)+"]",Float(p.samples[n]));
+                        }
                     } else if constexpr (std::is_same_v<T, ParticleNoiseModule>) {
                         Line(out, base + ".strength", Float(p.strength));
                         Line(out, base + ".frequency", Float(p.frequency));

@@ -26,6 +26,7 @@
 #include <vector>
 
 namespace kb::script {
+bool RegisterInputSensorApi(ScriptRuntimeHost&);
 bool RegisterInputRebindSessionApi(ScriptRuntimeHost& host);
 namespace {
 
@@ -817,7 +818,7 @@ bool RegisterStopVibration(ScriptRuntimeHost& host) {
 } // namespace
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
-    bool ok = true;
+    bool ok = RegisterInputSensorApi(host);
     ok = RegisterActionQuery(host, "Input.IsPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "Input.WasPressed", "pressed", &kb::input::InputSubsystem::WasActionStarted) && ok;
     ok = RegisterActionQuery(host, "Input.WasReleased", "released", &kb::input::InputSubsystem::WasActionReleased) && ok;

@@ -15,7 +15,7 @@ void PrintUsage() {
                  "--target <profile> --output <file.kbpack> "
                  "[--shaderc <executable>] "
                  "[--engine-root <directory>] [--cache <directory>] "
-                 "[--runtime-modules-output <directory>] [--reuse-pack <file.kbpack>] "
+                 "[--runtime-modules-output <directory>] [--native-link-manifest <file.json>] [--reuse-pack <file.kbpack>] "
                  "[--pack-compression-level <0-19>]\n";
 }
 
@@ -48,6 +48,8 @@ int main(int argc, char** argv) {
             request.cacheRoot = std::filesystem::path{ value };
         } else if (option == "--runtime-modules-output" && ReadValue(argc, argv, index, value)) {
             request.runtimeModulesOutputDirectory = std::filesystem::path{ value };
+        } else if (option == "--native-link-manifest" && ReadValue(argc, argv, index, value)) {
+            request.nativeLinkManifestPath = std::filesystem::path{ value };
         } else if (option == "--reuse-pack" && ReadValue(argc, argv, index, value)) {
             request.reusePackPath = std::filesystem::path{ value };
         } else if (option == "--pack-compression-level" && ReadValue(argc, argv, index, value)) {

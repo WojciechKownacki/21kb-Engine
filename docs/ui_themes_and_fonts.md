@@ -18,7 +18,13 @@ component to opt into raster SDF rendering. Shaping, wrapping, line metrics and
 caret positions still use the requested text size. The distance field uses a
 64-pixel raster of the selected font instance, including variation axes, and is
 generated from the font payload at runtime in both source projects and packages.
-This is SDF, not MSDF or a precomputed outline atlas.
+This mode uses a single-channel SDF. For outline-derived RGB MSDF, set
+`UIText::fontRenderMode` to `UITextFontRenderMode::MultiChannelSignedDistanceField`
+(serialized value `2`). The runtime generates the MSDF from the same font payload
+and uses the median of its three channels for text coverage. C++ and Lua share
+the rendering backend; see `kb_cli api --topic RuntimeUI` for authoring examples.
+The Windows D3D11 editor and source-free package workflow is covered by
+`kb_editor_runtime_ui_package`; this does not qualify other hosts.
 
 The renderer falls back to bitmap text when the optional SDF shader is absent,
 the field cannot represent a glyph, or an outline/shadow exceeds the field's

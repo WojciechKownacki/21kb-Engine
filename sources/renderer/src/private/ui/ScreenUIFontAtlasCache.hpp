@@ -53,7 +53,7 @@ class ScreenUIFontAtlasCache {
                                                   RenderResourceRegistry& resources,
                                                   const kb::scene::SceneUIFrame& frame, bool distanceFieldAvailable = true);
     [[nodiscard]] bgfx::TextureHandle Resolve(std::uint64_t sceneId, std::uint64_t fontAssetId, std::uint32_t pixelSize,
-                                              std::string_view variations, bool distanceField, const RenderResourceRegistry& resources) const noexcept;
+                                              std::string_view variations, std::uint8_t distanceField, const RenderResourceRegistry& resources) const noexcept;
     void ReleaseScene(std::uint64_t sceneId, RenderResourceRegistry& resources) noexcept;
     void Shutdown(RenderResourceRegistry& resources) noexcept;
 
@@ -70,7 +70,7 @@ class ScreenUIFontAtlasCache {
         std::uint64_t assetId = 0U;
         std::uint32_t pixelSize = 0U;
         std::string variations;
-        bool distanceField = false;
+        std::uint8_t distanceField = 0;
 
         [[nodiscard]] bool operator==(const FontKey&) const noexcept = default;
     };
@@ -90,7 +90,7 @@ class ScreenUIFontAtlasCache {
         float v0 = 0.0F;
         float u1 = 0.0F;
         float v1 = 0.0F;
-        bool distanceField = false;
+        std::uint8_t distanceField = 0;
     };
 
     struct FontEntry {

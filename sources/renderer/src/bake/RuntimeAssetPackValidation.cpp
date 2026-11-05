@@ -438,6 +438,7 @@ struct MaterialShaderQualifier final {
                 if (!kb::render::bake::ReadBakedTexture(
                         payload.blocks.front().bytes, texture) ||
                     !texture.gpuBlocks.has_value() ||
+                    (texture.dimension == RenderTextureDimension::TextureCube) != (artifact.qualifier == "rgba8-cube") ||
                     !kb::render::bake::BakedTextureFormatMatchesFamily(
                         texture.gpuBlocks->format, artifact.qualifier)) {
                     return Failure("baked texture payload is corrupt for " +

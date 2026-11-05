@@ -9,6 +9,8 @@ namespace kb::physics_jolt {
 
 class JoltPhysicsModule final : public kb::modules::IEngineModule {
 public:
+    void OnLoad(kb::modules::EngineModuleContext& context) override;
+    void OnUnload() override;
     [[nodiscard]] kb::modules::EngineModuleMetadata Metadata() const override;
     void OnSceneAttach(kb::scene::Scene& scene) override;
     void OnSceneDetach(kb::scene::Scene& scene) override;

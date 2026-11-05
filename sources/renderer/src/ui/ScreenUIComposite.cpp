@@ -223,7 +223,7 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
                        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
         bgfx::setVertexBuffer(0U, &vertices, 0U, vertexCount);
         bgfx::setIndexBuffer(&indices, batch.firstIndex, batch.indexCount);
-        const auto program = batch.style.fragmentKind == ScreenUIFragmentKind::DistanceFieldFont ? distanceFieldProgram_ : program_;
+        const auto program = (batch.style.fragmentKind == ScreenUIFragmentKind::DistanceFieldFont || batch.style.fragmentKind == ScreenUIFragmentKind::MultiChannelDistanceFieldFont) ? distanceFieldProgram_ : program_;
         if (!bgfx::isValid(program)) { bgfx::discard(); continue; }
         if (desc.overdrawQueries.empty()) {
             bgfx::submit(desc.viewId, program);

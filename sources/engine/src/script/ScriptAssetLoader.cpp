@@ -3,6 +3,7 @@
 #include "engine/script/ScriptApiDeclarationParser.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetPayloadMemory.hpp"
 
 #include <algorithm>
@@ -471,6 +472,8 @@ struct NativeBehaviourDescriptorParseResult {
             result.descriptor.symbol.assign(value);
         } else if (key == "module" || key == "dll" || key == "library") {
             result.descriptor.modulePath = std::filesystem::path{ std::string{ value } };
+        } else if (key == "linked") {
+            result.descriptor.linkedModule.assign(value);
         } else if (key == "source") {
             result.descriptor.sourcePath = std::filesystem::path{ std::string{ value } };
         } else if (key == "entry" || key == "entry_point") {
@@ -511,9 +514,10 @@ std::vector<std::string> LuaScriptAssetLoader::Extensions() const {
 namespace {
 
 // Explicit dependencies also cover paths assembled dynamically by gameplay code.
-// They are ordinary Lua comments and never execute during asset discovery.
-std::optional<std::string> LuaAssetDependencies(const kb::assets::AssetLoadRequest& request,
-    const kb::assets::AssetRegistry& registry, std::vector<kb::assets::AssetId>& dependencies) {
+// Script/descriptor comments never execute during asset discovery.
+std::optional<std::string> CommentAssetDependencies(const kb::assets::AssetLoadRequest& request,
+    const kb::assets::AssetRegistry& registry, std::vector<kb::assets::AssetId>& dependencies,
+    std::string_view prefix, std::string_view language) {
     std::string error;
     const std::string source = ReadSource(request, error);
     if (!error.empty()) return error;
@@ -522,21 +526,21 @@ std::optional<std::string> LuaAssetDependencies(const kb::assets::AssetLoadReque
     while (std::getline(lines, line)) {
         std::string_view declaration = Trim(line);
         if (declaration.empty()) continue;
-        if (!declaration.starts_with("--") || declaration.starts_with("--[")) break;
-        constexpr std::string_view marker = "-- @asset";
+        if (!declaration.starts_with(prefix) || (prefix == "--" && declaration.starts_with("--["))) break;
+        const std::string marker = std::string{prefix} + " @asset";
         if (!declaration.starts_with(marker)) continue;
         declaration.remove_prefix(marker.size());
         if (!declaration.empty() && declaration.front() != ' ' && declaration.front() != '\t') continue;
         declaration = Trim(declaration);
-        const std::filesystem::path path{ declaration };
+        const std::filesystem::path path = kb::assets::Utf8Path(declaration);
         if (declaration.empty() || !declaration.starts_with('/') || declaration.starts_with("//") ||
             declaration.find('\\') != std::string_view::npos || declaration.find(':') != std::string_view::npos ||
             std::ranges::any_of(path, [](const auto& part) { return part == ".." || part == "."; })) {
-            return "Lua @asset requires a canonical virtual asset path: " + std::string{ declaration };
+            return std::string{language} + " @asset requires a canonical virtual asset path: " + std::string{ declaration };
         }
         const auto* dependency = registry.FindByPath(path);
-        if (dependency == nullptr) return "Lua @asset was not discovered: " + std::string{ declaration };
-        if (!dependency->runtimeLoadable) return "Lua @asset is editor-only: " + std::string{ declaration };
+        if (dependency == nullptr) return std::string{language} + " @asset was not discovered: " + std::string{ declaration };
+        if (!dependency->runtimeLoadable) return std::string{language} + " @asset is editor-only: " + std::string{ declaration };
         if (std::ranges::find(dependencies, dependency->id) == dependencies.end()) dependencies.push_back(dependency->id);
     }
     return std::nullopt;
@@ -551,7 +555,7 @@ kb::assets::AssetLoadRequest LooseScriptRequest(const kb::assets::AssetMetadata&
 std::vector<kb::assets::AssetId> LuaScriptAssetLoader::DiscoverDependencies(
     const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const {
     std::vector<kb::assets::AssetId> dependencies;
-    static_cast<void>(LuaAssetDependencies(LooseScriptRequest(metadata), registry, dependencies));
+    static_cast<void>(CommentAssetDependencies(LooseScriptRequest(metadata), registry, dependencies, "--", "Lua"));
     return dependencies;
 }
 
@@ -563,7 +567,7 @@ std::optional<std::string> LuaScriptAssetLoader::ValidateDependencies(
 std::optional<std::string> LuaScriptAssetLoader::ValidateRuntimeDependencies(
     const kb::assets::AssetLoadRequest& request, const kb::assets::AssetRegistry& registry) const {
     std::vector<kb::assets::AssetId> dependencies;
-    return LuaAssetDependencies(request, registry, dependencies);
+    return CommentAssetDependencies(request, registry, dependencies, "--", "Lua");
 }
 
 kb::assets::AssetLoadResult LuaScriptAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
@@ -590,6 +594,22 @@ kb::assets::AssetLoadResult LuaScriptAssetLoader::Load(const kb::assets::AssetLo
         }
     }
     return kb::assets::AssetLoadResult{ .asset = std::move(payload), .error = {}, .residentBytes = bytes };
+}
+
+std::vector<kb::assets::AssetId> NativeBehaviourDescriptorAssetLoader::DiscoverDependencies(
+    const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const {
+    std::vector<kb::assets::AssetId> dependencies;
+    static_cast<void>(CommentAssetDependencies(LooseScriptRequest(metadata),registry,dependencies,"#","Native descriptor"));
+    return dependencies;
+}
+std::optional<std::string> NativeBehaviourDescriptorAssetLoader::ValidateDependencies(
+    const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const {
+    return ValidateRuntimeDependencies(LooseScriptRequest(metadata),registry);
+}
+std::optional<std::string> NativeBehaviourDescriptorAssetLoader::ValidateRuntimeDependencies(
+    const kb::assets::AssetLoadRequest& request, const kb::assets::AssetRegistry& registry) const {
+    std::vector<kb::assets::AssetId> dependencies;
+    return CommentAssetDependencies(request,registry,dependencies,"#","Native descriptor");
 }
 
 std::string_view NativeBehaviourDescriptorAssetLoader::Type() const noexcept {

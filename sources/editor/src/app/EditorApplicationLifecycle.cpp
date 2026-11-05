@@ -146,6 +146,9 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
     EditorWorkspaceSession::Restore(state.dockModel, state.sceneContext);
+    state.extensions=std::make_unique<EditorExtensionHost>(state.sceneContext,state.dockModel);
+    std::string extensionError;
+    if(!state.extensions->LoadProject(extensionError)) state.sceneContext.Console().Error("Extension",extensionError);
     RestoreParticleEditorHostSession(state);
     // A panel the session left torn off needs its window back, or it would be neither
     // in the dock tree nor on screen. The particle editor has already made its own by

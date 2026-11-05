@@ -1,3 +1,4 @@
+#include "engine/audio/SpatialAudioPlayback.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 
 #include "engine/audio/AudioMixerAsset.hpp"
@@ -193,7 +194,10 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         .priority = priority,
         .ownerEntityId = ownerEntityId,
     };
-    const kb::audio::AudioPlayResult played = kb::audio::AudioPlayback::PlayOneShot(*context.scene, playDesc);
+    const auto* modeArgument=FindArg(arguments,"spatialization");
+    const int mode=modeArgument?modeArgument->AsInt():0;
+    if(mode<0||mode>2) return Error("spatialization takes 0 (panning), 1 (mono HRTF) or 2 (first-order AmbiX)");
+    const auto played=kb::audio::SpatialAudioPlayback::Play(*context.scene,playDesc,static_cast<kb::audio::SpatialAudioMode>(mode));
     if (!played.Succeeded()) {
         return Error(played.error.empty() ? "audio playback request failed" : played.error);
     }
@@ -791,6 +795,7 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "priority", ScriptValueType::Int, false },
         ScriptFunctionPin{ "attach", ScriptValueType::Bool, false },
         ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
+        ScriptFunctionPin{ "spatialization", ScriptValueType::Int, false },
     };
     desc.signature.outputs = {
         ScriptFunctionPin{ "played", ScriptValueType::Bool, true },

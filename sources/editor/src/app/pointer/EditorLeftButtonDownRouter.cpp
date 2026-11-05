@@ -1,3 +1,4 @@
+#include "extensions/EditorExtensionHost.hpp"
 #include "app/EditorSceneLifecycleGuard.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
@@ -589,6 +590,14 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     EditorMainDockSplitterPointerController mainSplitter(mainWindow_, dockModel_, dockController_, sceneContext_, sceneViewport_, metrics_);
     if (mainSplitter.HandlePointerDown(messageWindow, x, y)) {
         return;
+    }
+
+    if(auto* extensions=EditorExtensionHost::Find(sceneContext_)) {
+        const auto panel=EditorPanelContentResolver::ResolvePanel(DockPanelKind::Generic,messageWindow,mainWindow_,dockModel_,floatingWindows_,metrics_);
+        if(panel) {
+            std::string error;const bool handled=extensions->PointerDown(panel->content,panel->panelId,x,y,error);
+            if(handled||!error.empty()) {if(!error.empty()) sceneContext_.Console().Error("Extension",error);InvalidateRect(messageWindow,nullptr,FALSE);return;}
+        }
     }
 
     const EditorPanelPointerHitContext panelHit =

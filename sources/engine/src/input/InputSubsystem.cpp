@@ -81,7 +81,11 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& physical, f
     }
     suppressedTouches_.assign(heldTouches.begin(), heldTouches.begin() + static_cast<std::ptrdiff_t>(heldCount));
     gameplayDevice_.SetTouchPoints(std::span{touches}.first(touchCount));
-    if (gameplayInputBlocked_) gameplayDevice_.ClearTextInput();
+    if (gameplayInputBlocked_) {
+        gameplayDevice_.ClearTextInput();auto sensors=physical.Sensors();
+        for(auto* sample:{&sensors.accelerometer,&sensors.gyroscope})if(sample->Available()){*sample={};sample->status=InputSensorStatus::Suspended;}
+        static_cast<void>(gameplayDevice_.SetSensors(sensors));
+    }
     const InputDeviceState& device = gameplayDevice_;
     // Snapshot last frame's combined states (used for edge events and chords),
     // then rebuild this frame's action states from scratch.

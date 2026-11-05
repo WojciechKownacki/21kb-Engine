@@ -12,6 +12,7 @@
 
 #include "engine/input/InputTouchPoint.hpp"
 #include "engine/input/InputText.hpp"
+#include "engine/platform/win32/Win32MotionSensors.hpp"
 
 #include <array>
 #include <cstddef>
@@ -59,6 +60,7 @@ private:
     void ApplyImeText(kb::scene::Scene& scene, HWND ownerWindow);
 
     static constexpr std::size_t kMaxTouchPoints = 10U;
+    Win32MotionSensors motionSensors_;
     bool hasPreviousMouse_ = false;
     bool copyWasDown_ = false;
     bool cutWasDown_ = false;

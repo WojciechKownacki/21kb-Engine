@@ -84,6 +84,53 @@ if(NOT ANDROID AND NOT EMSCRIPTEN)
     kb_apply_quality_gates(kb_cooker)
 endif()
 
+# Project C++ for targets that cannot load a library (Android, WebAssembly): the cooker writes
+# the modules to link, and each host compiles them with the engine headers and links them in.
+set(KB_PROJECT_NATIVE_MANIFEST "" CACHE FILEPATH "Cooked project C++ modules to link into the packaged host")
+function(kb_attach_project_native host)
+    if(NOT KB_PROJECT_NATIVE_MANIFEST)
+        return()
+    endif()
+    if(NOT EXISTS "${KB_PROJECT_NATIVE_MANIFEST}")
+        message(FATAL_ERROR "Project C++ manifest does not exist: ${KB_PROJECT_NATIVE_MANIFEST}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KB_PROJECT_NATIVE_MANIFEST}")
+    file(READ "${KB_PROJECT_NATIVE_MANIFEST}" manifest)
+    string(JSON count LENGTH "${manifest}" modules)
+    if(count EQUAL 0)
+        return()
+    endif()
+    set(registry "#include \"engine/script/NativeLinkedModules.hpp\"\n")
+    set(registrations "")
+    math(EXPR lastModule "${count} - 1")
+    foreach(module RANGE ${lastModule})
+        string(JSON key GET "${manifest}" modules ${module} key)
+        string(JSON entry GET "${manifest}" modules ${module} entry)
+        string(JSON sourceCount LENGTH "${manifest}" modules ${module} sources)
+        set(sources "")
+        math(EXPR lastSource "${sourceCount} - 1")
+        foreach(source RANGE ${lastSource})
+            string(JSON path GET "${manifest}" modules ${module} sources ${source})
+            list(APPEND sources "${path}")
+        endforeach()
+        # Every module exports the same default entry name, so each gets its own symbol.
+        set(symbol "kb_linked_${key}_${entry}")
+        add_library(kb_project_native_${key} OBJECT ${sources})
+        target_link_libraries(kb_project_native_${key} PRIVATE kb_engine)
+        target_compile_definitions(kb_project_native_${key} PRIVATE "${entry}=${symbol}")
+        set_target_properties(kb_project_native_${key} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        target_link_libraries(${host} PRIVATE kb_project_native_${key})
+        string(APPEND registry "extern \"C\" bool ${symbol}(kb::script::NativeScriptPluginApi*);\n")
+        string(APPEND registrations "    kb::script::NativeLinkedModules::Add(\"${key}\", &${symbol});\n")
+    endforeach()
+    string(APPEND registry "namespace {\nconst bool kLinked = ([] {\n${registrations}    return true;\n})();\n}\n")
+    set(registryFile "${CMAKE_CURRENT_BINARY_DIR}/kb_project_native_modules.cpp")
+    file(GENERATE OUTPUT "${registryFile}" CONTENT "${registry}")
+    add_library(kb_project_native_registry OBJECT "${registryFile}")
+    target_link_libraries(kb_project_native_registry PRIVATE kb_engine)
+    target_link_libraries(${host} PRIVATE kb_project_native_registry)
+endfunction()
+
 if(NOT WIN32 AND (KB_BUILD_PACKAGED_GAME_HOST OR (ANDROID AND KB_BUILD_ANDROID_HOST)))
     add_library(kb_packaged_game_host_core STATIC
         src/PackagedGameRuntime.cpp
@@ -166,6 +213,7 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST)
             "-Wl,-u,Java_com_google_androidgamesdk_GameActivity_initializeNativeCode"
     )
 
+    kb_attach_project_native(kb_game_android)
     kb_apply_quality_gates(kb_game_android)
 
     # bx's public assertion macro uses the long-standing GNU `, ##__VA_ARGS__`
@@ -245,6 +293,7 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         SUFFIX ".html"
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
+    kb_attach_project_native(${KB_GAME_WEB_TARGET})
     kb_apply_quality_gates(${KB_GAME_WEB_TARGET})
     target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE
         -Wno-gnu-zero-variadic-macro-arguments
@@ -432,6 +481,9 @@ if(BUILD_TESTING)
         set_tests_properties(kb_game_particle_gpu_package PROPERTIES
             LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
         set(_kb_touch_test_runtime_args)
+        if(TARGET kb_steam_audio)
+            list(APPEND _kb_touch_test_runtime_args "--runtime-dll" "$<TARGET_FILE:kb_steam_audio>")
+        endif()
         if(MSVC AND KB_ENABLE_SANITIZERS)
             list(APPEND _kb_touch_test_runtime_args
                 "--runtime-dll" "${KB_MSVC_ASAN_DYNAMIC_RUNTIME}")
@@ -538,8 +590,13 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_ui_modal_package PROPERTIES
             LABELS "game;runtime;packaging;ui;input" TIMEOUT 360)
+        set(_kb_native_editor_args)
+        if(KB_BUILD_EDITOR)
+            list(APPEND _kb_native_editor_args --editor $<TARGET_FILE:kb_editor>)
+        endif()
         add_test(NAME kb_game_native_sdk_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkPackagedTests.py"
+            ${_kb_native_editor_args}
             "--cli" "$<TARGET_FILE:kb_cli>"
             "--cooker" "$<TARGET_FILE:kb_cooker>"
             "--player" "$<TARGET_FILE:kb_game>"

@@ -86,13 +86,13 @@ bool MeshPipelinePassPolicy::Accepts(
     }
     switch (pass) {
     case MeshPassType::Depth:
-        return !UsesDisabledAlphaBlend(material);
+        return !UsesDisabledAlphaBlend(material) && !UsesAdvancedBuiltinPbr(material);
     case MeshPassType::BaseOpaque:
     case MeshPassType::GBuffer:
-        return !UsesDisabledAlphaBlend(material);
+        return !UsesDisabledAlphaBlend(material) && !UsesAdvancedBuiltinPbr(material);
     case MeshPassType::BaseTransparent:
         // Translucent (alphaMode == Blend) materials render exclusively in the transparent pass (MAT-80).
-        return UsesDisabledAlphaBlend(material);
+        return UsesDisabledAlphaBlend(material) || UsesAdvancedBuiltinPbr(material);
     case MeshPassType::ShadowDepth:
         return instance.castsShadow && !UsesDisabledAlphaBlend(material);
     case MeshPassType::MotionVectors:
@@ -109,6 +109,13 @@ bool MeshPipelinePassPolicy::Accepts(
 
 bool MeshPipelinePassPolicy::UsesDisabledAlphaBlend(const RenderMaterialResource* material) noexcept {
     return material != nullptr && material->alphaMode == RenderMaterialAlphaMode::Blend;
+}
+
+bool MeshPipelinePassPolicy::UsesAdvancedBuiltinPbr(const RenderMaterialResource* material) noexcept {
+    return material != nullptr && !material->graphProgram.active &&
+        (material->bakedLightmap || material->sheenColor[0] > 0.0F || material->sheenColor[1] > 0.0F || material->sheenColor[2] > 0.0F ||
+         material->sheenRoughnessFactor > 0.0F || material->transmissionFactor > 0.0F || material->thicknessFactor > 0.0F ||
+         material->anisotropyStrength > 0.0F || material->anisotropyRotation != 0.0F);
 }
 
 namespace {
@@ -170,6 +177,10 @@ std::uint64_t MeshPipelinePassPolicy::State(
     case MeshPassType::MotionVectors:
         return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | cullState | rasterStateExtra;
     case MeshPassType::BaseTransparent:
+        if (UsesAdvancedBuiltinPbr(material) && !UsesDisabledAlphaBlend(material)) {
+            const auto state = SceneDepthPolicy::SceneMeshState(doubleSided) | rasterStateExtra;
+            return writesDepth ? state : (state & ~BGFX_STATE_WRITE_Z);
+        }
         if (material != nullptr && material->graphProgram.decalDomain) {
             // A decal draws its box's back faces, so each pixel is drawn once, also with the camera inside the box.
             // No depth test: the shader keeps only the scene surface that lies inside the box.

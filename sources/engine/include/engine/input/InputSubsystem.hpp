@@ -62,6 +62,9 @@ public:
         return deviceState_;
     }
 
+    // Evaluated sensor data also observes explicit replay and gameplay blocking.
+    [[nodiscard]] const InputSensorFrame& SensorState() const noexcept {return gameplayDevice_.Sensors();}
+
     // UI reads DeviceState; gameplay reads this snapshot. A modal blocks actions
     // and raw gameplay input, retaining held controls until their release.
     [[nodiscard]] const InputDeviceState& GameplayDeviceState() const noexcept {

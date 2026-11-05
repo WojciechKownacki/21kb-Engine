@@ -30,6 +30,7 @@ public:
         std::uint32_t cullingMask,
         const RenderMeshSection* section = nullptr) noexcept;
     [[nodiscard]] static bool UsesDisabledAlphaBlend(const RenderMaterialResource* material) noexcept;
+    [[nodiscard]] static bool UsesAdvancedBuiltinPbr(const RenderMaterialResource* material) noexcept;
     [[nodiscard]] static std::uint64_t State(
         MeshPassType pass,
         const RenderMeshResource* mesh,

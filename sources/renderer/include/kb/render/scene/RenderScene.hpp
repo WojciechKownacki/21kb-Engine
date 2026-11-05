@@ -360,6 +360,8 @@ public:
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
     void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
     [[nodiscard]] const std::optional<SceneRenderAmbientRadiance>& AmbientRadiance() const noexcept;
+    void SetLocalReflectionProbes(std::vector<SceneRenderReflectionProbe> probes);
+    [[nodiscard]] std::span<const SceneRenderReflectionProbe> LocalReflectionProbes() const noexcept;
 
     enum class TransformUpdateOutcome {
         NotFound,
@@ -532,6 +534,7 @@ private:
     SpaceStrokeProxyMap spaceStrokes_;
     std::optional<SceneRenderWorldBackdrop> worldBackdrop_;
     std::optional<SceneRenderAmbientRadiance> ambientRadiance_;
+    std::vector<SceneRenderReflectionProbe> localReflectionProbes_;
     std::shared_ptr<const kb::particles::ParticleRenderSnapshot> particleRenderSnapshot_;
     mutable std::vector<SceneRenderDrawGroup> drawGroups_;
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;

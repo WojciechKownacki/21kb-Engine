@@ -39,6 +39,7 @@ std::uint64_t ChunkKey(std::uint64_t tile) {
 Map2DAsset Header(const Map2DAsset& map) {
     auto result = MakeEmptyMap2DAsset(map.width, map.height);
     result.tileSize = map.tileSize;
+    result.topology = map.topology;
     result.floorHeight = map.floorHeight;
     result.orientation = map.orientation;
     result.sheets = map.sheets;
@@ -131,7 +132,7 @@ void DriveCamera(kb::scene::Scene& scene, SceneEntity owner, Instance& instance,
 
     const bool wall = instance.map.orientation == Map2DOrientation::Wall;
     const float size = instance.map.tileSize;
-    const float wanted = static_cast<float>(instance.map.viewHeight) * size / settings.zoom;
+    const float wanted = static_cast<float>(static_cast<double>(instance.map.viewHeight) * Map2DCellHeight(instance.map) / settings.zoom);
     const auto viewport = scene.UI().Frame().viewportSize;
     const PixelPerfectView view = settings.pixelsPerUnit > 0.0F
         ? ComputePixelPerfectView(viewport.y, settings.pixelsPerUnit, wanted) : PixelPerfectView{ .orthographicHeight = wanted };
@@ -160,8 +161,9 @@ void DriveCamera(kb::scene::Scene& scene, SceneEntity owner, Instance& instance,
     frame.deltaSeconds = deltaSeconds;
     frame.teleportDistance = static_cast<float>(std::max(instance.map.viewWidth, instance.map.viewHeight)) * size;
     frame.clamp = settings.clampToMap;
-    const float width = static_cast<float>(instance.map.width) * size;
-    const float height = static_cast<float>(instance.map.height) * size;
+    const auto projectedSize=Map2DProjectedSize(instance.map);
+    const float width = static_cast<float>(projectedSize[0]);
+    const float height = static_cast<float>(projectedSize[1]);
     frame.area = wall ? Camera2DArea{ -width * 0.5F, 0.0F, width * 0.5F, height } : Camera2DArea{ -width * 0.5F, -height * 0.5F, width * 0.5F, height * 0.5F };
 
     if (!settings.followTarget.empty()) {
@@ -568,13 +570,8 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
                 if (spawned.Empty()) { context.ReportError("Tilemap prefab is empty: " + tile.prefab); continue; }
                 const auto root = spawned.RootObject().Entity();
                 auto transform = scene.Transforms().Get(root);
-                const auto x = (static_cast<float>(Map2DTileKeyX(cell)) + 0.5F - static_cast<float>(fragment.width) * 0.5F) * fragment.tileSize;
-                const auto y = static_cast<float>(Map2DTileKeyY(cell)) + 1.0F;
-                const auto elevation = static_cast<float>(Map2DTileKeyZ(cell)) * fragment.floorHeight;
-                const auto position = fragment.orientation == Map2DOrientation::Wall
-                    ? kb::scene::Vec3{x, (static_cast<float>(fragment.height) - y) * fragment.tileSize, -elevation}
-                    : kb::scene::Vec3{x, elevation, (static_cast<float>(fragment.height) * 0.5F - y) * fragment.tileSize};
-                transform.localPosition = transform.localPosition + position;
+                const auto local=Map2DCellLocalPoint(fragment,Map2DTileKeyX(cell),Map2DTileKeyY(cell),Map2DTileKeyZ(cell),true);
+                transform.localPosition=transform.localPosition+kb::scene::Vec3{static_cast<float>(local[0]),static_cast<float>(local[1]),static_cast<float>(local[2])};
                 scene.Transforms().Set(root, transform);
                 chunk.prefabs.emplace(cell, std::make_pair(tile.prefab, root));
             }

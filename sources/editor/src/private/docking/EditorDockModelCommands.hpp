@@ -19,6 +19,8 @@ public:
 
     // Puts the workspace back to the arrangement a new project starts with.
     void ResetWorkspace();
+    [[nodiscard]] bool RegisterToolPanel(DockPanel panel);
+    [[nodiscard]] bool UnregisterToolPanel(std::uint32_t panelId);
     // Rebuilds the dock tree from a previously serialized workspace. Refuses a text
     // that does not account for exactly the panels this build has, leaving the
     // current arrangement untouched.

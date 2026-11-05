@@ -8,8 +8,19 @@
 
 #include <memory>
 #include <stdexcept>
+#include <flecs.h>
 
 namespace kb::physics_jolt {
+
+void JoltPhysicsModule::OnLoad(kb::modules::EngineModuleContext&) {
+    // This provider owns a static ECS copy; generated bodies also allocate in
+    // the host world, so its OS hooks must be initialized for that lifetime.
+    ecs_os_init();
+}
+
+void JoltPhysicsModule::OnUnload() {
+    ecs_os_fini();
+}
 
 kb::modules::EngineModuleMetadata JoltPhysicsModule::Metadata() const {
     return kb::modules::EngineModuleMetadata{

@@ -1,4 +1,5 @@
 #include "docking/EditorDockModelCommands.hpp"
+#include <algorithm>
 
 #include "docking/DefaultDockWorkspace.hpp"
 #include "docking/DockLayoutSerializer.hpp"
@@ -26,6 +27,10 @@ namespace {
     return FirstLeaf(node->second.get());
 }
 
+bool ToolPanel(const DockPanel& p) {return p.kind==DockPanelKind::Generic&&p.id>=1000000U;}
+std::unique_ptr<DockNode> CopyNode(const DockNode* n) {
+    if(!n) return {};auto copy=std::make_unique<DockNode>();copy->kind=n->kind;copy->id=n->id;copy->axis=n->axis;copy->ratio=n->ratio;copy->panels=n->panels;copy->activePanelId=n->activePanelId;copy->first=CopyNode(n->first.get());copy->second=CopyNode(n->second.get());return copy;
+}
 } // namespace
 
 EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId, bool& drawerCollapsed) noexcept
@@ -44,9 +49,11 @@ bool EditorDockModelCommands::SetDrawerCollapsed(bool collapsed) noexcept {
 }
 
 void EditorDockModelCommands::ResetWorkspace() {
+    std::vector<DockPanel> tools;for(const auto& p:panels_.All()) if(ToolPanel(p)) tools.push_back(p);
     panels_.Reset(DefaultDockWorkspace{}.CreatePanels());
     nextNodeId_ = 1U;
     root_ = DefaultDockWorkspace{}.CreateRoot(nextNodeId_);
+    for(auto& p:tools) static_cast<void>(RegisterToolPanel(std::move(p)));
     maximizedLeafId_ = 0U;
 }
 
@@ -54,7 +61,7 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
     std::vector<std::uint32_t> knownPanels;
     knownPanels.reserve(panels_.All().size());
     for (const DockPanel& panel : panels_.All()) {
-        knownPanels.push_back(panel.id);
+        if(!ToolPanel(panel)) knownPanels.push_back(panel.id);
     }
 
     std::uint32_t nextNodeId = 1U;
@@ -62,6 +69,7 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
     if (restored == nullptr) {
         return false;
     }
+    std::vector<DockPanel> tools;for(const auto& p:panels_.All()) if(ToolPanel(p)) tools.push_back(p);
     root_ = std::move(restored);
     nextNodeId_ = nextNodeId;
     maximizedLeafId_ = 0U;
@@ -77,11 +85,31 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
             }
         }
     }
+    for(auto& p:tools) static_cast<void>(RegisterToolPanel(std::move(p)));
     return true;
 }
 
 std::string EditorDockModelCommands::SerializeWorkspace() const {
-    return DockLayoutSerializer::Serialize(root_.get());
+    auto saved=CopyNode(root_.get());
+    for(const auto& p:panels_.All()) if(ToolPanel(p)) DockTreeMutation::RemovePanel(saved,p.id);
+    DockTreeMutation::PruneEmptyBranches(saved);
+    return DockLayoutSerializer::Serialize(saved.get());
+}
+
+bool EditorDockModelCommands::RegisterToolPanel(DockPanel panel) {
+    if(!ToolPanel(panel)||panel.title.empty()) return false;
+    if(const auto* existing=panels_.Find(panel.id);existing&&!ToolPanel(*existing)) return false;
+    auto all=panels_.All();std::erase_if(all,[&](const auto& p){return p.id==panel.id;});panel.detachable=false;all.push_back(panel);panels_.Reset(std::move(all));
+    auto* leaf=DockNodeQuery::FindLeafContaining(root_.get(),panel.id);
+    if(!leaf) {for(const auto& candidate:panels_.All()) if(candidate.area==DockArea::Right&&candidate.visible) {leaf=DockNodeQuery::FindLeafContaining(root_.get(),candidate.id);if(leaf) break;}
+        if(!leaf) leaf=FirstLeaf(root_.get());
+        if(!leaf) {root_=DockNodeFactory::MakeLeaf(NextNodeId(),{panel.id});leaf=root_.get();}else leaf->panels.push_back(panel.id);
+    }
+    auto* stored=panels_.Find(panel.id);stored->area=DockArea::Right;stored->visible=true;leaf->activePanelId=panel.id;maximizedLeafId_=0;return true;
+}
+bool EditorDockModelCommands::UnregisterToolPanel(std::uint32_t id) {
+    const auto* panel=panels_.Find(id);if(!panel||!ToolPanel(*panel)) return false;
+    static_cast<void>(ClosePanel(id));auto all=panels_.All();std::erase_if(all,[&](const auto& p){return p.id==id;});panels_.Reset(std::move(all));return true;
 }
 
 void EditorDockModelCommands::ActivatePanel(std::uint32_t panelId) {

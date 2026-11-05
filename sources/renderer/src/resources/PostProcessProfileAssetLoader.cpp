@@ -120,6 +120,15 @@ enum class FieldResult { Applied, Invalid, Unknown };
     if (keyword == "bloomThreshold") return Applied(ParseNonNegativeFloat(Trim(rest), settings.bloomThreshold));
     if (keyword == "bloomSoftKnee") return Applied(ParseUnitFloat(Trim(rest), settings.bloomSoftKnee));
     if (keyword == "bloomRadiusPixels") return Applied(ParseNonNegativeFloat(Trim(rest), settings.bloomRadiusPixels));
+    if (keyword == "depthOfFieldEnabled") return Applied(ParseBoolToken(rest, settings.depthOfFieldEnabled));
+    if (keyword == "depthOfFieldFocusDistance") return Applied(ParsePositiveFloat(Trim(rest), settings.depthOfFieldFocusDistance));
+    if (keyword == "depthOfFieldFocusRange") return Applied(ParsePositiveFloat(Trim(rest), settings.depthOfFieldFocusRange));
+    if (keyword == "depthOfFieldMaxRadiusPixels") {
+        float value = 0.0F;
+        if (!ParseNonNegativeFloat(Trim(rest), value) || value > 32.0F) return FieldResult::Invalid;
+        settings.depthOfFieldMaxRadiusPixels = value;
+        return FieldResult::Applied;
+    }
     if (keyword == "temporalAntiAliasingEnabled") return Applied(ParseBoolToken(rest, settings.temporalAntiAliasingEnabled));
     if (keyword == "temporalJitterEnabled") return Applied(ParseBoolToken(rest, settings.temporalJitterEnabled));
     if (keyword == "temporalHistoryBlend") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.temporalHistoryBlend));
@@ -215,6 +224,10 @@ void WriteProfile(std::ostream& output, const ScenePostProcessSettings& settings
     output << "bloomThreshold " << settings.bloomThreshold << '\n';
     output << "bloomSoftKnee " << settings.bloomSoftKnee << '\n';
     output << "bloomRadiusPixels " << settings.bloomRadiusPixels << '\n';
+    output << "depthOfFieldEnabled " << (settings.depthOfFieldEnabled ? 1 : 0) << '\n';
+    output << "depthOfFieldFocusDistance " << settings.depthOfFieldFocusDistance << '\n';
+    output << "depthOfFieldFocusRange " << settings.depthOfFieldFocusRange << '\n';
+    output << "depthOfFieldMaxRadiusPixels " << settings.depthOfFieldMaxRadiusPixels << '\n';
     output << "temporalAntiAliasingEnabled " << (settings.temporalAntiAliasingEnabled ? 1 : 0) << '\n';
     output << "temporalJitterEnabled " << (settings.temporalJitterEnabled ? 1 : 0) << '\n';
     output << "temporalHistoryBlend " << settings.temporalHistoryBlend << '\n';

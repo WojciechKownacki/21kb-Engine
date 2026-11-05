@@ -1383,7 +1383,7 @@ void TestInputRecordingRefusesUnknownVersionsAndMagic() {
     const std::vector<std::uint8_t> bytes = EncodeInputRecording(recording);
     Require(DecodeInputRecording(bytes).succeeded, "A freshly encoded recording must decode");
     Require(bytes.size() > 12U, "The encoded recording must have a header");
-    for (const std::uint32_t version : { 0U, 1U, 2U, 6U, 99U, 0xFFFFFFFFU }) {
+    for (const std::uint32_t version : { 0U, 1U, 2U, InputAssetFormat::RecordingBinaryVersion + 1U, 99U, 0xFFFFFFFFU }) {
         std::vector<std::uint8_t> patched = bytes;
         for (int byte = 0; byte < 4; ++byte) patched[8U + static_cast<std::size_t>(byte)] = static_cast<std::uint8_t>(version >> (8 * byte));
         const InputAssetLoadResult<InputRecording> result = DecodeInputRecording(patched);

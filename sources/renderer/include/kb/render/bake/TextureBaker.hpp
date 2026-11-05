@@ -61,8 +61,8 @@ enum class TextureBakeStatus : std::uint8_t {
     SourceUnreadable,
     // bimg could not parse the source bytes as an image.
     SourceUndecodable,
-    // Cube maps, volumes and arrays are out of scope: their mip chains and face ordering are
-    // a separate contract, and producing a wrong one silently is worse than refusing.
+    // Volumes/arrays, non-square cubes and non-RGBA8/BGRA8 cube sources are refused.
+    // Captured LDR cubes preserve six faces and either one mip or a complete authored chain.
     UnsupportedSourceShape,
     // The source dimensions are not whole multiples of the chosen format's block footprint.
     // See the note on the rule at BakedTextureBlockFootprint.
@@ -180,7 +180,7 @@ struct TextureBakeOutput {
 // Reads a primary block this baker wrote back into the runtime's texture shape, keeping the
 // blocks compressed. The counterpart of the bake, and the only way a baked texture becomes a
 // RenderTextureAssetData - the ordinary loader is untouched and still decodes what it always
-// decoded. Returns false for anything that is not a 2D block-compressed container this baker
+// decoded. Returns false for anything that is not a native 2D or captured RGBA8 cube container this baker
 // could have produced. For a texture with streamed mips the result is the tail, with
 // `streaming` describing the full chain and the streamed levels.
 [[nodiscard]] bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureAssetData& out);

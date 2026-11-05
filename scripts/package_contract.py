@@ -50,6 +50,7 @@ ENGINE_BUILD_INPUTS = (
     "third_party/ufbx",
     "scripts/package_contract.py",
     "scripts/package_game.py",
+    "scripts/prebuilt_engine.py",
     "scripts/package_linux_guest.py",
     "scripts/third_party_notices.py",
     "scripts/windows_pe_resources.py",

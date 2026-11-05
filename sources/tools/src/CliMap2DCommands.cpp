@@ -26,7 +26,7 @@ namespace {
 
 constexpr std::string_view kUsage =
     "usage: kb_cli map2d <action> --project <dir> ...\n"
-    "  new        --name <Entity> [--scene <path>] [--size 64x64] [--orientation flat|wall] [--view 15x11]\n"
+    "  new        --name <Entity> [--scene <path>] [--size 64x64] [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view 15x11]\n"
     "  view       --entity <Name> [--scene <path>]      (the Map Camera again, after set)\n"
     "  import-image --source <PNG/BMP>  (copy into the palette without replacing files)\n"
     "  info       --map <path>\n"
@@ -34,12 +34,12 @@ constexpr std::string_view kUsage =
     "  path       --map <path> --from x,y --to x,y [--floor n] [--clearance 0..8]\n"
     "             [--diagonal none|safe|free] [--cost-property <name>] [--max-visited 1..1048576]\n"
     "             [--timeout-ms <milliseconds>] (JSON; default 25 ms; exits 0 found, 2 no path, 3 budget)\n"
-    "  set        --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]\n"
+    "  set        --map <path> [--size WxH] [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view WxH]\n"
     "             [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds]\n"
     "             [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera: pixel perfect, follow, bounds)\n"
     "  paint      --map <path> --at x,y[,floor] [--to x,y] [--size n]\n"
     "             (--ground <Name> | --sprite <texture> --cell <n> [--cell-size 32] [--as-ground] [--phase seconds]) [--no-borders]\n"
-    "  fill       --map <path> --ground <Name> --at x,y[,floor]\n"
+    "  fill       --map <path> (--ground <Name> | --sprite <texture> --cell <n>) --at x,y[,floor]\n"
     "  erase      --map <path> --at x,y[,floor] [--to x,y] [--items]\n"
     "  block      --map <path> --at x,y[,floor] [--to x,y] (solid walls or platforms)\n"
     "  unblock    --map <path> --at x,y[,floor] [--to x,y] (clear collision only)\n"
@@ -251,6 +251,7 @@ struct MapSession {
     const kb::assets::Map2DAsset& map = session->map;
     io.out << "map: " << kb::world2d::Map2DVirtualPath(session->assetsRoot, session->file) << '\n'
            << "size: " << map.width << " x " << map.height << " tiles of " << map.tileSize << " m, floor height " << map.floorHeight << " m\n"
+           << "topology: " << kb::assets::Map2DTopologyName(map.topology) << '\n'
            << "orientation: " << kb::assets::Map2DOrientationName(map.orientation) << '\n'
            << "client box: " << map.viewWidth << " x " << map.viewHeight << " tiles\n";
     if (map.camera != kb::assets::Map2DCamera{}) {
@@ -300,6 +301,14 @@ struct MapSession {
         }
         map.viewWidth = parsed->first;
         map.viewHeight = parsed->second;
+    }
+    if (const auto topology = arguments.Option("--topology")) {
+        if (*topology != "rectangular" && *topology != "isometric" && *topology != "hexagonal") {
+            io.err << "error: --topology takes rectangular, isometric or hexagonal\n";
+            return 1;
+        }
+        map.topology = *topology == "hexagonal" ? kb::assets::Map2DTopology::Hexagonal :
+            *topology == "isometric" ? kb::assets::Map2DTopology::Isometric : kb::assets::Map2DTopology::Rectangular;
     }
     if (const std::optional<std::string> orientation = arguments.Option("--orientation"); orientation.has_value()) {
         if (*orientation != "flat" && *orientation != "wall") {
@@ -474,6 +483,20 @@ struct MapSession {
     const kb::world2d::Map2DGroundBrush* brush = ground.has_value() ? session->library.Find(*ground) : nullptr;
     const std::optional<std::string> at = arguments.Option("--at");
     const std::optional<Spot> spot = at.has_value() ? ParseSpot(*at) : std::nullopt;
+    if (const auto texture=arguments.Option("--sprite")) {
+        if(!spot||spot->x<0||spot->y<0) {io.err<<"error: fill requires --at x,y[,floor]\n";return 1;}
+        const auto number=[&](std::string_view option,std::uint32_t fallback)->std::optional<std::uint32_t> {
+            const auto text=arguments.Option(option);if(!text) return fallback;
+            std::uint32_t value=0;const auto parsed=std::from_chars(text->data(),text->data()+text->size(),value);
+            if(parsed.ec!=std::errc{}||parsed.ptr!=text->data()+text->size()) return {};return value;
+        };
+        const auto cell=number("--cell",0),size=number("--cell-size",32);
+        if(!cell||!size||*size==0) {io.err<<"error: invalid fill sprite cell or size\n";return 1;}
+        kb::world2d::Map2DEditor editor{session->map,session->library,session->assetsRoot};std::string error;
+        const auto filled=editor.FillSprite(TexturePath(session->assetsRoot,*texture),*size,*cell,static_cast<std::uint32_t>(spot->x),static_cast<std::uint32_t>(spot->y),spot->z,&error);
+        if(!error.empty()) {io.err<<"error: "<<error<<'\n';return 1;}
+        return SaveMap(*session,"filled "+std::to_string(filled)+" sprite tiles",io);
+    }
     if (brush == nullptr || !spot.has_value() || spot->x < 0 || spot->y < 0) {
         io.err << "error: fill takes --ground <Name> (an existing ground) and --at x,y[,floor]\n";
         return 1;

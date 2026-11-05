@@ -686,6 +686,81 @@ void RunNativeBehaviourPackagingTests() {
         "Native package accepted a missing DLL after authoring content was removed");
 }
 
+// A target that cannot load a library links the project's C++ into its host: the cooker lists the
+// sources and the packaged descriptor names the linked module instead of a DLL or authoring paths.
+void RunLinkedNativePackagingTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "linked_native_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    const auto descriptorPath = fixture.root / "Assets" / "Player.native";
+    WriteTextFile(descriptorPath,
+        "name = Player\nsymbol = Tests.LinkedNative\nmodule = ../Binaries/native.dll\n"
+        "source = ../Source/Player/Player.cpp\nentry = kb_register_native_scripts\n"
+        "build = cmake -E echo windows-only\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "Player.cpp", "int PlayerValue() { return 1; }\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "Helpers" / "Helper.cc", "int HelperValue() { return 2; }\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "Player.hpp", "#pragma once\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "CMakeLists.txt", "project(Player)\n");
+    kb::assets::AssetId nativeId;
+    {
+        kb::scene::Scene authored{kb::scene::SceneMode::PrefabPrivate};
+        Require(authored.Assets().MountProject(fixture.root), "Linked native fixture mount failed");
+        static_cast<void>(authored.Assets().Discover());
+        const auto* asset = authored.Assets().Manager().Registry().FindByPath("/Game/Player.native");
+        Require(asset != nullptr, "Linked native fixture descriptor was not discovered");
+        nativeId = asset->id;
+        const auto entity = authored.Entities().CreateEntity();
+        authored.Components().Behaviours().Set(entity, {
+            .behaviourAssetId = nativeId.value, .backend = kb::scene::BehaviourBackend::Native,
+        });
+        Require(kb::scene::SceneDocumentService::Save(authored,
+            fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"), "Linked native fixture scene save failed");
+    }
+    const auto sealedRoot = TestRoot() / "linked_native_package";
+    std::error_code removeError;
+    std::filesystem::remove_all(sealedRoot, removeError);
+    const auto manifestPath = sealedRoot / "native-link.json";
+    std::ostringstream diagnostics;
+    kb::game::ProjectCookRequest request{
+        .projectPath = fixture.root,
+        .targetProfileId = "Android.ASTC.arm64",
+        .outputPackPath = sealedRoot / "Game.kbpack",
+    };
+    const auto withoutManifest = kb::game::CookProject(request, diagnostics);
+    Require(!withoutManifest.succeeded && Mentions(withoutManifest.error, "native link manifest"),
+        "A host target cooked project C++ without saying where its sources go");
+    request.nativeLinkManifestPath = manifestPath;
+    const auto cooked = kb::game::CookProject(request, diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+    std::ifstream manifestInput{manifestPath, std::ios::binary};
+    const std::string manifest{std::istreambuf_iterator<char>{manifestInput}, std::istreambuf_iterator<char>{}};
+    const std::string key = "module_" + std::to_string(nativeId.value);
+    Require(Mentions(manifest, "\"key\":\"" + key + "\"") && Mentions(manifest, "\"entry\":\"kb_register_native_scripts\"") &&
+            Mentions(manifest, "Source/Player/Player.cpp") && Mentions(manifest, "Source/Player/Helpers/Helper.cc") &&
+            !Mentions(manifest, "Player.hpp") && !Mentions(manifest, "CMakeLists"),
+        "The native link manifest did not list exactly the module's C++ sources");
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(request.outputPackPath, bake::AndroidAstcArm64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "Linked native package could not be mounted");
+    {
+        kb::scene::Scene runtime{kb::scene::SceneMode::PrefabPrivate};
+        Require(runtime.Assets().Manager().MountRuntimePack(pack), "Linked native runtime registry mount failed");
+        const auto descriptor = runtime.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(nativeId);
+        Require(descriptor.IsLoaded() && descriptor->linkedModule == key && descriptor->modulePath.empty() &&
+                descriptor->sourcePath.empty() && !descriptor->build.enabled,
+            "Linked native package kept authoring paths or lost its linked module key");
+    }
+    pack->Unmount();
+    WriteTextFile(descriptorPath, "name = Player\nsymbol = Tests.LinkedNative\nmodule = ../Binaries/native.dll\n");
+    const auto prebuiltOnly = kb::game::CookProject(request, diagnostics);
+    Require(!prebuiltOnly.succeeded && Mentions(prebuiltOnly.error, "needs C++ source"),
+        "A host target accepted a Windows library it cannot load");
+}
+
 // A mod is mounted beside a game whose player requires its release key: the game's packs keep that
 // requirement, the mod's chunk is read under its own author's seal, and a chunk that holds an asset the
 // game has is refused by the runtime with the mod named, while the rest of the mods still load.
@@ -1951,7 +2026,7 @@ void RunSceneMetaCookValidationTests() {
 void RunAuthoritativeMaterialGraphCookTest() {
     namespace bake = kb::assets::bake;
 
-    Require(kb::render::kRenderMaterialGraphShaderWrapperVersion == 9ULL,
+    Require(kb::render::kRenderMaterialGraphShaderWrapperVersion == 11ULL,
         "Material graph shader cache version was not advanced for WGSL artifacts");
     Require(kb::render::RenderMaterialGraphShaderBackendName(
                 kb::render::RenderMaterialGraphShaderBackend::Wgsl) == "wgsl" &&
@@ -2644,6 +2719,7 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "--native-behaviours") {
         RunNativeBehaviourPackagingTests();
+        RunLinkedNativePackagingTests();
         std::fputs("kb_game_core native-behaviour package tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
@@ -2656,6 +2732,7 @@ int main(int argc, char** argv) {
     RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();
     RunNativeBehaviourPackagingTests();
+    RunLinkedNativePackagingTests();
     RunSceneMetaCookValidationTests();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();

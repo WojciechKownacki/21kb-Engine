@@ -93,6 +93,8 @@ def requestedApplicationIcon = providers.gradleProperty("kbApplicationIcon")
 def requestedLegalAssets = providers.gradleProperty("kbLegalAssets")
 // Release public key and product id the player checks its pack against; written by packaging.
 def requestedTrustAnchor = providers.gradleProperty("kbTrustAnchor")
+// Cooked project C++ the native host links in; empty when the project has none.
+def projectNativeManifest = providers.gradleProperty("kbProjectNativeManifest").orElse("").get()
 def useAssetDelivery = providers.gradleProperty("kbAssetDelivery").orElse("false").get() == "true"
 
 def applicationIdValue = requestedApplicationId.get().trim()
@@ -188,7 +190,8 @@ android {
                     "-DKB_BUILD_EDITOR=OFF",
                     "-DKB_BUILD_PROVIDER_MODULES_AS_DLL=OFF",
                     "-DKB_BUILD_GRAPH_SHADERC=OFF",
-                    "-DKB_GENERATE_RENDERER_SHADERS=OFF"
+                    "-DKB_GENERATE_RENDERER_SHADERS=OFF",
+                    "-DKB_PROJECT_NATIVE_MANIFEST=${projectNativeManifest}"
                 ]
             }
         }

@@ -13,6 +13,17 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsAssembly.hpp"
+#include "engine/scene/SceneSurfaceGeometry.hpp"
+#include "engine/scene/SceneAnimatorComponents.hpp"
+#include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneColliderComponents.hpp"
+#include "engine/scene/SceneJointComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
+#include <functional>
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -62,6 +73,14 @@
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1187,6 +1206,8 @@ private:
 
 } // namespace
 
+#include "JoltPhysicsAssemblies.inl"
+
 class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend, public JPH::CharacterContactListener,
     public kb::core::IRuntimeStateProvider {
 public:
@@ -1267,6 +1288,8 @@ public:
 
     ~Impl() override {
         StopStepDriver();
+        if (scene_ && assemblies_) kb::scene::PhysicsAssemblies::UnregisterBackend(*scene_, *assemblies_);
+        assemblies_.reset();
         RemoveAllCharacters();
         RemoveAllJoints();
         RemoveAllBodies();
@@ -1307,6 +1330,7 @@ public:
     void OnFixedUpdate(SceneSystemContext& context) {
         PublishPendingStep(context);
         BreakOverloadedJoints(context);
+        if (assemblies_) assemblies_->PrepareBodies();
         RefreshCollisionMeshes(context.GetScene());
         SynchronizeBodies(context);
         pendingPushes_.clear();  // queued for a body this synchronization did not create
@@ -1316,6 +1340,7 @@ public:
         SynchronizeCharacters(context);
         pendingCharacterMoves_.clear();  // queued for a character this synchronization did not create
         UpdateCharacters(context);
+        if (assemblies_) assemblies_->BeforeStep(context.DeltaSeconds());
         const bool contactEvents = kb::scene::PhysicsBackend::HasCollisionEventConsumer(context.GetScene());
         if (contactListener_.Enabled() != contactEvents) {
             // Pair state tracked while disabled would be stale; start clean when events (re)start.
@@ -1342,6 +1367,7 @@ public:
         WriteBack(context);
         WriteBackCharacters(context);
         FinalizeWriteBackLocalPoses(context);
+        if (assemblies_) assemblies_->AfterStep();
         DispatchContactEvents(context);
     }
 
@@ -1404,6 +1430,7 @@ public:
         JoinStep();
         stepAwaitingWriteBack_ = false;
         pendingLaunchSeconds_ = 0.0F;
+        assemblies_.reset();
         // LIB-130: a constraint references its two bodies internally -
         // remove joints BEFORE the bodies they connect, matching the real
         // dependency order (mirrors why Jolt itself requires
@@ -1419,9 +1446,14 @@ public:
     void AttachScene(kb::scene::Scene& scene) {
         if (!stateIdentity_) stateIdentity_ = std::make_shared<const int>(0);
         scene_ = &scene;
+        assemblies_ = std::make_unique<JoltPhysicsAssemblies>(scene,physicsSystem_,ToObjectLayer(0U,false),
+            [this](SceneEntity entity) { const auto* id=FindCurrentBodyId(entity);return id?*id:JPH::BodyID{}; },
+            [this] { if(scene_) {SceneSystemContext context(*scene_,0.0F);PublishPendingStep(context);} JoinStep(); });
+        kb::scene::PhysicsAssemblies::RegisterBackend(scene,*assemblies_);
     }
 
     void DetachScene() noexcept {
+        if (scene_ && assemblies_) kb::scene::PhysicsAssemblies::UnregisterBackend(*scene_,*assemblies_);
         scene_ = nullptr;
     }
 
@@ -3231,6 +3263,7 @@ private:
     mutable std::atomic<bool> stepInFlight_{ false };
     bool stepAwaitingWriteBack_ = false;
     float pendingLaunchSeconds_ = 0.0F; // a pipelined step decided in a fixed update, started at the end of the update
+    std::unique_ptr<JoltPhysicsAssemblies> assemblies_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
     struct PendingPush {
         Vec3 force{};
@@ -3324,6 +3357,7 @@ public:
     std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override {
         error.clear();
         if (scene_ == nullptr) { error = "Physics provider is not attached to a scene"; return {}; }
+        if (assemblies_ && !assemblies_->Empty()) { error = "Runtime snapshots of active physics assemblies are not supported"; return {}; }
         SceneSystemContext context{*scene_, 0.0F};
         PublishPendingStep(context);
         JoinStep();
@@ -3344,7 +3378,8 @@ public:
                 return entry.second.constraint == constraint;
             });
             const auto settings = constraint->GetConstraintSettings();
-            auto* typed = dynamic_cast<JPH::TwoBodyConstraintSettings*>(settings.GetPtr());
+            auto* typed = constraint->GetType() == JPH::EConstraintType::TwoBodyConstraint
+                ? static_cast<JPH::TwoBodyConstraintSettings*>(settings.GetPtr()) : nullptr;
             if (found == joints_.end() || typed == nullptr) { error = "Physics constraint cannot be reconstructed"; return {}; }
             snapshot->orderedJoints.emplace_back(found->first, typed);
         }
@@ -3382,6 +3417,7 @@ public:
 
     bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const override {
         error.clear();
+        if (assemblies_ && !assemblies_->Empty()) {error="Runtime snapshots of active physics assemblies are not supported";return false;}
         const auto* snapshot = dynamic_cast<const RuntimeSnapshot*>(&state);
         if (scene_ == nullptr || snapshot == nullptr || snapshot->identity != stateIdentity_) {
             error = "Physics snapshot belongs to a different provider lifetime"; return false;

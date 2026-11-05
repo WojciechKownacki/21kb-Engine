@@ -93,6 +93,7 @@ enum class ParticleModuleType : std::uint8_t {
     Attraction,
     TorusSwirl,
     Separation,
+    CollisionGeometry,
 };
 // WhileAlive: every live particle of the source keeps emitting the target at the binding's rate
 // (smoke behind debris; Niagara's spawn per particle).
@@ -235,6 +236,24 @@ struct ParticleCollisionPlaneModule {
     std::uint32_t maxEventsPerStep = 64U;
     bool killOnContact = false;  // the particle dies where it struck, after its collision event
 };
+
+enum class ParticleCollisionGeometryKind : std::uint8_t { PhysicsWorld, SignedDistanceGrid, Heightfield };
+struct ParticleCollisionGeometryModule {
+    ParticleCollisionGeometryKind kind = ParticleCollisionGeometryKind::PhysicsWorld;
+    float radius = 0.05F;
+    float restitution = 0.5F;
+    float friction = 0.0F;
+    std::uint32_t maxEventsPerStep = 64U;
+    bool killOnContact = false;
+    std::uint32_t layerMask = 0xffffffffU;
+    // World-space grid origin and positive sample spacing. X varies fastest,
+    // then Y, then Z. Heightfields use height=1 and samples[x + width*z].
+    kb::math::Vec3 origin{};
+    kb::math::Vec3 cellSize{1,1,1};
+    std::uint32_t width = 2U, height = 1U, depth = 2U;
+    std::vector<float> samples;
+};
+[[nodiscard]] bool IsValidParticleCollisionGeometry(const ParticleCollisionGeometryModule& value) noexcept;
 // Curl noise (divergence-free swirl): acceleration strength x curl of gradient noise at position x frequency.
 struct ParticleNoiseModule {
     float strength = 1.0F;
@@ -276,7 +295,7 @@ using ParticleModulePayload =
                  ParticleColorOverLifeModule, ParticleSizeOverLifeModule, ParticleAlphaOverLifeModule,
                  ParticleCollisionPlaneModule, ParticleSubEmitterModule, ParticleNoiseModule,
                  ParticleAxisRotationModule, ParticleAttractionModule, ParticleTorusSwirlModule,
-                 ParticleSeparationModule>;
+                 ParticleSeparationModule, ParticleCollisionGeometryModule>;
 
 struct ParticleModuleAsset {
     ParticleStableId moduleId = 0U;

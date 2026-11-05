@@ -1,3 +1,7 @@
+#include "extensions/EditorExtensionHost.hpp"
+#include "docking/EditorDockModel.hpp"
+#include "engine/assets/AssetFileName.hpp"
+#include "authoring/EditorAuthoringHost.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "inspection/InspectorGenericComponentModel.hpp"
 #include "inspection/ui/InspectorUIThemeModel.hpp"
@@ -22,6 +26,12 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetBrowserLayout.hpp"
+#include "assets/EditorAssetBrowserHitTester.hpp"
+#include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
+#include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
@@ -205,8 +215,9 @@ struct ScenarioState {
         std::filesystem::path fixtures)
         : context(sceneContext)
         , automation(sceneContext, artifacts / "automation")
-        , fixtureRoot(std::move(fixtures)) {}
+        , fixtureRoot(std::move(fixtures)) {extensions=std::make_unique<EditorExtensionHost>(context,dock);}
 
+    EditorPythonRuntime python;
     EditorSceneContext& context;
     EditorHeadlessAutomation automation;
     EditorPlayModeState playMode;
@@ -217,6 +228,7 @@ struct ScenarioState {
     std::unordered_map<std::string, std::uint32_t> materialNodes;
     // The dock workspace the workspace_* steps arrange, and the layouts saved by name.
     EditorDockModel dock;
+    std::unique_ptr<EditorExtensionHost> extensions;
     std::unordered_map<std::string, EditorLayoutPreset> savedWorkspaces;
 };
 
@@ -1402,6 +1414,54 @@ ReadScriptValue(
     }
     if (std::optional<StepOutcome> postProcess = ExecutePostProcessStep(state, step, *operation)) {
         return *postProcess;
+    }
+
+    if (*operation == "extension_load_project") {
+        const bool ok=state.extensions->LoadProject(error);return {ok,ok?"project extensions loaded":error};
+    }
+    if (*operation == "assert_extension_module_unmapped") {
+        const auto name=StringMember(step,"module",error);if(!name) return {false,error};
+        const auto wide=kb::assets::Utf8Path(*name).wstring();return {GetModuleHandleW(wide.c_str())==nullptr,"extension DLL is unmapped"};
+    }
+
+    if (*operation == "extension_install") {
+        const auto path=StringMember(step,"path",error);if(!path) return {false,error};
+        const bool ok=state.extensions->Install(kb::assets::Utf8Path(*path),error);
+        const auto expected=StringMember(step,"expect_error",error,false);if(expected) return {!ok&&error.find(*expected)!=std::string::npos,error};
+        return {ok,ok?"extension installed":error};
+    }
+    if (*operation == "extension_unload"||*operation == "extension_invoke"||*operation == "extension_click") {
+        const auto id=StringMember(step,"id",error);if(!id) return {false,error};bool ok=false;
+        if(*operation=="extension_unload") ok=state.extensions->Uninstall(*id,error);
+        else if(*operation=="extension_invoke") ok=state.extensions->Invoke(*id,error);
+        else {
+            const auto panel=state.extensions->PanelId(*id);const RECT bounds{0,0,900,700};const auto button=EditorExtensionHost::ButtonRect(bounds);
+            ok=state.extensions->PointerDown(bounds,panel,(button.left+button.right)/2,(button.top+button.bottom)/2,error);
+        }
+        const auto expected=StringMember(step,"expect_error",error,false);if(expected) return {!ok&&error.find(*expected)!=std::string::npos,error};
+        return {ok,ok?"extension operation completed":error};
+    }
+    if (*operation == "assert_extensions") {
+        const auto modules=NumberMember(step,"modules",error),actions=NumberMember(step,"actions",error),panels=NumberMember(step,"panels",error);
+        if(!modules||!actions||!panels) return {false,error};
+        const bool ok=state.extensions->ModuleCount()==*modules&&state.extensions->ActionCount()==*actions&&state.extensions->PanelCount()==*panels;
+        return {ok,"extension owner counts"};
+    }
+    if (*operation == "assert_extension_panel") {
+        const auto id=StringMember(step,"id",error),text=StringMember(step,"contains",error);if(!id||!text) return {false,error};
+        return {state.extensions->PanelText(*id).find(*text)!=std::string::npos,"extension panel text"};
+    }
+    if (*operation == "assert_extension_workspace") {
+        const auto saved=state.dock.Commands().SerializeWorkspace();const auto count=state.extensions->PanelCount();
+        const bool restored=state.dock.Commands().RestoreWorkspace(saved);state.dock.Commands().ResetWorkspace();
+        std::size_t registered=0;for(auto& panel:state.dock.Queries().Panels()) if(panel.kind==DockPanelKind::Generic) ++registered;
+        return {restored&&registered==count,"ephemeral extension panels survive workspace restore/reset"};
+    }
+
+    if (*operation == "python_script") {
+        const auto path=StringMember(step,"path",error);if(!path) return {false,error};
+        EditorAuthoringHost host{state.context};const bool ok=state.python.ExecuteFile(host,kb::assets::Utf8Path(*path),error);
+        return {ok,ok?"embedded Python authoring completed":error};
     }
 
     if (*operation == "sprite2d_image") {
@@ -4644,6 +4704,79 @@ ReadScriptValue(
         return { valid, valid ? "immutable animator debug snapshot" : "animator debug snapshot mismatch" };
     }
 
+    if (*operation == "verify_external_code_activation") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto editor = StringMember(step, "editor", error);
+        const auto workspaceText = StringMember(step, "workspace", error);
+        const auto sourceText = StringMember(step, "source", error);
+        if (!asset || !editor || !workspaceText || !sourceText) return {false, error};
+        const auto installation = StringMember(step, "visual_studio_installation", error, false);
+        if (!error.empty()) return {false, error};
+        std::array<wchar_t, 32768> previousInstallation{};
+        const DWORD priorSize = GetEnvironmentVariableW(L"VSINSTALLDIR", previousInstallation.data(),
+            static_cast<DWORD>(previousInstallation.size()));
+        struct RestoreInstallation {
+            std::wstring previous;
+            bool restore;
+            ~RestoreInstallation() { if (restore) SetEnvironmentVariableW(L"VSINSTALLDIR", previous.empty() ? nullptr : previous.c_str()); }
+        } restoreInstallation{std::wstring{previousInstallation.data()}, installation.has_value()};
+        if (priorSize >= previousInstallation.size() || (installation &&
+            !SetEnvironmentVariableW(L"VSINSTALLDIR", std::filesystem::path{*installation}.c_str())))
+            return {false, "Visual Studio discovery fixture could not be installed"};
+        const auto root = EditorProjectPaths::ProjectRoot();
+        const RECT content{0, 0, 1400, 800};
+        EditorSettingsPanelRenderer::SelectCategory(EditorSettingsCategory::General);
+        const RECT field = EditorSettingsPanelRenderer::CodeEditorField(content);
+        if (EditorSettingsPanelRenderer::HitTest(content, field.left + 4, field.top + 4).kind != EditorSettingsHitKind::CodeEditor ||
+            !EditorExternalCodeLauncher::SetPreference(root, *editor, error) ||
+            EditorExternalCodeLauncher::Preference(root, error) != *editor) return {false, error};
+        // Invalid selection must not damage the persisted preference.
+        if (EditorExternalCodeLauncher::SetPreference(root, "Unknown", error) ||
+            EditorExternalCodeLauncher::Preference(root, error) != *editor) return {false, "invalid editor preference was accepted"};
+        auto& manager = state.context.Scene().Assets().Manager();
+        const auto id = ResolveAsset(state, *asset);
+        const auto* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr) return {false, "script asset was not found"};
+        auto& browser = state.context.AssetBrowser();
+        if (!browser.SelectFolder(std::filesystem::path{metadata->virtualPath}.parent_path(), manager))
+            return {false, "script asset folder was not found"};
+        browser.ClearSearch();
+        browser.SetRecursive(false);
+        browser.SetViewMode(EditorAssetViewMode::Tiles);
+        const auto rows = browser.AssetRows(manager);
+        const auto row = std::ranges::find_if(rows, [&](const auto& item) { return item.metadata.id == id; });
+        if (row == rows.end()) return {false, "script asset is not visible"};
+        const auto layout = EditorAssetBrowserLayout::Build(content, browser.TreeWidth());
+        const auto tile = EditorAssetBrowserLayout::AssetTileRect(layout,
+            static_cast<int>(browser.ChildFolderRows(manager).size() + std::distance(rows.begin(), row)), browser.ThumbnailScale());
+        const int x = (tile.left + tile.right) / 2, y = (tile.top + tile.bottom) / 2;
+        const auto hit = EditorAssetBrowserHitTester::HitTest(content, x, y, browser, manager);
+        if (EditorAssetBrowserHitPayloadResolver::AssetIdAt(hit, browser, manager) != id)
+            return {false, "double-click did not hit the script asset"};
+        static thread_local std::filesystem::path launchedExecutable, launchedWorkspace;
+        static thread_local std::wstring launchedCommand;
+        launchedExecutable.clear(); launchedWorkspace.clear(); launchedCommand.clear();
+        const auto previous = EditorExternalCodeLauncher::ExchangeProcessLauncher(
+            [](const auto& executable, const auto& command, const auto& workspace, std::string&) {
+                launchedExecutable = executable; launchedCommand = command; launchedWorkspace = workspace;
+                return true;
+            });
+        struct RestoreLauncher {
+            EditorExternalCodeLauncher::ProcessLauncher previous;
+            ~RestoreLauncher() { EditorExternalCodeLauncher::ExchangeProcessLauncher(previous); }
+        } restore{previous};
+        const auto opened = EditorAssetBrowserDoubleClickHandler::HandleDoubleClick(nullptr, content, x, y, state.context);
+        const auto expectedWorkspace = std::filesystem::weakly_canonical(root / *workspaceText);
+        const auto expectedSource = std::filesystem::weakly_canonical(root / *sourceText);
+        const bool passed = opened == EditorAssetBrowserDoubleClickResult::ExternalScriptOpened &&
+            launchedWorkspace == expectedWorkspace &&
+            launchedExecutable.filename() == (*editor == "VisualStudio" ? "devenv.exe" : "Code.exe") &&
+            launchedCommand.find(L"\"" + expectedWorkspace.wstring() + L"\"") != std::wstring::npos &&
+            launchedCommand.find(L"\"" + expectedSource.wstring() + L"\"") != std::wstring::npos &&
+            launchedCommand.find(*editor == "VisualStudio" ? L" /Edit " : L" --goto ") != std::wstring::npos;
+        return {passed, passed ? "double-click resolved selected IDE, CMake workspace and source; launch intercepted" : "incorrect code editor launch request"};
+    }
+
     if (*operation == "open_asset") {
         const auto asset = StringMember(step, "asset", error);
         if (!asset) return { false, error };
@@ -5170,8 +5303,11 @@ ReadScriptValue(
             std::floor(*width) != *width || std::floor(*height) != *height) {
             return {false, "runtime dimensions must be integers in [1, 8192]"};
         }
+        const auto localBlend = BoolMember(step, "local_probe_blending", error, false);
+        const auto parallax = BoolMember(step, "probe_parallax", error, false);
+        if ((step.Find("local_probe_blending") && !localBlend) || (step.Find("probe_parallax") && !parallax)) return {false, error};
         return {state.automation.ConfigureRuntimeRendering(
-            static_cast<std::uint32_t>(*width), static_cast<std::uint32_t>(*height), gpuDiagnostics.value_or(false)), "production Play viewport"};
+            static_cast<std::uint32_t>(*width), static_cast<std::uint32_t>(*height), gpuDiagnostics.value_or(false), localBlend.value_or(true), parallax.value_or(true)), "production Play viewport"};
     }
 
     if (*operation == "step") {

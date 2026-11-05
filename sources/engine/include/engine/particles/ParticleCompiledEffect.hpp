@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 10U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 11U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -49,7 +49,8 @@ struct ParticleCompiledEmitter {
                                        kb::scene::ParticleAxisRotationModule,
                                        kb::scene::ParticleAttractionModule,
                                        kb::scene::ParticleTorusSwirlModule,
-                                       kb::scene::ParticleSeparationModule>;
+                                       kb::scene::ParticleSeparationModule,
+                                       kb::scene::ParticleCollisionGeometryModule>;
 
     struct Module {
         kb::scene::ParticleStableId moduleId = 0U;

@@ -42,7 +42,7 @@ template <typename Enum>
             !EnumAtMost(emitter.droppedReason, ParticleRenderDropReason::SnapshotBudget) ||
             !EnumAtMost(emitter.alignment, ParticleRenderAlignment::Local) ||
             !EnumAtMost(emitter.simulationPath, ParticleEmitterSimulationPath::Gpu) ||
-            !EnumAtMost(emitter.gpuFallbackReason, ParticleGpuFallbackReason::EventMotion) ||
+            !EnumAtMost(emitter.gpuFallbackReason, ParticleGpuFallbackReason::GeometryCollision) ||
             ((emitter.simulationPath == ParticleEmitterSimulationPath::Gpu) !=
                 (emitter.gpuFallbackReason == ParticleGpuFallbackReason::None)) ||
             (static_cast<std::uint8_t>(emitter.flags) &

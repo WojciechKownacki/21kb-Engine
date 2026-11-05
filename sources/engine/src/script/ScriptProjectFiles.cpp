@@ -136,7 +136,7 @@ struct NativeSdk {
     std::filesystem::path compilerEnvironment;
     std::string toolsetVersion;
 
-    [[nodiscard]] std::array<std::filesystem::path, 10> Libraries() const {
+    [[nodiscard]] std::array<std::filesystem::path, 11> Libraries() const {
         return {
             (buildTree / "engine" / configFolder / "kb_engine.lib").lexically_normal(),
             (buildTree / "third_party/flecs" / configFolder / "flecs_static.lib").lexically_normal(),
@@ -148,6 +148,7 @@ struct NativeSdk {
             (buildTree / configFolder / "kb_ui_text_shaping.lib").lexically_normal(),
             (buildTree / configFolder / "kb_harfbuzz.lib").lexically_normal(),
             (buildTree / configFolder / "kb_sheenbidi.lib").lexically_normal(),
+            (buildTree / configFolder / "kb_csg_geometry.lib").lexically_normal(),
         };
     }
 };
@@ -248,6 +249,27 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         const NativeSdk sdk = CheckoutSdk(std::filesystem::path{ configured });
         return HasNativeSdk(sdk) ? std::optional<NativeSdk>{ sdk } : std::nullopt;
     }
+    const std::filesystem::path executableDirectory = kb::platform::RunningExecutablePath().parent_path();
+    if (executableDirectory.filename() == "Debug") {
+        return std::nullopt;
+    }
+    // Installed SDKs carry headers and libraries above their tools, without a
+    // developer-machine CMake cache. Resolve them independently of the project cwd.
+    for (std::filesystem::path probe = executableDirectory; !probe.empty(); probe = probe.parent_path()) {
+        if (HasNativeSdk(CheckoutSdk(probe))) {
+            return CheckoutSdk(probe);
+        }
+        // Do not walk out of a build tree and select another checkout's libraries.
+        if (Exists(probe / "CMakeCache.txt")) {
+            break;
+        }
+        if (probe == probe.parent_path()) {
+            break;
+        }
+    }
+    if (const std::optional<NativeSdk> sdk = RunningBuildTreeSdk(); sdk.has_value() && HasNativeSdk(*sdk)) {
+        return sdk;
+    }
     std::error_code error;
     for (std::filesystem::path probe = std::filesystem::current_path(error); !probe.empty(); probe = probe.parent_path()) {
         if (HasNativeSdk(CheckoutSdk(probe))) {
@@ -256,9 +278,6 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         if (probe == probe.parent_path()) {
             break;
         }
-    }
-    if (const std::optional<NativeSdk> sdk = RunningBuildTreeSdk(); sdk.has_value() && HasNativeSdk(*sdk)) {
-        return sdk;
     }
     return std::nullopt;
 }
@@ -304,7 +323,9 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
     if (sdk.compilerEnvironment.empty()) {
         const std::string generator = sdk.generator.starts_with("Visual Studio ")
             ? " -G \"" + sdk.generator + "\"" : std::string{};
-        return "cmake -S " + source + " -B " + binary + generator + " -A x64 && cmake --build " + binary + " --config Release --target " + target;
+        // NMake/Ninja selected by a developer command prompt do not accept -A.
+        const std::string platform = generator.empty() ? " -DCMAKE_BUILD_TYPE=Release" : " -A x64";
+        return "cmake -S " + source + " -B " + binary + generator + platform + " && cmake --build " + binary + " --config Release --target " + target;
     }
     const std::string cmake = Quoted(sdk.cmake);
     const std::string toolset = sdk.toolsetVersion.empty() ? std::string{} : " -vcvars_ver=" + sdk.toolsetVersion;
@@ -332,7 +353,8 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         "        \"${KB_NATIVE_SDK}/build/Release/kb_recast.lib\"\n"
         "        \"${KB_NATIVE_SDK}/build/Release/kb_ui_text_shaping.lib\"\n"
         "        \"${KB_NATIVE_SDK}/build/Release/kb_harfbuzz.lib\"\n"
-        "        \"${KB_NATIVE_SDK}/build/Release/kb_sheenbidi.lib\")\n"
+        "        \"${KB_NATIVE_SDK}/build/Release/kb_sheenbidi.lib\"\n"
+        "        \"${KB_NATIVE_SDK}/build/Release/kb_csg_geometry.lib\")\n"
         "else()\n"
         "    set(KB_NATIVE_SDK \"" + sdk.root.generic_string() + "\")\n"
         "    set(KB_NATIVE_LIBRARIES\n"
@@ -345,7 +367,8 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         "        \"" + libraries[6].generic_string() + "\"\n"
         "        \"" + libraries[7].generic_string() + "\"\n"
         "        \"" + libraries[8].generic_string() + "\"\n"
-        "        \"" + libraries[9].generic_string() + "\")\n"
+        "        \"" + libraries[9].generic_string() + "\"\n"
+        "        \"" + libraries[10].generic_string() + "\")\n"
         "endif()\n"
         "foreach(library IN LISTS KB_NATIVE_LIBRARIES)\n"
         "    if(NOT EXISTS \"${library}\")\n"
@@ -355,7 +378,7 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         "add_library(" + target + " SHARED " + target + ".cpp)\n"
         "target_compile_features(" + target + " PRIVATE cxx_std_20)\n"
         "target_include_directories(" + target + " PRIVATE \"${KB_NATIVE_SDK}/sources/engine/include\")\n"
-        "target_link_libraries(" + target + " PRIVATE ${KB_NATIVE_LIBRARIES} user32 xinput bcrypt)\n"
+        "target_link_libraries(" + target + " PRIVATE ${KB_NATIVE_LIBRARIES} user32 xinput bcrypt ole32 sapi mfuuid uiautomationcore comctl32)\n"
         "set_target_properties(" + target + " PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_CURRENT_LIST_DIR}/../../../Binaries/NativeScripts\")\n";
 }
 

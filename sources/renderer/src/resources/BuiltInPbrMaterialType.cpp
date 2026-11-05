@@ -306,7 +306,7 @@ void AddDiagnostic(
 }
 
 const RenderMaterialTypeSchema& BuildBuiltInPbrMaterialTypeSchema() {
-    static const std::array<RenderMaterialParameterSchema, 27> parameters{{
+    static const std::array<RenderMaterialParameterSchema, 28> parameters{{
         // Core PBR parameters (MVP)
         { .name = "baseColor", .type = RenderMaterialParameterType::Vec4, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "1 1 1 1", .description = "Base color and opacity (RGBA)." },
         { .name = "baseColorFactor", .type = RenderMaterialParameterType::Vec4, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "1 1 1 1", .description = "Alias for baseColor." },
@@ -319,21 +319,22 @@ const RenderMaterialTypeSchema& BuildBuiltInPbrMaterialTypeSchema() {
         { .name = "emissiveStrength", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 64.0F }, .defaultValueHint = "1", .description = "Emissive strength multiplier." },
         { .name = "alphaCutoff", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0.5", .description = "Alpha test threshold for MASK mode." },
         { .name = "alphaMode", .type = RenderMaterialParameterType::Enum, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .defaultValueHint = "OPAQUE", .description = "Alpha mode: OPAQUE and MASK render in the opaque pass; BLEND renders alpha-blended in the transparent pass." },
+        { .name = "bakedLightmap", .type = RenderMaterialParameterType::Bool, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .defaultValueHint = "false", .description = "Use emissive texture as baked diffuse irradiance in UV0; replaces dynamic surface lighting." },
         { .name = "doubleSided", .type = RenderMaterialParameterType::Bool, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .defaultValueHint = "false", .description = "Render both front and back faces." },
 
-        // Surface / advanced PBR parameters (parsed but ignored by current runtime shader)
+        // Surface / advanced PBR parameters
         { .name = "clearcoatFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Clearcoat layer intensity." },
         { .name = "clearcoatRoughnessFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Clearcoat roughness." },
-        { .name = "sheenColor", .type = RenderMaterialParameterType::Vec3, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0 0 0", .description = "Sheen color (RGB)." },
-        { .name = "sheenRoughnessFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Sheen roughness." },
-        { .name = "transmissionFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Light transmission factor." },
-        { .name = "thicknessFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1000.0F }, .defaultValueHint = "0", .description = "Volume thickness." },
-        { .name = "attenuationColor", .type = RenderMaterialParameterType::Vec3, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "1 1 1", .description = "Volume attenuation color." },
-        { .name = "attenuationDistance", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1000000.0F }, .defaultValueHint = "0", .description = "Volume attenuation distance." },
+        { .name = "sheenColor", .type = RenderMaterialParameterType::Vec3, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0 0 0", .description = "Sheen color (RGB)." },
+        { .name = "sheenRoughnessFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Sheen roughness." },
+        { .name = "transmissionFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Light transmission factor." },
+        { .name = "thicknessFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1000.0F }, .defaultValueHint = "0", .description = "Volume thickness." },
+        { .name = "attenuationColor", .type = RenderMaterialParameterType::Vec3, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "1 1 1", .description = "Volume attenuation color." },
+        { .name = "attenuationDistance", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1000000.0F }, .defaultValueHint = "0", .description = "Volume attenuation distance." },
         { .name = "subsurfaceColor", .type = RenderMaterialParameterType::Vec3, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "1 1 1", .description = "Subsurface scattering color." },
         { .name = "subsurfaceFactor", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Subsurface scattering factor." },
-        { .name = "anisotropyStrength", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Anisotropic specular strength." },
-        { .name = "anisotropyRotation", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ -1.0F, 1.0F }, .defaultValueHint = "0", .description = "Anisotropic rotation." },
+        { .name = "anisotropyStrength", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0", .description = "Anisotropic specular strength." },
+        { .name = "anisotropyRotation", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ -1.0F, 1.0F }, .defaultValueHint = "0", .description = "Anisotropic rotation." },
         { .name = "layerWeight", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "1", .description = "Layer blend weight." },
         { .name = "decalBlendMode", .type = RenderMaterialParameterType::Enum, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .defaultValueHint = "DISABLED", .description = "Decal blend mode." },
         { .name = "layerBlendMode", .type = RenderMaterialParameterType::Enum, .group = RenderMaterialParameterGroup::Advanced, .runtimeSupport = RenderMaterialFeatureSupport::ParsedButIgnored, .defaultValueHint = "REPLACE", .description = "Layer blend mode." },
@@ -359,17 +360,7 @@ const RenderMaterialTypeSchema& BuildBuiltInPbrMaterialTypeSchema() {
         "OPAQUE", "MASK", "BLEND"
     };
 
-    static const std::array<const char*, 9> unsupportedAdvancedFeatures{
-        "sheenColor",
-        "sheenRoughnessFactor",
-        "transmissionFactor",
-        "thicknessFactor",
-        "attenuationColor",
-        "attenuationDistance",
-        "anisotropyStrength",
-        "anisotropyRotation",
-        "tessellation",
-    };
+    static const std::array<const char*, 1> unsupportedAdvancedFeatures{ "tessellation" };
 
     static const std::array<RenderMaterialTypeMigrationOperation, 4> migrations{{
         { .kind = RenderMaterialTypeMigrationOperationKind::RenameParameter, .fromVersion = 0U, .toVersion = 1U, .field = "baseColorFactor", .targetField = "baseColor", .reason = "glTF naming was normalized to the engine PBR baseColor parameter." },

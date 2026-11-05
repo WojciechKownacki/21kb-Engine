@@ -5,6 +5,8 @@
 #include "engine/audio/AudioMixerAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/ui/DynamicImageAsset.hpp"
+#include "scene/SceneUIMedia.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputAssetLoaders.hpp"
 #include "engine/input/InputLocalUser.hpp"
@@ -18,6 +20,7 @@
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
+#include "engine/scene/VectorShape2DAssetLoader.hpp"
 #include "engine/particles/ParticleProcessAsset.hpp"
 #include "engine/scene/AiBehaviourAssetLoader.hpp"
 #include "engine/scene/SkeletonAssetLoader.hpp"
@@ -27,6 +30,7 @@
 #include "engine/scene/AnimationAssetLoaders.hpp"
 #include "engine/scene/BlendSpace2DAssetLoader.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
+#include "engine/scene/PhysicsAssembly.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
@@ -107,11 +111,16 @@ Scene::Scene(
     const bool registeredLuaScriptLoader = state_->assets.RegisterLoader(std::make_unique<kb::script::LuaScriptAssetLoader>());
     const bool registeredNativeBehaviourLoader = state_->assets.RegisterLoader(std::make_unique<kb::script::NativeBehaviourDescriptorAssetLoader>());
     const bool registeredVisualGraphLoader = state_->assets.RegisterLoader(std::make_unique<kb::visual::VisualGraphAssetLoader>());
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::input::InputRecordingAssetLoader>()));
     const bool registeredInputActionLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputActionAssetLoader>());
     const bool registeredInputContextLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputMappingContextAssetLoader>());
     const bool registeredAudioClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioClipAssetLoader>());
     const bool registeredAudioMixerLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioMixerAssetLoader>());
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<DynamicImageAssetLoader>()));
+    InitializeUIMedia(*this);
     const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsAssemblyAssetLoader>()));
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::scene::VectorShape2DAssetLoader>()));
     const bool registeredPhysicsLayersLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsLayersAssetLoader>());
     const bool registeredParticleEffectLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>());
     const bool registeredAiBehaviourLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AiBehaviourAssetLoader>());
@@ -195,6 +204,7 @@ Scene::Scene(
 }
 
 Scene::~Scene() {
+    ShutdownUIMedia(*this);
     if (moduleHost_ != nullptr) {
         moduleHost_->DetachScene(*this);
     }

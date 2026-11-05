@@ -7,6 +7,7 @@ $input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, 
 #include "gbuffer_contract.sh"
 #include "shading_models.sh"
 #include "pbr_builtin_layers.sh"
+#include "pbr_builtin_advanced.sh"
 
 SAMPLER2D(s_albedo, 0);
 SAMPLER2D(s_normal, 1);
@@ -32,6 +33,7 @@ uniform vec4 u_environmentZenith;
 uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
 #include "sky_reflection.sh"
+#include "local_reflection.sh"
 #include "height_fog.sh"
 uniform vec4 u_shadowParams;
 uniform vec4 u_terrainLayerParams;
@@ -90,7 +92,7 @@ float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
 }
 
 // Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
-vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, vec3 layers)
+vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, vec3 layers, vec3 tangent)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -148,14 +150,18 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
     vec3 fresnel = FresnelSchlick(hDotV, f0);
     float distribution = DistributionGgx(nDotH, roughness);
+    if (u_materialOptics.y > 0.0) {
+        distribution = KbAnisotropicDistribution(normal, halfVector, roughness, tangent);
+    }
     float geometry = GeometrySchlickGgx(nDotV, roughness) * GeometrySchlickGgx(nDotL, roughness);
     vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness));
+    diffuse *= 1.0 - u_materialOptics.x;
     // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
-    return KbLayeredPbrLight(layers.x, layers.y, layers.z, u_materialSubsurface.rgb, normal, viewDir, lightVector,
-        nDotLRaw, albedo, metallic, roughness, diffuse, specular) * radiance;
+    return (KbLayeredPbrLight(layers.x, layers.y, layers.z, u_materialSubsurface.rgb, normal, viewDir, lightVector,
+        nDotLRaw, albedo, metallic, roughness, diffuse, specular) + KbSheenLight(normal, viewDir, lightVector)) * radiance;
 }
 
 vec3 EnvironmentColor(vec3 direction)
@@ -166,7 +172,7 @@ vec3 EnvironmentColor(vec3 direction)
     return u_environmentParams.x < 1.5 ? constantColor : hemisphereColor;
 }
 
-vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float occlusion)
+vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float occlusion, vec3 worldPos)
 {
     if (u_environmentParams.x < 0.5) {
         return vec3(0.0, 0.0, 0.0);
@@ -176,10 +182,12 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
     vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
+    diffuseEnv *= 1.0 - u_materialOptics.x;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir)) * fresnel * specularEnergy * u_environmentParams.z;
-    return diffuseEnv + specularEnv;
+    vec3 specularEnv = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir))) * fresnel * specularEnergy * u_environmentParams.z;
+    vec3 sheenEnv = EnvironmentColor(normal) * u_materialSheen.rgb * pow(1.0 - nDotV,5.0) * occlusion * u_environmentParams.y;
+    return diffuseEnv + specularEnv + sheenEnv;
 }
 
 float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
@@ -260,22 +268,33 @@ void main()
         }
     }
     vec3 layers = KbBuiltinLayers(materialUv);
-    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);
+    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion, v_worldPos);
+    if (u_materialOptics.x > 0.0) {
+        vec3 direction = refract(-viewDir, normal, 0.66666667);
+        vec3 transmitted = KbTransmissionColor(normal, viewDir, albedo.rgb,
+            KbSkyReflection(direction, roughness, EnvironmentColor(direction)), v_worldPos, gl_FragCoord.xy);
+        vec3 fresnel = FresnelSchlick(max(dot(normal,viewDir),0.0),vec3_splat(0.04));
+        lighting += transmitted * (vec3_splat(1.0) - fresnel) * u_materialOptics.x * (1.0 - metallic);
+    }
     if (layers.x > 0.0 && u_environmentParams.x > 0.5) {
         vec3 direction = reflect(-viewDir, normal);
         lighting = KbClearCoatEnvironment(lighting,
-            KbSkyReflection(direction, layers.y, EnvironmentColor(direction)) * u_environmentParams.z,
+            KbLocalReflection(v_worldPos,direction,layers.y,KbSkyReflection(direction, layers.y, EnvironmentColor(direction))) * u_environmentParams.z,
             dot(normal, viewDir), layers.x);
     }
     vec2 lightList = KbLightGridList(v_worldPos, u_lightParams.x);
     for (int entry = 0; entry < int(lightList.y); ++entry) {
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
-            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness, layers);
+            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness, layers, v_tangent);
             lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, v_worldPos, normal);
         }
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
+    if (u_materialFlags.w > 0.5) {
+        lighting = albedo.rgb * texture2D(s_emissive, materialUv).rgb;
+        emissive = vec3_splat(0.0);
+    }
     // Opaque and masked surfaces cover what is behind them (the scene colour alpha is 1, SceneColorAlphaPolicy);
     // only a blended material has an opacity. A terrain layer blends by its weight.
     float outputAlpha = (u_materialFlags.x < 1.5 ? 1.0 : albedo.a) * terrainLayerOpacity;

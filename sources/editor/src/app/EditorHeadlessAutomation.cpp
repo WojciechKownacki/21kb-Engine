@@ -1,3 +1,4 @@
+#include "extensions/EditorExtensionHost.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
@@ -638,6 +639,8 @@ struct EditorHeadlessAutomation::Impl {
             const DockPanel panel{.id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene};
             auto settings = ScenePanelContentRenderer::BuildSettings(
                 RECT{0, -34, bounds.right, bounds.bottom}, panel, context, backendSettings);
+            settings.lightingConfig.ibl.localProbeBlending = localProbeBlending;
+            settings.lightingConfig.ibl.parallaxCorrection = probeParallax;
             settings.renderWidth = runtimeWidth;
             settings.renderHeight = runtimeHeight;
             settings.presentToHost = true;
@@ -809,6 +812,7 @@ struct EditorHeadlessAutomation::Impl {
     HWND scriptEditorWindow = nullptr;
     EditorSceneContext* sceneContext = nullptr;
     kb::input::Win32XInputHapticsBackend hapticsBackend;
+    bool localProbeBlending = true, probeParallax = true;
     EditorRenderBackendSettings backendSettings;
     EditorSceneBgfxViewport viewport;
     std::uint32_t runtimeWidth = 0U;
@@ -2479,11 +2483,13 @@ bool EditorHeadlessAutomation::SetGamepadConnected(
     return true;
 }
 
-bool EditorHeadlessAutomation::ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics) {
+bool EditorHeadlessAutomation::ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics, bool localProbeBlending, bool probeParallax) {
     if (width == 0U || height == 0U || width > 8192U || height > 8192U) return false;
     if (impl_->window == nullptr || SetWindowPos(impl_->window, nullptr, 0, 0,
             static_cast<int>(width), static_cast<int>(height),
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) == 0) return false;
+    impl_->localProbeBlending = localProbeBlending;
+    impl_->probeParallax = probeParallax;
     impl_->runtimeWidth = width;
     impl_->runtimeHeight = height;
     impl_->backendSettings.SetGpuDrivenEnabled(gpuVisibilityDiagnostics);
@@ -3981,7 +3987,11 @@ bool EditorHeadlessAutomation::CapturePanel(
     std::string_view panel, std::string_view checkpoint, int width, int height) {
     if (width < 240 || width > 3840 || height < 200 || height > 2160) return false;
     const RECT bounds{0, 0, width, height};
-    const auto kind = ParsePanelKind(panel);
+    auto kind = ParsePanelKind(panel);std::uint32_t panelId=1;
+    if(panel.starts_with("extension:")) {
+        auto* extensions=EditorExtensionHost::Find(context_);panelId=extensions?extensions->PanelId(panel.substr(10)):0;
+        if(panelId) kind=DockPanelKind::Generic;
+    }
     if (!kind.has_value()) {
         Trace("capture_panel", false, panel);
         return false;
@@ -3992,9 +4002,9 @@ bool EditorHeadlessAutomation::CapturePanel(
     bool panelContentCaptured = true;
     const bool saved = CaptureBitmap(
         path, ScreenshotDimensions{width, height, 96},
-        [this, kind, bounds, &panelContentCaptured](HDC memory) {
+        [this, kind, bounds, panelId, &panelContentCaptured](HDC memory) {
             const DockPanel dockPanel{
-                .id = 1U,
+                .id = panelId,
                 .kind = *kind,
                 .title = "Headless Automation",
                 .area = DockArea::Center,

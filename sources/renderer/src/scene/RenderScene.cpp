@@ -381,6 +381,14 @@ const std::optional<SceneRenderAmbientRadiance>& RenderScene::AmbientRadiance() 
     return ambientRadiance_;
 }
 
+void RenderScene::SetLocalReflectionProbes(std::vector<SceneRenderReflectionProbe> probes) {
+    localReflectionProbes_ = std::move(probes);
+}
+
+std::span<const SceneRenderReflectionProbe> RenderScene::LocalReflectionProbes() const noexcept {
+    return localReflectionProbes_;
+}
+
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     const auto found = meshes_.find(entityId);
     if (found == meshes_.end()) return false;

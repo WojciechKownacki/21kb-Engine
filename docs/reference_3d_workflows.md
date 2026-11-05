@@ -39,6 +39,13 @@ inputs before launching those players without a project override. It also runs
 the packs through the development player to compare screenshots with source
 playback. A second process verifies saved data survives restart.
 
+The image comparison keeps exact pixel equality. Both projects author and cook a
+manual-exposure profile with temporal anti-aliasing disabled: asynchronous HDR
+metering and streamed-cell completion can produce different render histories even
+at the same fixed simulation frame. Animation, physics, audio, streaming and
+source-free package assertions remain active; this check does not qualify temporal
+post-processing.
+
 Build `kb_cli`, `kb_cooker`, `kb_game` and the provider modules, then run:
 
 ```text

@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace kb::script {
+bool RegisterPhysicsAssemblyApi(ScriptRuntimeHost& host);
 namespace {
 
 // LIB-042: kb::math::Vec3 replaces this file's former private duplicate
@@ -781,7 +782,7 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
     isDebugDrawDesc.callback = &IsDebugDrawEnabled;
     ok = host.RegisterFunction(std::move(isDebugDrawDesc)) && ok;
 
-    return ok;
+    return RegisterPhysicsAssemblyApi(host) && ok;
 }
 
 } // namespace kb::script

@@ -21,6 +21,7 @@ namespace kb::world2d {
 namespace {
 
 using kb::assets::Map2DAsset;
+using kb::assets::Map2DTopology;
 using kb::assets::Map2DSprite;
 using kb::assets::Map2DTile;
 using kb::assets::Map2DTileKey;
@@ -504,6 +505,7 @@ void Map2DEditor::DropIfEmpty(std::uint64_t key) {
 }
 
 bool Map2DEditor::PaintGround(const Map2DGroundBrush& brush, Map2DRect area, std::int32_t z, std::string* error) {
+    if(map_.topology==Map2DTopology::Hexagonal) {SetError(error,"Hexagonal maps use explicit sprite painting instead of rectangular ground-border brushes");return false;}
     if (z < Map2DAsset::MinimumFloor || z > Map2DAsset::MaximumFloor) return false;
     // An area that lies wholly outside the map is refused; it is not squeezed onto the edge cells.
     if (std::min(area.x0, area.x1) >= map_.width || std::min(area.y0, area.y1) >= map_.height) {
@@ -633,6 +635,7 @@ std::size_t Map2DEditor::FillGround(
     std::uint32_t y,
     std::int32_t z,
     std::string* error) {
+    if(map_.topology==Map2DTopology::Hexagonal) {SetError(error,"Hexagonal maps use explicit sprite fill instead of rectangular ground-border brushes");return 0;}
     const auto sheet = EnsureMap2DSheet(map_, assetsRoot_, brush.texture, brush.cellSize, error, brushes_.SheetSetting(brush.texture));
     if (!sheet || brush.tiles.empty()) return 0U;
     const auto& info = map_.sheets[*sheet];
@@ -683,8 +686,7 @@ std::size_t Map2DEditor::Fill(
         queue.pop_front();
         region.emplace_back(tileX, tileY);
         bounds = Map2DRect{ std::min(bounds.x0, tileX), std::min(bounds.y0, tileY), std::max(bounds.x1, tileX), std::max(bounds.y1, tileY) };
-        const std::array<std::pair<std::int64_t, std::int64_t>, 4U> steps{ { { 0, -1 }, { 1, 0 }, { 0, 1 }, { -1, 0 } } };
-        for (const auto [dx, dy] : steps) {
+        for (const auto [dx, dy] : Map2DNeighbourOffsets(map_.topology)) {
             const std::int64_t nextX = std::int64_t{ tileX } + dx;
             const std::int64_t nextY = std::int64_t{ tileY } + dy;
             if (nextX < 0 || nextY < 0 || nextX >= map_.width || nextY >= map_.height) continue;

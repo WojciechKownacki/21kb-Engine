@@ -38,6 +38,12 @@ bool SceneAnimators::SetInt(SceneEntity entity, std::string_view name, std::int3
 bool SceneAnimators::SetFloat(SceneEntity entity, std::string_view name, float value) noexcept { return SceneAnimatorService::SetFloat(scene_, entity, name, value); }
 bool SceneAnimators::SetTrigger(SceneEntity entity, std::string_view name) noexcept { return SceneAnimatorService::SetTrigger(scene_, entity, name, true); }
 bool SceneAnimators::ResetTrigger(SceneEntity entity, std::string_view name) noexcept { return SceneAnimatorService::SetTrigger(scene_, entity, name, false); }
+bool SceneAnimators::SetPhysicsPose(SceneEntity entity, std::span<const AnimatorPhysicsBonePose> bones) noexcept {
+    return SceneAnimatorService::SetPhysicsPose(scene_,entity,bones);
+}
+bool SceneAnimators::ClearPhysicsPose(SceneEntity entity) noexcept {
+    return SceneAnimatorService::ClearPhysicsPose(scene_,entity);
+}
 bool SceneAnimators::SetIkTarget(
     SceneEntity entity, std::string_view name,
     const AnimatorIkTarget& target) noexcept {

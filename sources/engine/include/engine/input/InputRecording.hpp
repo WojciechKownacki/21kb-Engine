@@ -10,6 +10,8 @@
 #include <span>
 #include <vector>
 
+namespace kb::scene {class Scene;}
+
 namespace kb::input {
 
 // One digital key that was down, or one nonzero analog value, at the moment a
@@ -46,6 +48,7 @@ struct InputFrameSnapshot {
     std::uint32_t pointerViewportHeight = 0U;
     bool hasFocus = false;
     std::array<bool, InputDeviceState::kMaxGamepads> gamepadConnected{};
+    InputSensorFrame sensors{};
 };
 
 using InputRecording = std::vector<InputFrameSnapshot>;
@@ -72,6 +75,10 @@ void ApplyInputFrame(InputDeviceState& device, const InputFrameSnapshot& frame);
 // own device state, so replay does not depend on or mutate whatever the
 // subsystem's live device state currently holds.
 void ReplayInputRecording(InputSubsystem& subsystem, std::span<const InputFrameSnapshot> recording);
+
+// Applies a validated frame of a discovered/cooked recording to the primary input
+// subsystem and evaluates it immediately. Invalid assets/indices leave input unchanged.
+[[nodiscard]] bool ApplyInputRecordingFrame(kb::scene::Scene&,std::string_view asset,std::uint32_t frame,std::string& error);
 
 // Binary round-trip for a whole recording (LIB-121). Reuses InputAssetIO's
 // magic/version/atomic-write conventions rather than inventing new I/O, same

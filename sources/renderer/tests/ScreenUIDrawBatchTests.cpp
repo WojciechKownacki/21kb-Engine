@@ -4,6 +4,7 @@
 #include "private/ui/ScreenUIComposite.hpp"
 #include "private/ui/ScreenUIFontAtlasCache.hpp"
 #include "private/ui/ScreenUIFontDistanceField.hpp"
+#include "private/ui/ScreenUIFontMSDFGenerator.hpp"
 #include "private/ui/ScreenUIFontPayloadValidator.hpp"
 #include "private/ui/ScreenUITextMarkupParser.hpp"
 
@@ -380,6 +381,12 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         Require(assets.RegisterAsset({.id = kb::assets::AssetId{7U}, .type = "ImportedAsset", .name = "Text font",
                                       .virtualPath = "/Text/Font.kbasset", .runtimeLoadable = true}) &&
                 assets.PublishRuntimeAsset(kb::assets::AssetId{7U}, font), "Font fixture publication failed");
+        ScreenUIFontMSDFGenerator msdf(font->payload, {});
+        ScreenUIFontMSDFGenerator::Bitmap field;
+        Require(msdf.IsValid()&&msdf.Rasterize(36U,64.0F/2384.0F,field)&&!field.rgba.empty(), "MSDF outline generation failed");
+        std::size_t colored=0,inside=0,outside=0;
+        for(std::size_t i=0;i<field.rgba.size();i+=4){std::array<std::uint8_t,3> rgb{field.rgba[i],field.rgba[i+1],field.rgba[i+2]};std::ranges::sort(rgb);colored+=rgb[0]!=rgb[2];inside+=rgb[1]>128;outside+=rgb[1]<128;Require(field.rgba[i+3]==255,"MSDF must encode RGB distances, not alpha SDF");}
+        Require(colored>20&&inside>20&&outside>20,"MSDF requires independently colored edge distances and median inside/outside coverage");
         RenderResourceRegistry resources;
         ScreenUIFontAtlasCache fonts;
         kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
@@ -481,6 +488,13 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         Require(fonts.Resolve(1U, 7U, 32U, {}, true, resources).idx != bgfx::kInvalidHandle &&
                 fonts.Resolve(1U, 7U, 32U, {}, false, resources).idx != bgfx::kInvalidHandle,
                 "SDF and bitmap atlas keys must coexist");
+        scalable.text->fontRenderMode=kb::scene::UITextFontRenderMode::MultiChannelSignedDistanceField;
+        frame.elements={scalable};const auto multi=fonts.Prepare(1U,assets,resources,frame);
+        Require(multi.failureReason==nullptr&&multi.runs.size()==1&&multi.runs[0].distanceField==2,"MSDF must retain an independent RGB atlas mode");
+        const auto msdfDraw=ScreenUIDrawBatchBuilder{}.Build(frame,{},multi.runs);
+        Require(std::ranges::any_of(msdfDraw.batches,[](const auto& b){return b.style.fragmentKind==ScreenUIFragmentKind::MultiChannelDistanceFieldFont;}),"MSDF must select the median-RGB shader path");
+        Require(fonts.Prepare(1U,assets,resources,frame,false).failureReason!=nullptr,"MSDF must refuse an unavailable shader explicitly");
+        scalable.text->fontRenderMode=kb::scene::UITextFontRenderMode::SignedDistanceField;frame.elements={scalable};
         const auto unavailable = fonts.Prepare(1U, assets, resources, frame, false);
         Require(unavailable.failureReason == nullptr && unavailable.runs.size() == 1U &&
                 !unavailable.runs[0].distanceField && !unavailable.runs[0].glyphs.empty(),

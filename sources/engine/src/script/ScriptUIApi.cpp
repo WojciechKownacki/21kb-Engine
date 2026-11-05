@@ -21,6 +21,7 @@
 #include <vector>
 
 namespace kb::script {
+bool RegisterUIMediaApi(ScriptRuntimeHost&);
 namespace {
 
 [[nodiscard]] const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments,
@@ -238,7 +239,7 @@ bool RegisterFunction(ScriptRuntimeHost& host, std::string name,
 } // namespace
 
 bool ScriptUIApi::Register(ScriptRuntimeHost& host) {
-    bool ok = true;
+    bool ok = RegisterUIMediaApi(host);
     ok = RegisterFunction(
              host, "UI.Create",
              {

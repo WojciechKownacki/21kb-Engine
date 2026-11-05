@@ -636,6 +636,12 @@ int LuaMeshRendererAssign(lua_State* state, const char* functionName, const char
         return 2;
     }
 
+    if (lua_gettop(state) > 2 || (lua_istable(state, 1) != 0 && lua_gettop(state) > 1)) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "mesh assignment expects an asset and optional entity/options, or one argument table");
+        return 2;
+    }
+
     std::vector<ScriptFunctionArgument> arguments;
     if (lua_istable(state, 1) != 0) {
         arguments = ArgumentsFromTable(state, 1);
@@ -652,6 +658,16 @@ int LuaMeshRendererAssign(lua_State* state, const char* functionName, const char
         if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
             std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
             arguments.insert(arguments.end(), options.begin(), options.end());
+        } else if (lua_gettop(state) >= 2 && lua_isnil(state, 2) == 0) {
+            int integer = 0;
+            const lua_Integer entity = lua_tointegerx(state, 2, &integer);
+            if (integer == 0 || entity < 0) {
+                lua_pushnil(state);
+                lua_pushliteral(state, "mesh assignment entity must be a nonnegative integer or an options table");
+                return 2;
+            }
+            arguments.push_back(ScriptFunctionArgument{ "entity",
+                ScriptValue{static_cast<std::uint64_t>(entity), ScriptValueType::Entity} });
         }
     }
 

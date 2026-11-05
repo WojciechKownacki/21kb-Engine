@@ -311,6 +311,7 @@ constexpr std::uint8_t kSkinnedMotionPreviousModelStage = 13U;
 } // namespace
 
 bool SceneMeshPassResources::Initialize() {
+    if (!localReflections_.Initialize()) return false;
     if (IsInitialized()) {
         return true;
     }
@@ -363,6 +364,11 @@ bool SceneMeshPassResources::Initialize() {
     clearcoatRoughnessSampler_ = bgfx::createUniform("s_clearcoatRoughness", bgfx::UniformType::Sampler);
     materialLayersUniform_ = bgfx::createUniform("u_materialLayers", bgfx::UniformType::Vec4);
     materialSubsurfaceUniform_ = bgfx::createUniform("u_materialSubsurface", bgfx::UniformType::Vec4);
+    materialSheenUniform_ = bgfx::createUniform("u_materialSheen", bgfx::UniformType::Vec4);
+    materialOpticsUniform_ = bgfx::createUniform("u_materialOptics", bgfx::UniformType::Vec4);
+    materialAttenuationUniform_ = bgfx::createUniform("u_materialAttenuation", bgfx::UniformType::Vec4);
+    builtinSceneColorSampler_ = bgfx::createUniform("s_builtinSceneColor", bgfx::UniformType::Sampler);
+    builtinSceneColorParamsUniform_ = bgfx::createUniform("u_builtinSceneColorParams", bgfx::UniformType::Vec4);
     fogParamsUniform_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     fogColorUniform_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
     materialParamsUniform_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
@@ -406,6 +412,7 @@ bool SceneMeshPassResources::Initialize() {
 }
 
 void SceneMeshPassResources::Shutdown() {
+    localReflections_.Shutdown();
     lightGrid_.Shutdown();
     if (bgfx::isValid(motionPreviousTimeUniform_)) {
         bgfx::destroy(motionPreviousTimeUniform_);
@@ -571,7 +578,8 @@ void SceneMeshPassResources::Shutdown() {
     }
     layeredGbufferUnavailable_.fill(false);
     for (auto* handle : {&fogParamsUniform_, &fogColorUniform_, &clearcoatSampler_, &clearcoatRoughnessSampler_,
-                         &materialLayersUniform_, &materialSubsurfaceUniform_}) {
+                         &materialLayersUniform_, &materialSubsurfaceUniform_, &materialSheenUniform_, &materialOpticsUniform_,
+                         &materialAttenuationUniform_, &builtinSceneColorSampler_, &builtinSceneColorParamsUniform_}) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -705,7 +713,9 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(terrainLayerParamsUniform_) &&
         bgfx::isValid(fogParamsUniform_) && bgfx::isValid(fogColorUniform_) &&
         bgfx::isValid(clearcoatSampler_) && bgfx::isValid(clearcoatRoughnessSampler_) &&
-        bgfx::isValid(materialLayersUniform_) && bgfx::isValid(materialSubsurfaceUniform_) &&
+        bgfx::isValid(materialLayersUniform_) && bgfx::isValid(materialSubsurfaceUniform_) && localReflections_.IsInitialized() &&
+        bgfx::isValid(materialSheenUniform_) && bgfx::isValid(materialOpticsUniform_) &&
+        bgfx::isValid(materialAttenuationUniform_) && bgfx::isValid(builtinSceneColorSampler_) && bgfx::isValid(builtinSceneColorParamsUniform_) &&
         bgfx::isValid(materialParamsUniform_) &&
         bgfx::isValid(materialEmissiveUniform_) &&
         bgfx::isValid(materialFlagsUniform_) &&
@@ -1430,6 +1440,14 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(8U, clearcoatRoughnessSampler_, materialBinding.clearcoatRoughnessTexture);
     bgfx::setUniform(materialLayersUniform_, materialBinding.layers.data());
     bgfx::setUniform(materialSubsurfaceUniform_, materialBinding.subsurface.data());
+    bgfx::setUniform(materialSheenUniform_, materialBinding.sheen.data());
+    bgfx::setUniform(materialOpticsUniform_, materialBinding.optics.data());
+    localReflections_.Set(desc.lighting.ibl,fallbackWhiteCubeTexture_,11U,13U);
+    bgfx::setUniform(materialAttenuationUniform_, materialBinding.attenuation.data());
+    const bool hasSceneColor = bgfx::isValid(desc.sceneColorTexture);
+    bgfx::setTexture(10U, builtinSceneColorSampler_, hasSceneColor ? desc.sceneColorTexture : fallbackWhiteTexture_);
+    const std::array<float,4> sceneColorParams{hasSceneColor ? 1.0F : 0.0F, 0, 0, 0};
+    bgfx::setUniform(builtinSceneColorParamsUniform_, sceneColorParams.data());
     bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
     bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
     bgfx::setUniform(timeUniform_, desc.frameTime.data());

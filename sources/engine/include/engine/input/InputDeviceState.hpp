@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/input/InputKey.hpp"
+#include "engine/input/InputSensors.hpp"
 #include "engine/input/InputText.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 
@@ -49,6 +50,7 @@ public:
         }
         touchPointCount_ = 0U;
         textInputCount_ = 0U;
+        sensors_ = {};
     }
 
     // gamepadIndex is ignored for non-gamepad keys (keyboard/mouse/touch are
@@ -225,6 +227,9 @@ public:
         return gamepadIndex < kMaxGamepads && gamepadConnected_[gamepadIndex];
     }
 
+    [[nodiscard]] bool SetSensors(const InputSensorFrame& frame) noexcept {if(!IsInputSensorFrameValid(frame))return false;sensors_=frame;return true;}
+    [[nodiscard]] const InputSensorFrame& Sensors() const noexcept {return sensors_;}
+
 private:
     [[nodiscard]] bool HasActiveTouch() const noexcept {
         for (std::size_t index = 0U; index < touchPointCount_; ++index) {
@@ -269,6 +274,7 @@ private:
 
     bool hasFocus_ = false;
     std::array<bool, kMaxGamepads> gamepadConnected_{};
+    InputSensorFrame sensors_{};
 };
 
 } // namespace kb::input

@@ -1,3 +1,4 @@
+include("${PROJECT_SOURCE_DIR}/CMake/EnableSteamAudio.cmake")
 add_library(kb_audio_miniaudio_asset_runtime STATIC
     assets/MiniaudioEncodingFormat.hpp
     assets/ResolvedAudioClip.hpp
@@ -65,6 +66,8 @@ add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     runtime/MiniaudioPlaybackBackend.cpp
     runtime/MiniaudioSound.hpp
     runtime/MiniaudioSound.cpp
+    runtime/MiniaudioSpatialStream.hpp
+    runtime/MiniaudioSpatialStream.cpp
     ${KB_AUDIO_MINIAUDIO_DSP_SOURCES}
     scene/MiniaudioBusRegistry.hpp
     scene/MiniaudioBusRegistry.cpp
@@ -96,6 +99,7 @@ if(NOT KB_BUILD_PROVIDER_MODULES_AS_DLL)
     )
 endif()
 
+kb_enable_spatial_audio(kb_audio_miniaudio_plugin)
 kb_apply_quality_gates(kb_audio_miniaudio_plugin)
 
 if(BUILD_TESTING)
@@ -146,12 +150,14 @@ if(BUILD_TESTING)
         runtime/MiniaudioMeterNode.cpp
         runtime/MiniaudioPlaybackBackend.cpp
         runtime/MiniaudioSound.cpp
+        runtime/MiniaudioSpatialStream.cpp
         scene/MiniaudioBusRegistry.cpp
         scene/MiniaudioListenerSynchronizer.cpp
         scene/MiniaudioOcclusionSampler.cpp
         scene/MiniaudioSourceRegistry.cpp
     )
 
+    kb_enable_spatial_audio(kb_audio_runtime_tests)
     target_include_directories(kb_audio_runtime_tests
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}

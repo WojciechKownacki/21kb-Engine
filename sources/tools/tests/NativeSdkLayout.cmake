@@ -7,11 +7,17 @@ file(MAKE_DIRECTORY "${TEST_ROOT}/sdk/bin/Release" "${TEST_ROOT}/sdk/engine/Rele
 file(COPY_FILE "${CLI}" "${TEST_ROOT}/sdk/bin/Release/kb_cli.exe" ONLY_IF_DIFFERENT)
 file(COPY_FILE "${ENGINE_LIBRARY}" "${TEST_ROOT}/sdk/engine/Release/kb_engine.lib" ONLY_IF_DIFFERENT)
 file(COPY_FILE "${FLECS_LIBRARY}" "${TEST_ROOT}/sdk/third_party/flecs/Release/flecs_static.lib" ONLY_IF_DIFFERENT)
+# Stage the actual target's transitive runtime dependencies, including optional DSP.
+string(REPLACE "|" ";" audio_runtime_dlls "${AUDIO_RUNTIME_DLLS}")
+foreach(runtime IN LISTS audio_runtime_dlls)
+    get_filename_component(runtime_name "${runtime}" NAME)
+    file(COPY_FILE "${runtime}" "${TEST_ROOT}/sdk/bin/Release/${runtime_name}" ONLY_IF_DIFFERENT)
+endforeach()
 foreach(name IN ITEMS PHYSICS AUDIO LIGHTING PARTICLES AI WORLD2D)
     get_filename_component(plugin_name "${${name}_PLUGIN}" NAME)
     file(COPY_FILE "${${name}_PLUGIN}" "${TEST_ROOT}/sdk/bin/Release/${plugin_name}" ONLY_IF_DIFFERENT)
 endforeach()
-foreach(name IN ITEMS lua ufbx monocypher zstd recast ui_text_shaping harfbuzz sheenbidi)
+foreach(name IN ITEMS lua ufbx monocypher zstd recast ui_text_shaping harfbuzz sheenbidi csg_geometry)
     file(COPY_FILE "${${name}_LIBRARY}" "${TEST_ROOT}/sdk/Release/kb_${name}.lib" ONLY_IF_DIFFERENT)
 endforeach()
 if(SDK_GENERATOR STREQUAL "Ninja")
@@ -22,9 +28,10 @@ file(WRITE "${TEST_ROOT}/sdk/CMakeCache.txt"
     "CMAKE_GENERATOR:INTERNAL=${SDK_GENERATOR}\nCMAKE_COMMAND:INTERNAL=${CMAKE_COMMAND}\n"
     "CMAKE_CXX_COMPILER:FILEPATH=${COMPILER}\nCMAKE_MAKE_PROGRAM:FILEPATH=${MAKE_PROGRAM}\n")
 
+set(cli_under_test "${TEST_ROOT}/sdk/bin/Release/kb_cli.exe")
 function(run_cli)
     execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=KB_ENGINE_SDK_ROOT
-        "${TEST_ROOT}/sdk/bin/Release/kb_cli.exe" ${ARGV}
+        "${cli_under_test}" ${ARGV}
         WORKING_DIRECTORY "${TEST_ROOT}" RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
         TIMEOUT 180)
     if(NOT result STREQUAL "0")
@@ -68,3 +75,48 @@ if(NOT CLI_OUTPUT MATCHES "NativeProbe ready" OR NOT CLI_OUTPUT MATCHES "0 diagn
     message(FATAL_ERROR "The built native script did not execute cleanly: ${CLI_OUTPUT}")
 endif()
 message(STATUS "Multi-config native SDK create/build/load/run passed")
+
+# An installed SDK has no build-machine CMakeCache and must work from a project
+# outside its root. Its compiler is selected by the user's CMake environment.
+set(installed "${TEST_ROOT}/Installed SDK")
+file(MAKE_DIRECTORY "${installed}/bin/Debug" "${installed}/build/engine/Release"
+    "${installed}/build/third_party/flecs/Release" "${installed}/build/Release")
+file(COPY "${ENGINE_ROOT}/sources/engine/include" DESTINATION "${installed}/sources/engine")
+file(COPY_FILE "${CLI}" "${installed}/bin/kb_cli.exe" ONLY_IF_DIFFERENT)
+file(COPY_FILE "${CLI}" "${installed}/bin/Debug/kb_cli.exe" ONLY_IF_DIFFERENT)
+file(COPY_FILE "${ENGINE_LIBRARY}" "${installed}/build/engine/Release/kb_engine.lib" ONLY_IF_DIFFERENT)
+file(COPY_FILE "${FLECS_LIBRARY}" "${installed}/build/third_party/flecs/Release/flecs_static.lib" ONLY_IF_DIFFERENT)
+foreach(name IN ITEMS lua ufbx monocypher zstd recast ui_text_shaping harfbuzz sheenbidi csg_geometry)
+    file(COPY_FILE "${${name}_LIBRARY}" "${installed}/build/Release/kb_${name}.lib" ONLY_IF_DIFFERENT)
+endforeach()
+foreach(runtime IN LISTS audio_runtime_dlls)
+    get_filename_component(runtime_name "${runtime}" NAME)
+    file(COPY_FILE "${runtime}" "${installed}/bin/${runtime_name}" ONLY_IF_DIFFERENT)
+endforeach()
+foreach(name IN ITEMS PHYSICS AUDIO LIGHTING PARTICLES AI WORLD2D)
+    get_filename_component(plugin_name "${${name}_PLUGIN}" NAME)
+    file(COPY_FILE "${${name}_PLUGIN}" "${installed}/bin/${plugin_name}" ONLY_IF_DIFFERENT)
+endforeach()
+set(cli_under_test "${installed}/bin/kb_cli.exe")
+set(project "${TEST_ROOT}/${session}/InstalledScene")
+run_cli(new --parent "${TEST_ROOT}/${session}" --name InstalledScene --template Empty)
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=KB_ENGINE_SDK_ROOT
+    "${installed}/bin/Debug/kb_cli.exe" script-new --project "${project}" --name DebugProbe --language cpp
+    WORKING_DIRECTORY "${TEST_ROOT}" RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 30)
+if(result STREQUAL "0" OR NOT error MATCHES "SDK was not found")
+    message(FATAL_ERROR "An installed Debug tool must not select Release SDK libraries: ${output}\n${error}")
+endif()
+run_cli(script-new --project "${project}" --name InstalledProbe --language cpp)
+file(READ "${project}/Source/NativeScripts/InstalledProbe/CMakeLists.txt" native_cmake)
+if(NOT native_cmake MATCHES "Installed SDK/build/engine/Release/kb_engine.lib")
+    message(FATAL_ERROR "The installed tool did not select its own SDK libraries")
+endif()
+run_cli(script-build --project "${project}" --script /Game/Scripts/InstalledProbe.native)
+run_cli(entity add --project "${project}" --name NativeHost)
+run_cli(scene-attach --project "${project}" --scene /Game/Scenes/Main.21kbscene
+    --node NativeHost --script /Game/Scripts/InstalledProbe.native)
+run_cli(run --project "${project}" --frames 2)
+if(NOT CLI_OUTPUT MATCHES "InstalledProbe ready" OR NOT CLI_OUTPUT MATCHES "0 diagnostics")
+    message(FATAL_ERROR "The installed SDK module did not execute cleanly: ${CLI_OUTPUT}")
+endif()
+message(STATUS "Installed native SDK discovery/build/load/run passed")

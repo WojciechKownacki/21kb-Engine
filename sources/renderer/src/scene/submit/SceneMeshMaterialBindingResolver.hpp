@@ -17,6 +17,9 @@ struct SceneMeshMaterialBinding {
     bgfx::TextureHandle clearcoatRoughnessTexture = BGFX_INVALID_HANDLE;
     std::array<float, 4> layers{};
     std::array<float, 4> subsurface{};
+    std::array<float, 4> sheen{};
+    std::array<float, 4> optics{};
+    std::array<float, 4> attenuation{};
     std::array<float, 4> params{};
     std::array<float, 4> emissive{};
     std::array<float, 4> flags{};

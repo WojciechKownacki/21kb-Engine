@@ -260,7 +260,27 @@ Compiled only into the editor, the cooker and the shader compiler:
 - Fluent UI toolbar icons (MIT), `third_party/luizengine-fluentui-toolbar`
 - Devicon (MIT), `third_party/devicon`
 
-## Notes
+## Steam Audio
+
+Steam Audio 4.8.1 provides CPU HRTF and AmbiX processing on Windows under Apache-2.0.
+Its license and bundled third-party notices are retained in `licenses/steamaudio/`.
+
+## msdfgen
+
+msdfgen 1.13 generates multi-channel distance fields from font outlines under MIT.
+Its complete notice is retained in `licenses/msdfgen/LICENSE.txt`.
+
+## Manifold
+
+Manifold 3.5.4 supplies mesh boolean geometry under Apache-2.0.
+Its complete notice is retained in `licenses/manifold/LICENSE`.
+
+## CPython editor runtime
+
+CPython 3.14.10 supplies the embedded Windows authoring interpreter under PSF-2.0.
+Its complete license and third-party notices are retained in `licenses/python/`.
+
+## Engine license
 
 The root `LICENSE` file applies to 21kb-Engine itself. Third-party dependencies
 remain under their own licenses.

@@ -23,6 +23,7 @@ enum class ScreenUIFragmentKind : std::uint8_t {
     Font,
     BackgroundBlur,
     DistanceFieldFont,
+    MultiChannelDistanceFieldFont,
 };
 
 struct ScreenUIRect {
@@ -70,7 +71,7 @@ struct ScreenUITextureKey {
     std::uint64_t assetId = 0U;
     std::uint32_t pixelSize = 0U;
     std::string fontVariations;
-    bool distanceField = false;
+    std::uint8_t distanceField = 0;
 
     [[nodiscard]] bool operator==(const ScreenUITextureKey&) const noexcept = default;
 };
@@ -136,7 +137,7 @@ struct ScreenUIGlyphQuad {
     bool cellClip = false;
     float cellLeft = 0.0F;
     float cellRight = 0.0F;
-    bool distanceField = false;
+    std::uint8_t distanceField = 0;
     float fontOriginX = 0.0F;
     float fontOriginY = 0.0F;
 };
@@ -162,7 +163,7 @@ struct ScreenUITextRun {
     std::uint64_t fallbackFontAssetId = 0U;
     std::uint16_t fallbackAtlasWidth = 0U;
     std::uint16_t fallbackAtlasHeight = 0U;
-    bool distanceField = false;
+    std::uint8_t distanceField = 0;
 };
 
 } // namespace kb::render

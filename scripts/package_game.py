@@ -54,6 +54,7 @@ from package_contract import (
 )
 from elf_trust_anchor import ElfTrustAnchorError, embed_trust_anchor, read_trust_anchor
 from android_bundle import validate_bundle
+import prebuilt_engine
 from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
 from windows_authenticode import (
     AuthenticodeError,
@@ -237,7 +238,12 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         raise PackagingError("WebGL fallback requires a WebGPU package")
     args.project = _find_project_file(args.project)
     args.engine_root = args.engine_root.expanduser().resolve(strict=True)
-    if not (args.engine_root / "CMakeLists.txt").is_file() or not (args.engine_root / "sources").is_dir():
+    prebuilt = (args.engine_root / prebuilt_engine.MANIFEST).exists()
+    if prebuilt:
+        prebuilt_engine.load(args.engine_root)
+        if args.target != "Windows.x64":
+            raise PackagingError("this prebuilt engine supports Windows.x64 packages only")
+    if not (args.engine_root / "sources").is_dir() or (not prebuilt and not (args.engine_root / "CMakeLists.txt").is_file()):
         raise PackagingError(f"engine root is incomplete: {args.engine_root}")
     args.build_root = args.build_root.expanduser().absolute()
     args.output = args.output.expanduser().absolute()
@@ -645,6 +651,8 @@ def _project_source_fingerprint(project_file: Path) -> str:
 
 
 def _engine_fingerprint(root: Path) -> str:
+    if (root / prebuilt_engine.MANIFEST).exists():
+        return prebuilt_engine.fingerprint(root)
     return engine_source_fingerprint(root)
 
 
@@ -665,6 +673,10 @@ def _build_tool_path(build_root: Path, configuration: str, name: str) -> Path:
 
 
 def _build_targets(cmake: Path, build_root: Path, configuration: str, targets: Sequence[str], engine_root: Path) -> None:
+    if (engine_root / prebuilt_engine.MANIFEST).exists():
+        prebuilt_engine.verify_targets(engine_root, build_root, targets)
+        emit_diagnostic("Info", "Using verified prebuilt Release engine tools")
+        return
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
     if jobs and (not jobs.isdecimal() or int(jobs) < 1):
         raise PackagingError("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
@@ -691,6 +703,14 @@ def _ensure_host_tools(args: argparse.Namespace, cmake: Path) -> tuple[Path, Pat
     )
 
 
+_NATIVE_LINK_MANIFEST = "native-link.json"
+
+
+def _native_link_manifest(pack: Path) -> str:
+    manifest = pack.parent / _NATIVE_LINK_MANIFEST
+    return str(manifest) if manifest.is_file() else ""
+
+
 def _cook(args: argparse.Namespace, snapshot_project: Path, job: Path, cooker: Path, validator: Path) -> Path:
     output = job / "cook" / "Game.kbpack"
     output.parent.mkdir(parents=True)
@@ -706,6 +726,9 @@ def _cook(args: argparse.Namespace, snapshot_project: Path, job: Path, cooker: P
     ]
     if args.target == "Windows.x64":
         command.extend(("--runtime-modules-output", output.parent / "RuntimeModules"))
+    else:
+        # Project C++ the target host links in; the cooker writes it only when the project has any.
+        command.extend(("--native-link-manifest", output.parent / _NATIVE_LINK_MANIFEST))
     command.extend(("--pack-compression-level", str(args.pack_compression_level)))
     shaderc = _find_optional_build_tool(args.build_root, CONFIGURATIONS[args.configuration], "shaderc")
     if shaderc is not None:
@@ -1102,6 +1125,14 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         shutil.copy2(plugin, stage / expected)
         built[stage / expected] = plugin
         plugin_paths.append(plugin)
+    # The CPU spatial-audio SDK is a dependency of the existing audio provider.
+    # Stage it before signing, alongside that provider, so a package is self-contained.
+    audio_provider = _windows_provider_path(args.build_root, configuration, game.parent, "kb_audio_miniaudio_plugin")
+    spatial_runtime = audio_provider.parent / "phonon.dll"
+    if not spatial_runtime.is_file():
+        raise PackagingError("Windows spatial audio runtime was not produced: phonon.dll")
+    shutil.copy2(spatial_runtime, stage / spatial_runtime.name)
+    built[stage / spatial_runtime.name] = spatial_runtime
     _stage_licenses(args, stage)
     _stage_crash_report_notice(args.engine_root, stage)
     symbols = _collect_windows_symbols(
@@ -1438,6 +1469,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         f"-PkbMinSdk={args.android_min_sdk}",
         f"-PkbTargetSdk={args.android_target_sdk}",
         f"-PkbAssetDelivery={str(bundle).lower()}",
+        f"-PkbProjectNativeManifest={_native_link_manifest(pack)}",
         "--no-daemon",
     ]
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
@@ -1726,6 +1758,7 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
             "-DBUILD_TESTING=OFF",
             "-DBGFX_OPENGLES_VERSION=30",
             f"-DKB_WEB_RENDERER={backend}",
+            f"-DKB_PROJECT_NATIVE_MANIFEST={_native_link_manifest(pack)}",
         ],
         cwd=args.engine_root,
         timeout_seconds=1800,
@@ -2366,6 +2399,8 @@ def _source_state(engine_root: Path) -> dict[str, str]:
     "unknown" means git could not answer (no git, not a work tree); it is recorded, never guessed.
     Untracked sources count as changes; ignored build outputs do not.
     """
+    if (engine_root / prebuilt_engine.MANIFEST).exists():
+        return {"gitCommit": "unknown", "treeState": "unknown"}
     def git(*arguments: str) -> str | None:
         try:
             completed = subprocess.run(

@@ -163,6 +163,16 @@ std::optional<RenderMeshAssetData> RenderMap2DMeshBuilder::Build(const kb::asset
         float spriteWidth = 1.0F, spriteHeight = static_cast<float>(cellHeight) / static_cast<float>(cellWidth);
         if (sprite.rotation % 2U) std::swap(spriteWidth, spriteHeight);
         auto& quads = sprite.tint == 0xFFFFFFFFU && !map.lit ? sheetQuads[sprite.sheet] : tintedQuads[{sprite.sheet, sprite.tint}];
+        if(map.topology!=kb::assets::Map2DTopology::Rectangular) {
+            const auto center=kb::assets::Map2DProjectGrid(map,static_cast<double>(x)+.5,static_cast<double>(y)+.5);
+            const float cx=static_cast<float>(center[0])+sprite.offsetX*size;
+            const float bottom=static_cast<float>(center[1]+kb::assets::Map2DCellHeight(map)*.5)+sprite.offsetY*size;
+            quads.push_back(Quad{.x0=cx-spriteWidth*size*.5F,.z0=bottom-spriteHeight*size,
+                .x1=cx+spriteWidth*size*.5F,.z1=bottom,.y=lift,
+                .u0=static_cast<float>(left)/width,.v0=static_cast<float>(top)/height,
+                .u1=static_cast<float>(left+cellWidth)/width,.v1=static_cast<float>(top+cellHeight)/height,.style=sprite});
+            return;
+        }
         quads.push_back(Quad{
             .x0 = (static_cast<float>(x) + (1.0F - spriteWidth) * 0.5F + sprite.offsetX) * size,
             .z0 = (static_cast<float>(y + 1U) - spriteHeight + sprite.offsetY) * size,
@@ -179,9 +189,14 @@ std::optional<RenderMeshAssetData> RenderMap2DMeshBuilder::Build(const kb::asset
     for (const auto& [key, tile] : map.tiles) {
         const std::uint32_t x = kb::assets::Map2DTileKeyX(key);
         const std::uint32_t y = kb::assets::Map2DTileKeyY(key);
-        const float floor = static_cast<float>(kb::assets::Map2DTileKeyZ(key)) * map.floorHeight +
-            (map.sortByY ? 0.4F * static_cast<float>(y) / static_cast<float>(map.height + 1U) : 0.0F);
-        const float layerLift = map.sortByY ? 0.4F / static_cast<float>((map.height + 1U) * 64U) : kLayerLift;
+        float sortingOffset=map.sortByY?0.4F*static_cast<float>(y)/static_cast<float>(map.height+1U):0;
+        if(map.sortByY&&map.topology!=kb::assets::Map2DTopology::Rectangular) {
+            const auto center=kb::assets::Map2DProjectGrid(map,static_cast<double>(x)+.5,static_cast<double>(y)+.5);
+            sortingOffset=.4F*static_cast<float>(center[1]/kb::assets::Map2DProjectedSize(map)[1]);
+        }
+        const float floor = static_cast<float>(kb::assets::Map2DTileKeyZ(key))*map.floorHeight+sortingOffset;
+        const auto sortingRows=map.topology==kb::assets::Map2DTopology::Isometric?map.width+map.height:map.height;
+        const float layerLift=map.sortByY?.4F/static_cast<float>((sortingRows+1U)*64U):kLayerLift;
         std::uint32_t layer = 1U;
         if (tile.ground.IsValid()) addSprite(tile.ground, x, y, floor + layerLift * static_cast<float>(layer));
         ++layer;
@@ -191,13 +206,14 @@ std::optional<RenderMeshAssetData> RenderMap2DMeshBuilder::Build(const kb::asset
 
     RenderMeshAssetData mesh{};
     SectionBounds bounds;
-    const Placement placement{ map.orientation, static_cast<float>(map.width) * size, static_cast<float>(map.height) * size, drawOffset };
+    const auto projectedSize=kb::assets::Map2DProjectedSize(map);
+    const Placement placement{ map.orientation, static_cast<float>(projectedSize[0]), static_cast<float>(projectedSize[1]), drawOffset };
     if (map.background) {
         // Under the lowest floor painted, so floors below the ground floor still show.
         const std::int32_t lowest = map.tiles.empty() ? 0 : std::min(0, kb::assets::Map2DTileKeyZ(map.tiles.begin()->first));
         EmitSection(mesh, { Quad{
-            .x1 = static_cast<float>(map.width) * size,
-            .z1 = static_cast<float>(map.height) * size,
+            .x1 = placement.mapWidth,
+            .z1 = placement.mapHeight,
             .y = static_cast<float>(lowest) * map.floorHeight - kLayerLift,
             .u1 = 1.0F,
             .v1 = 1.0F,

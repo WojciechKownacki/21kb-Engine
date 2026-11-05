@@ -587,6 +587,12 @@ public:
             const float elevation = static_cast<float>(floor_) * map_.floorHeight;
             auto point = map_.orientation == kb::assets::Map2DOrientation::Wall ? kb::scene::Vec3{px, (static_cast<float>(map_.height)-y)*map_.tileSize, -elevation - 0.02F}
                 : kb::scene::Vec3{px, elevation + 0.02F, (static_cast<float>(map_.height)*0.5F-y)*map_.tileSize};
+            if(map_.topology!=kb::assets::Map2DTopology::Rectangular) {
+                const auto projected=kb::assets::Map2DProjectGrid(map_,x,y),bounds=kb::assets::Map2DProjectedSize(map_);
+                point=map_.orientation==kb::assets::Map2DOrientation::Wall
+                    ? kb::scene::Vec3{static_cast<float>(projected[0]-bounds[0]*.5),static_cast<float>(bounds[1]-projected[1]),-elevation-.02F}
+                    : kb::scene::Vec3{static_cast<float>(projected[0]-bounds[0]*.5),elevation+.02F,static_cast<float>(bounds[1]*.5-projected[1])};
+            }
             point = {point.x*transform.worldScale.x, point.y*transform.worldScale.y, point.z*transform.worldScale.z};
             return position + kb::math::Rotate(transform.worldRotation, point);
         };
@@ -595,6 +601,20 @@ public:
         int x0 = x-half, y0 = y-half, x1 = x+half+1, y1 = y+half+1;
         if (entry && entry->kind == EntryKind::Object) { const auto start = kb::world2d::Map2DObjectOrigin(entry->columns,entry->rows,x,y); x0 = static_cast<int>(start.first); y0 = static_cast<int>(start.second); x1 = x0 + static_cast<int>(entry->columns); y1 = y0 + static_cast<int>(entry->rows); }
         if (rectActive_) { x0 = std::min(dragStartX_,x); y0 = std::min(dragStartY_,y); x1 = std::max(dragStartX_,x)+1; y1 = std::max(dragStartY_,y)+1; }
+        if(map_.topology==kb::assets::Map2DTopology::Hexagonal&&x1-x0==1&&y1-y0==1) {
+            const auto center=kb::assets::Map2DCellLocalPoint(map_,x0,y0,floor_);
+            const auto outline=kb::assets::Map2DCellOutline(map_.topology);
+            std::vector<kb::scene::Vec3> vertices;
+            for(const auto uv:outline) {
+                kb::scene::Vec3 p{static_cast<float>(center[0])+(uv[0]-.5F)*map_.tileSize,static_cast<float>(center[1]),static_cast<float>(center[2])};
+                if(map_.orientation==kb::assets::Map2DOrientation::Wall) {p.y+=(.5F-uv[1])*static_cast<float>(kb::assets::Map2DCellHeight(map_));p.z-=.02F;}
+                else {p.z+=(.5F-uv[1])*static_cast<float>(kb::assets::Map2DCellHeight(map_));p.y+=.02F;}
+                p={p.x*transform.worldScale.x,p.y*transform.worldScale.y,p.z*transform.worldScale.z};vertices.push_back(position+kb::math::Rotate(transform.worldRotation,p));
+            }
+            const kb::scene::Vec3 strokeColor=Ctrl()||tool_==Tool::Eraser?kb::scene::Vec3{1,.4F,.2F}:kb::scene::Vec3{.3F,.8F,1};
+            for(std::size_t i=0;i<vertices.size();++i) lines.push_back({vertices[i],vertices[(i+1)%vertices.size()],strokeColor,1});
+            return lines;
+        }
         const std::array points{world(static_cast<float>(x0),static_cast<float>(y0)),world(static_cast<float>(x1),static_cast<float>(y0)),world(static_cast<float>(x1),static_cast<float>(y1)),world(static_cast<float>(x0),static_cast<float>(y1))};
         const kb::scene::Vec3 color = Ctrl() || tool_ == Tool::Eraser ? kb::scene::Vec3{1,0.4F,0.2F} : kb::scene::Vec3{0.3F,0.8F,1};
         for (unsigned i = 0; i < 4; ++i) lines.push_back({points[i],points[(i+1)%4],color,1});
@@ -614,10 +634,11 @@ public:
         if (!paintInScene_ || context_.HasPlayModeSceneSession() || tool_ == Tool::Select) return false;
         const auto* layer = std::as_const(context_.Scene()).Components().Tilemaps().TryGet(entity_);
         if (layer && layer->locked) return false;
-        const int x = static_cast<int>(std::floor(point.x / map_.tileSize + static_cast<float>(map_.width) * 0.5F));
-        const int y = static_cast<int>(std::floor(map_.orientation == kb::assets::Map2DOrientation::Wall
-            ? static_cast<float>(map_.height) - point.y / map_.tileSize : static_cast<float>(map_.height) * 0.5F - point.z / map_.tileSize));
-        if (x < 0 || y < 0 || x >= static_cast<int>(map_.width) || y >= static_cast<int>(map_.height)) return false;
+        const auto bounds=kb::assets::Map2DProjectedSize(map_);
+        const bool wall=map_.orientation==kb::assets::Map2DOrientation::Wall;
+        const auto cell=kb::assets::Map2DCellAtPlane(map_,point.x+bounds[0]*.5,(wall?bounds[1]:bounds[1]*.5)-(wall?point.y:point.z));
+        if(!cell) return false;
+        const int x=(*cell)[0],y=(*cell)[1];
         sceneHover_ = std::pair{x,y};
         if (begin) {
             if (sceneStroke_) FinishSceneStroke();

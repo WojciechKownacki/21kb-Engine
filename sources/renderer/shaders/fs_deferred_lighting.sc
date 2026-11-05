@@ -36,6 +36,8 @@ uniform vec4 u_deferredShadowParams;
 
 #include "sky_backdrop.sh"
 #include "sky_reflection.sh"
+#define KB_LOCAL_REFLECTION_DEFERRED 1
+#include "local_reflection.sh"
 
 #include "ssgi.sh"
 #include "ssr.sh"
@@ -88,7 +90,7 @@ vec3 EnvironmentColor(vec3 direction)
 
 // `reflection` is the screen-space reflection (rgb radiance, a confidence); it replaces the environment
 // specular where a ray hit something.
-vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion, vec4 reflection)
+vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion, vec4 reflection, vec3 worldPos)
 {
     if (u_deferredEnvironmentParams.x < 0.5) {
         return vec3(0.0, 0.0, 0.0);
@@ -100,7 +102,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_deferredEnvironmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir)) * fresnel * specularEnergy * u_deferredEnvironmentParams.z;
+    vec3 specularEnv = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir))) * fresnel * specularEnergy * u_deferredEnvironmentParams.z;
     vec3 specularSsr = reflection.rgb * fresnel * specularEnergy * u_ssrParams.x;
     return diffuseEnv + mix(specularEnv, specularSsr, reflection.a);
 }
@@ -423,11 +425,11 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
     // The sky light reaches only as much of the sky as the voxel GI sees (occluded sky light).
     skyAccumulated = mix(1.0, skyAccumulated, step(0.0001, u_giParams.x));
     vec4 reflection = KbScreenSpaceReflection(worldPos, normal, viewDir, roughness, pixel);
-    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated * skyAccumulated, reflection);
+    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated * skyAccumulated, reflection, worldPos);
     if ((KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) ||
          KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_LAYERED_PBR)) && u_deferredEnvironmentParams.x > 0.5) {
         vec3 coatDirection = reflect(-viewDir, normal);
-        vec3 coatReflection = mix(KbSkyReflection(coatDirection, customData1, EnvironmentColor(coatDirection)) * u_deferredEnvironmentParams.z,
+        vec3 coatReflection = mix(KbLocalReflection(worldPos,coatDirection,customData1,KbSkyReflection(coatDirection, customData1, EnvironmentColor(coatDirection))) * u_deferredEnvironmentParams.z,
             reflection.rgb * u_ssrParams.x, reflection.a);
         lighting = KbClearCoatEnvironment(lighting, coatReflection, dot(normal, viewDir), customData0);
     }
@@ -458,14 +460,14 @@ void main()
     // opaque G-buffer write stores 1. This is independent from both depth
     // conventions and authored material opacity.
     bool background = encodedNormal.a < 0.5;
-    vec3 color;
+    KB_RECONSTRUCTION_PRECISE vec3 color;
     vec3 fogEnd;
     bool fogged = true;
     if (background) {
         if (u_deferredBackdropParams.x <= 0.5 && u_fogSky.w <= 0.5) {
             discard;
         }
-        vec3 backdropDirection = normalize(ReconstructWorldPosition(v_texcoord0, depth) - u_deferredCameraPosition.xyz);
+        KB_RECONSTRUCTION_PRECISE vec3 backdropDirection = normalize(ReconstructWorldPosition(v_texcoord0, depth) - u_deferredCameraPosition.xyz);
         // The sky is as far away as the fog is marched: it takes the fog (and its light shafts) in front of it.
         fogEnd = u_deferredCameraPosition.xyz + backdropDirection * u_fogVolumetric.y;
         if (u_deferredBackdropParams.x > 0.5) {

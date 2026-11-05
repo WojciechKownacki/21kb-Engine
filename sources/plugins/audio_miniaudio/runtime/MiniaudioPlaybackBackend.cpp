@@ -134,6 +134,11 @@ void MiniaudioPlaybackBackend::SyncRouting(kb::scene::Scene& scene, bool routing
 }
 
 kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShot(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) {
+    return PlaySpatialAudio(scene,desc,kb::audio::SpatialAudioMode::Panning);
+}
+
+kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlaySpatialAudio(kb::scene::Scene& scene,const kb::audio::AudioPlayDesc& desc,kb::audio::SpatialAudioMode mode) {
+    if(const auto error=kb::audio::ValidateSpatialAudioPlayDesc(scene,desc,mode);!error.empty()) return {.started=false,.voiceId=0,.error=error};
     AssertOwnerThread();
     const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
     if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
@@ -145,13 +150,14 @@ kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShot(kb::scene::Scen
     if (!PlaybackAvailable()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio playback device is not available" };
     }
-    return PlayOneShotInternal(scene, desc, true);
+    return PlayOneShotInternal(scene, desc, true, mode);
 }
 
 kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShotInternal(
     kb::scene::Scene& scene,
     const kb::audio::AudioPlayDesc& desc,
-    bool playbackAvailable) {
+    bool playbackAvailable,
+    kb::audio::SpatialAudioMode mode) {
     const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
     if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
         return kb::audio::AudioPlayDescValidationResult(validation);
@@ -172,7 +178,7 @@ kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShotInternal(
             break;
         }
     }
-    return voicePool_.PlayOneShot(engine_.Native(), scene, desc, clipResolver_, route.group);
+    return voicePool_.PlayOneShot(engine_.Native(), scene, desc, clipResolver_, route.group, mode);
 }
 
 void MiniaudioPlaybackBackend::StopAll(kb::scene::Scene& scene) noexcept {

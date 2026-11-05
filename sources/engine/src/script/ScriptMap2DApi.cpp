@@ -12,6 +12,7 @@
 #include <limits>
 
 namespace kb::script {
+bool RegisterMap2DGeometryApi(ScriptRuntimeHost& host);
 namespace {
 using namespace kb::assets;
 using Args = std::span<const ScriptFunctionArgument>;
@@ -94,7 +95,7 @@ template <typename Value> ScriptFunctionCallResult SetProperty(const ScriptFunct
 ScriptFunctionCallResult NextStepDetailed(const ScriptFunctionCallContext& context, Args args) {
     const Cell cell(context, args); if (!cell.map) return Error("Tilemap entity or coordinates are invalid");
     Map2DPathOptions options;
-    options.floor = cell.floor; options.platformer = cell.map->orientation == Map2DOrientation::Wall;
+    options.floor = cell.floor; options.platformer = cell.map->orientation == Map2DOrientation::Wall && cell.map->topology==Map2DTopology::Rectangular;
     options.jumpHeight = static_cast<unsigned>(std::clamp(Arg(args, "jumpHeight").AsInt(3), 0, 16));
     options.jumpDistance = static_cast<unsigned>(std::clamp(Arg(args, "jumpDistance").AsInt(4), 0, 16));
     const int clearance = Arg(args, "clearance").AsInt(0);
@@ -111,6 +112,7 @@ ScriptFunctionCallResult NextStepDetailed(const ScriptFunctionCallContext& conte
     options.costProperty = Arg(args, "costProperty").AsString();
     const auto result = FindMap2DPathResult(*cell.map, {static_cast<int>(cell.x), static_cast<int>(cell.y)},
         {Arg(args, "targetX").AsInt(), Arg(args, "targetY").AsInt()}, options);
+    if(result.status==Map2DPathStatus::InvalidOptions) return Error("navigation options are not supported by this map topology");
     const auto& path = result.path;
     const auto next = path.empty() ? std::array<int, 2>{static_cast<int>(cell.x), static_cast<int>(cell.y)} : path[std::min<std::size_t>(1, path.size() - 1)];
     return {.executed = true, .outputs = {{"found", ScriptValue{!path.empty()}}, {"x", ScriptValue{next[0]}}, {"y", ScriptValue{next[1]}},
@@ -129,7 +131,7 @@ ScriptFunctionCallResult PlatformerWaypoint(const ScriptFunctionCallContext& con
     const kb::scene::SceneEntity character{Arg(args,"character").AsUInt64()};
     const auto* map = context.scene->Runtime().Tilemaps()->Map(entity);
     const auto* controller = std::as_const(*context.scene).Components().CharacterControllers2D().TryGet(character);
-    if (!map || map->orientation != Map2DOrientation::Wall || !controller || !controller->sideView)
+    if (!map || map->orientation != Map2DOrientation::Wall || map->topology!=Map2DTopology::Rectangular || !controller || !controller->sideView)
         return Error("Platformer navigation requires a wall tilemap and a side-view CharacterController2D");
     const auto origin = context.scene->Transforms().WorldTranslation(entity);
     const auto position = context.scene->Transforms().WorldTranslation(character);
@@ -238,6 +240,6 @@ bool ScriptMap2DApi::Register(ScriptRuntimeHost& host) {
             return Error("The tilemap has not been initialized");
         return {.executed = true, .outputs = {{"applied", ScriptValue{true}}}};
     };
-    return host.RegisterFunction(std::move(pause)) && ok;
+    return RegisterMap2DGeometryApi(host) && host.RegisterFunction(std::move(pause)) && ok;
 }
 } // namespace kb::script

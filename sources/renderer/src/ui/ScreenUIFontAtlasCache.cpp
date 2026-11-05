@@ -1,3 +1,4 @@
+#include "private/ui/ScreenUIFontMSDFGenerator.hpp"
 #include "private/ui/ScreenUIFontAtlasCache.hpp"
 #include "private/ui/ScreenUIFontPayloadValidator.hpp"
 #include "private/ui/ScreenUIFontDistanceField.hpp"
@@ -408,9 +409,14 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
             fail(element.entity.Id(), "Text outline or shadow is too large to pad a glyph atlas");
             continue;
         }
-        const auto useDistanceField = [&](std::uint32_t size) {
+        const bool msdf=element.text->fontRenderMode==kb::scene::UITextFontRenderMode::MultiChannelSignedDistanceField;
+        if(msdf&&(!distanceFieldAvailable||std::max(outline,shadow)>(kFontDistanceFieldPadding-1)*static_cast<float>(pixelSize)/64.0F)) {
+            fail(element.entity.Id(),"MSDF requires the distance-field shader and an outline/shadow within its distance range");continue;
+        }
+        const auto useDistanceField = [&](std::uint32_t size)->std::uint8_t {
+            if(msdf) return 2;
             return distanceFieldAvailable && element.text->fontRenderMode == kb::scene::UITextFontRenderMode::SignedDistanceField &&
-                std::max(outline, shadow) <= (kFontDistanceFieldPadding - 1) * static_cast<float>(size) / 64.0F;
+                std::max(outline, shadow) <= (kFontDistanceFieldPadding - 1) * static_cast<float>(size) / 64.0F ? 1 : 0;
         };
         FontKey key{.sceneId = sceneId, .assetId = element.text->fontAssetId, .pixelSize = pixelSize,
                     .variations = std::string{kb::scene::UITextFontVariations(*element.text)},
@@ -549,7 +555,7 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
 
 bgfx::TextureHandle ScreenUIFontAtlasCache::Resolve(std::uint64_t sceneId, std::uint64_t fontAssetId,
                                                     std::uint32_t pixelSize,
-                                                    std::string_view variations, bool distanceField,
+                                                    std::string_view variations, std::uint8_t distanceField,
                                                     const RenderResourceRegistry& resources) const noexcept {
     const auto found = std::ranges::find_if(fonts_, [&](const auto& pair) {
         return pair.first.sceneId == sceneId && pair.first.assetId == fontAssetId &&
@@ -682,7 +688,7 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
     entry.lineGap = static_cast<float>(lineGap) * entry.scale;
 
     std::unique_ptr<ScreenUIVariableFontRasterizer> variableRasterizer;
-    if (!entry.variations.empty() || key.distanceField) {
+    if (!entry.variations.empty() || key.distanceField==1) {
         try { variableRasterizer = std::make_unique<ScreenUIVariableFontRasterizer>(entry.asset->payload, entry.variations); }
         catch (const std::bad_alloc&) { if (!entry.variations.empty()) return false; }
         if (variableRasterizer && !variableRasterizer->IsValid()) variableRasterizer.reset();
@@ -690,6 +696,12 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
             !variableRasterizer->Metrics(entry.scale, entry.ascent, entry.descent, entry.lineGap))) return false;
     }
 
+    std::unique_ptr<ScreenUIFontMSDFGenerator> msdfGenerator;
+    if(key.distanceField==2) {
+        if(forceBitmap) return false;
+        msdfGenerator=std::make_unique<ScreenUIFontMSDFGenerator>(entry.asset->payload,entry.variations);
+        if(!msdfGenerator->IsValid()) return false;
+    }
     std::vector<std::uint32_t> glyphIds = entry.glyphIds;
     std::unordered_map<std::uint32_t, std::uint32_t> nominalGlyphs;
     for (const auto codepoint : codepoints) {
@@ -710,9 +722,11 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
     std::uint16_t extent = static_cast<std::uint16_t>(initialExtent);
     std::unordered_map<std::uint32_t, Glyph> glyphs;
     std::vector<std::uint8_t> alpha;
+    std::vector<std::uint8_t> multiChannel;
     bool packed = false;
     while (!packed && extent <= kMaximumAtlasExtent) {
         alpha.assign(static_cast<std::size_t>(extent) * extent, 0U);
+        if(msdfGenerator) multiChannel.assign(alpha.size()*4,0);
         glyphs.clear();
         const int padding = static_cast<int>(glyphPadding);
         int x = padding;
@@ -724,7 +738,7 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
             constexpr float basePixels = 64.0F;
             const float fieldScale = stbtt_ScaleForPixelHeight(&font, basePixels);
             const float geometryScale = fieldScale > 0.0F ? entry.scale / fieldScale : 0.0F;
-            bool useField = key.distanceField && !forceBitmap && variableRasterizer && fieldScale > 0.0F && std::isfinite(geometryScale);
+            bool useField = msdfGenerator || (key.distanceField==1 && !forceBitmap && variableRasterizer && fieldScale > 0.0F && std::isfinite(geometryScale));
             int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
             std::vector<std::uint8_t> pixels;
             const auto rasterize = [&](float scale) {
@@ -746,7 +760,11 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
                 const auto h = static_cast<std::size_t>(std::max(y1 - y0, 0));
                 return pixels.size() == w * h;
             };
-            if (useField) {
+            if(msdfGenerator) {
+                ScreenUIFontMSDFGenerator::Bitmap bitmap;
+                if(!msdfGenerator->Rasterize(codepoint,fieldScale,bitmap)) return false;
+                x0=bitmap.x0;y0=bitmap.y0;x1=bitmap.x1;y1=bitmap.y1;pixels=std::move(bitmap.rgba);
+            } else if (useField) {
                 try {
                     if (!rasterize(fieldScale)) useField = false;
                     if (useField && !pixels.empty()) {
@@ -785,11 +803,16 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
             stbtt_GetGlyphHMetrics(&font, static_cast<int>(codepoint), &advance, &leftBearing);
             static_cast<void>(leftBearing);
             if (width > 0 && height > 0) {
+                if(msdfGenerator) {
+                    if(pixels.size()!=static_cast<std::size_t>(width)*height*4) return false;
+                    for(int row=0;row<height;++row) std::copy_n(pixels.data()+static_cast<std::size_t>(row)*width*4,static_cast<std::size_t>(width)*4,multiChannel.data()+(static_cast<std::size_t>(y+row)*extent+x)*4);
+                } else {
                 if (pixels.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height)) return false;
                 for (int row = 0; row < height; ++row) {
                     std::copy_n(pixels.data() + static_cast<std::size_t>(row) * width, width,
                                 alpha.data() + static_cast<std::size_t>(y + row) * extent + x);
                 }
+            }
             }
             const float glyphScale = useField ? geometryScale : 1.0F;
             glyphs.emplace(codepoint, Glyph{.codepoint = codepoint,
@@ -802,7 +825,7 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
                                             .v0 = static_cast<float>(y) / static_cast<float>(extent),
                                             .u1 = static_cast<float>(x + width) / static_cast<float>(extent),
                                             .v1 = static_cast<float>(y + height) / static_cast<float>(extent),
-                                            .distanceField = useField});
+                                            .distanceField = static_cast<std::uint8_t>(msdfGenerator?2:(useField?1:0))});
             x += width + padding;
             rowHeight = std::max(rowHeight, height);
         }
@@ -811,7 +834,7 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
         }
     }
     if (!packed || extent > kMaximumAtlasExtent) {
-        if (key.distanceField && !forceBitmap) return Rebuild(key, entry, codepoints, glyphPadding, resources, true);
+        if (key.distanceField==1 && !forceBitmap) return Rebuild(key, entry, codepoints, glyphPadding, resources, true);
         return false;
     }
 
@@ -819,6 +842,7 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
     for (std::size_t index = 0U; index < alpha.size(); ++index) {
         rgba[index * 4U + 3U] = alpha[index];
     }
+    if(msdfGenerator) rgba=std::move(multiChannel);
     if (rgba.size() > std::numeric_limits<std::uint32_t>::max()) {
         return false;
     }
@@ -831,7 +855,7 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
         .colorSpace = RenderTextureColorSpace::Linear,
     });
     if (!newTexture.IsValid()) {
-        if (key.distanceField && !forceBitmap) return Rebuild(key, entry, codepoints, glyphPadding, resources, true);
+        if (key.distanceField==1 && !forceBitmap) return Rebuild(key, entry, codepoints, glyphPadding, resources, true);
         return false;
     }
     if (entry.texture.IsValid()) {

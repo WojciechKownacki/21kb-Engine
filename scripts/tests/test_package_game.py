@@ -1969,7 +1969,7 @@ class PackageGameTests(unittest.TestCase):
             root = Path(temporary_text)
             built = root / "build" / "bin"
             built.mkdir(parents=True)
-            for index, name in enumerate(("kb_game.exe", *(f"{plugin}.dll" for plugin in plugins))):
+            for index, name in enumerate(("kb_game.exe", *(f"{plugin}.dll" for plugin in plugins), "phonon.dll")):
                 guid = bytes([index] * 16)
                 stem = Path(name).stem
                 write_pe_with_pdb_reference(built / name, f"{stem}.pdb", guid, 1)

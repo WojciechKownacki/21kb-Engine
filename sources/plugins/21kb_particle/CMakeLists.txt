@@ -15,6 +15,7 @@ if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
 endif()
 
 add_library(kb_21kb_particle_plugin ${KB_21KB_PARTICLE_PLUGIN_LIBRARY_TYPE}
+    ParticleGeometryCollision.hpp
     CpuParticleBackend.hpp
     CpuParticleBackend.cpp
     ParticleModule.hpp

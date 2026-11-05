@@ -1,3 +1,4 @@
+#include "authoring/EditorAuthoringHost.hpp"
 #include "kb/editor/EditorApplication.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -8,6 +9,7 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
 #include <exception>
+#include <iostream>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -102,9 +104,11 @@ int RunEditorEntryPoint() {
     std::wstring selfTestTask =
         L"SELFTEST-001-Headless-Editor-Automation";
     std::filesystem::path selfTestScenario;
+    std::filesystem::path pythonScript;
     if (argv != nullptr) {
         ConfigureProjectFromArguments(argc, argv);
         selfTest = HasSelfTestFlag(argc, argv);
+        if(const auto script=ArgumentValue(argc,argv,L"--python-script")) pythonScript=std::filesystem::path{*script};
         if (const auto directory = ArgumentValue(argc, argv, L"--lua-debug-dir")) {
             kb::editor::EditorSceneContext::ConfigureLuaDebugger(std::filesystem::path{*directory});
         }
@@ -129,6 +133,12 @@ int RunEditorEntryPoint() {
     kb::editor::EditorCrashBreadcrumbs::Reset();
     kb::editor::EditorCrashBreadcrumbs::InstallUnhandledExceptionLogger();
     kb::editor::EditorCrashBreadcrumbs::Write("app", "wWinMain enter");
+    if(!pythonScript.empty()) {
+        if(selfTest) return 2;
+        kb::editor::EditorSceneContext context;kb::editor::EditorAuthoringHost host{context};kb::editor::EditorPythonRuntime runtime;std::string error;
+        if(!runtime.ExecuteFile(host,pythonScript,error)) {kb::editor::EditorCrashBreadcrumbs::Write("python",error);std::cerr<<"Python: "<<error<<'\n';return 1;}
+        std::cout<<"embedded Python authoring completed\n";return 0;
+    }
     if (selfTest) {
         // Headless: run self-tests and exit before any window/graphics init.
         if (!ValidTaskName(selfTestTask)) {

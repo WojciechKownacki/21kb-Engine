@@ -328,7 +328,7 @@ void AIBrainSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
 
 void AIBrainSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
     kb::scene::Scene& scene = context.GetScene();
-    if (!scene.Runtime().IsPlaying()) { OnDestroy(context); return; }
+    if (!scene.Runtime().IsPlaying()) return;
     const float deltaSeconds = context.DeltaSeconds();
     if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F) return;
     std::vector<kb::scene::SceneEntity> brains;

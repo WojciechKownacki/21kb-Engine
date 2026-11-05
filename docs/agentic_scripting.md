@@ -33,12 +33,19 @@ them into the scene, and checks that they work. The engine ships a small tool,
 
 ## Which language to start with
 
-**Start with Lua.** It is the language the templates, the API reference, the agent tools and the
-examples are written for; scripts are plain text files, a mistake is reported with its file and line
-and never needs a rebuild, and the packaged game runs them in the same sandbox as the editor. C++
-(`script-new --language cpp`) and Visual Graph are options for when a project needs them: C++ for
-code that must be as fast as the engine and can use any library, with a toolchain to install and a
-module to build; Visual Graph for logic drawn as nodes. Nothing in the engine requires them.
+**C++ is the primary code-first workflow.** `script-new --language cpp` creates a class
+and standalone CMake module against the public engine SDK. `script-build` incrementally
+compiles project code; scene attachment, Play and export use the same native descriptor.
+Read the generated `NativeAuthoring` API topic for the short C++ example and equivalent
+Lua workflow (`kb_cli api --project . --topic NativeAuthoring`).
+
+Lua is a supported alternative for scripts without native compilation, with file/line
+diagnostics and the same gameplay backend in the editor and packaged player. Visual
+Graph uses the shared function catalog for logic drawn as nodes.
+
+Select Visual Studio or VS Code in **Editor Settings > General > Code editor**.
+Double-click a script asset to open its source; native classes open their own CMake
+folder. After saving C++, run `script-build` and restart Play. Lua needs no C++ build.
 
 Use `kb_cli graph` to author and validate [gameplay graphs](gameplay_graphs.md).
 Use `kb_cli blend-space` to author and sample [two-axis animation assets](blend_space_2d.md).
@@ -175,7 +182,8 @@ bounded after warmup. This memory measurement is reported as unavailable on othe
 The Lua runtime can pause a script at a breakpoint, step into, over and out, continue, and show the call
 stack and locals. A paused script is suspended, not blocking: the game loop and the other scripts keep
 running. When the debugger goes away, clear its settings and resume, and the script runs to the end.
-There is no evaluate command and no `kb_cli` debug session yet.
+The [live Lua debugger](#live-lua-debugger) exposes these operations through `kb_cli debug`
+in the editor and player, including bounded, isolated expression evaluation of scalar locals and upvalues.
 
 ## Setup
 

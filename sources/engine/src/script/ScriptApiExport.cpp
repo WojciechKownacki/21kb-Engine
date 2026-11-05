@@ -1,4 +1,18 @@
 #include "engine/script/ScriptApiExport.hpp"
+#include "script/NativeAuthoringGuide.hpp"
+#include "script/PbrMaterialsGuide.hpp"
+#include "script/LightingGuide.hpp"
+#include "script/PhysicsAssembliesGuide.hpp"
+#include "script/ParticleGeometryGuide.hpp"
+#include "script/Map2DGeometryGuide.hpp"
+#include "script/Rig2DGuide.hpp"
+#include "script/CsgGuide.hpp"
+#include "script/PythonAuthoringGuide.hpp"
+#include "script/EditorExtensionGuide.hpp"
+#include "script/SpatialAudioGuide.hpp"
+#include "script/RuntimeUIGuide.hpp"
+#include "script/SensorInputGuide.hpp"
+#include "script/RuntimeUIGuide.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -44,7 +58,7 @@ namespace {
 
 [[nodiscard]] std::string PinList(const std::vector<ScriptApiPin>& pins) {
     if (pins.empty()) {
-        return "—";
+        return "Ă˘â‚¬â€ť";
     }
     std::string text;
     for (const ScriptApiPin& pin : pins) {
@@ -261,7 +275,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
     const ScriptApiCatalogLuaBinding& binding) {
     const ScriptApiCatalogFunction* function = catalog.FindFunction(binding.functionName);
     if (function == nullptr) {
-        return "—";
+        return "Ă˘â‚¬â€ť";
     }
     switch (binding.returnKind) {
     case ScriptApiCatalogLuaReturnKind::SingleOutput:
@@ -270,7 +284,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
                 return binding.returnPin + ": " + ToString(pin.type);
             }
         }
-        return "—";
+        return "Ă˘â‚¬â€ť";
     case ScriptApiCatalogLuaReturnKind::OutputsTable:
         return "table { " + PinList(function->outputs) + " }";
     case ScriptApiCatalogLuaReturnKind::GuardedTable: {
@@ -286,7 +300,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
         break;
     }
     if (function->outputs.empty()) {
-        return "—";
+        return "Ă˘â‚¬â€ť";
     }
     if (function->outputs.size() == 1U) {
         return function->outputs.front().name + ": " + ToString(function->outputs.front().type);
@@ -391,7 +405,7 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
     std::string out;
     out.reserve(16U * 1024U);
 
-    out += "# 21kb Engine — Script API Reference\n\n";
+    out += "# 21kb Engine Ă˘â‚¬â€ť Script API Reference\n\n";
     out += "> Generated with `kb_cli api`. Do not edit by hand; regenerate after engine updates.\n\n";
 
     out += "## Behaviour model\n\n";
@@ -497,7 +511,7 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
             out += " | `";
             out += entry.name;
             out += "` | ";
-            out += entry.owner.empty() ? "—" : entry.owner;
+            out += entry.owner.empty() ? "Ă˘â‚¬â€ť" : entry.owner;
             out += " | ";
             if (entry.kind == ScriptApiNameKind::Function || entry.kind == ScriptApiNameKind::Event) {
                 out += "in: ";
@@ -590,6 +604,8 @@ namespace {
     out += "Read only the page your task needs. The kb-engine `api_reference` tool returns one page by `topic` ";
     out += "(a group such as `Physics`, a function such as `Physics.Raycast`, a component such as `Rigidbody`) ";
     out += "or finds topics by `search` text; the same pages are files next to this one.\n\n";
+    out += "Start with [C++ and Lua authoring](NativeAuthoring.md) (topic: `NativeAuthoring`).\n\n";
+    out += "See [builtin PBR advanced materials](PbrMaterials.md) for sheen, transmission and anisotropy.\n\n";
     out += "## How scripts work\n\n";
     out += "A `Behaviour` component runs a script asset on its entity: Lua (`.lua`), Visual Graph (`.kbgraph`) or native C++. ";
     out += "A Lua script defines global functions named after lifecycle events, each receiving `(self, dt)`: ";
@@ -675,6 +691,19 @@ namespace {
 std::vector<ScriptApiReferencePage> ScriptApiExport::ToReferencePages(const ScriptApiCatalog& catalog) {
     std::vector<ScriptApiReferencePage> pages;
     pages.push_back({ "README.md", IndexPage(catalog) });
+    pages.push_back({ "NativeAuthoring.md", std::string{kNativeAuthoringGuide} });
+    pages.push_back({ "PbrMaterials.md", std::string{kPbrMaterialsGuide} });
+    pages.push_back({ "Lighting.md", std::string{kLightingGuide} });
+    pages.push_back({ "PhysicsAssemblies.md", std::string{kPhysicsAssembliesGuide} });
+    pages.push_back({ "ParticleGeometry.md", std::string{kParticleGeometryGuide} });
+    pages.push_back({ "Map2DGeometry.md", std::string{kMap2DGeometryGuide} });
+    pages.push_back({ "EditorExtensions.md", std::string{kEditorExtensionGuide} });
+    pages.push_back({ "PythonAuthoring.md", std::string{kPythonAuthoringGuide} });
+    pages.push_back({ "CSG.md", std::string{kCsgGuide} });
+    pages.push_back({ "Rig2D.md", std::string{kRig2DGuide} });
+    pages.push_back({ "SpatialAudio.md", std::string{kSpatialAudioGuide} });
+    pages.push_back({ "RuntimeUI.md", std::string{kRuntimeUIGuide} });
+    pages.push_back({ "SensorInput.md", std::string{kSensorInputGuide} });
     for (const auto& [group, functions] : FunctionGroups(catalog)) {
         pages.push_back({ GroupPagePath(group), GroupPage(catalog, group, functions) });
         for (const ScriptApiCatalogFunction* function : functions) {
@@ -692,6 +721,19 @@ std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCata
     while (!wanted.empty() && wanted.back() == ' ') wanted.pop_back();
     while (!wanted.empty() && wanted.front() == ' ') wanted.erase(wanted.begin());
     std::ranges::replace(wanted, '/', '.');
+    if (wanted == "nativeauthoring" || wanted == "nativeauthoring.md") return std::string{kNativeAuthoringGuide};
+    if (wanted == "sensorinput" || wanted == "sensorinput.md") return std::string{kSensorInputGuide};
+    if (wanted == "runtimeui" || wanted == "runtimeui.md") return std::string{kRuntimeUIGuide};
+    if (wanted == "spatialaudio" || wanted == "spatialaudio.md") return std::string{kSpatialAudioGuide};
+    if (wanted == "editorextensions" || wanted == "editorextensions.md") return std::string{kEditorExtensionGuide};
+    if (wanted == "pythonauthoring" || wanted == "pythonauthoring.md") return std::string{kPythonAuthoringGuide};
+    if (wanted == "csg" || wanted == "csg.md") return std::string{kCsgGuide};
+    if (wanted == "rig2d" || wanted == "rig2d.md") return std::string{kRig2DGuide};
+    if (wanted == "map2dgeometry" || wanted == "map2dgeometry.md") return std::string{kMap2DGeometryGuide};
+    if (wanted == "particlegeometry" || wanted == "particlegeometry.md") return std::string{kParticleGeometryGuide};
+    if (wanted == "physicsassemblies" || wanted == "physicsassemblies.md") return std::string{kPhysicsAssembliesGuide};
+    if (wanted == "lighting" || wanted == "lighting.md") return std::string{kLightingGuide};
+    if (wanted == "pbrmaterials" || wanted == "pbrmaterials.md") return std::string{kPbrMaterialsGuide};
     if (wanted.empty() || wanted == "index" || wanted == "readme") {
         return IndexPage(catalog);
     }
@@ -733,6 +775,55 @@ std::string ScriptApiExport::SearchReference(const ScriptApiCatalog& catalog, st
     };
     std::string out;
     std::size_t found = 0U;
+    if (found < limit && !words.empty() && matches(Lower(std::string{kSensorInputGuide}))) {
+        out += "- `SensorInput` - accelerometer, gyroscope, SI units, provider lifecycle and explicit replay\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kRuntimeUIGuide}))) {
+        out += "- `RuntimeUI` - MSDF, semantic accessibility, speech and decoded video\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kSpatialAudioGuide}))) {
+        out += "- `SpatialAudio` - HRTF convolution and first-order AmbiX binaural decoding\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kEditorExtensionGuide}))) {
+        out += "- `EditorExtensions` - public C++ editor SDK, external actions and dock panels, install and unload\n"; ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kPythonAuthoringGuide}))) {
+        out += "- `PythonAuthoring` - embedded Python kb21 authoring, editor history and scene persistence\n"; ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kCsgGuide}))) {
+        out += "- `CSG` - union subtract intersect boolean blockout meshes and collision\n"; ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kRig2DGuide}))) {
+        out += "- `Rig2D` - planar weighted rigs, bones and skeletal mesh animation\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kMap2DGeometryGuide}))) {
+        out += "- `Map2DGeometry` - isometric/axial hex maps, polygons and deformable lines\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kParticleGeometryGuide}))) {
+        out += "- `ParticleGeometry` - particle collisions with scene solids, signed distance grids and heightfields\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kPhysicsAssembliesGuide}))) {
+        out += "- `PhysicsAssemblies` - ragdoll, cloth soft bodies, vehicles, fracture and buoyancy\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kLightingGuide}))) {
+        out += "- `Lighting` - local reflection probes, baked lightmaps and depth of field\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kPbrMaterialsGuide}))) {
+        out += "- `PbrMaterials` - builtin PBR sheen, transmission, anisotropy, C++/Lua asset assignment and cook\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kNativeAuthoringGuide}))) {
+        out += "- `NativeAuthoring` - C++ and Lua class creation, CMake/SDK builds, IDE selection and scene execution\n";
+        ++found;
+    }
     for (const ScriptApiCatalogFunction& function : catalog.functions) {
         if (found < limit && !words.empty() && matches(Lower(function.name + " " + function.description))) {
             out += "- `" + function.name + "` - " + function.description + "\n";

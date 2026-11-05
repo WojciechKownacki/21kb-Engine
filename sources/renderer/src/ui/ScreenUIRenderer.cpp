@@ -1,6 +1,7 @@
 #include "private/ui/ScreenUIRenderer.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/ui/DynamicImageAsset.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/Scene.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
@@ -57,7 +58,7 @@ bool ScreenUIRenderer::Initialize() {
 }
 
 void ScreenUIRenderer::Shutdown(RenderResourceRegistry& resources) noexcept {
-    fontAtlas_.Shutdown(resources);
+    ReleaseAllScenes(resources);
     backgroundBlur_.Shutdown();
     composite_.Shutdown();
     imageBindings_.clear();
@@ -168,9 +169,12 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
 
 void ScreenUIRenderer::ReleaseScene(std::uint64_t sceneId, RenderResourceRegistry& resources) noexcept {
     fontAtlas_.ReleaseScene(sceneId, resources);
+    std::erase_if(dynamicTextures_,[&](const auto& t){if(t.sceneId!=sceneId)return false;if(bgfx::isValid(t.texture))bgfx::destroy(t.texture);return true;});
 }
 
 void ScreenUIRenderer::ReleaseAllScenes(RenderResourceRegistry& resources) noexcept {
+    for(const auto& t:dynamicTextures_)if(bgfx::isValid(t.texture))bgfx::destroy(t.texture);
+    dynamicTextures_.clear();
     fontAtlas_.Shutdown(resources);
     imageBindings_.clear();
     resolvedTextures_.clear();
@@ -185,6 +189,11 @@ bool ScreenUIRenderer::IsInitialized() const noexcept {
 }
 
 void ScreenUIRenderer::ResolveImages(const ScreenUISubmitDesc& desc) {
+    std::erase_if(dynamicTextures_,[&](const auto& texture){
+        if(texture.sceneId!=desc.sceneId)return false;
+        const bool live=std::ranges::any_of(desc.frame->elements,[&](const auto& e){return (e.rawImage&&e.rawImage->imageAssetId==texture.assetId)||(e.image&&e.image->imageAssetId==texture.assetId);});
+        if(!live&&bgfx::isValid(texture.texture))bgfx::destroy(texture.texture);return !live;
+    });
     for (const kb::scene::SceneUIFrameElement& element : desc.frame->elements) {
         ForEachImageAsset(element, [&](std::uint64_t assetId, RenderTextureColorSpace colorSpace,
                                        ScreenUITextureSource source) {
@@ -192,6 +201,23 @@ void ScreenUIRenderer::ResolveImages(const ScreenUISubmitDesc& desc) {
                     return image.assetId == assetId && image.source == source;
                 }) != imageBindings_.end()) {
                 return;
+            }
+            const auto* metadata=desc.assets->Registry().Find(kb::assets::AssetId{assetId});
+            if(metadata&&metadata->type=="DynamicImage") {
+                const auto image=desc.assets->AcquireLoaded<kb::scene::DynamicImageAsset>(metadata->id);
+                if(!image.IsLoaded()||image->width==0||image->height==0||image->width>1920||image->height>1080||image->rgba.size()!=static_cast<std::size_t>(image->width)*image->height*4)return;
+                auto found=std::ranges::find_if(dynamicTextures_,[&](const auto& t){return t.sceneId==desc.sceneId&&t.assetId==assetId;});
+                if(found==dynamicTextures_.end()){dynamicTextures_.push_back({.sceneId=desc.sceneId,.assetId=assetId});found=dynamicTextures_.end()-1;}
+                if(found->width!=image->width||found->height!=image->height){
+                    if(bgfx::isValid(found->texture))bgfx::destroy(found->texture);
+                    found->width=static_cast<std::uint16_t>(image->width);found->height=static_cast<std::uint16_t>(image->height);found->revision=0;
+                    // The UI composite consumes display-encoded image samples directly.
+                    found->texture=bgfx::createTexture2D(found->width,found->height,false,1,bgfx::TextureFormat::RGBA8,BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP);
+                }
+                if(!bgfx::isValid(found->texture))return;
+                if(found->revision!=image->revision){bgfx::updateTexture2D(found->texture,0,0,0,0,found->width,found->height,bgfx::copy(image->rgba.data(),static_cast<std::uint32_t>(image->rgba.size())));found->revision=image->revision;}
+                imageBindings_.push_back({.assetId=assetId,.source=source,.width=found->width,.height=found->height});
+                AppendResolvedTexture({.key={.source=source,.assetId=assetId},.texture=found->texture,.width=found->width,.height=found->height});return;
             }
             const RenderTextureHandle handle = desc.resourceMap->ResolveTexture(assetId, colorSpace);
             const RenderTextureResource* texture = desc.resources->FindTexture(handle);

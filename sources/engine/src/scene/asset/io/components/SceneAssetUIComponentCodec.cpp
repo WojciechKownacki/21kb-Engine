@@ -17,7 +17,7 @@ using kb::math::Vec2;
 using kb::math::Vec4;
 
 constexpr std::uint64_t Bit(UIComponentType type) noexcept { return 1ULL << static_cast<unsigned int>(type); }
-constexpr std::uint64_t KnownBits = (1ULL << (static_cast<unsigned int>(UIComponentType::WidgetSwitcher) + 1U)) - 1ULL;
+constexpr std::uint64_t KnownBits = (1ULL << (static_cast<unsigned int>(UIComponentType::Accessibility) + 1U)) - 1ULL;
 
 bool Read(Reader& in, Vec2& v) { return in.ReadFloat(v.x) && in.ReadFloat(v.y); }
 bool Read(Reader& in, Vec4& v) { return in.ReadFloat(v.x) && in.ReadFloat(v.y) && in.ReadFloat(v.z) && in.ReadFloat(v.w); }
@@ -92,7 +92,7 @@ bool ReadValue(Reader& in, UIText& v, std::uint32_t fileVersion) {
     if (!in.ReadUInt64(v.fallbackFontAssetId)) return false;
     if (fileVersion < SceneDocument::UITextFontRenderModeFileVersion) return true;
     std::uint32_t mode = 0U;
-    if (!in.ReadUInt32(mode) || mode > static_cast<std::uint32_t>(UITextFontRenderMode::SignedDistanceField)) return false;
+    if (!in.ReadUInt32(mode) || mode > static_cast<std::uint32_t>(UITextFontRenderMode::MultiChannelSignedDistanceField)) return false;
     v.fontRenderMode = static_cast<UITextFontRenderMode>(mode);
     return true;
 }
@@ -244,6 +244,14 @@ void WriteValue(std::vector<std::uint8_t>& out, const UIDropdown& v) {
 }
 void WriteValue(std::vector<std::uint8_t>& out, const UIProgressBar& v) { SceneAssetBinaryIO::WriteFloat(out,v.minimum);SceneAssetBinaryIO::WriteFloat(out,v.maximum);SceneAssetBinaryIO::WriteFloat(out,v.value);KB_WRITE_FIELD(direction);SceneAssetBinaryIO::WriteUInt64(out,v.fillRect); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIWidgetSwitcher& v) { SceneAssetBinaryIO::WriteUInt32(out,v.visibleChildIndex); }
+bool ReadValue(Reader& in,UIAccessibility& value,std::uint32_t) {
+    std::uint32_t role=0;std::string label,hint;
+    if(!in.ReadUInt32(role)||role>static_cast<std::uint32_t>(UIAccessibilityRole::List)||!in.ReadString(label)||!in.ReadString(hint)||!in.ReadBool(value.hidden))return false;
+    value.role=static_cast<UIAccessibilityRole>(role);return SetUIAccessibilityLabel(value,label)&&SetUIAccessibilityHint(value,hint);
+}
+void WriteValue(std::vector<std::uint8_t>& out,const UIAccessibility& value) {
+    SceneAssetBinaryIO::WriteUInt32(out,static_cast<std::uint32_t>(value.role));SceneAssetBinaryIO::WriteString(out,UIAccessibilityLabel(value));SceneAssetBinaryIO::WriteString(out,UIAccessibilityHint(value));SceneAssetBinaryIO::WriteBool(out,value.hidden);
+}
 #undef KB_WRITE_FIELD
 
 #define KB_COMPONENTS(X) \
@@ -251,7 +259,7 @@ void WriteValue(std::vector<std::uint8_t>& out, const UIWidgetSwitcher& v) { Sce
  X(HorizontalLayout,UIHorizontalLayout,horizontalLayout) X(VerticalLayout,UIVerticalLayout,verticalLayout) X(GridLayout,UIGridLayout,gridLayout) X(WrapLayout,UIWrapLayout,wrapLayout) X(OverlayLayout,UIOverlayLayout,overlayLayout) \
  X(LayoutElement,UILayoutElement,layoutElement) X(ContentSizeFitter,UIContentSizeFitter,contentSizeFitter) X(AspectRatioFitter,UIAspectRatioFitter,aspectRatioFitter) \
  X(Sprite,UISprite,sprite) X(Image,UIImage,image) X(RawImage,UIRawImage,rawImage) X(Text,UIText,text) X(Border,UIBorder,border) X(Mask,UIMask,mask) X(Shadow,UIShadow,shadow) X(Outline,UIOutline,outline) X(BackgroundBlur,UIBackgroundBlur,backgroundBlur) \
- X(Selectable,UISelectable,selectable) X(Button,UIButton,button) X(Toggle,UIToggle,toggle) X(Slider,UISlider,slider) X(Scrollbar,UIScrollbar,scrollbar) X(ScrollView,UIScrollView,scrollView) X(InputField,UIInputField,inputField) X(Dropdown,UIDropdown,dropdown) X(ProgressBar,UIProgressBar,progressBar) X(WidgetSwitcher,UIWidgetSwitcher,widgetSwitcher)
+ X(Selectable,UISelectable,selectable) X(Button,UIButton,button) X(Toggle,UIToggle,toggle) X(Slider,UISlider,slider) X(Scrollbar,UIScrollbar,scrollbar) X(ScrollView,UIScrollView,scrollView) X(InputField,UIInputField,inputField) X(Dropdown,UIDropdown,dropdown) X(ProgressBar,UIProgressBar,progressBar) X(WidgetSwitcher,UIWidgetSwitcher,widgetSwitcher) X(Accessibility,UIAccessibility,accessibility)
 
 } // namespace
 

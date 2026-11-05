@@ -22,6 +22,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/script/NativeScriptPlugin.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/script/ScriptProjectFiles.hpp"
@@ -1321,12 +1322,87 @@ struct WindowsRuntimeModuleSnapshot {
 
 using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::uint8_t>>;
 
+// Project C++ that a target links into its host instead of loading as a library.
+struct LinkedNativeModule {
+    std::string key;
+    std::string entryPoint;
+    std::vector<std::filesystem::path> sources;
+};
+
+[[nodiscard]] bool CollectLinkedNativeSources(
+    const std::filesystem::path& descriptorSource,
+    const std::filesystem::path& projectRoot,
+    LinkedNativeModule& module,
+    std::string& error) {
+    std::filesystem::path relative;
+    std::error_code fileError;
+    const auto status = std::filesystem::symlink_status(descriptorSource, fileError);
+    if (fileError || status.type() != std::filesystem::file_type::regular ||
+        !CanonicalRelativePathWithin(descriptorSource, projectRoot, relative)) {
+        error = "native behaviour source must be a regular file inside the project: " +
+            descriptorSource.generic_string();
+        return false;
+    }
+    const std::filesystem::path sourceDirectory = (projectRoot / relative).parent_path();
+    for (std::filesystem::recursive_directory_iterator it{ sourceDirectory, fileError }, end; !fileError && it != end;
+         it.increment(fileError)) {
+        if (!it->is_regular_file(fileError)) continue;
+        const std::string extension = it->path().extension().string();
+        if (extension == ".cpp" || extension == ".cc" || extension == ".cxx") {
+            module.sources.push_back(it->path().lexically_normal());
+        }
+    }
+    if (fileError || module.sources.empty()) {
+        error = "native behaviour sources could not be listed: " + sourceDirectory.generic_string();
+        return false;
+    }
+    std::ranges::sort(module.sources);
+    return true;
+}
+
+[[nodiscard]] std::string JsonString(std::string_view value) {
+    std::string text{ "\"" };
+    for (const char character : value) {
+        if (character == '"' || character == '\\') text += '\\';
+        text += character;
+    }
+    return text + '"';
+}
+
+[[nodiscard]] bool WriteLinkedNativeManifest(
+    const std::filesystem::path& path,
+    const std::vector<LinkedNativeModule>& modules,
+    std::string& error) {
+    std::ostringstream json;
+    json << "{\"modules\":[";
+    for (std::size_t index = 0U; index < modules.size(); ++index) {
+        const LinkedNativeModule& module = modules[index];
+        json << (index == 0U ? "" : ",") << "{\"key\":" << JsonString(module.key)
+             << ",\"entry\":" << JsonString(module.entryPoint) << ",\"sources\":[";
+        for (std::size_t source = 0U; source < module.sources.size(); ++source) {
+            json << (source == 0U ? "" : ",") << JsonString(module.sources[source].generic_string());
+        }
+        json << "]}";
+    }
+    json << "]}\n";
+    std::error_code directoryError;
+    std::filesystem::create_directories(path.parent_path(), directoryError);
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    const std::string text = json.str();
+    if (!output || !output.write(text.data(), static_cast<std::streamsize>(text.size()))) {
+        error = "native link manifest could not be written: " + path.generic_string();
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool PrepareNativeRuntimeSources(
     const std::vector<kb::assets::AssetMetadata>& assets,
     const SourceSnapshotMap& snapshots,
     const std::filesystem::path& projectRoot,
     std::string_view target,
     std::vector<WindowsRuntimeModulePlan>& plans,
+    std::vector<LinkedNativeModule>& linkedModules,
     NativeRuntimeSources& sources,
     std::string& error) {
     for (const auto& metadata : assets) {
@@ -1345,11 +1421,24 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         }
         const auto descriptor = std::static_pointer_cast<kb::script::NativeBehaviourDescriptor>(loaded.asset);
         std::filesystem::path packagedModule;
-        if (!descriptor->modulePath.empty()) {
-            if (target != "Windows.x64") {
-                error = "native behaviour DLL cannot be shipped for target " + std::string{target};
+        std::string linkedKey;
+        if (target != "Windows.x64" && (!descriptor->modulePath.empty() || !descriptor->sourcePath.empty())) {
+            if (descriptor->sourcePath.empty()) {
+                error = "native behaviour for target " + std::string{target} +
+                    " needs C++ source to link into the host: " + metadata.virtualPath.generic_string();
                 return false;
             }
+            LinkedNativeModule module{
+                .key = "module_" + std::to_string(metadata.id.value),
+                .entryPoint = descriptor->entryPoint.empty()
+                    ? std::string{ kb::script::kNativeScriptPluginDefaultEntryPoint } : descriptor->entryPoint,
+            };
+            const auto source = descriptor->sourcePath.is_absolute() ? descriptor->sourcePath
+                : metadata.physicalPath.parent_path() / descriptor->sourcePath;
+            if (!CollectLinkedNativeSources(source, projectRoot, module, error)) return false;
+            linkedKey = module.key;
+            linkedModules.push_back(std::move(module));
+        } else if (!descriptor->modulePath.empty()) {
             if (descriptor->build.enabled) {
                 const auto build = kb::script::ScriptProjectFiles::BuildOf(*descriptor, metadata.physicalPath, projectRoot);
                 const auto built = kb::script::NativeScriptBuildPipeline::Build(build);
@@ -1396,6 +1485,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
             output << line << '\n';
         }
         if (!packagedModule.empty()) output << "module = " << packagedModule.generic_string() << '\n';
+        if (!linkedKey.empty()) output << "linked = " << linkedKey << '\n';
         output << "shadow_copy = false\n";
         const auto text = output.str();
         sources.emplace(metadata.id.value, std::vector<std::uint8_t>{text.begin(), text.end()});
@@ -2621,9 +2711,19 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
         return Failure(std::move(error));
     }
     NativeRuntimeSources nativeRuntimeSources;
+    std::vector<LinkedNativeModule> linkedNativeModules;
     if (!PrepareNativeRuntimeSources(assets, sourceSnapshots, projectRoot, profile.identifier,
-            windowsRuntimeModulePlans, nativeRuntimeSources, error)) {
+            windowsRuntimeModulePlans, linkedNativeModules, nativeRuntimeSources, error)) {
         return Failure(std::move(error));
+    }
+    if (!linkedNativeModules.empty()) {
+        if (request.nativeLinkManifestPath.empty()) {
+            return Failure("target " + std::string{ profile.identifier } +
+                " links project C++ into its host but no native link manifest path was provided");
+        }
+        if (!WriteLinkedNativeManifest(request.nativeLinkManifestPath, linkedNativeModules, error)) {
+            return Failure(std::move(error));
+        }
     }
     if (profile.identifier == "Windows.x64") {
         if (!windowsRuntimeModulePlans.empty()) {
@@ -2774,6 +2874,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             if (!TextureBakeSource(metadata, fileBytes, *texture, textureSource, error)) {
                 return Failure(std::move(error));
             }
+            const bool cubeTexture = texture->dimension == kb::render::RenderTextureDimension::TextureCube;
             const kb::render::bake::TextureBakeSettings textureSettings{
                 .semantic = texture->semantic,
                 .colorSpace = texture->colorSpace,
@@ -2829,10 +2930,10 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 entry.artifacts.push_back(asset_bake::RuntimeArtifactReference{
                     .digest = digest,
                     .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
-                    .qualifier = textureSettings.preserveAtlas ? "rgba8-atlas" : std::string{ asset_bake::TextureCompressionFamilyName(family) },
+                    .qualifier = cubeTexture ? "rgba8-cube" : textureSettings.preserveAtlas ? "rgba8-atlas" : std::string{ asset_bake::TextureCompressionFamilyName(family) },
                 });
                 ++result.textureArtifactCount;
-                if (textureSettings.preserveAtlas) break;
+                if (textureSettings.preserveAtlas || cubeTexture) break;
             }
         } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension &&
                    entry.sourceExtension != kb::assets::kMap2DAssetExtension) {

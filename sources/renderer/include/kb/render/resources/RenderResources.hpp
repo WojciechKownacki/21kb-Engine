@@ -334,6 +334,8 @@ struct RenderMaterialDesc {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
+    bool bakedLightmap = false;
     bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
@@ -483,6 +485,8 @@ struct RenderMaterialResource {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
+    bool bakedLightmap = false;
     bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;

@@ -2,6 +2,7 @@
 
 #include "engine/modules/EngineModuleLoader.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
+#include "engine/script/NativeScriptPlugin.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -42,6 +43,8 @@ public:
     NativeScriptPluginManager& operator=(NativeScriptPluginManager&&) = delete;
 
     [[nodiscard]] NativeScriptPluginLoadResult LoadOrReload(NativeScriptPluginLoadDesc desc);
+    // Install a module linked into the host, using the same API and rollback as a DLL.
+    [[nodiscard]] NativeScriptPluginLoadResult LoadLinked(std::string key, NativeScriptPluginRegisterProc registration);
     [[nodiscard]] bool IsLoaded(std::string_view key) const noexcept;
     void Unload(std::string_view key) noexcept;
     void Clear() noexcept;
@@ -54,11 +57,13 @@ private:
         std::string entryPoint;
         kb::modules::EngineModuleLibrary library;
         std::vector<std::string> registeredSymbols;
+        NativeScriptPluginRegisterProc linkedRegistration = nullptr;
     };
 
     [[nodiscard]] static std::string NormalizeKey(std::string key, const std::filesystem::path& modulePath);
     [[nodiscard]] std::optional<LoadedPlugin> Detach(std::string_view key) noexcept;
     [[nodiscard]] bool RegisterPluginSymbols(kb::modules::EngineModuleLibrary& library, const std::string& entryPoint, std::vector<std::string>& registeredSymbols, std::vector<std::string>& errors);
+    [[nodiscard]] bool RegisterPluginSymbols(NativeScriptPluginRegisterProc registration, std::vector<std::string>& registeredSymbols, std::vector<std::string>& errors);
     void RestoreOrClose(LoadedPlugin plugin, std::vector<std::string>& errors);
 
     NativeScriptBackend& backend_;

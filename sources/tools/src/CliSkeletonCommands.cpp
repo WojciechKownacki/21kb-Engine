@@ -36,6 +36,7 @@ struct Session {
     kb::scene::Scene scene;
     std::filesystem::path file;
     std::string virtualPath;
+    std::uint64_t assetId = 0;
     kb::scene::SkeletonAsset skeleton;
 };
 
@@ -69,6 +70,7 @@ struct Session {
         io.err << "error: " << metadata->virtualPath.generic_string() << " could not be read: " << error << '\n';
         return false;
     }
+    session.assetId = metadata->id.value;
     session.file = metadata->physicalPath;
     session.virtualPath = metadata->virtualPath.generic_string();
     session.skeleton = std::move(*loaded);
@@ -132,6 +134,7 @@ void PrintBone(const kb::scene::SkeletonAsset& skeleton, std::size_t index, std:
     if (!OpenSkeleton(session, arguments, io)) return 1;
     io.out << session.virtualPath << ": " << session.skeleton.bones.size() << " bones, " << session.skeleton.sockets.size()
            << " sockets (any bone name works as a socket too)\n";
+    io.out << "assetId " << session.assetId << " compatibilitySignature " << kb::scene::SkeletonCompatibilitySignature(session.skeleton) << '\n';
     for (std::size_t index = 0U; index < session.skeleton.bones.size(); ++index) {
         if (session.skeleton.bones[index].parentIndex < 0) PrintBone(session.skeleton, index, 0U, io.out);
     }

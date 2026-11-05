@@ -50,7 +50,7 @@ std::string BakedTextureMipBlockName(std::uint32_t level) {
 bool BakedTextureFormatMatchesFamily(
     bgfx::TextureFormat::Enum format,
     std::string_view qualifier) noexcept {
-    if (qualifier == "rgba8-atlas") return format == bgfx::TextureFormat::RGBA8;
+    if (qualifier == "rgba8-atlas" || qualifier == "rgba8-cube") return format == bgfx::TextureFormat::RGBA8;
     if (qualifier == "bc-baseline") {
         return format == bgfx::TextureFormat::BC1 || format == bgfx::TextureFormat::BC3;
     }
@@ -84,7 +84,7 @@ bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureA
         return false;
     }
     RenderTextureAssetData tail{};
-    if (!ReadBakedKtx(primaryBlock.subspan(kStreamedTextureHeaderBytes), tail) || !tail.gpuBlocks.has_value()) {
+    if (!ReadBakedKtx(primaryBlock.subspan(kStreamedTextureHeaderBytes), tail) || !tail.gpuBlocks.has_value() || tail.dimension != RenderTextureDimension::Texture2D) {
         return false;
     }
     // The tail has to be exactly the full chain's levels below the streamed ones, and the
@@ -173,7 +173,7 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
         !parseError.isOk()) {
         return false;
     }
-    if (!container.m_ktx || container.m_cubeMap || container.m_depth > 1U || container.m_numLayers != 1U) {
+    if (!container.m_ktx || container.m_depth > 1U || container.m_numLayers != 1U) {
         return false;
     }
     if (container.m_width == 0U || container.m_height == 0U ||
@@ -189,11 +189,14 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
 
     const auto width = static_cast<std::uint16_t>(container.m_width);
     const auto height = static_cast<std::uint16_t>(container.m_height);
-    if (format == bimg::TextureFormat::RGBA8 ? container.m_numMips != 1U : container.m_numMips != bimg::imageGetNumMips(format, width, height)) {
+    if (container.m_cubeMap && (width != height || format != bimg::TextureFormat::RGBA8)) return false;
+    const auto fullMips = bimg::imageGetNumMips(format,width,height);
+    if (container.m_cubeMap ? (container.m_numMips != 1U && container.m_numMips != fullMips)
+        : (format == bimg::TextureFormat::RGBA8 ? container.m_numMips != 1U : container.m_numMips != fullMips)) {
         return false;
     }
 
-    const std::uint32_t payloadSize = TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, false, container.m_numMips > 1U, 1U, format));
+    const std::uint32_t payloadSize = TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, container.m_cubeMap, container.m_numMips > 1U, 1U, format));
     const std::uint64_t expectedSize = static_cast<std::uint64_t>(container.m_offset) +
         static_cast<std::uint64_t>(container.m_numMips) * sizeof(std::uint32_t) + payloadSize;
     if (payloadSize == 0U || primaryBlock.size() < expectedSize) {
@@ -203,10 +206,11 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
     RenderTextureGpuBlocks gpuBlocks{};
     gpuBlocks.format = static_cast<bgfx::TextureFormat::Enum>(format);
     gpuBlocks.blocks.reserve(payloadSize);
+    for (std::uint8_t face = 0; face < (container.m_cubeMap ? 6U : 1U); ++face) {
     for (std::uint8_t lod = 0U; lod < container.m_numMips; ++lod) {
         bimg::ImageMip mip{};
         if (!bimg::imageGetRawData(
-                container, 0U, lod, primaryBlock.data(), static_cast<std::uint32_t>(primaryBlock.size()), mip) ||
+                container, face, lod, primaryBlock.data(), static_cast<std::uint32_t>(primaryBlock.size()), mip) ||
             mip.m_data == nullptr) {
             return false;
         }
@@ -220,6 +224,7 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
         }
         gpuBlocks.blocks.insert(gpuBlocks.blocks.end(), mip.m_data, mip.m_data + mip.m_size);
     }
+    }
     if (gpuBlocks.blocks.size() != payloadSize) {
         return false;
     }
@@ -230,7 +235,7 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
     asset.depth = 1U;
     asset.layers = 1U;
     asset.mipCount = container.m_numMips;
-    asset.dimension = RenderTextureDimension::Texture2D;
+    asset.dimension = container.m_cubeMap ? RenderTextureDimension::TextureCube : RenderTextureDimension::Texture2D;
     asset.colorSpace = container.m_srgb ? RenderTextureAssetColorSpace::Srgb : RenderTextureAssetColorSpace::Linear;
     asset.semantic = RenderTextureAssetSemantic::Unknown;
     asset.gpuBlocks = std::move(gpuBlocks);

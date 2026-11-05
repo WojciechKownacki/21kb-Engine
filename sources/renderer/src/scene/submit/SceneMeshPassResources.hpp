@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
+#include "kb/render/scene/LocalReflectionUniforms.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 
 #include <bgfx/bgfx.h>
@@ -202,6 +203,12 @@ private:
     bgfx::UniformHandle clearcoatRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialLayersUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialSubsurfaceUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle materialSheenUniform_ = BGFX_INVALID_HANDLE;
+    LocalReflectionUniforms localReflections_{};
+    bgfx::UniformHandle materialOpticsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle materialAttenuationUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle builtinSceneColorSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle builtinSceneColorParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fogParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fogColorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialParamsUniform_ = BGFX_INVALID_HANDLE;

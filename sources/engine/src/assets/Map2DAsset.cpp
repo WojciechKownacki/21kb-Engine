@@ -209,9 +209,12 @@ Map2DCollision GraphicCollision(const Map2DAsset& map, const Map2DTileDefinition
     auto shape = definition.collision;
     // Explicit cell collisions and one-way platforms describe the grid, not a graphic outline.
     if (shape.kind == Map2DCollisionKind::None || shape.kind == Map2DCollisionKind::OneWay) return shape;
+    if(shape.kind==Map2DCollisionKind::Solid&&map.topology!=Map2DTopology::Rectangular) return shape;
     const auto& sheet = map.sheets[sprite.sheet];
     float width = 1.0F, height = static_cast<float>(sheet.CellHeight()) / static_cast<float>(sheet.cellSize);
     if (sprite.rotation % 2U) std::swap(width, height);
+    const float cellRatio=static_cast<float>(Map2DCellHeight(map)/map.tileSize);
+    height/=cellRatio;
     const bool placed = width != 1.0F || height != 1.0F || sprite.offsetX != 0.0F || sprite.offsetY != 0.0F;
     if (!placed && ((!sprite.rotation && !sprite.flipX && !sprite.flipY) || shape.kind == Map2DCollisionKind::Solid)) return shape;
     if (shape.kind == Map2DCollisionKind::Solid) shape.polygon = {{0,0},{1,0},{1,1},{0,1}};
@@ -223,7 +226,7 @@ Map2DCollision GraphicCollision(const Map2DAsset& map, const Map2DTileDefinition
         if (sprite.flipY) point[1] = 1.0F - point[1];
         for (unsigned turn = 0; turn < sprite.rotation; ++turn) { const auto x = point[0]; point[0] = 1.0F - point[1]; point[1] = x; }
         point[0] = (1.0F - width) * 0.5F + point[0] * width + sprite.offsetX;
-        point[1] = 1.0F - height + point[1] * height + sprite.offsetY;
+        point[1] = 1.0F - height + point[1] * height + sprite.offsetY/cellRatio;
     }
     return shape;
 }
@@ -288,6 +291,12 @@ bool SetMap2DPropertySchema(Map2DAsset& map, std::string_view name, Map2DValue d
 }
 
 bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error) {
+    if(static_cast<unsigned>(map.topology)>static_cast<unsigned>(Map2DTopology::Hexagonal)) {
+        SetError(error,"Invalid map topology"); return false;
+    }
+    if(map.topology==Map2DTopology::Hexagonal&&!map.groundRules.empty()) {
+        SetError(error,"Hexagonal maps use explicit tile graphics; rectangular ground-border rules are not supported"); return false;
+    }
     if (!PropertiesValid(map.propertyDefaults) || (!map.propertyDefaults.empty() && map.propertySchemaVersion==0U)) {
         SetError(error,"Invalid map property schema"); return false;
     }
@@ -508,6 +517,12 @@ std::optional<Map2DAsset> Map2DAssetIO::Parse(std::string_view text, std::string
             if (words.size() != 2U || !ParseNumber(words[1], map.tileSize)) return fail("tileSize needs a number");
         } else if (keyword == "floorHeight") {
             if (words.size() != 2U || !ParseNumber(words[1], map.floorHeight)) return fail("floorHeight needs a number");
+        } else if (keyword == "topology") {
+            if(words.size()!=2U) return fail("topology needs rectangular, isometric or hexagonal");
+            if(words[1]=="rectangular") map.topology=Map2DTopology::Rectangular;
+            else if(words[1]=="isometric") map.topology=Map2DTopology::Isometric;
+            else if(words[1]=="hexagonal") map.topology=Map2DTopology::Hexagonal;
+            else return fail("topology needs rectangular, isometric or hexagonal");
         } else if (keyword == "orientation") {
             if (words.size() != 2U || (words[1] != "flat" && words[1] != "wall")) return fail("orientation needs flat or wall");
             map.orientation = words[1] == "wall" ? Map2DOrientation::Wall : Map2DOrientation::Flat;
@@ -644,6 +659,7 @@ std::string Map2DAssetIO::Write(const Map2DAsset& map) {
     output << "tileSize " << FloatText(map.tileSize) << '\n';
     output << "floorHeight " << FloatText(map.floorHeight) << '\n';
     output << "orientation " << Map2DOrientationName(map.orientation) << '\n';
+    if(map.topology!=Map2DTopology::Rectangular) output << "topology " << Map2DTopologyName(map.topology) << '\n';
     output << "view " << map.viewWidth << ' ' << map.viewHeight << '\n';
     output << "background " << (map.background ? "true" : "false") << '\n';
     output << "parallax " << FloatText(map.parallaxX) << ' ' << FloatText(map.parallaxY) << '\n';

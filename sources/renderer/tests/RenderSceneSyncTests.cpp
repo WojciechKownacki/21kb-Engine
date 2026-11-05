@@ -2526,7 +2526,7 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     Require(stats.environmentLightingSampleCount == 4U, "SceneRenderer validation did not report IBL sample count");
     Require(stats.reflectionProbeCount == 2U, "SceneRenderer validation did not report reflection probes");
     Require(stats.localReflectionProbeCount == 1U, "SceneRenderer validation did not report local reflection probes");
-    Require(stats.parallaxCorrectedProbeCount == 2U, "SceneRenderer validation did not report parallax corrected probes");
+    Require(stats.parallaxCorrectedProbeCount == 1U, "Only a probe with both per-probe and global parallax enabled should report correction");
     Require(stats.globalIlluminationMode == static_cast<std::uint32_t>(SceneRenderGlobalIlluminationMode::ProbeGrid) + 1U, "SceneRenderer validation did not report GI mode");
     Require(stats.submittedAreaLightCount == 1U, "SceneRenderer validation did not report submitted area lights");
     Require(stats.submittedVolumetricLightCount == 1U, "SceneRenderer validation did not report volumetric lights");

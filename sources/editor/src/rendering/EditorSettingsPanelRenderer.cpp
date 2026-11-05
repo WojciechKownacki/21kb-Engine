@@ -2,6 +2,8 @@
 
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/HeroIconKind.hpp"
@@ -61,6 +63,8 @@ struct EditorSettingsLayout {
     RECT languageLabel{};
     RECT languageField{};
     RECT languageHint{};
+    RECT codeEditorLabel{};
+    RECT codeEditorField{};
 };
 
 [[nodiscard]] EditorSettingsLayout Resolve(const RECT& content) noexcept {
@@ -103,6 +107,9 @@ struct EditorSettingsLayout {
     rects.languageField = {left + kLabelWidth, autosaveTop + 4, std::min(right, left + kLabelWidth + kLanguageFieldWidth),
         autosaveTop + kRowHeight - 4};
     rects.languageHint = {left + kLabelWidth, rects.languageLabel.bottom, right, rects.languageLabel.bottom + 22};
+    const int codeTop = rects.languageHint.bottom + kRowGap;
+    rects.codeEditorLabel = {left, codeTop, left + kLabelWidth, codeTop + kRowHeight};
+    rects.codeEditorField = {rects.languageField.left, codeTop + 4, rects.languageField.right, codeTop + kRowHeight - 4};
     return rects;
 }
 
@@ -235,6 +242,15 @@ void EditorSettingsPanelRenderer::Paint(
             EditorLocalization::Format("editorSettings.languageHint", "{count} languages - applies at once",
                 { { "count", std::to_string(EditorLocalization::Languages().size()) } }).c_str(),
             Color(theme.textDisabled), 11);
+        std::string preferenceError;
+        const std::string preference = EditorExternalCodeLauncher::Preference(EditorProjectPaths::ProjectRoot(), preferenceError);
+        const char* label = preference == "VSCode" ? "VS Code" : preference == "VisualStudio" ? "Visual Studio"
+            : preference == "Auto" ? "Automatic" : "Invalid editor settings";
+        DrawText(dc, rects.codeEditorLabel, "Code editor", Color(theme.textSecondary), 12);
+        GdiDrawing::DrawSharpFrame(dc, rects.codeEditorField, Color(theme.background), Color(theme.borderPanel));
+        RECT text = rects.codeEditorField;
+        text.left += 8;
+        DrawText(dc, text, label, Color(theme.textPrimary), 12);
         return;
     }
 
@@ -292,6 +308,7 @@ EditorSettingsHit EditorSettingsPanelRenderer::HitTest(
         }
     }
     if (g_category == EditorSettingsCategory::General) {
+        if (Contains(rects.codeEditorField, x, y)) return {EditorSettingsHitKind::CodeEditor, 1, -1};
         if (Contains(rects.languageField, x, y) || Contains(rects.languageLabel, x, y)) {
             return {EditorSettingsHitKind::Language, 0, -1};
         }
@@ -315,6 +332,10 @@ RECT EditorSettingsPanelRenderer::ContentForPage(const RECT& page) noexcept {
 
 RECT EditorSettingsPanelRenderer::LanguageField(const RECT& content) noexcept {
     return Resolve(content).languageField;
+}
+
+RECT EditorSettingsPanelRenderer::CodeEditorField(const RECT& content) noexcept {
+    return Resolve(content).codeEditorField;
 }
 
 EditorSettingsCategory EditorSettingsPanelRenderer::SelectedCategory() noexcept {

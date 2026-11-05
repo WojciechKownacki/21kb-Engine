@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorEngineInstallation.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -411,10 +412,11 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         return false;
     }
 
-#if !defined(KB_EDITOR_ENGINE_ROOT)
-    console_.Error("Packaging", "The editor package root is unavailable.");
-    return false;
-#else
+    const auto installation = ResolveEditorEngineInstallation();
+    if (installation.root.empty()) {
+        console_.Error("Packaging", "The editor package root is unavailable.");
+        return false;
+    }
     const auto targets = kb::packaging::PackagingTargets();
     if (buildGameSelectedTarget_ < 0 || buildGameSelectedTarget_ >= static_cast<int>(targets.size())) {
         console_.Error("Packaging", "The selected package target is invalid.");
@@ -422,7 +424,7 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
     }
     const kb::packaging::PackagingTargetSpec& targetSpec = targets[static_cast<std::size_t>(buildGameSelectedTarget_)];
     const EditorBuildGameTargetSettings& targetSettings = buildGameSettings_.For(targetSpec.target);
-    const std::filesystem::path engineRoot = KB_EDITOR_ENGINE_ROOT;
+    const std::filesystem::path engineRoot = installation.root;
     EditorPackageRequest request;
     request.builderExecutable = buildGameSettings_.builderExecutable;
     request.packageScript = engineRoot / "scripts" / "package_game.py";
@@ -514,7 +516,6 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
     ClearBuildGameSigningPasswords();
     console_.Info("Packaging", "Package job started for " + std::string{ targetSpec.displayName } + '.');
     return true;
-#endif
 }
 
 void EditorSceneContext::CancelBuildGamePackage() noexcept {

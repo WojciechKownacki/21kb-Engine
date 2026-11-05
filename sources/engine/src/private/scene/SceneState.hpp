@@ -1,6 +1,10 @@
 #pragma once
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/scene/SceneSurfaceGeometry.hpp"
+#include "engine/scene/VectorShape2DAsset.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "scene/SceneGameplayService.hpp"
@@ -93,8 +97,10 @@ struct WorldPartitionState;
 } // namespace kb::world
 
 namespace kb::scene {
+struct SceneUIMediaState;
 
 class IPhysicsBackend;
+class IPhysicsAssemblyBackend;
 struct SceneTransformRootQueryCache;
 struct SceneTransformPassArena;
 struct SceneComponentIterationQueries;
@@ -226,6 +232,7 @@ struct AnimatorInstance {
     // Spring kind: the lagging animator-space rotation of the bone it last drove.
     std::optional<Quat> motionSkeletonRuleSpringRotation;
     SkeletonBoneId motionSkeletonRuleSpringBone = 0U;
+    std::vector<AnimatorPhysicsBonePose> physicsPose;
 };
 
 using AnimatorRuntimeRecord = AnimatorInstance;
@@ -305,6 +312,12 @@ struct SceneTransformApplyChunkStats {
     std::size_t unitScaleParentFastPath = 0U;
     std::size_t uniformScaleParentFastPath = 0U;
     std::size_t staticLocalRotationFastPath = 0U;
+};
+
+struct VectorShape2DRuntimeRecord {
+    SceneEntity owner{};
+    VectorShape2DAsset shape;
+    std::optional<MeshRendererComponent> previousMesh;
 };
 
 class SceneState {
@@ -970,6 +983,12 @@ public:
     // This placement preserves those offsets; it does not certify every old DLL path.
     // Passive pass outputs keep capacity; a lease also covers serial observer publication.
     std::shared_ptr<SceneTransformPassArena> transformPassArena;
+    // Provider state stays on the host-owned scene, shared by native modules.
+    IPhysicsAssemblyBackend* physicsAssemblyBackend = nullptr;
+    std::vector<SurfaceGeometry> surfaceGeometries;
+    std::uint64_t nextSurfaceGeometryRevision = 1;
+    std::vector<VectorShape2DRuntimeRecord> vectorShapes2D;
+    std::shared_ptr<SceneUIMediaState> uiMedia;
 };
 
 } // namespace kb::scene

@@ -1,3 +1,4 @@
+include("${PROJECT_SOURCE_DIR}/CMake/EnableMsdfgen.cmake")
 add_library(kb_renderer STATIC
     include/kb/render/BgfxContext.hpp
     include/kb/render/DisplayConfig.hpp
@@ -303,6 +304,7 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeTextureResourceEnsurer.cpp
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
+    src/scene/SceneSurfaceGeometryPublisher.cpp
     src/scene/RenderBridgeTelemetry.cpp
     src/scene/AuxFrameRenderer.cpp
     src/scene/AuxFrameRenderer.hpp
@@ -402,6 +404,8 @@ add_library(kb_renderer STATIC
     src/ui/ScreenUIRenderer.cpp
     src/ui/ScreenUIFontPayloadValidator.cpp
     src/ui/ScreenUIFontDistanceField.cpp
+    src/ui/ScreenUIFontMSDFGenerator.cpp
+    src/private/ui/ScreenUIFontMSDFGenerator.hpp
     src/ui/ScreenUIFontAtlasCache.cpp
     src/ui/ScreenUIVariableFontRasterizer.cpp
     src/ui/ScreenUITextMarkupParser.cpp
@@ -718,9 +722,18 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
     # bgfx's fixed-shader commands track the entry point and varying definition.
     # Height fog is shared with graph shaders, whose cooker already tracks transitive includes.
     foreach(_fog_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS)
+        if(_fog_shader_output MATCHES "/fs_post_bloom_combine\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/screen_uv.sh")
+        endif()
         if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
-                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh")
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh"
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/local_reflection.sh")
+        endif()
+        if(_fog_shader_output MATCHES "/fs_mesh_instanced\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_advanced.sh")
         endif()
         if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND DEPENDS
@@ -728,6 +741,18 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/shading_models.sh"
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_layers.sh"
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_gbuffer.sh")
+        endif()
+    endforeach()
+
+    foreach(_position_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS KB_RENDERER_GENERATED_COMPUTE_SHADERS)
+        if(_position_shader_output MATCHES "/(fs_deferred_lighting|fs_ssgi_resolve|cs_particle_gpu_collide)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_position_shader_output}" APPEND DEPENDS
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/gbuffer_position.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/screen_uv.sh")
+        endif()
+        if(_position_shader_output MATCHES "/fs_(deferred_lighting|sky_capture)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_position_shader_output}" APPEND DEPENDS
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/sky_backdrop.sh")
         endif()
     endforeach()
 
@@ -1148,3 +1173,5 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
 
     kb_apply_quality_gates(kb_skeletal_animator_benchmarks)
 endif()
+
+target_link_libraries(kb_renderer PRIVATE msdfgen::msdfgen-core)

@@ -36,6 +36,8 @@ public:
     [[nodiscard]] static bool SetInt(Scene& scene, SceneEntity entity, std::string_view name, std::int32_t value) noexcept;
     [[nodiscard]] static bool SetFloat(Scene& scene, SceneEntity entity, std::string_view name, float value) noexcept;
     [[nodiscard]] static bool SetTrigger(Scene& scene, SceneEntity entity, std::string_view name, bool value) noexcept;
+    [[nodiscard]] static bool SetPhysicsPose(Scene& scene, SceneEntity entity, std::span<const AnimatorPhysicsBonePose> bones) noexcept;
+    [[nodiscard]] static bool ClearPhysicsPose(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool SetIkTarget(
         Scene& scene, SceneEntity entity, std::string_view name,
         const AnimatorIkTarget& target) noexcept;

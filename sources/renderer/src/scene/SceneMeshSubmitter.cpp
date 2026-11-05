@@ -6,6 +6,7 @@
 #include "kb/render/particles/ParticleRenderSpace.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+#include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
@@ -57,7 +58,8 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
         // Zero resolves to the built-in opaque fallback in the mesh pipeline.
         if (id == 0U) return true;
         const auto* material = resources.FindMaterial(resourceMap.ResolveMaterial(id));
-        return material != nullptr && material->alphaMode != RenderMaterialAlphaMode::Blend;
+        return material != nullptr && material->alphaMode != RenderMaterialAlphaMode::Blend &&
+            !MeshPipelinePassPolicy::UsesAdvancedBuiltinPbr(material);
     };
     if (batch.materialAssetId != 0U) return opaque(batch.materialAssetId);
     return std::ranges::all_of(mesh->materialSlots, [&opaque](const auto& slot) {
@@ -191,6 +193,11 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     std::span<const ParticleGpuMeshDraw> gpuMeshDraws) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
+        return stats;
+    }
+    if (!ValidLocalReflectionConfig(lightingConfig.ibl)) {
+        if (diagnostics != nullptr) diagnostics->events.push_back({.severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::ReflectionProbeUnavailable, .instanceCount = lightingConfig.ibl.reflectionProbeCount});
         return stats;
     }
 
