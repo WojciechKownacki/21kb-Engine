@@ -2,6 +2,7 @@
 #include "TestSuites.hpp"
 
 #include "project/ProjectDescriptorIntegrity.hpp"
+#include "scene/asset/io/SceneAssetIntegrity.hpp"
 #include "project/ProjectDescriptorMetaWriter.hpp"
 #include "engine/config/IniDocument.hpp"
 #include "engine/platform/FileSystemPath.hpp"
@@ -247,6 +248,40 @@ public:
 private:
     SceneDocumentSystemProbe& probe_;
 };
+
+// The integrity of a scene file is read in blocks: sizes around a block, and a file of several, give the same
+// FNV-1a and CRC-32 as a byte-by-byte reference.
+void RunSceneAssetIntegrityBlockReadTest() {
+    const std::filesystem::path file = std::filesystem::temp_directory_path() / "21kb_scene_integrity_block_test.bin";
+    for (const std::size_t size : { std::size_t{ 0U }, std::size_t{ 1U }, std::size_t{ 65535U }, std::size_t{ 65536U },
+             std::size_t{ 65537U }, std::size_t{ 200003U } }) {
+        std::string bytes(size, '\0');
+        for (std::size_t index = 0U; index < size; ++index) {
+            bytes[index] = static_cast<char>((index * 131U + index / 251U) & 0xFFU);
+        }
+        {
+            std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        }
+        std::uint64_t fnv = 14695981039346656037ULL;
+        std::uint32_t crc = 0xFFFFFFFFU;
+        for (const char value : bytes) {
+            const auto byte = static_cast<unsigned char>(value);
+            fnv = (fnv ^ byte) * 1099511628211ULL;
+            crc ^= byte;
+            for (int bit = 0; bit < 8; ++bit) {
+                crc = (crc & 1U) != 0U ? (0xEDB88320U ^ (crc >> 1U)) : (crc >> 1U);
+            }
+        }
+        crc ^= 0xFFFFFFFFU;
+        const kb::scene::SceneAssetIntegrity integrity = kb::scene::SceneAssetIntegrityService::ComputeFile(file);
+        kb::tests::Require(integrity.byteSize == size && integrity.contentChecksumCrc32 == crc &&
+                integrity.contentHashFnv1a64 == (fnv == 0U ? 1099511628211ULL : fnv),
+            "a scene file's integrity read in blocks differs from the byte-by-byte one");
+    }
+    std::error_code error;
+    std::filesystem::remove(file, error);
+}
 
 void RunIniDocumentRoundTripTest() {
     CleanTempRoot();
@@ -1843,6 +1878,7 @@ void RunLargeNonAdditiveSceneTransitionBenchmark() {
 }
 
 void RunProjectSceneTests() {
+    RunSceneAssetIntegrityBlockReadTest();
     RunSingleRootNonAdditiveSceneOwnershipTest();
     RunMultiRootSceneUnloadOwnershipTest();
     RunLargeNonAdditiveSceneRootOwnershipTest();
