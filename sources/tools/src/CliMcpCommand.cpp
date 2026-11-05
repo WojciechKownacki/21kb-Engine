@@ -358,8 +358,10 @@ struct ToolCallOutcome {
         const CliCommandDescriptor* target = FindCliCommand(words.front());
         if (target == nullptr) return {.isError = true, .text = "unknown kb_cli command: " + words.front()};
         if (target->kind == CliCommandKind::Mcp) return {.isError = true, .text = "the mcp command cannot run inside the MCP server"};
-        // Commands about the project get it; the ones that make a project or describe kb_cli do not take it.
-        const bool takesProject = !projectRoot.empty() && target->kind == CliCommandKind::Normal && words.front() != "new";
+        // Commands about the project get it (a batch works on the bound project too); the ones that make a project or
+        // describe kb_cli do not take it.
+        const bool takesProject = !projectRoot.empty() &&
+            (target->kind == CliCommandKind::Normal || target->kind == CliCommandKind::Batch) && words.front() != "new";
         if (takesProject) words.insert(words.begin() + 1, { "--project", projectRoot });
         std::ostringstream captured;
         std::istringstream noInput;

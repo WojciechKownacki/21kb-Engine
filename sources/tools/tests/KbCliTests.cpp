@@ -4881,6 +4881,21 @@ void RunBatchSceneSessionTests() {
         "the failing operation must fail the batch: " + failed.out + failed.err);
     Require(Fingerprint(projectPath) == before, "a batch that fails after 149 scene edits must leave every file as it was");
 
+    // A batch sent to the MCP server works on the project the server is bound to.
+    const std::filesystem::path mcpFile = parent / "mcp.txt";
+    WriteTextFile(mcpFile, "entity add --name ByMcp\ncomponent add --entity ByMcp --type Light\n");
+    std::string mcpInput = R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kb_cli","arguments":{"args":["batch","--file",")";
+    for (const char character : mcpFile.generic_string()) mcpInput += character;
+    mcpInput += "\"]}}}\n";
+    std::istringstream mcpIn{ mcpInput };
+    std::ostringstream mcpOut;
+    std::ostringstream mcpErr;
+    const std::vector<std::string> mcpArguments{ "--project", project };
+    const kb::cli::ArgumentList mcpList{ mcpArguments, kFlagNames };
+    Require(kb::cli::RunMcpCommand(mcpList, mcpIn, kb::cli::CommandIo{ .out = mcpOut, .err = mcpErr }) == 0 &&
+            Contains(mcpOut.str(), "applied: 2 operation(s)") && Contains(mcpOut.str(), "\"isError\":false"),
+        "a batch sent over MCP must run on the bound project: " + mcpOut.str() + mcpErr.str());
+
 #if KB_CLI_RENDERER
     // --color makes a material before it edits the scene: the scene kept open from the first object must see the second one's.
     const std::filesystem::path colored = parent / "colored.txt";
