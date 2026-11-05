@@ -653,7 +653,7 @@ bool ReadGameProjectRuntime(
 
 bool RegisterGameAssetLoaders(kb::scene::Scene& scene, std::ostream& err) {
     kb::assets::AssetManager& manager = scene.Assets().Manager();
-    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>())) {
+    if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>(kb::render::RenderMeshLodBuild::Runtime))) {
         err << "mesh loader registration failed\n";
         return false;
     }

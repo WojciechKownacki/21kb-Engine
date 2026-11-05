@@ -1403,6 +1403,8 @@ std::string_view ToString(MeshBakeStatus status) noexcept {
         return "ChunkBudgetTooSmall";
     case MeshBakeStatus::SinkRejected:
         return "SinkRejected";
+    case MeshBakeStatus::ReadBackFailed:
+        return "ReadBackFailed";
     }
     return "Unknown";
 }
@@ -1424,15 +1426,21 @@ AssetBakeKey MakeMeshBakeKey(const RenderMeshAssetData& source, const BakeTarget
     return key;
 }
 
-MeshBakeOutput BakeMesh(
-    const RenderMeshAssetData& source,
-    const BakeTargetProfile& profile,
-    kb::assets::bake::IBakedAssetSink& sink) {
-    MeshBakeOutput output{};
+namespace {
+
+// A finished bake before any sink sees it: the bytes of the artifact and the fragment each chunk declares.
+struct BuiltMeshBake {
+    MeshBakeOutput output;
+    std::vector<BakedAssetBlockFragment> fragments;
+};
+
+[[nodiscard]] BuiltMeshBake BuildMeshBake(const RenderMeshAssetData& source, const BakeTargetProfile& profile) {
+    BuiltMeshBake built{};
+    MeshBakeOutput& output = built.output;
 
     if (!kb::assets::bake::IsValidBakeTargetProfile(profile)) {
         output.status = MeshBakeStatus::InvalidProfile;
-        return output;
+        return built;
     }
 
     output.key = MakeMeshBakeKey(source, profile);
@@ -1440,25 +1448,25 @@ MeshBakeOutput BakeMesh(
     SourceGeometry geometry{};
     if (const MeshBakeStatus status = ReadSourceGeometry(source, geometry); status != MeshBakeStatus::Success) {
         output.status = status;
-        return output;
+        return built;
     }
     const std::vector<std::uint8_t> materialMetadata = SerializeMaterialMetadata(source);
     if (!IsValidSourceMaterials(source, materialMetadata)) {
         output.status = MeshBakeStatus::MalformedMaterials;
-        return output;
+        return built;
     }
 
     std::vector<LodLevel> lodChain;
     if (const MeshBakeStatus status = BuildLodChain(geometry, lodChain); status != MeshBakeStatus::Success) {
         output.status = status;
-        return output;
+        return built;
     }
     ClusteredMesh mesh{};
     const std::uint32_t targetGroupSize = TargetClusterGroupSize(geometry.vertexStride, profile.maxGeometryChunkBytes);
     if (const MeshBakeStatus status = BuildClusters(geometry, lodChain, targetGroupSize, mesh);
         status != MeshBakeStatus::Success) {
         output.status = status;
-        return output;
+        return built;
     }
 
     const std::uint32_t indexWidthBytes = kb::assets::bake::BakeIndexWidthBytes(profile.indexWidth);
@@ -1468,21 +1476,21 @@ MeshBakeOutput BakeMesh(
     if (const MeshBakeStatus status = BuildDrawSections(mesh, geometry.vertexStride, maxSectionVertices);
         status != MeshBakeStatus::Success) {
         output.status = status;
-        return output;
+        return built;
     }
     const std::uint64_t residentGeometryBytes =
         static_cast<std::uint64_t>(mesh.vertices.size()) * sizeof(float) +
         static_cast<std::uint64_t>(mesh.indices.size()) * indexWidthBytes;
     if (residentGeometryBytes > kMaxResidentGeometryBytes) {
         output.status = MeshBakeStatus::ResidentBudgetExceeded;
-        return output;
+        return built;
     }
     std::vector<GeometryChunk> chunks;
     if (const MeshBakeStatus status = BuildChunks(
             mesh, geometry.vertexStride, indexWidthBytes, profile.maxGeometryChunkBytes, chunks);
         status != MeshBakeStatus::Success) {
         output.status = status;
-        return output;
+        return built;
     }
 
     std::vector<std::vector<std::uint8_t>> chunkBytes;
@@ -1491,11 +1499,11 @@ MeshBakeOutput BakeMesh(
         std::vector<std::uint8_t> encoded;
         if (!EncodeChunk(mesh, chunk, geometry.vertexStride, indexWidthBytes, encoded)) {
             output.status = MeshBakeStatus::EncodeFailed;
-            return output;
+            return built;
         }
         if (encoded.size() > profile.maxGeometryChunkBytes) {
             output.status = MeshBakeStatus::ChunkBudgetTooSmall;
-            return output;
+            return built;
         }
         chunkBytes.push_back(std::move(encoded));
     }
@@ -1507,32 +1515,18 @@ MeshBakeOutput BakeMesh(
             mesh.vertices.size() / (geometry.vertexStride / sizeof(float))));
     if (!IsFiniteBounds(bakedBounds)) {
         output.status = MeshBakeStatus::NonFiniteGeometry;
-        return output;
+        return built;
     }
     std::vector<std::uint8_t> primaryBlock =
         EncodePrimaryBlock(
             source, materialMetadata, geometry, mesh, chunks, chunkBytes, indexWidthBytes, bakedBounds);
     if (primaryBlock.size() > kb::assets::bake::kMaxAssetPackBlockBytes) {
         output.status = MeshBakeStatus::EncodeFailed;
-        return output;
+        return built;
     }
 
-    BakedAssetDescriptor descriptor{};
-    descriptor.key = output.key;
-    descriptor.assetTypeId = std::string{ kMeshBakedAssetTypeId };
-    output.sinkStatus = sink.BeginAsset(descriptor);
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        output.status = MeshBakeStatus::SinkRejected;
-        return output;
-    }
-    output.sinkStatus = sink.WritePrimaryBlock(primaryBlock, profile.packageBlockAlignmentBytes);
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        sink.AbortAsset();
-        output.status = MeshBakeStatus::SinkRejected;
-        return output;
-    }
-    for (std::uint32_t chunkIndex = 0U; chunkIndex < chunks.size(); ++chunkIndex) {
-        const GeometryChunk& chunk = chunks[chunkIndex];
+    built.fragments.reserve(chunks.size());
+    for (const GeometryChunk& chunk : chunks) {
         const VertexAabb box = AabbOfVertices(
             reinterpret_cast<const std::uint8_t*>(mesh.vertices.data()),
             geometry.vertexStride,
@@ -1542,35 +1536,99 @@ MeshBakeOutput BakeMesh(
         fragment.clusterCount = chunk.meshletCount;
         fragment.boundsMin = box.low;
         fragment.boundsMax = box.high;
-        const std::string blockName = BakedMeshChunkBlockName(chunkIndex);
-        BakedAssetBlock block{};
-        block.name = blockName;
-        // Streaming, because that is what a fragment is for: the primary block is enough to
-        // know what the mesh is and where its clusters are, and the geometry follows on demand.
-        block.residency = BakedAssetBlockResidency::Streaming;
-        block.alignmentBytes = profile.packageBlockAlignmentBytes;
-        block.fragment = fragment;
-        output.sinkStatus = sink.WriteAuxiliaryBlock(block, chunkBytes[chunkIndex]);
-        if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-            sink.AbortAsset();
-            output.status = MeshBakeStatus::SinkRejected;
-            return output;
-        }
+        built.fragments.push_back(fragment);
     }
-    output.sinkStatus = sink.CommitAsset();
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        sink.AbortAsset();
-        output.status = MeshBakeStatus::SinkRejected;
-        return output;
-    }
-
     output.status = MeshBakeStatus::Success;
     output.lodCount = static_cast<std::uint32_t>(mesh.lods.size());
     output.sectionCount = static_cast<std::uint32_t>(mesh.sections.size());
     output.clusterCount = static_cast<std::uint32_t>(mesh.meshlets.size());
     output.primaryBlock = std::move(primaryBlock);
     output.chunks = std::move(chunkBytes);
-    return output;
+    return built;
+}
+
+} // namespace
+
+MeshBakeOutput BakeMeshInMemory(const RenderMeshAssetData& source, const BakeTargetProfile& profile) {
+    return BuildMeshBake(source, profile).output;
+}
+
+MeshBakeOutput BakeMesh(
+    const RenderMeshAssetData& source,
+    const BakeTargetProfile& profile,
+    kb::assets::bake::IBakedAssetSink& sink) {
+    BuiltMeshBake built = BuildMeshBake(source, profile);
+    MeshBakeOutput& output = built.output;
+    if (output.status != MeshBakeStatus::Success) {
+        return std::move(output);
+    }
+    const std::vector<std::uint8_t>& primaryBlock = output.primaryBlock;
+    const std::vector<std::vector<std::uint8_t>>& chunkBytes = output.chunks;
+    // A refused artifact reports the sink's status and hands back no bytes, as before the build was split off.
+    const auto rejected = [&output]() {
+        output.status = MeshBakeStatus::SinkRejected;
+        output.primaryBlock.clear();
+        output.chunks.clear();
+        return std::move(output);
+    };
+
+    BakedAssetDescriptor descriptor{};
+    descriptor.key = output.key;
+    descriptor.assetTypeId = std::string{ kMeshBakedAssetTypeId };
+    output.sinkStatus = sink.BeginAsset(descriptor);
+    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+        return rejected();
+    }
+    output.sinkStatus = sink.WritePrimaryBlock(primaryBlock, profile.packageBlockAlignmentBytes);
+    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+        sink.AbortAsset();
+        return rejected();
+    }
+    for (std::uint32_t chunkIndex = 0U; chunkIndex < chunkBytes.size(); ++chunkIndex) {
+        BakedAssetBlock block{};
+        block.name = BakedMeshChunkBlockName(chunkIndex);
+        // Streaming, because that is what a fragment is for: the primary block is enough to
+        // know what the mesh is and where its clusters are, and the geometry follows on demand.
+        block.residency = BakedAssetBlockResidency::Streaming;
+        block.alignmentBytes = profile.packageBlockAlignmentBytes;
+        block.fragment = built.fragments[chunkIndex];
+        output.sinkStatus = sink.WriteAuxiliaryBlock(block, chunkBytes[chunkIndex]);
+        if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+            sink.AbortAsset();
+            return rejected();
+        }
+    }
+    output.sinkStatus = sink.CommitAsset();
+    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
+        sink.AbortAsset();
+        return rejected();
+    }
+    return std::move(output);
+}
+
+MeshBakeStatus BuildRuntimeLodMesh(const RenderMeshAssetData& source, RenderMeshAssetData& out) {
+    const MeshBakeOutput baked = BakeMeshInMemory(source, kb::assets::bake::WindowsX64BakeTargetProfile());
+    if (baked.status != MeshBakeStatus::Success) {
+        return baked.status;
+    }
+    BakedMeshLayout layout{};
+    RenderMeshAssetData mesh{};
+    if (!ReadBakedMeshLayout(baked.primaryBlock, layout) || !ReadBakedMesh(baked.primaryBlock, baked.chunks, mesh) ||
+        layout.lods.size() != mesh.lods.size()) {
+        return MeshBakeStatus::ReadBackFailed;
+    }
+    // A level is used while its error, projected at the reference height, stays under the pixel budget:
+    // error / radius * coverage * height / 2 <= budget. Levels are in order of growing error, so the
+    // thresholds fall from the finest level to the last, which draws at any coverage below the rest.
+    const float errorBudget = 2.0F * kRuntimeLodMaxScreenErrorPixels * layout.bounds.radius /
+        kRuntimeLodReferenceViewportHeight;
+    for (std::size_t level = 0U; level < mesh.lods.size(); ++level) {
+        mesh.lods[level].minScreenCoverage = level + 1U == mesh.lods.size()
+            ? 0.0F
+            : std::clamp(errorBudget / std::max(layout.lods[level + 1U].error, 1.0e-9F), 0.0F, 1.0F);
+    }
+    out = std::move(mesh);
+    return MeshBakeStatus::Success;
 }
 
 bool BakedMeshMatchesTargetProfile(

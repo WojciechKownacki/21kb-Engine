@@ -121,6 +121,8 @@ enum class MeshBakeStatus : std::uint8_t {
     ChunkBudgetTooSmall,
     // The sink refused the artifact; the sink's own status says why.
     SinkRejected,
+    // The bytes this baker had just produced did not read back as a mesh.
+    ReadBackFailed,
 };
 
 [[nodiscard]] std::string_view ToString(MeshBakeStatus status) noexcept;
@@ -161,6 +163,22 @@ struct MeshBakeOutput {
     const RenderMeshAssetData& source,
     const kb::assets::bake::BakeTargetProfile& profile,
     kb::assets::bake::IBakedAssetSink& sink);
+
+// What BakeMesh hands to a sink, without a sink: the artifact's bytes in the output, nothing written anywhere.
+[[nodiscard]] MeshBakeOutput BakeMeshInMemory(
+    const RenderMeshAssetData& source,
+    const kb::assets::bake::BakeTargetProfile& profile);
+
+// Level of detail of a mesh a runtime draws straight from its source, with no cooked package: how many
+// pixels of silhouette error a coarser level may add, and the viewport height those pixels are counted at.
+inline constexpr float kRuntimeLodMaxScreenErrorPixels = 1.0F;
+inline constexpr float kRuntimeLodReferenceViewportHeight = 1080.0F;
+
+// `source` baked in memory exactly as the cooker bakes it and read back, so the levels of detail are the
+// cooker's. Each level's minScreenCoverage is the coverage below which the next level's absolute error
+// stays under kRuntimeLodMaxScreenErrorPixels at the reference height; the last level covers the rest.
+// `out` is untouched unless the status is Success.
+[[nodiscard]] MeshBakeStatus BuildRuntimeLodMesh(const RenderMeshAssetData& source, RenderMeshAssetData& out);
 
 // Reads a primary block and its chunks back into the runtime's mesh shape. The counterpart of
 // the bake, and the only way a baked mesh becomes a RenderMeshAssetData - the ordinary importer

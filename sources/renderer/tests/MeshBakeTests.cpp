@@ -1163,6 +1163,33 @@ void RunBakedMeshLodChainTest() {
         "The LOD levels do not cover the whole section and cluster tables");
 }
 
+void RunRuntimeLodMeshTest() {
+    // A mesh drawn straight from its source gets the chain the cooker bakes, and each level a coverage
+    // below which the next level's error stays under the pixel budget: falling, ending at zero.
+    const RenderMeshAssetData source = MakeSphere(48U, 32U, 1.0F);
+    const MeshBakeOutput baked = BakeInto(source, kb::assets::bake::WindowsX64BakeTargetProfile());
+    RenderMeshAssetData runtime{};
+    Require(baked.status == MeshBakeStatus::Success && bake::BuildRuntimeLodMesh(source, runtime) == MeshBakeStatus::Success,
+        "A sphere did not build its runtime levels of detail");
+    const BakedMeshView view = ViewBakedMesh(baked.primaryBlock);
+    Require(runtime.lods.size() == view.lodCount && runtime.lods.size() > 2U, "The runtime chain is not the cooker's chain");
+    const float budget = 2.0F * bake::kRuntimeLodMaxScreenErrorPixels * runtime.bounds.radius / bake::kRuntimeLodReferenceViewportHeight;
+    for (std::uint32_t level = 0U; level < runtime.lods.size(); ++level) {
+        const float coverage = runtime.lods[level].minScreenCoverage;
+        if (level + 1U == runtime.lods.size()) {
+            Require(coverage == 0.0F, "The last level must draw at any coverage below the others");
+            break;
+        }
+        const float nextError = ReadLod(baked.primaryBlock, view, level + 1U).absoluteError;
+        Require(coverage > 0.0F && coverage <= 1.0F && std::fabs(coverage - std::min(budget / nextError, 1.0F)) < 1.0e-5F,
+            "A level's coverage is not the one where the next level's error reaches the pixel budget");
+        if (level > 0U) Require(coverage <= runtime.lods[level - 1U].minScreenCoverage, "The level coverages do not fall");
+    }
+    RenderMeshAssetData untouched{};
+    Require(bake::BuildRuntimeLodMesh(RenderMeshAssetData{}, untouched) == MeshBakeStatus::EmptySource && untouched.lods.empty(),
+        "A mesh without geometry must be refused and leave the output alone");
+}
+
 void RunBakedMeshLodErrorIsAbsoluteTest() {
     // The same sphere at two sizes. An error measured against the mesh's extents would come out
     // the same for both; an absolute error is in the units the positions are in, so it has to
@@ -2842,6 +2869,7 @@ void RunMeshBakeTests() {
     RunBakedMeshClusterLimitsTest();
     RunBakedMeshClusterBoundsAndConeTest();
     RunBakedMeshLodChainTest();
+    RunRuntimeLodMeshTest();
     RunBakedMeshLodErrorIsAbsoluteTest();
     RunBakedMeshSimplificationKeepsAttributesTest();
     RunBakedMeshMaterialSeamTest();

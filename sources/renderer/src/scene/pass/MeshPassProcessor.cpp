@@ -197,6 +197,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
 
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
+    std::vector<std::uint8_t> chainLevels;
     for (const SceneMeshBatch& batch : desc.meshBatches) {
         SceneMeshBatchCommandCache::BatchScope batchScope(desc.batchCommandCache, result, batch,
             writeCommandCount, acceptedInstanceCount, desc.diagnostics);
@@ -246,6 +247,9 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
             .bounds = meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds,
         };
         const std::vector<RenderMeshSection>* sections = meshResource == nullptr ? nullptr : &meshResource->sections;
+        constexpr std::uint8_t kLevelNotChosen = UINT8_MAX;
+        if (meshResource != nullptr && meshResource->lods.size() > 1U) chainLevels.assign(batch.instances.size(), kLevelNotChosen);
+        else chainLevels.clear();
         const std::uint32_t sectionCount = sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size());
         for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
             const RenderMeshSection& section = sections == nullptr || sections->empty() ? fallbackSection : (*sections)[sectionIndex];
@@ -271,11 +275,17 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, cullingMask)) {
                     continue;
                 }
-                std::uint8_t selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
-                if (instance.detailSwitchEnabled) {
-                    if (const auto selected = result.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != result.detailSwitchLevels.end()) {
-                        selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
+                // A mesh with a chain of levels is scanned once per section of every level; the level an instance
+                // draws does not depend on the section, so it is chosen the first time and kept for the batch.
+                std::uint8_t selectedLod = chainLevels.empty() ? std::uint8_t{ 0U } : chainLevels[instanceIndex];
+                if (selectedLod == kLevelNotChosen || chainLevels.empty()) {
+                    selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
+                    if (instance.detailSwitchEnabled) {
+                        if (const auto selected = result.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != result.detailSwitchLevels.end()) {
+                            selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
+                        }
                     }
+                    if (!chainLevels.empty()) chainLevels[instanceIndex] = selectedLod;
                 }
                 if (meshResource != nullptr && !meshResource->lods.empty()) {
                     ++result.stats.lodSelectionCount;

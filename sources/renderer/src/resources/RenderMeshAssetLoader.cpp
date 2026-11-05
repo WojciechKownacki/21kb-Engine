@@ -23,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <new>
@@ -641,8 +642,24 @@ private:
     return RenderMeshAssetBuilder::LoadObj(input);
 }
 
-[[nodiscard]] kb::assets::AssetLoadResult LoadRenderMeshAsset(const kb::assets::AssetLoadRequest& request) {
+// Builds the chain of a mesh read from its source. A mesh that cannot be baked keeps its single level and says why.
+void BuildRuntimeLods(RenderMeshAssetData& mesh, const kb::assets::AssetLoadRequest& request) {
+    const std::size_t indexCount = mesh.indices32.empty() ? mesh.indices16.size() : mesh.indices32.size();
+    if (indexCount / 3U < kRuntimeLodMinimumTriangles || mesh.lods.size() > 1U) return;
+    RenderMeshAssetData chained;
+    const kb::render::bake::MeshBakeStatus status = kb::render::bake::BuildRuntimeLodMesh(mesh, chained);
+    if (status != kb::render::bake::MeshBakeStatus::Success) {
+        std::cerr << "RenderMesh: levels of detail not built for " << request.resolvedPath.string()
+                  << " status=" << kb::render::bake::ToString(status) << '\n';
+        return;
+    }
+    mesh = std::move(chained);
+}
+
+[[nodiscard]] kb::assets::AssetLoadResult LoadRenderMeshAsset(
+    const kb::assets::AssetLoadRequest& request, RenderMeshLodBuild lodBuild) {
     std::optional<RenderMeshAssetData> mesh;
+    bool fromSource = false;
     std::string packagedError;
     const std::string extension = LowerExtensionText(request.SourceExtension());
     if (extension == kb::assets::kTerrainAssetExtension) {
@@ -664,8 +681,10 @@ private:
     } else if (extension == kb::assets::bake::kAssetPackFileExtension) {
         mesh = LoadBakedMeshPack(request.resolvedPath);
     } else if (extension == ".21kb") {
+        fromSource = true;
         mesh = LoadImportedMesh(request);
     } else if (request.HasSourceBytes()) {
+        fromSource = true;
         const std::span<const std::uint8_t> source = *request.sourceBytes;
         if (extension == ".gltf" || extension == ".glb") {
             mesh = RenderMeshAssetBuilder::LoadGltf(source, request.resolvedPath);
@@ -678,6 +697,7 @@ private:
             mesh = LoadCancellableObj(input, request);
         }
     } else {
+        fromSource = true;
         if (extension == ".gltf" || extension == ".glb") {
             mesh = RenderMeshAssetBuilder::LoadGltf(request.resolvedPath);
         } else if (extension == ".fbx") {
@@ -696,6 +716,7 @@ private:
         };
     }
     RenderMeshAssetFinalizer::EnsureTangentVertexStorage(*mesh);
+    if (fromSource && lodBuild == RenderMeshLodBuild::Runtime) BuildRuntimeLods(*mesh, request);
     mesh->RefreshDesc();
 
     return kb::assets::AssetLoadResult{
@@ -707,7 +728,7 @@ private:
 
 kb::assets::AssetLoadResult RenderMeshAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     try {
-        auto result = LoadRenderMeshAsset(request);
+        auto result = LoadRenderMeshAsset(request, lodBuild_);
         if (result.Succeeded()) result.residentBytes = MeshResidentBytes(*std::static_pointer_cast<RenderMeshAssetData>(result.asset));
         return result;
     } catch (const CancelledMeshLoad&) {
