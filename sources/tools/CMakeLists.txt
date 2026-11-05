@@ -145,6 +145,10 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliCommandLimitsTests.py
                 --cli $<TARGET_FILE:kb_cli> --test-root ${CMAKE_BINARY_DIR}/cli-command-limits)
         set_tests_properties(kb_cli_command_limits PROPERTIES LABELS "tools;process" TIMEOUT 90)
+        add_test(NAME kb_cli_plugin_copy_reuse
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliPluginCopyReuseTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_plugin_copy_reuse PROPERTIES LABELS "tools;process" TIMEOUT 120)
     endif()
     add_executable(kb_cli_tests
         tests/KbCliTests.cpp

@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -589,6 +590,39 @@ void RunEngineModuleLoaderShadowCopyTest() {
     kb::tests::Require(second.Succeeded(), "EngineModuleLoader did not load the second shadow-copied DLL");
     kb::tests::Require(second.reloadSerial > first.reloadSerial, "EngineModuleLoader did not advance the reload serial");
     kb::tests::Require(second.loadedPath != firstLoadedPath, "EngineModuleLoader reused a shadow-copy path across reloads");
+
+    // A copy stays after its load, for a later process to map instead of copying the module again.
+    kb::tests::Require(std::filesystem::is_regular_file(firstLoadedPath),
+        "EngineModuleLoader removed a shadow copy that a later process could map");
+    second.library.Reset();
+
+    // A rebuilt module (another write time) gets a copy of its own, and the copies of its old build go.
+    const std::filesystem::path rebuilt = moduleTestRoot() / "Rebuilt" / "rebuilt-module.dll";
+    std::error_code fileError;
+    std::filesystem::create_directories(rebuilt.parent_path(), fileError);
+    std::filesystem::copy_file(pluginPath, rebuilt, std::filesystem::copy_options::overwrite_existing, fileError);
+    kb::tests::Require(!fileError, "the module loader test could not stage a module to rebuild");
+    const auto loadRebuilt = [&] {
+        return loader.Load(kb::modules::EngineModuleLoadDesc{
+            .key = "module-rebuilt-test",
+            .modulePath = rebuilt,
+            .shadowCopy = true,
+            .shadowCopyDirectory = moduleTestRoot() / "EngineModuleLoaderShadow",
+            .diagnosticLabel = "module loader test",
+        });
+    };
+    kb::modules::EngineModuleLoadResult oldBuild = loadRebuilt();
+    kb::tests::Require(oldBuild.Succeeded(), "EngineModuleLoader did not load the module to rebuild");
+    const std::filesystem::path oldBuildCopy = oldBuild.loadedPath;
+    oldBuild.library.Reset();
+    std::filesystem::last_write_time(rebuilt, std::filesystem::last_write_time(rebuilt) + std::chrono::seconds{ 2 }, fileError);
+    kb::tests::Require(!fileError, "the module loader test could not rebuild the staged module");
+    kb::modules::EngineModuleLoadResult newBuild = loadRebuilt();
+    kb::tests::Require(newBuild.Succeeded(), "EngineModuleLoader did not load the rebuilt module");
+    kb::tests::Require(newBuild.loadedPath != oldBuildCopy && std::filesystem::is_regular_file(newBuild.loadedPath),
+        "EngineModuleLoader mapped the copy of the old build for a rebuilt module");
+    kb::tests::Require(!std::filesystem::is_regular_file(oldBuildCopy),
+        "EngineModuleLoader left the copy of an old build behind");
 #endif
 }
 

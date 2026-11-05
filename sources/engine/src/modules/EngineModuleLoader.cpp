@@ -6,11 +6,15 @@
 #include "engine/security/ReleaseManifest.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
+#include <mutex>
 #include <ranges>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -80,29 +84,159 @@ namespace {
     return digits > 0U && processId != CurrentProcessId() && ProcessAlive(processId);
 }
 
-// Best-effort removal of leftover shadow copies for this key so per-process
-// naming does not leak temp files indefinitely. A file still mapped by a live
-// process stays locked and simply fails to delete (skipped); once its process
-// exits it becomes removable and the next load prunes it. Another live process's
-// copy is left alone even while unlocked, as that process may be about to load it.
-// `keep` is the file we are about to (re)create and must not delete.
-void PruneRemovableShadowCopies(const std::filesystem::path& directory, std::string_view keyPrefix, const std::filesystem::path& keep) {
+// A module file's identity: its size and last write time. A shadow copy is named after the file it copies, so a
+// later process that loads the same file maps the copy that is already there instead of copying it again, and a
+// rebuilt file (another size or time) gets a copy of its own.
+struct ModuleStamp {
+    std::uintmax_t size = 0U;
+    std::filesystem::file_time_type time{};
+};
+
+[[nodiscard]] bool ReadModuleStamp(const std::filesystem::path& file, ModuleStamp& stamp) {
+    std::error_code error;
+    stamp.size = std::filesystem::file_size(file, error);
+    if (error) {
+        return false;
+    }
+    stamp.time = std::filesystem::last_write_time(file, error);
+    return !error;
+}
+
+[[nodiscard]] std::string StampText(const ModuleStamp& stamp) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    const std::array<std::uint64_t, 2U> parts{
+        static_cast<std::uint64_t>(stamp.size), static_cast<std::uint64_t>(stamp.time.time_since_epoch().count()) };
+    for (const std::uint64_t part : parts) {
+        for (unsigned shift = 0U; shift < 64U; shift += 8U) {
+            hash ^= (part >> shift) & 0xFFU;
+            hash *= 1099511628211ULL;
+        }
+    }
+    std::array<char, 16U> text{};
+    const char* const end = std::to_chars(text.data(), text.data() + text.size(), hash, 16).ptr;
+    return std::string(text.data(), static_cast<std::size_t>(end - text.data()));
+}
+
+// Whether `copy` is a finished copy of the file `stamp` describes: a copy is given the write time of its source.
+[[nodiscard]] bool IsCopyOf(const std::filesystem::path& copy, const ModuleStamp& stamp) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(copy, error) && !error &&
+           std::filesystem::file_size(copy, error) == stamp.size && !error &&
+           std::filesystem::last_write_time(copy, error) == stamp.time && !error;
+}
+
+// How many copies of one version of a module (one per load in a process) stay for later processes to map.
+constexpr std::uint64_t kKeptShadowSlots = 8U;
+constexpr std::string_view kPartialCopyMarker = ".partial";
+
+// Whether `rest` (a file name after the module's key) is `<stamp>_<slot>...`, and that slot.
+[[nodiscard]] bool ParseStampedName(std::string_view rest, std::uint64_t& slot) {
+    const std::size_t digits = rest.find_first_not_of("0123456789abcdef");
+    if (digits == 0U || digits == std::string_view::npos || digits > 16U || rest[digits] != '_') {
+        return false;
+    }
+    const std::string_view slotText = rest.substr(digits + 1U);
+    const auto [end, code] = std::from_chars(slotText.data(), slotText.data() + slotText.size(), slot);
+    return code == std::errc{} && end != slotText.data();
+}
+
+// Best-effort removal of shadow copies of this key that no later load can use: copies of other versions of the
+// module (and older engines' copies, which were named after their process), unfinished copies, and copies beyond
+// the slots kept. The copies of `current` (the name every copy of this version starts with) stay for the next
+// process to map. A file still mapped by a live process stays locked and fails to delete (skipped); another live
+// process's old-style copy is left alone even while unlocked, as that process may be about to load it.
+void PruneStaleShadowCopies(const std::filesystem::path& directory, std::string_view keyPrefix, std::string_view current) {
     std::error_code error;
     for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(directory, error)) {
         if (error) {
             return;
         }
-        if (!entry.is_regular_file() || entry.path() == keep) {
+        if (!entry.is_regular_file()) {
             continue;
         }
         const std::string name = entry.path().filename().string();
-        if (name.size() < keyPrefix.size() || std::string_view{ name }.substr(0, keyPrefix.size()) != keyPrefix ||
-            OtherLiveProcessOwns(name, keyPrefix)) {
+        if (!std::string_view{ name }.starts_with(keyPrefix)) {
+            continue;
+        }
+        const std::string_view rest = std::string_view{ name }.substr(keyPrefix.size());
+        std::uint64_t slot = 0U;
+        const bool stamped = ParseStampedName(rest, slot);
+        const bool oldStyle = rest.starts_with('p');
+        if (!stamped && !oldStyle) {
+            continue; // another module whose key starts with this one
+        }
+        if (stamped && std::string_view{ name }.starts_with(current) && slot >= 1U && slot <= kKeptShadowSlots &&
+            name.find(kPartialCopyMarker) == std::string::npos) {
+            continue;
+        }
+        if (oldStyle && OtherLiveProcessOwns(name, keyPrefix)) {
             continue;
         }
         std::error_code removeError;
         std::filesystem::remove(entry.path(), removeError);
     }
+}
+
+// Copies `source` to `destination`, a copy `IsCopyOf` accepts. The copy is written under another name and renamed
+// when it is finished, so another process that finds `destination` finds a whole copy.
+[[nodiscard]] bool CopyForLoad(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination,
+    const ModuleStamp& stamp,
+    std::string_view diagnosticLabel,
+    std::vector<std::string>& errors) {
+    std::error_code error;
+    std::filesystem::create_directories(destination.parent_path(), error);
+    if (error) {
+        errors.push_back(std::string{ diagnosticLabel } + " shadow copy directory could not be created");
+        return false;
+    }
+    const std::filesystem::path partial = destination.string() + std::string{ kPartialCopyMarker } +
+        std::to_string(CurrentProcessId());
+    // The source DLL can be transiently locked with a sharing violation by an
+    // antivirus real-time scan, the search indexer, or a build tool that just
+    // wrote it — an inherent Windows condition, not a permanent failure. Retry
+    // with a short backoff (the standard shadow-copy behavior for any host
+    // that copies plugins aside), and only report the failure if it persists.
+    // Ride out only a brief transient lock (e.g. an antivirus glancing at a
+    // freshly written DLL). Kept short on purpose: this runs on the caller's
+    // thread, so a long spin would freeze the editor UI, and a genuinely
+    // persistent lock is a real error to surface — not something to hang on.
+    // The common case (unlocked source) succeeds on the very first attempt.
+    constexpr int kMaxAttempts = 6;
+    constexpr std::chrono::milliseconds kRetryDelay{ 100 };
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        error.clear();
+        std::filesystem::copy_file(source, partial, std::filesystem::copy_options::overwrite_existing, error);
+        if (!error) {
+            break;
+        }
+        if (attempt + 1 < kMaxAttempts) {
+            std::this_thread::sleep_for(kRetryDelay);
+        }
+    }
+    if (error) {
+        errors.push_back(std::string{ diagnosticLabel } + " shadow copy failed after retries (" + error.message() + "): " +
+                         source.string() + " -> " + destination.string());
+        return false;
+    }
+    std::filesystem::last_write_time(partial, stamp.time, error);
+    if (!error) {
+        std::filesystem::rename(partial, destination, error);
+    }
+    if (error) {
+        // Another process put the same copy there first and has it mapped, so it cannot be replaced; it is what
+        // is wanted when it is a copy of this file.
+        const std::string reason = error.message();
+        std::error_code removeError;
+        std::filesystem::remove(partial, removeError);
+        if (!IsCopyOf(destination, stamp)) {
+            errors.push_back(std::string{ diagnosticLabel } + " shadow copy could not be put in place (" + reason + "): " +
+                             source.string() + " -> " + destination.string());
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] std::string NativeLibraryError(std::string_view diagnosticLabel) {
@@ -352,11 +486,20 @@ EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
     std::uint64_t serial = 0U;
     std::filesystem::path loadPath = sourcePath;
     if (desc.shadowCopy) {
-        loadPath = ResolveShadowCopyPath(desc.key, sourcePath, desc.shadowCopyDirectory, desc.shadowCopyDirectoryName, serial);
+        ModuleStamp stamp;
+        if (!ReadModuleStamp(sourcePath, stamp)) {
+            result.errors.push_back(desc.diagnosticLabel + " file could not be inspected: " + sourcePath.string());
+            return result;
+        }
+        const std::string keyPrefix = SanitizeFileName(desc.key) + "_";
+        const std::string current = keyPrefix + StampText(stamp) + "_";
+        std::uint64_t slot = 0U;
+        loadPath = ResolveShadowCopyPath(
+            current, sourcePath, desc.shadowCopyDirectory, desc.shadowCopyDirectoryName, serial, slot);
         std::error_code shadowDirError;
         std::filesystem::create_directories(loadPath.parent_path(), shadowDirError);
-        PruneRemovableShadowCopies(loadPath.parent_path(), SanitizeFileName(desc.key) + "_", loadPath);
-        if (!CopyForLoad(sourcePath, loadPath, desc.diagnosticLabel, result.errors)) {
+        PruneStaleShadowCopies(loadPath.parent_path(), keyPrefix, current);
+        if (!IsCopyOf(loadPath, stamp) && !CopyForLoad(sourcePath, loadPath, stamp, desc.diagnosticLabel, result.errors)) {
             return result;
         }
     }
@@ -444,66 +587,33 @@ std::filesystem::path EngineModuleLoader::ResolveModulePath(const std::filesyste
 }
 
 std::filesystem::path EngineModuleLoader::ResolveShadowCopyPath(
-    std::string_view key,
+    std::string_view namePrefix,
     const std::filesystem::path& modulePath,
     const std::filesystem::path& shadowCopyDirectory,
     std::string_view shadowCopyDirectoryName,
-    std::uint64_t& serial) {
+    std::uint64_t& serial,
+    std::uint64_t& slot) {
     std::filesystem::path directory = shadowCopyDirectory;
     if (directory.empty()) {
         directory = std::filesystem::temp_directory_path() / std::string{ shadowCopyDirectoryName.empty() ? "21kb_engine_modules" : shadowCopyDirectoryName };
     }
-    const std::string extension = modulePath.extension().string();
     // Serial from a PROCESS-GLOBAL counter, not the per-loader member: every
     // EngineModuleHost creates its own loader whose member would reset to the
     // same value, so two loaders alive at once in one process (an editor scene
     // reload creating a new host while the old host's plugin DLL is still mapped,
-    // or two hosts sharing a scene) would target the SAME temp filename and the
-    // second copy_file(overwrite_existing) onto the still-locked leftover fails.
-    // A process-global serial makes every shadow copy in the process unique.
+    // or two hosts sharing a scene) would load the same copy twice.
     static std::atomic<std::uint64_t> processShadowSerial{ 1U };
     serial = processShadowSerial.fetch_add(1U, std::memory_order_relaxed);
-    // Scope the filename to THIS process id too, so it never collides with a
-    // DIFFERENT process's (possibly locked) leftover shadow copy either.
-    return directory / (SanitizeFileName(key) + "_p" + std::to_string(CurrentProcessId()) + "_" + std::to_string(serial) + extension);
-}
-
-bool EngineModuleLoader::CopyForLoad(
-    const std::filesystem::path& source,
-    const std::filesystem::path& destination,
-    std::string_view diagnosticLabel,
-    std::vector<std::string>& errors) {
-    std::error_code error;
-    std::filesystem::create_directories(destination.parent_path(), error);
-    if (error) {
-        errors.push_back(std::string{ diagnosticLabel } + " shadow copy directory could not be created");
-        return false;
+    // The copy's name carries the load's number among the loads of this version of the module in this process, so
+    // no load in the process maps a copy another load of it has mapped. The numbers repeat from one process to the
+    // next, which is what lets a later process find the copies this one made and map them without copying again.
+    static std::mutex slotsMutex;
+    static std::unordered_map<std::string, std::uint64_t> loadsOfVersion;
+    {
+        const std::lock_guard lock{ slotsMutex };
+        slot = ++loadsOfVersion[(directory / std::string{ namePrefix }).string()];
     }
-    // The source DLL can be transiently locked with a sharing violation by an
-    // antivirus real-time scan, the search indexer, or a build tool that just
-    // wrote it — an inherent Windows condition, not a permanent failure. Retry
-    // with a short backoff (the standard shadow-copy behavior for any host
-    // that copies plugins aside), and only report the failure if it persists.
-    // Ride out only a brief transient lock (e.g. an antivirus glancing at a
-    // freshly written DLL). Kept short on purpose: this runs on the caller's
-    // thread, so a long spin would freeze the editor UI, and a genuinely
-    // persistent lock is a real error to surface — not something to hang on.
-    // The common case (unlocked source) succeeds on the very first attempt.
-    constexpr int kMaxAttempts = 6;
-    constexpr std::chrono::milliseconds kRetryDelay{ 100 };
-    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
-        error.clear();
-        std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
-        if (!error) {
-            return true;
-        }
-        if (attempt + 1 < kMaxAttempts) {
-            std::this_thread::sleep_for(kRetryDelay);
-        }
-    }
-    errors.push_back(std::string{ diagnosticLabel } + " shadow copy failed after retries (" + error.message() + "): " +
-                     source.string() + " -> " + destination.string());
-    return false;
+    return directory / (std::string{ namePrefix } + std::to_string(slot) + modulePath.extension().string());
 }
 
 void* EngineModuleLoader::LoadNativeLibrary(
