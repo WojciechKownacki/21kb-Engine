@@ -3,6 +3,8 @@
 #include "engine/assets/TerrainAsset.hpp"
 
 #include <cstdint>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 namespace kb::terrain_editor {
@@ -53,6 +55,12 @@ struct TerrainBrushResult {
 
     [[nodiscard]] constexpr bool Changed() const noexcept { return changedSamples != 0U; }
 };
+
+// The words commands and scenarios use for modes and shapes (raise, lower, ..., soft-round, ...).
+[[nodiscard]] std::string_view TerrainBrushModeName(TerrainBrushMode mode) noexcept;
+[[nodiscard]] std::optional<TerrainBrushMode> ParseTerrainBrushMode(std::string_view text) noexcept;
+[[nodiscard]] std::string_view TerrainBrushShapeName(TerrainBrushShape shape) noexcept;
+[[nodiscard]] std::optional<TerrainBrushShape> ParseTerrainBrushShape(std::string_view text) noexcept;
 
 [[nodiscard]] bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept;
 [[nodiscard]] float TerrainBrushWeight(

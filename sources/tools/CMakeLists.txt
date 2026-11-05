@@ -63,11 +63,12 @@ if(KB_BUILD_RENDERER)
         src/CliParticleCommands.cpp
         src/CliParticleProfileCommand.cpp
         src/CliMap2DCommands.cpp
+        src/CliTerrainCommands.cpp
         src/CliVectorShapeCommands.cpp
         src/CliCsgCommands.cpp
         src/CliRig2DCommands.cpp
         src/private/CliMaterialShared.hpp)
-    target_link_libraries(kb_cli_core PUBLIC kb_world2d_core)
+    target_link_libraries(kb_cli_core PUBLIC kb_world2d_core kb_terrain_editor_core)
 endif()
 
 kb_apply_quality_gates(kb_cli_core)
@@ -193,6 +194,13 @@ if(BUILD_TESTING)
                 "--blender" "${KB_BLENDER_EXECUTABLE}"
                 "--test-root" "${CMAKE_BINARY_DIR}/blender_bridge_tests")
             set_tests_properties(kb_blender_bridge PROPERTIES LABELS "tools;import;blender" TIMEOUT 300)
+        endif()
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME kb_cli_terrain_authoring COMMAND "${Python3_EXECUTABLE}" -I
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/TerrainAuthoringTests.py"
+                "--cli" "$<TARGET_FILE:kb_cli>"
+                "--test-root" "${CMAKE_BINARY_DIR}/terrain_authoring_tests")
+            set_tests_properties(kb_cli_terrain_authoring PROPERTIES LABELS "tools;terrain;authoring" TIMEOUT 180)
         endif()
     endif()
     if(WIN32 AND KB_BUILD_RENDERER AND KB_BUILD_PROVIDER_MODULES_AS_DLL)

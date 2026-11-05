@@ -1,5 +1,7 @@
 #include "TerrainLayerPainter.hpp"
 
+#include "TerrainAnalysis.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -102,6 +104,55 @@ bool SetTerrainMaterialLayer(
     if (layerIndex >= terrain.materialLayers.size()) return false;
     terrain.materialLayers[layerIndex].materialAssetId = materialAssetId;
     return true;
+}
+
+TerrainLayerPaintResult ApplyTerrainAutoPaint(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainAutoPaintSettings& settings) noexcept {
+    TerrainLayerPaintResult result{};
+    const std::uint32_t layerCount = static_cast<std::uint32_t>(terrain.materialLayers.size());
+    if (settings.layerIndex >= layerCount || terrain.layerWeightWidth < 2U || terrain.layerWeightHeight < 2U ||
+        terrain.layerWeights.size() != static_cast<std::size_t>(terrain.layerWeightWidth) * terrain.layerWeightHeight * kChannels ||
+        !kb::assets::IsTerrainResolutionValid(terrain.width) || !kb::assets::IsTerrainResolutionValid(terrain.height) ||
+        terrain.heights.size() != static_cast<std::size_t>(terrain.width) * terrain.height ||
+        !std::isfinite(settings.minSlopeDegrees) || !std::isfinite(settings.maxSlopeDegrees) ||
+        !std::isfinite(settings.minHeight) || !std::isfinite(settings.maxHeight) ||
+        settings.minSlopeDegrees > settings.maxSlopeDegrees || settings.minHeight > settings.maxHeight ||
+        !std::isfinite(settings.slopeBlendDegrees) || settings.slopeBlendDegrees < 0.0F ||
+        !std::isfinite(settings.heightBlend) || settings.heightBlend < 0.0F ||
+        !std::isfinite(settings.opacity) || settings.opacity < 0.0F || settings.opacity > 1.0F) {
+        return result;
+    }
+    // 1 inside [low, high], falling to 0 over `blend` outside either end.
+    const auto band = [](float value, float low, float high, float blend) {
+        if (value >= low && value <= high) return 1.0F;
+        const float outside = value < low ? low - value : value - high;
+        if (blend <= 0.0F || outside >= blend) return 0.0F;
+        const float t = 1.0F - outside / blend;
+        return t * t * (3.0F - 2.0F * t);
+    };
+    for (std::uint32_t y = 0U; y < terrain.layerWeightHeight; ++y) {
+        const float worldZ = static_cast<float>(y) / static_cast<float>(terrain.layerWeightHeight - 1U) * terrain.worldSizeZ -
+            terrain.worldSizeZ * 0.5F;
+        for (std::uint32_t x = 0U; x < terrain.layerWeightWidth; ++x) {
+            const float worldX = static_cast<float>(x) / static_cast<float>(terrain.layerWeightWidth - 1U) * terrain.worldSizeX -
+                terrain.worldSizeX * 0.5F;
+            const TerrainSurfaceSample sample = SampleTerrainSurface(terrain, worldX, worldZ);
+            const float influence = settings.opacity *
+                band(sample.slopeDegrees, settings.minSlopeDegrees, settings.maxSlopeDegrees, settings.slopeBlendDegrees) *
+                band(sample.height, settings.minHeight, settings.maxHeight, settings.heightBlend);
+            if (influence <= 0.0F) continue;
+            std::uint8_t* weights = terrain.layerWeights.data() +
+                (static_cast<std::size_t>(y) * terrain.layerWeightWidth + x) * kChannels;
+            const std::uint32_t before = weights[settings.layerIndex];
+            const std::uint32_t after = static_cast<std::uint32_t>(std::lround(
+                std::lerp(static_cast<float>(before), 255.0F, influence)));
+            if (after == before) continue;
+            NormalizeAfterTargetChange(weights, layerCount, settings.layerIndex, after);
+            MarkChanged(result, x, y);
+        }
+    }
+    return result;
 }
 
 TerrainLayerPaintResult ApplyTerrainLayerPaint(

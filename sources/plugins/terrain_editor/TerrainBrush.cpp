@@ -102,6 +102,43 @@ void MarkChanged(TerrainBrushResult& result, std::uint32_t x, std::uint32_t z) n
 
 } // namespace
 
+namespace {
+
+struct ModeName { std::string_view name; TerrainBrushMode mode; };
+constexpr ModeName kModeNames[]{
+    { "raise", TerrainBrushMode::Raise }, { "lower", TerrainBrushMode::Lower }, { "smooth", TerrainBrushMode::Smooth },
+    { "flatten", TerrainBrushMode::Flatten }, { "noise", TerrainBrushMode::Noise }, { "terrace", TerrainBrushMode::Terrace },
+    { "cut-hole", TerrainBrushMode::CutHole }, { "fill-hole", TerrainBrushMode::FillHole },
+};
+struct ShapeName { std::string_view name; TerrainBrushShape shape; };
+constexpr ShapeName kShapeNames[]{
+    { "soft-round", TerrainBrushShape::SoftRound }, { "hard-round", TerrainBrushShape::HardRound },
+    { "linear-round", TerrainBrushShape::LinearRound }, { "bell", TerrainBrushShape::Bell },
+    { "ring", TerrainBrushShape::Ring }, { "speckle", TerrainBrushShape::Speckle },
+};
+
+} // namespace
+
+std::string_view TerrainBrushModeName(TerrainBrushMode mode) noexcept {
+    for (const ModeName& entry : kModeNames) if (entry.mode == mode) return entry.name;
+    return {};
+}
+
+std::optional<TerrainBrushMode> ParseTerrainBrushMode(std::string_view text) noexcept {
+    for (const ModeName& entry : kModeNames) if (entry.name == text) return entry.mode;
+    return std::nullopt;
+}
+
+std::string_view TerrainBrushShapeName(TerrainBrushShape shape) noexcept {
+    for (const ShapeName& entry : kShapeNames) if (entry.shape == shape) return entry.name;
+    return {};
+}
+
+std::optional<TerrainBrushShape> ParseTerrainBrushShape(std::string_view text) noexcept {
+    for (const ShapeName& entry : kShapeNames) if (entry.name == text) return entry.shape;
+    return std::nullopt;
+}
+
 bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept {
     return static_cast<std::uint8_t>(settings.shape) <= static_cast<std::uint8_t>(TerrainBrushShape::Speckle) &&
         std::isfinite(settings.radius) && settings.radius > 0.0F && settings.radius <= 100'000.0F &&

@@ -27,6 +27,8 @@ namespace kb::cli {
 [[nodiscard]] int RunVectorShapeShowCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVectorShapeSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMap2DCommand(const ArgumentList& arguments, CommandIo io);
+// Terrain files (.kbterrain): the Terrain Editor's brushes, layers and heightmaps (CliTerrainCommands.cpp).
+[[nodiscard]] int RunTerrainCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io);
 // Places a baked navigation mesh in the scene of --project/--scene (once), as the editor's Bake does.
 [[nodiscard]] bool PlaceSceneNavMesh(const ArgumentList& arguments, const std::filesystem::path& navMesh, CommandIo io);

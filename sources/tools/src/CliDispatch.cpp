@@ -203,6 +203,28 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
 R"(  rig2d new/show/set/build --project <dir> [--name <Name> | --rig <path>] [--data <source object>]
   vector2d-new --project <dir> --name <Name> [--kind Polygon|Line] [--points <JSON array>]
   vector2d-set/show --project <dir> --shape <path> [--points <JSON array>] [--width <number>]
+)"
+R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - brushes, material layers,
+               heightmap import - on a file, so an agent can shape ground without the editor. x, z are
+               world units from the terrain's centre (terrain info prints the extent). Strokes, paths and
+               batches are saved at once; a stroke that changes nothing is an error.
+                 new --project <dir> (--name <Entity> [--scene <path>] [--position x,y,z] | --terrain <file>)
+                     [--resolution 129] [--size 128|256x128] [--chunk-quads 32] [--lod-count 4]   (flat; resolution 2^n+1, 17..2049)
+                 info --terrain <file>    (size, heights, slopes, layers, heightHash)
+                 sample --terrain <file> --x <n> --z <n>    (height, normal, slope, layer weights)
+                 brush --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole]
+                     [--shape soft-round|hard-round|linear-round|bell|ring|speckle]
+                     (--x <n> --z <n> | --path "x,z;x,z") [--radius 8] [--strength 1] [--falloff 0.65]
+                     [--height <flatten target>] [--step <terrace step>] [--seed <n>] [--spacing <n>]
+                 apply --terrain <file> --ops <ops.json | inline JSON>    (a batch: [{"op":"brush","mode":"raise","x":0,"z":0}, ...])
+                 layer list|add|set|remove --terrain <file> [--material </Game/....kbmat> | --material-id <n>] [--index <n>]   (up to 4)
+                 paint --terrain <file> --layer <n> (--x <n> --z <n> | --path "x,z;x,z") [--radius 8] [--opacity 1] [--falloff 0.65]
+                     [--shape soft-round] [--erase yes] | --layer <n> --auto slope=35..90,height=-5..40
+                     [--slope-blend 3] [--height-blend 1] [--opacity 1]    (by slope in degrees and height)
+                 import --terrain <file> --source <heightmap.png|.raw|.r16> [--min -32] [--max 32] [--size 512[x256]] [--flip yes] [--replace]
+                 export --terrain <file> --out <file.png|.raw|.r16> [--min <n> --max <n>]    (16 bit)
+                 preview --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]
+                 --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path; --project is needed for /Game paths.
   map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
                Map component and Map Editor window do - grounds with automatic borders (Remere's Map
                Editor style), sprites as items or grounds, floors -50..50, a Map Camera for Play.
@@ -659,6 +681,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vector2d-show", &RunVectorShapeShowCommand, CliCommandKind::Normal, true, {}},
     {"vector2d-set", &RunVectorShapeSetCommand, CliCommandKind::Normal, true, {}},
     {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}},
+    {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}},
     {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
     {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
@@ -677,6 +700,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}},
 #else
     {"map2d", nullptr, CliCommandKind::Normal, false, {}},
+    {"terrain", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
     {"material-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-set", nullptr, CliCommandKind::Normal, false, {}},

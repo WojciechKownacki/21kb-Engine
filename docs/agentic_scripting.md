@@ -306,6 +306,7 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli ability` | create and edit combat abilities |
 | `kb_cli ai` | give an object a combatant and an AI brain from a preset |
 | `kb_cli map2d` | create and edit 2D tile maps |
+| `kb_cli terrain` | create a terrain and shape it with brushes, material layers and heightmaps |
 | `kb_cli vfx-new` | create a particle effect |
 | `kb_cli vfx-show` | print a particle effect |
 | `kb_cli vfx-set` | change values of a particle effect |

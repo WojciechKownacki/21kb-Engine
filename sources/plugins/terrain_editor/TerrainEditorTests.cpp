@@ -18,6 +18,8 @@
 #include <stdexcept>
 #include <string>
 
+void RunTerrainToolsTests();
+
 namespace {
 
 void Require(bool condition, const char* message) {
@@ -577,6 +579,7 @@ int main() {
         RunSmoothWorkspaceTest();
         RunDynamicMeshBenchmark();
         RunRuntimeLoaderTest();
+        RunTerrainToolsTests();
         std::cout << "Terrain Editor tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
