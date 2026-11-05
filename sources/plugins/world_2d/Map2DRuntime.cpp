@@ -91,6 +91,19 @@ struct Map2DRuntime::State {
     std::map<SceneEntity, Instance> instances;
     std::set<SceneEntity> camerasDriven;
     std::size_t rebuilt = 0U;
+    std::uint64_t registryGeneration = 0U;
+    bool registryHasMapAsset = false;
+
+    // Whether any registered asset is a tilemap, re-examined only when the registry changed.
+    [[nodiscard]] bool HasMapAsset(const kb::assets::AssetRegistry& registry) {
+        if (registry.Generation() != registryGeneration) {
+            registryGeneration = registry.Generation();
+            registryHasMapAsset = std::ranges::any_of(registry.All(), [](const AssetMetadata& meta) {
+                return meta.sourceExtension == kMap2DAssetExtension || meta.physicalPath.extension() == kMap2DAssetExtension;
+            });
+        }
+        return registryHasMapAsset;
+    }
 
     static void Release(kb::scene::Scene& scene, Instance& instance) {
         for (const auto& [key, chunk] : instance.chunks) {
@@ -334,12 +347,15 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
         return;
     }
     scene.Runtime().SetTilemapRuntime(this);
-    // Older scenes store the map in a MeshRenderer. Upgrade after querying, outside ECS iteration.
+    // Older scenes store the map in a MeshRenderer. Upgrade after querying, outside ECS iteration. No mesh
+    // renderer can name a map while the registry holds none, so a scene without maps skips the scan.
     std::vector<SceneEntity> legacy;
-    context.EcsWorld().CreateQuery<kb::scene::MeshRendererComponent>().ForEach(
-        [](SceneEntity entity, const kb::scene::MeshRendererComponent&, void* output) {
-            static_cast<std::vector<SceneEntity>*>(output)->push_back(entity);
-        }, &legacy);
+    if (state_->HasMapAsset(scene.Assets().Manager().Registry())) {
+        context.EcsWorld().CreateQuery<kb::scene::MeshRendererComponent>().ForEach(
+            [](SceneEntity entity, const kb::scene::MeshRendererComponent&, void* output) {
+                static_cast<std::vector<SceneEntity>*>(output)->push_back(entity);
+            }, &legacy);
+    }
     for (const auto entity : legacy) {
         if (std::as_const(scene).Components().Tilemaps().Has(entity)) continue;
         const auto id = std::as_const(scene).Components().MeshRenderers().TryGet(entity)->meshAssetId;
