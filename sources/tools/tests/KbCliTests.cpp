@@ -4881,6 +4881,22 @@ void RunBatchSceneSessionTests() {
         "the failing operation must fail the batch: " + failed.out + failed.err);
     Require(Fingerprint(projectPath) == before, "a batch that fails after 149 scene edits must leave every file as it was");
 
+    // The transaction's own cost stays small beside the project it covers: finding what an operation changed does not
+    // read the unchanged files one byte at a time.
+    constexpr std::size_t kBigFileBytes = 30U * 1024U * 1024U;
+    const std::string bigBytes(kBigFileBytes, 'k');
+    for (int index = 0; index < 4; ++index) {
+        WriteTextFile(projectPath / "Assets" / "Data" / ("big" + std::to_string(index) + ".bin"), bigBytes);
+    }
+    const std::filesystem::path cheap = parent / "cheap.txt";
+    WriteTextFile(cheap, "entity show --name Obj1\n");
+    const auto bigStarted = std::chrono::steady_clock::now();
+    const CliRun cheapRun = RunCliProgram({ "batch", "--project", project, "--file", cheap.string() });
+    const auto bigElapsed = std::chrono::steady_clock::now() - bigStarted;
+    Require(cheapRun.exitCode == 0 && Contains(cheapRun.out, "0 file(s) changed"), "a batch that changes nothing must apply: " + cheapRun.out + cheapRun.err);
+    Require(bigElapsed < std::chrono::seconds{ 1 }, "a batch must not read 120 MB of unchanged files byte by byte");
+    std::filesystem::remove_all(projectPath / "Assets" / "Data", error);
+
     // A batch sent to the MCP server works on the project the server is bound to.
     const std::filesystem::path mcpFile = parent / "mcp.txt";
     WriteTextFile(mcpFile, "entity add --name ByMcp\ncomponent add --entity ByMcp --type Light\n");

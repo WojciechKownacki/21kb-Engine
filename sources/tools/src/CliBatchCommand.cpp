@@ -92,6 +92,23 @@ bool ReadFile(const fs::path& path, std::string& content) {
     return !input.bad();
 }
 
+// Whether two files hold the same bytes, read in blocks side by side: the files of a project are compared one by
+// one after every batch, and most of them did not change.
+bool SameContent(const fs::path& left, const fs::path& right) {
+    std::ifstream first{ left, std::ios::binary };
+    std::ifstream second{ right, std::ios::binary };
+    if (!first || !second) return false;
+    std::vector<char> firstBlock(1U << 16U);
+    std::vector<char> secondBlock(firstBlock.size());
+    for (;;) {
+        first.read(firstBlock.data(), static_cast<std::streamsize>(firstBlock.size()));
+        second.read(secondBlock.data(), static_cast<std::streamsize>(secondBlock.size()));
+        const std::streamsize count = first.gcount();
+        if (count != second.gcount() || !std::equal(firstBlock.begin(), firstBlock.begin() + count, secondBlock.begin())) return false;
+        if (count < static_cast<std::streamsize>(firstBlock.size())) return !first.bad() && !second.bad();
+    }
+}
+
 // The files as they were before the operations, copied beside the project.
 struct Snapshot {
     fs::path root;
@@ -244,12 +261,7 @@ bool CollectChanges(const CommandRunner& run, const Snapshot& snapshot, std::vec
                 .diff = DiffOf(run, {}, snapshot.root / path) });
             continue;
         }
-        bool same = old->second == size;
-        if (same) {
-            std::string before;
-            std::string after;
-            same = ReadFile(snapshot.backup / path, before) && ReadFile(snapshot.root / path, after) && before == after;
-        }
+        const bool same = old->second == size && SameContent(snapshot.backup / path, snapshot.root / path);
         if (!same) {
             changes.push_back(Change{ .path = path, .kind = ChangeKind::Modified, .bytesBefore = old->second, .bytesAfter = size,
                 .diff = DiffOf(run, snapshot.backup / path, snapshot.root / path) });
@@ -303,10 +315,9 @@ bool Restore(const Snapshot& snapshot, std::string& error) {
     }
     for (const auto& [path, size] : snapshot.listing.files) {
         // Keep unchanged files untouched, including read-only files and their timestamps.
-        if (const auto found = current.files.find(path); found != current.files.end() && found->second == size) {
-            std::string before, after;
-            if (ReadFile(snapshot.backup / path, before) && ReadFile(snapshot.root / path, after) && before == after)
-                continue;
+        if (const auto found = current.files.find(path); found != current.files.end() && found->second == size &&
+            SameContent(snapshot.backup / path, snapshot.root / path)) {
+            continue;
         }
         fs::copy_file(snapshot.backup / path, snapshot.root / path, fs::copy_options::overwrite_existing, ec);
         if (ec) {
