@@ -667,7 +667,6 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .sourceRadius = light.sourceRadius,
         .shadowStrength = light.shadowStrength,
         .shadowDistance = light.shadowDistance,
-        .staticMobility = light.mobility == kb::scene::LightMobility::Static,
         .layer = light.layerMask,
     }));
     static_cast<void>(transform);
@@ -1318,12 +1317,15 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
     renderScene.InvalidateDrawGroupsIfFallback(
         fallbackCount > 0U ? RenderScene::TransformUpdateOutcome::Fallback : RenderScene::TransformUpdateOutcome::InPlace);
     if (geometrySwarmChanged.load(std::memory_order_relaxed)) {
+        renderScene.NoteNonMeshShadowCasterChange();
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
     if (surfaceCastChanged.load(std::memory_order_relaxed)) {
+        renderScene.NoteNonMeshShadowCasterChange();
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
     if (spaceStrokeChanged.load(std::memory_order_relaxed)) {
+        renderScene.NoteNonMeshShadowCasterChange();
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
     renderScene.AddTransformUpdateCounts(inPlace.load(std::memory_order_relaxed), fallbackCount);

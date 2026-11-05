@@ -4,6 +4,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 #include "kb/render/shadow/ShadowMapResource.hpp"
+#include "shadow/PointShadowCasterChanges.hpp"
 #include "shadow/PointShadowPassPlanner.hpp"
 #include "renderer/RendererViewConfigurator.hpp"
 
@@ -83,8 +84,9 @@ void SubmitPointShadows(
     const std::array<float, 3>* cameraPosition,
     SceneRenderShadowMapBinding& binding) {
     PointShadowSetup setup = PointShadowPassPlanner::Build(
-        desc.renderScene, desc.lightingConfig, cameraPosition, cameraCullingMask, BGFX_INVALID_HANDLE);
-    desc.aggregateSubmitStats.selectedShadowLightCount += setup.lightCount;
+        desc.renderScene, desc.lightingConfig, cameraPosition, cameraCullingMask, BGFX_INVALID_HANDLE,
+        desc.pointShadowMap.RowOwners());
+    desc.aggregateSubmitStats.selectedShadowLightCount += setup.selectedLights;
     desc.aggregateSubmitStats.droppedShadowLightCount += setup.droppedLights;
     if (setup.droppedLights != 0U) {
         desc.diagnostics.events.push_back({.severity = SceneRenderDiagnosticSeverity::Warning,
@@ -94,15 +96,24 @@ void SubmitPointShadows(
         return;
     }
     setup.binding.depthTexture = desc.pointShadowMap.DepthTexture();
+    // A light keeps the tiles it last rendered while its own settings, the atlas and the casters in its range
+    // stay the same, however its row moves in the camera's ordering.
+    const bool caching = desc.lightingConfig.perLightShadowCaching;
+    if (caching) {
+        PointShadowCasterChanges::Apply(
+            desc.renderScene, desc.sceneRenderer.Resources(), desc.sceneRenderer.ResourceMap(), setup, desc.pointShadowMap);
+    }
     for (std::uint32_t light = 0U; light < setup.lightCount; ++light) {
-        // A static light keeps the tiles it last rendered while it, its tile and the scene's meshes
-        // stay the same (cached shadow maps of static lights).
+        if (setup.faceCount[light] == 0U) {
+            continue;
+        }
         std::uint64_t key = 0U;
-        if (setup.staticLight[light]) {
+        if (caching) {
             key = 1469598103934665603ULL;
             const auto mix = [&key](std::uint64_t value) noexcept { key = (key ^ value) * 1099511628211ULL; };
             mix(setup.binding.entityId[light]);
-            mix(desc.renderScene.MeshContentRevision());
+            mix(desc.sceneRenderer.Resources().Revision());
+            mix(desc.sceneRenderer.ResourceMap().Revision());
             mix((static_cast<std::uint64_t>(setup.tileSize) << 32U) ^ setup.atlasWidth ^ (static_cast<std::uint64_t>(setup.atlasHeight) << 16U));
             for (std::uint32_t c = 0U; c < 4U; ++c) {
                 for (const float value : { setup.binding.positionRange[light * 4U + c], setup.binding.spot[light * 4U + c],
@@ -115,7 +126,7 @@ void SubmitPointShadows(
                 continue;
             }
         }
-        desc.pointShadowMap.SetCachedTiles(light, key);
+        desc.pointShadowMap.DiscardCachedTiles(light);
         for (std::uint32_t face = 0U; face < setup.faceCount[light]; ++face) {
             const std::uint32_t index = light * ScenePointShadowBinding::kFaceCount + face;
             const std::uint16_t viewId = desc.viewportPlan.viewIds.pointShadowViews[index];
@@ -150,6 +161,7 @@ void SubmitPointShadows(
                 .stats = stats,
             });
         }
+        desc.pointShadowMap.SetCachedTiles(light, key);
     }
     binding.point = setup.binding;
 }

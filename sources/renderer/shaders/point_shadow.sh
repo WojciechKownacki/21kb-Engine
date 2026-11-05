@@ -40,7 +40,7 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
         if (s >= count) {
             break;
         }
-        if (int(u_pointShadowLight[s].w + 0.5) != lightSlot) {
+        if (int(floor(u_pointShadowLight[s].w + 0.5)) != lightSlot) {
             continue;
         }
         vec3 d = worldPos - u_pointShadowLight[s].xyz;

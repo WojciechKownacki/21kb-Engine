@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <span>
 #include <utility>
 
 namespace kb::render {
@@ -48,6 +49,34 @@ constexpr std::uint32_t kHalfQualityLights = 8U;
 [[nodiscard]] std::uint32_t AtlasRows(std::uint32_t lightCount) noexcept {
     return lightCount > kHalfQualityLights ? ScenePointShadowBinding::kMaxLights
          : lightCount > kFullQualityLights ? kHalfQualityLights : kFullQualityLights;
+}
+
+// Gives each selected light a row of the atlas: a light that had one keeps it, a new light takes the lowest free
+// one, and a row whose light left is freed. Returns the row of each selected light and, through `rowCount`, the
+// highest row in use + 1.
+[[nodiscard]] std::array<std::uint32_t, ScenePointShadowBinding::kMaxLights> AssignRows(
+    const PointShadowLightSelection& selection,
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights>& owners,
+    std::uint32_t& rowCount) noexcept {
+    constexpr std::uint32_t kNoRow = ScenePointShadowBinding::kMaxLights;
+    const std::span<const std::uint64_t> selected{ selection.entityIds.data(), selection.count };
+    for (std::uint64_t& owner : owners) {
+        if (owner != 0U && std::ranges::find(selected, owner) == selected.end()) owner = 0U;
+    }
+    std::array<std::uint32_t, ScenePointShadowBinding::kMaxLights> rows{};
+    for (std::uint32_t index = 0U; index < selection.count; ++index) {
+        const auto found = std::ranges::find(owners, selection.entityIds[index]);
+        rows[index] = found == owners.end() ? kNoRow : static_cast<std::uint32_t>(found - owners.begin());
+    }
+    for (std::uint32_t index = 0U; index < selection.count; ++index) {
+        if (rows[index] != kNoRow) continue;
+        const auto freeRow = std::ranges::find(owners, 0U);
+        rows[index] = static_cast<std::uint32_t>(freeRow - owners.begin());
+        *freeRow = selection.entityIds[index];
+    }
+    rowCount = 0U;
+    for (std::uint32_t index = 0U; index < selection.count; ++index) rowCount = std::max(rowCount, rows[index] + 1U);
+    return rows;
 }
 
 } // namespace
@@ -114,7 +143,8 @@ PointShadowSetup PointShadowPassPlanner::Build(
     const SceneRenderLightingConfig& lightingConfig,
     const std::array<float, 3>* cameraPosition,
     std::uint32_t cameraCullingMask,
-    bgfx::TextureHandle depthTexture) noexcept {
+    bgfx::TextureHandle depthTexture,
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights>& rowOwners) noexcept {
     PointShadowSetup setup{};
     if (!lightingConfig.shadowsEnabled) {
         return setup;
@@ -122,18 +152,27 @@ PointShadowSetup PointShadowPassPlanner::Build(
     const PointShadowLightSelection selection = Select(renderScene, cameraPosition, cameraCullingMask);
     setup.droppedLights = selection.droppedCount;
     if (selection.count == 0U) {
+        rowOwners.fill(0U);
         return setup;
     }
 
+    std::uint32_t rowCount = 0U;
+    auto rows = AssignRows(selection, rowOwners, rowCount);
+    if (TileSizeFor(lightingConfig, rowCount) != TileSizeFor(lightingConfig, selection.count)) {
+        // Rows left empty by lights that went away would force smaller tiles than these lights need.
+        rowOwners.fill(0U);
+        rows = AssignRows(selection, rowOwners, rowCount);
+    }
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
-    setup.tileSize = TileSizeFor(lightingConfig, selection.count);
+    setup.tileSize = TileSizeFor(lightingConfig, rowCount);
     setup.atlasWidth = setup.tileSize * ScenePointShadowBinding::kFaceCount;
-    setup.atlasHeight = setup.tileSize * AtlasRows(selection.count);
-    setup.lightCount = selection.count;
+    setup.atlasHeight = setup.tileSize * AtlasRows(rowCount);
+    setup.lightCount = rowCount;
+    setup.selectedLights = selection.count;
 
     ScenePointShadowBinding& binding = setup.binding;
     binding.depthTexture = depthTexture;
-    binding.lightCount = selection.count;
+    binding.lightCount = rowCount;
     binding.strength = std::clamp(lightingConfig.shadowStrength, 0.0F, 1.0F);
     const float tanHalfFov = std::tan(bx::toRad(kFaceFovDegrees * 0.5F));
     binding.atlas = {
@@ -142,11 +181,12 @@ PointShadowSetup PointShadowPassPlanner::Build(
         static_cast<float>(setup.tileSize),
         tanHalfFov,
     };
-    for (std::uint32_t slot = 0U; slot < selection.count; ++slot) {
-        const LightRenderProxyDesc& light = *selection.lights[slot];
+    for (std::uint32_t index = 0U; index < selection.count; ++index) {
+        const std::uint32_t slot = rows[index];
+        const LightRenderProxyDesc& light = *selection.lights[index];
         const float far = std::max(light.range, 0.1F);
         const float near = std::clamp(far * 0.002F, 0.02F, 0.25F);
-        binding.entityId[slot] = selection.entityIds[slot];
+        binding.entityId[slot] = selection.entityIds[index];
         binding.positionRange[slot * 4U + 0U] = light.position[0];
         binding.positionRange[slot * 4U + 1U] = light.position[1];
         binding.positionRange[slot * 4U + 2U] = light.position[2];
@@ -160,7 +200,6 @@ PointShadowSetup PointShadowPassPlanner::Build(
         binding.depthParams[slot * 4U + 2U] = std::max(light.sourceRadius,
             area ? 0.5F * std::sqrt(std::max(light.areaWidth * light.areaHeight, 0.0F)) : 0.0F);
         binding.lightStrength[slot] = std::clamp(light.shadowStrength, 0.0F, 1.0F);
-        setup.staticLight[slot] = light.staticMobility;
         const bx::Vec3 eye{ light.position[0], light.position[1], light.position[2] };
         if (light.kind == RenderLightKind::Spot) {
             const auto axis = SceneLightShaderData::Pack(light).texels[0];

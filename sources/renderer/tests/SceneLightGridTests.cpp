@@ -1,8 +1,10 @@
 #include "RendererTestSupport.hpp"
 #include "scene/lighting/SceneLightGrid.hpp"
+#include "shadow/PointShadowCasterChanges.hpp"
 #include "shadow/PointShadowPassPlanner.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -62,7 +64,8 @@ void PointShadowSelectionKeepsTheNearestAndCountsTheRest() {
     SceneRenderLightingConfig config;
     config.shadowsEnabled = true;
     config.shadowMapSize = 2048U;
-    const PointShadowSetup setup = PointShadowPassPlanner::Build(scene, config, &camera, ~0U, BGFX_INVALID_HANDLE);
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights> owners{};
+    const PointShadowSetup setup = PointShadowPassPlanner::Build(scene, config, &camera, ~0U, BGFX_INVALID_HANDLE, owners);
     Require(setup.valid && setup.lightCount == ScenePointShadowBinding::kMaxLights && setup.droppedLights == 9U,
         "the shadow setup must report the lights it dropped");
     const std::uint32_t full = PointShadowPassPlanner::TileSizeFor(config, 4U);
@@ -88,8 +91,105 @@ std::vector<std::uint32_t> CellLights(const SceneLightGrid& grid, std::array<flo
 }
 }
 
+[[nodiscard]] LightRenderProxyDesc ShadowLightAt(std::uint64_t id, float x) {
+    LightRenderProxyDesc light{.entityId = id};
+    light.kind = RenderLightKind::Point;
+    light.castsShadow = true;
+    light.intensity = 1.0F;
+    light.range = 10.0F;
+    light.position = {x, 0.0F, 0.0F};
+    return light;
+}
+
+[[nodiscard]] MeshRenderProxyDesc CasterAt(std::uint64_t id, float x) {
+    MeshRenderProxyDesc mesh{.entityId = id, .meshAssetId = 7U};
+    mesh.model[0] = mesh.model[5] = mesh.model[10] = mesh.model[15] = 1.0F;
+    mesh.model[12] = x;
+    mesh.boundsOverride = {.center = {0.0F, 0.0F, 0.0F}, .radius = 0.5F};
+    return mesh;
+}
+
+// A light keeps its row of the atlas while the camera reorders the lights, a row freed by a light that left stays
+// empty until a new light takes it, and the rows are dealt out again once empty rows would shrink the tiles.
+void PointShadowRowsFollowTheirLights() {
+    RenderScene scene;
+    for (std::uint64_t id = 1U; id <= 3U; ++id) static_cast<void>(scene.UpsertLight(ShadowLightAt(id, static_cast<float>(id))));
+    SceneRenderLightingConfig config;
+    config.shadowsEnabled = true;
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights> owners{};
+    const std::array<float, 3> near{ 0.0F, 0.0F, 0.0F };
+    const std::array<float, 3> far{ 10.0F, 0.0F, 0.0F };
+    auto setup = PointShadowPassPlanner::Build(scene, config, &near, ~0U, BGFX_INVALID_HANDLE, owners);
+    Require(setup.lightCount == 3U && setup.binding.entityId[0] == 1U && setup.binding.entityId[2] == 3U,
+        "the nearest light must take the first row");
+    setup = PointShadowPassPlanner::Build(scene, config, &far, ~0U, BGFX_INVALID_HANDLE, owners);
+    Require(setup.binding.entityId[0] == 1U && setup.binding.entityId[1] == 2U && setup.binding.entityId[2] == 3U,
+        "a camera that reorders the lights must not move them between rows");
+    Require(scene.RemoveLight(2U), "the light did not leave");
+    setup = PointShadowPassPlanner::Build(scene, config, &far, ~0U, BGFX_INVALID_HANDLE, owners);
+    Require(setup.lightCount == 3U && setup.selectedLights == 2U && setup.binding.entityId[1] == 0U && setup.faceCount[1] == 0U &&
+            setup.binding.entityId[2] == 3U,
+        "the row of a light that left must stay empty and the others must keep theirs");
+    static_cast<void>(scene.UpsertLight(ShadowLightAt(4U, 4.0F)));
+    setup = PointShadowPassPlanner::Build(scene, config, &far, ~0U, BGFX_INVALID_HANDLE, owners);
+    Require(setup.selectedLights == 3U && setup.binding.entityId[1] == 4U, "a new light must take the lowest free row");
+    for (std::uint64_t id = 5U; id <= 12U; ++id) static_cast<void>(scene.UpsertLight(ShadowLightAt(id, static_cast<float>(id))));
+    setup = PointShadowPassPlanner::Build(scene, config, &far, ~0U, BGFX_INVALID_HANDLE, owners);
+    for (std::uint64_t id = 5U; id <= 11U; ++id) static_cast<void>(scene.RemoveLight(id));
+    static_cast<void>(scene.RemoveLight(1U));
+    static_cast<void>(scene.RemoveLight(3U));
+    setup = PointShadowPassPlanner::Build(scene, config, &far, ~0U, BGFX_INVALID_HANDLE, owners);
+    Require(setup.selectedLights == 2U && setup.lightCount == 2U && setup.tileSize == PointShadowPassPlanner::TileSizeFor(config, 2U),
+        "empty rows must not keep the tiles small once their lights are gone");
+}
+
+// A cached tile of a light is discarded only by a shadow caster change that reaches it: a caster that moves far away
+// leaves it, one that moves in range, appears or leaves takes it, and a frame the cache did not see takes them all.
+void PointShadowCasterChangesDiscardOnlyTilesTheyReach() {
+    RenderScene scene;
+    for (std::uint64_t id = 1U; id <= 3U; ++id) static_cast<void>(scene.UpsertLight(ShadowLightAt(id, 100.0F * static_cast<float>(id - 1U))));
+    static_cast<void>(scene.UpsertMesh(CasterAt(10U, 1.0F)));
+    static_cast<void>(scene.UpsertMesh(CasterAt(11U, 1000.0F)));
+    SceneRenderLightingConfig config;
+    config.shadowsEnabled = true;
+    RenderResourceRegistry resources;
+    SceneRenderResourceMap resourceMap;
+    ShadowMapResource map;
+    const std::array<float, 3> camera{ 0.0F, 0.0F, 0.0F };
+    std::uint64_t rendererFrame = 1U;
+    const auto frame = [&](auto&& change) {
+        scene.BeginMotionFrame(rendererFrame++);
+        change();
+        const PointShadowSetup setup = PointShadowPassPlanner::Build(scene, config, &camera, ~0U, BGFX_INVALID_HANDLE, map.RowOwners());
+        PointShadowCasterChanges::Apply(scene, resources, resourceMap, setup, map);
+        return setup;
+    };
+    const auto cacheAll = [&map] { for (std::uint32_t row = 0U; row < 3U; ++row) map.SetCachedTiles(row, 100U + row); };
+    const auto cached = [&map] { return std::array{ map.CachedTiles(0U) != 0U, map.CachedTiles(1U) != 0U, map.CachedTiles(2U) != 0U }; };
+    static_cast<void>(frame([] {}));
+    cacheAll();
+    static_cast<void>(frame([&] { Require(scene.UpdateMeshTransform(11U, CasterAt(11U, 1001.0F).model), "the far caster did not move"); }));
+    Require((cached() == std::array{ true, true, true }), "a caster moving far from every light must keep their tiles");
+    static_cast<void>(frame([&] { Require(scene.UpdateMeshTransform(10U, CasterAt(10U, 1.2F).model), "the near caster did not move"); }));
+    Require((cached() == std::array{ false, true, true }), "a caster moving in a light's range must discard that light's tiles only");
+    cacheAll();
+    static_cast<void>(frame([] {}));
+    Require((cached() == std::array{ true, true, true }), "a frame without changes must keep every tile");
+    static_cast<void>(frame([&] { static_cast<void>(scene.UpsertMesh(CasterAt(12U, 101.0F))); }));
+    Require((cached() == std::array{ true, false, true }), "a caster appearing in a light's range must discard its tiles");
+    cacheAll();
+    static_cast<void>(frame([&] { Require(scene.RemoveMesh(12U), "the caster did not leave"); }));
+    Require((cached() == std::array{ false, false, false }), "a removed caster must discard every tile");
+    cacheAll();
+    scene.BeginMotionFrame(rendererFrame++);
+    static_cast<void>(frame([] {}));
+    Require((cached() == std::array{ false, false, false }), "a frame the cache did not see must discard every tile");
+}
+
 void RunSceneLightGridTests() {
     PointShadowSelectionKeepsTheNearestAndCountsTheRest();
+    PointShadowRowsFollowTheirLights();
+    PointShadowCasterChangesDiscardOnlyTilesTheyReach();
     RenderScene scene;
     SceneRenderLightingConfig config{};
     config.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;

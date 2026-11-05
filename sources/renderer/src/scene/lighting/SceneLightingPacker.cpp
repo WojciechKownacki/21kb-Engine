@@ -112,6 +112,7 @@ void SceneLightingPacker::AssignPointShadowSlots(PackedSceneLighting& lighting, 
     const std::vector<std::uint64_t>& gridIds = lighting.lightGrid.entityIds;
     if (bgfx::isValid(lighting.lightGrid.texture) && !gridIds.empty()) {
         for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {
+            if (binding.entityId[shadow] == 0U) continue;
             const auto found = std::ranges::find(gridIds, binding.entityId[shadow]);
             if (found != gridIds.end()) {
                 lighting.pointShadowSlot[shadow] = static_cast<float>(found - gridIds.begin());
@@ -122,6 +123,7 @@ void SceneLightingPacker::AssignPointShadowSlots(PackedSceneLighting& lighting, 
     const std::uint32_t packedCount = std::min<std::uint32_t>(
         static_cast<std::uint32_t>(lighting.params[0]), kMaxSceneForwardPlusLights);
     for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {
+        if (binding.entityId[shadow] == 0U) continue;
         for (std::uint32_t slot = 0U; slot < packedCount; ++slot) {
             if (lighting.slotEntityId[slot] == binding.entityId[shadow]) {
                 lighting.pointShadowSlot[shadow] = static_cast<float>(slot);
