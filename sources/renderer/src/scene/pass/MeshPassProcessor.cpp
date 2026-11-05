@@ -320,6 +320,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask, &section)) {
                     continue;
                 }
+                if (desc.pass == MeshPassType::MotionVectors && desc.motionFrame != 0U &&
+                    !MeshPipelinePassPolicy::HasOwnMotion(instance, materialResource, desc.motionFrame)) {
+                    continue;
+                }
                 // The material's World Position Offset reach (Max World Position Offset Displacement).
                 const float boundsMargin = MeshPipelineVisibility::MaterialBoundsMargin(materialResource);
                 const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()

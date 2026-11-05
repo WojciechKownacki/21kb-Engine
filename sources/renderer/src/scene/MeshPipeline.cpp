@@ -212,6 +212,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .terrainLayersOnly = desc.terrainLayersOnly,
         .batchCommandCache = batchCache,
         .gpuDrivenSupport = desc.gpuDrivenSupport,
+        .motionFrame = desc.motionFrame,
     }, result);
     ExpandMeshletCommands(desc, result);
     SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);

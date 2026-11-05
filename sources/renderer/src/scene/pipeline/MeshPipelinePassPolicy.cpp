@@ -107,6 +107,15 @@ bool MeshPipelinePassPolicy::Accepts(
     return false;
 }
 
+bool MeshPipelinePassPolicy::HasOwnMotion(
+    const SceneRenderMeshInstance& instance,
+    const RenderMaterialResource* material,
+    std::uint64_t motionFrame) noexcept {
+    return instance.currentSkinningPalette.IsValid() || instance.previousSkinningPalette.IsValid() ||
+        (material != nullptr && material->graphProgram.active && material->graphProgram.drawsOwnMotionVectors) ||
+        SceneRenderPreviousModel(instance, motionFrame) != instance.model;
+}
+
 bool MeshPipelinePassPolicy::UsesDisabledAlphaBlend(const RenderMaterialResource* material) noexcept {
     return material != nullptr && material->alphaMode == RenderMaterialAlphaMode::Blend;
 }

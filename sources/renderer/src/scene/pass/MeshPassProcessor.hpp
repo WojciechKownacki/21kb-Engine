@@ -26,6 +26,7 @@ struct MeshPassProcessorDesc {
     bool terrainLayersOnly = false;
     SceneMeshBatchCommandCache* batchCommandCache = nullptr;
     SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
+    std::uint64_t motionFrame = 0U;
 };
 
 class MeshPassProcessor {
