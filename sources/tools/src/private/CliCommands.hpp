@@ -41,6 +41,7 @@ namespace kb::cli {
 [[nodiscard]] int RunInputActionCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPrefabCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneDuplicateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialSetCommand(const ArgumentList& arguments, CommandIo io);

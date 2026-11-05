@@ -277,6 +277,7 @@ More commands, each with its options in `kb_cli help`:
 |---|---|
 | `kb_cli new` | create a project in a new or empty folder (Basic or Empty startup scene) |
 | `kb_cli scene-new` | create a scene from a template |
+| `kb_cli scene-duplicate` | copy a scene under a new name, with an identity of its own |
 | `kb_cli entity` | add or remove a scene entity |
 | `kb_cli component` | add, set or remove a component of an entity |
 | `kb_cli schema` | list components and their properties |

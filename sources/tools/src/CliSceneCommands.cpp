@@ -8,6 +8,7 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAssetCopy.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneTemplates.hpp"
@@ -461,6 +462,66 @@ int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
         }
         io.out << "Startup scene: " << target.virtualPath << '\n';
     }
+    return 0;
+}
+
+// File > Save Scene As without the editor: a copy of a scene under a new name, with an identity of its own.
+int RunSceneDuplicateCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!project.has_value() || !name.has_value()) {
+        io.err << "error: scene-duplicate requires --project <dir> --name <Name> [--scene <path>] [--folder Assets/Scenes]\n";
+        return 1;
+    }
+    kb::scene::Scene scene;
+    std::string error;
+    if (!MountProjectAssets(scene, kb::assets::Utf8Path(*project), error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const SceneFileResolution source = ResolveSceneFile(arguments, &scene);
+    if (!source.succeeded) {
+        io.err << "error: " << source.error << '\n';
+        return 1;
+    }
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(*project, error);
+    if (projectFile.empty()) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const kb::scene::NewScenePath target = kb::scene::SceneTemplates::ResolveNewScene(
+        projectFile.parent_path(), arguments.Option("--folder").value_or("Assets/Scenes"), *name);
+    if (!target.error.empty()) {
+        io.err << "error: " << target.error << '\n';
+        return 1;
+    }
+    std::error_code fileError;
+    std::filesystem::path targetMeta = target.file;
+    targetMeta.replace_extension(".meta");
+    // Whatever fails after the file is copied takes the copy and its .meta away again.
+    const auto fail = [&](const std::string& reason) {
+        std::filesystem::remove(target.file, fileError);
+        std::filesystem::remove(targetMeta, fileError);
+        io.err << "error: " << reason << '\n';
+        return 1;
+    };
+    std::filesystem::copy_file(source.path, target.file, std::filesystem::copy_options::none, fileError);
+    if (fileError) {
+        io.err << "error: the scene could not be copied: " << fileError.message() << '\n';
+        return 1;
+    }
+    if (!kb::scene::ReidentifyCopiedSceneAssets(target.file, error)) {
+        return fail(error);
+    }
+    kb::scene::SceneDocumentLoadResult copy = kb::scene::SceneDocumentService::Load(target.file);
+    if (!copy.succeeded) {
+        return fail("the copy could not be read: " + copy.error);
+    }
+    copy.document.name = *name;
+    if (!kb::scene::SceneDocumentService::Save(copy.document, target.file)) {
+        return fail("the copy could not be named");
+    }
+    io.out << "Scene copied: " << target.virtualPath << " (from " << source.path.generic_string() << ").\n";
     return 0;
 }
 

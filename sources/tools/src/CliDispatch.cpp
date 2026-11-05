@@ -35,6 +35,9 @@ Commands:
                  --project <dir> --name <Name> [--folder Assets/Scenes]
                  [--template Basic|Empty] [--default yes|no]
                (--default yes makes it the scene the game starts in)
+  scene-duplicate Copy a scene under a new name, with an identity of its own, as File >
+               Save Scene As does. The scene is --scene, or the one the game starts in.
+                 --project <dir> --name <Name> [--scene <path>] [--folder Assets/Scenes]
   script-new   Create a script, as the editor's Create menu does: Lua (one .lua
                file) or C++ (a .native asset, with its source and CMake project in
                Source/NativeScripts/<Name>). Existing files are never overwritten.
@@ -570,7 +573,7 @@ std::size_t EditDistance(std::string_view a, std::string_view b) {
 // A misspelled option must fail, not be ignored: for these commands the options accepted are the
 // ones their usage block names, plus the global ones. The other commands check their own.
 constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "api", "validate", "scene-list",
-    "scene-attach", "scene-new", "run", "material-new", "material-set", "material-show", "input-action", "prefab" };
+    "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab" };
 
 bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
     if (std::ranges::find(kUsageCheckedCommands, command) == std::end(kUsageCheckedCommands)) return false;
@@ -629,6 +632,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"prefab", &RunPrefabCommand, CliCommandKind::Normal, true, {}},
     {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}},
     {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
+    {"scene-duplicate", &RunSceneDuplicateCommand, CliCommandKind::Normal, true, ""},
     {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
     {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, ""},
     {"run", &RunRunCommand, CliCommandKind::Normal, true, "run_scene"},

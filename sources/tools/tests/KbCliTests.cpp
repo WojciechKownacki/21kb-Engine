@@ -4928,6 +4928,57 @@ void RunBatchSceneSessionTests() {
 #endif
 }
 
+// scene-duplicate: a scene copied under a new name keeps its content, gets an identity of its own, and can be edited
+// at once; the original is not touched.
+void RunSceneDuplicateCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "scene_duplicate";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path projectPath = parent / "Scena";
+    const std::string project = projectPath.string();
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Alpha", "--position", "1,2,3" }).exitCode == 0 &&
+            RunCliProgram({ "component", "add", "--project", project, "--entity", "Alpha", "--type", "Light" }).exitCode == 0,
+        "the scene to copy could not be prepared");
+    const std::filesystem::path original = projectPath / "Assets" / "Scenes" / "Main.21kbscene";
+    const auto originalBefore = Fingerprint(projectPath / "Assets" / "Scenes");
+
+    const CliRun copied = RunCliProgram({ "scene-duplicate", "--project", project, "--name", "Copy" });
+    Require(copied.exitCode == 0 && Contains(copied.out, "/Game/Scenes/Copy.21kbscene"),
+        "scene-duplicate must copy the startup scene: " + copied.out + copied.err);
+    const std::filesystem::path copy = projectPath / "Assets" / "Scenes" / "Copy.21kbscene";
+    Require(std::filesystem::is_regular_file(copy) && std::filesystem::is_regular_file(projectPath / "Assets" / "Scenes" / "Copy.meta"),
+        "the copy must be a scene with its own .meta");
+    const auto copiedScene = kb::scene::SceneDocumentService::Load(copy);
+    const auto originalScene = kb::scene::SceneDocumentService::Load(original);
+    Require(copiedScene.succeeded && originalScene.succeeded && copiedScene.document.name == "Copy" &&
+            copiedScene.document.guid != originalScene.document.guid && !copiedScene.document.guid.empty(),
+        "the copy must be named and identified as a scene of its own: " + copiedScene.error);
+    const CliRun listed = RunCliProgram({ "scene-list", "--project", project, "--scene", "/Game/Scenes/Copy.21kbscene" });
+    Require(listed.exitCode == 0 && Contains(listed.out, "Alpha") && Contains(listed.out, "Light"),
+        "the copy must hold what the original held: " + listed.out + listed.err);
+
+    // Editing the copy works at once and leaves the original alone.
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--scene", "/Game/Scenes/Copy.21kbscene", "--name", "Beta" }).exitCode == 0,
+        "the copy must be editable");
+    const CliRun originalListed = RunCliProgram({ "scene-list", "--project", project, "--scene", "/Game/Scenes/Main.21kbscene" });
+    Require(originalListed.exitCode == 0 && Contains(originalListed.out, "Alpha") && !Contains(originalListed.out, "Beta"),
+        "editing the copy must not change the original: " + originalListed.out);
+    Require(Fingerprint(projectPath / "Assets" / "Scenes").at("Main.21kbscene") == originalBefore.at("Main.21kbscene") &&
+            Fingerprint(projectPath / "Assets" / "Scenes").at("Main.meta") == originalBefore.at("Main.meta"),
+        "scene-duplicate must not touch the original files");
+
+    // A name that is taken, and one that is not a file name, are refused and leave nothing behind.
+    const auto before = Fingerprint(projectPath);
+    Require(RunCliProgram({ "scene-duplicate", "--project", project, "--name", "Copy" }).exitCode == 1 &&
+            RunCliProgram({ "scene-duplicate", "--project", project, "--name", "Bad/Name" }).exitCode == 1 &&
+            RunCliProgram({ "scene-duplicate", "--project", project, "--scene", "/Game/Scenes/Missing.21kbscene", "--name", "Other" }).exitCode == 1 &&
+            RunCliProgram({ "scene-duplicate", "--project", project }).exitCode == 1,
+        "scene-duplicate must refuse a taken name, a bad name, a missing scene and no name");
+    Require(Fingerprint(projectPath) == before, "a refused scene-duplicate must leave every file as it was");
+}
+
 #if KB_CLI_RENDERER
 // The play camera of a map is set from the command line: pixel density, target, smoothing, drag margins, bounds.
 void RunMap2DCameraCliTests() {
@@ -5354,6 +5405,10 @@ int main(int argc, char** argv) {
         RunBatchCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "scene-duplicate") {
+        RunSceneDuplicateCommandTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "batch-scenes") {
         RunBatchSceneSessionTests();
         return EXIT_SUCCESS;
@@ -5388,6 +5443,7 @@ int main(int argc, char** argv) {
     RunCommandCatalogTests();
     RunBatchCommandTests();
     RunBatchSceneSessionTests();
+    RunSceneDuplicateCommandTests();
     RunMiniJsonTests();
     RunArgumentListTests();
     RunFlexibleAssetPathTests();
