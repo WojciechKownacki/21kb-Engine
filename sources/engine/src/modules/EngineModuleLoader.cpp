@@ -14,7 +14,6 @@
 #include <ranges>
 #include <system_error>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -82,6 +81,20 @@ namespace {
         ++digits;
     }
     return digits > 0U && processId != CurrentProcessId() && ProcessAlive(processId);
+}
+
+// Whether this process has the module file mapped (a library freed by its last holder is not).
+[[nodiscard]] bool IsModuleMapped(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    return GetModuleHandleW(path.c_str()) != nullptr;
+#else
+    void* const library = dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+    if (library == nullptr) {
+        return false;
+    }
+    dlclose(library);
+    return true;
+#endif
 }
 
 // A module file's identity: its size and last write time. A shadow copy is named after the file it copies, so a
@@ -483,6 +496,11 @@ EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
         return result;
     }
 
+    // From choosing the copy to mapping it, one load at a time in the process: two loads must not choose the same
+    // unmapped copy and so share one mapping. Recursive: a module may load another from its own initialisation.
+    static std::recursive_mutex loadMutex;
+    const std::lock_guard loadLock{ loadMutex };
+
     std::uint64_t serial = 0U;
     std::filesystem::path loadPath = sourcePath;
     if (desc.shadowCopy) {
@@ -493,9 +511,8 @@ EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
         }
         const std::string keyPrefix = SanitizeFileName(desc.key) + "_";
         const std::string current = keyPrefix + StampText(stamp) + "_";
-        std::uint64_t slot = 0U;
         loadPath = ResolveShadowCopyPath(
-            current, sourcePath, desc.shadowCopyDirectory, desc.shadowCopyDirectoryName, serial, slot);
+            current, sourcePath, desc.shadowCopyDirectory, desc.shadowCopyDirectoryName, serial);
         std::error_code shadowDirError;
         std::filesystem::create_directories(loadPath.parent_path(), shadowDirError);
         PruneStaleShadowCopies(loadPath.parent_path(), keyPrefix, current);
@@ -591,8 +608,7 @@ std::filesystem::path EngineModuleLoader::ResolveShadowCopyPath(
     const std::filesystem::path& modulePath,
     const std::filesystem::path& shadowCopyDirectory,
     std::string_view shadowCopyDirectoryName,
-    std::uint64_t& serial,
-    std::uint64_t& slot) {
+    std::uint64_t& serial) {
     std::filesystem::path directory = shadowCopyDirectory;
     if (directory.empty()) {
         directory = std::filesystem::temp_directory_path() / std::string{ shadowCopyDirectoryName.empty() ? "21kb_engine_modules" : shadowCopyDirectoryName };
@@ -604,16 +620,15 @@ std::filesystem::path EngineModuleLoader::ResolveShadowCopyPath(
     // or two hosts sharing a scene) would load the same copy twice.
     static std::atomic<std::uint64_t> processShadowSerial{ 1U };
     serial = processShadowSerial.fetch_add(1U, std::memory_order_relaxed);
-    // The copy's name carries the load's number among the loads of this version of the module in this process, so
-    // no load in the process maps a copy another load of it has mapped. The numbers repeat from one process to the
-    // next, which is what lets a later process find the copies this one made and map them without copying again.
-    static std::mutex slotsMutex;
-    static std::unordered_map<std::string, std::uint64_t> loadsOfVersion;
-    {
-        const std::lock_guard lock{ slotsMutex };
-        slot = ++loadsOfVersion[(directory / std::string{ namePrefix }).string()];
+    // The copy's name carries a slot: the first one no load of this process has mapped. A load never maps a copy
+    // another load of the process has mapped (they would share one mapping), yet a copy nobody maps is mapped
+    // again instead of copied, by this process's later loads and by other processes.
+    for (std::uint64_t slot = 1U;; ++slot) {
+        std::filesystem::path candidate = directory / (std::string{ namePrefix } + std::to_string(slot) + modulePath.extension().string());
+        if (!IsModuleMapped(candidate)) {
+            return candidate;
+        }
     }
-    return directory / (std::string{ namePrefix } + std::to_string(slot) + modulePath.extension().string());
 }
 
 void* EngineModuleLoader::LoadNativeLibrary(

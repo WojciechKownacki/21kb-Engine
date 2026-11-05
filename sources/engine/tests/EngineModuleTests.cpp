@@ -578,8 +578,8 @@ void RunEngineModuleLoaderShadowCopyTest() {
     kb::tests::Require(first.library.FindSymbol("kb_register_native_scripts", symbolErrors, "module loader test") != nullptr, "EngineModuleLoader did not resolve an exported symbol");
     kb::tests::Require(symbolErrors.empty(), "EngineModuleLoader reported errors for a valid symbol");
     const std::filesystem::path firstLoadedPath = first.loadedPath;
-    first.library.Reset();
 
+    // The first load is still mapped: the second must not map the same copy and so share its mapping.
     kb::modules::EngineModuleLoadResult second = loader.Load(kb::modules::EngineModuleLoadDesc{
         .key = "module-loader-test",
         .modulePath = pluginPath,
@@ -589,12 +589,23 @@ void RunEngineModuleLoaderShadowCopyTest() {
     });
     kb::tests::Require(second.Succeeded(), "EngineModuleLoader did not load the second shadow-copied DLL");
     kb::tests::Require(second.reloadSerial > first.reloadSerial, "EngineModuleLoader did not advance the reload serial");
-    kb::tests::Require(second.loadedPath != firstLoadedPath, "EngineModuleLoader reused a shadow-copy path across reloads");
+    kb::tests::Require(second.loadedPath != firstLoadedPath, "EngineModuleLoader mapped one shadow copy twice");
 
-    // A copy stays after its load, for a later process to map instead of copying the module again.
-    kb::tests::Require(std::filesystem::is_regular_file(firstLoadedPath),
-        "EngineModuleLoader removed a shadow copy that a later process could map");
+    // A copy stays after its load, and the next load that finds it unmapped maps it instead of copying again.
+    first.library.Reset();
     second.library.Reset();
+    kb::tests::Require(std::filesystem::is_regular_file(firstLoadedPath),
+        "EngineModuleLoader removed a shadow copy that a later load could map");
+    kb::modules::EngineModuleLoadResult third = loader.Load(kb::modules::EngineModuleLoadDesc{
+        .key = "module-loader-test",
+        .modulePath = pluginPath,
+        .shadowCopy = true,
+        .shadowCopyDirectory = moduleTestRoot() / "EngineModuleLoaderShadow",
+        .diagnosticLabel = "module loader test",
+    });
+    kb::tests::Require(third.Succeeded() && third.loadedPath == firstLoadedPath && third.reloadSerial > second.reloadSerial,
+        "EngineModuleLoader did not map the unmapped shadow copy again");
+    third.library.Reset();
 
     // A rebuilt module (another write time) gets a copy of its own, and the copies of its old build go.
     const std::filesystem::path rebuilt = moduleTestRoot() / "Rebuilt" / "rebuilt-module.dll";

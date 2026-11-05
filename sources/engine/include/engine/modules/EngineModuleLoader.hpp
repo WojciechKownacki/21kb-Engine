@@ -90,8 +90,7 @@ private:
         const std::filesystem::path& modulePath,
         const std::filesystem::path& shadowCopyDirectory,
         std::string_view shadowCopyDirectoryName,
-        std::uint64_t& serial,
-        std::uint64_t& slot);
+        std::uint64_t& serial);
     [[nodiscard]] static void* LoadNativeLibrary(
         const std::filesystem::path& path,
         std::string_view diagnosticLabel,
