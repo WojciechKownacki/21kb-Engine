@@ -351,7 +351,8 @@ struct SceneRenderLightingConfig {
     std::uint32_t shadowMapSize = 2048U;
     std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;
-    float shadowDistance = 1000.0F;
+    // How far from the camera the sun's shadow reaches.
+    float shadowDistance = 150.0F;
     float shadowDepthBias = 0.002F;
     float shadowStrength = 1.0F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;

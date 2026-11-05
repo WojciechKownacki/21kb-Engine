@@ -2668,6 +2668,13 @@ void RunDirectionalShadowCameraCoverageTest() {
     Require(setup.valid && NearlyEqual(std::abs(setup.camera.projection[0]), 1.0F / 50.0F),
         "Distant world geometry must not expand camera shadow coverage");
     Require(setup.camera.cullingMask == 1U, "Shadow submission must retain camera layer filtering");
+    // The engine's own shadow distance keeps the sun's maps around the camera: a scene kilometre-wide is not
+    // squeezed into one map.
+    const auto standard = DirectionalShadowPassPlanner{}.Build(
+        scene, resources, resourceMap, SceneRenderLightingConfig{}, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(standard.valid && standard.binding.cascadeCount == SceneRenderLightingConfig{}.shadowCascadeCount &&
+            SceneRenderLightingConfig{}.shadowDistance <= 400.0F,
+        "The default shadow distance must give a wide scene camera cascades");
     config.shadowCascadeCount = 3U;
     const auto cascaded = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
     Require(cascaded.valid && cascaded.binding.cascadeCount == 3U && cascaded.atlasSize == 2U * config.shadowMapSize,
