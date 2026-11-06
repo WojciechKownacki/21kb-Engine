@@ -2,6 +2,8 @@
 
 #include "CliCommon.hpp"
 
+#include "engine/scene/RiverGeometry.hpp"
+
 #include <filesystem>
 #include <istream>
 #include <optional>
@@ -29,6 +31,17 @@ namespace kb::cli {
 [[nodiscard]] int RunMap2DCommand(const ArgumentList& arguments, CommandIo io);
 // Terrain files (.kbterrain): the Terrain Editor's brushes, layers and heightmaps (CliTerrainCommands.cpp).
 [[nodiscard]] int RunTerrainCommand(const ArgumentList& arguments, CommandIo io);
+// Rivers of a scene (terrain river add|move|remove|list, CliEntityCommands.cpp) and, for terrain river carve, the
+// river with the places of its entity and of the entity that draws the terrain (world position, rotation, scale).
+struct RiverCarveSource {
+    std::string name;
+    kb::scene::RiverComponent river;
+    kb::scene::RiverPlacement riverPlacement;
+    kb::scene::RiverPlacement terrainPlacement;
+};
+[[nodiscard]] int RunRiverSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] std::optional<RiverCarveSource> LoadRiverForCarve(
+    const ArgumentList& arguments, const std::filesystem::path& terrainFile, CommandIo io);
 // How many levels of detail an imported model gets (CliMeshLodCommands.cpp).
 [[nodiscard]] int RunMeshLodCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io);

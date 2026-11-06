@@ -19,6 +19,7 @@
 #include <string>
 
 void RunTerrainToolsTests();
+void RunTerrainRiverTests();
 
 namespace {
 
@@ -580,6 +581,7 @@ int main() {
         RunDynamicMeshBenchmark();
         RunRuntimeLoaderTest();
         RunTerrainToolsTests();
+        RunTerrainRiverTests();
         std::cout << "Terrain Editor tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

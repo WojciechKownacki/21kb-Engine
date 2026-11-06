@@ -38,6 +38,7 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -129,6 +130,7 @@ struct ScenePrefabNodeComponents {
     std::optional<Collider2DComponent> collider2D;
     std::optional<Body2DComponent> body2D;
     std::optional<Sprite2DComponent> sprite2D;
+    std::optional<RiverComponent> river;
     std::optional<StreamFocusComponent> streamFocus;
     std::optional<WorldBackdropComponent> worldBackdrop;
     std::optional<AmbientRadianceComponent> ambientRadiance;

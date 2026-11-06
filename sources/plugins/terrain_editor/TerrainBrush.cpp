@@ -1,6 +1,7 @@
 #include "TerrainBrush.hpp"
 
 #include "TerrainAnalysis.hpp"
+#include "TerrainChannel.hpp"
 #include "TerrainParallel.hpp"
 
 #include <algorithm>
@@ -228,7 +229,6 @@ struct StampMath {
     float pressure;
     const Variant& at;
     float noiseSign;
-    float rampLengthSquared;
     float rotationCos;
     float rotationSin;
     TerrainNoiseSettings noise;
@@ -243,17 +243,11 @@ struct StampMath {
         const auto foldedX = static_cast<std::uint32_t>(settings.symmetryX ? std::min(x, static_cast<int>(terrain.width) - 1 - x) : x);
         const auto foldedZ = static_cast<std::uint32_t>(settings.symmetryZ ? std::min(z, static_cast<int>(terrain.height) - 1 - z) : z);
         if (mode == TerrainBrushMode::Ramp) {
-            const float abx = at.endX - at.x;
-            const float abz = at.endZ - at.z;
-            const float t = rampLengthSquared > 0.0F ? std::clamp((dx * abx + dz * abz) / rampLengthSquared, 0.0F, 1.0F) : 0.0F;
-            const float offsetX = dx - abx * t;
-            const float offsetZ = dz - abz * t;
-            const float distance = std::sqrt(offsetX * offsetX + offsetZ * offsetZ);
-            if (distance > settings.radius) return before;
-            const float normalized = distance / settings.radius;
-            const float side = normalized <= settings.falloff ? 1.0F
-                : 1.0F - SmoothStep((normalized - settings.falloff) / std::max(1.0F - settings.falloff, 0.0001F));
-            const float target = std::lerp(settings.targetHeight, settings.rampEndHeight, t);
+            // A ramp is a one segment channel with a flat cross section; a river bed is cut with the same primitive.
+            const TerrainSegmentProbe probe = ProbeTerrainSegment(at.x, at.z, at.endX, at.endZ, worldX, worldZ);
+            if (probe.distance > settings.radius) return before;
+            const float side = TerrainChannelEdgeWeight(probe.distance, settings.radius * settings.falloff, settings.radius);
+            const float target = std::lerp(settings.targetHeight, settings.rampEndHeight, probe.along);
             return std::lerp(before, target, std::clamp(settings.strength * side * pressure, 0.0F, 1.0F));
         }
         if (mode == TerrainBrushMode::Stamp) {
@@ -320,7 +314,6 @@ TerrainBrushResult ApplyHeights(
     if (region.maxX < region.minX || region.maxZ < region.minZ) return {};
 
     StampMath math{ .settings = settings, .mode = mode, .pressure = pressure, .at = at, .noiseSign = settings.invert ? -1.0F : 1.0F,
-        .rampLengthSquared = (at.endX - at.x) * (at.endX - at.x) + (at.endZ - at.z) * (at.endZ - at.z),
         .rotationCos = std::cos(settings.stampRotationDegrees * kDegreesToRadians),
         .rotationSin = std::sin(settings.stampRotationDegrees * kDegreesToRadians),
         .noise = TerrainNoiseSettings{ .kind = settings.noiseKind, .scale = settings.noiseScale, .octaves = settings.noiseOctaves,

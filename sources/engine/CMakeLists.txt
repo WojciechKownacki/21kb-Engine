@@ -441,6 +441,9 @@ add_library(kb_engine STATIC
         include/engine/scene/SceneFacingPanelComponents.hpp
         include/engine/scene/SpaceStrokeComponent.hpp
         include/engine/scene/SceneSpaceStrokeComponents.hpp
+        include/engine/scene/RiverComponent.hpp
+        include/engine/scene/SceneRiverComponents.hpp
+        include/engine/scene/RiverGeometry.hpp
         include/engine/scene/HistoryRibbonComponent.hpp
         include/engine/scene/SceneHistoryRibbonComponents.hpp
         include/engine/scene/ParticleEffectComponent.hpp
@@ -1040,6 +1043,8 @@ add_library(kb_engine STATIC
         src/scene/components/SceneFacingPanelStorage.cpp
         src/scene/components/SceneSpaceStrokeApi.cpp
         src/scene/components/SceneSpaceStrokeStorage.cpp
+        src/scene/components/SceneRiverApi.cpp
+        src/scene/components/SceneRiverStorage.cpp
         src/scene/components/SceneHistoryRibbonApi.cpp
         src/scene/components/SceneHistoryRibbonStorage.cpp
         src/scene/components/SceneParticleEffectApi.cpp
@@ -1129,6 +1134,8 @@ add_library(kb_engine STATIC
         src/scene/modules/components/SceneSprite2DModule.cpp
         src/scene/modules/components/SceneStreamFocusModule.cpp
       src/scene/systems/ContentInstanceSceneSystem.cpp
+      src/scene/systems/RiverSceneSystem.cpp
+      src/scene/RiverGeometry.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
@@ -1464,11 +1471,13 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneSurfaceCastComponentStore.hpp
         src/private/scene/components/SceneFacingPanelComponentStore.hpp
         src/private/scene/components/SceneSpaceStrokeComponentStore.hpp
+        src/private/scene/components/SceneRiverComponentStore.hpp
         src/private/scene/components/SceneHistoryRibbonComponentStore.hpp
         src/private/scene/components/SceneParticleEffectComponentStore.hpp
         src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
+      src/private/scene/systems/RiverSceneSystem.hpp
     src/private/navigation/NavMeshCrowd.hpp
     src/private/navigation/NavMeshRuntime.hpp
     src/private/world/WorldAssetLoaders.hpp

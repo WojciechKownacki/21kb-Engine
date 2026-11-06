@@ -518,6 +518,20 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
+            .componentName = "River",
+            .displayName = "River",
+            .category = "Water",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "points", "Points", "The control points of the river, \"x,y,z,width,depth,speed;...\": the water surface there, its width and depth, and the speed of the current. Edit them in the scene with the River tool." },
+                LibraryComponentInspectorFieldDesc{ "pointCount", "Point Count", "How many control points the river has." },
+                LibraryComponentInspectorFieldDesc{ "bankWidth", "Bank Width", "Width of the shoulder that blends the channel into the ground on each side when the river is cut into a terrain." },
+                LibraryComponentInspectorFieldDesc{ "waterfallSlopeDegrees", "Waterfall Slope", "A stretch of the river falling at least this steeply (degrees) is drawn as a waterfall." },
+                LibraryComponentInspectorFieldDesc{ "materialAssetId", "Water Material", "The material of the stream." },
+                LibraryComponentInspectorFieldDesc{ "waterfallMaterialAssetId", "Waterfall Material", "The material of the waterfalls." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Visible", "Draw the water." },
+            },
+        },
+        LibraryComponentInspectorDesc{
             .componentName = "Body2D",
             .displayName = "Body 2D",
             .category = "2D",

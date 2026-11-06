@@ -101,6 +101,10 @@ void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) 
     if (components.surfaceCast.has_value()) {
         sink(components.surfaceCast->materialAssetId, std::string_view{ "surfaceCastMaterial" }, nullptr);
     }
+    if (components.river.has_value()) {
+        sink(components.river->materialAssetId, std::string_view{ "riverMaterial" }, nullptr);
+        sink(components.river->waterfallMaterialAssetId, std::string_view{ "riverWaterfallMaterial" }, nullptr);
+    }
     if (components.spaceStroke.has_value()) {
         sink(components.spaceStroke->meshAssetId, std::string_view{ "spaceStrokeMesh" }, nullptr);
         sink(components.spaceStroke->materialAssetId, std::string_view{ "spaceStrokeMaterial" }, nullptr);

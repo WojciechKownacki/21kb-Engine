@@ -136,6 +136,7 @@ template <typename T>
         && SameValue(lhs.surfaceCast, rhs.surfaceCast)
         && SameValue(lhs.facingPanel, rhs.facingPanel)
         && SameValue(lhs.spaceStroke, rhs.spaceStroke)
+        && SameValue(lhs.river, rhs.river)
         && SameValue(lhs.historyRibbon, rhs.historyRibbon)
         && SameValue(lhs.particleEffect, rhs.particleEffect)
         && SameValue(lhs.lensEcho, rhs.lensEcho)

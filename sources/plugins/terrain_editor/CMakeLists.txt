@@ -8,6 +8,8 @@ add_library(kb_terrain_editor_core STATIC
     TerrainAnalysis.cpp
     TerrainBrush.hpp
     TerrainBrush.cpp
+    TerrainChannel.hpp
+    TerrainChannel.cpp
     TerrainErosion.hpp
     TerrainErosion.cpp
     TerrainGenerators.hpp
@@ -61,7 +63,7 @@ endif()
 kb_apply_quality_gates(kb_terrain_editor_plugin)
 
 if(BUILD_TESTING AND KB_BUILD_RENDERER)
-    add_executable(kb_terrain_editor_tests TerrainEditorTests.cpp TerrainToolsTests.cpp)
+    add_executable(kb_terrain_editor_tests TerrainEditorTests.cpp TerrainToolsTests.cpp TerrainRiverTests.cpp)
     target_link_libraries(kb_terrain_editor_tests PRIVATE kb_terrain_editor_core kb_renderer)
     kb_apply_quality_gates(kb_terrain_editor_tests)
     add_test(NAME kb_terrain_editor_tests COMMAND kb_terrain_editor_tests)

@@ -198,6 +198,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "River",
+            .id = ComputeLibraryComponentId("River"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Body2D",
             .id = ComputeLibraryComponentId("Body2D"),
             .serializable = true,

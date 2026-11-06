@@ -35,6 +35,7 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
@@ -573,6 +574,14 @@ struct ScriptComponentAccess<kb::scene::SpaceStrokeComponent> {
     [[nodiscard]] static kb::scene::SpaceStrokeComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().SpaceStrokes().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::SpaceStrokeComponent& value) { scene.Components().SpaceStrokes().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().SpaceStrokes().Has(entity)) return false; scene.Components().SpaceStrokes().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::RiverComponent> {
+    [[nodiscard]] static const kb::scene::RiverComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Rivers().TryGet(entity); }
+    [[nodiscard]] static kb::scene::RiverComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Rivers().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::RiverComponent& value) { scene.Components().Rivers().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().Rivers().Has(entity)) return false; scene.Components().Rivers().Remove(entity); return true; }
 };
 
 template <>

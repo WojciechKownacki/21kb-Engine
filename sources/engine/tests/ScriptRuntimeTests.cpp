@@ -73,6 +73,7 @@
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
@@ -13308,6 +13309,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
     scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
     scene.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 21U, .cellWidth = 16U });
+    scene.Components().Rivers().Set(object.Entity(), kb::scene::RiverComponent{});
     scene.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{});
     scene.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{});
     scene.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{});
@@ -13417,12 +13419,15 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                     validValue = kb::script::ScriptValue{ 0.4F };
                 } else if (componentName == "WorldBackdrop" && property.name == "sunSize") {
                     validValue = kb::script::ScriptValue{ 0.5F }; // Unity's Sun Size range is 0..1
+                } else if (componentName == "River" && property.name == "waterfallSlopeDegrees") {
+                    validValue = kb::script::ScriptValue{ 40.0F }; // a waterfall slope is 5..89 degrees
                 } else {
                     validValue = kb::script::ScriptValue{ 2.5F };
                 }
                 break;
             case kb::script::ScriptValueType::String:
-                validValue = kb::script::ScriptValue{ std::string{ "Enemy" } };
+                // A river's points are text of numbers, in the form the component reads back.
+                validValue = kb::script::ScriptValue{ std::string{ componentName == "River" ? "0,0,0,4,1,1.5;5,0,0,4,1,1.5" : "Enemy" } };
                 break;
             default:
                 kb::tests::Require(false, "Script component API generated accessor coverage test found a property type it does not know how to exercise");
@@ -13473,7 +13478,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             } else if (property.type == kb::script::ScriptValueType::Bool) {
                 kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::String) {
-                kb::tests::Require(get.value.AsString() == "Enemy", ("Script component API did not round-trip " + fieldLabel).c_str());
+                kb::tests::Require(get.value == validValue, ("Script component API did not round-trip " + fieldLabel).c_str());
             }
         }
     }
@@ -13494,7 +13499,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    kb::tests::Require(fieldsChecked == 838U, "Script component API generated accessor coverage test did not exercise the expected total field count (838, including text rendering, themes, audio fields and the compatibility alias)");
+    kb::tests::Require(fieldsChecked == 845U, "Script component API generated accessor coverage test did not exercise the expected total field count (845, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -13521,6 +13526,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
     scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
     scene.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 21U, .cellWidth = 16U });
+    scene.Components().Rivers().Set(object.Entity(), kb::scene::RiverComponent{});
     scene.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{});
     scene.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{});
     scene.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{});
@@ -13591,7 +13597,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 838U, "LIB-082 raw-pointer audit did not exercise the expected total field count (838, including text rendering, themes, audio fields and the compatibility alias)");
+    kb::tests::Require(propertiesChecked == 845U, "LIB-082 raw-pointer audit did not exercise the expected total field count (845, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

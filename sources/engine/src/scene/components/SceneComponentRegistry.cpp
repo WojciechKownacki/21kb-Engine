@@ -46,6 +46,7 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -392,6 +393,19 @@ void RegisterFacingPanelReflection(kb::ecs::World& world) {
     }));
 }
 
+// The points are an array of structs; reflection lists the scalar members, the codecs carry the points.
+void RegisterRiverReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<RiverComponent>(RiverComponent::StableId, {
+        KB_ECS_FIELD(RiverComponent, pointCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(RiverComponent, bankWidth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(RiverComponent, waterfallSlopeDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(RiverComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(RiverComponent, waterfallMaterialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(RiverComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+
 void RegisterSpaceStrokeReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<SpaceStrokeComponent>(SpaceStrokeComponent::StableId, {
         KB_ECS_FIELD(SpaceStrokeComponent, meshAssetId, kb::ecs::ComponentFieldType::Bytes),
@@ -714,6 +728,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , surfaceCastComponentId_(RegisterSceneComponent<SurfaceCastComponent>(world, SurfaceCastComponent::StableId))
     , facingPanelComponentId_(RegisterSceneComponent<FacingPanelComponent>(world, FacingPanelComponent::StableId))
     , spaceStrokeComponentId_(RegisterSceneComponent<SpaceStrokeComponent>(world, SpaceStrokeComponent::StableId))
+    , riverComponentId_(RegisterSceneComponent<RiverComponent>(world, RiverComponent::StableId))
     , historyRibbonComponentId_(RegisterSceneComponent<HistoryRibbonComponent>(world, HistoryRibbonComponent::StableId))
     , particleEffectComponentId_(RegisterSceneComponent<ParticleEffectComponent>(world, ParticleEffectComponent::StableId))
     , lensEchoComponentId_(RegisterSceneComponent<LensEchoComponent>(world, LensEchoComponent::StableId))
@@ -758,6 +773,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterSurfaceCastReflection(world);
     RegisterFacingPanelReflection(world);
     RegisterSpaceStrokeReflection(world);
+    RegisterRiverReflection(world);
     RegisterHistoryRibbonReflection(world);
     RegisterParticleEffectReflection(world);
     RegisterLensEchoReflection(world);
@@ -837,6 +853,7 @@ std::uint64_t SceneComponentRegistry::GeometrySwarmComponentId() const noexcept 
 std::uint64_t SceneComponentRegistry::SurfaceCastComponentId() const noexcept { return surfaceCastComponentId_; }
 std::uint64_t SceneComponentRegistry::FacingPanelComponentId() const noexcept { return facingPanelComponentId_; }
 std::uint64_t SceneComponentRegistry::SpaceStrokeComponentId() const noexcept { return spaceStrokeComponentId_; }
+std::uint64_t SceneComponentRegistry::RiverComponentId() const noexcept { return riverComponentId_; }
 std::uint64_t SceneComponentRegistry::HistoryRibbonComponentId() const noexcept { return historyRibbonComponentId_; }
 std::uint64_t SceneComponentRegistry::ParticleEffectComponentId() const noexcept { return particleEffectComponentId_; }
 std::uint64_t SceneComponentRegistry::LensEchoComponentId() const noexcept { return lensEchoComponentId_; }

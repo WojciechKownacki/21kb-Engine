@@ -407,6 +407,23 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         WriteVec3(output, "facingPanel.up", panel.up);
         output << "facingPanel.enabled=" << (panel.enabled ? 1 : 0) << '\n';
     }
+    output << "river=" << (components.river.has_value() ? 1 : 0) << '\n';
+    if (components.river.has_value()) {
+        const RiverComponent& river = *components.river;
+        output << "river.pointCount=" << river.pointCount << '\n';
+        output << "river.bankWidth=" << river.bankWidth << '\n';
+        output << "river.waterfallSlopeDegrees=" << river.waterfallSlopeDegrees << '\n';
+        output << "river.materialAssetId=" << river.materialAssetId << '\n';
+        output << "river.waterfallMaterialAssetId=" << river.waterfallMaterialAssetId << '\n';
+        output << "river.enabled=" << (river.enabled ? 1 : 0) << '\n';
+        for (std::uint32_t index = 0U; index < river.pointCount; ++index) {
+            const std::string key = "river.point" + std::to_string(index);
+            WriteVec3(output, key.c_str(), river.points[index].position);
+            output << key << ".width=" << river.points[index].width << '\n';
+            output << key << ".depth=" << river.points[index].depth << '\n';
+            output << key << ".speed=" << river.points[index].speed << '\n';
+        }
+    }
     output << "spaceStroke=" << (components.spaceStroke.has_value() ? 1 : 0) << '\n';
     if (components.spaceStroke.has_value()) {
         const SpaceStrokeComponent& stroke = *components.spaceStroke;

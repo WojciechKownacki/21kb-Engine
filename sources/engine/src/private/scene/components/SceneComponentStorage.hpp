@@ -26,6 +26,7 @@
 #include "scene/components/SceneSurfaceCastComponentStore.hpp"
 #include "scene/components/SceneFacingPanelComponentStore.hpp"
 #include "scene/components/SceneSpaceStrokeComponentStore.hpp"
+#include "scene/components/SceneRiverComponentStore.hpp"
 #include "scene/components/SceneHistoryRibbonComponentStore.hpp"
 #include "scene/components/SceneParticleEffectComponentStore.hpp"
 #include "scene/components/SceneLensEchoComponentStore.hpp"
@@ -137,7 +138,9 @@ public:
     [[nodiscard]] const SceneFacingPanelComponentStore& FacingPanels() const noexcept;
     [[nodiscard]] SceneFacingPanelComponentStore& FacingPanels() noexcept;
     [[nodiscard]] const SceneSpaceStrokeComponentStore& SpaceStrokes() const noexcept;
+    [[nodiscard]] const SceneRiverComponentStore& Rivers() const noexcept;
     [[nodiscard]] SceneSpaceStrokeComponentStore& SpaceStrokes() noexcept;
+    [[nodiscard]] SceneRiverComponentStore& Rivers() noexcept;
     [[nodiscard]] const SceneHistoryRibbonComponentStore& HistoryRibbons() const noexcept;
     [[nodiscard]] SceneHistoryRibbonComponentStore& HistoryRibbons() noexcept;
     [[nodiscard]] const SceneParticleEffectComponentStore& ParticleEffects() const noexcept;
@@ -201,6 +204,7 @@ private:
     SceneSurfaceCastComponentStore surfaceCasts_;
     SceneFacingPanelComponentStore facingPanels_;
     SceneSpaceStrokeComponentStore spaceStrokes_;
+    SceneRiverComponentStore rivers_;
     SceneHistoryRibbonComponentStore historyRibbons_;
     SceneParticleEffectComponentStore particleEffects_;
     SceneLensEchoComponentStore lensEchoes_;

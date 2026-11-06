@@ -172,6 +172,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<SurfaceCastComponent> surfaceCasts;
     std::vector<FacingPanelComponent> facingPanels;
     std::vector<SpaceStrokeComponent> spaceStrokes;
+    std::vector<RiverComponent> rivers;
     std::vector<HistoryRibbonComponent> historyRibbons;
     std::vector<ParticleEffectComponent> particleEffects;
     std::vector<BehaviourComponent> behaviours;
@@ -330,6 +331,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SpaceStroke)) {
             RepeatComponents(spaceStrokes, std::span<const SpaceStrokeComponent>{ archetype.spaceStrokes }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const SpaceStrokeComponent>{ spaceStrokes });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::River)) {
+            RepeatComponents(rivers, std::span<const RiverComponent>{ archetype.rivers }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const RiverComponent>{ rivers });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::HistoryRibbon)) {
             RepeatComponents(historyRibbons, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);
@@ -531,6 +536,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SpaceStroke)) {
             AddCommandComponentPatternView(views, std::span<const SpaceStrokeComponent>{ archetype.spaceStrokes }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const SpaceStrokeComponent>{ archetype.spaceStrokes }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::River)) {
+            AddCommandComponentPatternView(views, std::span<const RiverComponent>{ archetype.rivers }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const RiverComponent>{ archetype.rivers }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::HistoryRibbon)) {
             AddCommandComponentPatternView(views, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);

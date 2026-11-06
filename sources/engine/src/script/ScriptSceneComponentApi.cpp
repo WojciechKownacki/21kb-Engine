@@ -49,6 +49,8 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
+#include "engine/scene/RiverGeometry.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
@@ -328,7 +330,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 48> kComponentNames{
+constexpr std::array<std::string_view, 49> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -356,6 +358,7 @@ constexpr std::array<std::string_view, 48> kComponentNames{
     "Collider2D",
     "Body2D",
     "Sprite2D",
+    "River",
     "ContentInstance",
     "StreamFocus",
     "WorldBackdrop",
@@ -622,6 +625,13 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kSpaceStrokePropertyD
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
+constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kRiverPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "points", ScriptValueType::String }, ScriptSceneComponentPropertyDesc{ "pointCount", ScriptValueType::UInt32, false },
+    ScriptSceneComponentPropertyDesc{ "bankWidth", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "waterfallSlopeDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "waterfallMaterialAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
 constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kHistoryRibbonPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash },
     ScriptSceneComponentPropertyDesc{ "lifetimeSeconds", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float },
@@ -1821,6 +1831,17 @@ constexpr std::array<FieldBinding, 10> kSpaceStrokeFields{
     FieldBinding{ "layer", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->layer }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->layer = v.AsUInt32(); return true; } },
     KB_BOOL(kb::scene::SpaceStrokeComponent, castsShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, receivesShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, enabled),
 };
+constexpr std::array<FieldBinding, 7> kRiverFields{
+    FieldBinding{ "points", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ kb::scene::RiverPointsToText(*static_cast<const kb::scene::RiverComponent*>(c)) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::String) return false; std::string error; return kb::scene::ParseRiverPointsText(v.AsString(), *static_cast<kb::scene::RiverComponent*>(c), error); } },
+    FieldBinding{ "pointCount", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->pointCount }; }, [](void*, const ScriptValue&) noexcept -> bool { return false; } },
+    FieldBinding{ "bankWidth", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->bankWidth }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat()) || v.AsFloat() < 0.0F || v.AsFloat() > 10000.0F) return false; static_cast<kb::scene::RiverComponent*>(c)->bankWidth = v.AsFloat(); return true; } },
+    FieldBinding{ "waterfallSlopeDegrees", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->waterfallSlopeDegrees }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat()) || v.AsFloat() < 5.0F || v.AsFloat() > 89.0F) return false; static_cast<kb::scene::RiverComponent*>(c)->waterfallSlopeDegrees = v.AsFloat(); return true; } },
+    FieldBinding{ "materialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->materialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->materialAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "waterfallMaterialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->waterfallMaterialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->waterfallMaterialAssetId = v.AsUInt64(); return true; } },
+    KB_BOOL(kb::scene::RiverComponent, enabled),
+};
+
 constexpr std::array<FieldBinding, 9> kHistoryRibbonFields{
     FieldBinding{ "meshAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->meshAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->meshAssetId = v.AsUInt64(); return true; } },
     FieldBinding{ "materialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->materialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->materialAssetId = v.AsUInt64(); return true; } },
@@ -1953,6 +1974,7 @@ void MarkGeometrySwarmModified(kb::scene::Scene& scene, kb::scene::SceneEntity e
 void MarkSurfaceCastModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SurfaceCasts().MarkModified(entity); }
 void MarkFacingPanelModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().FacingPanels().MarkModified(entity); }
 void MarkSpaceStrokeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SpaceStrokes().MarkModified(entity); }
+void MarkRiverModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Rivers().MarkModified(entity); }
 void MarkHistoryRibbonModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().HistoryRibbons().MarkModified(entity); }
 void MarkParticleEffectModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ParticleEffects().MarkModified(entity); }
 void MarkAudioSourceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AudioSources().MarkModified(entity); }
@@ -2139,6 +2161,10 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::SpaceStrokeComponent* component = scene.Components().SpaceStrokes().TryGet(entity);
         return ComponentAccess{ component, component, kSpaceStrokeFields, &MarkSpaceStrokeModified };
     }
+    if (componentName == "River") {
+        kb::scene::RiverComponent* component = scene.Components().Rivers().TryGet(entity);
+        return ComponentAccess{ component, component, kRiverFields, &MarkRiverModified };
+    }
     if (componentName == "Trail Renderer") {
         kb::scene::HistoryRibbonComponent* component = scene.Components().HistoryRibbons().TryGet(entity);
         return ComponentAccess{ component, component, kHistoryRibbonFields, &MarkHistoryRibbonModified };
@@ -2204,6 +2230,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Surface Cast") return kSurfaceCastPropertyDescs;
     if (componentName == "Facing Panel") return kFacingPanelPropertyDescs;
     if (componentName == "Line Renderer") return kSpaceStrokePropertyDescs;
+    if (componentName == "River") return kRiverPropertyDescs;
     if (componentName == "Trail Renderer") return kHistoryRibbonPropertyDescs;
     if (componentName == "Particle Effect") return kParticleEffectPropertyDescs;
     if (componentName == "Lens Flare") return kLensEchoPropertyDescs;
@@ -2370,6 +2397,16 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         kb::scene::SpaceStrokeComponent candidate = stroke;
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
         if (!kb::scene::IsSpaceStrokeComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Line Renderer values must remain valid" };
+    }
+    if (componentName == "River") {
+        kb::scene::RiverComponent candidate = *static_cast<const kb::scene::RiverComponent*>(component.immutable);
+        if (field->name == "points" && value.Type() == ScriptValueType::String) {
+            std::string error;
+            if (!kb::scene::ParseRiverPointsText(value.AsString(), candidate, error)) return ScriptSceneComponentMutationResult{ .error = "River points: " + error };
+        } else if (!field->write(&candidate, value)) {
+            return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        }
+        if (!kb::scene::IsRiverComponentValid(candidate)) return ScriptSceneComponentMutationResult{ .error = "River values must remain valid" };
     }
     if (componentName == "Trail Renderer") {
         const kb::scene::HistoryRibbonComponent& ribbon = *static_cast<const kb::scene::HistoryRibbonComponent*>(component.immutable);

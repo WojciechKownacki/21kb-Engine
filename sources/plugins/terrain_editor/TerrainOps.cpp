@@ -1,6 +1,7 @@
 #include "TerrainOps.hpp"
 
 #include "TerrainAnalysis.hpp"
+#include "TerrainChannel.hpp"
 #include "TerrainHeightmapImporter.hpp"
 #include "TerrainLayerPainter.hpp"
 
@@ -172,6 +173,9 @@ public:
         return { Number(key), false };
     }
 
+    // A member as it is, null when there is none.
+    [[nodiscard]] const JsonValue* Member(std::string_view key) const { return operation_.Find(key); }
+
     // Every member must be one of `allowed`.
     void OnlyKeys(std::span<const std::string_view> allowed) {
         if (Failed()) return;
@@ -204,6 +208,7 @@ constexpr std::string_view kBrushKeys[]{ "op", "mode", "shape", "x", "z", "path"
     "softness", "seed", "spacing", "invert", "symmetry", "noiseKind", "noiseScale", "noiseOctaves", "to", "toHeight", "image",
     "rotation", "blend" };
 constexpr std::string_view kPaintKeys[]{ "op", "layer", "x", "z", "path", "radius", "opacity", "falloff", "shape", "erase", "seed", "auto" };
+constexpr std::string_view kChannelKeys[]{ "op", "nodes", "bank" };
 constexpr std::string_view kAutoPaintKeys[]{ "op", "layer", "slope", "height", "slopeBlend", "heightBlend", "opacity" };
 
 // A stamp image by path: as written, or under the context's base directory when that is where it is.
@@ -427,6 +432,38 @@ void ReadLayerPaintSettings(Reader& reader, TerrainLayerPaintSettings& settings)
     return true;
 }
 
+// {"op":"channel","nodes":[[x,z,level,halfWidth,depth],...],"bank":3}: a river bed cut along the nodes.
+[[nodiscard]] bool ApplyChannelOp(kb::assets::TerrainAsset& terrain, Reader& reader, TerrainOpSummary& summary, std::string& error) {
+    reader.OnlyKeys(kChannelKeys);
+    TerrainChannelSettings settings{};
+    if (const auto bank = reader.Number("bank")) settings.bankWidth = static_cast<float>(*bank);
+    if (reader.Failed()) return false;
+    const JsonValue* list = reader.Member("nodes");
+    if (list == nullptr || list->GetKind() != JsonValue::Kind::Array) {
+        error = "channel needs 'nodes': [[x,z,level,halfWidth,depth],...]";
+        return false;
+    }
+    std::vector<TerrainChannelNode> nodes;
+    for (std::size_t index = 0U; index < list->Size(); ++index) {
+        const JsonValue* node = list->At(index);
+        bool numbers = node->GetKind() == JsonValue::Kind::Array && node->Size() == 5U;
+        for (std::size_t item = 0U; numbers && item < 5U; ++item) numbers = node->At(item)->GetKind() == JsonValue::Kind::Number;
+        if (!numbers) {
+            error = "node " + std::to_string(index) + " must be [x,z,level,halfWidth,depth]";
+            return false;
+        }
+        const auto value = [node](std::size_t item) { return static_cast<float>(node->At(item)->AsNumber()); };
+        nodes.push_back({ value(0U), value(1U), value(2U), value(3U), value(4U) });
+    }
+    if (!IsTerrainChannelValid(nodes, settings)) {
+        error = "channel nodes need at least 2 stations with half width > 0, depth >= 0 and finite numbers; 'bank' must be >= 0";
+        return false;
+    }
+    if (!kb::assets::IsTerrainAssetValid(terrain, &error)) return false;
+    summary.changedSamples += CarveTerrainChannel(terrain, nodes, settings).changedSamples;
+    return true;
+}
+
 } // namespace
 
 bool ParseTerrainBrushSettings(const JsonValue& operation, TerrainOpContext& context, TerrainBrushSettings& settings, std::string& error) {
@@ -452,14 +489,15 @@ bool ApplyTerrainOp(
     const std::optional<std::string> kind = reader.Text("op");
     if (reader.Failed()) return false;
     if (!kind) {
-        error = "an operation needs an 'op' member (brush, paint or auto-paint)";
+        error = "an operation needs an 'op' member (brush, paint, auto-paint or channel)";
         return false;
     }
     bool applied = false;
     if (*kind == "brush") applied = ApplyBrushOp(terrain, reader, context, summary, error);
     else if (*kind == "paint") applied = ApplyPaintOp(terrain, reader, summary, error);
     else if (*kind == "auto-paint") applied = ApplyAutoPaintOp(terrain, reader, summary, error);
-    else error = "unknown op '" + *kind + "' (brush, paint or auto-paint)";
+    else if (*kind == "channel") applied = ApplyChannelOp(terrain, reader, summary, error);
+    else error = "unknown op '" + *kind + "' (brush, paint, auto-paint or channel)";
     if (applied) ++summary.operations;
     return applied;
 }

@@ -137,6 +137,7 @@ const std::array kEntries{
         },
         [](Scene& scene, SceneEntity entity) { scene.Components().SpaceStrokes().Remove(entity); },
         [](const ScenePrefabNodeComponents& node) { return node.spaceStroke.has_value(); } },
+    Entry{ { "River", "River", {} }, KB_COMPONENT(Rivers, river, RiverComponent{}) },
     Entry{ { "Trail Renderer", "Trail Renderer", {} }, KB_COMPONENT(HistoryRibbons, historyRibbon, HistoryRibbonComponent{}) },
     Entry{ { "Lens Flare", "Lens Flare", {} }, KB_COMPONENT(LensEchoes, lensEcho, LensEchoComponent{}) },
     Entry{ { "NavAgent", "Nav Agent", {} }, KB_COMPONENT(NavAgents, navAgent, NavAgent{}) },

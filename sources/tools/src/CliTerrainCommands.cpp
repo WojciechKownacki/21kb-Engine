@@ -1,6 +1,8 @@
 #include "CliCommands.hpp"
 
 #include "TerrainAnalysis.hpp"
+#include "TerrainChannel.hpp"
+#include "TerrainChannel.hpp"
 #include "TerrainErosion.hpp"
 #include "TerrainGenerators.hpp"
 #include "TerrainHeightmapImporter.hpp"
@@ -82,7 +84,16 @@ constexpr std::string_view kUsage =
     "  import     --source <heightmap.png|.raw|.r16> --terrain <file> [--min -32] [--max 32] [--size 512[xD]]\n"
     "             [--flip yes] [--replace]   (the resolution becomes the nearest 2^n+1)\n"
     "  export     --terrain <file> --out <file.png|.raw|.r16> [--min <n> --max <n>]   (16 bit; prints the range)\n"
-    "  preview    --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]\n";
+    "  preview    --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]\n"
+    "  river      rivers of the scene, drawn as water and cut into a terrain (a River component; --scene as in entity):\n"
+    "             add --project <dir> --name <Entity> --points \"x,y,z[,width,depth,speed];...\" [--index <n>] [--position x,y,z]\n"
+    "                 [--bank-width 3] [--waterfall-slope 35] [--material </Game/..kbmat>] [--fall-material </Game/..kbmat>]\n"
+    "                 (makes the river with 2 or more points, or inserts points into it; x,y,z are local to the entity, y the water\n"
+    "                 surface, width bank to bank, depth to the bed, speed of the current; default 4, 1, 1.5)\n"
+    "             move --name <Entity> --index <n> --to \"x,y,z[,width,depth,speed]\"   (3 numbers keep width, depth and speed)\n"
+    "             remove --name <Entity> (--index <n> | --all)      list [--name <Entity>]   (points, waterfalls, length)\n"
+    "             carve --project <dir> --name <Entity> --terrain <file>   (cuts the river's bed and banks into the terrain that the\n"
+    "                 scene draws from that file: deepest in the middle, eased to the water level over the bank width)\n";
 
 [[nodiscard]] std::filesystem::path Utf8Path(std::string_view text) {
     return kb::assets::Utf8Path(text);
@@ -863,6 +874,41 @@ constexpr OptionKey kPaintOptions[]{ { "layer", "layer" }, { "x", "x" }, { "z", 
     return 0;
 }
 
+// ---- river ----------------------------------------------------------------------------------------
+
+[[nodiscard]] int TerrainRiverCarve(const ArgumentList& arguments, CommandIo io) {
+    constexpr std::string_view own[]{ "terrain", "scene", "name" };
+    if (!CheckOptions(arguments, io, own)) return 1;
+    std::optional<Session> session = OpenTerrain(arguments, io);
+    if (!session.has_value()) return 1;
+    const std::optional<RiverCarveSource> source = LoadRiverForCarve(arguments, session->file, io);
+    if (!source.has_value()) return 1;
+    kb::assets::TerrainAsset& terrain = session->terrain;
+    // Stations as close as a cell of the terrain (at most 2 units), so that the cut follows the curve.
+    const float cell = std::min(terrain.worldSizeX / static_cast<float>(terrain.width - 1U), terrain.worldSizeZ / static_cast<float>(terrain.height - 1U));
+    const std::vector<kb::terrain_editor::TerrainChannelNode> nodes = kb::terrain_editor::RiverChannelNodes(
+        source->river, source->riverPlacement, source->terrainPlacement, std::clamp(cell, 0.25F, 2.0F));
+    const kb::terrain_editor::TerrainChannelSettings settings{ .bankWidth = source->river.bankWidth };
+    if (!kb::terrain_editor::IsTerrainChannelValid(nodes, settings)) {
+        io.err << "error: river '" << source->name << "' is not a valid channel (check terrain river list)\n";
+        return 1;
+    }
+    const kb::terrain_editor::TerrainBrushResult carved = kb::terrain_editor::CarveTerrainChannel(terrain, nodes, settings);
+    if (!carved.Changed()) {
+        io.err << "error: nothing changed - the river lies outside the terrain (x +-" << FormatCliNumber(terrain.worldSizeX * 0.5F) << " z +-"
+               << FormatCliNumber(terrain.worldSizeZ * 0.5F) << " from its centre) or the ground is cut there already\n";
+        return 1;
+    }
+    return SaveTerrain(*session, "carved river '" + source->name + "': " + std::to_string(carved.changedSamples) + " height samples changed", io);
+}
+
+[[nodiscard]] int TerrainRiver(const ArgumentList& arguments, CommandIo io) {
+    const std::vector<std::string>& positionals = arguments.Positionals();
+    const std::string action = positionals.size() > 1U ? positionals[1] : std::string{};
+    if (action == "carve") return TerrainRiverCarve(arguments, io);
+    return RunRiverSceneCommand(action, arguments, io);
+}
+
 } // namespace
 
 int RunTerrainCommand(const ArgumentList& arguments, CommandIo io) {
@@ -880,6 +926,7 @@ int RunTerrainCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "import") return TerrainImport(arguments, io);
     if (action == "export") return TerrainExport(arguments, io);
     if (action == "preview") return TerrainPreview(arguments, io);
+    if (action == "river") return TerrainRiver(arguments, io);
     io.err << kUsage;
     return 1;
 }

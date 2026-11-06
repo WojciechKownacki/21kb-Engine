@@ -89,6 +89,7 @@
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
@@ -2879,6 +2880,18 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 101U, .locked = true });
     source.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{ .sortingOrder = 5, .enabled = false });
     source.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{ .enabled = false });
+    {
+        kb::scene::RiverComponent river{};
+        river.pointCount = 3U;
+        river.points[0] = { { 0.0F, 5.0F, 0.0F }, 3.0F, 1.0F, 1.0F };
+        river.points[1] = { { 10.0F, 5.0F, 4.0F }, 6.0F, 2.0F, 2.5F };
+        river.points[2] = { { 20.0F, 1.0F, 4.0F }, 5.0F, 1.5F, 3.0F };
+        river.bankWidth = 2.5F;
+        river.waterfallSlopeDegrees = 50.0F;
+        river.materialAssetId = 811U;
+        river.waterfallMaterialAssetId = 812U;
+        source.Components().Rivers().Set(object.Entity(), river);
+    }
     source.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 303U, .cellWidth = 16U, .cell = 2U, .frameCount = 3U, .pivotX = 0.25F, .flipX = true, .tintA = 0.5F, .sortingOrder = -4, .wall = false });
     source.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{ .type = 1, .gravityScale = 0.5F, .fixedRotation = true, .sideView = false, .startVelocityX = 2.0F });
     source.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{ .shape = 2, .width = 2.0F, .radius = 0.25F, .offsetX = 0.5F, .isTrigger = true, .friction = 0.2F, .layer = 3, .collidesWith = 9U, .sideView = false });
@@ -3040,6 +3053,8 @@ void RunEngineLibraryComponentRegistryTest() {
         *target.Components().TilemapRenderers().TryGet(restored) == *source.Components().TilemapRenderers().TryGet(object.Entity()), "Tilemap renderer fields survive the library serialization contract");
     kb::tests::Require(target.Components().TilemapColliders().Has(restored) &&
         *target.Components().TilemapColliders().TryGet(restored) == *source.Components().TilemapColliders().TryGet(object.Entity()), "Tilemap collider fields survive the library serialization contract");
+    kb::tests::Require(target.Components().Rivers().Has(restored) &&
+        *target.Components().Rivers().TryGet(restored) == *source.Components().Rivers().TryGet(object.Entity()), "River points and settings survive the library serialization contract");
     kb::tests::Require(target.Components().Sprites2D().Has(restored) &&
         *target.Components().Sprites2D().TryGet(restored) == *source.Components().Sprites2D().TryGet(object.Entity()), "Sprite 2D fields survive the library serialization contract");
     kb::tests::Require(target.Components().Bodies2D().Has(restored) && *target.Components().Bodies2D().TryGet(restored) == *source.Components().Bodies2D().TryGet(object.Entity()) &&
@@ -3552,7 +3567,7 @@ void RunComponentInspectorDescCatalogTest() {
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 838U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (838, including text rendering, themes, collision mesh and the compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 845U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (845, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

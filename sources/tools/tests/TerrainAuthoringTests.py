@@ -238,6 +238,60 @@ def main():
     assert not outside.exists()
     assert height_hash(hills) == final, "read-only commands changed the terrain"
 
+    # Rivers: a River in the scene (points added, moved, removed), a waterfall found, and the bed cut into a terrain.
+    terrain("new", "--name", "Valley", "--size", "128", "--resolution", "129")
+    valley = "/Game/Terrains/Valley.kbterrain"
+    terrain("brush", "--terrain", valley, "--mode", "flatten", "--height", "8", "--x", "0", "--z", "0", "--radius", "100", "--falloff", "1")
+    assert abs(height(valley, 0, 12) - 8.0) < 0.001
+    out = terrain("river", "add", "--name", "Brook", "--points", "-50,6,0;0,6,12,6,1.5,2;50,4,0", "--bank-width", "4")
+    assert "created river 'Brook'" in out and "3 in all" in out, out
+    listing = terrain("river", "list", "--name", "Brook")
+    assert "3 points" in listing and "1: 0,6,12 width 6 depth 1.5 speed 2" in listing and "0 waterfalls" in listing, listing
+    assert "0: -50,6,0 width 4 depth 1 speed 1.5" in listing, listing   # the defaults of a point given by position only
+    shown = run("entity", "show", "--project", project, "--name", "Brook")
+    assert "River" in shown and "-50,6,0" in shown, shown
+    terrain("river", "add", "--name", "Brook", "--points", "25,5,6", "--index", "2")
+    assert "4 points" in terrain("river", "list", "--name", "Brook")
+    terrain("river", "move", "--name", "Brook", "--index", "2", "--to", "25,5,3")
+    moved = terrain("river", "list", "--name", "Brook")
+    assert "2: 25,5,3 width 4 depth 1 speed 1.5" in moved, moved
+    terrain("river", "move", "--name", "Brook", "--index", "1", "--to", "0,6,14")      # three numbers keep width, depth, speed
+    assert "1: 0,6,14 width 6 depth 1.5 speed 2" in terrain("river", "list", "--name", "Brook")
+    terrain("river", "remove", "--name", "Brook", "--index", "2")
+    assert "3 points" in terrain("river", "list", "--name", "Brook")
+    terrain("river", "move", "--name", "Brook", "--index", "1", "--to", "0,6,12")
+    # Wrong input names the problem and changes nothing.
+    scene_before = run("entity", "show", "--project", project, "--name", "Brook")
+    terrain("river", "move", "--name", "Brook", "--index", "9", "--to", "0,0,0", expected=1)
+    terrain("river", "move", "--name", "Brook", "--index", "1", "--to", "0,0", expected=1)
+    terrain("river", "add", "--name", "Brook", "--points", "1,2,3,0,1,1", expected=1)              # no width
+    terrain("river", "add", "--name", "Solo", "--points", "0,0,0", expected=1)                      # a new river needs two
+    terrain("river", "add", "--name", "Brook", "--points", "0,0,0", "--bogus", "1", expected=1)
+    terrain("river", "remove", "--name", "Brook", expected=1)
+    terrain("river", "remove", "--name", "Hills", "--index", "0", expected=1)                       # no River on it
+    terrain("river", "carve", "--name", "Brook", "--terrain", "/Game/Terrains/Nope.kbterrain", expected=1)
+    assert run("entity", "show", "--project", project, "--name", "Brook") == scene_before
+    # The bed: deepest in the middle (level 6, depth 1.5), the water edge at the level, the ground as it was beyond the bank.
+    flat_valley = height_hash(valley)
+    out = terrain("river", "carve", "--name", "Brook", "--terrain", valley)
+    assert "carved river 'Brook'" in out and height_hash(valley) != flat_valley, out
+    assert abs(height(valley, 0, 12) - 4.5) < 0.15, height(valley, 0, 12)
+    assert abs(height(valley, 0, 15) - 6.0) < 0.15, height(valley, 0, 15)       # the edge of the water, 3 from the middle
+    assert 6.0 < height(valley, 0, 17) < 8.0, height(valley, 0, 17)             # on the bank
+    assert abs(height(valley, 0, 40) - 8.0) < 0.001 and abs(height(valley, -30, -30) - 8.0) < 0.001
+    carved = height_hash(valley)
+    terrain("river", "carve", "--name", "Nobody", "--terrain", valley, expected=1)
+    assert height_hash(valley) == carved
+    # A waterfall: a steep stretch between two points of the same river.
+    terrain("river", "add", "--name", "Falls", "--points", "-30,12,-40;-10,12,-40;-6,4,-40;14,4,-40")
+    falls = terrain("river", "list", "--name", "Falls")
+    assert "1 waterfalls" in falls and "waterfall at" in falls and "drops 8" in falls, falls
+    terrain("river", "add", "--name", "Falls", "--points", "0,0,0", "--waterfall-slope", "89", "--index", "0")
+    assert "0 waterfalls" in terrain("river", "list", "--name", "Falls")
+    terrain("river", "remove", "--name", "Falls", "--all")
+    assert "1 river" in terrain("river", "list") and "Falls" not in terrain("river", "list")
+    assert "river" in run("help", "terrain") and "carve" in run("help", "terrain")
+
     # The command is part of the agent surface.
     commands = run("commands")
     assert "terrain" in commands, commands

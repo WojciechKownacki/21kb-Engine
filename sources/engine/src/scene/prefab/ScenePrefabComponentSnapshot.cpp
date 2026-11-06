@@ -128,6 +128,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const FacingPanelComponent* facingPanel = sceneComponents.FacingPanels().TryGet(entity)) {
         components.facingPanel = *facingPanel;
     }
+    if (const RiverComponent* river = sceneComponents.Rivers().TryGet(entity)) {
+        components.river = *river;
+    }
     if (const SpaceStrokeComponent* spaceStroke = sceneComponents.SpaceStrokes().TryGet(entity)) {
         components.spaceStroke = *spaceStroke;
     }

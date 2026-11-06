@@ -157,6 +157,31 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseRiver(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "river", present)) return false;
+    if (!present) return true;
+    RiverComponent river{};
+    if (!ParseField(fields, "river.pointCount", river.pointCount) || !IsRiverPointCountValid(river.pointCount) ||
+        !ParseField(fields, "river.bankWidth", river.bankWidth) || !ParseField(fields, "river.waterfallSlopeDegrees", river.waterfallSlopeDegrees) ||
+        !ParseField(fields, "river.materialAssetId", river.materialAssetId) ||
+        !ParseField(fields, "river.waterfallMaterialAssetId", river.waterfallMaterialAssetId) || !ParseOptionalBool(fields, "river.enabled", river.enabled)) {
+        return false;
+    }
+    for (std::uint32_t index = 0U; index < river.pointCount; ++index) {
+        const std::string key = "river.point" + std::to_string(index);
+        RiverPoint& point = river.points[index];
+        if (!ScenePrefabAssetFieldParser::ParseVec3(fields, key, point.position) || !ParseField(fields, key + ".width", point.width) ||
+            !ParseField(fields, key + ".depth", point.depth) || !ParseField(fields, key + ".speed", point.speed)) {
+            return false;
+        }
+    }
+    if (!IsRiverComponentValid(river)) return false;
+    components.river = river;
+    return true;
+}
+
+
 [[nodiscard]] bool ParseGuideCurve(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasGuideCurve = false;
     if (!ParseOptionalComponentFlag(fields, "guideCurve", hasGuideCurve)) return false;
@@ -930,6 +955,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseSurfaceCast(fields, components)
         && ParseFacingPanel(fields, components)
         && ParseSpaceStroke(fields, components)
+        && ParseRiver(fields, components)
         && ParseHistoryRibbon(fields, components)
         && ParseParticleEffect(fields, components)
         && ParseLensEcho(fields, components)

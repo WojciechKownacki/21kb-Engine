@@ -1943,7 +1943,295 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
     return 0;
 }
 
+// ---- rivers: terrain river add|move|remove|list ---------------------------------------------------------
+
+constexpr std::string_view kRiverOptions[]{ "project", "scene", "name", "points", "index", "to", "all", "position", "parent", "bank-width",
+    "waterfall-slope", "material", "fall-material", "help", "json", "dry-run", "command-timeout-ms", "command-cancel-file" };
+
+[[nodiscard]] bool RiverOptionsKnown(const ArgumentList& arguments, CommandIo io) {
+    std::vector<std::string> names;
+    for (const std::string_view option : kRiverOptions) names.push_back("--" + std::string{ option });
+    const std::vector<std::string_view> known{ names.begin(), names.end() };
+    const std::vector<std::string> unknown = arguments.UnknownOptions(known);
+    if (unknown.empty()) return true;
+    io.err << "error: terrain river has no option '" << unknown.front() << "'; kb_cli help terrain lists them\n";
+    return false;
+}
+
+// The entity --name, which must carry a River.
+[[nodiscard]] std::optional<kb::scene::SceneEntity> FindRiver(const kb::scene::Scene& scene, const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!name.has_value()) {
+        io.err << "error: terrain river needs --name <Entity> (the entity that carries the River)\n";
+        return std::nullopt;
+    }
+    const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *name, io);
+    if (!entity.has_value()) return std::nullopt;
+    if (!scene.Components().Rivers().Has(*entity)) {
+        io.err << "error: '" << *name << "' has no River; terrain river add --name " << *name << " --points \"x,y,z;x,y,z\" gives it one\n";
+        return std::nullopt;
+    }
+    return entity;
+}
+
+[[nodiscard]] std::string RiverPointLine(std::uint32_t index, const kb::scene::RiverPoint& point) {
+    std::ostringstream text;
+    text << index << ": " << FormatCliNumber(point.position.x) << ',' << FormatCliNumber(point.position.y) << ',' << FormatCliNumber(point.position.z)
+         << " width " << FormatCliNumber(point.width) << " depth " << FormatCliNumber(point.depth) << " speed " << FormatCliNumber(point.speed);
+    return text.str();
+}
+
+[[nodiscard]] bool ReadRiverFloat(const ArgumentList& arguments, std::string_view option, float low, float high, float& value, CommandIo io) {
+    const std::optional<std::string> text = arguments.Option("--" + std::string{ option });
+    if (!text.has_value()) return true;
+    float parsed = 0.0F;
+    const auto [end, code] = std::from_chars(text->data(), text->data() + text->size(), parsed);
+    if (code != std::errc{} || end != text->data() + text->size() || !std::isfinite(parsed) || parsed < low || parsed > high) {
+        io.err << "error: --" << option << " takes a number from " << FormatCliNumber(low) << " to " << FormatCliNumber(high) << '\n';
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+[[nodiscard]] bool ReadRiverWholeNumber(const ArgumentList& arguments, std::string_view option, std::uint32_t& value, CommandIo io) {
+    const std::optional<std::string> text = arguments.Option("--" + std::string{ option });
+    if (!text.has_value()) return true;
+    std::uint32_t parsed = 0U;
+    const auto [end, code] = std::from_chars(text->data(), text->data() + text->size(), parsed);
+    if (code != std::errc{} || end != text->data() + text->size()) {
+        io.err << "error: --" << option << " takes a whole number (the 0-based number of a point; terrain river list shows them)\n";
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+// The settings that are not points: --bank-width, --waterfall-slope, --material and --fall-material.
+[[nodiscard]] bool ApplyRiverSettings(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const ArgumentList& arguments, CommandIo io) {
+    kb::scene::RiverComponent river = *scene.Components().Rivers().TryGet(entity);
+    if (!ReadRiverFloat(arguments, "bank-width", 0.0F, 10000.0F, river.bankWidth, io) ||
+        !ReadRiverFloat(arguments, "waterfall-slope", 5.0F, 89.0F, river.waterfallSlopeDegrees, io)) {
+        return false;
+    }
+    scene.Components().Rivers().Set(entity, river);
+    for (const auto& [option, property] : { std::pair{ "--material", "materialAssetId" }, std::pair{ "--fall-material", "waterfallMaterialAssetId" } }) {
+        const std::optional<std::string> path = arguments.Option(option);
+        if (path.has_value() && !ApplySetting(scene, entity, "River", std::string{ property } + "=" + *path, io)) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] int RiverAdd(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> name = arguments.Option("--name");
+    const std::optional<std::string> pointsText = arguments.Option("--points");
+    if (!name.has_value() || !pointsText.has_value()) {
+        io.err << "error: terrain river add needs --name <Entity> and --points \"x,y,z[,width,depth,speed];...\" (a new river needs 2 or more)\n";
+        return 1;
+    }
+    std::vector<kb::scene::RiverPoint> added;
+    std::string error;
+    if (!kb::scene::ParseRiverPointList(*pointsText, added, error) || added.empty()) {
+        io.err << "error: --points: " << (error.empty() ? "no points given" : error) << '\n';
+        return 1;
+    }
+    std::uint32_t index = kb::scene::RiverComponent::MaxPoints;
+    if (!ReadRiverWholeNumber(arguments, "index", index, io)) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    std::optional<kb::scene::SceneEntity> parent;
+    if (const std::optional<std::string> parentName = arguments.Option("--parent"); parentName.has_value()) {
+        parent = FindEntity(scene, *parentName, io);
+        if (!parent.has_value()) return 1;
+    }
+    kb::scene::SceneEntity entity{};
+    kb::scene::RiverComponent river{};
+    std::vector<kb::scene::RiverPoint> points;
+    bool created = false;
+    if (MatchEntities(scene, *name).empty()) {
+        if (added.size() < 2U) {
+            io.err << "error: a new river needs 2 or more points; give --points \"x,y,z;x,y,z\"\n";
+            return 1;
+        }
+        if (!NameFreeUnder(scene, parent.value_or(kb::scene::SceneEntity{}), *name)) {
+            io.err << "error: an entity named '" << *name << "' already exists there. Pass another --name.\n";
+            return 1;
+        }
+        entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = *name,
+            .parent = parent ? scene.Entities().Object(*parent) : kb::scene::SceneObject{} });
+        if (!entity.IsValid()) {
+            io.err << "error: the river entity could not be created\n";
+            return 1;
+        }
+        if (!ApplyTransformOptions(scene, entity, arguments, io)) return 1;
+        created = true;
+    } else {
+        const std::optional<kb::scene::SceneEntity> found = FindEntity(scene, *name, io);
+        if (!found.has_value()) return 1;
+        entity = *found;
+        if (const kb::scene::RiverComponent* existing = scene.Components().Rivers().TryGet(entity); existing != nullptr) {
+            river = *existing;
+            points.assign(existing->points.begin(), existing->points.begin() + existing->pointCount);
+        }
+    }
+    const std::size_t at = std::min<std::size_t>(index, points.size());
+    points.insert(points.begin() + static_cast<std::ptrdiff_t>(at), added.begin(), added.end());
+    if (!kb::scene::SetRiverPoints(river, points, error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    scene.Components().Rivers().Set(entity, river);
+    if (!ApplyRiverSettings(scene, entity, arguments, io)) return 1;
+    return Saved(*session, std::string{ created ? "created river '" : "river '" } + *name + "': added " + std::to_string(added.size()) +
+        (added.size() == 1U ? " point at " : " points from ") + std::to_string(at) + ", " + std::to_string(points.size()) + " in all", io);
+}
+
+[[nodiscard]] int RiverMove(const ArgumentList& arguments, CommandIo io) {
+    std::uint32_t index = 0U;
+    const std::optional<std::string> to = arguments.Option("--to");
+    if (!arguments.Option("--index").has_value() || !to.has_value()) {
+        io.err << "error: terrain river move needs --name <Entity> --index <n> --to \"x,y,z[,width,depth,speed]\"\n";
+        return 1;
+    }
+    if (!ReadRiverWholeNumber(arguments, "index", index, io)) return 1;
+    std::vector<kb::scene::RiverPoint> target;
+    std::string error;
+    if (!kb::scene::ParseRiverPointList(*to, target, error) || target.size() != 1U) {
+        io.err << "error: --to takes one point: " << (error.empty() ? "x,y,z[,width,depth,speed]" : error) << '\n';
+        return 1;
+    }
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    const std::optional<kb::scene::SceneEntity> entity = FindRiver(scene, arguments, io);
+    if (!entity.has_value()) return 1;
+    kb::scene::RiverComponent river = *scene.Components().Rivers().TryGet(*entity);
+    if (index >= river.pointCount) {
+        io.err << "error: the river has " << river.pointCount << " points (0.." << river.pointCount - 1U << "); --index " << index << " is not one\n";
+        return 1;
+    }
+    // Three numbers move the point and keep its width, depth and speed.
+    if (std::ranges::count(*to, ',') == 2) {
+        target.front().width = river.points[index].width;
+        target.front().depth = river.points[index].depth;
+        target.front().speed = river.points[index].speed;
+    }
+    river.points[index] = target.front();
+    scene.Components().Rivers().Set(*entity, river);
+    return Saved(*session, "moved point " + RiverPointLine(index, river.points[index]), io);
+}
+
+[[nodiscard]] int RiverRemove(const ArgumentList& arguments, CommandIo io) {
+    const bool all = arguments.Flag("--all");
+    if (all == arguments.Option("--index").has_value()) {
+        io.err << "error: terrain river remove needs --index <n> (one point) or --all (the whole river and its entity)\n";
+        return 1;
+    }
+    std::uint32_t index = 0U;
+    if (!all && !ReadRiverWholeNumber(arguments, "index", index, io)) return 1;
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    const std::optional<kb::scene::SceneEntity> entity = FindRiver(scene, arguments, io);
+    if (!entity.has_value()) return 1;
+    if (all) {
+        scene.Entities().Destroy(*entity);
+        return Saved(*session, "removed river '" + EntityPath(scene, *entity) + "' and its entity", io);
+    }
+    kb::scene::RiverComponent river = *scene.Components().Rivers().TryGet(*entity);
+    if (index >= river.pointCount) {
+        io.err << "error: the river has " << river.pointCount << " points (0.." << river.pointCount - 1U << "); --index " << index << " is not one\n";
+        return 1;
+    }
+    std::vector<kb::scene::RiverPoint> points{ river.points.begin(), river.points.begin() + river.pointCount };
+    points.erase(points.begin() + index);
+    std::string error;
+    if (!kb::scene::SetRiverPoints(river, points, error)) {
+        io.err << "error: " << error << " (--all removes the whole river)\n";
+        return 1;
+    }
+    scene.Components().Rivers().Set(*entity, river);
+    return Saved(*session, "removed point " + std::to_string(index) + "; " + std::to_string(points.size()) + " points remain", io);
+}
+
+[[nodiscard]] int RiverList(const ArgumentList& arguments, CommandIo io) {
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
+    const kb::scene::Scene& scene = *session->scene;
+    std::vector<kb::scene::SceneEntity> rivers;
+    if (arguments.Option("--name").has_value()) {
+        const std::optional<kb::scene::SceneEntity> entity = FindRiver(scene, arguments, io);
+        if (!entity.has_value()) return 1;
+        rivers.push_back(*entity);
+    } else {
+        for (const kb::scene::SceneEntity entity : AllEntities(scene)) {
+            if (scene.Components().Rivers().Has(entity)) rivers.push_back(entity);
+        }
+    }
+    io.out << rivers.size() << (rivers.size() == 1U ? " river\n" : " rivers\n");
+    for (const kb::scene::SceneEntity entity : rivers) {
+        const kb::scene::RiverComponent& river = *scene.Components().Rivers().TryGet(entity);
+        kb::scene::RiverSurface surface;
+        const bool built = kb::scene::BuildRiverSurface(river, surface);
+        io.out << "river '" << EntityPath(scene, entity) << "': " << river.pointCount << " points, bank " << FormatCliNumber(river.bankWidth)
+               << ", waterfall slope " << FormatCliNumber(river.waterfallSlopeDegrees) << " degrees, "
+               << (built ? std::to_string(surface.waterfalls.size()) : std::string{ "?" }) << " waterfalls, length "
+               << (built ? FormatCliNumber(surface.samples.back().distance) : std::string{ "?" }) << '\n';
+        for (std::uint32_t index = 0U; index < river.pointCount; ++index) io.out << "  " << RiverPointLine(index, river.points[index]) << '\n';
+        if (!built) continue;
+        for (const kb::scene::RiverWaterfall& fall : surface.waterfalls) {
+            const kb::scene::Vec3 top = surface.samples[fall.first].position;
+            io.out << "  waterfall at " << FormatCliNumber(top.x) << ',' << FormatCliNumber(top.y) << ',' << FormatCliNumber(top.z) << ": drops "
+                   << FormatCliNumber(fall.topHeight - fall.bottomHeight) << '\n';
+        }
+    }
+    return 0;
+}
+
 } // namespace
+
+int RunRiverSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
+    if (!RiverOptionsKnown(arguments, io)) return 1;
+    if (action == "add") return RiverAdd(arguments, io);
+    if (action == "move") return RiverMove(arguments, io);
+    if (action == "remove") return RiverRemove(arguments, io);
+    if (action == "list") return RiverList(arguments, io);
+    io.err << "error: terrain river takes add, move, remove, list or carve\n";
+    return 1;
+}
+
+std::optional<RiverCarveSource> LoadRiverForCarve(const ArgumentList& arguments, const std::filesystem::path& terrainFile, CommandIo io) {
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return std::nullopt;
+    kb::scene::Scene& scene = *session->scene;
+    const std::optional<kb::scene::SceneEntity> entity = FindRiver(scene, arguments, io);
+    if (!entity.has_value()) return std::nullopt;
+    scene.Runtime().SynchronizeTransforms();
+    const kb::assets::AssetMetadata* terrain = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), terrainFile);
+    std::optional<kb::scene::SceneEntity> terrainEntity;
+    if (terrain != nullptr) {
+        for (const kb::scene::SceneEntity candidate : AllEntities(scene)) {
+            const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(candidate);
+            if (renderer != nullptr && renderer->meshAssetId == terrain->id.value) {
+                terrainEntity = candidate;
+                break;
+            }
+        }
+    }
+    if (!terrainEntity.has_value()) {
+        io.err << "error: no entity of the scene draws " << terrainFile.generic_string()
+               << "; place the terrain first (terrain new --name <Entity>), so that the river is cut where the terrain stands\n";
+        return std::nullopt;
+    }
+    const auto placement = [&scene](kb::scene::SceneEntity of) {
+        const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(of);
+        return transform == nullptr ? kb::scene::RiverPlacement{} : kb::scene::RiverPlacement{ transform->worldPosition, transform->worldRotation, transform->worldScale };
+    };
+    return RiverCarveSource{ .name = arguments.Option("--name").value(), .river = *scene.Components().Rivers().TryGet(*entity),
+        .riverPlacement = placement(*entity), .terrainPlacement = placement(*terrainEntity) };
+}
+
 
 #if KB_CLI_RENDERER
 #if KB_CLI_RENDERER

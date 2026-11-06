@@ -307,6 +307,13 @@ kb_cli terrain info --project . --terrain /Game/Terrains/Hills.kbterrain
   is noticed. `terrain sample --x --z` reads height, slope and layer weights back; `terrain info`
   prints `heightHash`, equal for equal heights, to compare two runs; `terrain preview` draws the
   height, slope or layers to a PNG you can look at.
+- Rivers: `terrain river add --name Brook --points "-50,6,0;0,6,12,6,1.5,2;50,4,0"` makes an entity with a River
+  component, a spline of points `x,y,z[,width,depth,speed]` in the entity's space: `y` is the water surface, `width`
+  bank to bank, `depth` to the bed, `speed` of the current (default 4, 1, 1.5). The water is drawn as a ribbon that
+  flows; a stretch that falls at least `--waterfall-slope` degrees (35) is drawn as a waterfall with its own
+  material. `river move|remove|list` edit and read the points (`remove --all` removes the river), `river carve --terrain <file>` cuts the bed and the
+  banks into the terrain the scene draws from that file (deepest in the middle, eased to the water level over
+  `--bank-width`; nothing changes beyond). `component set --type River --set points="..."` replaces all the points.
 - `import` turns a 16-bit PNG or RAW heightmap into a terrain, `export` writes one (it prints the
   `--min`/`--max` that import needs to restore the heights). Resolution is 2^n+1 (17 to 2049).
 - `kb_cli help terrain` lists every option.

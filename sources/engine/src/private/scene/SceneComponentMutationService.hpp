@@ -40,6 +40,7 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -199,6 +200,10 @@ public:
     static void SetFacingPanel(Scene& scene, SceneEntity entity, const FacingPanelComponent& component);
     static void RemoveFacingPanel(Scene& scene, SceneEntity entity) noexcept;
     static void MarkFacingPanelModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static RiverComponent* TryGetRiver(Scene& scene, SceneEntity entity) noexcept;
+    static void SetRiver(Scene& scene, SceneEntity entity, const RiverComponent& component);
+    static void RemoveRiver(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkRiverModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static SpaceStrokeComponent* TryGetSpaceStroke(Scene& scene, SceneEntity entity) noexcept;
     static void SetSpaceStroke(Scene& scene, SceneEntity entity, const SpaceStrokeComponent& component);
     static void RemoveSpaceStroke(Scene& scene, SceneEntity entity) noexcept;

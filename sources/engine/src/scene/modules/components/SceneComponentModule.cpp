@@ -78,6 +78,7 @@ SceneGeometrySwarmComponentQueries SceneComponentQueries::GeometrySwarms() const
 SceneSurfaceCastComponentQueries SceneComponentQueries::SurfaceCasts() const noexcept { return SceneSurfaceCastComponentQueries{ scene_ }; }
 SceneFacingPanelComponentQueries SceneComponentQueries::FacingPanels() const noexcept { return SceneFacingPanelComponentQueries{ scene_ }; }
 SceneSpaceStrokeComponentQueries SceneComponentQueries::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponentQueries{ scene_ }; }
+SceneRiverComponentQueries SceneComponentQueries::Rivers() const noexcept { return SceneRiverComponentQueries{ scene_ }; }
 SceneHistoryRibbonComponentQueries SceneComponentQueries::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponentQueries{ scene_ }; }
 SceneParticleEffectComponentQueries SceneComponentQueries::ParticleEffects() const noexcept {
     return SceneParticleEffectComponentQueries{scene_};
@@ -194,6 +195,7 @@ SceneGeometrySwarmComponents SceneComponents::GeometrySwarms() const noexcept { 
 SceneSurfaceCastComponents SceneComponents::SurfaceCasts() const noexcept { return SceneSurfaceCastComponents{ scene_ }; }
 SceneFacingPanelComponents SceneComponents::FacingPanels() const noexcept { return SceneFacingPanelComponents{ scene_ }; }
 SceneSpaceStrokeComponents SceneComponents::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponents{ scene_ }; }
+SceneRiverComponents SceneComponents::Rivers() const noexcept { return SceneRiverComponents{ scene_ }; }
 SceneHistoryRibbonComponents SceneComponents::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponents{ scene_ }; }
 SceneParticleEffectComponents SceneComponents::ParticleEffects() const noexcept {
     return SceneParticleEffectComponents{scene_};
