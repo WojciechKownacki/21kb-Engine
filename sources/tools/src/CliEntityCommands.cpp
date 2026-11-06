@@ -41,6 +41,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneUIDependencies.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
@@ -708,6 +709,16 @@ void ListProperties(std::string_view component, std::ostream& out) {
             return false;
         }
         std::optional<kb::script::ScriptValue> parsed = ParseValue(text, desc->type);
+        // An object by its name or path (Menu/PlayButton); none clears the reference.
+        if (desc->type == kb::script::ScriptValueType::Entity) {
+            if (text == "none" || text.empty()) {
+                parsed = kb::script::ScriptValue{ std::uint64_t{ 0U }, kb::script::ScriptValueType::Entity };
+            } else {
+                const std::optional<kb::scene::SceneEntity> referenced = FindEntity(scene, text, io);
+                if (!referenced.has_value()) return false;
+                parsed = kb::script::ScriptValue{ referenced->Id(), kb::script::ScriptValueType::Entity };
+            }
+        }
         const auto named = std::find(desc->enumNames.begin(), desc->enumNames.end(), text);
         if (!parsed.has_value() && named != desc->enumNames.end()) {
             parsed = kb::script::ScriptValue{ static_cast<int>(named - desc->enumNames.begin()) };
@@ -895,16 +906,25 @@ void ListProperties(std::string_view component, std::ostream& out) {
         }
     } else if (uiPreset != nullptr) {
         const auto parentObject = parent ? scene.Entities().Object(*parent) : kb::scene::SceneObject{};
+        std::vector<kb::scene::SceneEntity> parts;
         if (kb::scene::IsUIHierarchyPreset(uiPreset->preset)) {
-            entity = kb::scene::CreateUIHierarchy(scene, uiPreset->preset, parentObject, *name);
+            entity = kb::scene::CreateUIHierarchy(scene, uiPreset->preset, parentObject, *name, &parts);
         } else {
             entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = *name, .parent = parentObject});
             if (entity.IsValid()) kb::scene::ApplySceneUIComponents(scene.Components().UI(), entity,
                 kb::scene::BuildUIComponentPreset(uiPreset->preset));
+            parts.push_back(entity);
         }
         if (!entity.IsValid()) {
             io.err << "error: UI preset could not be created\n";
             return 1;
+        }
+        // As the editor's Create menu does: a font for every Text and a Canvas above the widget.
+        for (const kb::scene::SceneEntity part : parts) {
+            if (const kb::scene::UIDependencyResult completed = kb::scene::CompleteUIDependencies(scene, part); !completed.succeeded) {
+                io.err << "error: " << completed.error << '\n';
+                return 1;
+            }
         }
     } else if (create.has_value()) {
         const kb::scene::SceneCreateResult created =

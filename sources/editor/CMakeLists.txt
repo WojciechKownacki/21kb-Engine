@@ -944,7 +944,6 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/ui/EditorUIComponentAuthoring.cpp
-    src/private/platform/win32/EditorBundledFontPath.hpp
     src/scene/EditorSceneContextSkeletalMesh.cpp
     src/scene/EditorSceneContextPostProcess.cpp
     src/scene/ui/EditorUIThemeAssets.cpp

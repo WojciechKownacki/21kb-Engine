@@ -4239,6 +4239,64 @@ void RunUiValidationCliTests() {
         "guide menus-and-buttons must hold the button to script recipe: " + recipe.out);
 }
 
+// entity add --create of a UI widget gives it a Canvas and a font, as the editor's Create menu does, and
+// component set takes another object by its path.
+void RunUiDependencyCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const std::string scene = "Assets/Scenes/Menu2.21kbscene";
+    const auto cli = [&](const std::vector<std::string>& words) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+    };
+    const auto must = [&](const std::vector<std::string>& words) {
+        const CliRun run = cli(words);
+        Require(run.exitCode == 0, run.out + run.err);
+    };
+    must({ "scene-new", "--project", root, "--name", "Menu2", "--template", "Empty" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Button", "--name", "Play" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Text", "--name", "Hint", "--parent", "Canvas" });
+
+    kb::scene::Scene loaded;
+    const kb::scene::SceneDocumentLoadResult document =
+        kb::scene::SceneDocumentService::Load(TestRoot() / "Assets" / "Scenes" / "Menu2.21kbscene");
+    Require(document.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(loaded, document.document), "the UI scene must load");
+    const auto roots = loaded.Hierarchy().RootEntities();
+    Require(roots.size() == 1U && loaded.Entities().Name(roots.front()) == "Canvas" &&
+            loaded.Components().UI().Has<kb::scene::UICanvas>(roots.front()) && loaded.Hierarchy().ChildEntities(roots.front()).size() == 2U,
+        "a widget made without a parent must land under one new Canvas, and the next one under the same Canvas");
+    std::uint64_t font = 0U;
+    for (const kb::scene::SceneEntity child : loaded.Hierarchy().ChildEntities(roots.front())) {
+        const kb::scene::UIText* text = loaded.Components().UI().TryGet<kb::scene::UIText>(child);
+        Require(text != nullptr && text->fontAssetId != 0U && (font == 0U || font == text->fontAssetId),
+            "every Text a widget brings must have the one bundled font");
+        font = text->fontAssetId;
+    }
+    std::size_t fontFiles = 0U;
+    for (const auto& entry : std::filesystem::directory_iterator(TestRoot() / "Assets" / "UI" / "Fonts")) {
+        fontFiles += entry.path().extension() != ".meta" ? 1U : 0U;
+    }
+    Require(fontFiles == 1U, "the bundled font must be imported once, not for every widget");
+    const CliRun checked = cli({ "validate", "--project", root, scene });
+    Require(Contains(checked.out, "(1 warning)") && Contains(checked.out, ":Canvas/Play: [ui-button-no-reaction]") &&
+            !Contains(checked.out, "[ui-no-canvas]") && !Contains(checked.out, "[ui-text-no-font]"),
+        "a widget made by entity add must pass the Canvas and font checks: " + checked.out + checked.err);
+
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable",
+        "--set", "eventTarget=Canvas/Hint" });
+    const CliRun shown = cli({ "entity", "show", "--project", root, "--scene", scene, "--name", "Canvas/Play" });
+    Require(Contains(shown.out, "eventTarget=Canvas/Hint"), "an object reference must be set by its path and shown by it: " + shown.out);
+    const CliRun missing = cli({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable",
+        "--set", "eventTarget=Nowhere" });
+    Require(missing.exitCode != 0 && Contains(missing.err, "no entity named 'Nowhere'"), "a path that names nothing must be refused: " + missing.err);
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable", "--set", "eventTarget=none" });
+    Require(Contains(cli({ "entity", "show", "--project", root, "--scene", scene, "--name", "Canvas/Play" }).out, "eventTarget=none"),
+        "none must clear an object reference");
+}
+
 void RunInputRecordingCliTests() {
     PrepareProject();
     const auto root = TestRoot();
@@ -5492,6 +5550,7 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{argv[1]} == "ui-validation") {
         RunUiValidationCliTests();
+        RunUiDependencyCliTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
@@ -5551,6 +5610,7 @@ int main(int argc, char** argv) {
     RunSceneShortcutTests();
     RunInputRecordingCliTests();
     RunUiValidationCliTests();
+    RunUiDependencyCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();
     RunParticleReportCommandTests();

@@ -415,6 +415,8 @@ void RunTextureReuseCookTests() {
     const auto cold = cook();
     Require(cold.first.succeeded && cold.first.textureArtifactCount > 0U &&
         Mentions(cold.second, "cooking texture:"), "Cold texture cook failed");
+    Require(Mentions(cold.second, "WARN /Game/Scenes/Main.21kbscene:Image: [ui-no-canvas]"),
+        "The cook must name a widget outside a Canvas");
     const auto original = fixture.root / "Original.kbpack";
     std::filesystem::copy_file(request.outputPackPath, original);
     request.reusePackPath = request.outputPackPath;

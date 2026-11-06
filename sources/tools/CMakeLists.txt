@@ -88,6 +88,14 @@ if(WIN32)
 endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+# A new UI Text gets this font (engine/scene/SceneUIDependencies finds it beside the executable).
+add_custom_target(kb_cli_stage_ui_font
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli>/Content/EditorShell/Fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/sources/editor/content/EditorShell/Fonts/DejaVuSans.ttf"
+        "$<TARGET_FILE_DIR:kb_cli>/Content/EditorShell/Fonts/DejaVuSans.ttf"
+    VERBATIM)
+add_dependencies(kb_cli kb_cli_stage_ui_font)
 if(KB_BUILD_RENDERER)
     add_custom_target(kb_cli_stage_particle_content
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -159,6 +167,13 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
+    add_custom_target(kb_cli_tests_stage_ui_font
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli_tests>/Content/EditorShell/Fonts"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/sources/editor/content/EditorShell/Fonts/DejaVuSans.ttf"
+            "$<TARGET_FILE_DIR:kb_cli_tests>/Content/EditorShell/Fonts/DejaVuSans.ttf"
+        VERBATIM)
+    add_dependencies(kb_cli_tests kb_cli_tests_stage_ui_font)
     if(KB_BUILD_RENDERER)
         target_include_directories(kb_cli_tests PRIVATE "${PROJECT_SOURCE_DIR}/sources/renderer/tests")
         add_custom_target(kb_cli_tests_stage_particle_content

@@ -76,9 +76,9 @@
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
-#include "platform/win32/EditorBundledFontPath.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUIDependencies.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -4159,49 +4159,9 @@ bool EditorSceneContext::FitColliderToMesh(kb::scene::SceneEntity entity) {
 }
 
 bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity entity) {
-    auto ui = scene_->Components().UI();
-    if (const auto* text = ui.TryGet<kb::scene::UIText>(entity); text != nullptr && text->fontAssetId == 0U) {
-        const std::array fontFiles{EditorBundledFontPath()};
-        const auto imported = kb::assets::AssetImportService::ImportFiles(
-            scene_->Assets().Manager(), fontFiles, "/Game/UI/Fonts");
-        if (imported.items.empty() || !imported.items.front().Succeeded()) {
-            console_.Error("UI", "Cannot provision the bundled UI font: " +
-                (imported.items.empty() ? std::string{"import returned no result"} : imported.items.front().error));
-            return false;
-        }
-        auto authoredText = *text;
-        authoredText.fontAssetId = imported.items.front().id.value;
-        ui.Set(entity, authoredText);
-    }
-    kb::scene::SceneEntity root = entity;
-    for (auto ancestor = entity; ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor)) {
-        if (ui.Has<kb::scene::UICanvas>(ancestor)) {
-            for (auto bridge = entity;; bridge = scene_->Hierarchy().Parent(bridge)) {
-                if (!ui.Has<kb::scene::UIRectTransform>(bridge)) {
-                    kb::scene::UIRectTransform rect;
-                    rect.anchorMax = {1.0F, 1.0F};
-                    rect.offsetMax = {};
-                    ui.Set(bridge, rect);
-                }
-                if (bridge == ancestor) break;
-            }
-            return true;
-        }
-        if (ui.Has<kb::scene::UIRectTransform>(ancestor)) root = ancestor;
-    }
-    const auto parent = scene_->Hierarchy().Parent(root);
-    if (!parent.IsValid()) {
-        for (const auto existing : scene_->Hierarchy().RootEntities()) {
-            if (existing != root && ui.Has<kb::scene::UICanvas>(existing) && ui.Has<kb::scene::UIRectTransform>(existing))
-                return scene_->Hierarchy().SetParent(root, existing);
-        }
-    }
-    const auto canvas = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Canvas" });
-    if (!canvas.IsValid()) return false;
-    kb::scene::ApplySceneUIComponents(ui, canvas,
-        kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Canvas));
-    if (parent.IsValid() && !scene_->Hierarchy().SetParent(canvas, parent)) return false;
-    return scene_->Hierarchy().SetParent(root, canvas);
+    const kb::scene::UIDependencyResult completed = kb::scene::CompleteUIDependencies(*scene_, entity);
+    if (!completed.succeeded) console_.Error("UI", completed.error);
+    return completed.succeeded;
 }
 
 void EditorSceneContext::UpgradePrefabLinksOnSave(const kb::scene::SceneDocument& document) {

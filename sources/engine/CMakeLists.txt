@@ -459,6 +459,7 @@ add_library(kb_engine STATIC
         include/engine/scene/SceneLensEchoComponents.hpp
     include/engine/scene/SceneUIComponents.hpp
     include/engine/scene/SceneUIComponentSet.hpp
+    include/engine/scene/SceneUIDependencies.hpp
     include/engine/scene/SceneUI.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
@@ -950,6 +951,7 @@ add_library(kb_engine STATIC
     src/scene/SceneUIMedia.cpp
     src/scene/SceneVideoPlayers.cpp
     src/scene/SceneUI.cpp
+    src/scene/ui/SceneUIDependencies.cpp
     src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
     src/ui/UITextLineBreaking.cpp
