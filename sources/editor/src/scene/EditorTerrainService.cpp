@@ -539,6 +539,8 @@ std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildHeightmapImpo
     imported->worldSizeZ = current.worldSizeZ;
     imported->chunkQuads = current.chunkQuads;
     imported->lodCount = current.lodCount;
+    imported->lodPixelError = current.lodPixelError;
+    imported->collisionStep = current.collisionStep;
     imported->materialLayers = current.materialLayers;
     imported->layerWeightWidth = current.layerWeightWidth;
     imported->layerWeightHeight = current.layerWeightHeight;
@@ -575,9 +577,9 @@ std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildReconfigured(
     result.height = configuration.height;
     result.chunkQuads = configuration.chunkQuads;
     result.lodCount = configuration.lodCount;
+    result.lodPixelError = current.lodPixelError;
+    result.collisionStep = current.collisionStep;
     result.worldSizeX = configuration.worldSizeX;
-    imported->lodPixelError = current.lodPixelError;
-    imported->collisionStep = current.collisionStep;
     result.worldSizeZ = configuration.worldSizeZ;
     result.materialLayers = current.materialLayers;
     result.layerWeightWidth = current.layerWeightWidth;
@@ -614,8 +616,6 @@ std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildReconfigured(
     }
 
     for (std::uint32_t z = 0U; z + 1U < result.height; ++z) {
-    result.lodPixelError = current.lodPixelError;
-    result.collisionStep = current.collisionStep;
         const std::uint32_t sourceZ = std::min(
             static_cast<std::uint32_t>(
                 ((static_cast<std::uint64_t>(z) * 2U + 1U) *
