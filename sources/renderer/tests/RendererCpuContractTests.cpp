@@ -542,12 +542,22 @@ void RunLightingQuality() {
     const kb::render::SceneRenderLightingConfig engine{};
     kb::render::SceneRenderLightingConfig automatic = engine;
     kb::render::ApplyProjectLightingQuality(automatic, Level::Auto, Level::Auto, false);
-    kb::render::ApplyProjectLightingQuality(automatic, Level::Auto, Level::Auto, true);
     Require(automatic.shadowMapSize == engine.shadowMapSize && automatic.shadowCascadeCount == engine.shadowCascadeCount &&
             automatic.shadowAtlasSize == engine.shadowAtlasSize && automatic.shadowDistance == engine.shadowDistance &&
             automatic.shadowFilter == engine.shadowFilter && automatic.giVoxelSize == engine.giVoxelSize &&
-            automatic.giHistoryWeight == engine.giHistoryWeight,
-        "Auto quality must leave the lighting config as the engine chose it");
+            automatic.giHistoryWeight == engine.giHistoryWeight && automatic.pointShadowCubeEnabled && automatic.pointShadowMaxLights == 32U,
+        "Auto quality must leave a computer's lighting config as the engine chose it");
+    // A phone or tablet starts at its own Medium, not at desktop detail, and draws no cube shadows.
+    kb::render::SceneRenderLightingConfig handheldAuto = engine;
+    kb::render::ApplyProjectLightingQuality(handheldAuto, Level::Auto, Level::Auto, true);
+    kb::render::SceneRenderLightingConfig handheldMedium = engine;
+    kb::render::ApplyProjectLightingQuality(handheldMedium, Level::Medium, Level::Medium, true);
+    Require(handheldAuto.shadowMapSize == handheldMedium.shadowMapSize && handheldAuto.shadowCascadeCount == handheldMedium.shadowCascadeCount &&
+            handheldAuto.shadowAtlasSize == handheldMedium.shadowAtlasSize && handheldAuto.giVoxelSize == handheldMedium.giVoxelSize &&
+            handheldAuto.shadowMapSize < engine.shadowMapSize && handheldAuto.shadowCascadeCount < engine.shadowCascadeCount,
+        "Auto quality on a phone must be the phone's Medium");
+    Require(!handheldAuto.pointShadowCubeEnabled && handheldAuto.pointShadowMaxLights == 4U && !handheldMedium.pointShadowCubeEnabled,
+        "A phone must draw no cube shadows and shadows for at most four lights");
 
     const std::array levels{ Level::Low, Level::Medium, Level::High, Level::Ultra };
     for (const bool mobile : { false, true }) {

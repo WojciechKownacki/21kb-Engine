@@ -356,6 +356,11 @@ struct SceneRenderLightingConfig {
     float shadowDepthBias = 0.002F;
     float shadowStrength = 1.0F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;
+    // Point, spot and area lights that get a shadow map (at most 32, the atlas rows), picked by their importance in the
+    // frame. A point or area light's cube shadow takes six passes; a phone-class device draws none of them (its
+    // spot lights keep their single pass), because it has no one-pass cube shadow.
+    std::uint32_t pointShadowMaxLights = 32U;
+    bool pointShadowCubeEnabled = true;
     // Width of the fade between neighbouring cascades, as a fraction of the finer cascade (0 = hard switch).
     float shadowCascadeBlend = 0.1F;
     bool shadowsEnabled = true;

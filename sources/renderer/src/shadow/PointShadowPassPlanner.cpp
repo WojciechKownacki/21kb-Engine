@@ -34,6 +34,14 @@ constexpr std::array<FaceBasis, ScenePointShadowBinding::kFaceCount> kFaces{{
         light.intensity > 0.0F && light.range > 0.0F && std::isfinite(light.range);
 }
 
+[[nodiscard]] bool UsesCubeShadow(const LightRenderProxyDesc& light) noexcept {
+    return light.kind != RenderLightKind::Spot;
+}
+
+// Reach under this share of the distance covers too few pixels to justify a shadow pass.
+constexpr float kMinimumReachShare = 0.03F;
+constexpr float kIncumbentBonus = 1.25F;
+
 [[nodiscard]] float DistanceSquared(const std::array<float, 3>& a, const std::array<float, 3>& b) noexcept {
     const float dx = a[0] - b[0];
     const float dy = a[1] - b[1];
@@ -84,38 +92,54 @@ constexpr std::uint32_t kHalfQualityLights = 8U;
 PointShadowLightSelection PointShadowPassPlanner::Select(
     const RenderScene& renderScene,
     const std::array<float, 3>* cameraPosition,
-    std::uint32_t cameraCullingMask) noexcept {
+    std::uint32_t cameraCullingMask,
+    const SceneRenderLightingConfig& config,
+    const std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights>* incumbents) noexcept {
     struct Candidate {
+        float importance = 0.0F;
         float distanceSquared = 0.0F;
         std::uint64_t entityId = 0U;
         const LightRenderProxyDesc* light = nullptr;
     };
     std::array<Candidate, ScenePointShadowBinding::kMaxLights> best{};
+    const std::uint32_t capacity = std::min(config.pointShadowMaxLights, ScenePointShadowBinding::kMaxLights);
     std::uint32_t count = 0U;
     std::uint32_t eligible = 0U;
     const std::array<float, 3> origin{};
     const std::array<float, 3>& reference = cameraPosition != nullptr ? *cameraPosition : origin;
     for (const auto& [entityId, proxy] : renderScene.LightProxies()) {
         const LightRenderProxyDesc& light = proxy.desc;
-        if (!CastsPointShadow(light) || (light.layer & cameraCullingMask) == 0U) {
+        if (!CastsPointShadow(light) || (light.layer & cameraCullingMask) == 0U ||
+            (!config.pointShadowCubeEnabled && UsesCubeShadow(light))) {
+            continue;
+        }
+        const float distanceSquared = DistanceSquared(light.position, reference);
+        const float reach = light.range;
+        if (reach * reach < kMinimumReachShare * kMinimumReachShare * distanceSquared) {
             continue;
         }
         ++eligible;
-        const Candidate candidate{ DistanceSquared(light.position, reference), entityId, &light };
-        const auto closer = [](const Candidate& lhs, const Candidate& rhs) noexcept {
+        // Inside a quarter of its reach a light fills the view; beyond, its share falls with the distance.
+        const float distance = std::max(std::sqrt(distanceSquared), 0.25F * reach);
+        const float coverage = reach / distance;
+        const float radiance = std::max({ light.color[0], light.color[1], light.color[2] }) * light.intensity;
+        const bool held = incumbents != nullptr && std::ranges::find(*incumbents, entityId) != incumbents->end();
+        const Candidate candidate{ radiance * coverage * coverage * (held ? kIncumbentBonus : 1.0F), distanceSquared, entityId, &light };
+        const auto better = [](const Candidate& lhs, const Candidate& rhs) noexcept {
+            if (lhs.importance != rhs.importance) return lhs.importance > rhs.importance;
             return lhs.distanceSquared != rhs.distanceSquared ? lhs.distanceSquared < rhs.distanceSquared
                                                               : lhs.entityId < rhs.entityId;
         };
         std::uint32_t position = count;
-        if (count < ScenePointShadowBinding::kMaxLights) {
+        if (count < capacity) {
             ++count;
-        } else if (closer(candidate, best[count - 1U])) {
+        } else if (count != 0U && better(candidate, best[count - 1U])) {
             position = count - 1U;
         } else {
             continue;
         }
         best[position] = candidate;
-        while (position > 0U && closer(best[position], best[position - 1U])) {
+        while (position > 0U && better(best[position], best[position - 1U])) {
             std::swap(best[position], best[position - 1U]);
             --position;
         }
@@ -149,7 +173,7 @@ PointShadowSetup PointShadowPassPlanner::Build(
     if (!lightingConfig.shadowsEnabled) {
         return setup;
     }
-    const PointShadowLightSelection selection = Select(renderScene, cameraPosition, cameraCullingMask);
+    const PointShadowLightSelection selection = Select(renderScene, cameraPosition, cameraCullingMask, lightingConfig, &rowOwners);
     setup.droppedLights = selection.droppedCount;
     if (selection.count == 0U) {
         rowOwners.fill(0U);

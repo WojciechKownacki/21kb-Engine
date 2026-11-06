@@ -109,6 +109,49 @@ std::vector<std::uint32_t> CellLights(const SceneLightGrid& grid, std::array<flo
     return mesh;
 }
 
+// The lights that get a shadow are the most important ones, not just the nearest: a bright light with a long reach outranks a
+// dim or short one that is nearer, a light that holds a row keeps it against an equal newcomer, a reach under 3% of the
+// distance is not worth a pass, and a phone draws no cube shadows (its spot shadows stay).
+void PointShadowLightsAreChosenByImportance() {
+    RenderScene scene;
+    LightRenderProxyDesc dimNear = ShadowLightAt(1U, 2.0F);
+    dimNear.intensity = 0.1F;
+    dimNear.range = 4.0F;
+    LightRenderProxyDesc brightFar = ShadowLightAt(2U, 12.0F);
+    brightFar.intensity = 40.0F;
+    brightFar.range = 30.0F;
+    LightRenderProxyDesc tiny = ShadowLightAt(3U, 500.0F);
+    tiny.range = 1.0F;
+    LightRenderProxyDesc spot = ShadowLightAt(4U, 6.0F);
+    spot.kind = RenderLightKind::Spot;
+    for (const LightRenderProxyDesc& light : { dimNear, brightFar, tiny, spot }) static_cast<void>(scene.UpsertLight(light));
+    const std::array<float, 3> camera{ 0.0F, 0.0F, 0.0F };
+    SceneRenderLightingConfig config;
+    config.pointShadowMaxLights = 1U;
+    PointShadowLightSelection selection = PointShadowPassPlanner::Select(scene, &camera, ~0U, config);
+    Require(selection.count == 1U && selection.entityIds[0] == 2U && selection.droppedCount == 2U,
+        "one shadow must go to the bright light with the long reach, and the tiny far light is not even counted as dropped");
+    config.pointShadowMaxLights = 32U;
+    selection = PointShadowPassPlanner::Select(scene, &camera, ~0U, config);
+    Require(selection.count == 3U && selection.entityIds[0] == 2U && selection.entityIds[2] == 1U,
+        "the lights must come most important first, the dim one last, and the tiny far one not at all");
+    config.pointShadowCubeEnabled = false;
+    selection = PointShadowPassPlanner::Select(scene, &camera, ~0U, config);
+    Require(selection.count == 1U && selection.entityIds[0] == 4U && selection.droppedCount == 0U,
+        "without cube shadows only the spot light keeps one, and the lights the policy removes are not reported as dropped");
+
+    RenderScene equals;
+    static_cast<void>(equals.UpsertLight(ShadowLightAt(10U, 5.0F)));
+    static_cast<void>(equals.UpsertLight(ShadowLightAt(11U, -5.0F)));
+    SceneRenderLightingConfig one;
+    one.pointShadowMaxLights = 1U;
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights> held{};
+    held[3] = 11U;
+    Require(PointShadowPassPlanner::Select(equals, &camera, ~0U, one).entityIds[0] == 10U &&
+            PointShadowPassPlanner::Select(equals, &camera, ~0U, one, &held).entityIds[0] == 11U,
+        "a light that holds a row must keep it against an equal newcomer");
+}
+
 // A light keeps its row of the atlas while the camera reorders the lights, a row freed by a light that left stays
 // empty until a new light takes it, and the rows are dealt out again once empty rows would shrink the tiles.
 void PointShadowRowsFollowTheirLights() {
@@ -189,6 +232,7 @@ void PointShadowCasterChangesDiscardOnlyTilesTheyReach() {
 void RunSceneLightGridTests() {
     PointShadowSelectionKeepsTheNearestAndCountsTheRest();
     PointShadowRowsFollowTheirLights();
+    PointShadowLightsAreChosenByImportance();
     PointShadowCasterChangesDiscardOnlyTilesTheyReach();
     RenderScene scene;
     SceneRenderLightingConfig config{};
