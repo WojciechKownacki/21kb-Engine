@@ -9,6 +9,7 @@
 #include "scene/pipeline/MeshPipelineGpuDrivenRecorder.hpp"
 #include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "scene/pipeline/MeshPipelineResourceResolver.hpp"
+#include "scene/pipeline/MeshPipelineTerrainLod.hpp"
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
 #include <algorithm>
@@ -250,8 +251,17 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
         constexpr std::uint8_t kLevelNotChosen = UINT8_MAX;
         if (meshResource != nullptr && meshResource->lods.size() > 1U) chainLevels.assign(batch.instances.size(), kLevelNotChosen);
         else chainLevels.clear();
-        const std::uint32_t sectionCount = sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size());
-        for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
+        // A terrain chooses the level of every chunk; only the sections of the chosen levels are visited.
+        const bool terrainChunks = MeshPipelineTerrainLod::IsTerrain(meshResource);
+        if (terrainChunks) {
+            MeshPipelineTerrainLod::SelectChunkLevels(*meshResource, batch.instances, desc.camera, frustum, result.terrainChunkLevels);
+            MeshPipelineTerrainLod::CollectSections(*meshResource, result.terrainChunkLevels, batch.instances.size(), result.terrainSectionList);
+        }
+        const std::uint32_t sectionCount = terrainChunks
+            ? static_cast<std::uint32_t>(result.terrainSectionList.size())
+            : (sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size()));
+        for (std::uint32_t sectionListIndex = 0U; sectionListIndex < sectionCount; ++sectionListIndex) {
+            const std::uint32_t sectionIndex = terrainChunks ? result.terrainSectionList[sectionListIndex] : sectionListIndex;
             const RenderMeshSection& section = sections == nullptr || sections->empty() ? fallbackSection : (*sections)[sectionIndex];
             const std::uint32_t sectionVertexCount = section.vertexCount != 0U
                 ? section.vertexCount
@@ -277,8 +287,12 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 }
                 // A mesh with a chain of levels is scanned once per section of every level; the level an instance
                 // draws does not depend on the section, so it is chosen the first time and kept for the batch.
-                std::uint8_t selectedLod = chainLevels.empty() ? std::uint8_t{ 0U } : chainLevels[instanceIndex];
-                if (selectedLod == kLevelNotChosen || chainLevels.empty()) {
+                if (terrainChunks && !MeshPipelineTerrainLod::Draws(*meshResource, result.terrainChunkLevels, instanceIndex, section)) {
+                    continue;
+                }
+                std::uint8_t selectedLod = terrainChunks ? section.lodLevel
+                    : (chainLevels.empty() ? std::uint8_t{ 0U } : chainLevels[instanceIndex]);
+                if (!terrainChunks && (selectedLod == kLevelNotChosen || chainLevels.empty())) {
                     selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
                     if (instance.detailSwitchEnabled) {
                         if (const auto selected = result.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != result.detailSwitchLevels.end()) {
@@ -290,7 +304,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (meshResource != nullptr && !meshResource->lods.empty()) {
                     ++result.stats.lodSelectionCount;
                 }
-                if (selectedLod != section.lodLevel) {
+                if (!terrainChunks && selectedLod != section.lodLevel) {
                     continue;
                 }
                 const std::uint64_t materialAssetId = MeshPipelineResourceResolver::MaterialAssetForSectionInstance(batch, instance, meshResource, section);

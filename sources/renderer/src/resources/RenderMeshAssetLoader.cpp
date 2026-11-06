@@ -45,8 +45,12 @@ using kb::assets::StringBufferBytes;
     };
     std::uint64_t bytes = sizeof(mesh) + buffers(mesh.vertices, mesh.tangentVertices, mesh.indices16, mesh.indices32,
         mesh.sections, mesh.meshlets, mesh.lods, mesh.materialSlots, mesh.materialNames, mesh.embeddedMaterials,
-        mesh.terrainSectionIndices, mesh.dynamicVertexUpdateRanges, mesh.dynamicSectionUpdateIndices,
+        mesh.dynamicVertexUpdateRanges, mesh.dynamicSectionUpdateIndices,
         mesh.terrainLayerWeights, mesh.dynamicTerrainLayerWeightUpdates);
+    if (mesh.terrainChunks != nullptr) {
+        const RenderTerrainChunkGrid& grid = *mesh.terrainChunks;
+        bytes += sizeof(grid) + buffers(grid.sectionIndices, grid.skirtSectionIndices, grid.lodError, grid.skirtDepth, grid.borderError);
+    }
     for (const auto& name : mesh.materialNames) bytes += StringBufferBytes(name);
     for (const auto& material : mesh.embeddedMaterials) {
         for (const auto* name : {&material.name, &material.albedoTexturePath, &material.normalTexturePath,

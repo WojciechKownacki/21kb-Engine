@@ -84,12 +84,21 @@ namespace {
              view[2] * point[0] + view[6] * point[1] + view[10] * point[2] + view[14] };
 }
 
-[[nodiscard]] bool IsOrthographic(const SceneRenderCamera& camera) noexcept {
+} // namespace
+
+bool MeshPipelineVisibility::IsOrthographic(const SceneRenderCamera& camera) noexcept {
     return camera.projection[3] == 0.0F && camera.projection[7] == 0.0F &&
         camera.projection[11] == 0.0F && camera.projection[15] != 0.0F;
 }
 
-} // namespace
+std::array<float, 3> MeshPipelineVisibility::CameraPosition(const SceneRenderCamera& camera) noexcept {
+    const std::array<float, 16>& view = camera.view;
+    return {
+        -(view[0] * view[12] + view[1] * view[13] + view[2] * view[14]),
+        -(view[4] * view[12] + view[5] * view[13] + view[6] * view[14]),
+        -(view[8] * view[12] + view[9] * view[13] + view[10] * view[14]),
+    };
+}
 
 float MeshPipelineVisibility::MaterialBoundsMargin(const RenderMaterialResource* material) noexcept {
     return material != nullptr && material->graphProgram.active ? std::max(material->graphProgram.boundsMargin, 0.0F) : 0.0F;
@@ -128,15 +137,10 @@ float MeshPipelineVisibility::ScreenCoverage(const SceneRenderCamera* camera, co
 }
 
 kb::scene::ScenePortalCamera MeshPipelineVisibility::PortalCamera(const SceneRenderCamera& camera) noexcept {
-    const std::array<float, 16>& view = camera.view;
-    // The view is a rigid transform, so the camera sits at -R^T t.
+    const std::array<float, 3> position = CameraPosition(camera);
     return kb::scene::ScenePortalCamera{
-        .position = kb::math::Vec3{
-            -(view[0] * view[12] + view[1] * view[13] + view[2] * view[14]),
-            -(view[4] * view[12] + view[5] * view[13] + view[6] * view[14]),
-            -(view[8] * view[12] + view[9] * view[13] + view[10] * view[14]),
-        },
-        .viewProjection = MultiplyColumnMajor(camera.CullingProjection(), view),
+        .position = kb::math::Vec3{ position[0], position[1], position[2] },
+        .viewProjection = MultiplyColumnMajor(camera.CullingProjection(), camera.view),
         .membershipMask = camera.cullingMask,
     };
 }

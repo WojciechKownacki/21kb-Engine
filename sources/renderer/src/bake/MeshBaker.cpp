@@ -1,7 +1,7 @@
 #include "kb/render/bake/MeshBaker.hpp"
 
 #include "engine/assets/bake/AssetPack.hpp"
-#include "engine/ecs/WorkerPool.hpp"
+#include "resources/ForEachParallel.hpp"
 
 #include <meshoptimizer/src/meshoptimizer.h>
 
@@ -611,20 +611,6 @@ struct ClusterGroup {
         return MeshBakeStatus::MalformedSections;
     }
     return MeshBakeStatus::Success;
-}
-
-// Runs job(index) for every index below `count` on the engine's worker pool and returns when all are done. A job
-// writes only the slot of its own index, so the result is the one a loop would give, whatever the order they finish in.
-template <typename Job>
-void ForEachParallel(std::size_t count, Job&& job) {
-    if (count < 2U) {
-        for (std::size_t index = 0U; index < count; ++index) job(index);
-        return;
-    }
-    static kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
-    pool.ParallelForChunks(count, 1U, [&job](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
-        for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) job(index);
-    });
 }
 
 // The whole LOD chain, simplified level from level. Stops as soon as a level fails to get

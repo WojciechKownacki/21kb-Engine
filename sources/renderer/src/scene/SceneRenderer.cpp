@@ -243,7 +243,14 @@ void SceneRenderer::SubmitMeshPass(
     const SceneRenderDrawBudget effectiveDrawBudget = ResolveDrawBudget(drawBudget, defaultDrawBudget_);
     const SceneRenderLightingConfig effectiveLightingConfig = ResolveLightingConfig(lightingConfig, defaultLightingConfig_);
     const std::optional<SceneRenderCamera> primaryCamera = cameraOverride == nullptr ? renderScene.BuildPrimaryCamera(viewportWidth, viewportHeight) : std::optional<SceneRenderCamera>{};
-    const SceneRenderCamera* camera = cameraOverride != nullptr ? cameraOverride : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    const SceneRenderCamera* sourceCamera = cameraOverride != nullptr ? cameraOverride : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    // The pass knows the size of its target; chunks of a terrain pick their level of detail by the size of a pixel.
+    SceneRenderCamera sizedCamera;
+    if (sourceCamera != nullptr) {
+        sizedCamera = *sourceCamera;
+        sizedCamera.viewportHeight = viewportHeight;
+    }
+    const SceneRenderCamera* camera = sourceCamera != nullptr ? &sizedCamera : nullptr;
     {
         std::ostringstream message;
         message << "SubmitMeshPass begin pass=" << MeshPassName(pass)

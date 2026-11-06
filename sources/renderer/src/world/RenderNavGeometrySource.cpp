@@ -34,7 +34,7 @@ std::shared_ptr<const kb::navigation::NavSourceMesh> RenderNavGeometrySource::Re
             }
             const std::size_t indexCount = mesh.indices32.empty() ? mesh.indices16.size() : mesh.indices32.size();
             for (const RenderMeshSectionDesc& section : mesh.sections) {
-                if (section.lodLevel != 0U || section.terrainLayerIndex != UINT8_MAX || section.indexCount < 3U) {
+                if (section.lodLevel != 0U || section.terrainLayerIndex != UINT8_MAX || section.terrainSkirt || section.indexCount < 3U) {
                     continue;
                 }
                 const std::size_t end = static_cast<std::size_t>(section.indexStart) + section.indexCount - section.indexCount % 3U;

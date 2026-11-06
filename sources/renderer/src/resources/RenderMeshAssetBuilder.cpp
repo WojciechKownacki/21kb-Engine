@@ -33,6 +33,7 @@ RenderMeshDesc& RenderMeshAssetData::RefreshDesc() noexcept {
             .lodCount = static_cast<std::uint32_t>(lods.size()),
         },
         .dynamicVertexBuffer = dynamicVertexUpdates,
+        .terrainChunks = terrainChunks != nullptr && terrainChunks->Valid() ? terrainChunks.get() : nullptr,
         .terrainLayerWeights = terrainLayerWeights.empty() ? nullptr : terrainLayerWeights.data(),
         .terrainLayerWeightBytes = static_cast<std::uint32_t>(terrainLayerWeights.size()),
         .terrainLayerWeightWidth = terrainLayerWeightWidth,

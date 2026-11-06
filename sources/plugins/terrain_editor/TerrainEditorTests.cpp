@@ -33,6 +33,13 @@ void Require(bool condition, const char* message) {
     return static_cast<std::size_t>(terrain.height / 2U) * terrain.width + terrain.width / 2U;
 }
 
+// The sections that draw terrain, not the skirts that hide the gaps between levels.
+[[nodiscard]] std::size_t CountMainSections(const kb::render::RenderMeshAssetData& mesh) {
+    return static_cast<std::size_t>(std::ranges::count_if(mesh.sections, [](const kb::render::RenderMeshSectionDesc& section) {
+        return !section.terrainSkirt;
+    }));
+}
+
 void RunAssetRoundTripTest() {
     kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(33U, 64.0F, 48.0F);
     terrain.heights[Center(terrain)] = 12.5F;
@@ -212,7 +219,7 @@ void RunMaterialLayerMeshTest() {
         "Could not prepare layered terrain mesh test");
     std::optional<kb::render::RenderMeshAssetData> mesh =
         kb::render::RenderTerrainMeshBuilder::Build(terrain);
-    Require(mesh.has_value() && mesh->sections.size() == 128U && mesh->materialSlots.size() == 2U,
+    Require(mesh.has_value() && CountMainSections(*mesh) == 128U && mesh->materialSlots.size() == 2U,
         "Layered terrain did not emit one draw section and slot per material layer");
     Require(!mesh->sections[1].terrainLayerActive,
         "An empty painted layer was not culled at chunk granularity");
@@ -417,8 +424,9 @@ void RunMeshBuildTest() {
     terrain.lodCount = 4U;
     const std::optional<kb::render::RenderMeshAssetData> mesh = kb::render::RenderTerrainMeshBuilder::Build(terrain);
     Require(mesh.has_value(), "Terrain mesh builder rejected a valid terrain");
-    Require(mesh->lods.size() == 4U, "Terrain mesh did not preserve four LOD levels");
-    Require(mesh->sections.size() == 64U, "Terrain mesh did not emit one section per chunk and LOD");
+    Require(mesh->terrainChunks != nullptr && mesh->terrainChunks->Valid() && mesh->terrainChunks->lodCount == 4U,
+        "Terrain mesh did not describe its chunks and four LOD levels");
+    Require(CountMainSections(*mesh) == 64U, "Terrain mesh did not emit one section per chunk and LOD");
     Require(mesh->desc.gpuDriven.allowGpuCulling && mesh->meshlets.size() == mesh->sections.size(),
         "Terrain chunks are not represented in GPU-driven culling metadata");
     Require(mesh->embeddedMaterials.size() == 1U &&
@@ -482,6 +490,40 @@ void RunDynamicMeshUpdateTest() {
     Require(mesh->tangentVertices[Center(terrain)].y > 0.9F &&
             mesh->tangentVertices.front().y == untouchedHeight,
         "Dynamic terrain update changed the wrong vertex range");
+}
+
+// A brush stroke updates the mesh in place; the result must be the mesh a fresh build gives.
+void RunDynamicUpdateMatchesRebuildTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(129U, 128.0F, 128.0F);
+    terrain.chunkQuads = 16U;
+    std::optional<kb::render::RenderMeshAssetData> mesh = kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    Require(mesh.has_value() && kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *mesh),
+        "Terrain mesh could not enter dynamic preview mode");
+    for (const float x : { -20.0F, 3.0F, 30.0F }) {
+        const kb::terrain_editor::TerrainBrushResult changed = kb::terrain_editor::ApplyTerrainBrush(
+            terrain,
+            kb::terrain_editor::TerrainBrushSettings{ .mode = kb::terrain_editor::TerrainBrushMode::Raise, .radius = 9.0F, .strength = 6.0F },
+            kb::terrain_editor::TerrainBrushStamp{ .localX = x, .localZ = x * 0.5F });
+        Require(changed.Changed() && kb::render::RenderTerrainMeshBuilder::UpdateDynamicPreview(
+                terrain,
+                kb::render::RenderTerrainMeshUpdateRegion{ .minX = changed.minX, .minZ = changed.minZ, .maxX = changed.maxX, .maxZ = changed.maxZ },
+                *mesh),
+            "Terrain mesh rejected a brush stroke");
+    }
+    const std::optional<kb::render::RenderMeshAssetData> fresh = kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    Require(fresh.has_value() && fresh->tangentVertices.size() == mesh->tangentVertices.size(),
+        "Terrain rebuild changed the vertex count");
+    for (std::size_t vertex = 0U; vertex < fresh->tangentVertices.size(); ++vertex) {
+        const auto& a = fresh->tangentVertices[vertex];
+        const auto& b = mesh->tangentVertices[vertex];
+        Require(std::abs(a.x - b.x) < 1.0e-4F && std::abs(a.y - b.y) < 1.0e-4F && std::abs(a.z - b.z) < 1.0e-4F,
+            "A brush stroke left a grid or skirt vertex different from a rebuild");
+    }
+    const kb::render::RenderTerrainChunkGrid& updated = *mesh->terrainChunks;
+    const kb::render::RenderTerrainChunkGrid& rebuilt = *fresh->terrainChunks;
+    Require(updated.lodError == rebuilt.lodError && updated.borderError == rebuilt.borderError && updated.skirtDepth == rebuilt.skirtDepth,
+        "A brush stroke left the level errors or skirt depths different from a rebuild");
+    Require(*std::ranges::max_element(updated.skirtDepth) > 0.0F, "Raising hills must give some chunk a skirt");
 }
 
 void RunSmoothWorkspaceTest() {
@@ -601,7 +643,7 @@ void RunRuntimeLoaderTest() {
     Require(metadata != nullptr && metadata->type == "RenderMesh", "Terrain asset was registered with the wrong runtime type");
     const kb::assets::AssetHandle<kb::render::RenderMeshAssetData> mesh =
         manager.Load<kb::render::RenderMeshAssetData>(metadata->id);
-    Require(mesh.IsLoaded() && mesh->desc.vertexCount == 1089U && mesh->desc.indexCount != 0U,
+    Require(mesh.IsLoaded() && mesh->desc.vertexCount == 1089U + 4U * 32U && mesh->desc.indexCount != 0U,
         "Runtime terrain render mesh did not load through AssetManager");
 
     std::filesystem::remove_all(root, filesystemError);
@@ -620,6 +662,7 @@ int main() {
         RunHeightmapImportTest();
         RunMeshBuildTest();
         RunDynamicMeshUpdateTest();
+        RunDynamicUpdateMatchesRebuildTest();
         RunSmoothWorkspaceTest();
         RunDynamicMeshBenchmark();
         RunRuntimeLoaderTest();

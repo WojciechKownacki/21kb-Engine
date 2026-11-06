@@ -193,6 +193,17 @@ bool RenderResourceRegistry::UpdateMeshGeometryMetadata(
     }
     resource->bounds = desc.bounds;
     resource->boundsBox = desc.boundsBox;
+    if (desc.terrainChunks != nullptr) {
+        // A brush changes how far each level of a chunk strays and how far a skirt must hang.
+        const RenderTerrainChunkGrid& grid = *desc.terrainChunks;
+        if (!resource->terrainChunks.Valid() || grid.lodError.size() != resource->terrainChunks.lodError.size() ||
+            grid.skirtDepth.size() != resource->terrainChunks.skirtDepth.size()) {
+            return false;
+        }
+        resource->terrainChunks.lodError = grid.lodError;
+        resource->terrainChunks.skirtDepth = grid.skirtDepth;
+        resource->terrainChunks.borderError = grid.borderError;
+    }
     for (const std::uint32_t sectionIndex : sectionIndices) {
         if (sectionIndex >= resource->sections.size()) return false;
         resource->sections[sectionIndex].bounds = desc.sections[sectionIndex].bounds;

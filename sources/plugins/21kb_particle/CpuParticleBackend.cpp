@@ -1063,7 +1063,7 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
         };
         if (mesh->sections.empty()) addRange(0U, indexCount, 0U);
         for (const kb::render::RenderMeshSectionDesc& section : mesh->sections) {
-            if (section.lodLevel == 0U && section.terrainLayerIndex == UINT8_MAX)
+            if (section.lodLevel == 0U && section.terrainLayerIndex == UINT8_MAX && !section.terrainSkirt)
                 addRange(section.indexStart, section.indexCount, section.vertexStart);
         }
 #endif

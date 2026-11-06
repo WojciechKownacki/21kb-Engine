@@ -168,6 +168,10 @@ struct SceneRenderCamera {
     // conservative guard band containing every sample in the pixel sequence.
     std::array<float, 2> temporalProjectionOffset{};
     std::array<float, 2> cullingGuardBand{};
+    // Height in pixels of the target the camera renders to; level of detail that depends on the size of a pixel (a
+    // terrain chunk) reads it. 0 when the camera is not tied to a target: such a camera is taken as kDefaultViewportHeight.
+    static constexpr std::uint32_t kDefaultViewportHeight = 1080U;
+    std::uint32_t viewportHeight = 0U;
     [[nodiscard]] std::array<float, 16> CullingProjection() const noexcept {
         auto result = projection;
         result[8] -= temporalProjectionOffset[0];

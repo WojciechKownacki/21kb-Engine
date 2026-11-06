@@ -116,7 +116,7 @@ kb::world::WorldHlodResult WorldHlodMeshBaker::Bake(const kb::world::WorldHlodRe
         const std::size_t vertexCount = VertexCount(mesh);
         const std::size_t indexCount = IndexCount(mesh);
         for (const RenderMeshSectionDesc& section : mesh.sections) {
-            if (section.lodLevel != 0U || section.terrainLayerIndex != UINT8_MAX || section.indexCount < 3U) {
+            if (section.lodLevel != 0U || section.terrainLayerIndex != UINT8_MAX || section.terrainSkirt || section.indexCount < 3U) {
                 continue;
             }
             Bucket& bucket = buckets[SectionMaterial(instance, mesh, section.materialSlot)];

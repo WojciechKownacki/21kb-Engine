@@ -35,6 +35,9 @@ public:
     [[nodiscard]] static RenderBoundsSphere TransformBounds(
         const RenderBoundsSphere& localBounds,
         const std::array<float, 16>& model) noexcept;
+    [[nodiscard]] static bool IsOrthographic(const SceneRenderCamera& camera) noexcept;
+    // Position of the camera in the world, from its rigid view transform.
+    [[nodiscard]] static std::array<float, 3> CameraPosition(const SceneRenderCamera& camera) noexcept;
     [[nodiscard]] static float ViewDepth(const SceneRenderCamera* camera, const RenderBoundsSphere& bounds) noexcept;
     [[nodiscard]] static float ScreenCoverage(const SceneRenderCamera* camera, const RenderBoundsSphere& bounds) noexcept;
     [[nodiscard]] static bool IsOccludedByVisibilityBlockers(

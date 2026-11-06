@@ -255,6 +255,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshAssetBuilder.cpp
     src/resources/RenderMap2DMeshBuilder.cpp
     src/resources/RenderTerrainMeshBuilder.cpp
+    src/resources/ForEachParallel.hpp
     src/resources/RenderMeshFbxImporter.cpp
     src/resources/RenderMeshFbxImporter.hpp
     src/resources/RenderMeshGltfImporter.cpp
@@ -354,6 +355,8 @@ add_library(kb_renderer STATIC
     src/scene/pipeline/MeshPipelinePassPolicy.hpp
     src/scene/pipeline/MeshPipelineResourceResolver.cpp
     src/scene/pipeline/MeshPipelineResourceResolver.hpp
+    src/scene/pipeline/MeshPipelineTerrainLod.cpp
+    src/scene/pipeline/MeshPipelineTerrainLod.hpp
     src/scene/pipeline/MeshPipelineVisibility.cpp
     src/scene/pipeline/MeshPipelineVisibility.hpp
     src/scene/pass/MeshPassProcessor.cpp
@@ -918,6 +921,14 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     add_test(NAME kb_content_streaming_tests COMMAND kb_content_streaming_tests)
     set_tests_properties(kb_content_streaming_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "renderer;streaming;memory")
+
+    add_executable(kb_terrain_lod_tests tests/TerrainLodTests.cpp)
+    target_include_directories(kb_terrain_lod_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(kb_terrain_lod_tests PRIVATE kb_renderer)
+    kb_apply_quality_gates(kb_terrain_lod_tests)
+    add_test(NAME kb_terrain_lod_tests COMMAND kb_terrain_lod_tests)
+    set_tests_properties(kb_terrain_lod_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 LABELS "renderer;terrain;lod")
 
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp

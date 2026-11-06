@@ -115,7 +115,6 @@ struct RenderMeshAssetData {
     std::vector<RenderMaterialSlotDesc> materialSlots;
     std::vector<std::string> materialNames;
     std::vector<RenderMeshEmbeddedMaterial> embeddedMaterials;
-    std::vector<std::uint32_t> terrainSectionIndices;
     RenderBoundsSphere bounds{};
     RenderBoundsBox boundsBox{};
     RenderMeshDesc desc{};
@@ -125,13 +124,13 @@ struct RenderMeshAssetData {
     std::uint64_t dynamicTopologyKey = 0U;
     std::vector<RenderMeshVertexUpdateRange> dynamicVertexUpdateRanges;
     std::vector<std::uint32_t> dynamicSectionUpdateIndices;
+    // Shared and never changed in place, so the pointer the desc holds stays good when the asset is moved or copied;
+    // a dynamic update installs a new one.
+    std::shared_ptr<const RenderTerrainChunkGrid> terrainChunks;
     std::vector<std::uint8_t> terrainLayerWeights;
     std::vector<RenderTerrainLayerWeightUpdateRegion> dynamicTerrainLayerWeightUpdates;
     std::uint32_t vertexUpdateFirst = 0U;
     std::uint32_t vertexUpdateCount = 0U;
-    std::uint32_t terrainChunkCountX = 0U;
-    std::uint32_t terrainChunkCountZ = 0U;
-    std::uint32_t terrainLodCount = 0U;
     std::uint16_t terrainLayerWeightWidth = 0U;
     std::uint16_t terrainLayerWeightHeight = 0U;
     std::uint8_t terrainLayerCount = 0U;
@@ -144,6 +143,9 @@ struct RenderMeshAssetData {
 
 struct RenderMeshFinalizeOptions {
     bool optimizeVertexFetch = true;
+    // Reorders the triangles of every section for the vertex cache. A mesh that lays its triangles out in the order it
+    // wants (a terrain in tiles) turns it off: the pass costs a full vertex table per section.
+    bool optimizeVertexCache = true;
 };
 
 class RenderMeshAssetBuilder {

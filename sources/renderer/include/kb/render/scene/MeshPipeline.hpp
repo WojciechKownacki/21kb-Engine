@@ -166,6 +166,9 @@ struct MeshPipelineBuildResult {
     std::vector<std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution>::node_type> materialResolutionNodes;
     // Renderer-owned frame cache. It holds only the resolved level, never authored
     // component data; caller reuse preserves hysteresis across submissions.
+    // Level chosen for every chunk of the terrain being built (per instance) and the sections it draws.
+    std::vector<std::uint8_t> terrainChunkLevels;
+    std::vector<std::uint32_t> terrainSectionList;
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchPreviousLevels;
     std::uint64_t detailSwitchHistoryRevision = 1U;
