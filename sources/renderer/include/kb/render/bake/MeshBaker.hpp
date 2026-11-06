@@ -66,7 +66,8 @@ inline constexpr std::uint32_t kTargetClusterGroupSize = 8U;
 // the error stays inside an ABSOLUTE budget -- a fraction of the mesh's own extent, measured by
 // meshopt_simplifyScale. Nothing here reads a viewport, a resolution or a field of view, and
 // nothing may: an error baked against a camera has to be re-baked when the camera changes.
-inline constexpr std::uint32_t kMaxLodCount = 4U;
+// Eight levels reach 1/128 of the triangles: a dense scan seen from far away covers a few pixels.
+inline constexpr std::uint32_t kMaxLodCount = 8U;
 inline constexpr float kLodTriangleRatio = 0.5F;
 inline constexpr float kLodErrorFractionOfScale = 0.02F;
 

@@ -1185,6 +1185,9 @@ void RunRuntimeLodMeshTest() {
             "A level's coverage is not the one where the next level's error reaches the pixel budget");
         if (level > 0U) Require(coverage <= runtime.lods[level - 1U].minScreenCoverage, "The level coverages do not fall");
     }
+    RenderMeshAssetData dense{};
+    Require(bake::BuildRuntimeLodMesh(MakeSphere(96U, 64U, 1.0F), dense) == MeshBakeStatus::Success && dense.lods.size() > 4U,
+        "A dense mesh must get levels coarse enough for instances far away");
     RenderMeshAssetData untouched{};
     Require(bake::BuildRuntimeLodMesh(RenderMeshAssetData{}, untouched) == MeshBakeStatus::EmptySource && untouched.lods.empty(),
         "A mesh without geometry must be refused and leave the output alone");
@@ -1243,10 +1246,10 @@ void RunBakedMeshSimplificationKeepsAttributesTest() {
     const BakedMeshView tangentView = ViewBakedMesh(texturedTangent.primaryBlock);
     const BakedMeshView uv1View = ViewBakedMesh(texturedUv1.primaryBlock);
     const BakedMeshView colorView = ViewBakedMesh(texturedColor.primaryBlock);
-    Require(plainView.lodCount > 1U && uvView.lodCount == plainView.lodCount &&
-            normalView.lodCount == plainView.lodCount && tangentView.lodCount == plainView.lodCount &&
-            uv1View.lodCount == plainView.lodCount && colorView.lodCount == plainView.lodCount,
-        "Sheets of one shape produced different LOD chains, so their errors are not comparable");
+    // Detail stops a chain sooner, so only the first level, which all of them have, is compared.
+    Require(plainView.lodCount > 1U && uvView.lodCount > 1U && normalView.lodCount > 1U && tangentView.lodCount > 1U &&
+            uv1View.lodCount > 1U && colorView.lodCount > 1U,
+        "A sheet of one shape produced no first level of detail, so its error cannot be compared");
 
     const LodRecord plainLod = ReadLod(plain.primaryBlock, plainView, 1U);
     const LodRecord uvLod = ReadLod(texturedUv.primaryBlock, uvView, 1U);
@@ -1693,7 +1696,7 @@ void RunBakedMeshKeyTest() {
         AppendFloat(parameters, 0.25F);
         AppendFloat(parameters, 2.0F);
         AppendUInt32(parameters, 8U);
-        AppendUInt32(parameters, 4U);
+        AppendUInt32(parameters, 8U);
         AppendFloat(parameters, 0.5F);
         AppendFloat(parameters, 0.02F);
         AppendFloat(parameters, 1.0F);
