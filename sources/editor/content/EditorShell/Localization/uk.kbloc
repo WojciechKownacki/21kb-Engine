@@ -3105,3 +3105,7 @@ text "uiChoice.fontMsdf" "Багатоканальне поле відстане
 text "component.river" "Річка"
 text "terrainTool.river" "Річка"
 text "terrainTool.riverCut" "Прорізати в рельєфі"
+text "terrainTool.splatMap" "Карта шарів"
+text "terrainTool.lodError" "Похибка LOD {value}"
+text "terrainTool.collisionStep" "Крок колізії {value}"
+text "terrainTool.job.settings" "Застосування налаштувань"

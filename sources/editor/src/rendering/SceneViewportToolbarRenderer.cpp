@@ -272,7 +272,9 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     Drawing::DrawChip(dc, rects.advancedButton, EditorText("terrainTool.advanced", "Advanced"), theme, tool.drawer == EditorTerrainDrawer::Advanced);
 
     const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(selected);
-    TerrainToolbarDrawer::Paint(dc, rects, theme, tool, terrain != nullptr ? terrain->width : 0U);
+    TerrainToolbarDrawer::Paint(dc, rects, theme, tool, terrain == nullptr ? TerrainDrawerValues{} : TerrainDrawerValues{
+        .resolution = terrain->width, .splatResolution = terrain->materialLayers.empty() ? 0U : terrain->layerWeightWidth,
+        .lodPixelError = terrain->lodPixelError, .collisionStep = terrain->collisionStep });
 }
 
 void SceneViewportToolbarRenderer::PaintTerrainPopup(

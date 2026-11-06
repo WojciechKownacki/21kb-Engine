@@ -33,6 +33,7 @@ void DrawLabel(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     case EditorTerrainJobKind::World: return EditorText("terrainTool.job.world", "Generating world");
     case EditorTerrainJobKind::Thermal: return EditorText("terrainTool.job.thermal", "Thermal erosion");
     case EditorTerrainJobKind::Hydraulic: return EditorText("terrainTool.job.hydraulic", "Hydraulic erosion");
+    case EditorTerrainJobKind::Settings: return EditorText("terrainTool.job.settings", "Applying settings");
     case EditorTerrainJobKind::None: break;
     }
     return {};
@@ -53,7 +54,18 @@ void PaintJob(HDC dc, const TerrainViewportToolbarRects& rects, const EditorThem
     SceneViewportToolbarDrawing::DrawChip(dc, rects.cancelButton, EditorText("terrainTool.cancel", "Cancel"), theme, false);
 }
 
-void PaintWizard(HDC dc, const TerrainViewportToolbarRects& rects, const EditorTheme& theme, const EditorTerrainToolState& tool, EditorTerrainJobKind job) {
+// The splat map size on offer, the current one lit.
+void PaintSplat(HDC dc, const TerrainViewportToolbarRects& rects, const EditorTheme& theme, std::uint32_t splatResolution) {
+    DrawLabel(dc, Box(rects.drawer.left + kPad, rects.splatButtons[0].top, kLabelWidth - 6), EditorText("terrainTool.splatMap", "Splat map"),
+        GdiDrawing::ToColorRef(theme.textSecondary));
+    for (std::size_t index = 0U; index < rects.splatButtons.size(); ++index) {
+        SceneViewportToolbarDrawing::DrawChip(dc, rects.splatButtons[index], std::to_string(kEditorTerrainSplatResolutions[index]), theme,
+            splatResolution == kEditorTerrainSplatResolutions[index]);
+    }
+}
+
+void PaintWizard(HDC dc, const TerrainViewportToolbarRects& rects, const EditorTheme& theme, const EditorTerrainToolState& tool, EditorTerrainJobKind job,
+    const TerrainDrawerValues& values) {
     const COLORREF secondary = GdiDrawing::ToColorRef(theme.textSecondary);
     const RECT titleRow = Box(rects.drawer.left + kPad, rects.drawer.top + kPad, kLabelWidth - 6);
     DrawLabel(dc, titleRow, EditorText("terrainTool.newWorld.title", "New world"), GdiDrawing::ToColorRef(theme.textPrimary));
@@ -83,10 +95,11 @@ void PaintWizard(HDC dc, const TerrainViewportToolbarRects& rects, const EditorT
     } else {
         SceneViewportToolbarDrawing::DrawChip(dc, rects.generateButton, EditorText("terrainTool.newWorld.generate", "Generate"), theme, true);
     }
+    PaintSplat(dc, rects, theme, values.splatResolution);
 }
 
 void PaintAdvanced(HDC dc, const TerrainViewportToolbarRects& rects, const EditorTheme& theme, const EditorTerrainToolState& tool, EditorTerrainJobKind job,
-    std::uint32_t terrainResolution) {
+    const TerrainDrawerValues& values) {
     const COLORREF secondary = GdiDrawing::ToColorRef(theme.textSecondary);
     SceneViewportToolbarDrawing::DrawValueButton(dc, rects.operationButton, HeroIconKind::AdjustmentsHorizontal,
         TerrainToolbarLabels::BrushToolbarLabel(tool.brush.mode), theme, tool.brushMenuOpen);
@@ -106,12 +119,19 @@ void PaintAdvanced(HDC dc, const TerrainViewportToolbarRects& rects, const Edito
         EditorText("terrainTool.resolution", "Resolution"), secondary);
     for (std::size_t index = 0U; index < kResolutions.size(); ++index) {
         SceneViewportToolbarDrawing::DrawChip(dc, rects.resolutionButtons[index], std::to_string(kResolutions[index]), theme,
-            terrainResolution == kResolutions[index]);
+            values.resolution == kResolutions[index]);
     }
     const std::string image = tool.stampImageName.empty()
         ? std::string{ EditorText("terrainTool.stampImage.pick", "Stamp image...") }
         : EditorLocalization::Format("terrainTool.stampImage.named", "Image: {name}", { { "name", tool.stampImageName } });
     SceneViewportToolbarDrawing::DrawChip(dc, rects.stampImageButton, image, theme, !tool.stampImageName.empty());
+
+    PaintSplat(dc, rects, theme, values.splatResolution);
+    // These two are written with their texts in the call so the translation check finds them.
+    SceneViewportToolbarDrawing::DrawStepper(dc, rects.lodError.minus, rects.lodError.value, rects.lodError.plus,
+        EditorLocalization::Format("terrainTool.lodError", "LOD error {value}", { { "value", TerrainToolbarLabels::FormatNumber(values.lodPixelError) } }), theme);
+    SceneViewportToolbarDrawing::DrawStepper(dc, rects.collisionStep.minus, rects.collisionStep.value, rects.collisionStep.plus,
+        EditorLocalization::Format("terrainTool.collisionStep", "Collision step {value}", { { "value", std::to_string(values.collisionStep) } }), theme);
 
     SceneViewportToolbarDrawing::DrawChip(dc, rects.thermalButton, EditorText("terrainTool.erode.thermal", "Thermal erosion"), theme, job == EditorTerrainJobKind::Thermal);
     SceneViewportToolbarDrawing::DrawChip(dc, rects.hydraulicButton, EditorText("terrainTool.erode.hydraulic", "Hydraulic erosion"), theme, job == EditorTerrainJobKind::Hydraulic);
@@ -121,12 +141,12 @@ void PaintAdvanced(HDC dc, const TerrainViewportToolbarRects& rects, const Edito
 } // namespace
 
 void TerrainToolbarDrawer::Paint(
-    HDC dc, const TerrainViewportToolbarRects& rects, const EditorTheme& theme, const EditorTerrainToolState& tool, std::uint32_t terrainResolution) {
+    HDC dc, const TerrainViewportToolbarRects& rects, const EditorTheme& theme, const EditorTerrainToolState& tool, const TerrainDrawerValues& values) {
     if (tool.drawer == EditorTerrainDrawer::None || rects.drawer.right <= rects.drawer.left) return;
     SceneViewportToolbarDrawing::FillRound(dc, rects.drawer, RGB(20, 24, 30), RGB(67, 78, 92), 9);
     const EditorTerrainJobKind job = EditorTerrainJobs::Active();
-    if (tool.drawer == EditorTerrainDrawer::NewWorld) PaintWizard(dc, rects, theme, tool, job);
-    else PaintAdvanced(dc, rects, theme, tool, job, terrainResolution);
+    if (tool.drawer == EditorTerrainDrawer::NewWorld) PaintWizard(dc, rects, theme, tool, job, values);
+    else PaintAdvanced(dc, rects, theme, tool, job, values);
 }
 
 } // namespace kb::editor

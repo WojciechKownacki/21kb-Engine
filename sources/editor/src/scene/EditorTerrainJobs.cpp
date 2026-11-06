@@ -1,6 +1,7 @@
 #include "scene/EditorTerrainJobs.hpp"
 
 #include "TerrainErosion.hpp"
+#include "TerrainLayerPainter.hpp"
 #include "TerrainPresets.hpp"
 #include "TerrainTask.hpp"
 #include "console/EditorConsoleState.hpp"
@@ -128,6 +129,25 @@ bool EditorTerrainJobs::StartErosion(
     }
     if (error != nullptr) *error = "Erosion is thermal or hydraulic";
     return false;
+}
+
+bool EditorTerrainJobs::StartSettings(
+    EditorSceneContext& context, kb::scene::SceneEntity entity, std::uint32_t splatResolution, float lodPixelError, std::uint32_t collisionStep,
+    std::string* error) {
+    if (splatResolution != 0U && !kb::terrain_editor::IsTerrainSplatResolution(splatResolution)) {
+        if (error != nullptr) *error = "The splat map is 512, 1024 or 2048 texels across";
+        return false;
+    }
+    return Start(context, entity, EditorTerrainJobKind::Settings, "Terrain Settings", [splatResolution, lodPixelError, collisionStep](
+        kb::assets::TerrainAsset& terrain, TerrainTaskControl& control, std::string& failure) {
+        terrain.lodPixelError = lodPixelError;
+        terrain.collisionStep = collisionStep;
+        if (splatResolution != 0U && !kb::terrain_editor::SetTerrainSplatResolution(terrain, splatResolution, control.maxWorkers)) {
+            failure = "The splat map needs a material layer: add one in the Inspector first.";
+            return false;
+        }
+        return kb::assets::IsTerrainAssetValid(terrain, &failure);
+    }, error);
 }
 
 void EditorTerrainJobs::Cancel() noexcept {

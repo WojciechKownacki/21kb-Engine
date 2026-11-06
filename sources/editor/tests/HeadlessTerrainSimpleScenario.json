@@ -44,8 +44,23 @@
     { "op": "terrain_erode", "entity": "land", "kind": "hydraulic" },
     { "op": "undo" },
     { "op": "undo" },
+    { "op": "assert_terrain_settings", "entity": "land", "splat_resolution": 512, "lod_pixel_error": 2.0, "collision_step": 1 },
     { "op": "terrain_drawer", "drawer": "advanced" },
     { "op": "capture", "panel": "scene", "checkpoint": "terrain-advanced", "width": 1100, "height": 300, "text_fits": true },
+    { "op": "terrain_settings", "entity": "land", "splat_resolution": 1024, "lod_pixel_error": 3.5, "collision_step": 2 },
+    { "op": "assert_terrain_settings", "entity": "land", "splat_resolution": 1024, "lod_pixel_error": 3.5, "collision_step": 2 },
+    { "op": "assert_terrain_layer_weight", "entity": "land", "x": 0.0, "z": 0.0, "layer": 0, "min": 0.99 },
+    { "op": "terrain_paint", "entity": "land", "layer": 1, "x": 20.0, "z": 20.0, "radius": 6.0 },
+    { "op": "assert_terrain_layer_weight", "entity": "land", "x": 20.0, "z": 20.0, "layer": 1, "min": 0.9 },
+    { "op": "capture", "panel": "scene", "checkpoint": "terrain-advanced-settings", "width": 1100, "height": 300, "text_fits": true },
+    { "op": "terrain_drawer", "drawer": "new_world" },
+    { "op": "capture", "panel": "scene", "checkpoint": "terrain-new-world-splat", "width": 1100, "height": 300, "text_fits": true },
+    { "op": "undo" },
+    { "op": "configure_terrain", "entity": "land", "width": 257, "height": 257, "chunk_quads": 32, "lod_count": 4, "world_size_x": 128.0, "world_size_z": 128.0 },
+    { "op": "assert_terrain_settings", "entity": "land", "splat_resolution": 1024, "lod_pixel_error": 3.5, "collision_step": 2 },
+    { "op": "undo" },
+    { "op": "undo" },
+    { "op": "assert_terrain_settings", "entity": "land", "splat_resolution": 512, "lod_pixel_error": 2.0, "collision_step": 1 },
     { "op": "terrain_drawer", "drawer": "none" }
   ]
 }

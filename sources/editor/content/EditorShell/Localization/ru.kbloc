@@ -3105,3 +3105,7 @@ text "uiChoice.fontMsdf" "Многоканальное поле расстоян
 text "component.river" "Река"
 text "terrainTool.river" "Река"
 text "terrainTool.riverCut" "Прорезать в рельефе"
+text "terrainTool.splatMap" "Карта слоёв"
+text "terrainTool.lodError" "Ошибка LOD {value}"
+text "terrainTool.collisionStep" "Шаг коллизии {value}"
+text "terrainTool.job.settings" "Применение настроек"

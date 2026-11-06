@@ -46,9 +46,31 @@ void ClickTool(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, 
     }
 }
 
+// The splat map size, the chunk detail error and the collision step: a click that changes one starts the settings job.
+void ClickSettings(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const TerrainViewportToolbarRects& bar, int x, int y) {
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+    if (terrain == nullptr || EditorTerrainJobs::Active() != EditorTerrainJobKind::None) return;
+    std::uint32_t splat = terrain->layerWeightWidth;
+    float lodError = terrain->lodPixelError;
+    std::uint32_t collisionStep = terrain->collisionStep;
+    for (std::size_t index = 0U; index < bar.splatButtons.size(); ++index) {
+        if (PointInRect(bar.splatButtons[index], x, y)) splat = kEditorTerrainSplatResolutions[index];
+    }
+    if (PointInRect(bar.lodError.minus, x, y)) lodError = std::max(0.25F, lodError - 0.5F);
+    if (PointInRect(bar.lodError.plus, x, y)) lodError = std::min(16.0F, lodError + 0.5F);
+    if (PointInRect(bar.collisionStep.minus, x, y)) collisionStep = std::max(1U, collisionStep / 2U);
+    if (PointInRect(bar.collisionStep.plus, x, y)) collisionStep = std::min(kb::assets::TerrainAsset::MaximumCollisionStep, collisionStep * 2U);
+    if (splat == terrain->layerWeightWidth && lodError == terrain->lodPixelError && collisionStep == terrain->collisionStep) return;
+    std::string error;
+    if (!EditorTerrainJobs::StartSettings(sceneContext, entity, splat, lodError, collisionStep, &error)) {
+        Warn(sceneContext, error, "The terrain settings could not be applied.");
+    }
+}
+
 void ClickDrawer(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const TerrainViewportToolbarRects& bar, int x, int y) {
     EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     std::string error;
+    ClickSettings(sceneContext, entity, bar, x, y);
     const auto start = [&](bool started) {
         if (!started) Warn(sceneContext, error, "The terrain job could not be started.");
     };

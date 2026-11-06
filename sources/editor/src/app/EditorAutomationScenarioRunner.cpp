@@ -3565,6 +3565,32 @@ ReadScriptValue(
         return { finished, finished ? "terrain job applied" : error };
     }
 
+    if (*operation == "terrain_settings" || *operation == "assert_terrain_settings") {
+        // splat_resolution (512 1024 2048), lod_pixel_error and collision_step, each optional. terrain_settings applies
+        // them as the Advanced drawer does (a background job, waited for, one Undo step); assert_terrain_settings checks them.
+        const auto alias = StringMember(step, "entity", error);
+        const auto splat = UInt32Member(step, "splat_resolution", error, false);
+        const auto lodError = NumberMember(step, "lod_pixel_error", error, false);
+        const auto collisionStep = UInt32Member(step, "collision_step", error, false);
+        if (!alias || !error.empty()) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(state.context.Scene(), entity, &error);
+        if (!terrain.has_value()) return { false, error };
+        if (*operation == "assert_terrain_settings") {
+            const bool matched = (!splat || terrain->layerWeightWidth == *splat) &&
+                (!lodError || std::abs(static_cast<double>(terrain->lodPixelError) - *lodError) < 0.0001) &&
+                (!collisionStep || terrain->collisionStep == *collisionStep);
+            return { matched, matched ? "terrain settings matched" : "terrain settings are splat " + std::to_string(terrain->layerWeightWidth) +
+                ", lod pixel error " + std::to_string(terrain->lodPixelError) + ", collision step " + std::to_string(terrain->collisionStep) };
+        }
+        if (!EditorTerrainJobs::StartSettings(state.context, entity, splat.value_or(0U),
+                static_cast<float>(lodError.value_or(static_cast<double>(terrain->lodPixelError))), collisionStep.value_or(terrain->collisionStep), &error)) {
+            return { false, error };
+        }
+        const bool finished = EditorTerrainJobs::Finish(state.context, 300.0, &error);
+        return { finished, finished ? "terrain settings applied" : error };
+    }
+
     if (*operation == "assert_terrain_relief") {
         // The heights span at least `min` (and at most `max`) world units from lowest to highest.
         const auto alias = StringMember(step, "entity", error);

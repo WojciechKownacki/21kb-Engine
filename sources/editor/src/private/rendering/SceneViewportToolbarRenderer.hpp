@@ -88,6 +88,10 @@ struct TerrainViewportToolbarRects {
     RECT symmetryZButton{};
     std::array<RECT, 5U> resolutionButtons{};
     RECT stampImageButton{};
+    // The splat map size (in both drawers), then the chunk detail error and the collision step.
+    std::array<RECT, 3U> splatButtons{};
+    TerrainStepperRects lodError{};
+    TerrainStepperRects collisionStep{};
     RECT thermalButton{};
     RECT hydraulicButton{};
     // The running job (a world, an erosion) in either drawer.

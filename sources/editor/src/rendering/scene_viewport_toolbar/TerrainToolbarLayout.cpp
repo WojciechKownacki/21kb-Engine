@@ -9,15 +9,22 @@ using namespace terrain_toolbar;
 
 int TerrainToolbarDrawer::Layout(TerrainViewportToolbarRects& rects, EditorTerrainDrawer drawer) noexcept {
     const bool wizard = drawer == EditorTerrainDrawer::NewWorld;
-    const int rows = wizard ? 2 : 3;
+    const int rows = wizard ? 3 : 4;
     rects.drawer = RECT{ rects.panel.left, rects.panel.bottom + 4, rects.panel.right,
         rects.panel.bottom + 4 + 2 * kPad + rows * kRowHeight + (rows - 1) * kRowGap };
     const int left = rects.drawer.left + kPad;
     const int row1 = rects.drawer.top + kPad;
     const int row2 = row1 + kRowHeight + kRowGap;
     const int row3 = row2 + kRowHeight + kRowGap;
+    const int row4 = row3 + kRowHeight + kRowGap;
+    // The splat map sizes, after their label, on the last row of either drawer.
+    int cursor = left + kLabelWidth;
+    for (RECT& chip : rects.splatButtons) {
+        chip = Box(cursor, wizard ? row3 : row4, 58);
+        cursor = chip.right + kChipGap;
+    }
     if (wizard) {
-        int cursor = left + kLabelWidth;
+        cursor = left + kLabelWidth;
         for (RECT& chip : rects.worldPresetButtons) {
             chip = Box(cursor, row1, 104);
             cursor = chip.right + kChipGap;
@@ -29,7 +36,7 @@ int TerrainToolbarDrawer::Layout(TerrainViewportToolbarRects& rects, EditorTerra
         LayoutJob(rects, actionLeft, row2);
         return rects.drawer.bottom;
     }
-    int cursor = left;
+    cursor = left;
     rects.operationButton = Box(cursor, row1, 170);
     rects.brushShapeButton = Box(rects.operationButton.right + kChipGap, row1, 150);
     cursor = rects.brushShapeButton.right + 14;
@@ -49,6 +56,9 @@ int TerrainToolbarDrawer::Layout(TerrainViewportToolbarRects& rects, EditorTerra
     rects.thermalButton = Box(left, row3, 150);
     rects.hydraulicButton = Box(rects.thermalButton.right + kChipGap, row3, 160);
     LayoutJob(rects, rects.hydraulicButton.right + 14, row3);
+    cursor = rects.splatButtons[2].right + 14;
+    rects.lodError = Stepper(cursor, row4, 130);
+    rects.collisionStep = Stepper(cursor, row4, 150);
     return rects.drawer.bottom;
 }
 
