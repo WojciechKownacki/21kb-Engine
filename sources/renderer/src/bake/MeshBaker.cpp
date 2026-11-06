@@ -1,6 +1,7 @@
 #include "kb/render/bake/MeshBaker.hpp"
 
 #include "engine/assets/bake/AssetPack.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 
 #include <meshoptimizer/src/meshoptimizer.h>
 
@@ -612,6 +613,20 @@ struct ClusterGroup {
     return MeshBakeStatus::Success;
 }
 
+// Runs job(index) for every index below `count` on the engine's worker pool and returns when all are done. A job
+// writes only the slot of its own index, so the result is the one a loop would give, whatever the order they finish in.
+template <typename Job>
+void ForEachParallel(std::size_t count, Job&& job) {
+    if (count < 2U) {
+        for (std::size_t index = 0U; index < count; ++index) job(index);
+        return;
+    }
+    static kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+    pool.ParallelForChunks(count, 1U, [&job](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) job(index);
+    });
+}
+
 // The whole LOD chain, simplified level from level. Stops as soon as a level fails to get
 // smaller: a level that is not smaller than the one above it is not a level, and emitting it
 // would be a chain that claims a reduction it did not make.
@@ -641,19 +656,24 @@ struct ClusterGroup {
             previousIndices += section.indices.size();
         }
 
-        LodLevel next{};
-        next.sections.reserve(previous.sections.size());
-        std::size_t nextIndices = 0U;
-        float stepError = 0.0F;
-        for (std::size_t sectionIndex = 0U; sectionIndex < previous.sections.size(); ++sectionIndex) {
+        // Every section of the level is simplified on its own, so they run side by side; the results are looked at
+        // in section order, as a loop would have met them.
+        struct Simplified {
+            LodSection section;
+            float error = 0.0F;
+            bool wellFormed = true;
+        };
+        std::vector<Simplified> simplifiedSections(previous.sections.size());
+        ForEachParallel(previous.sections.size(), [&](std::size_t sectionIndex) {
             const LodSection& section = previous.sections[sectionIndex];
             const std::size_t targetTriangles = static_cast<std::size_t>(
                 static_cast<double>(lods.front().sections[sectionIndex].indices.size() / 3U) * wanted.trianglePercent * 0.01);
             const std::size_t targetIndices = std::max<std::size_t>(targetTriangles, 1U) * 3U;
-            LodSection simplified{};
+            Simplified& result = simplifiedSections[sectionIndex];
+            LodSection& simplified = result.section;
             simplified.materialSlot = section.materialSlot;
             simplified.indices.resize(section.indices.size());
-            float sectionError = 0.0F;
+            float& sectionError = result.error;
             // LockBorder is what keeps two materials welded: a section is simplified without
             // its neighbours, so a vertex on the seam that moves leaves a crack no later pass
             // can close. ErrorAbsolute is the binding half -- the returned error is then in the
@@ -674,24 +694,31 @@ struct ClusterGroup {
                 stepErrorLimit,
                 meshopt_SimplifyErrorAbsolute | meshopt_SimplifyLockBorder,
                 &sectionError);
-            if (!std::isfinite(sectionError)) {
+            result.wellFormed = produced <= section.indices.size() && produced % 3U == 0U &&
+                std::ranges::all_of(
+                    std::span<const std::uint32_t>{ simplified.indices.data(), std::min(produced, section.indices.size()) },
+                    [&source](std::uint32_t index) noexcept { return index < source.vertexCount; });
+            if (result.wellFormed) simplified.indices.resize(produced);
+        });
+        LodLevel next{};
+        next.sections.reserve(previous.sections.size());
+        std::size_t nextIndices = 0U;
+        float stepError = 0.0F;
+        for (Simplified& result : simplifiedSections) {
+            if (!std::isfinite(result.error)) {
                 return MeshBakeStatus::NonFiniteGeometry;
             }
-            if (produced > section.indices.size() || produced % 3U != 0U ||
-                !std::ranges::all_of(
-                    std::span<const std::uint32_t>{ simplified.indices.data(), produced },
-                    [&source](std::uint32_t index) noexcept { return index < source.vertexCount; })) {
+            if (!result.wellFormed) {
                 return MeshBakeStatus::SimplificationFailed;
             }
-            simplified.indices.resize(produced);
-            if (produced < 3U) {
+            if (result.section.indices.size() < 3U) {
                 // A section that simplified itself out of existence would leave the level
                 // without a material it had; the chain stops instead.
                 return MeshBakeStatus::Success;
             }
-            nextIndices += produced;
-            stepError = std::max(stepError, sectionError);
-            next.sections.push_back(std::move(simplified));
+            nextIndices += result.section.indices.size();
+            stepError = std::max(stepError, result.error);
+            next.sections.push_back(std::move(result.section));
         }
         if (nextIndices >= previousIndices) {
             return MeshBakeStatus::Success;
@@ -803,12 +830,167 @@ struct ClusteredMesh {
 // Turns the LOD chain into clusters and lays the geometry out in cluster order, so that a
 // cluster is a contiguous run of both buffers and a chunk of clusters is a contiguous slice of
 // them. That is the property the streaming fragment rests on.
+// The clusters of one section of one level, numbered from the section's own first vertex, index and cluster, so
+// that sections can be built side by side and laid out one after another afterwards.
+struct SectionClusters {
+    MeshBakeStatus status = MeshBakeStatus::Success;
+    std::vector<float> vertices;
+    std::vector<std::uint32_t> indices;
+    std::vector<RenderMeshletDesc> meshlets;
+    std::vector<std::uint32_t> groupMeshletCounts;
+    RenderBoundsSphere bounds{};
+};
+
+[[nodiscard]] SectionClusters BuildSectionClusters(
+    const SourceGeometry& source, const LodSection& section, std::uint32_t lodIndex, std::uint32_t targetGroupSize) {
+    const std::uint32_t vertexFloats = source.vertexStride / sizeof(float);
+    SectionClusters out{};
+    const std::size_t bound =
+        meshopt_buildMeshletsBound(section.indices.size(), kMaxClusterVertices, kMinClusterTriangles);
+    std::vector<meshopt_Meshlet> meshlets(bound);
+    std::vector<std::uint32_t> meshletVertices(section.indices.size());
+    std::vector<std::uint8_t> meshletTriangles(section.indices.size());
+    const std::size_t meshletCount = meshopt_buildMeshletsFlex(
+        meshlets.data(),
+        meshletVertices.data(),
+        meshletTriangles.data(),
+        section.indices.data(),
+        section.indices.size(),
+        source.positions,
+        source.vertexCount,
+        source.vertexStride,
+        kMaxClusterVertices,
+        kMinClusterTriangles,
+        kMaxClusterTriangles,
+        kClusterConeWeight,
+        kClusterSplitFactor);
+    if (meshletCount == 0U) {
+        out.status = MeshBakeStatus::ClusterBuildFailed;
+        return out;
+    }
+
+    std::vector<std::uint32_t> partitionIndices;
+    std::vector<std::uint32_t> partitionIndexCounts(meshletCount, 0U);
+    partitionIndices.reserve(section.indices.size());
+    for (std::size_t meshletIndex = 0U; meshletIndex < meshletCount; ++meshletIndex) {
+        const meshopt_Meshlet& meshlet = meshlets[meshletIndex];
+        partitionIndexCounts[meshletIndex] = meshlet.triangle_count * 3U;
+        for (std::uint32_t corner = 0U; corner < meshlet.triangle_count * 3U; ++corner) {
+            const std::uint32_t local = meshletTriangles[meshlet.triangle_offset + corner];
+            partitionIndices.push_back(meshletVertices[meshlet.vertex_offset + local]);
+        }
+    }
+    std::vector<std::uint32_t> partitionIds(meshletCount, 0U);
+    const std::size_t partitionCount = meshopt_partitionClusters(
+        partitionIds.data(),
+        partitionIndices.data(),
+        partitionIndices.size(),
+        partitionIndexCounts.data(),
+        meshletCount,
+        source.positions,
+        source.vertexCount,
+        source.vertexStride,
+        targetGroupSize);
+    if (partitionCount == 0U) {
+        out.status = MeshBakeStatus::ClusterBuildFailed;
+        return out;
+    }
+    std::vector<std::uint32_t> meshletOrder(meshletCount, 0U);
+    std::iota(meshletOrder.begin(), meshletOrder.end(), 0U);
+    std::ranges::stable_sort(meshletOrder, [&partitionIds](std::uint32_t lhs, std::uint32_t rhs) noexcept {
+        return partitionIds[lhs] < partitionIds[rhs];
+    });
+
+    std::vector<std::uint32_t> clusterIndices;
+    std::uint32_t previousPartition = std::numeric_limits<std::uint32_t>::max();
+    for (const std::uint32_t sourceMeshletIndex : meshletOrder) {
+        const std::uint32_t partition = partitionIds[sourceMeshletIndex];
+        if (partition != previousPartition) {
+            out.groupMeshletCounts.push_back(0U);
+            previousPartition = partition;
+        }
+        const meshopt_Meshlet& meshlet = meshlets[sourceMeshletIndex];
+        const std::uint32_t vertexStart = static_cast<std::uint32_t>(out.vertices.size() / vertexFloats);
+        const std::uint32_t indexStart = static_cast<std::uint32_t>(out.indices.size());
+
+        clusterIndices.assign(meshlet.triangle_count * 3U, 0U);
+        for (std::uint32_t corner = 0U; corner < meshlet.triangle_count * 3U; ++corner) {
+            const std::uint32_t local = meshletTriangles[meshlet.triangle_offset + corner];
+            clusterIndices[corner] = meshletVertices[meshlet.vertex_offset + local];
+            out.indices.push_back(vertexStart + local);
+        }
+        // The cluster's own bounds and cone, from the triangles that are in it. This is
+        // the whole point of the stage: the field these fill has been a constant
+        // {0,0,1,1} that no culler could ever have used.
+        const meshopt_Bounds bounds = meshopt_computeClusterBounds(
+            clusterIndices.data(),
+            clusterIndices.size(),
+            source.positions,
+            source.vertexCount,
+            source.vertexStride);
+
+        for (std::uint32_t local = 0U; local < meshlet.vertex_count; ++local) {
+            const std::uint32_t sourceVertex = meshletVertices[meshlet.vertex_offset + local];
+            const float* const from = source.positions + static_cast<std::size_t>(sourceVertex) * vertexFloats;
+            out.vertices.insert(out.vertices.end(), from, from + vertexFloats);
+        }
+
+        RenderMeshletDesc desc{};
+        desc.indexStart = indexStart;
+        desc.indexCount = meshlet.triangle_count * 3U;
+        desc.vertexStart = vertexStart;
+        desc.vertexCount = meshlet.vertex_count;
+        desc.bounds = RenderBoundsSphere{
+            .center = { bounds.center[0], bounds.center[1], bounds.center[2] },
+            .radius = bounds.radius,
+        };
+        desc.cone = { bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff };
+        desc.lodLevel = static_cast<std::uint8_t>(lodIndex);
+        // A cluster with no extent is one whose triangles are all a single point. Its
+        // sphere culls nothing and its cone means nothing, and a reader that trusted
+        // RenderMeshletDesc::IsValid would refuse the artifact anyway -- so the bake is
+        // the refusal, rather than a payload that only fails on the way back in.
+        if (!std::isfinite(desc.bounds.radius) || !desc.bounds.IsValid()) {
+            out.status = MeshBakeStatus::DegenerateGeometry;
+            return out;
+        }
+        out.meshlets.push_back(desc);
+        ++out.groupMeshletCounts.back();
+    }
+
+    out.bounds = BoundsOfVertices(
+        reinterpret_cast<const std::uint8_t*>(out.vertices.data()),
+        source.vertexStride,
+        0U,
+        static_cast<std::uint32_t>(out.vertices.size() / vertexFloats));
+    if (!IsFiniteBounds(out.bounds)) {
+        out.status = MeshBakeStatus::NonFiniteGeometry;
+    }
+    return out;
+}
+
 [[nodiscard]] MeshBakeStatus BuildClusters(
     const SourceGeometry& source,
     const std::vector<LodLevel>& lodChain,
     std::uint32_t targetGroupSize,
     ClusteredMesh& out) {
     const std::uint32_t vertexFloats = source.vertexStride / sizeof(float);
+    struct SectionTask {
+        std::uint32_t lodIndex = 0U;
+        const LodSection* section = nullptr;
+    };
+    std::vector<SectionTask> tasks;
+    for (std::uint32_t lodIndex = 0U; lodIndex < lodChain.size(); ++lodIndex) {
+        for (const LodSection& section : lodChain[lodIndex].sections) tasks.push_back({ lodIndex, &section });
+    }
+    // Every section of every level is clustered on its own, side by side; they are laid out below in the order a
+    // loop over the levels and their sections would have produced them, so the bytes do not depend on the threads.
+    std::vector<SectionClusters> built(tasks.size());
+    ForEachParallel(tasks.size(), [&](std::size_t index) {
+        built[index] = BuildSectionClusters(source, *tasks[index].section, tasks[index].lodIndex, targetGroupSize);
+    });
+
+    std::size_t taskIndex = 0U;
     for (std::uint32_t lodIndex = 0U; lodIndex < lodChain.size(); ++lodIndex) {
         const LodLevel& lod = lodChain[lodIndex];
         RenderMeshLodDesc lodDesc{};
@@ -821,139 +1003,32 @@ struct ClusteredMesh {
         lodDesc.minScreenCoverage = 0.0F;
 
         for (const LodSection& section : lod.sections) {
+            SectionClusters& clusters = built[taskIndex++];
+            if (clusters.status != MeshBakeStatus::Success) {
+                return clusters.status;
+            }
             const std::uint32_t sectionIndex = static_cast<std::uint32_t>(out.sections.size());
-            const std::size_t bound =
-                meshopt_buildMeshletsBound(section.indices.size(), kMaxClusterVertices, kMinClusterTriangles);
-            std::vector<meshopt_Meshlet> meshlets(bound);
-            std::vector<std::uint32_t> meshletVertices(section.indices.size());
-            std::vector<std::uint8_t> meshletTriangles(section.indices.size());
-            const std::size_t meshletCount = meshopt_buildMeshletsFlex(
-                meshlets.data(),
-                meshletVertices.data(),
-                meshletTriangles.data(),
-                section.indices.data(),
-                section.indices.size(),
-                source.positions,
-                source.vertexCount,
-                source.vertexStride,
-                kMaxClusterVertices,
-                kMinClusterTriangles,
-                kMaxClusterTriangles,
-                kClusterConeWeight,
-                kClusterSplitFactor);
-            if (meshletCount == 0U) {
-                return MeshBakeStatus::ClusterBuildFailed;
-            }
-
-            std::vector<std::uint32_t> partitionIndices;
-            std::vector<std::uint32_t> partitionIndexCounts(meshletCount, 0U);
-            partitionIndices.reserve(section.indices.size());
-            for (std::size_t meshletIndex = 0U; meshletIndex < meshletCount; ++meshletIndex) {
-                const meshopt_Meshlet& meshlet = meshlets[meshletIndex];
-                partitionIndexCounts[meshletIndex] = meshlet.triangle_count * 3U;
-                for (std::uint32_t corner = 0U; corner < meshlet.triangle_count * 3U; ++corner) {
-                    const std::uint32_t local = meshletTriangles[meshlet.triangle_offset + corner];
-                    partitionIndices.push_back(meshletVertices[meshlet.vertex_offset + local]);
-                }
-            }
-            std::vector<std::uint32_t> partitionIds(meshletCount, 0U);
-            const std::size_t partitionCount = meshopt_partitionClusters(
-                partitionIds.data(),
-                partitionIndices.data(),
-                partitionIndices.size(),
-                partitionIndexCounts.data(),
-                meshletCount,
-                source.positions,
-                source.vertexCount,
-                source.vertexStride,
-                targetGroupSize);
-            if (partitionCount == 0U) {
-                return MeshBakeStatus::ClusterBuildFailed;
-            }
-            std::vector<std::uint32_t> meshletOrder(meshletCount, 0U);
-            std::iota(meshletOrder.begin(), meshletOrder.end(), 0U);
-            std::ranges::stable_sort(meshletOrder, [&partitionIds](std::uint32_t lhs, std::uint32_t rhs) noexcept {
-                return partitionIds[lhs] < partitionIds[rhs];
-            });
-
             const std::uint32_t sectionIndexStart = static_cast<std::uint32_t>(out.indices.size());
-            const std::uint32_t sectionVertexStart =
-                static_cast<std::uint32_t>(out.vertices.size() / vertexFloats);
-            std::vector<std::uint32_t> clusterIndices;
-            std::uint32_t previousPartition = std::numeric_limits<std::uint32_t>::max();
-            for (const std::uint32_t sourceMeshletIndex : meshletOrder) {
-                const std::uint32_t partition = partitionIds[sourceMeshletIndex];
-                if (partition != previousPartition) {
-                    out.groups.push_back(ClusterGroup{
-                        .firstMeshlet = static_cast<std::uint32_t>(out.meshlets.size()),
-                        .meshletCount = 0U,
-                    });
-                    previousPartition = partition;
-                }
-                const meshopt_Meshlet& meshlet = meshlets[sourceMeshletIndex];
-                const std::uint32_t vertexStart =
-                    static_cast<std::uint32_t>(out.vertices.size() / vertexFloats);
-                const std::uint32_t indexStart = static_cast<std::uint32_t>(out.indices.size());
-
-                clusterIndices.assign(meshlet.triangle_count * 3U, 0U);
-                for (std::uint32_t corner = 0U; corner < meshlet.triangle_count * 3U; ++corner) {
-                    const std::uint32_t local = meshletTriangles[meshlet.triangle_offset + corner];
-                    clusterIndices[corner] = meshletVertices[meshlet.vertex_offset + local];
-                    out.indices.push_back(vertexStart + local);
-                }
-                // The cluster's own bounds and cone, from the triangles that are in it. This is
-                // the whole point of the stage: the field these fill has been a constant
-                // {0,0,1,1} that no culler could ever have used.
-                const meshopt_Bounds bounds = meshopt_computeClusterBounds(
-                    clusterIndices.data(),
-                    clusterIndices.size(),
-                    source.positions,
-                    source.vertexCount,
-                    source.vertexStride);
-
-                for (std::uint32_t local = 0U; local < meshlet.vertex_count; ++local) {
-                    const std::uint32_t sourceVertex = meshletVertices[meshlet.vertex_offset + local];
-                    const float* const from = source.positions + static_cast<std::size_t>(sourceVertex) * vertexFloats;
-                    out.vertices.insert(out.vertices.end(), from, from + vertexFloats);
-                }
-
-                RenderMeshletDesc desc{};
-                desc.indexStart = indexStart;
-                desc.indexCount = meshlet.triangle_count * 3U;
-                desc.vertexStart = vertexStart;
-                desc.vertexCount = meshlet.vertex_count;
-                desc.sectionIndex = sectionIndex;
-                desc.bounds = RenderBoundsSphere{
-                    .center = { bounds.center[0], bounds.center[1], bounds.center[2] },
-                    .radius = bounds.radius,
-                };
-                desc.cone = { bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2], bounds.cone_cutoff };
-                desc.lodLevel = static_cast<std::uint8_t>(lodIndex);
-                // A cluster with no extent is one whose triangles are all a single point. Its
-                // sphere culls nothing and its cone means nothing, and a reader that trusted
-                // RenderMeshletDesc::IsValid would refuse the artifact anyway -- so the bake is
-                // the refusal, rather than a payload that only fails on the way back in.
-                if (!std::isfinite(desc.bounds.radius) || !desc.bounds.IsValid()) {
-                    return MeshBakeStatus::DegenerateGeometry;
-                }
-                out.meshlets.push_back(desc);
-                ++out.groups.back().meshletCount;
+            const std::uint32_t sectionVertexStart = static_cast<std::uint32_t>(out.vertices.size() / vertexFloats);
+            const std::uint32_t firstMeshlet = static_cast<std::uint32_t>(out.meshlets.size());
+            out.vertices.insert(out.vertices.end(), clusters.vertices.begin(), clusters.vertices.end());
+            for (const std::uint32_t index : clusters.indices) out.indices.push_back(sectionVertexStart + index);
+            for (RenderMeshletDesc& meshlet : clusters.meshlets) {
+                meshlet.indexStart += sectionIndexStart;
+                meshlet.vertexStart += sectionVertexStart;
+                meshlet.sectionIndex = sectionIndex;
+                out.meshlets.push_back(meshlet);
             }
-
-            const std::uint32_t sectionVertexCount =
-                static_cast<std::uint32_t>(out.vertices.size() / vertexFloats) - sectionVertexStart;
+            std::uint32_t next = firstMeshlet;
+            for (const std::uint32_t count : clusters.groupMeshletCounts) {
+                out.groups.push_back(ClusterGroup{ .firstMeshlet = next, .meshletCount = count });
+                next += count;
+            }
             RenderMeshSectionDesc sectionDesc{};
             sectionDesc.indexStart = sectionIndexStart;
-            sectionDesc.indexCount = static_cast<std::uint32_t>(out.indices.size()) - sectionIndexStart;
+            sectionDesc.indexCount = static_cast<std::uint32_t>(clusters.indices.size());
             sectionDesc.materialSlot = section.materialSlot;
-            sectionDesc.bounds = BoundsOfVertices(
-                reinterpret_cast<const std::uint8_t*>(out.vertices.data()),
-                source.vertexStride,
-                sectionVertexStart,
-                sectionVertexCount);
-            if (!IsFiniteBounds(sectionDesc.bounds)) {
-                return MeshBakeStatus::NonFiniteGeometry;
-            }
+            sectionDesc.bounds = clusters.bounds;
             sectionDesc.lodLevel = static_cast<std::uint8_t>(lodIndex);
             out.sections.push_back(sectionDesc);
         }
@@ -1514,19 +1589,21 @@ struct BuiltMeshBake {
         return built;
     }
 
-    std::vector<std::vector<std::uint8_t>> chunkBytes;
-    chunkBytes.reserve(chunks.size());
-    for (const GeometryChunk& chunk : chunks) {
-        std::vector<std::uint8_t> encoded;
-        if (!EncodeChunk(mesh, chunk, geometry.vertexStride, indexWidthBytes, encoded)) {
+    // A chunk reads and rewrites only its own clusters and indices, so the chunks encode side by side.
+    std::vector<std::vector<std::uint8_t>> chunkBytes(chunks.size());
+    std::vector<std::uint8_t> chunkEncoded(chunks.size(), 0U);
+    ForEachParallel(chunks.size(), [&](std::size_t index) {
+        chunkEncoded[index] = EncodeChunk(mesh, chunks[index], geometry.vertexStride, indexWidthBytes, chunkBytes[index]) ? 1U : 0U;
+    });
+    for (std::size_t index = 0U; index < chunks.size(); ++index) {
+        if (chunkEncoded[index] == 0U) {
             output.status = MeshBakeStatus::EncodeFailed;
             return built;
         }
-        if (encoded.size() > profile.maxGeometryChunkBytes) {
+        if (chunkBytes[index].size() > profile.maxGeometryChunkBytes) {
             output.status = MeshBakeStatus::ChunkBudgetTooSmall;
             return built;
         }
-        chunkBytes.push_back(std::move(encoded));
     }
     const RenderBoundsSphere bakedBounds = BoundsOfVertices(
         reinterpret_cast<const std::uint8_t*>(mesh.vertices.data()),
