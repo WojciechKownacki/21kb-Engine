@@ -1193,6 +1193,62 @@ void RunRuntimeLodMeshTest() {
         "A mesh without geometry must be refused and leave the output alone");
 }
 
+void RunMeshLodSettingsTest() {
+    // The levels follow the asset's own settings, in the cooker and in a game that draws the source alike.
+    const auto profile = kb::assets::bake::WindowsX64BakeTargetProfile();
+    const RenderMeshAssetData defaults = MakeSphere(64U, 48U, 1.0F);
+    const MeshBakeOutput defaultBake = BakeInto(defaults, profile);
+    Require(defaultBake.status == MeshBakeStatus::Success && defaultBake.lodCount > 4U, "A dense sphere did not bake its default chain");
+
+    RenderMeshAssetData three = defaults;
+    three.lod.levelCount = 3U;
+    const MeshBakeOutput threeBake = BakeInto(three, profile);
+    Require(threeBake.status == MeshBakeStatus::Success && threeBake.lodCount == 3U, "Three levels were asked for and the chain has another count");
+    Require(!(kb::render::bake::MakeMeshBakeKey(three, profile).Digest() == kb::render::bake::MakeMeshBakeKey(defaults, profile).Digest()),
+        "Levels of detail with other settings share one bake key");
+
+    RenderMeshAssetData manual = defaults;
+    manual.lod.manual = true;
+    manual.lod.levelCount = 3U;
+    manual.lod.levels[0] = { .trianglePercent = 30.0F, .errorPercent = 50.0F };
+    manual.lod.levels[1] = { .trianglePercent = 5.0F, .errorPercent = 50.0F };
+    const MeshBakeOutput manualBake = BakeInto(manual, profile);
+    Require(manualBake.status == MeshBakeStatus::Success && manualBake.lodCount == 3U, "A manual chain did not bake");
+    const BakedMeshView manualView = ViewBakedMesh(manualBake.primaryBlock);
+    const float finest = static_cast<float>(ReadLod(manualBake.primaryBlock, manualView, 0U).indexCount);
+    const float second = static_cast<float>(ReadLod(manualBake.primaryBlock, manualView, 1U).indexCount) / finest;
+    const float third = static_cast<float>(ReadLod(manualBake.primaryBlock, manualView, 2U).indexCount) / finest;
+    Require(std::fabs(second - 0.30F) < 0.04F && std::fabs(third - 0.05F) < 0.03F,
+        "The manual levels do not keep the share of triangles they were given");
+
+    RenderMeshAssetData small = defaults;
+    small.lod.minTriangles = 1'000'000U;
+    Require(BakeInto(small, profile).lodCount == 1U, "A mesh under the triangle threshold was given a chain");
+
+    RenderMeshAssetData invalid = defaults;
+    invalid.lod.keepPercent = 120.0F;
+    Require(BakeInto(invalid, profile).status != MeshBakeStatus::Success, "Settings that are not valid were baked");
+
+    RenderMeshAssetData runtime{};
+    Require(bake::BuildRuntimeLodMesh(three, runtime) == MeshBakeStatus::Success && runtime.lods.size() == 3U,
+        "A source mesh does not get the levels its settings ask for");
+
+    // A mesh read from the package gets the same screen coverage as the one built from the source.
+    RenderMeshAssetData packaged{};
+    Require(bake::ReadBakedMesh(threeBake.primaryBlock, threeBake.chunks, packaged), "The three-level bake did not read back");
+    bake::BakedMeshLayout layout{};
+    Require(bake::ReadBakedMeshLayout(threeBake.primaryBlock, layout), "The three-level layout did not read back");
+    std::vector<float> errors;
+    for (const bake::BakedMeshLodLayout& level : layout.lods) errors.push_back(level.error);
+    Require(packaged.lods[0].minScreenCoverage == 0.0F, "A packaged mesh carries a screen coverage before the loader derives it");
+    bake::AssignLodScreenCoverage(packaged, errors, layout.bounds.radius);
+    for (std::size_t level = 0U; level < 3U; ++level) {
+        Require(packaged.lods[level].minScreenCoverage == runtime.lods[level].minScreenCoverage,
+            "A packaged mesh chooses its levels by another coverage than a source mesh");
+    }
+    Require(packaged.lods[0].minScreenCoverage > 0.0F && packaged.lods[2].minScreenCoverage == 0.0F, "The packaged coverages do not fall to zero");
+}
+
 void RunBakedMeshLodErrorIsAbsoluteTest() {
     // The same sphere at two sizes. An error measured against the mesh's extents would come out
     // the same for both; an absolute error is in the units the positions are in, so it has to
@@ -1698,12 +1754,23 @@ void RunBakedMeshKeyTest() {
         AppendFloat(parameters, 2.0F);
         AppendUInt32(parameters, 8U);
         AppendUInt32(parameters, 8U);
-        AppendFloat(parameters, 0.5F);
-        AppendFloat(parameters, 0.2F);
         AppendFloat(parameters, 0.1F);
         AppendFloat(parameters, 0.1F);
         AppendFloat(parameters, 0.25F);
         AppendFloat(parameters, 0.1F);
+        // The asset's own settings (AssetMeshLodSettings, here the defaults): automatic, eight levels, each
+        // keeping half of the one above and adding up to a fifth of the extent, from 1024 triangles.
+        AppendUInt32(parameters, 0U);
+        AppendUInt32(parameters, 8U);
+        AppendFloat(parameters, 50.0F);
+        AppendFloat(parameters, 20.0F);
+        AppendUInt32(parameters, 1024U);
+        float share = 100.0F;
+        for (std::uint32_t level = 1U; level < 8U; ++level) {
+            share *= 0.5F;
+            AppendFloat(parameters, share);
+            AppendFloat(parameters, 20.0F);
+        }
         Require(key.settingsHash == kb::assets::bake::HashBakeBytes(parameters),
             "The cluster and LOD parameters in the bake key are not the ones this suite was written against");
     }
@@ -2874,6 +2941,7 @@ void RunMeshBakeTests() {
     RunBakedMeshClusterBoundsAndConeTest();
     RunBakedMeshLodChainTest();
     RunRuntimeLodMeshTest();
+    RunMeshLodSettingsTest();
     RunBakedMeshLodErrorIsAbsoluteTest();
     RunBakedMeshSimplificationKeepsAttributesTest();
     RunBakedMeshMaterialSeamTest();

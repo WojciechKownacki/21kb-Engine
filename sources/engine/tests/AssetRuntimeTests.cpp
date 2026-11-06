@@ -1556,6 +1556,68 @@ void RunAssetImportServiceKeepsModelTransformTest() {
     kb::tests::Require(found != nullptr && found->importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Model) && found->type == "RenderMesh", "A version 3 container must be discovered as a model");
 }
 
+// The levels of detail of a model are its own setting: a container written without them reads as the defaults,
+// SetMeshLod rewrites the container in place (a version 4 one, the payload untouched), the setting survives a
+// reimport, a texture refuses it, and settings that are not valid are refused.
+void RunAssetImportServiceKeepsModelLodTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "Project" / "Assets";
+    const std::filesystem::path sourceRoot = TestRoot() / "External";
+    WriteTextFile(sourceRoot / "Crate.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    WriteTextFile(sourceRoot / "Albedo.png", "texture bytes");
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()) &&
+            manager.Mounts().Mount("Game", assetsRoot), "Model lod test setup failed");
+    const std::array<std::filesystem::path, 2> files{ sourceRoot / "Crate.obj", sourceRoot / "Albedo.png" };
+    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, files, "/Game/Models");
+    kb::tests::Require(imported.Succeeded() && imported.CreatedCount() == 2U, "Model lod test import failed");
+    const std::filesystem::path model = imported.items[0].assetPhysicalPath;
+    const auto version = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        std::array<unsigned char, 12U> header{};
+        input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+        return static_cast<std::uint32_t>(header[8]);
+    };
+    kb::tests::Require(version(model) == 1U, "A model imported without levels of detail settings must keep its version 1 bytes");
+    kb::tests::Require(kb::assets::AssetImportService::ReadMeshLod(model) == kb::assets::AssetMeshLodSettings{}, "A plain container must read as the default levels of detail");
+
+    kb::assets::AssetMeshLodSettings lod{};
+    lod.levelCount = 4U;
+    lod.keepPercent = 40.0F;
+    lod.minTriangles = 7U;
+    kb::tests::Require(kb::assets::AssetImportService::SetMeshLod(manager, imported.items[0].id, lod).empty(), "SetMeshLod refused valid settings");
+    kb::tests::Require(version(model) == 4U && kb::assets::AssetImportService::ReadMeshLod(model) == lod, "The levels of detail did not round-trip through the container");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(imported.items[0].id);
+    kb::tests::Require(metadata != nullptr, "Model lod test lost the model metadata");
+    kb::assets::ImportedAssetLoader containerLoader;
+    const kb::assets::AssetLoadResult load = containerLoader.Load(kb::assets::AssetLoadRequest{ *metadata, model });
+    const auto reloaded = std::static_pointer_cast<kb::assets::ImportedAsset>(load.asset);
+    kb::tests::Require(load.Succeeded() && reloaded != nullptr && reloaded->meshLod == lod &&
+            reloaded->payload.size() == std::filesystem::file_size(sourceRoot / "Crate.obj"),
+        "The container loader lost the levels of detail or changed the payload");
+
+    kb::assets::AssetMeshLodSettings manual{};
+    manual.manual = true;
+    manual.levelCount = 3U;
+    manual.levels[0] = { .trianglePercent = 60.0F, .errorPercent = 30.0F };
+    manual.levels[1] = { .trianglePercent = 20.0F, .errorPercent = 10.0F };
+    kb::tests::Require(kb::assets::AssetImportService::SetMeshLod(manager, imported.items[0].id, manual).empty() &&
+            kb::assets::AssetImportService::ReadMeshLod(model) == manual, "Manual levels did not round-trip");
+
+    // A reimport of the same source keeps the settings.
+    const kb::assets::AssetImportItemResult again = kb::assets::AssetImportService::ReimportFile(manager, imported.items[0].id, sourceRoot / "Crate.obj");
+    kb::tests::Require(again.Succeeded() && kb::assets::AssetImportService::ReadMeshLod(model) == manual, "A reimport dropped the levels of detail");
+
+    kb::assets::AssetMeshLodSettings broken = manual;
+    broken.levels[1].trianglePercent = 80.0F;
+    kb::tests::Require(!kb::assets::AssetImportService::SetMeshLod(manager, imported.items[0].id, broken).empty() &&
+            kb::assets::AssetImportService::ReadMeshLod(model) == manual, "Levels that do not fall were accepted");
+    kb::tests::Require(!kb::assets::AssetImportService::SetMeshLod(manager, imported.items[1].id, lod).empty(), "A texture was given levels of detail");
+
+    kb::tests::Require(kb::assets::AssetImportService::SetMeshLod(manager, imported.items[0].id, kb::assets::AssetMeshLodSettings{}).empty() &&
+            version(model) == 3U && kb::assets::AssetImportService::ReadMeshLod(model)->IsDefault(), "Going back to the defaults must write a plain container");
+}
+
 // An import preset (.kbimportpreset) round-trips every option, ignores a key it does not know and
 // refuses a value a key does not take.
 void RunAssetImportPresetRoundTripTest() {
@@ -2994,6 +3056,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();
     RunAssetImportServiceKeepsModelTransformTest();
+    RunAssetImportServiceKeepsModelLodTest();
     RunAssetImportPresetRoundTripTest();
     RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest();
     RunScenePrefabRuntimeAssetTest();

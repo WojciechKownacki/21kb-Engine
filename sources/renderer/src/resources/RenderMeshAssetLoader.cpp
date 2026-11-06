@@ -124,7 +124,9 @@ using kb::assets::StringBufferBytes;
     return mesh;
 }
 
-[[nodiscard]] std::optional<RenderMeshAssetData> LoadImportedMesh(const kb::assets::AssetLoadRequest& request) {
+// `lod` receives the container's levels-of-detail settings.
+[[nodiscard]] std::optional<RenderMeshAssetData> LoadImportedMesh(
+    const kb::assets::AssetLoadRequest& request, kb::assets::AssetMeshLodSettings& lod) {
     kb::assets::ImportedAssetLoader importedLoader;
     kb::assets::AssetLoadResult result = importedLoader.Load(request);
     if (!result.Succeeded()) {
@@ -135,6 +137,7 @@ using kb::assets::StringBufferBytes;
     if (imported == nullptr || imported->category != kb::assets::AssetImportCategory::Model) {
         return std::nullopt;
     }
+    lod = imported->meshLod;
 
     const std::string sourceExtension = LowerExtensionText(imported->sourceExtension);
     if (sourceExtension == ".obj") {
@@ -513,6 +516,11 @@ struct MeshFragmentBounds {
         error = "Baked mesh payload is malformed";
         return std::nullopt;
     }
+    // The bytes hold absolute errors; the screen coverage each instance chooses a level by is derived here, as for a source mesh.
+    std::vector<float> errors;
+    errors.reserve(layout.lods.size());
+    for (const kb::render::bake::BakedMeshLodLayout& level : layout.lods) errors.push_back(level.error);
+    kb::render::bake::AssignLodScreenCoverage(asset, errors, layout.bounds.radius);
     return asset;
 }
 
@@ -533,6 +541,7 @@ bool AssembleStreamedMeshLevels(
             return false;
         }
         RenderMeshAssetFinalizer::EnsureTangentVertexStorage(asset);
+        kb::render::bake::AssignLodScreenCoverage(asset, std::span<const float>{ layout.lodErrors }.subspan(firstLod), asset.bounds.radius);
         asset.streaming = RenderMeshStreamingLayout{
             .artifact = layout.artifact,
             .firstLod = firstLod,
@@ -645,7 +654,7 @@ private:
 // Builds the chain of a mesh read from its source. A mesh that cannot be baked keeps its single level and says why.
 void BuildRuntimeLods(RenderMeshAssetData& mesh, const kb::assets::AssetLoadRequest& request) {
     const std::size_t indexCount = mesh.indices32.empty() ? mesh.indices16.size() : mesh.indices32.size();
-    if (indexCount / 3U < kRuntimeLodMinimumTriangles || mesh.lods.size() > 1U) return;
+    if (!mesh.lod.BuildsChain(indexCount / 3U) || mesh.lods.size() > 1U) return;
     RenderMeshAssetData chained;
     const kb::render::bake::MeshBakeStatus status = kb::render::bake::BuildRuntimeLodMesh(mesh, chained);
     if (status != kb::render::bake::MeshBakeStatus::Success) {
@@ -659,6 +668,7 @@ void BuildRuntimeLods(RenderMeshAssetData& mesh, const kb::assets::AssetLoadRequ
 [[nodiscard]] kb::assets::AssetLoadResult LoadRenderMeshAsset(
     const kb::assets::AssetLoadRequest& request, RenderMeshLodBuild lodBuild) {
     std::optional<RenderMeshAssetData> mesh;
+    kb::assets::AssetMeshLodSettings importedLod{};
     bool fromSource = false;
     std::string packagedError;
     const std::string extension = LowerExtensionText(request.SourceExtension());
@@ -682,7 +692,7 @@ void BuildRuntimeLods(RenderMeshAssetData& mesh, const kb::assets::AssetLoadRequ
         mesh = LoadBakedMeshPack(request.resolvedPath);
     } else if (extension == ".21kb") {
         fromSource = true;
-        mesh = LoadImportedMesh(request);
+        mesh = LoadImportedMesh(request, importedLod);
     } else if (request.HasSourceBytes()) {
         fromSource = true;
         const std::span<const std::uint8_t> source = *request.sourceBytes;
@@ -716,6 +726,7 @@ void BuildRuntimeLods(RenderMeshAssetData& mesh, const kb::assets::AssetLoadRequ
         };
     }
     RenderMeshAssetFinalizer::EnsureTangentVertexStorage(*mesh);
+    if (fromSource) mesh->lod = importedLod;
     if (fromSource && lodBuild == RenderMeshLodBuild::Runtime) BuildRuntimeLods(*mesh, request);
     mesh->RefreshDesc();
 

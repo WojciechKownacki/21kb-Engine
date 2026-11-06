@@ -34,9 +34,6 @@ enum class RenderMeshLodBuild : std::uint8_t {
     Runtime,
 };
 
-// A source mesh below this many triangles is not worth a chain.
-inline constexpr std::uint32_t kRuntimeLodMinimumTriangles = 1024U;
-
 class RenderMeshAssetLoader final : public kb::assets::IAssetLoader {
 public:
     explicit RenderMeshAssetLoader(RenderMeshLodBuild lodBuild = RenderMeshLodBuild::None) noexcept : lodBuild_(lodBuild) {}

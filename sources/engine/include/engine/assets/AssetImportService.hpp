@@ -3,7 +3,9 @@
 #include "engine/assets/AssetImportTypes.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <span>
+#include <string>
 
 namespace kb::assets {
 
@@ -28,6 +30,12 @@ public:
         AssetId id,
         const std::filesystem::path& sourcePath,
         const AssetImportOptions& options = {});
+
+    // How the levels of detail of an imported model are built (AssetMeshLodSettings); the defaults for a container written without them.
+    [[nodiscard]] static std::optional<AssetMeshLodSettings> ReadMeshLod(const std::filesystem::path& containerPath);
+
+    // Sets them in place: the asset keeps its id, path and payload, and a reimport keeps the settings. Returns why it could not, empty on success.
+    [[nodiscard]] static std::string SetMeshLod(AssetManager& manager, AssetId id, const AssetMeshLodSettings& lod);
 };
 
 } // namespace kb::assets

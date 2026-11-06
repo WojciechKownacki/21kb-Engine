@@ -119,6 +119,9 @@ struct RenderMeshAssetData {
     RenderBoundsSphere bounds{};
     RenderBoundsBox boundsBox{};
     RenderMeshDesc desc{};
+    // How the levels of detail are built from this geometry (the asset's own setting; MeshBaker reads it). Not
+    // part of a mesh read from a package, whose levels are already built.
+    kb::assets::AssetMeshLodSettings lod{};
     std::uint64_t dynamicTopologyKey = 0U;
     std::vector<RenderMeshVertexUpdateRange> dynamicVertexUpdateRanges;
     std::vector<std::uint32_t> dynamicSectionUpdateIndices;

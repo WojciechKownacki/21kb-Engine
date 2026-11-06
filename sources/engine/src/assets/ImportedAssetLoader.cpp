@@ -1,6 +1,7 @@
 #include "engine/assets/ImportedAssetLoader.hpp"
 
 #include "engine/assets/AssetMemoryInputStream.hpp"
+#include "assets/ImportedAssetLodBlock.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 
 #include <algorithm>
@@ -21,6 +22,8 @@ constexpr std::uint32_t SupportedVersion = 1U;
 constexpr std::uint32_t ResourcesVersion = 2U;
 // Version 3 adds, after the names, the model's import scale and rotation (then the resource table).
 constexpr std::uint32_t TransformVersion = 3U;
+// Version 4 adds the model's levels-of-detail record after the transform (ImportedAssetLodBlock.hpp).
+constexpr std::uint32_t LodVersion = detail::kImportContainerWithLodVersion;
 constexpr std::uint32_t MaximumResourceCount = 4096U;
 
 [[nodiscard]] bool ReadU16(std::istream& input, std::uint16_t& value) {
@@ -146,7 +149,7 @@ AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
     std::uint64_t sourceHash = 0;
     ImportedAsset imported;
     if (!ReadU32(input, version)
-        || (version != SupportedVersion && version != ResourcesVersion && version != TransformVersion)
+        || (version != SupportedVersion && version != ResourcesVersion && version != TransformVersion && version != LodVersion)
         || !ReadU16(input, category)
         || !ReadU16(input, flags)
         || !ReadU64(input, sourceSize)
@@ -155,10 +158,13 @@ AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
         || !ReadString(input, imported.sourceExtension)) {
         return AssetLoadResult{ .asset = {}, .error = "Imported asset header is invalid." };
     }
-    if (version == TransformVersion && !ReadTransform(input, imported.meshTransform)) {
+    if ((version == TransformVersion || version == LodVersion) && !ReadTransform(input, imported.meshTransform)) {
         return AssetLoadResult{ .asset = {}, .error = "Imported asset import transform is invalid." };
     }
-    if ((version == ResourcesVersion || version == TransformVersion) &&
+    if (version == LodVersion && !detail::ReadLodBlock(input, imported.meshLod)) {
+        return AssetLoadResult{ .asset = {}, .error = "Imported asset levels-of-detail settings are invalid." };
+    }
+    if ((version == ResourcesVersion || version == TransformVersion || version == LodVersion) &&
         !ReadResources(input, sourceBytes.size(), imported.resources)) {
         return AssetLoadResult{ .asset = {}, .error = "Imported asset resource table is invalid." };
     }

@@ -29,7 +29,8 @@ namespace kb::render::bake {
 // version below re-bakes every mesh and leaves every other baker's cache untouched.
 inline constexpr std::string_view kMeshBakerId = "Mesh";
 // 5: meshoptimizer 1.2 clusters and bounds, which a cache baked by 0.25 does not match.
-inline constexpr std::string_view kMeshBakerVersion = "6";
+// 7: the levels come from the asset's AssetMeshLodSettings, each level's triangles counted from the finest level.
+inline constexpr std::string_view kMeshBakerVersion = "7";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store, and
 // what a package announces about itself so discovery can ask instead of guessing from .kbpack.
@@ -62,16 +63,14 @@ inline constexpr float kClusterSplitFactor = 2.0F;
 // budgets, but never raises it above this locality target.
 inline constexpr std::uint32_t kTargetClusterGroupSize = 8U;
 
-// LOD chain. Each level is simplified from the level above it, halving the triangle count while
-// the error stays inside an ABSOLUTE budget -- a fraction of the mesh's own extent, measured by
-// meshopt_simplifyScale. Nothing here reads a viewport, a resolution or a field of view, and
-// nothing may: an error baked against a camera has to be re-baked when the camera changes.
-// Eight levels reach 1/128 of the triangles: a dense scan seen from far away covers a few pixels.
-inline constexpr std::uint32_t kMaxLodCount = 8U;
-inline constexpr float kLodTriangleRatio = 0.5F;
-// How far one step may deviate. A level is drawn only where its recorded error projects under the pixel budget,
-// so a generous limit costs no quality up close; it lets a noisy scan keep halving instead of stopping at once.
-inline constexpr float kLodErrorFractionOfScale = 0.2F;
+// LOD chain. Each level is simplified from the level above it down to the share of the finest level's
+// triangles its AssetMeshLodSettings ask for, while the error stays inside an ABSOLUTE budget -- a percent
+// of the mesh's own extent, measured by meshopt_simplifyScale. Nothing here reads a viewport, a resolution
+// or a field of view, and nothing may: an error baked against a camera has to be re-baked when the camera
+// changes. Eight levels at the default half reach 1/128 of the triangles: a dense scan seen from far away
+// covers a few pixels. A level is drawn only where its recorded error projects under the pixel budget, so
+// a generous limit costs no quality up close; it lets a noisy scan keep reducing instead of stopping at once.
+inline constexpr std::uint32_t kMaxLodCount = kb::assets::kMeshLodMaxLevels;
 
 // Relative priority of every non-position attribute in the simplifier's error metric. Omitting
 // any channel lets a collapse preserve the silhouette while erasing a tangent seam, lightmap
@@ -172,16 +171,22 @@ struct MeshBakeOutput {
     const RenderMeshAssetData& source,
     const kb::assets::bake::BakeTargetProfile& profile);
 
-// Level of detail of a mesh a runtime draws straight from its source, with no cooked package: how many
-// pixels of silhouette error a coarser level may add, and the viewport height those pixels are counted at.
+// How a runtime chooses among the levels of a mesh: how many pixels of silhouette error a coarser level may
+// add, and the viewport height those pixels are counted at. The streamer and BuildRuntimeLodMesh share them.
 inline constexpr float kRuntimeLodMaxScreenErrorPixels = 1.0F;
 inline constexpr float kRuntimeLodReferenceViewportHeight = 1080.0F;
 
-// `source` baked in memory exactly as the cooker bakes it and read back, so the levels of detail are the
-// cooker's. Each level's minScreenCoverage is the coverage below which the next level's absolute error
-// stays under kRuntimeLodMaxScreenErrorPixels at the reference height; the last level covers the rest.
-// `out` is untouched unless the status is Success.
+// `source` baked in memory exactly as the cooker bakes it (its own `lod` settings) and read back, so the
+// levels of detail are the cooker's. Each level's minScreenCoverage is the coverage below which the next
+// level's absolute error stays under kRuntimeLodMaxScreenErrorPixels at the reference height; the last level
+// covers the rest. `out` is untouched unless the status is Success.
 [[nodiscard]] MeshBakeStatus BuildRuntimeLodMesh(const RenderMeshAssetData& source, RenderMeshAssetData& out);
+
+// Sets the minScreenCoverage of `mesh`'s levels from their absolute errors, as BuildRuntimeLodMesh does: `errors`
+// holds the error of every level of `mesh.lods` (growing, 0 for a finest level) and `radius` is the mesh's bounds
+// radius. A mesh read from a package carries no coverage (the bytes hold the errors, never a screen size), so the
+// loader and the streamer call this to draw each instance at the level its distance allows.
+void AssignLodScreenCoverage(RenderMeshAssetData& mesh, std::span<const float> errors, float radius) noexcept;
 
 // Reads a primary block and its chunks back into the runtime's mesh shape. The counterpart of
 // the bake, and the only way a baked mesh becomes a RenderMeshAssetData - the ordinary importer

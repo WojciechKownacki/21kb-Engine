@@ -615,16 +615,26 @@ struct ClusterGroup {
 // The whole LOD chain, simplified level from level. Stops as soon as a level fails to get
 // smaller: a level that is not smaller than the one above it is not a level, and emitting it
 // would be a chain that claims a reduction it did not make.
-[[nodiscard]] MeshBakeStatus BuildLodChain(const SourceGeometry& source, std::vector<LodLevel>& lods) {
+[[nodiscard]] MeshBakeStatus BuildLodChain(
+    const SourceGeometry& source, const kb::assets::AssetMeshLodSettings& settings, std::vector<LodLevel>& lods) {
     lods.clear();
     lods.push_back(LodLevel{ .sections = source.sections, .absoluteError = 0.0F });
 
+    std::uint64_t finestTriangles = 0U;
+    for (const LodSection& section : source.sections) {
+        finestTriangles += section.indices.size() / 3U;
+    }
+    if (!settings.IsValid()) {
+        return MeshBakeStatus::UnsupportedSourceShape;
+    }
     const float scale = meshopt_simplifyScale(source.positions, source.vertexCount, source.vertexStride);
-    const float stepErrorLimit = kLodErrorFractionOfScale * scale;
-    if (!std::isfinite(scale) || !std::isfinite(stepErrorLimit)) {
+    if (!std::isfinite(scale)) {
         return MeshBakeStatus::NonFiniteGeometry;
     }
-    while (lods.size() < kMaxLodCount) {
+    const std::uint32_t levelCount = settings.BuildsChain(finestTriangles) ? settings.levelCount : 1U;
+    while (lods.size() < levelCount) {
+        const kb::assets::AssetMeshLodLevel wanted = settings.Level(static_cast<std::uint32_t>(lods.size()));
+        const float stepErrorLimit = wanted.errorPercent * 0.01F * scale;
         const LodLevel& previous = lods.back();
         std::size_t previousIndices = 0U;
         for (const LodSection& section : previous.sections) {
@@ -635,9 +645,10 @@ struct ClusterGroup {
         next.sections.reserve(previous.sections.size());
         std::size_t nextIndices = 0U;
         float stepError = 0.0F;
-        for (const LodSection& section : previous.sections) {
-            const std::size_t targetTriangles =
-                static_cast<std::size_t>(static_cast<float>(section.indices.size() / 3U) * kLodTriangleRatio);
+        for (std::size_t sectionIndex = 0U; sectionIndex < previous.sections.size(); ++sectionIndex) {
+            const LodSection& section = previous.sections[sectionIndex];
+            const std::size_t targetTriangles = static_cast<std::size_t>(
+                static_cast<double>(lods.front().sections[sectionIndex].indices.size() / 3U) * wanted.trianglePercent * 0.01);
             const std::size_t targetIndices = std::max<std::size_t>(targetTriangles, 1U) * 3U;
             LodSection simplified{};
             simplified.materialSlot = section.materialSlot;
@@ -1358,8 +1369,6 @@ struct ClusteredMesh {
     PutFloat(bytes, kClusterSplitFactor);
     PutUInt32(bytes, kTargetClusterGroupSize);
     PutUInt32(bytes, kMaxLodCount);
-    PutFloat(bytes, kLodTriangleRatio);
-    PutFloat(bytes, kLodErrorFractionOfScale);
     PutFloat(bytes, kSimplifyNormalWeight);
     PutFloat(bytes, kSimplifyTangentWeight);
     PutFloat(bytes, kSimplifyUvWeight);
@@ -1415,7 +1424,19 @@ std::string BakedMeshChunkBlockName(std::uint32_t chunkIndex) {
 
 AssetBakeKey MakeMeshBakeKey(const RenderMeshAssetData& source, const BakeTargetProfile& profile) {
     const std::vector<std::uint8_t> serializedSource = SerializeSourceGeometry(source);
-    const std::vector<std::uint8_t> serializedParameters = SerializeMeshBakeParameters();
+    std::vector<std::uint8_t> serializedParameters = SerializeMeshBakeParameters();
+    // The levels the asset asks for change the bytes as much as the cluster size does.
+    const kb::assets::AssetMeshLodSettings& lod = source.lod;
+    PutUInt32(serializedParameters, lod.manual ? 1U : 0U);
+    PutUInt32(serializedParameters, lod.levelCount);
+    PutFloat(serializedParameters, lod.keepPercent);
+    PutFloat(serializedParameters, lod.errorPercent);
+    PutUInt32(serializedParameters, lod.minTriangles);
+    for (std::uint32_t level = 1U; level < lod.levelCount; ++level) {
+        const kb::assets::AssetMeshLodLevel entry = lod.Level(level);
+        PutFloat(serializedParameters, entry.trianglePercent);
+        PutFloat(serializedParameters, entry.errorPercent);
+    }
     AssetBakeKey key{};
     key.sourceContentHash = kb::assets::bake::HashBakeBytes(serializedSource);
     key.bakerId = std::string{ kMeshBakerId };
@@ -1457,7 +1478,7 @@ struct BuiltMeshBake {
     }
 
     std::vector<LodLevel> lodChain;
-    if (const MeshBakeStatus status = BuildLodChain(geometry, lodChain); status != MeshBakeStatus::Success) {
+    if (const MeshBakeStatus status = BuildLodChain(geometry, source.lod, lodChain); status != MeshBakeStatus::Success) {
         output.status = status;
         return built;
     }
@@ -1617,18 +1638,25 @@ MeshBakeStatus BuildRuntimeLodMesh(const RenderMeshAssetData& source, RenderMesh
         layout.lods.size() != mesh.lods.size()) {
         return MeshBakeStatus::ReadBackFailed;
     }
+    std::vector<float> errors;
+    errors.reserve(layout.lods.size());
+    for (const BakedMeshLodLayout& level : layout.lods) errors.push_back(level.error);
+    AssignLodScreenCoverage(mesh, errors, layout.bounds.radius);
+    mesh.lod = source.lod;
+    out = std::move(mesh);
+    return MeshBakeStatus::Success;
+}
+
+void AssignLodScreenCoverage(RenderMeshAssetData& mesh, std::span<const float> errors, float radius) noexcept {
     // A level is used while its error, projected at the reference height, stays under the pixel budget:
     // error / radius * coverage * height / 2 <= budget. Levels are in order of growing error, so the
     // thresholds fall from the finest level to the last, which draws at any coverage below the rest.
-    const float errorBudget = 2.0F * kRuntimeLodMaxScreenErrorPixels * layout.bounds.radius /
-        kRuntimeLodReferenceViewportHeight;
+    const float errorBudget = 2.0F * kRuntimeLodMaxScreenErrorPixels * radius / kRuntimeLodReferenceViewportHeight;
     for (std::size_t level = 0U; level < mesh.lods.size(); ++level) {
-        mesh.lods[level].minScreenCoverage = level + 1U == mesh.lods.size()
+        mesh.lods[level].minScreenCoverage = level + 1U >= mesh.lods.size() || level + 1U >= errors.size()
             ? 0.0F
-            : std::clamp(errorBudget / std::max(layout.lods[level + 1U].error, 1.0e-9F), 0.0F, 1.0F);
+            : std::clamp(errorBudget / std::max(errors[level + 1U], 1.0e-9F), 0.0F, 1.0F);
     }
-    out = std::move(mesh);
-    return MeshBakeStatus::Success;
 }
 
 bool BakedMeshMatchesTargetProfile(
