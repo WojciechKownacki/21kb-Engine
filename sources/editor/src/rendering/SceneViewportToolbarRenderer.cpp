@@ -237,6 +237,7 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     Drawing::DrawChip(dc, rects.paintButton, EditorText("terrainTool.paint", "Paint"), theme, active == EditorTerrainTool::Paint);
     Drawing::DrawChip(dc, rects.rampButton, EditorText("terrainTool.ramp", "Ramp"), theme, active == EditorTerrainTool::Ramp);
     Drawing::DrawChip(dc, rects.stampButton, EditorText("terrainTool.stamp", "Stamp"), theme, active == EditorTerrainTool::Stamp);
+    Drawing::DrawChip(dc, rects.riverButton, EditorText("terrainTool.river", "River"), theme, active == EditorTerrainTool::River);
     Drawing::DrawChip(dc, rects.worldButton, EditorText("terrainTool.newWorld", "New World"), theme, tool.drawer == EditorTerrainDrawer::NewWorld);
 
     // What the active tool can vary: Flatten for Smooth, a layer or Auto for Paint, how a stamp blends.
@@ -250,6 +251,8 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
             ? std::string{ EditorText("terrainTool.paintAuto", "Auto") }
             : EditorLocalization::Format("terrainTool.paintLayer", "Layer {index}",
                 { { "index", std::to_string(static_cast<unsigned>(tool.selectedMaterialLayer) + 1U) } });
+    } else if (active == EditorTerrainTool::River) {
+        variant = EditorText("terrainTool.riverCut", "Cut Channel");
     } else if (active == EditorTerrainTool::Stamp) {
         using Blend = kb::terrain_editor::TerrainStampBlend;
         variant = tool.brush.stampBlend == Blend::Add ? std::string{ EditorText("terrainTool.blend.add", "Blend: Add") }

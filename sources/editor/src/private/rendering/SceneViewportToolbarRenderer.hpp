@@ -62,6 +62,7 @@ struct TerrainViewportToolbarRects {
     RECT paintButton{};
     RECT rampButton{};
     RECT stampButton{};
+    RECT riverButton{};
     RECT worldButton{};
     RECT variantButton{};
     TerrainStepperRects size{};

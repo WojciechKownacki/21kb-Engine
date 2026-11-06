@@ -4,6 +4,7 @@
 #include "app/scene_viewport/EditorTerrainFileDialog.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "localization/EditorLocalization.hpp"
+#include "scene/EditorRiverTool.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorTerrainJobs.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -122,9 +123,9 @@ bool EditorTerrainToolbarPointer::HandleClick(EditorSceneContext& sceneContext, 
     }
     EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     using Tool = EditorTerrainTool;
-    const std::array<std::pair<const RECT*, Tool>, 5U> tools{ {
+    const std::array<std::pair<const RECT*, Tool>, 6U> tools{ {
         { &bar.sculptButton, Tool::Sculpt }, { &bar.smoothButton, Tool::Smooth }, { &bar.paintButton, Tool::Paint },
-        { &bar.rampButton, Tool::Ramp }, { &bar.stampButton, Tool::Stamp } } };
+        { &bar.rampButton, Tool::Ramp }, { &bar.stampButton, Tool::Stamp }, { &bar.riverButton, Tool::River } } };
     for (const auto& [rect, which] : tools) {
         if (PointInRect(*rect, x, y)) {
             ClickTool(sceneContext, selected, which);
@@ -146,6 +147,10 @@ bool EditorTerrainToolbarPointer::HandleClick(EditorSceneContext& sceneContext, 
     }
     if (PointInRect(bar.slopeButton, x, y)) {
         tool.slopeOverlay = !tool.slopeOverlay;
+        return true;
+    }
+    if (PointInRect(bar.variantButton, x, y) && EditorTerrainService::ActiveTool(tool) == Tool::River) {
+        static_cast<void>(EditorRiverTool::Carve(sceneContext, selected));
         return true;
     }
     if (PointInRect(bar.variantButton, x, y)) {

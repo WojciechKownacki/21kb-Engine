@@ -23,6 +23,7 @@ namespace {
         InspectorComponentTile{ .id = "TilemapRenderer", .category = "World", .label = "Tilemap Renderer", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "TilemapCollider", .category = "World", .label = "Tilemap Collider", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "Sprite2D", .category = "World", .label = "Sprite 2D", .icon = HeroIconKind::RectangleGroup },
+        InspectorComponentTile{ .id = "River", .category = "World", .label = "River", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Ambient Radiance", .category = "Rendering", .label = "Ambient Radiance", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "Detail Switch", .category = "Rendering", .label = "Detail Switch", .icon = HeroIconKind::Cube },
@@ -114,6 +115,7 @@ constexpr ComponentNames kComponentNames[] = {
     {"TilemapRenderer", "tile renderer, tilemap rendering, draw tiles", "Draws a tilemap layer using its tile assets and rendering settings."},
     {"TilemapCollider", "tile collision, solid tiles, tilemap physics", "Builds collision shapes from the solid cells of a tilemap."},
     {"Sprite2D", "sprite, 2d sprite, animated sprite, picture, image, character art, flipbook, sprite sheet, atlas", "Draws a picture, or one cell of a sprite sheet, and plays a frame animation."},
+    {"River", "water, stream, creek, brook, waterfall, flow, spline, terrain", "Flowing water along a line of points, with waterfalls where it falls steeply."},
     {"WorldBackdrop", "sky, skybox, background, horizon", "Draws the sky and distant background behind the scene."},
     {"Ambient Radiance", "ambient light, global illumination, gi, light probe, bounce light", "Adds soft indirect light that fills shadows around it."},
     {"Detail Switch", "lod, level of detail, distance, simplify", "Swaps to simpler models as the object gets far from the camera, to save speed."},
@@ -250,6 +252,7 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "TerrainEditor") return std::string{ EditorText("component.terrainEditor", "Terrain Editor") };
     if (tile.id == "World2DMap") return std::string{ EditorText("component.world2dMap", "World 2D Map") };
     if (tile.id == "Sprite2D") return std::string{ EditorText("component.sprite2D", "Sprite 2D") };
+    if (tile.id == "River") return std::string{ EditorText("component.river", "River") };
     if (tile.id == "WorldBackdrop") return std::string{ EditorText("component.worldBackdrop", "World Backdrop") };
     if (tile.id == "Ambient Radiance") return std::string{ EditorText("component.ambientRadiance", "Ambient Radiance") };
     if (tile.id == "Detail Switch") return std::string{ EditorText("component.detailSwitch", "Detail Switch") };

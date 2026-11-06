@@ -152,6 +152,7 @@ EditorTerrainTool EditorTerrainService::ActiveTool(const EditorTerrainToolState&
     if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select) return EditorTerrainTool::None;
     if (tool.mode == EditorTerrainToolMode::Paint) return EditorTerrainTool::Paint;
     if (tool.mode == EditorTerrainToolMode::Holes) return EditorTerrainTool::Holes;
+    if (tool.mode == EditorTerrainToolMode::River) return EditorTerrainTool::River;
     switch (tool.brush.mode) {
     case Mode::Smooth:
     case Mode::Flatten: return EditorTerrainTool::Smooth;
@@ -172,6 +173,8 @@ bool EditorTerrainService::SelectTool(
         tool.editingEnabled = false;
         tool.strokeActive = false;
         tool.rampDragging = false;
+        tool.riverDragPoint = -1;
+        tool.riverPendingVisible = false;
         tool.hoverVisible = false;
         return true;
     }
@@ -192,6 +195,7 @@ bool EditorTerrainService::SelectTool(
     switch (selected) {
     case EditorTerrainTool::Paint: tool.mode = EditorTerrainToolMode::Paint; return true;
     case EditorTerrainTool::Holes: tool.mode = EditorTerrainToolMode::Holes; tool.brush.mode = Mode::CutHole; return true;
+    case EditorTerrainTool::River: tool.mode = EditorTerrainToolMode::River; tool.riverPendingVisible = false; return true;
     case EditorTerrainTool::Smooth: tool.brush.mode = Mode::Smooth; break;
     case EditorTerrainTool::Ramp: tool.brush.mode = Mode::Ramp; break;
     case EditorTerrainTool::Stamp: tool.brush.mode = Mode::Stamp; break;

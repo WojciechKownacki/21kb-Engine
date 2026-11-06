@@ -128,6 +128,8 @@ namespace kb::terrain_editor {
 
 struct TerrainBrushSettings;
 struct TerrainBrushStamp;
+struct TerrainChannelNode;
+struct TerrainChannelSettings;
 struct TerrainHeightmapImportSettings;
 struct TerrainLayerPaintSettings;
 
@@ -406,6 +408,13 @@ public:
         const kb::terrain_editor::TerrainBrushSettings& settings,
         const kb::terrain_editor::TerrainBrushStamp& stamp,
         bool beginStroke,
+        std::string* error = nullptr);
+    // Cuts a channel (a river bed) into the terrain as one Undo step; false with the reason when it changes nothing.
+    [[nodiscard]] bool ApplyTerrainChannel(
+        kb::scene::SceneEntity entity,
+        const std::vector<kb::terrain_editor::TerrainChannelNode>& nodes,
+        const kb::terrain_editor::TerrainChannelSettings& settings,
+        std::string label,
         std::string* error = nullptr);
     [[nodiscard]] bool ApplyTerrainLayerPaintStamp(
         kb::scene::SceneEntity entity,

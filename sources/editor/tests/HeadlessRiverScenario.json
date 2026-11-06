@@ -1,0 +1,33 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "create_scene", "name": "RiverTool", "template": "Empty" },
+    { "op": "set_plugin", "id": "Editor.Terrain", "enabled": true },
+    { "op": "create_entity", "id": "land", "name": "Land" },
+    { "op": "select_entity", "entity": "land" },
+    { "op": "add_component", "entity": "land", "component": "TerrainEditor" },
+    { "op": "river_click", "entity": "land", "x": -8.0, "z": 0.0 },
+    { "op": "assert_river", "entity": "land", "points": 0 },
+    { "op": "river_click", "entity": "land", "x": 0.0, "z": 4.0 },
+    { "op": "assert_river", "entity": "land", "points": 2, "point": 0, "x": -8.0, "z": 0.0 },
+    { "op": "river_click", "entity": "land", "x": 8.0, "z": 0.0 },
+    { "op": "assert_river", "entity": "land", "points": 3, "point": 2, "x": 8.0, "z": 0.0 },
+    { "op": "river_drag", "entity": "land", "from_x": 0.0, "from_z": 4.0, "x": 0.0, "z": 8.0 },
+    { "op": "assert_river", "entity": "land", "points": 3, "point": 1, "x": 0.0, "z": 8.0 },
+    { "op": "undo" },
+    { "op": "assert_river", "entity": "land", "points": 3, "point": 1, "x": 0.0, "z": 4.0 },
+    { "op": "redo" },
+    { "op": "assert_river", "entity": "land", "points": 3, "point": 1, "x": 0.0, "z": 8.0 },
+    { "op": "river_click", "entity": "land", "x": 0.0, "z": 8.0, "remove": true },
+    { "op": "assert_river", "entity": "land", "points": 2 },
+    { "op": "undo" },
+    { "op": "assert_river", "entity": "land", "points": 3 },
+    { "op": "capture_scene_viewport", "checkpoint": "river-tool" },
+    { "op": "river_cut", "entity": "land" },
+    { "op": "capture_scene_viewport", "checkpoint": "river-tool-cut" },
+    { "op": "assert_capture_difference", "before": "river-tool", "after": "river-tool-cut" },
+    { "op": "undo" },
+    { "op": "capture", "panel": "scene", "checkpoint": "river-bar", "width": 1300, "height": 300, "text_fits": true },
+    { "op": "terrain_tool", "entity": "land", "tool": "none" }
+  ]
+}

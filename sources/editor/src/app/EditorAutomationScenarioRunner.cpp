@@ -157,6 +157,7 @@
 #include "TerrainOps.hpp"
 #include "scene/EditorTerrainJobs.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "scene/EditorRiverTool.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
@@ -3410,9 +3411,10 @@ ReadScriptValue(
         const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
         using Tool = EditorTerrainTool;
         constexpr std::pair<std::string_view, Tool> names[]{ { "none", Tool::None }, { "sculpt", Tool::Sculpt }, { "smooth", Tool::Smooth },
-            { "flatten", Tool::Smooth }, { "paint", Tool::Paint }, { "ramp", Tool::Ramp }, { "stamp", Tool::Stamp }, { "holes", Tool::Holes } };
+            { "flatten", Tool::Smooth }, { "paint", Tool::Paint }, { "ramp", Tool::Ramp }, { "stamp", Tool::Stamp }, { "holes", Tool::Holes },
+            { "river", Tool::River } };
         const auto* const found = std::ranges::find(names, *name, &std::pair<std::string_view, Tool>::first);
-        if (found == std::end(names)) return { false, "unknown terrain tool '" + *name + "' (none sculpt smooth flatten paint ramp stamp holes)" };
+        if (found == std::end(names)) return { false, "unknown terrain tool '" + *name + "' (none sculpt smooth flatten paint ramp stamp holes river)" };
         EditorTerrainToolState& tool = EditorTerrainService::ToolState();
         if (const auto image = StringMember(step, "image", error, false)) {
             if (!EditorTerrainService::LoadStampImage(tool, *image, &error)) return { false, error };
@@ -3435,6 +3437,69 @@ ReadScriptValue(
             EditorTerrainService::CycleToolVariant(tool, terrain->materialLayers.size());
         }
         return { true, "terrain tool " + *name };
+    }
+
+    if (*operation == "river_click" || *operation == "river_drag" || *operation == "river_cut") {
+        // The River tool on the terrain `entity`: river_click lays a point at x, z (remove: Ctrl+click deletes the point there),
+        // river_drag picks the point at from_x, from_z up and puts it down at x, z, river_cut digs the river into the terrain.
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (EditorTerrainService::ActiveTool(tool) != EditorTerrainTool::River &&
+            !EditorTerrainService::SelectTool(tool, EditorTerrainTool::River, state.context.TerrainForEditing(entity, &error), &error)) {
+            return { false, error };
+        }
+        if (*operation == "river_cut") {
+            return EditorRiverTool::Carve(state.context, entity) ? StepOutcome{ true, "river cut into the terrain" } : StepOutcome{ false, "the river could not be cut into the terrain" };
+        }
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!x || !z) return { false, error };
+        if (*operation == "river_click") {
+            const auto remove = BoolMember(step, "remove", error, false);
+            if (!error.empty()) return { false, error };
+            if (!EditorRiverTool::Press(state.context, entity, static_cast<float>(*x), static_cast<float>(*z), remove.value_or(false))) return { false, "the River tool refused the click" };
+            return { true, "river click" };
+        }
+        const auto fromX = NumberMember(step, "from_x", error);
+        const auto fromZ = NumberMember(step, "from_z", error);
+        if (!fromX || !fromZ) return { false, error };
+        if (!EditorRiverTool::Press(state.context, entity, static_cast<float>(*fromX), static_cast<float>(*fromZ), false) ||
+            tool.riverDragPoint < 0 || !EditorRiverTool::Drag(state.context, entity, static_cast<float>(*x), static_cast<float>(*z))) {
+            EditorRiverTool::Release(state.context);
+            return { false, "no river point at the start of the drag" };
+        }
+        EditorRiverTool::Release(state.context);
+        return { true, "river drag" };
+    }
+
+    if (*operation == "assert_river") {
+        // The River tool's river has `points` points; `point` with x, z (the terrain plane) and optional `y` (within `tolerance`) checks that point.
+        const auto alias = StringMember(step, "entity", error);
+        const auto points = UInt32Member(step, "points", error);
+        if (!alias || !points || !error.empty()) return { false, error };
+        const kb::scene::SceneEntity river = EditorRiverTool::ActiveRiver(state.context);
+        const kb::scene::RiverComponent* value = river.IsValid() ? state.context.Scene().Components().Rivers().TryGet(river) : nullptr;
+        if (value == nullptr) return { *points == 0U, "there is no river" };
+        if (value->pointCount != *points) return { false, "the river has " + std::to_string(value->pointCount) + " points, expected " + std::to_string(*points) };
+        std::vector<kb::scene::RiverSample> line;
+        std::vector<kb::scene::Vec3> plane;
+        const kb::scene::SceneEntity terrain = ResolveEntity(state, *alias);
+        if (!EditorRiverTool::TerrainView(state.context, terrain, river, line, plane)) return { false, "the river could not be read in the terrain plane" };
+        const auto index = UInt32Member(step, "point", error, false);
+        const auto x = NumberMember(step, "x", error, false);
+        const auto z = NumberMember(step, "z", error, false);
+        const auto tolerance = NumberMember(step, "tolerance", error, false);
+        if (!error.empty()) return { false, error };
+        if (index && x && z) {
+            if (*index >= plane.size()) return { false, "the river has no point " + std::to_string(*index) };
+            const double limit = tolerance.value_or(0.05);
+            if (std::abs(plane[*index].x - *x) > limit || std::abs(plane[*index].z - *z) > limit) {
+                return { false, "point " + std::to_string(*index) + " is at " + std::to_string(plane[*index].x) + "," + std::to_string(plane[*index].z) };
+            }
+        }
+        return { true, "river has " + std::to_string(value->pointCount) + " points" };
     }
 
     if (*operation == "terrain_drawer") {

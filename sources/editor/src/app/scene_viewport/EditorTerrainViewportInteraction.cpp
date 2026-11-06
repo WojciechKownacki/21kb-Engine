@@ -12,6 +12,7 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "TerrainAnalysis.hpp"
 #include "console/EditorConsoleState.hpp"
+#include "scene/EditorRiverTool.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorTerrainJobs.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -399,6 +400,11 @@ bool EditorTerrainViewportInteraction::Stamp(
         if (beginStroke) sceneContext.Console().Warning("Terrain", "A terrain job is running; wait for it or cancel it before sculpting.");
         return true;
     }
+    if (tool.mode == EditorTerrainToolMode::River) {
+        return beginStroke
+            ? EditorRiverTool::Press(sceneContext, pointer->entity, pointer->local.x, pointer->local.z, EditorKeyDown(VK_CONTROL))
+            : EditorRiverTool::Drag(sceneContext, pointer->entity, pointer->local.x, pointer->local.z);
+    }
     const kb::terrain_editor::TerrainBrushStamp stamp{
         .localX = pointer->local.x,
         .localZ = pointer->local.z };
@@ -473,6 +479,10 @@ void EditorTerrainViewportInteraction::FinishStroke(EditorSceneContext& sceneCon
     EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     tool.strokeActive = false;
     tool.heldSculptElapsedSeconds = 0.0F;
+    if (tool.mode == EditorTerrainToolMode::River) {
+        EditorRiverTool::Release(sceneContext);
+        return;
+    }
     std::string error;
     bool done = true;
     if (tool.rampDragging) {
@@ -500,7 +510,8 @@ bool EditorTerrainViewportInteraction::TickActiveStroke(
     EditorSceneContext& sceneContext,
     float deltaSeconds) {
     EditorTerrainToolState& tool = EditorTerrainService::ToolState();
-    if (!tool.strokeActive || !tool.editingEnabled || tool.mode != EditorTerrainToolMode::Sculpt) {
+    if (!tool.strokeActive || !tool.editingEnabled ||
+        (tool.mode != EditorTerrainToolMode::Sculpt && tool.mode != EditorTerrainToolMode::River)) {
         tool.heldSculptElapsedSeconds = 0.0F;
         return false;
     }
@@ -509,7 +520,7 @@ bool EditorTerrainViewportInteraction::TickActiveStroke(
         ReleaseCapture();
         return true;
     }
-    if (!IsHeldBrush(tool.brush.mode)) return false;
+    if (tool.mode == EditorTerrainToolMode::River || !IsHeldBrush(tool.brush.mode)) return false;
     if (!EditorTerrainStrokeTickPolicy::Advance(deltaSeconds, tool.heldSculptElapsedSeconds)) {
         return false;
     }

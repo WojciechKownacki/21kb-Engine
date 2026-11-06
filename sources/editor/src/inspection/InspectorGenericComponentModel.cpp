@@ -30,11 +30,12 @@ namespace {
 using kb::script::ScriptValue;
 using kb::script::ScriptValueType;
 
-constexpr std::array<InspectorGenericComponentModel::Section, 10> kSections{ {
+constexpr std::array<InspectorGenericComponentModel::Section, 11> kSections{ {
     { "Combatant", InspectorSectionId::Combatant, HeroIconKind::Gamepad2, "Combatant" },
     { "AIBrain", InspectorSectionId::AIBrain, HeroIconKind::Gamepad2, "AI Brain" },
     { "CharacterController2D", InspectorSectionId::CharacterController2D, HeroIconKind::RectangleGroup, "Character Controller 2D" },
     { "Sprite2D", InspectorSectionId::Sprite2D, HeroIconKind::RectangleGroup, "Sprite 2D" },
+    { "River", InspectorSectionId::River, HeroIconKind::RectangleGroup, "River" },
     { "Body2D", InspectorSectionId::Body2D, HeroIconKind::RectangleGroup, "Body 2D" },
     { "Collider2D", InspectorSectionId::Collider2D, HeroIconKind::RectangleGroup, "Collider 2D" },
     { "Grid", InspectorSectionId::Grid, HeroIconKind::RectangleGroup, "Grid" },
@@ -105,6 +106,8 @@ constexpr std::array<InspectorGenericComponentModel::Section, 10> kSections{ {
     if (component == "Combatant" && property.starts_with("ability")) return kb::gameplay::kAbilityAssetType;
     if (component == "Sprite2D" && property == "imageAssetId") return "Texture";
     if (component == "Sprite2D" && property == "materialAssetId") return "RenderMaterial";
+    if (component == "River" && (property == "materialAssetId" || property == "waterfallMaterialAssetId")) return "RenderMaterial";
+    if (component == "River" && property == "mistEffectAssetId") return "ParticleEffect";
     if (component == "Tilemap" && property == "mapAssetId") return "RenderMesh";
     return {};
 }

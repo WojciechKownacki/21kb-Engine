@@ -26,6 +26,7 @@ enum class EditorTerrainToolMode : std::uint8_t {
     Sculpt,
     Holes,
     Paint,
+    River,
 };
 
 // The six tools of the terrain bar. Holes (cut and fill) are reached through the operation menu of the
@@ -38,6 +39,7 @@ enum class EditorTerrainTool : std::uint8_t {
     Ramp,
     Stamp,
     Holes,
+    River,
 };
 
 // What the strip under the terrain bar shows: the New World wizard or the Advanced settings.
@@ -76,6 +78,13 @@ struct EditorTerrainToolState {
     std::uint8_t selectedMaterialLayer = 0U;
     bool brushMenuOpen = false;
     bool brushShapeMenuOpen = false;
+    // River tool: the river it edits (0 until it makes one or finds the first of the scene), the point being
+    // dragged (-1 for none), and the first point of a river that waits for a second one.
+    std::uint64_t riverEntityId = 0U;
+    std::int32_t riverDragPoint = -1;
+    bool riverPendingVisible = false;
+    float riverPendingX = 0.0F;
+    float riverPendingZ = 0.0F;
     bool hoverVisible = false;
     std::uint64_t hoverEntityId = 0U;
     float hoverLocalX = 0.0F;

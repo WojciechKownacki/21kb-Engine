@@ -137,6 +137,7 @@
 #include "Map2DView.hpp"
 #include "scene/EditorMap2DService.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "TerrainChannel.hpp"
 #include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
@@ -1380,6 +1381,30 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
     terrainStroke_->previewPublished = true;
     terrainStroke_->changed = true;
     return true;
+}
+
+bool EditorSceneContext::ApplyTerrainChannel(
+    kb::scene::SceneEntity entity,
+    const std::vector<kb::terrain_editor::TerrainChannelNode>& nodes,
+    const kb::terrain_editor::TerrainChannelSettings& settings,
+    std::string label,
+    std::string* error) {
+    if (!BeginTerrainBrushStroke(entity, std::move(label), false, error)) return false;
+    const kb::terrain_editor::TerrainBrushResult result =
+        kb::terrain_editor::CarveTerrainChannel(terrainStroke_->working, nodes, settings);
+    if (!result.Changed()) {
+        CancelTerrainBrushStroke();
+        if (error != nullptr) *error = "The river lies outside the terrain, or the ground is cut there already.";
+        return false;
+    }
+    if (!EditorTerrainService::UpdatePreviewMesh(terrainStroke_->working, result, false, terrainStroke_->previewMesh, error) ||
+        !EditorTerrainService::PublishPreview(*scene_, terrainStroke_->assetId, terrainStroke_->working, terrainStroke_->previewMesh, true, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    terrainStroke_->previewPublished = true;
+    terrainStroke_->changed = true;
+    return CommitTerrainBrushStroke(error);
 }
 
 bool EditorSceneContext::ApplyTerrainLayerPaintStamp(

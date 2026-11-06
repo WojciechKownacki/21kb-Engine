@@ -679,6 +679,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
     src/private/scene/EditorTerrainService.hpp
+    src/private/scene/EditorRiverTool.hpp
     src/private/scene/EditorTerrainJobs.hpp
     src/private/scene/EditorMap2DService.hpp
     src/private/scene/EditorSceneObjectEditCommands.hpp
@@ -986,6 +987,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorTerrainService.cpp
     src/scene/EditorTerrainJobs.cpp
+    src/scene/EditorRiverTool.cpp
     src/scene/EditorMap2DService.cpp
     src/scene/EditorMap2DPreview.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
@@ -2146,6 +2148,13 @@ if(BUILD_TESTING)
             --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
             --selftest-task "SELFTEST-Terrain-Simple")
     set_tests_properties(kb_editor_terrain_simple_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;terrain" TIMEOUT 300)
+    add_test(NAME kb_editor_river_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessRiverScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Terrain-River")
+    set_tests_properties(kb_editor_river_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;terrain" TIMEOUT 300)
     add_test(NAME kb_editor_user_widget_headless
         COMMAND $<TARGET_FILE:kb_editor>

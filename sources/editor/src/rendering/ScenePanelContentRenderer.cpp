@@ -26,6 +26,7 @@
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "TerrainAnalysis.hpp"
+#include "scene/EditorRiverTool.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 
@@ -597,6 +598,52 @@ void AppendTerrainBrushRing(
     }
 }
 
+// The River tool's overlay: the water's line over the ground, a cross on every point (the picked one in orange),
+// and the first point of a river that waits for its second.
+void AppendRiverToolOverlay(
+    const EditorSceneContext& sceneContext,
+    const kb::math::DVec3& origin,
+    std::vector<kb::render::PhysicsDebugLine>& lines) {
+    const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    const kb::scene::SceneEntity terrainEntity = sceneContext.SelectedEntity();
+    if (!tool.editingEnabled || tool.mode != EditorTerrainToolMode::River || !sceneContext.IsProjectPluginEnabled("Editor.Terrain") ||
+        !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), terrainEntity)) {
+        return;
+    }
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(terrainEntity);
+    if (terrain == nullptr) return;
+    const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(terrainEntity);
+    const kb::scene::Vec3 translation = kb::math::RelativeTo(sceneContext.Scene().Transforms().WorldTranslation(terrainEntity, transform), origin);
+    const auto viewport = [&](kb::scene::Vec3 local) {
+        const kb::scene::Vec3 point = TerrainPointToViewport(transform, translation, local);
+        return std::array<float, 3U>{ point.x, point.y, point.z };
+    };
+    const auto cross = [&](kb::scene::Vec3 local, float size, const std::array<float, 3U>& color) {
+        for (const auto [dx, dz] : { std::pair{ size, 0.0F }, std::pair{ 0.0F, size } }) {
+            lines.push_back(kb::render::PhysicsDebugLine{ .from = viewport({ local.x - dx, local.y + 0.05F, local.z - dz }),
+                .to = viewport({ local.x + dx, local.y + 0.05F, local.z + dz }), .color = color, .alpha = 1.0F });
+        }
+        lines.push_back(kb::render::PhysicsDebugLine{ .from = viewport({ local.x, local.y, local.z }),
+            .to = viewport({ local.x, local.y + size, local.z }), .color = color, .alpha = 1.0F });
+    };
+    constexpr std::array<float, 3U> kWater{ 0.25F, 0.78F, 1.0F };
+    constexpr std::array<float, 3U> kPoint{ 1.0F, 1.0F, 1.0F };
+    constexpr std::array<float, 3U> kPicked{ 1.0F, 0.63F, 0.16F };
+    if (tool.riverPendingVisible) {
+        cross({ tool.riverPendingX, TerrainHeightAt(*terrain, tool.riverPendingX, tool.riverPendingZ), tool.riverPendingZ }, 1.0F, kPicked);
+    }
+    std::vector<kb::scene::RiverSample> line;
+    std::vector<kb::scene::Vec3> points;
+    if (!EditorRiverTool::TerrainView(sceneContext, terrainEntity, EditorRiverTool::ActiveRiver(sceneContext), line, points)) return;
+    for (std::size_t index = 1U; index < line.size(); ++index) {
+        lines.push_back(kb::render::PhysicsDebugLine{ .from = viewport({ line[index - 1U].position.x, line[index - 1U].position.y + 0.1F, line[index - 1U].position.z }),
+            .to = viewport({ line[index].position.x, line[index].position.y + 0.1F, line[index].position.z }), .color = kWater, .alpha = 1.0F });
+    }
+    for (std::size_t index = 0U; index < points.size(); ++index) {
+        cross(points[index], 0.8F, static_cast<std::int32_t>(index) == tool.riverDragPoint ? kPicked : kPoint);
+    }
+}
+
 // The slope overlay: a net of lines laid on the terrain, green where it is flat through yellow to red where it
 // is 45 degrees or steeper. At most 64 lines across, so a big terrain stays cheap to draw.
 void AppendTerrainSlopeOverlay(
@@ -702,6 +749,7 @@ void AppendNavigationMesh(
     }
     for (const auto& line : EditorMap2DWindow::SceneBrushLines(sceneContext, origin)) lines.push_back({.from = {line.from.x,line.from.y,line.from.z}, .to = {line.to.x,line.to.y,line.to.z}, .color = {line.color.x,line.color.y,line.color.z}, .alpha = line.alpha});
     AppendTerrainBrushRing(sceneContext, origin, lines);
+    AppendRiverToolOverlay(sceneContext, origin, lines);
     AppendTerrainSlopeOverlay(sceneContext, origin, lines);
     AppendWorldPartitionGrid(sceneContext, origin, lines);
     AppendNavigationMesh(sceneContext, origin, lines);

@@ -152,6 +152,7 @@ TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(cons
     rects.paintButton = button(52);
     rects.rampButton = button(52);
     rects.stampButton = button(56);
+    rects.riverButton = button(54);
     rects.worldButton = button(88);
     cursor += 1;
     rects.variantButton = button(120);
