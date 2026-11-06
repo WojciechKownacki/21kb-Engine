@@ -113,7 +113,7 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
   (`--type Axis2D --key W=+y --key S=-y --key D=+x --key A=-x` for movement); scripts read
   `Input.Pressed("Fire")` and `Input.Vector2("Move")`; `input-action list` shows what exists.
 - `-- @expose <name> <Type> [= default]` makes a variable editable in the Inspector; read it with
-  `self:GetVariable`.
+  `self:GetVariable`. `kb_cli scene-attach ... --set speed=8` gives one node its own value for it.
 - Component properties: `self:GetProperty(component, property)` / `self:SetProperty(...)`; each
   component's properties are an `api_reference` topic (for example `Transform`).
 - Engine functions are grouped (`Input`, `Physics`, `Transform`, `World`, `Audio`, `Gameplay`,

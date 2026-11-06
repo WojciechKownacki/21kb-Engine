@@ -1043,6 +1043,20 @@ void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc
     }
 }
 
+// The exposed script variables a node's behaviour overrides are stored per entity, so each instance gets its own copy.
+void ApplyBehaviourVariableOverrides(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities, std::size_t instanceCount) {
+    if (std::ranges::none_of(nodes, [](const ScenePrefabNodeDesc& node) { return !node.components.behaviourVariableOverrides.empty(); })) return;
+    SceneState& state = SceneAccess::State(scene);
+    for (std::size_t instance = 0U; instance < instanceCount; ++instance) {
+        for (std::size_t index = 0U; index < nodes.size(); ++index) {
+            if (!nodes[index].components.behaviourVariableOverrides.empty()) {
+                state.behaviourVariableOverrides[entities[EntityIndex(instance, index, nodes.size())].Id()] = nodes[index].components.behaviourVariableOverrides;
+            }
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -1149,6 +1163,7 @@ void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc
         SceneHistoryService::NoteObjectsCreated(scene, entities);
         ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ entities }, count);
 
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
@@ -1215,6 +1230,7 @@ void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc
     SceneHistoryService::NoteObjectsCreated(scene, resolvedEntities);
     ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
 
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;

@@ -57,6 +57,7 @@ if(KB_BUILD_RENDERER)
     target_compile_definitions(kb_cli_core PUBLIC KB_CLI_WORLD_HLOD=1 KB_CLI_RENDERER=1)
     target_sources(kb_cli_core PRIVATE
         src/CliMaterialCommands.cpp
+        src/CliMeshLodCommands.cpp
         src/CliMaterialGraphCommands.cpp
         src/CliPostProcessCommands.cpp
         src/CliParticleProcessCommands.cpp
@@ -151,6 +152,10 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/DeterminismWorkflowTests.py
                 --cli $<TARGET_FILE:kb_cli>)
         set_tests_properties(kb_cli_determinism_workflow PROPERTIES LABELS "tools;deterministic;replay" TIMEOUT 120)
+        add_test(NAME kb_cli_scene_attach_variables
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/SceneAttachVariablesTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_scene_attach_variables PROPERTIES LABELS "tools;scripting;scene" TIMEOUT 120)
     endif()
     if(WIN32)
         find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)

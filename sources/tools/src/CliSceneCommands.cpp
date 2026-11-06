@@ -12,6 +12,7 @@
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneTemplates.hpp"
+#include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
@@ -19,8 +20,10 @@
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #endif
 
+#include <algorithm>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <vector>
 #include <string>
 
@@ -78,6 +81,58 @@ namespace {
         return kb::scene::BehaviourTickGroup::Presentation;
     }
     return std::nullopt;
+}
+
+// Applies the --set name=value assignments to the exposed variables of the script a behaviour runs. Only a value that
+// differs from the script's default is stored, as the editor does; a name the script does not expose, or a value its
+// type does not accept, fails with the variables that are available.
+[[nodiscard]] bool ApplyVariableAssignments(kb::scene::Scene& scene, const kb::assets::AssetMetadata& script,
+    std::span<const std::string> assignments, std::vector<kb::scene::BehaviourVariableOverride>& overrides, std::ostream& out,
+    std::ostream& err) {
+    const std::string path = script.virtualPath.generic_string();
+    kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset;
+    if (script.type == kb::script::ScriptAssetTypes::LuaScript) {
+        asset = scene.Assets().Manager().Load<kb::script::LuaScriptAsset>(script.id);
+    }
+    if (!asset.IsLoaded()) {
+        err << "error: --set needs a Lua script with exposed variables; " << path << " (type " << script.type << ") has none\n";
+        return false;
+    }
+    const kb::script::LuaScriptAsset& exposed = *asset.Get();
+    const auto available = [&exposed]() {
+        std::string text;
+        for (const kb::script::ScriptApiPin& pin : exposed.exposedVariables) {
+            text += (text.empty() ? " " : ", ") + pin.name + " (" + kb::script::ToString(pin.type) + ")";
+        }
+        return text.empty() ? std::string{ " none" } : text;
+    };
+    for (const std::string& assignment : assignments) {
+        const std::size_t separator = assignment.find('=');
+        if (separator == std::string::npos || separator == 0U) {
+            err << "error: --set expects name=value, got '" << assignment << "'\n";
+            return false;
+        }
+        const std::string name = assignment.substr(0U, separator);
+        const auto pin = std::ranges::find(exposed.exposedVariables, name, &kb::script::ScriptApiPin::name);
+        if (pin == exposed.exposedVariables.end()) {
+            err << "error: " << path << " exposes no variable '" << name << "'; available:" << available() << '\n';
+            return false;
+        }
+        const std::size_t index = static_cast<std::size_t>(pin - exposed.exposedVariables.begin());
+        std::optional<kb::script::ScriptValue> value = kb::script::TryParseValueText(std::string_view{ assignment }.substr(separator + 1U), pin->type);
+        if (!value.has_value()) {
+            err << "error: '" << assignment.substr(separator + 1U) << "' is not a valid " << kb::script::ToString(pin->type)
+                << " for variable '" << name << "'\n";
+            return false;
+        }
+        std::erase_if(overrides, [&name](const kb::scene::BehaviourVariableOverride& entry) { return entry.name == name; });
+        const bool isDefault = index < exposed.exposedVariableDefaults.size() && *value == exposed.exposedVariableDefaults[index];
+        out << "  " << name << " = " << kb::script::FormatValueText(*value) << (isDefault ? " (script default, no override stored)" : "") << '\n';
+        if (!isDefault) {
+            overrides.push_back(kb::scene::BehaviourVariableOverride{ .name = name, .value = std::move(*value) });
+        }
+    }
+    return true;
 }
 
 // Each node's world position from its own and its parents' local transforms, composed as the scene
@@ -240,6 +295,10 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
                    << ", order " << behaviour.executionOrder
                    << (behaviour.enabled ? "" : ", disabled")
                    << ")";
+            for (std::size_t variable = 0U; variable < node.components.behaviourVariableOverrides.size(); ++variable) {
+                const kb::scene::BehaviourVariableOverride& entry = node.components.behaviourVariableOverrides[variable];
+                io.out << (variable == 0U ? " variables: " : ", ") << entry.name << '=' << kb::script::FormatValueText(entry.value);
+            }
         }
         io.out << " @ " << FormatCliNumber(world[index].x) << ',' << FormatCliNumber(world[index].y) << ','
                << FormatCliNumber(world[index].z) << '\n';
@@ -333,6 +392,15 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
                << "; an entity runs one behaviour - put both in one script, attach it to a child entity, or pass --replace\n";
         return 1;
     }
+    // Overrides belong to the script they were set for: another script starts without any.
+    if (!target->components.behaviour.has_value() || target->components.behaviour->behaviourAssetId != component->behaviourAssetId) {
+        target->components.behaviourVariableOverrides.clear();
+    }
+    std::ostringstream assigned;
+    if (const std::vector<std::string> assignments = arguments.Options("--set");
+        !assignments.empty() && !ApplyVariableAssignments(scene, *metadata, assignments, target->components.behaviourVariableOverrides, assigned, io.err)) {
+        return 1;
+    }
     target->components.behaviour = *component;
 
     if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {
@@ -342,7 +410,8 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 
     io.out << "attached " << metadata->virtualPath.generic_string()
            << " (" << BackendName(component->backend) << ") to node '" << *nodeName
-           << "' in " << resolved.path.generic_string() << '\n';
+           << "' in " << resolved.path.generic_string() << '\n'
+           << assigned.str();
     return 0;
 }
 

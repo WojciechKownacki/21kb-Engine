@@ -5,9 +5,12 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
+#include <algorithm>
+#include <span>
 #include <sstream>
 #include <string>
 
@@ -461,6 +464,13 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (behaviour == nullptr) {
             return false;
+        }
+        if (StartsWith(propertyPath, "behaviour.variable.")) {
+            const std::string_view name = propertyPath.substr(std::string_view{ "behaviour.variable." }.size());
+            const std::span<const BehaviourVariableOverride> overrides = scene.Entities().BehaviourVariableOverrides(entity);
+            const auto match = std::ranges::find_if(overrides, [name](const BehaviourVariableOverride& entry) { return entry.name == name; });
+            property.value = match == overrides.end() ? "default" : kb::script::FormatTypedValueText(match->value);
+            return true;
         }
         if (propertyPath == "behaviour.behaviourAssetId") {
             property.value = std::to_string(behaviour->behaviourAssetId);

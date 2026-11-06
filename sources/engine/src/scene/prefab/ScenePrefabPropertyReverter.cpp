@@ -63,6 +63,7 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.Behaviours().Remove(entity);
         }
+        scene.Entities().ReplaceBehaviourVariableOverrides(entity, node.components.behaviourVariableOverrides);
     } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "audioSource")) {
         if (node.components.audioSource.has_value()) {
             components.AudioSources().Set(entity, *node.components.audioSource);

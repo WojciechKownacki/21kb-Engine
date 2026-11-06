@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
@@ -91,6 +92,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.particleEffect.has_value()) sceneComponents.ParticleEffects().Set(entity, *components.particleEffect);
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
+        if (!components.behaviourVariableOverrides.empty()) {
+            scene.Entities().ReplaceBehaviourVariableOverrides(entity, components.behaviourVariableOverrides);
+        }
     }
     if (components.audioSource.has_value()) {
         sceneComponents.AudioSources().Set(entity, *components.audioSource);

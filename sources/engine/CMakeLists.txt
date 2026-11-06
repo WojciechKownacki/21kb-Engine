@@ -2166,6 +2166,7 @@ if(BUILD_TESTING)
     tests/TimelineAudioTests.cpp
         tests/LocalizationTests.cpp
         tests/LargeWorldTests.cpp
+        tests/SceneBehaviourVariableTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
         tests/UITextLineBreakingTests.cpp

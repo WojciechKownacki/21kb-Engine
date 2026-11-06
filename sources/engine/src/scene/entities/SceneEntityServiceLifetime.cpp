@@ -4,6 +4,7 @@
 #include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityDestructionService.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 #include <algorithm>
 
@@ -58,14 +59,15 @@ void SceneEntityService::SetBehaviourVariableOverride(Scene& scene, SceneEntity 
     if (!entity.IsValid() || name.empty()) {
         return;
     }
-    std::vector<BehaviourVariableOverride>& overrides = SceneAccess::State(scene).behaviourVariableOverrides[entity.Id()];
-    for (BehaviourVariableOverride& existing : overrides) {
-        if (existing.name == name) {
-            existing.value = std::move(value);
-            return;
-        }
+    SceneState& state = SceneAccess::State(scene);
+    std::vector<BehaviourVariableOverride>& overrides = state.behaviourVariableOverrides[entity.Id()];
+    const auto existing = std::ranges::find(overrides, name, &BehaviourVariableOverride::name);
+    if (existing != overrides.end()) {
+        existing->value = std::move(value);
+    } else {
+        overrides.push_back(BehaviourVariableOverride{ .name = std::move(name), .value = std::move(value) });
     }
-    overrides.push_back(BehaviourVariableOverride{ .name = std::move(name), .value = std::move(value) });
+    MarkScenePrefabNodeDirty(state, entity);
 }
 
 bool SceneEntityService::RemoveBehaviourVariableOverride(Scene& scene, SceneEntity entity, std::string_view name) noexcept {
@@ -87,6 +89,7 @@ bool SceneEntityService::RemoveBehaviourVariableOverride(Scene& scene, SceneEnti
     if (overrides.empty()) {
         table.erase(iter);
     }
+    MarkScenePrefabNodeDirty(SceneAccess::State(scene), entity);
     return true;
 }
 
@@ -99,9 +102,10 @@ void SceneEntityService::ReplaceBehaviourVariableOverrides(Scene& scene, SceneEn
         SceneAccess::State(scene).behaviourVariableOverrides;
     if (overrides.empty()) {
         static_cast<void>(table.erase(entity.Id()));
-        return;
+    } else {
+        table[entity.Id()] = std::move(overrides);
     }
-    table[entity.Id()] = std::move(overrides);
+    MarkScenePrefabNodeDirty(SceneAccess::State(scene), entity);
 }
 
 } // namespace kb::scene

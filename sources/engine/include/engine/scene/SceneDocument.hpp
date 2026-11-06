@@ -60,6 +60,8 @@ struct SceneDocument {
     // v49: SocketAttachment holds an object at a socket or bone of the character above it.
     //      Combatant persists health, mana, resistances, team, senses and ability slots.
     //      AIBrain persists the AI preset and its rules.
+    // v60: a behaviour persists the exposed script variables set on it that differ from the script defaults;
+    //      older files load without overrides.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
@@ -72,7 +74,8 @@ struct SceneDocument {
     static constexpr std::uint32_t UITextFallbackFontFileVersion = 57U;
     static constexpr std::uint32_t UITextFontRenderModeFileVersion = 58U;
     static constexpr std::uint32_t UIThemeBindingFileVersion = 59U;
-    static constexpr std::uint32_t CurrentFileVersion = 59U;
+    static constexpr std::uint32_t BehaviourVariableOverridesFileVersion = 60U;
+    static constexpr std::uint32_t CurrentFileVersion = 60U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

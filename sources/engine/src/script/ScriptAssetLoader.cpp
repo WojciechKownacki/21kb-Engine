@@ -7,8 +7,6 @@
 #include "engine/assets/AssetPayloadMemory.hpp"
 
 #include <algorithm>
-#include <cerrno>
-#include <charconv>
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
@@ -109,105 +107,16 @@ namespace {
     return false;
 }
 
-[[nodiscard]] std::optional<float> TryParseFloat(std::string_view value) {
-    const std::string text{ value };
-    char* end = nullptr;
-    errno = 0;
-    const float parsedValue = std::strtof(text.c_str(), &end);
-    if (errno != 0 || end != text.c_str() + text.size()) {
-        return std::nullopt;
-    }
-    return parsedValue;
-}
-
-[[nodiscard]] std::optional<double> TryParseDouble(std::string_view value) {
-    const std::string text{ value };
-    char* end = nullptr;
-    errno = 0;
-    const double parsedValue = std::strtod(text.c_str(), &end);
-    if (errno != 0 || end != text.c_str() + text.size()) {
-        return std::nullopt;
-    }
-    return parsedValue;
-}
-
 [[nodiscard]] std::optional<ScriptValue> TryParseScriptValue(std::string_view value, ScriptValueType type) {
     value = Trim(value);
     if (value.empty()) {
         return std::nullopt;
     }
-    switch (type) {
-    case ScriptValueType::Bool:
-        if (value == "true" || value == "1") {
-            return ScriptValue{ true };
-        }
-        if (value == "false" || value == "0") {
-            return ScriptValue{ false };
-        }
-        return std::nullopt;
-    case ScriptValueType::Int:
-    {
-        int parsedValue = 0;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
+    const bool textual = type == ScriptValueType::String || type == ScriptValueType::Name || type == ScriptValueType::Guid;
+    if (textual && value.size() >= 2U && (value.front() == '"' || value.front() == '\'') && value.back() == value.front()) {
+        value = value.substr(1U, value.size() - 2U);
     }
-    case ScriptValueType::Float:
-    {
-        const std::optional<float> parsedValue = TryParseFloat(value);
-        return parsedValue.has_value() ? std::optional<ScriptValue>{ ScriptValue{ *parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::String:
-        if ((value.size() >= 2U && value.front() == '"' && value.back() == '"') ||
-            (value.size() >= 2U && value.front() == '\'' && value.back() == '\'')) {
-            return ScriptValue{ std::string{ value.substr(1U, value.size() - 2U) } };
-        }
-        return ScriptValue{ std::string{ value } };
-    case ScriptValueType::Entity:
-    {
-        std::uint64_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Entity } } : std::nullopt;
-    }
-    case ScriptValueType::Component:
-    {
-        std::uint64_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Component } } : std::nullopt;
-    }
-    case ScriptValueType::Hash:
-    {
-        std::uint64_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Hash } } : std::nullopt;
-    }
-    case ScriptValueType::UInt32:
-    {
-        std::uint32_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::Int64:
-    {
-        std::int64_t parsedValue = 0;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::Double:
-    {
-        const std::optional<double> parsedValue = TryParseDouble(value);
-        return parsedValue.has_value() ? std::optional<ScriptValue>{ ScriptValue{ *parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::Name:
-    case ScriptValueType::Guid:
-        if ((value.size() >= 2U && value.front() == '"' && value.back() == '"') ||
-            (value.size() >= 2U && value.front() == '\'' && value.back() == '\'')) {
-            return ScriptValue{ std::string{ value.substr(1U, value.size() - 2U) }, type };
-        }
-        return ScriptValue{ std::string{ value }, type };
-    case ScriptValueType::Void:
-        break;
-    }
-        return std::nullopt;
+    return TryParseValueText(value, type);
 }
 
 [[nodiscard]] ScriptValue DefaultScriptValue(ScriptValueType type) {

@@ -414,7 +414,11 @@ R"(  validate     Validate Lua behaviour scripts (syntax + sandbox load) and the
   scene-attach Attach a behaviour asset to a scene node and save the scene.
                  --project <dir> --scene <path> --node <name> --script <path>
                  [--tick-group <group>] [--execution-order <n>] [--disabled] [--replace]
-               (an entity runs one behaviour; --replace swaps a different one out)
+                 [--set <variable>=<value> ...]
+               (an entity runs one behaviour; --replace swaps a different one out; --set gives this node its
+               own value for an exposed variable of the Lua script, stored in the scene and in prefabs made
+               from it; a value equal to the script default stores nothing, an unknown variable lists the
+               ones the script exposes)
   input-action Create an input action and bind keys in the project's input context
                (made and set when the project has none), as the Input Actions window.
                  new --project <dir> --name <Name> [--type Bool|Float|Axis2D|Axis3D]

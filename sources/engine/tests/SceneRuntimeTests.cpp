@@ -192,6 +192,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunWorldPartitionTests();
     } else if (suite == "large-world") {
         kb::tests::RunLargeWorldTests();
+    } else if (suite == "scene-behaviour-variables") {
+        kb::tests::RunSceneBehaviourVariableTests();
     } else {
         return false;
     }
@@ -238,6 +240,7 @@ void RunAllSuites() {
     kb::tests::RunMotionSkeletonRuleTests();
     kb::tests::RunWorldPartitionTests();
     kb::tests::RunLargeWorldTests();
+    kb::tests::RunSceneBehaviourVariableTests();
 }
 
 } // namespace

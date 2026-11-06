@@ -1,6 +1,7 @@
 #include "scene/prefab/io/ScenePrefabAssetComponentWriter.hpp"
 
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 #include "scene/prefab/io/ScenePrefabAssetEscaper.hpp"
 #include "scene/CombatantFields.hpp"
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace kb::scene {
@@ -455,6 +457,15 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "behaviour.enabled=" << (components.behaviour->enabled ? 1 : 0) << '\n';
         output << "behaviour.tickGroup=" << static_cast<int>(components.behaviour->tickGroup) << '\n';
         output << "behaviour.executionOrder=" << components.behaviour->executionOrder << '\n';
+        if (!components.behaviourVariableOverrides.empty()) {
+            output << "behaviour.variableCount=" << components.behaviourVariableOverrides.size() << '\n';
+        }
+        for (std::size_t index = 0U; index < components.behaviourVariableOverrides.size(); ++index) {
+            const BehaviourVariableOverride& entry = components.behaviourVariableOverrides[index];
+            const std::string key = "behaviour.variable." + std::to_string(index);
+            output << key << ".name=" << ScenePrefabAssetEscaper::Escape(entry.name) << '\n';
+            output << key << ".value=" << ScenePrefabAssetEscaper::Escape(kb::script::FormatTypedValueText(entry.value)) << '\n';
+        }
     }
 
     output << "audioSource=" << (components.audioSource.has_value() ? 1 : 0) << '\n';

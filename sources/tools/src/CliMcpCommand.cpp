@@ -162,6 +162,7 @@ thread_local bool tDiscovery = false;
             ToolProperty{ "script", "string", "Script asset path: /Game/... virtual path or a path under Assets/.", true, "--script" },
             ToolProperty{ "tickGroup", "string", "Optional tick group: Input, Gameplay, Physics, Animation, Camera, Presentation.", false, "--tick-group" },
             ToolProperty{ "executionOrder", "integer", "Optional execution order within the tick group.", false, "--execution-order" },
+            ToolProperty{ "set", "string", "Optional: one exposed script variable for this node, as name=value.", false, "--set" },
         });
     if (command.name == "run") return MakeToolDescriptor(command.mcpTool,
         "Runs a scene headless for N frames and reports script logs, events, errors and where dynamic bodies moved.",

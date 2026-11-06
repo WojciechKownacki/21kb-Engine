@@ -6,11 +6,16 @@
 #include "scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetTagsParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetNodeFieldParser.hpp"
+#include "engine/script/ScriptValue.hpp"
+#include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/CombatantFields.hpp"
 #include "scene/AIBrainFields.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cmath>
+#include <optional>
+#include <string>
+#include <utility>
 
 namespace kb::scene {
 namespace {
@@ -554,6 +559,26 @@ template <typename T>
 
     behaviour.backend = static_cast<BehaviourBackend>(backend);
     behaviour.tickGroup = static_cast<BehaviourTickGroup>(tickGroup);
+    std::uint32_t variableCount = 0U;
+    if (!ParseOptionalField(fields, "behaviour.variableCount", variableCount) || variableCount > SceneAssetFormat::MaxBehaviourVariableOverrides) {
+        return false;
+    }
+    components.behaviourVariableOverrides.clear();
+    for (std::uint32_t index = 0U; index < variableCount; ++index) {
+        const std::string key = "behaviour.variable." + std::to_string(index);
+        BehaviourVariableOverride entry;
+        std::string valueText;
+        if (!ScenePrefabAssetNodeFieldParser::ParseEscapedString(fields, key + ".name", entry.name) || entry.name.empty() ||
+            !ScenePrefabAssetNodeFieldParser::ParseEscapedString(fields, key + ".value", valueText)) {
+            return false;
+        }
+        std::optional<kb::script::ScriptValue> value = kb::script::TryParseTypedValueText(valueText);
+        if (!value.has_value()) {
+            return false;
+        }
+        entry.value = std::move(*value);
+        components.behaviourVariableOverrides.push_back(std::move(entry));
+    }
     components.behaviour = behaviour;
     return true;
 }

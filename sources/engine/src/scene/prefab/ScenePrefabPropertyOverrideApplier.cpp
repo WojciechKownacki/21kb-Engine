@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 #include "scene/CombatantFields.hpp"
@@ -6,11 +7,16 @@
 
 #include <cmath>
 
+#include <algorithm>
 #include <charconv>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <system_error>
+#include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace kb::scene {
 namespace {
@@ -51,6 +57,36 @@ template <typename T>
         const std::from_chars_result result = std::from_chars(first, last, output);
         return result.ec == std::errc{} && result.ptr == last;
     }
+}
+
+constexpr std::string_view kBehaviourVariablePrefix = "behaviour.variable.";
+
+[[nodiscard]] bool StartsWith(std::string_view value, std::string_view prefix) noexcept {
+    return value.substr(0, prefix.size()) == prefix;
+}
+
+// "default" drops the node's override of the variable; anything else is a typed value ("Float:12.5").
+[[nodiscard]] bool ApplyBehaviourVariable(std::vector<BehaviourVariableOverride>& overrides, std::string_view name, std::string_view value) {
+    if (name.empty()) {
+        return false;
+    }
+    const auto existing = std::ranges::find_if(overrides, [name](const BehaviourVariableOverride& entry) { return entry.name == name; });
+    if (value == "default") {
+        if (existing != overrides.end()) {
+            overrides.erase(existing);
+        }
+        return true;
+    }
+    std::optional<kb::script::ScriptValue> parsed = kb::script::TryParseTypedValueText(value);
+    if (!parsed.has_value()) {
+        return false;
+    }
+    if (existing != overrides.end()) {
+        existing->value = std::move(*parsed);
+    } else {
+        overrides.push_back(BehaviourVariableOverride{ .name = std::string{ name }, .value = std::move(*parsed) });
+    }
+    return true;
 }
 
 [[nodiscard]] bool ApplyComponentPresence(std::string_view value, auto& component) {
@@ -346,6 +382,9 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "behaviour") {
         return ApplyComponentPresence(property.value, node.components.behaviour);
+    }
+    if (StartsWith(property.propertyPath, kBehaviourVariablePrefix)) {
+        return ApplyBehaviourVariable(node.components.behaviourVariableOverrides, std::string_view{ property.propertyPath }.substr(kBehaviourVariablePrefix.size()), property.value);
     }
     if (property.propertyPath == "behaviour.behaviourAssetId") {
         return ParseNumber(property.value, Ensure(node.components.behaviour).behaviourAssetId);

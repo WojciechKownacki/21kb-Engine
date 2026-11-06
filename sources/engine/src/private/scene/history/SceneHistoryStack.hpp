@@ -1,6 +1,5 @@
 #pragma once
 
-#include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneHistory.hpp"
@@ -33,7 +32,6 @@ struct SceneHistoryObjectState {
     ScenePrefabNodeDesc node;
     bool active = true;
     bool persistent = false;
-    std::vector<BehaviourVariableOverride> behaviourVariableOverrides;
 };
 
 // One object a command changed, with its state before and after the command.

@@ -43,5 +43,6 @@ void RunPortalVisibilityTests();
 void RunMotionSkeletonRuleTests();
 void RunWorldPartitionTests();
 void RunLargeWorldTests();
+void RunSceneBehaviourVariableTests();
 
 } // namespace kb::tests

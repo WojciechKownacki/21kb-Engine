@@ -327,7 +327,8 @@ template <typename T, typename Components>
     if (componentMask.available && !componentMask.matches) {
         return false;
     }
-    return LiveComponentsMatchTemplate(componentReaders, entity, node.components, componentMask.available);
+    return SameBehaviourVariableOverrides(entities.BehaviourVariableOverrides(entity), node.components.behaviourVariableOverrides) &&
+        LiveComponentsMatchTemplate(componentReaders, entity, node.components, componentMask.available);
 }
 
 void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, SceneEntity entity) noexcept {
