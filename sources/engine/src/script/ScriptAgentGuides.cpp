@@ -346,6 +346,10 @@ kb_cli component set --project . --entity Environment --type WorldBackdrop --set
 - Any translucent material: the alpha of Base Color plus `Blend Mode` translucent.
 - `kb_cli help material-graph` and `kb_cli help post-process-new` list every setting.
 )md";
+- `entity add --create Button` (or Text, Slider, ...) puts the widget under a Canvas, creating one when the scene has none, and gives
+  every Text the bundled font; `component set ... --set eventTarget=Menu/Root` takes an object by its path.
+- Try the menu without a window: `kb_cli run --project . --frames 12 --click Menu/PlayButton@5` presses the widget on frame 5 and says
+  what was under the pointer and which script answered; `--report ui` lists every widget with its rectangle and its answering scripts.
 
 constexpr std::array<ScriptAgentGuide, 10> kGuides{ {
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },

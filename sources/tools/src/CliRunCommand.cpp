@@ -1,6 +1,7 @@
 #include "CliCommands.hpp"
 #include "CliAudioJson.hpp"
 #include "CliAudioMeterJson.hpp"
+#include "CliUiReport.hpp"
 #include "engine/audio/AudioDiagnostics.hpp"
 
 #include "engine/core/JsonValue.hpp"
@@ -355,7 +356,7 @@ void PrintBodyMovement(kb::scene::Scene& scene, const std::vector<BodyPosition>&
 
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
     std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr, std::ostream* inputReport = nullptr,
-    std::ostream* aiReport = nullptr, std::ostream* determinismReport = nullptr) {
+    std::ostream* aiReport = nullptr, std::ostream* determinismReport = nullptr, std::ostream* uiReport = nullptr) {
     const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -493,6 +494,23 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         io.err << "error: --press and --input-replay both drive the input; use one\n";
         return 1;
     }
+    // --click Menu/PlayButton@10 or --click 320,240@10: the pointer goes to the widget (or point) on the frame
+    // before, presses on that frame and lets go on the next, so a menu can be driven without a recording.
+    std::vector<UiClick> clicks;
+    for (const std::string& text : arguments.Options("--click")) {
+        std::string clickError;
+        std::optional<UiClick> click = ParseUiClick(text, clickError);
+        if (!click.has_value() || click->frame + 1 > frames) {
+            io.err << "error: " << (click.has_value() ? "--click '" + text + "' presses after the last of the " + std::to_string(frames) + " frames" : clickError) << '\n';
+            return 1;
+        }
+        clicks.push_back(std::move(*click));
+    }
+    if (!clicks.empty() && inputReplayPath) {
+        io.err << "error: --click and --input-replay both drive the input; use one\n";
+        return 1;
+    }
+    if ((!clicks.empty() || uiReport != nullptr) && !viewport) viewport = std::pair{ 1280, 720 };
     if (inputRecordPath && static_cast<std::uint32_t>(frames) > kb::input::InputAssetFormat::MaxRecordingFrameCount) {
         io.err << "error: frame count exceeds the input recording limit\n";
         return 1;
@@ -651,6 +669,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         return 1;
     }
 
+    kb::script::UIScriptIndex uiScripts;
     {
         const auto sceneDocument = kb::scene::SceneDocumentService::Load(scenePath);
         if (!sceneDocument.succeeded) {
@@ -662,8 +681,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             return 1;
         }
         // Mistakes that load fine but leave a widget invisible or dead.
-        const kb::script::UIScriptIndex uiScripts =
-            kb::script::UIScriptIndex::FromAssets(scene.Assets().Manager().Registry().All());
+        uiScripts = kb::script::UIScriptIndex::FromAssets(scene.Assets().Manager().Registry().All());
         for (const kb::script::UISceneWarning& warning :
             kb::script::ValidateUIScene(sceneDocument.document.worldPrefab.Nodes(), uiScripts)) {
             io.err << kb::script::FormatUIWarning(scenePath.filename().generic_string(), warning) << '\n';
@@ -787,6 +805,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         return stopCode != 0;
     };
     double elapsedSimulationSeconds = 0.0;
+    std::vector<std::pair<int, kb::script::ScriptUIDispatch>> uiEvents;
     for (int frame = 1; frame <= frames; ++frame) {
         if (stopRequested()) break;
         const float frameDeltaSeconds = inputReplayPath ?
@@ -811,6 +830,27 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             scene.Input().MutableDeviceState().SetPointerViewportExtent(
                 static_cast<std::uint32_t>(viewport->first), static_cast<std::uint32_t>(viewport->second));
         }
+        for (UiClick& click : clicks) {
+            kb::input::InputDeviceState& device = scene.Input().MutableDeviceState();
+            if (frame == click.frame - 1) {
+                std::string placeError;
+                if (!PlaceUiClick(scene, click, placeError)) {
+                    io.err << "error: " << placeError << '\n';
+                    stopCode = 1;
+                    stopReason = "click-target-missing";
+                    break;
+                }
+                device.SetHasFocus(true);
+                device.SetPointerPosition(click.position.x, click.position.y);
+            }
+            if (frame == click.frame) {
+                const kb::scene::SceneEntity under = scene.UI().HitTest(click.position);
+                click.hit = under.IsValid() ? EntityPath(scene, under) : std::string{};
+                device.SetKeyDown(kb::input::InputKey::MouseLeft, true);
+            }
+            if (frame == click.frame + 1) device.SetKeyDown(kb::input::InputKey::MouseLeft, false);
+        }
+        if (stopCode != 0) break;
         if (inputRecordPath)
             inputRecording.push_back(kb::input::CaptureInputFrame(scene.Input().DeviceState(), frameDeltaSeconds));
         const auto updateStarted = std::chrono::steady_clock::now();
@@ -819,6 +859,14 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         updateWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - updateStarted).count());
         ++completedFrames;
+        if (!clicks.empty() || uiReport != nullptr) {
+            for (kb::script::ScriptUIDispatch& dispatch : host.TakeInstalledSceneSystemUIDispatches()) {
+                for (UiClick& click : clicks) {
+                    if (frame >= click.frame && frame <= click.frame + 1) click.dispatched.push_back(dispatch);
+                }
+                uiEvents.emplace_back(frame, std::move(dispatch));
+            }
+        }
         if (historyCapacity != 0U) {
             if (telemetryHistory.size() == historyCapacity) telemetryHistory.pop_front();
             telemetryHistory.emplace_back(completedFrames, scene.Runtime().EcsWorld().TelemetrySnapshot());
@@ -992,6 +1040,14 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         if (!inputReport->good()) { io.err << "error: input report could not be written\n"; return 1; }
     }
 
+    for (const UiClick& click : clicks) {
+        if (click.placed) io.out << DescribeUiClick(scene, click) << '\n';
+    }
+    if (uiReport != nullptr) {
+        *uiReport << BuildUiReport(scene, uiScripts, clicks, uiEvents, printer.total == 0U && stopCode == 0).Dump() << '\n';
+        if (!uiReport->good()) { io.err << "error: UI report could not be written\n"; return 1; }
+    }
+
     PrintBodyMovement(scene, bodiesAtStart, io.out);
     io.out << "done: " << completedFrames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";
@@ -1155,14 +1211,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input, ai or determinism\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory, input, ai, determinism or ui\n"; return 1; }
     if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
         io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai" && *report != "determinism") {
-        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input, ai or determinism\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input" && *report != "ai" && *report != "determinism" && *report != "ui") {
+        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory, input, ai, determinism or ui\n";
         return 1;
     }
+    if (report && *report == "ui") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "determinism") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "ai") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "input") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, &io.out);

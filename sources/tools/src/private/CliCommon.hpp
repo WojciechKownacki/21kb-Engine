@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/math/EngineMath.hpp"
+#include "engine/scene/SceneEntity.hpp"
 
 #include <array>
 #include <filesystem>
@@ -83,6 +84,15 @@ private:
 [[nodiscard]] std::string FormatCliNumber(double value);
 // "x,y,z" as three finite numbers; nullopt for anything else.
 [[nodiscard]] std::optional<kb::math::Vec3> ParseVec3(std::string_view text);
+
+// Appends `entity` and everything below it, parents before children.
+void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::vector<kb::scene::SceneEntity>& out);
+// Every entity of the scene, parents before children.
+[[nodiscard]] std::vector<kb::scene::SceneEntity> AllEntities(const kb::scene::Scene& scene);
+// "Parent/Child/Name", like Unity's Transform.Find path.
+[[nodiscard]] std::string EntityPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+// The entities `name` addresses, in hierarchy order: by name, or by path ("Parent/Name").
+[[nodiscard]] std::vector<kb::scene::SceneEntity> MatchEntities(const kb::scene::Scene& scene, std::string_view name);
 
 // Finds an asset by virtual path ("/Game/...") or by physical file path.
 [[nodiscard]] const kb::assets::AssetMetadata* FindAssetByFlexiblePath(

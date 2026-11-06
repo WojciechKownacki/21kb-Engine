@@ -287,45 +287,6 @@ void RefreshOpenScenes() {
     }
 }
 
-void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::vector<kb::scene::SceneEntity>& out) {
-    out.push_back(entity);
-    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
-        CollectEntities(scene, child, out);
-    }
-}
-
-[[nodiscard]] std::vector<kb::scene::SceneEntity> AllEntities(const kb::scene::Scene& scene) {
-    std::vector<kb::scene::SceneEntity> all;
-    for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
-        CollectEntities(scene, root, all);
-    }
-    return all;
-}
-
-// "Parent/Child/Name", like Unity's Transform.Find path.
-[[nodiscard]] std::string EntityPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
-    std::string path{ scene.Entities().Name(entity) };
-    for (kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity); parent.IsValid();
-         parent = scene.Hierarchy().Parent(parent)) {
-        path = std::string{ scene.Entities().Name(parent) } + "/" + path;
-    }
-    return path;
-}
-
-// The entities `name` addresses, in hierarchy order: by name, or by path ("Parent/Name").
-[[nodiscard]] std::vector<kb::scene::SceneEntity> MatchEntities(const kb::scene::Scene& scene, std::string_view name) {
-    std::vector<kb::scene::SceneEntity> byName;
-    std::vector<kb::scene::SceneEntity> byPath;
-    for (const kb::scene::SceneEntity entity : AllEntities(scene)) {
-        if (scene.Entities().Name(entity) == name) {
-            byName.push_back(entity);
-        } else if (name.find('/') != std::string_view::npos && EntityPath(scene, entity) == name) {
-            byPath.push_back(entity);
-        }
-    }
-    return byName.empty() ? byPath : byName;
-}
-
 void ReportAmbiguous(const kb::scene::Scene& scene, std::string_view name, std::span<const kb::scene::SceneEntity> matches,
     CommandIo io) {
     io.err << "error: " << matches.size() << " entities are named '" << name << "':";

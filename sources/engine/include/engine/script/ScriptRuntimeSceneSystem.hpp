@@ -7,10 +7,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace kb::script {
+
+// A widget event the script system delivered: the callback (OnUIClicked) or the Selectable's event name, the
+// widget it is about, the object that received it and how many behaviours ran a function for it.
+struct ScriptUIDispatch {
+    std::string name;
+    kb::scene::SceneEntity widget{};
+    kb::scene::SceneEntity target{};
+    std::uint32_t answered = 0U;
+};
 
 struct ScriptRuntimeFrameSettings {
     float fixedDeltaSeconds = 1.0F / 60.0F;
@@ -45,6 +55,8 @@ public:
 
     [[nodiscard]] const ScriptRuntimeExecutionResult& LastResult() const noexcept;
     [[nodiscard]] const ScriptRuntimeAssetPrepareResult& LastPrepareResult() const noexcept;
+    // The widget events delivered since the last call (the newest 256), for tools that report who answered a click.
+    [[nodiscard]] std::vector<ScriptUIDispatch> TakeUIDispatches();
 
 private:
     friend class ScriptRuntimeHost;
@@ -153,6 +165,7 @@ private:
     float fixedAccumulatorSeconds_ = 0.0F;
     ScriptRuntimeExecutionResult lastResult_;
     ScriptRuntimeAssetPrepareResult lastPrepareResult_;
+    std::vector<ScriptUIDispatch> uiDispatches_;
     std::unordered_map<BehaviourLifecycleKey, BehaviourLifecycleRecord, BehaviourLifecycleKeyHasher> lifecycleRecords_;
 };
 

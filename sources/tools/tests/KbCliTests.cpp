@@ -4297,6 +4297,64 @@ void RunUiDependencyCliTests() {
         "none must clear an object reference");
 }
 
+// run --click drives a menu without a recording, and --report ui says what is on screen and who answered.
+void RunUiClickCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const std::string scene = "Assets/Scenes/Click.21kbscene";
+    const auto must = [&](const std::vector<std::string>& words) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        Require(exitCode == 0, out.str() + err.str());
+    };
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Click.lua",
+        "function PlayClicked(self, event)\n    Log('play-clicked ' .. event.args.action)\nend\n");
+    must({ "scene-new", "--project", root, "--name", "Click", "--template", "Empty" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Button", "--name", "Play" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Button", "--name", "Quit", "--parent", "Canvas" });
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Quit", "--type", "Rect Transform",
+        "--set", "offsetMin=0,100", "--set", "offsetMax=160,132" });
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable",
+        "--set", "eventName=PlayClicked" });
+    must({ "scene-attach", "--project", root, "--scene", scene, "--node", "Play", "--script", "/Game/Logic/Click.lua" });
+
+    const CliRun played = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Play@3" });
+    Require(played.exitCode == 0 && Contains(played.out, "[log] play-clicked PlayClicked") &&
+            Contains(played.out, "click Canvas/Play at frame 3:") && Contains(played.out, "under it Canvas/Play") &&
+            Contains(played.out, "PlayClicked -> Canvas/Play answered by 1"),
+        "a click on a widget must reach its script and be reported: " + played.out + played.err);
+    const CliRun quit = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Quit@3" });
+    Require(quit.exitCode == 0 && Contains(quit.out, "OnUIClicked -> Canvas/Quit unanswered") && !Contains(quit.out, "play-clicked"),
+        "a click on a widget no script answers must say so: " + quit.out + quit.err);
+    const CliRun missing = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Nowhere@3" });
+    Require(missing.exitCode == 1 && Contains(missing.err, "names no object of the scene"), "a click target that is not there must fail: " + missing.err);
+    const CliRun late = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Play@9" });
+    Require(late.exitCode == 1 && Contains(late.err, "after the last"), "a click past the last frame must fail: " + late.err);
+
+    const CliRun report = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Play@3", "--report", "ui" });
+    JsonValue json;
+    std::string parseError;
+    Require(report.exitCode == 0 && JsonValue::Parse(report.out, json, parseError) && json.Find("schema")->AsString() == "21kb.ui-report/v1",
+        "--report ui must print the report: " + report.out + report.err);
+    bool playAnswered = false;
+    for (std::size_t index = 0U; index < json.Find("widgets")->Size(); ++index) {
+        const JsonValue* widget = json.Find("widgets")->At(index);
+        if (widget->Find("path")->AsString() != "Canvas/Play") continue;
+        const JsonValue* answers = widget->Find("answers");
+        playAnswered = widget->Find("rect")->Find("width")->AsNumber() > 0.0 && answers != nullptr && answers->Size() == 1U &&
+            answers->At(0U)->Find("event")->AsString() == "PlayClicked" && answers->At(0U)->Find("script")->AsString() == "/Game/Logic/Click.lua";
+    }
+    Require(playAnswered, "the report must give the widget's rectangle and the script function that answers its event: " + report.out);
+    bool delivered = false;
+    for (std::size_t index = 0U; index < json.Find("events")->Size(); ++index) {
+        const JsonValue* event = json.Find("events")->At(index);
+        delivered = delivered || (event->Find("name")->AsString() == "PlayClicked" && event->Find("answered")->AsNumber() == 1.0);
+    }
+    Require(delivered && json.Find("clicks")->Size() == 1U, "the report must list the delivered events and the clicks: " + report.out);
+}
+
 void RunInputRecordingCliTests() {
     PrepareProject();
     const auto root = TestRoot();
@@ -5551,6 +5609,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{argv[1]} == "ui-validation") {
         RunUiValidationCliTests();
         RunUiDependencyCliTests();
+        RunUiClickCliTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
@@ -5611,6 +5670,7 @@ int main(int argc, char** argv) {
     RunInputRecordingCliTests();
     RunUiValidationCliTests();
     RunUiDependencyCliTests();
+    RunUiClickCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();
     RunParticleReportCommandTests();

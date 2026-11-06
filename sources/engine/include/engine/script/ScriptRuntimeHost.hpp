@@ -79,6 +79,8 @@ public:
     // scene system is destroyed.
     [[nodiscard]] const ScriptRuntimeExecutionResult* InstalledSceneSystemLastResult() const noexcept;
     [[nodiscard]] const ScriptRuntimeAssetPrepareResult* InstalledSceneSystemLastPrepareResult() const noexcept;
+    // The widget events the installed scene system delivered since the last call, and who answered them.
+    [[nodiscard]] std::vector<ScriptUIDispatch> TakeInstalledSceneSystemUIDispatches();
     // LIB-028: the kb::library startup report (one entry per catalog
     // module: installed/disabled, version, reason) produced by the real
     // EngineLibraryModule::Install() call this host made while

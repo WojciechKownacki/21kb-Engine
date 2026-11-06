@@ -424,6 +424,10 @@ const ScriptRuntimeAssetPrepareResult* ScriptRuntimeHost::InstalledSceneSystemLa
     return state_->installedSceneSystem == nullptr ? nullptr : &state_->installedSceneSystem->System().LastPrepareResult();
 }
 
+std::vector<ScriptUIDispatch> ScriptRuntimeHost::TakeInstalledSceneSystemUIDispatches() {
+    return state_->installedSceneSystem == nullptr ? std::vector<ScriptUIDispatch>{} : state_->installedSceneSystem->System().TakeUIDispatches();
+}
+
 const std::vector<kb::library::EngineLibraryModuleReportEntry>& ScriptRuntimeHost::LibraryStartupReport() const noexcept {
     return libraryStartupReport_;
 }

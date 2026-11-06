@@ -10,6 +10,7 @@ add_library(kb_cli_core STATIC
     src/CliBatchCommand.cpp
     src/CliLayoutCommands.cpp
     src/CliCommon.cpp
+    src/CliUiReport.cpp
     src/CliDispatch.cpp
     src/CliEntityCommands.cpp
     src/CliImportCommand.cpp

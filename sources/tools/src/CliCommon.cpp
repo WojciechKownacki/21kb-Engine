@@ -6,6 +6,8 @@
 #include "engine/math/ColorSpace.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #if KB_CLI_RENDERER
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -242,6 +244,43 @@ std::optional<kb::math::Vec3> ParseVec3(std::string_view text) {
         text = comma == std::string_view::npos ? std::string_view{} : text.substr(comma + 1U);
     }
     return kb::math::Vec3{ values[0], values[1], values[2] };
+}
+
+void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::vector<kb::scene::SceneEntity>& out) {
+    out.push_back(entity);
+    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
+        CollectEntities(scene, child, out);
+    }
+}
+
+std::vector<kb::scene::SceneEntity> AllEntities(const kb::scene::Scene& scene) {
+    std::vector<kb::scene::SceneEntity> all;
+    for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
+        CollectEntities(scene, root, all);
+    }
+    return all;
+}
+
+std::string EntityPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    std::string path{ scene.Entities().Name(entity) };
+    for (kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity); parent.IsValid();
+         parent = scene.Hierarchy().Parent(parent)) {
+        path = std::string{ scene.Entities().Name(parent) } + "/" + path;
+    }
+    return path;
+}
+
+std::vector<kb::scene::SceneEntity> MatchEntities(const kb::scene::Scene& scene, std::string_view name) {
+    std::vector<kb::scene::SceneEntity> byName;
+    std::vector<kb::scene::SceneEntity> byPath;
+    for (const kb::scene::SceneEntity entity : AllEntities(scene)) {
+        if (scene.Entities().Name(entity) == name) {
+            byName.push_back(entity);
+        } else if (name.find('/') != std::string_view::npos && EntityPath(scene, entity) == name) {
+            byPath.push_back(entity);
+        }
+    }
+    return byName.empty() ? byPath : byName;
 }
 
 } // namespace kb::cli
