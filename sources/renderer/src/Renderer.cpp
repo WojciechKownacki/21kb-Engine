@@ -1399,6 +1399,16 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     if (!desc.gpuDrivenRuntimeDispatchEnabled) {
         effectiveGpuDrivenSupport = SceneGpuDrivenFeatureSupport{};
     }
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport camera resolve begin");
+    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height, desc.target.viewport.id.value);
+    const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
+        ? &(*desc.cameraOverride)
+        : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    std::optional<SceneRenderCamera> lodViewCamera;
+    if (overlayCamera != nullptr) {
+        lodViewCamera = *overlayCamera;
+        lodViewCamera->viewportHeight = height;
+    }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport ShadowSubmit begin");
     const SceneRenderShadowMapBinding shadowBinding = RendererShadowSubmitter::Submit(RendererShadowSubmitDesc{
         .renderScene = renderScene,
@@ -1406,6 +1416,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         .shadowMap = defaultShadowMap_,
         .pointShadowMap = defaultPointShadowMap_,
         .sceneDesc = desc,
+        .viewCamera = lodViewCamera.has_value() ? &(*lodViewCamera) : nullptr,
         .viewportPlan = viewportPlan,
         .lightingConfig = effectiveLightingConfig,
         .gpuDrivenSupport = effectiveGpuDrivenSupport,
@@ -1420,11 +1431,6 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         WriteRendererBreadcrumb("renderer", message.str());
     }
 
-    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport camera resolve begin");
-    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height, desc.target.viewport.id.value);
-    const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
-        ? &(*desc.cameraOverride)
-        : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     // A playing scene with visibility cells culls what this camera cannot see through the portals; the
     // mesh passes and the visibility feedback below read it from the render scene.
     if (overlayCamera != nullptr && scene.Runtime().IsPlaying() && kb::scene::SceneHasVisibilityCells(scene)) {

@@ -237,6 +237,10 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliBuildCaptureTests.py
                 --cli $<TARGET_FILE:kb_cli>)
         set_tests_properties(kb_cli_build_capture PROPERTIES LABELS "tools;gpu" TIMEOUT 900)
+        add_test(NAME kb_cli_terrain_lod_images
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/TerrainLodImageTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_terrain_lod_images PROPERTIES LABELS "tools;gpu;terrain" TIMEOUT 900)
         add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")

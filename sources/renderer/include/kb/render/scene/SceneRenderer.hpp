@@ -73,7 +73,9 @@ public:
         const SceneRenderShadowMapBinding* shadowMap = nullptr,
         std::span<const std::uint64_t> selectedEntityIds = {},
         const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
-        bool terrainLayersOnly = false) const;
+        bool terrainLayersOnly = false,
+        // The view a shadow pass shades: terrain chunks take the level of detail that view picks.
+        const SceneRenderCamera* levelOfDetailCamera = nullptr) const;
     // Draws the Post Process materials of `renderScene` (Mesh Renderers whose material is of that domain, in entity
     // order, at most one per view) over `chain.input`; returns the texture holding the result.
     [[nodiscard]] bgfx::TextureHandle SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const;

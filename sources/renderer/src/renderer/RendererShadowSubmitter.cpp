@@ -56,7 +56,9 @@ namespace {
             desc.lightingConfig,
             nullptr,
             {},
-            &desc.gpuDrivenSupport);
+            &desc.gpuDrivenSupport,
+            false,
+            desc.viewCamera);
 
         SceneRenderSubmitStats shadowStats = desc.sceneRenderer.LastSubmitStats();
         shadowStats.shadowLightEntityId = shadowSetup.lightEntityId;
@@ -148,7 +150,9 @@ void SubmitPointShadows(
                 desc.lightingConfig,
                 nullptr,
                 {},
-                &desc.gpuDrivenSupport);
+                &desc.gpuDrivenSupport,
+                false,
+                desc.viewCamera);
             SceneRenderSubmitStats stats = desc.sceneRenderer.LastSubmitStats();
             stats.shadowMapAllocationBytes = index == 0U ? desc.pointShadowMap.AllocationBytes() : 0U;
             desc.aggregateSubmitStats += stats;

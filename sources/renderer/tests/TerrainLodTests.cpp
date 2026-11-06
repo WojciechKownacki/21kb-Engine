@@ -3,6 +3,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "resources/RenderMeshResourceBuilder.hpp"
@@ -16,6 +17,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -317,6 +319,85 @@ void RunSkirtsFollowLevelsTest() {
     Require(transitions > 0U, "The camera positions must produce chunks at different levels");
 }
 
+// A shadow pass draws the surface the view it shades draws: with the level of detail view of that camera its chunks
+// take the levels the view picks, where its own position would pick others.
+void RunShadowFollowsViewLevelsTest() {
+    const TerrainFixture fixture = MakeFixture(257U, 256.0F, 16U, false);
+    const SceneRenderMeshInstance instance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U, .model = Identity() };
+    const SceneRenderCamera view = CameraLookingEast(0.0F, 3.0F, 128.0F, 75.0F, 1080U);
+    SceneRenderCamera shadow = CameraAbove(128.0F, 400.0F, 128.0F, 100.0F, 2048U);
+    std::vector<std::uint8_t> viewLevels;
+    std::vector<std::uint8_t> ownLevels;
+    std::vector<std::uint8_t> followedLevels;
+    const auto select = [&](const SceneRenderCamera& camera, std::vector<std::uint8_t>& levels) {
+        MeshPipelineTerrainLod::SelectChunkLevels(fixture.resource, std::span{ &instance, 1U }, &camera,
+            MeshPipelineVisibility::BuildFrustum(&camera), levels);
+    };
+    select(view, viewLevels);
+    select(shadow, ownLevels);
+    shadow.levelOfDetailView = MeshPipelineVisibility::LevelOfDetailViewOf(view);
+    select(shadow, followedLevels);
+    std::uint32_t compared = 0U;
+    bool differsOwn = false;
+    for (std::size_t chunk = 0U; chunk < viewLevels.size(); ++chunk) {
+        if (viewLevels[chunk] == MeshPipelineTerrainLod::kCulled || followedLevels[chunk] == MeshPipelineTerrainLod::kCulled) continue;
+        // The skirt flag follows the neighbours in view, which the two cameras see differently; the level must agree.
+        Require((viewLevels[chunk] & kLevelMask) == (followedLevels[chunk] & kLevelMask),
+            "A shadow pass did not take the level of detail of the view it shades");
+        differsOwn = differsOwn || (ownLevels[chunk] != MeshPipelineTerrainLod::kCulled && (ownLevels[chunk] & kLevelMask) != (viewLevels[chunk] & kLevelMask));
+        ++compared;
+    }
+    Require(compared > 8U && differsOwn, "The shadow camera must see chunks the view sees, at levels its own position would not pick");
+}
+
+// A brush changes the heights: the mesh resource must receive the new vertices, the new level errors and skirt
+// depths, and the new bounds of the chunks.
+void RunRegistryFollowsBrushTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(129U, 128.0F, 128.0F);
+    terrain.chunkQuads = 16U;
+    std::optional<RenderMeshAssetData> built = RenderTerrainMeshBuilder::Build(terrain);
+    Require(built.has_value() && RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *built), "A dynamic terrain mesh could not be built");
+    RenderMeshAssetData& asset = *built;
+    RenderResourceRegistry registry;
+    const RenderMeshHandle handle = registry.RegisterMesh(asset.desc);
+    Require(handle.IsValid(), "The terrain mesh did not register");
+    const std::size_t firstUpdate = asset.dynamicVertexUpdateRanges.size();
+    const std::size_t firstSection = asset.dynamicSectionUpdateIndices.size();
+    // A hill of 6 units over the middle of the terrain.
+    std::uint32_t minX = 40U;
+    std::uint32_t maxX = 90U;
+    for (std::uint32_t z = minX; z <= maxX; ++z) {
+        for (std::uint32_t x = minX; x <= maxX; ++x) {
+            const float dx = static_cast<float>(x) - 65.0F;
+            const float dz = static_cast<float>(z) - 65.0F;
+            terrain.heights[static_cast<std::size_t>(z) * terrain.width + x] = 6.0F * std::exp(-(dx * dx + dz * dz) / 120.0F);
+        }
+    }
+    Require(RenderTerrainMeshBuilder::UpdateDynamicPreview(terrain,
+            RenderTerrainMeshUpdateRegion{ .minX = minX, .minZ = minX, .maxX = maxX, .maxZ = maxX }, asset),
+        "The dynamic terrain mesh rejected the brush");
+    for (std::size_t range = firstUpdate; range < asset.dynamicVertexUpdateRanges.size(); ++range) {
+        Require(registry.UpdateMeshVertices(handle, asset.desc, asset.dynamicVertexUpdateRanges[range].firstVertex,
+                asset.dynamicVertexUpdateRanges[range].vertexCount),
+            "The mesh resource rejected a vertex update");
+    }
+    std::vector<std::uint32_t> sections(asset.dynamicSectionUpdateIndices.begin() + static_cast<std::ptrdiff_t>(firstSection),
+        asset.dynamicSectionUpdateIndices.end());
+    std::ranges::sort(sections);
+    sections.erase(std::unique(sections.begin(), sections.end()), sections.end());
+    Require(registry.UpdateMeshGeometryMetadata(handle, asset.desc, sections), "The mesh resource rejected the new geometry metadata");
+    const RenderMeshResource* resource = registry.FindMesh(handle);
+    Require(resource != nullptr && resource->terrainChunks.skirtDepth == asset.terrainChunks->skirtDepth &&
+            resource->terrainChunks.lodError == asset.terrainChunks->lodError &&
+            resource->terrainChunks.borderError == asset.terrainChunks->borderError,
+        "The mesh resource kept the level errors of the terrain before the brush");
+    const RenderTerrainChunkGrid& grid = *asset.terrainChunks;
+    const std::uint32_t hillChunk = 4U * grid.chunkCountX + 4U;
+    Require(grid.lodError[hillChunk * grid.lodCount + grid.lodCount - 1U] > 0.5F, "A hill must make its chunk stray from a coarse level");
+    const RenderMeshSection& section = resource->sections[grid.sectionIndices[hillChunk]];
+    Require(section.bounds.center[1] + section.bounds.radius > 5.0F, "The bounds of a chunk did not grow with the hill");
+}
+
 void RunTrianglesFallWithDistanceTest() {
     // A strict error budget makes the level follow the distance across the whole range of the test.
     const TerrainFixture fixture = MakeFixture(513U, 512.0F, 32U, true, 0.25F);
@@ -391,6 +472,8 @@ void RunTerrainLodTests() {
     RunBuiltGridTest();
     RunNoGapBetweenLevelsTest();
     RunSkirtsFollowLevelsTest();
+    RunShadowFollowsViewLevelsTest();
+    RunRegistryFollowsBrushTest();
     RunTrianglesFallWithDistanceTest();
 }
 
@@ -402,6 +485,14 @@ void RunTerrainLodBenchmark() {
 } // namespace kb::render::tests
 
 int main(int argc, char** argv) {
+    // Meshes register against the no-op renderer, which creates buffers and keeps no frames.
+    bgfx::Init renderer;
+    renderer.type = bgfx::RendererType::Noop;
+    if (!bgfx::init(renderer)) {
+        std::cerr << "Terrain LOD tests failed: the no-op renderer did not start\n";
+        return EXIT_FAILURE;
+    }
+    int exitCode = EXIT_SUCCESS;
     try {
         if (argc == 2 && std::string_view{ argv[1] } == "bench") {
             kb::render::tests::RunTerrainLodBenchmark();
@@ -409,9 +500,10 @@ int main(int argc, char** argv) {
             kb::render::tests::RunTerrainLodTests();
         }
         std::cout << "Terrain LOD tests passed\n";
-        return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "Terrain LOD tests failed: " << error.what() << '\n';
-        return EXIT_FAILURE;
+        exitCode = EXIT_FAILURE;
     }
+    bgfx::shutdown();
+    return exitCode;
 }

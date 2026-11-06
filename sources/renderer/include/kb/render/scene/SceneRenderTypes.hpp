@@ -160,6 +160,15 @@ enum class SceneRenderCameraClearMode : std::uint8_t {
     DontClear,
 };
 
+// What terrain chunks measure their level of detail by: where the view looks from and how many pixels a unit covers at
+// distance one (the whole view for an orthographic camera). Unset (no scale) means the camera it sits in.
+struct SceneRenderLevelOfDetailView {
+    [[nodiscard]] bool operator==(const SceneRenderLevelOfDetailView&) const noexcept = default;
+    std::array<float, 3> eye{};
+    float pixelsPerUnit = 0.0F;
+    bool orthographic = false;
+};
+
 struct SceneRenderCamera {
     [[nodiscard]] bool operator==(const SceneRenderCamera&) const noexcept = default;
     std::array<float, 16> view{};
@@ -172,6 +181,9 @@ struct SceneRenderCamera {
     // terrain chunk) reads it. 0 when the camera is not tied to a target: such a camera is taken as kDefaultViewportHeight.
     static constexpr std::uint32_t kDefaultViewportHeight = 1080U;
     std::uint32_t viewportHeight = 0U;
+    // Set on the camera of a shadow pass: it draws the surface of the view it shades, so its chunks take the level
+    // that view picks (a surface of another level casts a shadow onto the one the view draws).
+    SceneRenderLevelOfDetailView levelOfDetailView{};
     [[nodiscard]] std::array<float, 16> CullingProjection() const noexcept {
         auto result = projection;
         result[8] -= temporalProjectionOffset[0];

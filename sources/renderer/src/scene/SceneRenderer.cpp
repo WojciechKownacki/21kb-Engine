@@ -8,6 +8,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/particles/ParticleGpuRenderer.hpp"
 #include "scene/SceneMeshSubmitter.hpp"
+#include "scene/pipeline/MeshPipelineVisibility.hpp"
 #include "renderer/RendererDebugLog.hpp"
 
 #include <bgfx/bgfx.h>
@@ -236,7 +237,8 @@ void SceneRenderer::SubmitMeshPass(
     const SceneRenderShadowMapBinding* shadowMap,
     std::span<const std::uint64_t> selectedEntityIds,
     const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride,
-    bool terrainLayersOnly) const {
+    bool terrainLayersOnly,
+    const SceneRenderCamera* levelOfDetailCamera) const {
     if (meshCoverage_) meshCoverage_->BeginPass(pass, viewportWidth, viewportHeight, viewId);
     lastSubmitStats_ = SceneRenderSubmitStats{};
     lastDiagnostics_.Clear();
@@ -249,6 +251,7 @@ void SceneRenderer::SubmitMeshPass(
     if (sourceCamera != nullptr) {
         sizedCamera = *sourceCamera;
         sizedCamera.viewportHeight = viewportHeight;
+        if (levelOfDetailCamera != nullptr) sizedCamera.levelOfDetailView = MeshPipelineVisibility::LevelOfDetailViewOf(*levelOfDetailCamera);
     }
     const SceneRenderCamera* camera = sourceCamera != nullptr ? &sizedCamera : nullptr;
     {

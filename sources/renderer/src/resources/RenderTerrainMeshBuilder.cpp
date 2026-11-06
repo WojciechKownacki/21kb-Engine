@@ -371,25 +371,20 @@ void WriteChunkRing(
     }
 }
 
-// Number of indices of the skirt of a chunk at the level whose cells span `step` quads.
-[[nodiscard]] std::uint32_t SkirtIndexCount(const ChunkRange& range, const SkirtSides& sides, std::uint32_t step) noexcept {
-    const std::uint32_t edges = (sides.south ? range.Width() : 0U) + (sides.east ? range.Depth() : 0U) +
-        (sides.north ? range.Width() : 0U) + (sides.west ? range.Depth() : 0U);
-    return edges / step * 6U;
-}
-
-// Writes the triangles of that skirt, facing away from the chunk.
-void WriteChunkSkirt(
+// Calls visit(position, next, topA, topB) for every segment of the skirt of a chunk at the level whose cells span `step`
+// quads: its place on the way round the chunk and the grid vertices of its top. A segment beside a hole has no
+// skirt: nothing is there to hide a gap behind.
+template <typename Visit>
+void ForEachSkirtSegment(
     const kb::assets::TerrainAsset& terrain,
     const ChunkLayout& layout,
     std::uint32_t chunk,
     std::uint32_t step,
-    std::uint32_t* out) noexcept {
+    Visit&& visit) noexcept {
     const ChunkRange range = RangeOfChunk(layout, chunk);
     const SkirtSides sides = SidesWithNeighbour(layout, chunk);
     const std::uint32_t width = range.Width();
     const std::uint32_t depth = range.Depth();
-    const std::uint32_t ringBase = layout.gridVertices + chunk * layout.ringStride;
     const std::uint32_t length = range.Perimeter();
     const std::array<std::array<std::uint32_t, 3U>, 4U> runs{ {
         { sides.south ? 1U : 0U, 0U, width },
@@ -403,12 +398,36 @@ void WriteChunkSkirt(
             const std::uint32_t next = position + step == length ? 0U : position + step;
             const auto [xa, za] = PerimeterVertex(range, position);
             const auto [xb, zb] = PerimeterVertex(range, next);
-            const std::uint32_t topA = static_cast<std::uint32_t>(VertexIndex(terrain, xa, za));
-            const std::uint32_t topB = static_cast<std::uint32_t>(VertexIndex(terrain, xb, zb));
-            *out++ = topA; *out++ = topB; *out++ = ringBase + position;
-            *out++ = topB; *out++ = ringBase + next; *out++ = ringBase + position;
+            // The cell inside the chunk that the segment is the edge of.
+            const bool alongX = za == zb;
+            const std::uint32_t cellX = alongX ? std::min(xa, xb) : (xa == range.x0 ? range.x0 : xa - step);
+            const std::uint32_t cellZ = alongX ? (za == range.z0 ? range.z0 : za - step) : std::min(za, zb);
+            if (CoarseCellHasHole(terrain, cellX, cellZ, step)) continue;
+            visit(position, next, static_cast<std::uint32_t>(VertexIndex(terrain, xa, za)), static_cast<std::uint32_t>(VertexIndex(terrain, xb, zb)));
         }
     }
+}
+
+// Number of indices of the skirt of a chunk at the level whose cells span `step` quads.
+[[nodiscard]] std::uint32_t SkirtIndexCount(
+    const kb::assets::TerrainAsset& terrain, const ChunkLayout& layout, std::uint32_t chunk, std::uint32_t step) noexcept {
+    std::uint32_t indices = 0U;
+    ForEachSkirtSegment(terrain, layout, chunk, step, [&indices](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) { indices += 6U; });
+    return indices;
+}
+
+// Writes the triangles of that skirt, facing away from the chunk.
+void WriteChunkSkirt(
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkLayout& layout,
+    std::uint32_t chunk,
+    std::uint32_t step,
+    std::uint32_t* out) noexcept {
+    const std::uint32_t ringBase = layout.gridVertices + chunk * layout.ringStride;
+    ForEachSkirtSegment(terrain, layout, chunk, step, [&](std::uint32_t position, std::uint32_t next, std::uint32_t topA, std::uint32_t topB) {
+        *out++ = topA; *out++ = topB; *out++ = ringBase + position;
+        *out++ = topB; *out++ = ringBase + next; *out++ = ringBase + position;
+    });
 }
 
 // The bounds of a chunk, its skirt included, from the heights of its vertices.
@@ -501,7 +520,7 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
             }
         }
         mainIndexCount[task] = cells * 6U;
-        skirtIndexCount[task] = cells == 0U ? 0U : SkirtIndexCount(range, SidesWithNeighbour(layout, chunk), step);
+        skirtIndexCount[task] = cells == 0U ? 0U : SkirtIndexCount(terrain, layout, chunk, step);
     });
     std::vector<std::size_t> firstIndex(taskCount + 1U);
     for (std::size_t task = 0U; task < taskCount; ++task) {

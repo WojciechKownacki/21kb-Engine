@@ -49,12 +49,10 @@ void MeshPipelineTerrainLod::SelectChunkLevels(
         }
         return;
     }
-    const bool orthographic = MeshPipelineVisibility::IsOrthographic(*camera);
-    const std::array<float, 3> eye = MeshPipelineVisibility::CameraPosition(*camera);
-    const float viewportHeight = static_cast<float>(
-        camera->viewportHeight != 0U ? camera->viewportHeight : SceneRenderCamera::kDefaultViewportHeight);
-    // Pixels a unit of the view covers at distance one (the whole view for an orthographic camera).
-    const float pixelsPerUnit = 0.5F * viewportHeight * std::abs(camera->projection[5]);
+    const SceneRenderLevelOfDetailView view = MeshPipelineVisibility::LevelOfDetailViewOf(*camera);
+    const bool orthographic = view.orthographic;
+    const std::array<float, 3>& eye = view.eye;
+    const float pixelsPerUnit = view.pixelsPerUnit;
     std::vector<std::uint8_t> chosen(chunkCount);
     std::vector<std::uint8_t> visible(chunkCount);
     const std::int32_t lastLevel = static_cast<std::int32_t>(grid.lodCount) - 1;

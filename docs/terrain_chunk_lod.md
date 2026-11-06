@@ -9,8 +9,9 @@ before it. The scene pipeline picks the level of every chunk for every view and 
 The builder measures, for every chunk and level, how far the surface of that level strays from the full-resolution
 surface (the level error, in mesh units, never decreasing with the level). A chunk shows the coarsest level whose error,
 projected into the pixels of the view that draws it, stays under the terrain's `lodPixelError` (2 pixels by default,
-0.25 to 16). The size of a pixel comes from the camera and the height of its target, so a shadow cascade, a depth pass
-and the main view each measure by their own pixels; an orthographic view uses one size for every chunk. Flat ground
+0.25 to 16). The size of a pixel comes from the camera and the height of its target; an orthographic view uses one size for every
+chunk. A shadow map is drawn at the levels the view it shades picks, so the surface that casts a shadow is the surface
+that view draws. Flat ground
 therefore drops to the coarsest level at once while rough ground keeps its detail near the camera. A mesh instance's
 `lodBias` and `lodEnabled` apply on top.
 

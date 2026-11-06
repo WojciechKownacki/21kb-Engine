@@ -219,6 +219,17 @@ RenderBoundsSphere MeshPipelineVisibility::TransformBounds(const RenderBoundsSph
     };
 }
 
+SceneRenderLevelOfDetailView MeshPipelineVisibility::LevelOfDetailViewOf(const SceneRenderCamera& camera) noexcept {
+    if (camera.levelOfDetailView.pixelsPerUnit > 0.0F) return camera.levelOfDetailView;
+    const float height = static_cast<float>(
+        camera.viewportHeight != 0U ? camera.viewportHeight : SceneRenderCamera::kDefaultViewportHeight);
+    return SceneRenderLevelOfDetailView{
+        .eye = CameraPosition(camera),
+        .pixelsPerUnit = 0.5F * height * std::abs(camera.projection[5]),
+        .orthographic = IsOrthographic(camera),
+    };
+}
+
 float MeshPipelineVisibility::ViewDepth(const SceneRenderCamera* camera, const RenderBoundsSphere& bounds) noexcept {
     if (camera == nullptr || !bounds.IsValid()) {
         return 0.0F;
