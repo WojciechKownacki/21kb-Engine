@@ -136,6 +136,17 @@ public:
         const std::filesystem::path& assetsRoot,
         std::string* error = nullptr);
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept;
+    // Makes the terrain object collide: its Collider takes the height field of the terrain asset (other
+    // collider settings stay). The object needs its Terrain Editor mesh.
+    static void AttachCollider(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+    // Hands what a brush changed to the physics world, if the scene has one. `holeCells` says the region names
+    // changed hole cells instead of height samples (a cell is named by its lower corner sample).
+    static void UpdateCollision(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId assetId,
+        const kb::assets::TerrainAsset& terrain,
+        const kb::terrain_editor::TerrainBrushResult& changedRegion,
+        bool holeCells);
     [[nodiscard]] static bool PublishPreview(
         kb::scene::Scene& scene,
         kb::assets::AssetId assetId,

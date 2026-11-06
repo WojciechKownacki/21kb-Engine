@@ -6,6 +6,7 @@
     { "op": "create_entity", "id": "land", "name": "Land" },
     { "op": "select_entity", "entity": "land" },
     { "op": "add_component", "entity": "land", "component": "TerrainEditor" },
+    { "op": "assert_component", "entity": "land", "component": "Collider" },
     { "op": "assert_terrain_layer_weight", "entity": "land", "x": 0.0, "z": 0.0, "layer": 0, "min": 0.99 },
     { "op": "assert_terrain_layer_weight", "entity": "land", "x": 0.0, "z": 0.0, "layer": 1, "max": 0.01 },
     { "op": "terrain_tool", "entity": "land", "tool": "sculpt" },

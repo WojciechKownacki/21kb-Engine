@@ -1363,14 +1363,13 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
         if (error != nullptr) error->clear();
         return true;
     }
-    if (!EditorTerrainService::UpdatePreviewMesh(
-            terrainStroke_->working, result,
-            settings.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
-                settings.mode == kb::terrain_editor::TerrainBrushMode::FillHole,
-            terrainStroke_->previewMesh, error)) {
+    const bool holeBrush = settings.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+        settings.mode == kb::terrain_editor::TerrainBrushMode::FillHole;
+    if (!EditorTerrainService::UpdatePreviewMesh(terrainStroke_->working, result, holeBrush, terrainStroke_->previewMesh, error)) {
         CancelTerrainBrushStroke();
         return false;
     }
+    EditorTerrainService::UpdateCollision(*scene_, terrainStroke_->assetId, terrainStroke_->working, result, holeBrush);
     if (!terrainStroke_->previewPublished && !EditorTerrainService::PublishPreview(
             *scene_, terrainStroke_->assetId,
             terrainStroke_->working, terrainStroke_->previewMesh,
@@ -1402,6 +1401,7 @@ bool EditorSceneContext::ApplyTerrainChannel(
         CancelTerrainBrushStroke();
         return false;
     }
+    EditorTerrainService::UpdateCollision(*scene_, terrainStroke_->assetId, terrainStroke_->working, result, false);
     terrainStroke_->previewPublished = true;
     terrainStroke_->changed = true;
     return CommitTerrainBrushStroke(error);
@@ -4161,6 +4161,17 @@ bool EditorSceneContext::ApplyColliderFitToMesh(kb::scene::SceneEntity entity, s
         reason = "the entity has no Collider";
         return false;
     }
+    if (EditorTerrainService::IsTerrainEntity(*scene_, entity)) {
+        // A terrain is not baked into triangles: its collider is the height field of the terrain asset itself.
+        const auto* body = scene_->Components().Rigidbodies().TryGet(entity);
+        if (body != nullptr && body->bodyType != kb::scene::RigidbodyBodyType::Static) {
+            reason = "terrain collision requires a static body";
+            return false;
+        }
+        EditorTerrainService::AttachCollider(*scene_, entity);
+        reason = "terrain height field";
+        return true;
+    }
     if (collider->shape == kb::scene::ColliderShape::Mesh) {
         const auto* body = scene_->Components().Rigidbodies().TryGet(entity);
         if (body != nullptr && body->bodyType != kb::scene::RigidbodyBodyType::Static) {
@@ -4196,7 +4207,7 @@ bool EditorSceneContext::ApplyColliderFitToMesh(kb::scene::SceneEntity entity, s
             }
         } else {
             for (const auto& section : mesh->sections) {
-                if (section.lodLevel != 0 || (section.terrainLayerIndex != UINT8_MAX && section.terrainLayerIndex != 0)) continue;
+                if (section.lodLevel != 0) continue;
                 if (!appendSection(section.indexStart, section.indexCount, section.vertexStart)) {
                     reason = "mesh section indices are invalid"; return false;
                 }

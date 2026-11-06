@@ -4,7 +4,9 @@
 #include "TerrainLayerPainter.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -96,6 +98,9 @@ constexpr std::array<DefaultTerrainLayer, 2U> kDefaultTerrainLayers{ {
         if (error != nullptr) *error = "Terrain asset is not registered";
         return false;
     }
+    // A preview mesh that comes with the terrain was kept up to date by the brush, which told the physics world
+    // as it went; a terrain without one changed as a whole.
+    const bool wholeTerrainChanged = mesh == nullptr;
     if (mesh == nullptr) {
         std::optional<kb::render::RenderMeshAssetData> built =
             kb::render::RenderTerrainMeshBuilder::Build(terrain);
@@ -126,6 +131,10 @@ constexpr std::array<DefaultTerrainLayer, 2U> kDefaultTerrainLayers{ {
             std::move(mesh))) {
         if (error != nullptr) *error = manager.LastError();
         return false;
+    }
+    if (wholeTerrainChanged) {
+        static_cast<void>(kb::scene::PhysicsBackend::UpdateTerrain(
+            scene, assetId.value, terrain, kb::assets::TerrainSampleRegion{ 0U, 0U, terrain.width - 1U, terrain.height - 1U }));
     }
     if (error != nullptr) error->clear();
     return true;
@@ -334,13 +343,41 @@ bool EditorTerrainService::Create(
         .castsShadow = true,
         .receivesShadow = true,
     });
+    AttachCollider(scene, entity);
     return true;
 }
 
 bool EditorTerrainService::Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
     if (!IsTerrainEntity(scene, entity)) return false;
+    const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(entity);
+    if (collider != nullptr && collider->shape == kb::scene::ColliderShape::Terrain) {
+        scene.Components().Colliders().Remove(entity);
+    }
     scene.Components().MeshRenderers().Remove(entity);
     return true;
+}
+
+void EditorTerrainService::AttachCollider(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
+    if (renderer == nullptr) return;
+    kb::scene::ColliderComponent collider{};
+    if (const kb::scene::ColliderComponent* existing = scene.Components().Colliders().TryGet(entity)) collider = *existing;
+    collider.shape = kb::scene::ColliderShape::Terrain;
+    collider.meshAssetId = renderer->meshAssetId;
+    collider.center = {};
+    scene.Components().Colliders().Set(entity, collider);
+}
+
+void EditorTerrainService::UpdateCollision(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId assetId,
+    const kb::assets::TerrainAsset& terrain,
+    const kb::terrain_editor::TerrainBrushResult& changedRegion,
+    bool holeCells) {
+    const std::uint32_t reach = holeCells ? 1U : 0U;
+    static_cast<void>(kb::scene::PhysicsBackend::UpdateTerrain(scene, assetId.value, terrain, kb::assets::TerrainSampleRegion{
+        changedRegion.minX, changedRegion.minZ,
+        std::min(changedRegion.maxX + reach, terrain.width - 1U), std::min(changedRegion.maxZ + reach, terrain.height - 1U) }));
 }
 
 bool EditorTerrainService::PublishPreview(
