@@ -348,6 +348,9 @@ end
   cook print the same warnings.
 - `entity add --create Button` (or Text, Slider, ...) puts the widget under a Canvas, creating one when the scene has none, and gives
   every Text the bundled font; `component set ... --set eventTarget=Menu/Root` takes an object by its path.
+- Whole screens: `kb_cli entity add --project . --create "Main Menu"` (also `Pause`, `HUD`, `Settings`) builds the title, buttons,
+  health bar or sliders at once; the buttons carry event names (`PlayClicked`, `SettingsClicked`, `QuitClicked`, `ResumeClicked`,
+  `MainMenuClicked`, `BackClicked`) for your script to answer.
 - Try the menu without a window: `kb_cli run --project . --frames 12 --click Menu/PlayButton@5` presses the widget on frame 5 and says
   what was under the pointer and which script answered; `--report ui` lists every widget with its rectangle and its answering scripts.
 )md";

@@ -7,6 +7,8 @@
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 
+#include <algorithm>
+#include <array>
 #include <string>
 #include <utility>
 
@@ -232,6 +234,135 @@ SceneEntity CreateUIHierarchy(Scene& scene, UIComponentPreset preset, SceneObjec
         linked.verticalScrollbar = scrollbar.Id();
         ui.Set(viewportEntity, linked);
         return view;
+    }
+    return {};
+}
+
+namespace {
+
+constexpr std::array<UIScreenTemplateDescriptor, 4U> kScreenTemplates{ {
+    { UIScreenTemplate::MainMenu, "Main Menu", "Title with Play, Settings and Quit buttons." },
+    { UIScreenTemplate::Pause, "Pause", "Dimmed backdrop with Resume, Settings and Main Menu buttons." },
+    { UIScreenTemplate::Hud, "HUD", "A health bar top left and a score top right." },
+    { UIScreenTemplate::Settings, "Settings", "Dimmed backdrop with a volume slider, a fullscreen toggle and a Back button." },
+} };
+
+constexpr Vec2 kCentre{0.5F, 0.5F};
+constexpr Color kBackdrop{0.02F, 0.03F, 0.05F, 0.72F};
+constexpr Color kPanel{0.11F, 0.13F, 0.17F, 0.96F};
+
+// A rectangle `width` x `height` whose centre is `y` below the middle of its parent (and `x` right of it).
+[[nodiscard]] UIRectTransform Centred(float width, float height, float y, float x = 0.0F) {
+    return Anchored(kCentre, kCentre, {x - width * 0.5F, y - height * 0.5F}, {x + width * 0.5F, y + height * 0.5F});
+}
+
+[[nodiscard]] UIComponentSet Stretched(Color background) {
+    UIComponentSet set;
+    set.rectTransform = Anchored({0.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 0.0F}, {0.0F, 0.0F});
+    UIBorder border{};
+    border.backgroundColor = background;
+    border.borderColor = {0.0F, 0.0F, 0.0F, 0.0F};
+    border.borderWidth = {};
+    border.cornerRadius = {};
+    set.border = border;
+    return set;
+}
+
+[[nodiscard]] UIComponentSet Title(std::string_view text, float y) {
+    UIComponentSet set;
+    set.rectTransform = Centred(520.0F, 64.0F, y);
+    set.text = Label(text, 40.0F, UITextHorizontalAlignment::Center);
+    return set;
+}
+
+[[nodiscard]] UIComponentSet MenuButton(std::string_view text, std::string_view eventName, float y) {
+    UIComponentSet set = BuildUIComponentPreset(UIComponentPreset::Button);
+    set.rectTransform = Centred(240.0F, 44.0F, y);
+    static_cast<void>(SetUITextContent(*set.text, text));
+    set.text->fontSize = 20.0F;
+    static_cast<void>(SetUIEventName(*set.selectable, eventName));
+    return set;
+}
+
+} // namespace
+
+std::span<const UIScreenTemplateDescriptor> UIScreenTemplateCatalog() noexcept {
+    return kScreenTemplates;
+}
+
+const UIScreenTemplateDescriptor* FindUIScreenTemplate(std::string_view name) noexcept {
+    const auto found = std::ranges::find(kScreenTemplates, name, &UIScreenTemplateDescriptor::name);
+    return found == kScreenTemplates.end() ? nullptr : &*found;
+}
+
+SceneEntity CreateUIScreen(Scene& scene, UIScreenTemplate screen, SceneObject parent, std::string_view name,
+                           std::vector<SceneEntity>* created) {
+    Builder build{scene, created};
+    const auto add = [&build](SceneEntity under, std::string_view part, const UIComponentSet& set) {
+        return build.Add(build.Object(under), part, set);
+    };
+    switch (screen) {
+    case UIScreenTemplate::MainMenu: {
+        const SceneEntity root = build.Add(parent, name, Stretched({0.05F, 0.06F, 0.09F, 1.0F}));
+        static_cast<void>(add(root, "Title", Title("My Game", -150.0F)));
+        static_cast<void>(add(root, "Play", MenuButton("Play", "PlayClicked", -40.0F)));
+        static_cast<void>(add(root, "Settings", MenuButton("Settings", "SettingsClicked", 20.0F)));
+        static_cast<void>(add(root, "Quit", MenuButton("Quit", "QuitClicked", 80.0F)));
+        return root;
+    }
+    case UIScreenTemplate::Pause: {
+        const SceneEntity root = build.Add(parent, name, Stretched(kBackdrop));
+        UIComponentSet panel = Stretched(kPanel);
+        panel.rectTransform = Centred(360.0F, 300.0F, 0.0F);
+        panel.border->cornerRadius = {6.0F, 6.0F, 6.0F, 6.0F};
+        const SceneEntity box = add(root, "Panel", panel);
+        UIComponentSet heading = Title("Paused", -100.0F);
+        heading.rectTransform = Centred(320.0F, 48.0F, -100.0F);
+        static_cast<void>(add(box, "Title", heading));
+        static_cast<void>(add(box, "Resume", MenuButton("Resume", "ResumeClicked", -30.0F)));
+        static_cast<void>(add(box, "Settings", MenuButton("Settings", "SettingsClicked", 25.0F)));
+        static_cast<void>(add(box, "Main Menu", MenuButton("Main Menu", "MainMenuClicked", 80.0F)));
+        return root;
+    }
+    case UIScreenTemplate::Hud: {
+        UIComponentSet rootSet = Stretched({0.0F, 0.0F, 0.0F, 0.0F});
+        rootSet.border.reset();
+        const SceneEntity root = build.Add(parent, name, rootSet);
+        const SceneEntity health = CreateUIHierarchy(scene, UIComponentPreset::ProgressBar, build.Object(root), "Health", created);
+        UIRectTransform healthRect = *scene.Components().UI().TryGet<UIRectTransform>(health);
+        healthRect = Anchored({0.0F, 0.0F}, {0.0F, 0.0F}, {24.0F, 24.0F}, {264.0F, 40.0F}, {0.0F, 0.0F});
+        scene.Components().UI().Set(health, healthRect);
+        UIComponentSet score;
+        score.rectTransform = Anchored({1.0F, 0.0F}, {1.0F, 0.0F}, {-224.0F, 20.0F}, {-24.0F, 52.0F}, {1.0F, 0.0F});
+        score.text = Label("Score: 0", 24.0F, UITextHorizontalAlignment::Right);
+        static_cast<void>(add(root, "Score", score));
+        return root;
+    }
+    case UIScreenTemplate::Settings: {
+        const SceneEntity root = build.Add(parent, name, Stretched(kBackdrop));
+        UIComponentSet panel = Stretched(kPanel);
+        panel.rectTransform = Centred(460.0F, 320.0F, 0.0F);
+        panel.border->cornerRadius = {6.0F, 6.0F, 6.0F, 6.0F};
+        const SceneEntity box = add(root, "Panel", panel);
+        UIComponentSet heading = Title("Settings", -120.0F);
+        heading.rectTransform = Centred(420.0F, 48.0F, -120.0F);
+        static_cast<void>(add(box, "Title", heading));
+        UIComponentSet volumeLabel;
+        volumeLabel.rectTransform = Centred(140.0F, 32.0F, -40.0F, -140.0F);
+        volumeLabel.text = Label("Volume", 18.0F, UITextHorizontalAlignment::Left);
+        static_cast<void>(add(box, "Volume Label", volumeLabel));
+        const SceneEntity volume = CreateUIHierarchy(scene, UIComponentPreset::Slider, build.Object(box), "Volume", created);
+        scene.Components().UI().Set(volume, Centred(220.0F, 20.0F, -40.0F, 80.0F));
+        UIComponentSet fullscreenLabel;
+        fullscreenLabel.rectTransform = Centred(140.0F, 32.0F, 15.0F, -140.0F);
+        fullscreenLabel.text = Label("Fullscreen", 18.0F, UITextHorizontalAlignment::Left);
+        static_cast<void>(add(box, "Fullscreen Label", fullscreenLabel));
+        UIComponentSet toggle = BuildUIComponentPreset(UIComponentPreset::Toggle);
+        toggle.rectTransform = Centred(28.0F, 28.0F, 15.0F, -20.0F);
+        static_cast<void>(add(box, "Fullscreen", toggle));
+        static_cast<void>(add(box, "Back", MenuButton("Back", "BackClicked", 100.0F)));
+        return root;
+    }
     }
     return {};
 }

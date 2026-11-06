@@ -4297,6 +4297,68 @@ void RunUiDependencyCliTests() {
         "none must clear an object reference");
 }
 
+// The screen templates (Main Menu, Pause, HUD, Settings) come under one Canvas with the bundled font, their buttons
+// carry event names, and a script answers a click on them.
+void RunUiScreenCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const auto cli = [&](const std::vector<std::string>& words) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+    };
+    const auto must = [&](const std::vector<std::string>& words) {
+        const CliRun run = cli(words);
+        Require(run.exitCode == 0, run.out + run.err);
+    };
+    const std::string all = "Assets/Scenes/Screens.21kbscene";
+    must({ "scene-new", "--project", root, "--name", "Screens", "--template", "Empty" });
+    bool first = true;
+    for (const char* screen : { "Main Menu", "Pause", "HUD", "Settings" }) {
+        std::vector<std::string> add{ "entity", "add", "--project", root, "--scene", all, "--create", screen };
+        if (!first) {
+            add.push_back("--parent");
+            add.push_back("Canvas");
+        }
+        must(add);
+        first = false;
+    }
+    // Four screens under the one Canvas the first one made; every Text has the font; the events nothing answers are named.
+    const CliRun checked = cli({ "validate", "--project", root, all });
+    Require(checked.exitCode == 0 && Contains(checked.out, "(7 warnings)") && !Contains(checked.out, "[ui-no-canvas]") &&
+            !Contains(checked.out, "[ui-text-no-font]") && Contains(checked.out, ":Canvas/Main Menu/Play: [ui-event-no-handler] event name \"PlayClicked\"") &&
+            Contains(checked.out, ":Canvas/Settings/Panel/Back: [ui-event-no-handler]"),
+        "the screens must come complete and name only the events a script has to answer: " + checked.out + checked.err);
+    const CliRun hud = cli({ "run", "--project", root, "--scene", all, "--frames", "2", "--report", "ui" });
+    JsonValue hudReport;
+    std::string hudError;
+    Require(JsonValue::Parse(hud.out, hudReport, hudError), "the UI report must parse: " + hud.out.substr(0U, 300U));
+    double scoreY = 1.0e9, scoreX = 0.0;
+    bool health = false;
+    for (std::size_t index = 0U; index < hudReport.Find("widgets")->Size(); ++index) {
+        const JsonValue* widget = hudReport.Find("widgets")->At(index);
+        const std::string& path = widget->Find("path")->AsString();
+        health = health || path == "Canvas/HUD/Health/Fill";
+        if (path == "Canvas/HUD/Score") {
+            scoreY = widget->Find("rect")->Find("y")->AsNumber();
+            scoreX = widget->Find("rect")->Find("x")->AsNumber();
+        }
+    }
+    Require(health && scoreY < 100.0 && scoreX > 1000.0, "the HUD must lay out a health bar and a score in the top right corner");
+
+    // A menu alone: a script answers the Play button.
+    must({ "scene-new", "--project", root, "--name", "Title", "--template", "Empty" });
+    const std::string title = "Assets/Scenes/Title.21kbscene";
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Title.lua", "function PlayClicked(self, event)\n    Log('title-play')\nend\n");
+    must({ "entity", "add", "--project", root, "--scene", title, "--create", "Main Menu" });
+    must({ "scene-attach", "--project", root, "--scene", title, "--node", "Play", "--script", "/Game/Logic/Title.lua" });
+    const CliRun played = cli({ "run", "--project", root, "--scene", title, "--frames", "6", "--click", "Canvas/Main Menu/Play@3" });
+    Require(played.exitCode == 0 && Contains(played.out, "[log] title-play") && Contains(played.out, "PlayClicked -> Canvas/Main Menu/Play answered by 1"),
+        "a click on the template's Play button must reach the script: " + played.out + played.err);
+}
+
 // run --click drives a menu without a recording, and --report ui says what is on screen and who answered.
 void RunUiClickCliTests() {
     PrepareProject();
@@ -5610,6 +5672,7 @@ int main(int argc, char** argv) {
         RunUiValidationCliTests();
         RunUiDependencyCliTests();
         RunUiClickCliTests();
+        RunUiScreenCliTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
@@ -5671,6 +5734,7 @@ int main(int argc, char** argv) {
     RunUiValidationCliTests();
     RunUiDependencyCliTests();
     RunUiClickCliTests();
+    RunUiScreenCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();
     RunParticleReportCommandTests();

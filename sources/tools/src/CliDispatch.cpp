@@ -329,7 +329,10 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
-                 --name then defaults to the item. --create 'Platformer Player', 'Top Down Player' or 'Platformer Navigator'
+                 --name then defaults to the item. UI widgets (Canvas, Text, Button, Slider, ...) and the screens
+                 'Main Menu', 'Pause', 'HUD' and 'Settings' go under a Canvas with the bundled font; a screen's
+                 buttons carry event names (PlayClicked, ResumeClicked, BackClicked, ...) for a script to answer.
+                 --create 'Platformer Player', 'Top Down Player' or 'Platformer Navigator'
                  makes a 2D player named Player with Sprite2D, CharacterController2D, a following
                  orthographic camera and Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua.
                  Existing scripts and input contexts are preserved; a new project gets Move/Jump

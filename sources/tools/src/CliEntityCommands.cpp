@@ -802,6 +802,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
     const kb::scene::SceneCreateItem* createItem = create.has_value() ? kb::scene::SceneCreateMenu::Find(*create) : nullptr;
     const auto* uiPreset = create.has_value() && createItem == nullptr
         ? kb::scene::FindUIComponentPreset(*create) : nullptr;
+    const auto* screenTemplate = create.has_value() && createItem == nullptr && uiPreset == nullptr
+        ? kb::scene::FindUIScreenTemplate(*create) : nullptr;
     const bool playerPreset = create.has_value() && IsPlayerPreset(*create);
     const std::optional<std::string> physics = arguments.Option("--physics");
     if (physics.has_value() && (!playerPreset || (*physics != "2d" && *physics != "3d"))) {
@@ -865,10 +867,12 @@ void ListProperties(std::string_view component, std::ostream& out) {
             io.err << "error: '" << *name << "' could not be parented\n";
             return 1;
         }
-    } else if (uiPreset != nullptr) {
+    } else if (uiPreset != nullptr || screenTemplate != nullptr) {
         const auto parentObject = parent ? scene.Entities().Object(*parent) : kb::scene::SceneObject{};
         std::vector<kb::scene::SceneEntity> parts;
-        if (kb::scene::IsUIHierarchyPreset(uiPreset->preset)) {
+        if (screenTemplate != nullptr) {
+            entity = kb::scene::CreateUIScreen(scene, screenTemplate->id, parentObject, *name, &parts);
+        } else if (kb::scene::IsUIHierarchyPreset(uiPreset->preset)) {
             entity = kb::scene::CreateUIHierarchy(scene, uiPreset->preset, parentObject, *name, &parts);
         } else {
             entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = *name, .parent = parentObject});
