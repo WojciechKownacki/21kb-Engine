@@ -14,9 +14,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 void RunTerrainToolsTests();
 void RunTerrainRiverTests();
@@ -61,6 +63,46 @@ void RunAssetRoundTripTest() {
             loaded->materialLayers[1].materialAssetId == 202U &&
             loaded->layerWeights == terrain.layerWeights,
         "Terrain round-trip changed material layers or painted weights");
+}
+
+// A version 3 file with its settings block cut off reads as version 2; a layerless one cut after the holes as
+// version 1. Both take the default settings.
+void RunLegacyFormatTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(33U, 64.0F, 64.0F);
+    terrain.heights[Center(terrain)] = 3.0F;
+    terrain.lodPixelError = 3.5F;
+    terrain.collisionStep = 2U;
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "kb_terrain_editor_legacy.kbterrain";
+    std::string error;
+    Require(kb::assets::TerrainAssetIO::Save(path, terrain, &error), error.c_str());
+    std::ifstream input(path, std::ios::binary);
+    std::vector<std::uint8_t> bytes{ std::istreambuf_iterator<char>(input), {} };
+    input.close();
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+    const auto current = kb::assets::TerrainAssetIO::Load(bytes, &error);
+    Require(current && current->lodPixelError == 3.5F && current->collisionStep == 2U &&
+            current->heights == terrain.heights,
+        "Version 3 settings did not round-trip");
+    constexpr std::size_t versionOffset = 8U;
+    constexpr std::size_t settingsBytes = sizeof(float) + sizeof(std::uint32_t);
+    constexpr std::size_t emptyLayerBlockBytes = 3U * sizeof(std::uint32_t);
+    std::vector<std::uint8_t> version2(bytes.begin(), bytes.end() - settingsBytes);
+    version2[versionOffset] = 2U;
+    const auto legacy2 = kb::assets::TerrainAssetIO::Load(version2, &error);
+    Require(legacy2 && legacy2->heights == terrain.heights &&
+            legacy2->lodPixelError == kb::assets::TerrainAsset::DefaultLodPixelError && legacy2->collisionStep == 1U,
+        "Version 2 file did not read with default settings");
+    std::vector<std::uint8_t> version1(version2.begin(), version2.end() - emptyLayerBlockBytes);
+    version1[versionOffset] = 1U;
+    const auto legacy1 = kb::assets::TerrainAssetIO::Load(version1, &error);
+    Require(legacy1 && legacy1->heights == terrain.heights && legacy1->materialLayers.empty(),
+        "Version 1 file did not read");
+    version1.push_back(0U);
+    Require(!kb::assets::TerrainAssetIO::Load(version1, &error), "Version 1 file with trailing bytes was accepted");
+    std::vector<std::uint8_t> badStep = bytes;
+    badStep[bytes.size() - sizeof(std::uint32_t)] = 3U;
+    Require(!kb::assets::TerrainAssetIO::Load(badStep, &error), "Terrain with a non power of two collision step was accepted");
 }
 
 void RunMaterialLayerPaintTest() {
@@ -570,6 +612,7 @@ void RunRuntimeLoaderTest() {
 int main() {
     try {
         RunAssetRoundTripTest();
+        RunLegacyFormatTest();
         RunBrushTest();
         RunBrushShapeTest();
         RunMaterialLayerPaintTest();

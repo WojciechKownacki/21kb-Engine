@@ -40,6 +40,15 @@ bool IsTerrainAssetValid(const TerrainAsset& terrain, std::string* error) noexce
         SetError(error, "Terrain LOD count must be from 1 to 8");
         return false;
     }
+    if (!std::isfinite(terrain.lodPixelError) || terrain.lodPixelError < 0.25F || terrain.lodPixelError > 16.0F) {
+        SetError(error, "Terrain LOD pixel error must be from 0.25 to 16");
+        return false;
+    }
+    if (terrain.collisionStep == 0U || terrain.collisionStep > TerrainAsset::MaximumCollisionStep ||
+        !IsPowerOfTwo(terrain.collisionStep)) {
+        SetError(error, "Terrain collision step must be 1, 2, 4 or 8");
+        return false;
+    }
     const std::uint64_t vertexCount = static_cast<std::uint64_t>(terrain.width) * terrain.height;
     const std::uint64_t cellCount = static_cast<std::uint64_t>(terrain.width - 1U) * (terrain.height - 1U);
     if (terrain.heights.size() != vertexCount || terrain.holes.size() != cellCount) {
