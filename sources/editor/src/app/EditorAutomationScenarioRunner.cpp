@@ -153,6 +153,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "scene/EditorMap2DService.hpp"
+#include "TerrainOps.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
@@ -3209,6 +3210,8 @@ ReadScriptValue(
     }
 
     if (*operation == "terrain_stamp") {
+        // The brush options are the ones of terrain operations (mode, shape, radius, strength, falloff,
+        // height, step, softness, seed, invert, symmetry, noise*, to, toHeight, image, rotation, blend).
         const auto alias = StringMember(step, "entity", error);
         const auto x = NumberMember(step, "x", error);
         const auto z = NumberMember(step, "z", error);
@@ -3217,13 +3220,9 @@ ReadScriptValue(
         if (!EditorTerrainService::IsTerrainEntity(state.context.Scene(), entity)) {
             return { false, "entity does not have a Terrain Editor component" };
         }
+        kb::terrain_editor::TerrainOpContext opContext{};
         kb::terrain_editor::TerrainBrushSettings settings{};
-        settings.radius = static_cast<float>(
-            NumberMember(step, "radius", error, false).value_or(settings.radius));
-        settings.strength = static_cast<float>(
-            NumberMember(step, "strength", error, false).value_or(settings.strength));
-        settings.falloff = static_cast<float>(
-            NumberMember(step, "falloff", error, false).value_or(settings.falloff));
+        if (!kb::terrain_editor::ParseTerrainBrushSettings(step, opContext, settings, error)) return { false, error };
         const kb::terrain_editor::TerrainBrushStamp stamp{
             .localX = static_cast<float>(*x),
             .localZ = static_cast<float>(*z),
@@ -3233,6 +3232,9 @@ ReadScriptValue(
         if (!kb::terrain_editor::IsTerrainBrushSettingsValid(settings)) {
             return { false, "terrain brush settings are invalid" };
         }
+        const kb::assets::TerrainAsset* terrain = state.context.TerrainForEditing(entity, &error);
+        if (terrain == nullptr) return { false, error };
+        kb::terrain_editor::BeginTerrainStroke(*terrain, settings, stamp);
         if (!state.context.ApplyTerrainBrushStamp(entity, settings, stamp, true, &error)) {
             return { false, error };
         }
@@ -3240,6 +3242,31 @@ ReadScriptValue(
             return { false, error };
         }
         return { true, "terrain stroke committed" };
+    }
+
+    if (*operation == "terrain_paint") {
+        // layer, x, z (and to_x, to_z for a stroke between two points), radius, opacity, falloff, shape, erase, seed.
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!alias || !x || !z) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!EditorTerrainService::IsTerrainEntity(state.context.Scene(), entity)) {
+            return { false, "entity does not have a Terrain Editor component" };
+        }
+        kb::terrain_editor::TerrainLayerPaintSettings settings{};
+        if (!kb::terrain_editor::ParseTerrainLayerPaintSettings(step, settings, error)) return { false, error };
+        const kb::terrain_editor::TerrainBrushStamp start{ .localX = static_cast<float>(*x), .localZ = static_cast<float>(*z) };
+        const auto toX = NumberMember(step, "to_x", error, false);
+        const auto toZ = NumberMember(step, "to_z", error, false);
+        if (!error.empty()) return { false, error };
+        const bool applied = toX && toZ
+            ? state.context.ApplyTerrainLayerPaintSegment(entity, settings, start,
+                kb::terrain_editor::TerrainBrushStamp{ .localX = static_cast<float>(*toX), .localZ = static_cast<float>(*toZ) }, true, &error)
+            : state.context.ApplyTerrainLayerPaintStamp(entity, settings, start, true, &error);
+        if (!applied) return { false, error };
+        if (!state.context.CommitTerrainBrushStroke(&error)) return { false, error };
+        return { true, "terrain paint committed" };
     }
 
     if (*operation == "assert_terrain_height") {

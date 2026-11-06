@@ -10,6 +10,7 @@ import tempfile
 # Height hashes of the engine's own maths: a change in a brush or the file format shows here first.
 GOLDEN_FLAT_129 = "3ed011c271f10e05"
 GOLDEN_RAISE = "537d008342114f69"
+GOLDEN_MOUNTAINS = "0e9cf1898b42dfc2"
 
 
 def main():
@@ -132,9 +133,82 @@ def main():
     terrain("layer", "remove", "--terrain", hills, "--index", "1")
     assert "layers 1" in terrain("info", "--terrain", hills)
 
+    exports = project / "Exports"
+    # Brushes beyond the plain ones: noise that joins up, ramp, terrace, stamp, symmetry, Ctrl, the eyedropper.
+    sculpt = assets / "Terrains" / "Sculpt.kbterrain"
+    terrain("new", "--terrain", sculpt, "--size", "128", "--resolution", "129")
+    clean = sculpt.read_bytes()
+    terrain("brush", "--terrain", sculpt, "--mode", "noise", "--x", "0", "--z", "0", "--radius", "40", "--strength", "4", "--falloff", "0.5",
+            "--seed", "5", "--noise-scale", "20", "--symmetry", "xz")
+    assert abs(height(sculpt, 12, 7) - height(sculpt, -12, -7)) < 0.002 and abs(height(sculpt, 12, 7) - height(sculpt, -12, 7)) < 0.002
+    noisy = height_hash(sculpt)
+    terrain("brush", "--terrain", sculpt, "--mode", "noise", "--x", "0", "--z", "0", "--radius", "40", "--strength", "4", "--falloff", "0.5",
+            "--seed", "5", "--noise-scale", "20", "--symmetry", "xz", "--invert", "yes")    # Ctrl takes it away again
+    assert abs(height(sculpt, 12, 7)) < 0.002 and height_hash(sculpt) != noisy
+    sculpt.write_bytes(clean)
+    terrain("brush", "--terrain", sculpt, "--mode", "raise", "--x", "40", "--z", "0", "--radius", "12", "--strength", "20", "--falloff", "1")
+    terrain("brush", "--terrain", sculpt, "--mode", "ramp", "--x", "-40", "--z", "0", "--to", "40,0", "--radius", "6")  # heights: the terrain's own
+    assert abs(height(sculpt, 0, 0) - 10.0) < 0.2, height(sculpt, 0, 0)
+    terrain("brush", "--terrain", sculpt, "--mode", "ramp", "--x", "-40", "--z", "-30", "--to", "40,-30", "--radius", "4", "--height", "2", "--to-height", "12")
+    assert abs(height(sculpt, 0, -30) - 7.0) < 0.1
+    terrain("brush", "--terrain", sculpt, "--mode", "ramp", "--x", "-40", "--z", "-30", "--to", "40,-30", "--radius", "4", "--height", "2", expected=1)
+    terrain("brush", "--terrain", sculpt, "--mode", "ramp", "--x", "0", "--z", "0", "--radius", "4", expected=1)
+    terrain("brush", "--terrain", sculpt, "--mode", "terrace", "--x", "0", "--z", "-30", "--radius", "40", "--falloff", "1", "--step", "4", "--softness", "0.3")
+    terrain("brush", "--terrain", sculpt, "--mode", "flatten", "--x", "40", "--z", "40", "--radius", "5", "--height", "sample", "--strength", "1", expected=1)  # flat already: nothing changes
+    terrain("brush", "--terrain", sculpt, "--mode", "flatten", "--path", "40,0;40,40", "--radius", "5", "--height", "sample", "--falloff", "1")
+    assert abs(height(sculpt, 40, 36) - height(sculpt, 40, 0)) < 0.5
+    stamp_image = exports / "stamp.png"
+    terrain("export", "--terrain", sculpt, "--out", stamp_image)
+    terrain("brush", "--terrain", sculpt, "--mode", "stamp", "--image", stamp_image, "--x", "-40", "--z", "40", "--radius", "16", "--strength", "6",
+            "--rotation", "45", "--blend", "add")
+    assert height(sculpt, -40, 40) > 0.5
+    terrain("brush", "--terrain", sculpt, "--mode", "stamp", "--x", "-40", "--z", "40", "--radius", "16", expected=1)               # no image
+    terrain("brush", "--terrain", sculpt, "--mode", "stamp", "--image", exports / "missing.png", "--x", "0", "--z", "0", expected=1)
+    terrain("brush", "--terrain", sculpt, "--mode", "raise", "--x", "0", "--z", "0", "--symmetry", "y", expected=1)
+    terrain("brush", "--terrain", sculpt, "--mode", "noise", "--x", "0", "--z", "0", "--noise-octaves", "12", expected=1)
+    terrain("apply", "--terrain", sculpt, "--ops", json.dumps([
+        {"op": "brush", "mode": "stamp", "image": "Exports/stamp.png", "x": 20, "z": 50, "radius": 10, "strength": 3, "blend": "max"},
+        {"op": "brush", "mode": "terrace", "x": 20, "z": 50, "radius": 12, "step": 2, "softness": 0.5}]))
+
+    # Whole worlds: generators and erosion, repeatable on any number of threads, stoppable.
+    world = assets / "Terrains" / "World.kbterrain"
+    world_again = assets / "Terrains" / "WorldAgain.kbterrain"
+    terrain("new", "--terrain", world, "--preset", "mountains", "--seed", "7", "--size", "512", "--resolution", "129")
+    terrain("new", "--terrain", world_again, "--preset", "mountains", "--seed", "7", "--size", "512", "--resolution", "129", "--threads", "1")
+    assert height_hash(world) == height_hash(world_again) != flat
+    expect_hash("mountains preset", height_hash(world), GOLDEN_MOUNTAINS)
+    terrain("new", "--terrain", assets / "Terrains" / "Bad.kbterrain", "--preset", "moon", expected=1)
+    for preset in ("hills", "island", "plateau"):
+        made = assets / "Terrains" / f"Preset_{preset}.kbterrain"
+        terrain("new", "--terrain", made, "--preset", preset, "--seed", "3", "--resolution", "65", "--size", "256")
+        assert "heightHash" in terrain("info", "--terrain", made)
+    drawn = terrain("info", "--terrain", world)
+    assert float(value(drawn, "height").split()[3]) > 20, drawn
+    terrain("generate", "--terrain", world, "--kind", "ridged", "--seed", "11", "--amplitude", "80", "--scale", "200", "--warp", "20")
+    first = height_hash(world)
+    terrain("generate", "--terrain", world_again, "--kind", "ridged", "--seed", "11", "--amplitude", "80", "--scale", "200", "--warp", "20", "--threads", "2")
+    assert height_hash(world_again) == first
+    terrain("generate", "--terrain", world, "--kind", "island", "--seed", "2", "--island-radius", "0.5", "--add", "yes")
+    assert height_hash(world) != first
+    terrain("generate", "--terrain", world, "--kind", "dunes", expected=1)
+    terrain("generate", "--terrain", world, "--scale", "0", expected=1)
+    terrain("generate", "--terrain", world, "--bogus", "1", expected=1)
+    terrain("erode", "--terrain", world, "--mode", "hydraulic", "--iterations", "40", "--strength", "0.5")
+    wet = height_hash(world)
+    terrain("erode", "--terrain", world, "--mode", "thermal", "--iterations", "10", "--talus", "30")
+    assert height_hash(world) != wet
+    terrain("erode", "--terrain", world, "--mode", "thermal", "--rain", "0.1", expected=1)
+    terrain("erode", "--terrain", world, "--mode", "hydraulic", "--iterations", "0", expected=1)
+    before = world.read_bytes()
+    big = assets / "Terrains" / "Big.kbterrain"
+    terrain("new", "--terrain", big, "--resolution", "1025", "--size", "1024")
+    big_bytes = big.read_bytes()
+    stopped = terrain("erode", "--terrain", big, "--iterations", "100000", "--max-seconds", "0.5", expected=1)
+    assert "time limit" in stopped and big.read_bytes() == big_bytes, stopped
+    assert world.read_bytes() == before
+
     # Heightmaps out and back in, and previews.
     final = height_hash(hills)
-    exports = project / "Exports"
     for extension in ("png", "raw"):
         image = exports / f"hills.{extension}"
         exported = terrain("export", "--terrain", hills, "--out", image)

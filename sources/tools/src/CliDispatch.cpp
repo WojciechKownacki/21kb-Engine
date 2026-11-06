@@ -205,27 +205,45 @@ R"(  rig2d new/show/set/build --project <dir> [--name <Name> | --rig <path>] [--
   vector2d-set/show --project <dir> --shape <path> [--points <JSON array>] [--width <number>]
 )"
 R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - brushes, material layers,
-               heightmap import - on a file, so an agent can shape ground without the editor. x, z are
-               world units from the terrain's centre (terrain info prints the extent). Strokes, paths and
-               batches are saved at once; a stroke that changes nothing is an error.
+               heightmap import, generators and erosion - on a file, so an agent can shape ground without
+               the editor. x, z are world units from the terrain's centre (terrain info prints the extent).
+               Strokes, paths and batches are saved at once; a stroke that changes nothing is an error.
                  new --project <dir> (--name <Entity> [--scene <path>] [--position x,y,z] | --terrain <file>)
-                     [--resolution 129] [--size 128|256x128] [--chunk-quads 32] [--lod-count 4]   (flat; resolution 2^n+1, 17..2049)
+                     [--resolution 129] [--size 128|256x128] [--chunk-quads 32] [--lod-count 4]
+                     [--preset flat|hills|mountains|island|plateau] [--seed 1] [--threads <n>] [--max-seconds <n>]
+                     (flat unless a preset makes a whole world, generated and eroded; resolution 2^n+1, 17..2049)
                  info --terrain <file>    (size, heights, slopes, layers, heightHash)
                  sample --terrain <file> --x <n> --z <n>    (height, normal, slope, layer weights)
-                 brush --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole]
+                 brush --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole|ramp|stamp]
                      [--shape soft-round|hard-round|linear-round|bell|ring|speckle]
                      (--x <n> --z <n> | --path "x,z;x,z") [--radius 8] [--strength 1] [--falloff 0.65]
-                     [--height <flatten target>] [--step <terrace step>] [--seed <n>] [--spacing <n>]
+                     [--invert yes (Ctrl: raise lowers, ...)] [--symmetry x|z|xz (mirrored across x=0 and/or z=0)]
+                     [--spacing <n>] (strength is per stamp; a path stamps every --spacing, default a quarter radius)
+                     flatten: [--height <n>|sample]   terrace: [--step 2] [--softness 0..1]   noise: [--seed <n>]
+                     [--noise-kind gradient|value] [--noise-scale 16] [--noise-octaves 3]
+                     ramp: --x/--z the start, --to x,z the end, [--height <n> --to-height <n>] (none: the terrain's own),
+                     --radius the half width, --falloff the flat share of the strip
+                     stamp: --image <heightmap.png> [--rotation 0] [--blend add|max|min] [--height <base for max/min>]
+                     (strength = height of white; the image covers a square of side 2 x radius)
                  apply --terrain <file> --ops <ops.json | inline JSON>    (a batch: [{"op":"brush","mode":"raise","x":0,"z":0}, ...])
                  layer list|add|set|remove --terrain <file> [--material </Game/....kbmat> | --material-id <n>] [--index <n>]   (up to 4)
                  paint --terrain <file> --layer <n> (--x <n> --z <n> | --path "x,z;x,z") [--radius 8] [--opacity 1] [--falloff 0.65]
                      [--shape soft-round] [--erase yes] | --layer <n> --auto slope=35..90,height=-5..40
                      [--slope-blend 3] [--height-blend 1] [--opacity 1]    (by slope in degrees and height)
+                 generate --terrain <file> [--kind fbm|ridged|island|plateau] [--seed 1] [--amplitude 24] [--base 0]
+                     [--scale <world units>] [--octaves 6] [--lacunarity 2] [--gain 0.5] [--noise-kind gradient|value] [--warp 0]
+                     [--island-radius 0.65] [--island-falloff 0.3] [--plateau-level 0.55] [--plateau-softness 0.04] [--add yes]
+                     (heights from noise on every core; the same seed gives the same ground)
+                 erode --terrain <file> [--mode hydraulic|thermal] [--iterations 150]
+                     hydraulic: [--rain 0.0015] [--evaporation 0.03] [--strength 0.4]   thermal: [--talus 35] [--strength 0.5]
+                 (generate, erode and presets run in the background of the command: [--threads <n>] caps the cores,
+                 [--max-seconds <n>] stops them and saves nothing)
                  import --terrain <file> --source <heightmap.png|.raw|.r16> [--min -32] [--max 32] [--size 512[x256]] [--flip yes] [--replace]
                  export --terrain <file> --out <file.png|.raw|.r16> [--min <n> --max <n>]    (16 bit)
                  preview --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]
                  --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path; --project is needed for /Game paths.
-  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
+)"
+R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
                Map component and Map Editor window do - grounds with automatic borders (Remere's Map
                Editor style), sprites as items or grounds, floors -50..50, a Map Camera for Play.
                  new --project <dir> --name <Entity> [--scene <path>] [--size 64x64]

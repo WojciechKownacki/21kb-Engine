@@ -1,8 +1,10 @@
 #pragma once
 
+#include "TerrainNoise.hpp"
 #include "engine/assets/TerrainAsset.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -18,6 +20,8 @@ enum class TerrainBrushMode : std::uint8_t {
     Terrace,
     CutHole,
     FillHole,
+    Ramp,  // a sloped strip from the stamp to (rampEndX, rampEndZ), `radius` wide on each side
+    Stamp, // a height image pressed into the terrain
 };
 
 enum class TerrainBrushShape : std::uint8_t {
@@ -29,15 +33,50 @@ enum class TerrainBrushShape : std::uint8_t {
     Speckle,
 };
 
+enum class TerrainStampBlend : std::uint8_t {
+    Add, // the image's heights are added to the terrain
+    Max, // the terrain rises to the image where the image is higher
+    Min, // the terrain drops to the image where the image is lower
+};
+
+// A greyscale height image, 0 (black) to 1 (white), row 0 at the low z side.
+struct TerrainStampImage {
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    std::vector<float> samples;
+};
+
 struct TerrainBrushSettings {
     TerrainBrushMode mode = TerrainBrushMode::Raise;
     TerrainBrushShape shape = TerrainBrushShape::SoftRound;
     float radius = 8.0F;
     float strength = 1.0F;
     float falloff = 0.65F;
+    // Flatten: the height to flatten to. Stamp: the base height of Max and Min. Ramp: the height at the start.
     float targetHeight = 0.0F;
     float terraceStep = 2.0F;
     std::uint32_t noiseSeed = 1U;
+    // Terrace: 0 gives flat steps with sharp risers, 1 rounds every step into the next.
+    float terraceSoftness = 0.0F;
+    // Noise: coherent noise in world space, so strokes beside each other join up.
+    TerrainNoiseKind noiseKind = TerrainNoiseKind::Gradient;
+    float noiseScale = 16.0F;
+    std::uint8_t noiseOctaves = 3U;
+    // Ctrl: raise lowers, lower raises, noise and stamps carve, cut hole fills.
+    bool invert = false;
+    // Every stroke is repeated mirrored across the terrain's centre plane x = 0 and/or z = 0.
+    bool symmetryX = false;
+    bool symmetryZ = false;
+    // Flatten, Stamp and Ramp take their heights from the terrain under the stroke's start (and a
+    // ramp's end) when the stroke begins; see BeginTerrainStroke.
+    bool sampleTargetHeight = false;
+    float rampEndX = 0.0F;
+    float rampEndZ = 0.0F;
+    float rampEndHeight = 0.0F;
+    // Stamp: the image covers a square of side 2 x radius, turned by the rotation, and is `strength` high.
+    std::shared_ptr<const TerrainStampImage> stampImage;
+    float stampRotationDegrees = 0.0F;
+    TerrainStampBlend stampBlend = TerrainStampBlend::Add;
 };
 
 struct TerrainBrushStamp {
@@ -61,8 +100,17 @@ struct TerrainBrushResult {
 [[nodiscard]] std::optional<TerrainBrushMode> ParseTerrainBrushMode(std::string_view text) noexcept;
 [[nodiscard]] std::string_view TerrainBrushShapeName(TerrainBrushShape shape) noexcept;
 [[nodiscard]] std::optional<TerrainBrushShape> ParseTerrainBrushShape(std::string_view text) noexcept;
+[[nodiscard]] std::string_view TerrainStampBlendName(TerrainStampBlend blend) noexcept;
+[[nodiscard]] std::optional<TerrainStampBlend> ParseTerrainStampBlend(std::string_view text) noexcept;
 
 [[nodiscard]] bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept;
+// Settles what depends on the terrain when a stroke begins at `first`: with sampleTargetHeight a
+// Flatten stroke takes the height under its start as the target (so does a Stamp as its base), and
+// a Ramp takes the heights under both of its ends. The settings are then what every stamp of the stroke uses.
+void BeginTerrainStroke(
+    const kb::assets::TerrainAsset& terrain,
+    TerrainBrushSettings& settings,
+    const TerrainBrushStamp& first) noexcept;
 [[nodiscard]] float TerrainBrushWeight(
     float distance,
     std::uint32_t sampleX,

@@ -1,10 +1,14 @@
 #include "CliCommands.hpp"
 
 #include "TerrainAnalysis.hpp"
+#include "TerrainErosion.hpp"
+#include "TerrainGenerators.hpp"
 #include "TerrainHeightmapImporter.hpp"
 #include "TerrainImageExport.hpp"
 #include "TerrainLayerPainter.hpp"
 #include "TerrainOps.hpp"
+#include "TerrainPresets.hpp"
+#include "TerrainTask.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -35,20 +39,30 @@
 namespace kb::cli {
 namespace {
 
+using kb::terrain_editor::TerrainBackgroundTask;
+using kb::terrain_editor::TerrainTaskControl;
+
 constexpr std::string_view kUsage =
     "usage: kb_cli terrain <action> [--project <dir>] --terrain <file> ...\n"
     "  --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path (a path outside a project\n"
     "  needs no --project). Positions x,z are in world units from the terrain's centre (see info).\n"
     "  new        [--name <Entity> [--scene <path>] [--position x,y,z]] [--terrain <file>] [--resolution 129]\n"
-    "             [--size 128|256x128] [--chunk-quads 32] [--lod-count 4]\n"
-    "             (a flat terrain; resolution is 2^n+1, 17..2049; --name also places it in the scene)\n"
+    "             [--size 128|256x128] [--chunk-quads 32] [--lod-count 4] [--preset flat|hills|mountains|island|plateau] [--seed 1]\n"
+    "             (flat unless a preset makes a whole world: generated, then eroded; resolution is 2^n+1, 17..2049;\n"
+    "             --name also places it in the scene; the generating options below apply to a preset too)\n"
     "  info       --terrain <file>              (size, heights, slopes, layers, height hash)\n"
     "  sample     --terrain <file> --x <n> --z <n>   (height, normal, slope and layer weights there)\n"
-    "  brush      --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole]\n"
+    "  brush      --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole|ramp|stamp]\n"
     "             [--shape soft-round|hard-round|linear-round|bell|ring|speckle]\n"
     "             (--x <n> --z <n> | --path \"x,z;x,z\") [--radius 8] [--strength 1] [--falloff 0.65]\n"
-    "             [--height <flatten target>] [--step <terrace step>] [--seed <n>] [--spacing <n>]\n"
-    "             (strength is per stamp; a path stamps every --spacing, default a quarter radius)\n"
+    "             [--invert yes (Ctrl: raise lowers, ...)] [--symmetry x|z|xz (mirrored across x=0 and/or z=0)]\n"
+    "             [--spacing <n>] (strength is per stamp; a path stamps every --spacing, default a quarter radius)\n"
+    "             flatten: [--height <n>|sample]   terrace: [--step 2] [--softness 0..1]   noise: [--seed <n>]\n"
+    "             [--noise-kind gradient|value] [--noise-scale 16] [--noise-octaves 3]\n"
+    "             ramp: --x/--z the start, --to x,z the end, [--height <n> --to-height <n>] (none: the terrain's own),\n"
+    "             --radius the half width, --falloff the flat share of the strip\n"
+    "             stamp: --image <heightmap.png> [--rotation 0] [--blend add|max|min] [--height <base for max/min>]\n"
+    "             (strength = height of white; the image covers a square of side 2 x radius)\n"
     "  apply      --terrain <file> --ops <ops.json | inline JSON>   (many strokes in one save; op members\n"
     "             are the brush/paint/auto-paint options: {\"ops\":[{\"op\":\"brush\",\"mode\":\"raise\",\"x\":0,\"z\":0}]})\n"
     "  layer      list | add (--material <.kbmat path> | --material-id <n>)\n"
@@ -57,6 +71,12 @@ constexpr std::string_view kUsage =
     "             [--falloff 0.65] [--shape soft-round] [--erase yes]\n"
     "             | --terrain <file> --layer <n> --auto slope=35..90,height=-5..40 [--slope-blend 3] [--height-blend 1]\n"
     "             [--opacity 1]   (by the ground's slope in degrees and height)\n"
+    "  generate   --terrain <file> [--kind fbm|ridged|island|plateau] [--seed 1] [--amplitude 24] [--base 0] [--scale <world units>]\n"
+    "             [--octaves 6] [--lacunarity 2] [--gain 0.5] [--noise-kind gradient|value] [--warp 0] [--add yes (instead of replace)]\n"
+    "             [--island-radius 0.65] [--island-falloff 0.3] [--plateau-level 0.55] [--plateau-softness 0.04]\n"
+    "             (heights from noise, on every core, the same seed gives the same ground; --threads <n> --max-seconds <n>)\n"
+    "  erode      --terrain <file> [--mode hydraulic|thermal] [--iterations 150] (hydraulic: [--rain 0.0015] [--evaporation 0.03]\n"
+    "             [--strength 0.4]; thermal: [--talus 35] [--strength 0.5]) [--threads <n>] [--max-seconds <n>]\n"
     "  import     --source <heightmap.png|.raw|.r16> --terrain <file> [--min -32] [--max 32] [--size 512[xD]]\n"
     "             [--flip yes] [--replace]   (the resolution becomes the nearest 2^n+1)\n"
     "  export     --terrain <file> --out <file.png|.raw|.r16> [--min <n> --max <n>]   (16 bit; prints the range)\n"
@@ -178,8 +198,49 @@ template <typename... Lists>
     return run(arguments, io);
 }
 
+// A number option into `value` when given; false, with the error printed, when it is not a number.
+[[nodiscard]] bool ReadFloat(const ArgumentList& arguments, std::string_view name, float& value, CommandIo io) {
+    const std::optional<std::string> text = arguments.Option("--" + std::string{ name });
+    if (!text.has_value()) return true;
+    const std::optional<float> parsed = ParseValue<float>(*text);
+    if (!parsed.has_value()) io.err << "error: --" << name << " takes a number\n";
+    else value = *parsed;
+    return parsed.has_value();
+}
+
+[[nodiscard]] bool ReadWhole(const ArgumentList& arguments, std::string_view name, std::uint32_t& value, CommandIo io) {
+    const std::optional<std::string> text = arguments.Option("--" + std::string{ name });
+    if (!text.has_value()) return true;
+    const std::optional<std::uint32_t> parsed = ParseValue<std::uint32_t>(*text);
+    if (!parsed.has_value()) io.err << "error: --" << name << " takes a whole number\n";
+    else value = *parsed;
+    return parsed.has_value();
+}
+
+// Runs a generator or an erosion on a worker thread over a copy of the terrain, as the editor does,
+// and waits for it: --threads caps the cores it uses and --max-seconds stops it (nothing is saved then).
+[[nodiscard]] std::optional<kb::assets::TerrainAsset> RunJob(
+    kb::assets::TerrainAsset terrain, TerrainBackgroundTask::Work work, const ArgumentList& arguments, CommandIo io) {
+    std::uint32_t threads = 0U;
+    float seconds = 0.0F;
+    if (!ReadWhole(arguments, "threads", threads, io) || !ReadFloat(arguments, "max-seconds", seconds, io)) return std::nullopt;
+    if (seconds < 0.0F) {
+        io.err << "error: --max-seconds takes a positive number\n";
+        return std::nullopt;
+    }
+    TerrainBackgroundTask task{ std::move(terrain), [threads, work = std::move(work)](
+        kb::assets::TerrainAsset& target, TerrainTaskControl& control, std::string& error) {
+        control.maxWorkers = threads;
+        return work(target, control, error);
+    } };
+    std::string error;
+    std::optional<kb::assets::TerrainAsset> result = task.Wait(seconds, &error);
+    if (!result.has_value()) io.err << "error: " << error << '\n';
+    return result;
+}
+
 [[nodiscard]] int TerrainNew(const ArgumentList& arguments, CommandIo io) {
-    constexpr std::string_view allowed[]{ "name", "terrain", "scene", "position", "resolution", "size", "chunk-quads", "lod-count" };
+    constexpr std::string_view allowed[]{ "name", "terrain", "scene", "position", "resolution", "size", "chunk-quads", "lod-count", "preset", "seed", "threads", "max-seconds" };
     if (!CheckOptions(arguments, io, allowed)) return 1;
     const std::optional<std::string> name = arguments.Option("--name");
     if (!name.has_value() && !arguments.Option("--terrain").has_value()) {
@@ -219,6 +280,15 @@ template <typename... Lists>
         io.err << "error: " << error << '\n';
         return 1;
     }
+    const std::string preset = arguments.Option("--preset").value_or("flat");
+    std::uint32_t seed = 1U;
+    if (!ReadWhole(arguments, "seed", seed, io)) return 1;
+    if (!kb::terrain_editor::IsTerrainPreset(preset)) {
+        io.err << "error: unknown preset '" << preset << "'; the presets are";
+        for (const kb::terrain_editor::TerrainPresetInfo& info : kb::terrain_editor::TerrainPresets()) io.err << ' ' << info.name;
+        io.err << '\n';
+        return 1;
+    }
     const std::optional<std::filesystem::path> root = ProjectRoot(arguments, io);
     if (!root.has_value()) return 1;
     if (name.has_value() && root->empty()) {
@@ -239,12 +309,22 @@ template <typename... Lists>
         io.err << "error: " << file.generic_string() << " already exists; pass another --terrain or edit it with terrain brush\n";
         return 1;
     }
+    if (preset != "flat") {
+        std::optional<kb::assets::TerrainAsset> made = RunJob(std::move(terrain), [preset, seed](
+            kb::assets::TerrainAsset& target, TerrainTaskControl& control, std::string& failure) {
+            return kb::terrain_editor::ApplyTerrainPreset(target, preset, seed, control, failure);
+        }, arguments, io);
+        if (!made.has_value()) return 1;
+        terrain = std::move(*made);
+    }
     if (!kb::assets::TerrainAssetIO::Save(file, terrain, &error)) {
         io.err << "error: " << error << '\n';
         return 1;
     }
     io.out << "created " << file.generic_string() << " (" << terrain.width << 'x' << terrain.height << " samples, "
-           << FormatCliNumber(terrain.worldSizeX) << 'x' << FormatCliNumber(terrain.worldSizeZ) << " units)\n";
+           << FormatCliNumber(terrain.worldSizeX) << 'x' << FormatCliNumber(terrain.worldSizeZ) << " units, " << preset
+           << (preset == "flat" ? "" : ", seed " + std::to_string(seed)) << ", heightHash "
+           << Hex(kb::terrain_editor::HashTerrainHeights(terrain)) << ")\n";
     if (!name.has_value()) return 0;
 
     // The scene entity the editor's Terrain component makes: an entity whose Mesh Renderer draws the terrain.
@@ -348,13 +428,34 @@ template <typename... Lists>
 
 // ---- brush / apply / paint ------------------------------------------------------------------------
 
+// A command line option and the operation member it fills.
+struct OptionKey {
+    std::string_view option;
+    std::string_view key;
+};
+
+constexpr OptionKey kBrushOptions[]{ { "mode", "mode" }, { "shape", "shape" }, { "x", "x" }, { "z", "z" }, { "path", "path" },
+    { "radius", "radius" }, { "strength", "strength" }, { "falloff", "falloff" }, { "height", "height" }, { "step", "step" },
+    { "softness", "softness" }, { "seed", "seed" }, { "spacing", "spacing" }, { "invert", "invert" }, { "symmetry", "symmetry" },
+    { "noise-kind", "noiseKind" }, { "noise-scale", "noiseScale" }, { "noise-octaves", "noiseOctaves" }, { "to", "to" },
+    { "to-height", "toHeight" }, { "image", "image" }, { "rotation", "rotation" }, { "blend", "blend" } };
+constexpr OptionKey kPaintOptions[]{ { "layer", "layer" }, { "x", "x" }, { "z", "z" }, { "path", "path" }, { "radius", "radius" },
+    { "opacity", "opacity" }, { "falloff", "falloff" }, { "shape", "shape" }, { "erase", "erase" }, { "seed", "seed" } };
+
+[[nodiscard]] std::vector<std::string_view> OptionNames(std::span<const OptionKey> options) {
+    std::vector<std::string_view> names;
+    for (const OptionKey& option : options) names.push_back(option.option);
+    return names;
+}
+
 // The options an operation takes, as the text members of an operation object.
-[[nodiscard]] kb::core::JsonValue OperationFromOptions(
-    std::string_view kind, const ArgumentList& arguments, std::span<const std::string_view> keys) {
+[[nodiscard]] kb::core::JsonValue OperationFromOptions(std::string_view kind, const ArgumentList& arguments, std::span<const OptionKey> options) {
     kb::core::JsonValue operation = kb::core::JsonValue::MakeObject();
     operation.Set("op", kb::core::JsonValue::MakeString(std::string{ kind }));
-    for (const std::string_view key : keys) {
-        if (const auto value = arguments.Option("--" + std::string{ key })) operation.Set(std::string{ key }, kb::core::JsonValue::MakeString(*value));
+    for (const OptionKey& option : options) {
+        if (const auto value = arguments.Option("--" + std::string{ option.option })) {
+            operation.Set(std::string{ option.key }, kb::core::JsonValue::MakeString(*value));
+        }
     }
     return operation;
 }
@@ -367,8 +468,9 @@ template <typename... Lists>
 
 [[nodiscard]] int Apply(Session& session, const kb::core::JsonValue& operations, std::string_view what, CommandIo io) {
     kb::terrain_editor::TerrainOpSummary summary{};
+    kb::terrain_editor::TerrainOpContext context{ .baseDirectory = session.projectRoot };
     std::string error;
-    if (!kb::terrain_editor::ApplyTerrainOps(session.terrain, operations, summary, error)) {
+    if (!kb::terrain_editor::ApplyTerrainOps(session.terrain, operations, context, summary, error)) {
         io.err << "error: " << error << '\n';
         return 1;
     }
@@ -385,13 +487,12 @@ template <typename... Lists>
 }
 
 [[nodiscard]] int TerrainBrush(const ArgumentList& arguments, CommandIo io) {
-    constexpr std::string_view keys[]{ "mode", "shape", "x", "z", "path", "radius", "strength", "falloff", "height", "step", "seed", "spacing" };
     constexpr std::string_view own[]{ "terrain" };
-    if (!CheckOptions(arguments, io, keys, own)) return 1;
+    if (!CheckOptions(arguments, io, OptionNames(kBrushOptions), own)) return 1;
     std::optional<Session> session = OpenTerrain(arguments, io);
     if (!session.has_value()) return 1;
     const std::string mode = arguments.Option("--mode").value_or("raise");
-    return Apply(*session, OneOperation(OperationFromOptions("brush", arguments, keys)), "brush " + mode, io);
+    return Apply(*session, OneOperation(OperationFromOptions("brush", arguments, kBrushOptions)), "brush " + mode, io);
 }
 
 [[nodiscard]] std::optional<std::string> ReadText(const std::filesystem::path& file) {
@@ -431,13 +532,12 @@ template <typename... Lists>
 }
 
 [[nodiscard]] int TerrainPaint(const ArgumentList& arguments, CommandIo io) {
-    constexpr std::string_view keys[]{ "layer", "x", "z", "path", "radius", "opacity", "falloff", "shape", "erase", "seed" };
     constexpr std::string_view own[]{ "terrain", "auto", "slope-blend", "height-blend" };
-    if (!CheckOptions(arguments, io, keys, own)) return 1;
+    if (!CheckOptions(arguments, io, OptionNames(kPaintOptions), own)) return 1;
     std::optional<Session> session = OpenTerrain(arguments, io);
     if (!session.has_value()) return 1;
     const std::optional<std::string> automatic = arguments.Option("--auto");
-    if (!automatic.has_value()) return Apply(*session, OneOperation(OperationFromOptions("paint", arguments, keys)), "paint", io);
+    if (!automatic.has_value()) return Apply(*session, OneOperation(OperationFromOptions("paint", arguments, kPaintOptions)), "paint", io);
     // --auto slope=35..90,height=-5..40
     kb::core::JsonValue operation = kb::core::JsonValue::MakeObject();
     operation.Set("op", kb::core::JsonValue::MakeString("auto-paint"));
@@ -542,6 +642,96 @@ template <typename... Lists>
     if (!index.has_value()) return 1;
     static_cast<void>(kb::terrain_editor::SetTerrainMaterialLayer(terrain, *index, *material));
     return SaveTerrain(*session, "set layer " + std::to_string(*index), io);
+}
+
+// ---- generate / erode ----------------------------------------------------------------------------
+
+[[nodiscard]] int TerrainGenerate(const ArgumentList& arguments, CommandIo io) {
+    constexpr std::string_view allowed[]{ "terrain", "kind", "seed", "amplitude", "base", "scale", "octaves", "lacunarity", "gain", "noise-kind",
+        "warp", "add", "island-radius", "island-falloff", "plateau-level", "plateau-softness", "threads", "max-seconds" };
+    if (!CheckOptions(arguments, io, allowed)) return 1;
+    std::optional<Session> session = OpenTerrain(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::terrain_editor::TerrainGeneratorSettings settings{};
+    // The largest feature a third of the terrain, unless told.
+    settings.scale = std::max(session->terrain.worldSizeX, session->terrain.worldSizeZ) / 3.0F;
+    if (const auto kind = arguments.Option("--kind")) {
+        const auto parsed = kb::terrain_editor::ParseTerrainGeneratorKind(*kind);
+        if (!parsed.has_value()) {
+            io.err << "error: --kind is fbm, ridged, island or plateau\n";
+            return 1;
+        }
+        settings.kind = *parsed;
+    }
+    if (const auto kind = arguments.Option("--noise-kind")) {
+        const auto parsed = kb::terrain_editor::ParseTerrainNoiseKind(*kind);
+        if (!parsed.has_value()) {
+            io.err << "error: --noise-kind is gradient or value\n";
+            return 1;
+        }
+        settings.noiseKind = *parsed;
+    }
+    std::uint32_t octaves = settings.octaves;
+    if (!ReadWhole(arguments, "seed", settings.seed, io) || !ReadWhole(arguments, "octaves", octaves, io) ||
+        !ReadFloat(arguments, "amplitude", settings.amplitude, io) || !ReadFloat(arguments, "base", settings.baseHeight, io) ||
+        !ReadFloat(arguments, "scale", settings.scale, io) || !ReadFloat(arguments, "lacunarity", settings.lacunarity, io) ||
+        !ReadFloat(arguments, "gain", settings.gain, io) || !ReadFloat(arguments, "warp", settings.warp, io) ||
+        !ReadFloat(arguments, "island-radius", settings.islandRadius, io) || !ReadFloat(arguments, "island-falloff", settings.islandFalloff, io) ||
+        !ReadFloat(arguments, "plateau-level", settings.plateauLevel, io) || !ReadFloat(arguments, "plateau-softness", settings.plateauSoftness, io)) {
+        return 1;
+    }
+    settings.octaves = static_cast<std::uint8_t>(std::min(octaves, 255U));
+    settings.additive = arguments.Option("--add").value_or("no") == "yes";
+    std::optional<kb::assets::TerrainAsset> made = RunJob(std::move(session->terrain), [settings](
+        kb::assets::TerrainAsset& target, TerrainTaskControl& control, std::string& error) {
+        return kb::terrain_editor::GenerateTerrain(target, settings, control, error);
+    }, arguments, io);
+    if (!made.has_value()) return 1;
+    session->terrain = std::move(*made);
+    return SaveTerrain(*session, "generated " + std::string{ kb::terrain_editor::TerrainGeneratorKindName(settings.kind) } + " (seed " + std::to_string(settings.seed) + ")", io);
+}
+
+[[nodiscard]] int TerrainErode(const ArgumentList& arguments, CommandIo io) {
+    constexpr std::string_view allowed[]{ "terrain", "mode", "iterations", "rain", "evaporation", "strength", "talus", "threads", "max-seconds" };
+    if (!CheckOptions(arguments, io, allowed)) return 1;
+    std::optional<Session> session = OpenTerrain(arguments, io);
+    if (!session.has_value()) return 1;
+    const std::string mode = arguments.Option("--mode").value_or("hydraulic");
+    if (mode != "hydraulic" && mode != "thermal") {
+        io.err << "error: --mode is hydraulic (water: channels and fans) or thermal (slumping to a talus angle)\n";
+        return 1;
+    }
+    kb::terrain_editor::TerrainHydraulicSettings hydraulic{};
+    kb::terrain_editor::TerrainThermalSettings thermal{};
+    std::uint32_t iterations = mode == "thermal" ? thermal.iterations : hydraulic.iterations;
+    if (!ReadWhole(arguments, "iterations", iterations, io)) return 1;
+    const bool thermalMode = mode == "thermal";
+    if (thermalMode) {
+        thermal.iterations = iterations;
+        if (!ReadFloat(arguments, "talus", thermal.talusDegrees, io) || !ReadFloat(arguments, "strength", thermal.strength, io)) return 1;
+        if (arguments.Option("--rain") || arguments.Option("--evaporation")) {
+            io.err << "error: --rain and --evaporation belong to --mode hydraulic\n";
+            return 1;
+        }
+    } else {
+        hydraulic.iterations = iterations;
+        if (!ReadFloat(arguments, "rain", hydraulic.rain, io) || !ReadFloat(arguments, "evaporation", hydraulic.evaporation, io) ||
+            !ReadFloat(arguments, "strength", hydraulic.strength, io)) {
+            return 1;
+        }
+        if (arguments.Option("--talus")) {
+            io.err << "error: --talus belongs to --mode thermal\n";
+            return 1;
+        }
+    }
+    std::optional<kb::assets::TerrainAsset> eroded = RunJob(std::move(session->terrain), [thermalMode, thermal, hydraulic](
+        kb::assets::TerrainAsset& target, TerrainTaskControl& control, std::string& error) {
+        return thermalMode ? kb::terrain_editor::ErodeTerrainThermal(target, thermal, control, error)
+                           : kb::terrain_editor::ErodeTerrainHydraulic(target, hydraulic, control, error);
+    }, arguments, io);
+    if (!eroded.has_value()) return 1;
+    session->terrain = std::move(*eroded);
+    return SaveTerrain(*session, mode + " erosion, " + std::to_string(iterations) + " iterations", io);
 }
 
 // ---- import / export / preview --------------------------------------------------------------------
@@ -681,6 +871,8 @@ int RunTerrainCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "apply") return TerrainApply(arguments, io);
     if (action == "layer") return TerrainLayer(arguments, io);
     if (action == "paint") return TerrainPaint(arguments, io);
+    if (action == "generate") return TerrainGenerate(arguments, io);
+    if (action == "erode") return TerrainErode(arguments, io);
     if (action == "import") return TerrainImport(arguments, io);
     if (action == "export") return TerrainExport(arguments, io);
     if (action == "preview") return TerrainPreview(arguments, io);

@@ -1,11 +1,13 @@
 #include "TerrainOps.hpp"
 
 #include "TerrainAnalysis.hpp"
+#include "TerrainHeightmapImporter.hpp"
 #include "TerrainLayerPainter.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -134,6 +136,42 @@ public:
         return points;
     }
 
+    // "x,z" or [x, z].
+    [[nodiscard]] std::optional<std::pair<float, float>> Pair(std::string_view key) {
+        const JsonValue* value = operation_.Find(key);
+        if (value == nullptr || Failed()) return std::nullopt;
+        std::optional<double> first;
+        std::optional<double> second;
+        if (value->GetKind() == JsonValue::Kind::String) {
+            const std::string& text = value->AsString();
+            const std::size_t comma = text.find(',');
+            if (comma != std::string::npos) {
+                first = ParseNumber(std::string_view{ text }.substr(0U, comma));
+                second = ParseNumber(std::string_view{ text }.substr(comma + 1U));
+            }
+        } else if (value->GetKind() == JsonValue::Kind::Array && value->Size() == 2U &&
+                   value->At(0U)->GetKind() == JsonValue::Kind::Number && value->At(1U)->GetKind() == JsonValue::Kind::Number) {
+            first = value->At(0U)->AsNumber();
+            second = value->At(1U)->AsNumber();
+        }
+        if (!first || !second || !std::isfinite(*first) || !std::isfinite(*second)) {
+            Fail(key, "must be a point x,z or [x, z]");
+            return std::nullopt;
+        }
+        return std::pair{ static_cast<float>(*first), static_cast<float>(*second) };
+    }
+
+    // A height, or "sample" for the height of the terrain under the stroke.
+    struct HeightOrSample {
+        std::optional<double> height;
+        bool sample = false;
+    };
+    [[nodiscard]] HeightOrSample Height(std::string_view key) {
+        const JsonValue* value = operation_.Find(key);
+        if (value != nullptr && value->GetKind() == JsonValue::Kind::String && value->AsString() == "sample") return { std::nullopt, true };
+        return { Number(key), false };
+    }
+
     // Every member must be one of `allowed`.
     void OnlyKeys(std::span<const std::string_view> allowed) {
         if (Failed()) return;
@@ -163,14 +201,34 @@ private:
 };
 
 constexpr std::string_view kBrushKeys[]{ "op", "mode", "shape", "x", "z", "path", "radius", "strength", "falloff", "height", "step",
-    "seed", "spacing" };
+    "softness", "seed", "spacing", "invert", "symmetry", "noiseKind", "noiseScale", "noiseOctaves", "to", "toHeight", "image",
+    "rotation", "blend" };
 constexpr std::string_view kPaintKeys[]{ "op", "layer", "x", "z", "path", "radius", "opacity", "falloff", "shape", "erase", "seed" };
 constexpr std::string_view kAutoPaintKeys[]{ "op", "layer", "slope", "height", "slopeBlend", "heightBlend", "opacity" };
 
-void ReadBrushSettings(Reader& reader, TerrainBrushSettings& settings) {
+// A stamp image by path: as written, or under the context's base directory when that is where it is.
+[[nodiscard]] std::shared_ptr<const TerrainStampImage> LoadImage(TerrainOpContext& context, const std::string& text, std::string& error) {
+    std::filesystem::path path{ std::u8string{ reinterpret_cast<const char8_t*>(text.data()), text.size() } };
+    std::error_code code;
+    if (path.is_relative() && !context.baseDirectory.empty() && std::filesystem::exists(context.baseDirectory / path, code)) {
+        path = context.baseDirectory / path;
+    }
+    const std::string key = path.generic_string();
+    if (const auto found = context.images.find(key); found != context.images.end()) return found->second;
+    std::string reason;
+    std::shared_ptr<const TerrainStampImage> image = TerrainHeightmapImporter::LoadStampImage(path, &reason);
+    if (image == nullptr) {
+        error = "'image' " + key + ": " + reason;
+        return nullptr;
+    }
+    context.images.emplace(key, image);
+    return image;
+}
+
+void ReadBrushSettings(Reader& reader, TerrainOpContext& context, TerrainBrushSettings& settings) {
     if (const std::optional<std::string> mode = reader.Text("mode")) {
         if (const std::optional<TerrainBrushMode> parsed = ParseTerrainBrushMode(*mode)) settings.mode = *parsed;
-        else reader.Fail("mode", "is not a brush mode (raise lower smooth flatten noise terrace cut-hole fill-hole)");
+        else reader.Fail("mode", "is not a brush mode (raise lower smooth flatten noise terrace cut-hole fill-hole ramp stamp)");
     }
     if (const std::optional<std::string> shape = reader.Text("shape")) {
         if (const std::optional<TerrainBrushShape> parsed = ParseTerrainBrushShape(*shape)) settings.shape = *parsed;
@@ -179,23 +237,77 @@ void ReadBrushSettings(Reader& reader, TerrainBrushSettings& settings) {
     if (const auto value = reader.Number("radius")) settings.radius = static_cast<float>(*value);
     if (const auto value = reader.Number("strength")) settings.strength = static_cast<float>(*value);
     if (const auto value = reader.Number("falloff")) settings.falloff = static_cast<float>(*value);
-    if (const auto value = reader.Number("height")) settings.targetHeight = static_cast<float>(*value);
     if (const auto value = reader.Number("step")) settings.terraceStep = static_cast<float>(*value);
+    if (const auto value = reader.Number("softness")) settings.terraceSoftness = static_cast<float>(*value);
     if (const auto value = reader.Number("seed")) {
         if (*value < 0.0 || *value > 4294967295.0) reader.Fail("seed", "must be from 0 to 4294967295");
         else settings.noiseSeed = static_cast<std::uint32_t>(*value);
     }
+    if (const std::optional<bool> invert = reader.Flag("invert")) settings.invert = *invert;
+    if (const std::optional<std::string> symmetry = reader.Text("symmetry")) {
+        if (*symmetry != "none" && *symmetry != "x" && *symmetry != "z" && *symmetry != "xz") {
+            reader.Fail("symmetry", "is none, x, z or xz (the planes x=0 and z=0 the stroke is mirrored across)");
+        }
+        settings.symmetryX = *symmetry == "x" || *symmetry == "xz";
+        settings.symmetryZ = *symmetry == "z" || *symmetry == "xz";
+    }
+    if (const std::optional<std::string> kind = reader.Text("noiseKind")) {
+        if (const std::optional<TerrainNoiseKind> parsed = ParseTerrainNoiseKind(*kind)) settings.noiseKind = *parsed;
+        else reader.Fail("noiseKind", "is gradient or value");
+    }
+    if (const auto value = reader.Number("noiseScale")) settings.noiseScale = static_cast<float>(*value);
+    if (const auto value = reader.Number("noiseOctaves")) {
+        if (*value < 1.0 || *value > kTerrainNoiseMaximumOctaves || *value != std::floor(*value)) reader.Fail("noiseOctaves", "must be a whole number from 1 to 8");
+        else settings.noiseOctaves = static_cast<std::uint8_t>(*value);
+    }
+    if (const auto value = reader.Number("rotation")) settings.stampRotationDegrees = static_cast<float>(*value);
+    if (const std::optional<std::string> blend = reader.Text("blend")) {
+        if (const std::optional<TerrainStampBlend> parsed = ParseTerrainStampBlend(*blend)) settings.stampBlend = *parsed;
+        else reader.Fail("blend", "is add, max or min");
+    }
+    // Heights: Flatten's target, a Stamp's base for max and min, a Ramp's heights at its two ends.
+    const Reader::HeightOrSample height = reader.Height("height");
+    const Reader::HeightOrSample toHeight = reader.Height("toHeight");
+    if (height.height) settings.targetHeight = static_cast<float>(*height.height);
+    if (toHeight.height) settings.rampEndHeight = static_cast<float>(*toHeight.height);
+    if (settings.mode == TerrainBrushMode::Ramp) {
+        if (const auto end = reader.Pair("to")) {
+            settings.rampEndX = end->first;
+            settings.rampEndZ = end->second;
+        } else if (!reader.Failed()) {
+            reader.Fail("to", "is required by a ramp: the point it ends at, x,z");
+        }
+        if (height.height.has_value() != toHeight.height.has_value() && !height.sample && !toHeight.sample) {
+            reader.Fail("height", "and 'toHeight' go together: a ramp takes both heights, or neither (then it joins the terrain's own)");
+        }
+        settings.sampleTargetHeight = !height.height.has_value() && !toHeight.height.has_value();
+        if (height.sample != toHeight.sample && (height.sample || toHeight.sample)) {
+            reader.Fail("height", "'sample' goes with both heights of a ramp or neither");
+        }
+    } else {
+        settings.sampleTargetHeight = height.sample;
+    }
+    if (settings.mode == TerrainBrushMode::Stamp) {
+        const std::optional<std::string> image = reader.Text("image");
+        if (!reader.Failed() && !image) reader.Fail("image", "is required by a stamp: a greyscale PNG or RAW height image");
+        if (!reader.Failed()) {
+            std::string imageError;
+            settings.stampImage = LoadImage(context, *image, imageError);
+            if (settings.stampImage == nullptr) reader.Fail("image", imageError);
+        }
+    }
 }
 
-[[nodiscard]] bool ApplyBrushOp(kb::assets::TerrainAsset& terrain, Reader& reader, TerrainOpSummary& summary, std::string& error) {
+[[nodiscard]] bool ApplyBrushOp(
+    kb::assets::TerrainAsset& terrain, Reader& reader, TerrainOpContext& context, TerrainOpSummary& summary, std::string& error) {
     reader.OnlyKeys(kBrushKeys);
     TerrainBrushSettings settings{};
-    ReadBrushSettings(reader, settings);
+    ReadBrushSettings(reader, context, settings);
     const std::optional<double> spacing = reader.Number("spacing");
     const std::vector<Point> points = reader.Points();
     if (reader.Failed()) return false;
     if (!IsTerrainBrushSettingsValid(settings)) {
-        error = "brush settings are out of range (radius 0..100000, strength >= 0, falloff 0..1, step > 0)";
+        error = "brush settings are out of range (radius 0..100000, strength >= 0, falloff 0..1, step > 0, softness 0..1, noiseScale 0.01..1000000)";
         return false;
     }
     if (spacing && (*spacing <= 0.0 || *spacing > 100000.0)) {
@@ -203,6 +315,7 @@ void ReadBrushSettings(Reader& reader, TerrainBrushSettings& settings) {
         return false;
     }
     if (!kb::assets::IsTerrainAssetValid(terrain, &error)) return false;
+    BeginTerrainStroke(terrain, settings, TerrainBrushStamp{ .localX = points.front().x, .localZ = points.front().z });
     const float cell = std::min(terrain.worldSizeX / static_cast<float>(terrain.width - 1U),
         terrain.worldSizeZ / static_cast<float>(terrain.height - 1U));
     const float step = spacing ? static_cast<float>(*spacing) : std::max(settings.radius * 0.25F, cell);
@@ -234,32 +347,40 @@ void ReadBrushSettings(Reader& reader, TerrainBrushSettings& settings) {
     return true;
 }
 
-[[nodiscard]] bool ApplyPaintOp(kb::assets::TerrainAsset& terrain, Reader& reader, TerrainOpSummary& summary, std::string& error) {
-    reader.OnlyKeys(kPaintKeys);
-    TerrainLayerPaintSettings settings{};
+void ReadLayerPaintSettings(Reader& reader, TerrainLayerPaintSettings& settings) {
     if (const auto layer = reader.Number("layer")) {
-        if (*layer < 0.0 || *layer >= static_cast<double>(terrain.materialLayers.size()) || *layer != std::floor(*layer)) {
-            error = "'layer' must be the index of a layer of the terrain (" + std::to_string(terrain.materialLayers.size()) + " layers)";
-            return false;
+        if (*layer < 0.0 || *layer >= static_cast<double>(kb::assets::TerrainAsset::MaximumMaterialLayers) || *layer != std::floor(*layer)) {
+            reader.Fail("layer", "must be a layer index from 0 to 3");
+        } else {
+            settings.layerIndex = static_cast<std::uint32_t>(*layer);
         }
-        settings.layerIndex = static_cast<std::uint32_t>(*layer);
     } else if (!reader.Failed()) {
-        error = "paint needs 'layer'";
-        return false;
+        reader.Fail("layer", "is required: the index of the layer to paint");
     }
     if (const auto value = reader.Number("radius")) settings.radius = static_cast<float>(*value);
     if (const auto value = reader.Number("opacity")) settings.opacity = static_cast<float>(*value);
     if (const auto value = reader.Number("falloff")) settings.falloff = static_cast<float>(*value);
-    if (const auto value = reader.Number("seed")) settings.noiseSeed = static_cast<std::uint32_t>(std::max(0.0, *value));
+    if (const auto value = reader.Number("seed")) settings.noiseSeed = static_cast<std::uint32_t>(std::clamp(*value, 0.0, 4294967295.0));
     if (const std::optional<std::string> shape = reader.Text("shape")) {
         if (const std::optional<TerrainBrushShape> parsed = ParseTerrainBrushShape(*shape)) settings.shape = *parsed;
         else reader.Fail("shape", "is not a brush shape (soft-round hard-round linear-round bell ring speckle)");
     }
     if (const std::optional<bool> erase = reader.Flag("erase")) settings.erase = *erase;
+    if (!reader.Failed() && (settings.opacity < 0.0F || settings.opacity > 1.0F)) reader.Fail("opacity", "must be from 0 to 1");
+}
+
+[[nodiscard]] bool ApplyPaintOp(kb::assets::TerrainAsset& terrain, Reader& reader, TerrainOpSummary& summary, std::string& error) {
+    reader.OnlyKeys(kPaintKeys);
+    TerrainLayerPaintSettings settings{};
+    ReadLayerPaintSettings(reader, settings);
     const std::vector<Point> points = reader.Points();
     if (reader.Failed()) return false;
-    if (settings.opacity > 1.0F || (settings.erase && terrain.materialLayers.size() < 2U)) {
-        error = settings.opacity > 1.0F ? "'opacity' must be from 0 to 1" : "a terrain with one layer has nothing to erase to";
+    if (settings.layerIndex >= terrain.materialLayers.size()) {
+        error = "'layer' " + std::to_string(settings.layerIndex) + " is not a layer of the terrain (" + std::to_string(terrain.materialLayers.size()) + " layers)";
+        return false;
+    }
+    if (settings.erase && terrain.materialLayers.size() < 2U) {
+        error = "a terrain with one layer has nothing to erase to";
         return false;
     }
     for (std::size_t index = 0U; index < points.size(); ++index) {
@@ -307,13 +428,20 @@ void ReadBrushSettings(Reader& reader, TerrainBrushSettings& settings) {
 
 } // namespace
 
-bool ParseTerrainBrushSettings(const JsonValue& operation, TerrainBrushSettings& settings, std::string& error) {
+bool ParseTerrainBrushSettings(const JsonValue& operation, TerrainOpContext& context, TerrainBrushSettings& settings, std::string& error) {
     Reader reader{ operation, error };
-    ReadBrushSettings(reader, settings);
+    ReadBrushSettings(reader, context, settings);
     return !reader.Failed();
 }
 
-bool ApplyTerrainOp(kb::assets::TerrainAsset& terrain, const JsonValue& operation, TerrainOpSummary& summary, std::string& error) {
+bool ParseTerrainLayerPaintSettings(const JsonValue& operation, TerrainLayerPaintSettings& settings, std::string& error) {
+    Reader reader{ operation, error };
+    ReadLayerPaintSettings(reader, settings);
+    return !reader.Failed();
+}
+
+bool ApplyTerrainOp(
+    kb::assets::TerrainAsset& terrain, const JsonValue& operation, TerrainOpContext& context, TerrainOpSummary& summary, std::string& error) {
     error.clear();
     if (operation.GetKind() != JsonValue::Kind::Object) {
         error = "an operation must be an object with an 'op' member";
@@ -327,7 +455,7 @@ bool ApplyTerrainOp(kb::assets::TerrainAsset& terrain, const JsonValue& operatio
         return false;
     }
     bool applied = false;
-    if (*kind == "brush") applied = ApplyBrushOp(terrain, reader, summary, error);
+    if (*kind == "brush") applied = ApplyBrushOp(terrain, reader, context, summary, error);
     else if (*kind == "paint") applied = ApplyPaintOp(terrain, reader, summary, error);
     else if (*kind == "auto-paint") applied = ApplyAutoPaintOp(terrain, reader, summary, error);
     else error = "unknown op '" + *kind + "' (brush, paint or auto-paint)";
@@ -335,7 +463,8 @@ bool ApplyTerrainOp(kb::assets::TerrainAsset& terrain, const JsonValue& operatio
     return applied;
 }
 
-bool ApplyTerrainOps(kb::assets::TerrainAsset& terrain, const JsonValue& operations, TerrainOpSummary& summary, std::string& error) {
+bool ApplyTerrainOps(
+    kb::assets::TerrainAsset& terrain, const JsonValue& operations, TerrainOpContext& context, TerrainOpSummary& summary, std::string& error) {
     const JsonValue* list = &operations;
     if (operations.GetKind() == JsonValue::Kind::Object) {
         list = operations.Find("ops");
@@ -349,7 +478,7 @@ bool ApplyTerrainOps(kb::assets::TerrainAsset& terrain, const JsonValue& operati
         return false;
     }
     for (std::size_t index = 0U; index < list->Size(); ++index) {
-        if (!ApplyTerrainOp(terrain, *list->At(index), summary, error)) {
+        if (!ApplyTerrainOp(terrain, *list->At(index), context, summary, error)) {
             error = "op " + std::to_string(index) + ": " + error;
             return false;
         }

@@ -8,12 +8,23 @@ add_library(kb_terrain_editor_core STATIC
     TerrainAnalysis.cpp
     TerrainBrush.hpp
     TerrainBrush.cpp
+    TerrainErosion.hpp
+    TerrainErosion.cpp
+    TerrainGenerators.hpp
+    TerrainGenerators.cpp
     TerrainHeightmapImporter.hpp
     TerrainHeightmapImporter.cpp
     TerrainImageExport.hpp
     TerrainImageExport.cpp
     TerrainLayerPainter.hpp
     TerrainLayerPainter.cpp
+    TerrainNoise.hpp
+    TerrainNoise.cpp
+    TerrainParallel.hpp
+    TerrainPresets.hpp
+    TerrainPresets.cpp
+    TerrainTask.hpp
+    TerrainTask.cpp
     TerrainOps.hpp
     TerrainOps.cpp
 )

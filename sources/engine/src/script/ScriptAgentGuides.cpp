@@ -263,6 +263,53 @@ kb_cli scene-list --project . --scene Assets/Scenes/Main.21kbscene   # what the 
   tools, never by editing or parsing the files.
 )md";
 
+constexpr std::string_view kTerrain = R"md(# Terrain
+
+A terrain is a heightmap file (`.kbterrain`) drawn by an entity's Mesh Renderer: up to 4 material
+layers painted on it, holes cut through it. `kb_cli terrain` edits the file with the Terrain
+Editor's own brushes, generators and erosion, so the editor opens what you made. Positions `x,z`
+are world units from the terrain's centre (`terrain info` prints the extent); heights are world units.
+
+```
+# A whole world in one command: mountains, cut by rivers (also hills, island, plateau).
+kb_cli terrain new --project . --name World --size 1024 --resolution 513 --preset mountains --seed 7
+# Or a flat terrain, shaped by hand.
+kb_cli terrain new --project . --name Hills --size 256 --resolution 257
+kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode raise --x 0 --z 0 --radius 30 --strength 4
+kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode raise --path "-80,-60;0,0;80,60" --radius 12 --strength 2
+kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode noise --x 0 --z 0 --radius 90 --strength 3 --noise-scale 24
+kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode ramp --x -60 --z 0 --to 60,0 --radius 6
+kb_cli terrain generate --project . --terrain /Game/Terrains/Hills.kbterrain --kind ridged --seed 3 --amplitude 80 --scale 120
+kb_cli terrain erode --project . --terrain /Game/Terrains/Hills.kbterrain --mode hydraulic --iterations 150
+kb_cli terrain layer add --project . --terrain /Game/Terrains/Hills.kbterrain --material /Game/Materials/Grass.kbmat
+kb_cli terrain layer add --project . --terrain /Game/Terrains/Hills.kbterrain --material /Game/Materials/Rock.kbmat
+kb_cli terrain paint --project . --terrain /Game/Terrains/Hills.kbterrain --layer 1 --auto slope=35..90
+kb_cli terrain preview --project . --terrain /Game/Terrains/Hills.kbterrain --out Exports/hills.png --kind height
+kb_cli terrain info --project . --terrain /Game/Terrains/Hills.kbterrain
+```
+
+- Brush modes: `raise lower smooth flatten noise terrace cut-hole fill-hole ramp stamp`. Strength
+  is per stamp; a `--path` stamps every `--spacing` (a quarter of the radius by default), so a stroke
+  does not depend on how many points describe it. `--invert yes` is the editor's Ctrl, `--symmetry
+  x|z|xz` mirrors the stroke across the centre planes, `flatten --height sample` flattens to the
+  height under the start, `stamp --image height.png` presses a greyscale picture into the ground.
+- `generate` makes heights from noise (`fbm`, `ridged`, `island`, `plateau`; same seed, same ground,
+  on any number of cores), `--add yes` layers it over what is there. `erode` runs water (`hydraulic`:
+  channels and fans) or slumping (`thermal`: slopes settle to a talus angle). They run on every
+  core; `--threads <n>` caps that and `--max-seconds <n>` stops a long run and saves nothing.
+- `apply --ops` runs many strokes in one save. `ops.json` is a list of objects with the same words
+  as the options: `[{"op":"brush","mode":"raise","x":0,"z":0,"radius":20}, {"op":"paint","layer":1,
+  "path":"0,0;40,0"}, {"op":"auto-paint","layer":1,"slope":"35..90"}]`. A wrong member fails the
+  whole batch and leaves the file as it was.
+- A stroke that changes nothing (outside the terrain, no effect) is an error, so a wrong position
+  is noticed. `terrain sample --x --z` reads height, slope and layer weights back; `terrain info`
+  prints `heightHash`, equal for equal heights, to compare two runs; `terrain preview` draws the
+  height, slope or layers to a PNG you can look at.
+- `import` turns a 16-bit PNG or RAW heightmap into a terrain, `export` writes one (it prints the
+  `--min`/`--max` that import needs to restore the heights). Resolution is 2^n+1 (17 to 2049).
+- `kb_cli help terrain` lists every option.
+)md";
+
 constexpr std::string_view kMenusAndButtons = R"md(# Menus, buttons and UI events
 
 A menu is a Canvas with widgets under it; a button does something only when a script answers it.
@@ -299,6 +346,10 @@ end
   (`ui-no-canvas`), a Text without a font (`ui-text-no-font`), an `eventName` no script answers
   (`ui-event-no-handler`) and a Button that reacts to nothing (`ui-button-no-reaction`). `run` and the
   cook print the same warnings.
+- `entity add --create Button` (or Text, Slider, ...) puts the widget under a Canvas, creating one when the scene has none, and gives
+  every Text the bundled font; `component set ... --set eventTarget=Menu/Root` takes an object by its path.
+- Try the menu without a window: `kb_cli run --project . --frames 12 --click Menu/PlayButton@5` presses the widget on frame 5 and says
+  what was under the pointer and which script answered; `--report ui` lists every widget with its rectangle and its answering scripts.
 )md";
 
 constexpr std::string_view kUiAudioParticles = R"md(# UI, sound and particles
@@ -346,18 +397,15 @@ kb_cli component set --project . --entity Environment --type WorldBackdrop --set
 - Any translucent material: the alpha of Base Color plus `Blend Mode` translucent.
 - `kb_cli help material-graph` and `kb_cli help post-process-new` list every setting.
 )md";
-- `entity add --create Button` (or Text, Slider, ...) puts the widget under a Canvas, creating one when the scene has none, and gives
-  every Text the bundled font; `component set ... --set eventTarget=Menu/Root` takes an object by its path.
-- Try the menu without a window: `kb_cli run --project . --frames 12 --click Menu/PlayButton@5` presses the widget on frame 5 and says
-  what was under the pointer and which script answered; `--report ui` lists every widget with its rectangle and its answering scripts.
 
-constexpr std::array<ScriptAgentGuide, 10> kGuides{ {
+constexpr std::array<ScriptAgentGuide, 11> kGuides{ {
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },
     { "characters-and-animation", "Characters and animation", "Import a character, state machines, blends, sockets and weapons.", kCharacters },
     { "combat-and-ai", "Combat and AI", "Abilities, health and teams, AI brains from presets and rules.", kCombatAndAi },
     { "maps-2d", "2D maps and platformers", "Tile maps with grounds, borders, objects and floors; 2D players and platforms with 2D physics.", kMaps2D },
+    { "terrain", "Terrain", "A heightmap ground: brushes, ramps, noise, stamps, material layers painted by hand or by slope, heightmap import and export.", kTerrain },
     { "menus-and-buttons", "Menus, buttons and UI events", "A menu or HUD with buttons that run a script: widgets, OnUIClicked, event names, what validate warns about.", kMenusAndButtons },
     { "ui-audio-particles", "UI, sound and particles", "On-screen text and buttons, sounds that play, particle effects.", kUiAudioParticles },
     { "water-and-look", "Water, sky, fog and post-processing", "Translucent water, sky colour, fog, bloom and other post effects.", kWaterAndLook },

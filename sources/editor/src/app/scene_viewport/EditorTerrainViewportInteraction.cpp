@@ -238,6 +238,12 @@ void ConsiderTerrainPick(
     }
 }
 
+// Holding Ctrl turns the sculpt around: raise lowers, lower raises, noise and stamps carve, cut hole fills.
+[[nodiscard]] kb::terrain_editor::TerrainBrushSettings CtrlInvertedBrush(kb::terrain_editor::TerrainBrushSettings brush, bool control) {
+    brush.invert = brush.invert != control;
+    return brush;
+}
+
 [[nodiscard]] std::optional<ResolvedTerrainPointer> ResolveTerrainPointer(
     HWND sourceWindow,
     HWND mainWindow,
@@ -410,7 +416,7 @@ bool EditorTerrainViewportInteraction::Stamp(
             segmentStart, stamp,
             beginStroke, &error)
         : sceneContext.ApplyTerrainBrushStamp(
-            pointer->entity, tool.brush, stamp, beginStroke, &error);
+            pointer->entity, CtrlInvertedBrush(tool.brush, EditorKeyDown(VK_CONTROL)), stamp, beginStroke, &error);
     if (!applied) {
         sceneContext.Console().Warning("Terrain", error.empty() ? "Terrain brush stamp failed." : error);
         return true;
@@ -454,7 +460,7 @@ bool EditorTerrainViewportInteraction::TickActiveStroke(
     std::string error;
     const bool applied = sceneContext.ApplyTerrainBrushStamp(
         entity,
-        tool.brush,
+        CtrlInvertedBrush(tool.brush, EditorAsyncKeyDown(VK_CONTROL)),
         kb::terrain_editor::TerrainBrushStamp{
             .localX = tool.lastStampX,
             .localZ = tool.lastStampZ,

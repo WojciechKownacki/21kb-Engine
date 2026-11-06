@@ -124,7 +124,8 @@ scenario-local aliases.
   | `add_component` | `entity`, `component` |
 | `remove_component` | `entity`, `component`; supports SkeletonBinding, DeformedGeometry, and the actual Inspector remove buttons for World2DMap and MeshRenderer. |
 | `remember_mesh_renderer`, `assert_mesh_renderer_unchanged` | `entity`; remembers and compares the mesh, materials, render flags and visibility across map edits, Undo/Redo, scene reload and Play. |
-  | `terrain_stamp` | Terrain `entity`, local `x`, `z`; optional `radius`, `strength`, `falloff`, `pressure`; commits one production Undo/Redo stroke |
+  | `terrain_stamp` | Terrain `entity`, local `x`, `z`; optional `radius`, `strength`, `falloff`, `pressure`, `mode` (`raise` `lower` `smooth` `flatten` `noise` `terrace` `cut-hole` `fill-hole` `ramp` `stamp`), `shape`, `height` (a number or `sample`), `step`, `softness`, `seed`, `invert`, `symmetry` (`x`, `z`, `xz`), `noiseKind`, `noiseScale`, `noiseOctaves`, `to` and `toHeight` (ramp), `image`, `rotation`, `blend` (stamp); commits one production Undo/Redo stroke |
+  | `terrain_paint` | Terrain `entity`, local `x`, `z`, `layer`; optional `to_x`, `to_z` (a stroke between two points), `radius`, `opacity`, `falloff`, `shape`, `erase`, `seed`; commits one production Undo/Redo stroke |
   | `assert_terrain_height` | Terrain `entity`, local `x`, `z`, expected `value`; optional `tolerance` |
   | `configure_terrain`, `assert_terrain_configuration` | Terrain `entity`, `width`, `height`, `chunk_quads`, `lod_count`, `world_size_x`, `world_size_z`; configuration resamples through the production Undo/Redo path |
   | `set_animator_root_motion_owner`, `assert_animator_root_motion_owner` | Animator `entity`, owner: `none`, `animator`, `character_controller`, or `rigidbody`; setter uses the production Inspector command and rejects incompatible ownership |
