@@ -1684,7 +1684,9 @@ MeshBakeOutput BakeMesh(
     }
     for (std::uint32_t chunkIndex = 0U; chunkIndex < chunkBytes.size(); ++chunkIndex) {
         BakedAssetBlock block{};
-        block.name = BakedMeshChunkBlockName(chunkIndex);
+        // The block's name is a view: the string it views must outlive the write.
+        const std::string chunkName = BakedMeshChunkBlockName(chunkIndex);
+        block.name = chunkName;
         // Streaming, because that is what a fragment is for: the primary block is enough to
         // know what the mesh is and where its clusters are, and the geometry follows on demand.
         block.residency = BakedAssetBlockResidency::Streaming;
