@@ -24,6 +24,8 @@ struct NativeBehaviourDescriptor {
     std::string name;
     std::string symbol;
     std::filesystem::path modulePath;
+    // Key of a module linked into the host instead of a library (Android, WebAssembly).
+    std::string linkedModule;
     std::filesystem::path sourcePath;
     std::string entryPoint;
     NativeScriptBuildDesc build;

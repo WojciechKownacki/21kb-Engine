@@ -6,20 +6,70 @@
 #include <Windows.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace kb::editor {
 
+enum class EditorSceneViewportTextAlign : std::uint8_t { Left, Right };
+
+// With Right, `x` is the right edge of the text. A label with a shadow is the readable-over-anything
+// text of the bone names; one without sits on a panel of its own.
 struct EditorSceneViewportTextLabel {
     float x = 0.0F;
     float y = 0.0F;
     float pixelHeight = 10.0F;
     std::string text;
     std::array<std::uint8_t, 4U> color{ 255U, 255U, 255U, 255U };
+    EditorSceneViewportTextAlign align = EditorSceneViewportTextAlign::Left;
+    bool shadow = true;
+
+    [[nodiscard]] bool operator==(const EditorSceneViewportTextLabel&) const = default;
+};
+
+// A translucent panel or a line drawn under the labels. RoundedRect takes two opposite corners;
+// Polyline takes any number of points and may be dashed.
+struct EditorSceneViewportOverlayShape {
+    enum class Kind : std::uint8_t { RoundedRect, Polyline };
+    Kind kind = Kind::Polyline;
+    std::vector<std::array<float, 2U>> points;
+    float thickness = 1.0F;
+    float radius = 0.0F;
+    bool dashed = false;
+    std::array<std::uint8_t, 4U> color{ 255U, 255U, 255U, 255U };
+
+    [[nodiscard]] bool operator==(const EditorSceneViewportOverlayShape&) const = default;
+};
+
+// What an overlay window shows and where, to tell an update that would change nothing: drawing the same
+// content again at the same place took several milliseconds a frame.
+class EditorSceneViewportOverlayMemory {
+public:
+    [[nodiscard]] bool Shows(std::span<const EditorSceneViewportTextLabel> labels, std::span<const EditorSceneViewportOverlayShape> shapes,
+        int x, int y) const {
+        return valid_ && x == x_ && y == y_ && std::ranges::equal(labels, labels_) && std::ranges::equal(shapes, shapes_);
+    }
+    void Remember(std::span<const EditorSceneViewportTextLabel> labels, std::span<const EditorSceneViewportOverlayShape> shapes, int x, int y) {
+        labels_.assign(labels.begin(), labels.end());
+        shapes_.assign(shapes.begin(), shapes.end());
+        x_ = x;
+        y_ = y;
+        valid_ = true;
+    }
+    // The window's picture is gone or about to be replaced: the next update must draw.
+    void Forget() noexcept { valid_ = false; }
+
+private:
+    std::vector<EditorSceneViewportTextLabel> labels_;
+    std::vector<EditorSceneViewportOverlayShape> shapes_;
+    int x_ = 0;
+    int y_ = 0;
+    bool valid_ = false;
 };
 
 #if defined(_WIN32)
@@ -33,7 +83,13 @@ public:
     EditorSceneViewportTextOverlay& operator=(const EditorSceneViewportTextOverlay&) = delete;
 
     [[nodiscard]] bool Ensure(HINSTANCE instance, HWND parent, std::uint32_t width, std::uint32_t height);
-    [[nodiscard]] bool Update(std::span<const EditorSceneViewportTextLabel> labels);
+    // Rasterizes the content and puts it on the window; content that is what is already there, at the
+    // place it already is, costs nothing (drawing it again took several milliseconds a frame).
+    [[nodiscard]] bool Update(std::span<const EditorSceneViewportTextLabel> labels,
+        std::span<const EditorSceneViewportOverlayShape> shapes);
+    // Draws the same content on a device context, inside `area` and with its corner as the origin.
+    [[nodiscard]] bool Paint(HDC dc, const RECT& area, std::span<const EditorSceneViewportTextLabel> labels,
+        std::span<const EditorSceneViewportOverlayShape> shapes);
     void Show() noexcept;
     void Hide() noexcept;
     void Destroy() noexcept;

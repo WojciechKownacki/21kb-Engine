@@ -14,7 +14,7 @@ void ComponentTypeCache::InvalidateTypeInfoEntries() noexcept {
 }
 
 ComponentId ComponentTypeCache::Find(std::type_index type) const noexcept {
-    const auto it = componentIds_.find(type);
+    const auto it = componentIds_.find(std::string_view{ type.name() });
     return it == componentIds_.end() ? 0 : it->second;
 }
 
@@ -49,7 +49,7 @@ ComponentId ComponentTypeCache::Find(const std::type_info& type) const noexcept 
 
 void ComponentTypeCache::Store(std::type_index type, ComponentId componentId) {
     if (componentId != 0) {
-        componentIds_.emplace(type, componentId);
+        componentIds_.emplace(type.name(), componentId);
     }
 }
 

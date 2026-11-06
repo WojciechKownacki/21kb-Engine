@@ -664,7 +664,8 @@
       "checkpoint": "animation-speed",
       "inputs": [
         "settings animation-speed",
-        "field 0 7,5"
+        "field 0 7,5",
+        "field 1 0.25"
       ]
     },
     {
@@ -684,6 +685,24 @@
       ]
     },
     {
+      "op": "write_file",
+      "path": "Assets/Logic/MapAnimationProbe.lua",
+      "content": "local frame = 0\nfunction Tick(self, dt)\n frame = frame + 1\n if frame == 2 then\n  assert(CallFunction(\"Map2D.SetAnimationPaused\", {entity=self.entity, paused=true}))\n elseif frame == 5 then\n  assert(CallFunction(\"Map2D.SetAnimationPaused\", {entity=self.entity, paused=false}))\n  Log(\"map-animation-pause-resume-pass\")\n end\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "attach_script",
+      "entity": "terrain",
+      "asset": "/Game/Logic/MapAnimationProbe.lua"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/2D Map Stamps/AnimatedPattern.kbmap2d",
+      "contains": "/0.25"
+    },
+    {
       "op": "save_scene",
       "path": "Assets/Scenes/LayeredMap.21kbscene"
     },
@@ -698,6 +717,12 @@
       "op": "assert_map2d_runtime",
       "entity": "terrain",
       "contains": "frames 0 0 0 2 1 3"
+    },
+    {
+      "op": "assert_console",
+      "contains": "map-animation-pause-resume-pass",
+      "category": "Script",
+      "level": "info"
     },
     {
       "op": "capture_runtime",
@@ -731,6 +756,7 @@
         "animation-add 3",
         "settings animation-speed",
         "field 0 6",
+        "field 1 0",
         "apply",
         "animation-apply",
         "assert-map-unchanged",
@@ -857,12 +883,34 @@
       "name": "Independent Layer"
     },
     {
+      "op": "assert_map2d_sharing",
+      "entity": "terrain",
+      "other": "terrain_copy",
+      "shared": true,
+      "same_content": true
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain_copy",
+      "checkpoint": "shared-scope",
+      "inputs": [],
+      "width": 1100,
+      "height": 700
+    },
+    {
       "op": "map2d_editor",
       "entity": "terrain_copy",
       "checkpoint": "independent-map",
       "inputs": [
         "unique"
       ]
+    },
+    {
+      "op": "assert_map2d_sharing",
+      "entity": "terrain",
+      "other": "terrain_copy",
+      "shared": false,
+      "same_content": true
     },
     {
       "op": "map2d_editor",
@@ -889,6 +937,46 @@
       "op": "assert_file",
       "path": "Assets/Maps/World 3 Copy 1.kbmap2d",
       "contains": "layout 1 30 1 2 128 64"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain_copy",
+      "checkpoint": "copy-undo-save",
+      "inputs": [
+        "key z ctrl",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World 3 Copy 1.kbmap2d",
+      "not_contains": "696e646570656e64656e74"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World 3.kbmap2d",
+      "not_contains": "696e646570656e64656e74"
+    },
+    {
+      "op": "assert_map2d_sharing",
+      "entity": "terrain",
+      "other": "terrain_copy",
+      "shared": false,
+      "same_content": true
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain_copy",
+      "checkpoint": "copy-redo-save",
+      "inputs": [
+        "key y ctrl",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World 3 Copy 1.kbmap2d",
+      "contains": "696e646570656e64656e74"
     },
     {
       "op": "delete_entity",
@@ -977,6 +1065,31 @@
     },
     {
       "op": "stop"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "map-limits",
+      "width": 1100,
+      "height": 700,
+      "inputs": [
+        "remember-map",
+        "settings size",
+        "field 0 4097",
+        "reject",
+        "assert-map-unchanged"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "map-limits-preserved",
+      "inputs": [
+        "field 0 0",
+        "reject",
+        "assert-map-unchanged",
+        "cancel"
+      ]
     },
     {
       "op": "assert_no_errors"

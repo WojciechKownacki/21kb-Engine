@@ -198,6 +198,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "River",
+            .id = ComputeLibraryComponentId("River"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Body2D",
             .id = ComputeLibraryComponentId("Body2D"),
             .serializable = true,
@@ -290,23 +295,6 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
         LibraryComponentDesc{
             .name = "Lens Flare",
             .id = ComputeLibraryComponentId("Lens Flare"),
-            .serializable = true,
-        },
-        // Older names of Line Renderer, Trail Renderer and Lens Flare, kept for scripts and
-        // serialized API consumers written against them.
-        LibraryComponentDesc{
-            .name = "Kreska przestrzenna",
-            .id = ComputeLibraryComponentId("Kreska przestrzenna"),
-            .serializable = true,
-        },
-        LibraryComponentDesc{
-            .name = "Wst\xC4\x99" "ga historii",
-            .id = ComputeLibraryComponentId("Wst\xC4\x99" "ga historii"),
-            .serializable = true,
-        },
-        LibraryComponentDesc{
-            .name = "Echo soczewki",
-            .id = ComputeLibraryComponentId("Echo soczewki"),
             .serializable = true,
         },
         };

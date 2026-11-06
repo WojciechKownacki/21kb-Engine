@@ -103,12 +103,12 @@ void RendererExposesRuntimeCapabilityReport() {
         report.hdrExposureMeteringSupported == (report.textureBlitSupported && report.textureReadbackSupported),
         "Capability report did not classify HDR exposure metering from blit/readback capabilities");
     Require(
-        report.gpuDrivenComputeCullingSupported == report.computeSupported,
+        report.gpuDrivenComputeCullingSupported == (report.computeSupported && report.indirectDrawSupported),
         "Capability report did not gate GPU-driven compute culling on compute support");
     Require(
-        !report.gpuDrivenIndirectSubmitSupported,
-        "Capability report must not advertise GPU-driven indirect submit without a draw consumer");
-    Require(!report.gpuDrivenMeshletSubmitSupported, "Capability report should keep meshlet submit disabled until a meshlet path exists");
+        report.gpuDrivenIndirectSubmitSupported == report.gpuDrivenComputeCullingSupported,
+        "Capability report must gate indirect culling on compute and indirect draw support");
+    Require(report.gpuDrivenMeshletSubmitSupported == report.gpuDrivenComputeCullingSupported, "Capability report must gate meshlet indirect submission on compute and indirect support");
     Require(report.particleGpuDrawingSupported == report.particleInstancingSupported &&
             report.particleSubtractiveBlendSupported == report.particleGpuDrawingSupported,
         "capability report did not expose the GPU particle instancing/blend gate");

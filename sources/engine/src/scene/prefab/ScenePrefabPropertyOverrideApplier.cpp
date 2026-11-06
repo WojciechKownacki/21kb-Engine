@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 #include "scene/CombatantFields.hpp"
@@ -6,11 +7,16 @@
 
 #include <cmath>
 
+#include <algorithm>
 #include <charconv>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <system_error>
+#include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace kb::scene {
 namespace {
@@ -51,6 +57,36 @@ template <typename T>
         const std::from_chars_result result = std::from_chars(first, last, output);
         return result.ec == std::errc{} && result.ptr == last;
     }
+}
+
+constexpr std::string_view kBehaviourVariablePrefix = "behaviour.variable.";
+
+[[nodiscard]] bool StartsWith(std::string_view value, std::string_view prefix) noexcept {
+    return value.substr(0, prefix.size()) == prefix;
+}
+
+// "default" drops the node's override of the variable; anything else is a typed value ("Float:12.5").
+[[nodiscard]] bool ApplyBehaviourVariable(std::vector<BehaviourVariableOverride>& overrides, std::string_view name, std::string_view value) {
+    if (name.empty()) {
+        return false;
+    }
+    const auto existing = std::ranges::find_if(overrides, [name](const BehaviourVariableOverride& entry) { return entry.name == name; });
+    if (value == "default") {
+        if (existing != overrides.end()) {
+            overrides.erase(existing);
+        }
+        return true;
+    }
+    std::optional<kb::script::ScriptValue> parsed = kb::script::TryParseTypedValueText(value);
+    if (!parsed.has_value()) {
+        return false;
+    }
+    if (existing != overrides.end()) {
+        existing->value = std::move(*parsed);
+    } else {
+        overrides.push_back(BehaviourVariableOverride{ .name = std::string{ name }, .value = std::move(*parsed) });
+    }
+    return true;
 }
 
 [[nodiscard]] bool ApplyComponentPresence(std::string_view value, auto& component) {
@@ -197,6 +233,20 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "meshRenderer.layer") {
         return ParseNumber(property.value, Ensure(node.components.meshRenderer).layer);
     }
+    if (property.propertyPath == "meshRenderer.lodBias") {
+        return ParseNumber(property.value, Ensure(node.components.meshRenderer).lodBias) && IsMeshRendererComponentValid(*node.components.meshRenderer);
+    }
+    if (property.propertyPath == "meshRenderer.lodEnabled") {
+        return ParseBool(property.value, Ensure(node.components.meshRenderer).lodEnabled);
+    }
+    if (property.propertyPath == "meshRenderer.mobility") {
+        std::uint32_t mobility = 0U;
+        if (!ParseNumber(property.value, mobility) || mobility > static_cast<std::uint32_t>(MeshMobility::Static)) {
+            return false;
+        }
+        Ensure(node.components.meshRenderer).mobility = static_cast<MeshMobility>(mobility);
+        return true;
+    }
     if (property.propertyPath == "light") {
         return ApplyComponentPresence(property.value, node.components.light);
     }
@@ -256,6 +306,34 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "light.shadowDistance") {
         return ParseNumber(property.value, Ensure(node.components.light).shadowDistance);
     }
+    if (property.propertyPath == "light.shadowBias") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowBias);
+    }
+    if (property.propertyPath == "light.shadowNormalBias") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowNormalBias);
+    }
+    if (property.propertyPath == "light.shadowCascadeCount") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowCascadeCount);
+    }
+    if (property.propertyPath == "light.shadowCascadeDistribution") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowCascadeDistribution);
+    }
+    if (property.propertyPath == "light.shadowFilter") {
+        std::uint32_t filter = 0U;
+        if (!ParseNumber(property.value, filter) || filter > static_cast<std::uint32_t>(LightShadowFilter::Pcss)) {
+            return false;
+        }
+        Ensure(node.components.light).shadowFilter = static_cast<LightShadowFilter>(filter);
+        return true;
+    }
+    if (property.propertyPath == "light.shadowQuality") {
+        std::uint32_t quality = 0U;
+        if (!ParseNumber(property.value, quality) || quality > static_cast<std::uint32_t>(LightShadowQuality::Ultra)) {
+            return false;
+        }
+        Ensure(node.components.light).shadowQuality = static_cast<LightShadowQuality>(quality);
+        return true;
+    }
     if (property.propertyPath == "light.mobility") {
         std::uint32_t mobility = 0U;
         if (!ParseNumber(property.value, mobility) || mobility > static_cast<std::uint32_t>(LightMobility::Static)) {
@@ -313,7 +391,7 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "collider.shape") {
         int value = 0;
-        if (!ParseNumber(property.value, value) || value < static_cast<int>(ColliderShape::Box) || value > static_cast<int>(ColliderShape::OneWayBox)) {
+        if (!ParseNumber(property.value, value) || value < static_cast<int>(ColliderShape::Box) || value > static_cast<int>(ColliderShape::Terrain)) {
             return false;
         }
         Ensure(node.components.collider).shape = static_cast<ColliderShape>(value);
@@ -346,6 +424,9 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "behaviour") {
         return ApplyComponentPresence(property.value, node.components.behaviour);
+    }
+    if (StartsWith(property.propertyPath, kBehaviourVariablePrefix)) {
+        return ApplyBehaviourVariable(node.components.behaviourVariableOverrides, std::string_view{ property.propertyPath }.substr(kBehaviourVariablePrefix.size()), property.value);
     }
     if (property.propertyPath == "behaviour.behaviourAssetId") {
         return ParseNumber(property.value, Ensure(node.components.behaviour).behaviourAssetId);

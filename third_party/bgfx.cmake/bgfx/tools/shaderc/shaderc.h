@@ -167,6 +167,7 @@ namespace bgfx
 		bool disasm;
 		bool raw;
 		bool preprocessOnly;
+		bool sourceLocations;
 		bool depends;
 
 		bool debugInformation;

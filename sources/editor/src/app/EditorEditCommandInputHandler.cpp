@@ -7,6 +7,7 @@
 #include "app/EditorPendingTextEditCommitter.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
 
 #include <optional>
 
@@ -29,6 +30,12 @@ namespace {
         return EditorEditCommand::Redo;
     case 'D':
         return EditorEditCommand::Duplicate;
+    case 'C':
+        return EditorEditCommand::Copy;
+    case 'X':
+        return EditorEditCommand::Cut;
+    case 'V':
+        return EditorEditCommand::Paste;
     case 'S':
         return EditorEditCommand::Save;
     default:
@@ -53,6 +60,14 @@ bool EditorEditCommandInputHandler::HandleKeyDown(WPARAM key) const {
 }
 
 bool EditorEditCommandInputHandler::ExecuteShortcut(EditorEditCommand command) const {
+    if (auto* graph=sceneContext_.GameplayGraphEditor(); graph && graph->keyboardFocus && !sceneContext_.Inspector().IsTextEditing()) {
+        if (command==EditorEditCommand::Undo || command==EditorEditCommand::Redo) {
+            const bool changed=command==EditorEditCommand::Undo?graph->document.Undo():graph->document.Redo();
+            if (changed) graph->Edited();
+            return true;
+        }
+        if (command==EditorEditCommand::Save) return graph->Save(sceneContext_.Scene());
+    }
     // Ctrl+S never types into a field, so a value still being edited is committed - exactly as Enter would -
     // and then saved. Refusing instead made Save do nothing at all whenever an Inspector field was left open.
     if (command == EditorEditCommand::Save) {

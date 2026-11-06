@@ -723,6 +723,70 @@ void TestStripGeometryHistoryOrderAndFixedStepDeterminism() {
         "beam endpoint motion did not rebuild the dynamic strip geometry");
 }
 
+void TestStripCurvesDegeneracyAndRelease() {
+    auto emitter = Emitter(0U, 1U, kb::particles::ParticleRenderSortMode::None);
+    emitter.output = kb::particles::ParticleRenderOutput::Trail;
+    emitter.trailSampleIntervalSeconds = 1.0F / 60.0F;
+    emitter.trailMinimumDistance = 0.0F;
+    emitter.trailMaxSamplesPerParticle = 4U;
+    emitter.trailWidth = 0.5F;
+    std::array particles{Particle(41U, 0.0F, 0.0F, 0U)};
+    kb::particles::ParticleRenderSnapshotChannel channel;
+    Require(channel.Warmup(135U).Succeeded(), "curved trail warmup failed");
+    kb::render::ParticleStripGeometryBuilder builder;
+    builder.Warmup();
+    const std::array<kb::math::Vec3, 6> path{{{0, 0, 0}, {1, 0, 0}, {1, 1, 0},
+        {1, 1, 0}, {1, 0, 0}, {0, 0, 0}}};
+    const auto valid = [](const auto& mesh) {
+        Require(mesh.Succeeded(), "degenerate strip build failed");
+        for (const auto& v : mesh.vertices)
+            Require(std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
+                std::isfinite(v.u) && std::isfinite(v.v), "strip produced non-finite geometry");
+        for (auto i : mesh.indices) Require(i < mesh.vertices.size(), "strip produced an invalid index");
+    };
+    for (std::size_t step = 0; step < path.size(); ++step) {
+        particles[0].position = path[step];
+        Require(channel.Publish(1U, {.revision = step + 1U, .fixedStepIndex = step + 1U,
+            .emitters = std::span{&emitter, 1U}, .particles = particles}).Succeeded(), "curve publication failed");
+        const auto mesh = builder.Build(*channel.Read(), IdentityCamera(), {10, 20, 0});
+        valid(mesh);
+        const auto count = std::min(step + 1U, std::size_t{4U});
+        if (count < 2U) continue;
+        Require(mesh.vertices.size() == 2U * count && mesh.indices.size() == 6U * (count - 1U),
+            "trail exceeded its sample limit");
+        for (std::size_t point = 0; point < count; ++point) {
+            const auto& expected = path[step + 1U - count + point];
+            const auto& a = mesh.vertices[point * 2U];
+            const auto& b = mesh.vertices[point * 2U + 1U];
+            Require(std::abs((a.x + b.x) * 0.5F - expected.x - 10.0F) < 0.0001F &&
+                std::abs((a.y + b.y) * 0.5F - expected.y - 20.0F) < 0.0001F,
+                "trail replaced its curved history with a straight segment");
+        }
+    }
+    builder.ReleaseScene(135U);
+    Require(builder.Build(*channel.Read(), IdentityCamera()).indices.empty(), "unloaded scene retained trail samples");
+    emitter.output = kb::particles::ParticleRenderOutput::Beam;
+    emitter.outputOrigin = {1, 1, 1};
+    emitter.beamEnd = emitter.outputOrigin;
+    emitter.beamSegments = 4U;
+    Require(!channel.Publish(1U, {.revision = 7U, .fixedStepIndex = 7U,
+        .emitters = std::span{&emitter, 1U}, .particles = particles}).Succeeded(),
+        "zero-length beam bypassed snapshot validation");
+    emitter.output = kb::particles::ParticleRenderOutput::Ribbon;
+    emitter.particleCount = emitter.liveParticleCount = 4U;
+    emitter.ribbonMaxSegments = 3U;
+    emitter.ribbonWidth = 0.5F;
+    std::array ribbonParticles{Particle(1U, 0, 0, 0U), Particle(2U, 1, 0, 0U),
+        Particle(3U, 1, 0, 0U), Particle(4U, 0, 0, 0U)};
+    for (std::size_t i = 0; i < ribbonParticles.size(); ++i) ribbonParticles[i].spawnOrdinal = i + 1U;
+    Require(channel.Publish(1U, {.revision = 8U, .fixedStepIndex = 8U,
+        .emitters = std::span{&emitter, 1U}, .particles = ribbonParticles}).Succeeded(),
+        "degenerate ribbon publication failed");
+    const auto ribbon = builder.Build(*channel.Read(), IdentityCamera());
+    valid(ribbon);
+    Require(ribbon.indices.size() == 18U, "degenerate ribbon lost its bounded segments");
+}
+
 void TestStripGeometryCapacityIsHardAndDiagnostic() {
     constexpr std::uint32_t segmentsPerEmitter = 256U;
     // A beam strip of n segments takes 2 (n + 1) vertices and 6 n indices: the index budget fills first.
@@ -778,6 +842,28 @@ void TestTrailHistoryCapacityIsHardAndDiagnostic() {
     builder.Warmup();
     Require(builder.Build(*channel.Read(), IdentityCamera()).status == kb::render::ParticleStripBuildStatus::CapacityExceeded,
         "trail history budget did not report the first rejected particle");
+    // A restarted backend can publish the same revision as the previous backend.
+    particles.pop_back();
+    emitter.particleCount = static_cast<std::uint32_t>(particles.size());
+    emitter.liveParticleCount = emitter.particleCount;
+    kb::particles::ParticleRenderSnapshotChannel restartedChannel;
+    Require(restartedChannel.Warmup(134U).Succeeded(), "restart channel warmup failed");
+    Require(restartedChannel.Publish(2U, {.revision = 1U, .fixedStepIndex = 1U,
+                .emitters = std::span{&emitter, 1U}, .particles = particles}).Succeeded(),
+        "same-revision restart publication failed");
+    Require(builder.Build(*restartedChannel.Read(), IdentityCamera()).Succeeded(),
+        "same-revision backend restart leaked the previous trail history capacity");
+    builder.ReleaseScene(134U);
+    particles.push_back(Particle(particleCount, 0.0F, 0.0F, 0U));
+    emitter.particleCount = particleCount;
+    emitter.liveParticleCount = particleCount;
+    kb::particles::ParticleRenderSnapshotChannel releasedChannel;
+    Require(releasedChannel.Warmup(134U).Succeeded(), "released channel warmup failed");
+    Require(releasedChannel.Publish(1U, {.revision = 1U, .fixedStepIndex = 1U,
+                .emitters = std::span{&emitter, 1U}, .particles = particles}).Succeeded(),
+        "released trail history publication failed");
+    Require(builder.Build(*releasedChannel.Read(), IdentityCamera()).droppedSegmentCount == 1U,
+        "scene release did not recover the trail history capacity");
     for (auto& particle : particles) particle.position.y += 1.0F;
     Require(channel.Publish(1U, {.revision = 2U, .fixedStepIndex = 2U,
                 .emitters = std::span{&emitter, 1U}, .particles = particles}).Succeeded(),
@@ -920,6 +1006,7 @@ int main() {
         TestMeshBatchBuilderInstancesLodShadowAndExclusion();
         TestMeshBatchBuilderOrdersTranslucentAndSpins();
         TestStripGeometryHistoryOrderAndFixedStepDeterminism();
+        TestStripCurvesDegeneracyAndRelease();
         TestStripGeometryCapacityIsHardAndDiagnostic();
         TestTrailHistoryCapacityIsHardAndDiagnostic();
         TestStripColourIntensityAndTextureCoordinates();

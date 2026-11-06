@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/audio/SpatialAudioPlayback.hpp"
 #include "runtime/MiniaudioSound.hpp"
 
 #include <miniaudio.h>
@@ -28,7 +29,8 @@ public:
         kb::scene::Scene& scene,
         const kb::audio::AudioPlayDesc& desc,
         const MiniaudioClipResolver& clipResolver,
-        ma_sound_group* group);
+        ma_sound_group* group,
+        kb::audio::SpatialAudioMode mode = kb::audio::SpatialAudioMode::Panning);
 
     void RemoveFinishedVoices() noexcept;
     void StopAll() noexcept;

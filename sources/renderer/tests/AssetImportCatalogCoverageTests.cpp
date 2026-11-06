@@ -370,10 +370,18 @@ void RequireImportedTextureDecodes(ImportFixture& fixture, std::string_view exte
 }
 
 void RequireImportedDataRoundTrips(ImportFixture& fixture, std::string_view extension, kb::assets::AssetImportCategory category) {
-    const Bytes bytes = TextBytes("catalog fixture for " + std::string{ extension } + "\n");
+    const Bytes bytes = TextBytes(extension == ".kbloc"
+        ? "schema 1\nfallback en\nlanguage en\ntext sample \"Catalog fixture\"\n"
+        : "catalog fixture for " + std::string{ extension } + "\n");
     const kb::assets::AssetImportItemResult item = fixture.Import(extension, bytes);
     RequireThat(item.status == kb::assets::AssetImportItemStatus::Created && item.category == category,
         "Data fixture did not import: " + std::string{ extension } + " " + item.error);
+    if (extension == ".kbloc") {
+        RequireThat(ReadFileBytes(item.assetPhysicalPath) == bytes &&
+                fixture.manager.Registry().Find(item.id)->type == "LocalizationCatalog",
+            "Typed localization import did not preserve its valid catalog");
+        return;
+    }
     const kb::assets::AssetHandle<kb::assets::ImportedAsset> imported = fixture.manager.Load<kb::assets::ImportedAsset>(item.id);
     RequireThat(imported.IsLoaded() && imported->category == category &&
             imported->payload.size() == bytes.size() &&

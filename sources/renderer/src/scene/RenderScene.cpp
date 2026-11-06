@@ -171,6 +171,27 @@ RenderSceneStats RenderScene::Stats() const noexcept {
     };
 }
 
+namespace {
+
+[[nodiscard]] bool CastsMeshShadow(const MeshRenderProxyDesc& desc) noexcept {
+    return desc.visible && desc.castsShadow;
+}
+
+// Whether a change of a mesh proxy can alter the shadow it casts: where it is, what it draws, whether it casts.
+[[nodiscard]] bool ChangesMeshShadow(const MeshRenderProxyDesc& before, const MeshRenderProxyDesc& after) noexcept {
+    if (!CastsMeshShadow(before) && !CastsMeshShadow(after)) return false;
+    return before.model != after.model || before.meshAssetId != after.meshAssetId || before.materialAssetId != after.materialAssetId ||
+        before.materialSlotOverrideCount != after.materialSlotOverrideCount || before.materialSlotAssetIds != after.materialSlotAssetIds ||
+        before.boundsOverride.center != after.boundsOverride.center || before.boundsOverride.radius != after.boundsOverride.radius ||
+        before.currentSkinningPalette != after.currentSkinningPalette || before.visible != after.visible ||
+        before.castsShadow != after.castsShadow || before.shadowOnly != after.shadowOnly || before.layer != after.layer ||
+        before.morphDeformationEnabled != after.morphDeformationEnabled || before.lodBias != after.lodBias ||
+        before.lodEnabled != after.lodEnabled || before.detailSwitchEnabled != after.detailSwitchEnabled ||
+        before.isStatic != after.isStatic;
+}
+
+} // namespace
+
 RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     auto [it, inserted] = meshes_.try_emplace(desc.entityId);
     MeshRenderProxy& proxy = it->second;
@@ -189,6 +210,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
         proxy.desc = desc;
         proxy.dirty = RenderProxyDirtyFlag::All;
         proxy.spawnMotionFrame = motionFrame_;
+        if (CastsMeshShadow(desc)) proxy.shadowChangeFrame = motionFrame_;
         if (!drawGroupsDirty_ && desc.visible) AppendMeshInstance(proxy);
         return proxy.id;
     }
@@ -196,6 +218,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     const RenderProxyDirtyFlag dirty = RenderSceneProxyDirtyTracker::DirtyForMeshChange(proxy.desc, desc);
     if (dirty != RenderProxyDirtyFlag::None) {
         meshContentRevision_ = NextContentRevision();
+        if (ChangesMeshShadow(proxy.desc, desc)) proxy.shadowChangeFrame = motionFrame_;
         if (proxy.desc.model != desc.model) {
             RecordPreviousModel(proxy, proxy.desc.model);
         }
@@ -285,7 +308,7 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
     if (inserted) {
         proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All;
         proxy.spawnMotionFrame = motionFrame_;
-        InvalidateDrawGroups();
+        InvalidateDrawGroupsOfNonMeshProxy();
         return proxy.id;
     }
     const GeometrySwarmRenderProxyDesc& previous = proxy.desc;
@@ -302,6 +325,7 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
             if (group.meshAssetId == desc.meshAssetId && group.materialAssetId == desc.materialAssetId) {
                 const std::uint32_t firstNewInstance = previous.instanceCount;
                 const auto firstGenerated = group.instances.size();
+                NoteNonMeshShadowCasterChange();
                 meshContentRevision_ = NextContentRevision();
                 group.contentRevision = NextContentRevision();
                 proxy.desc = desc;
@@ -338,7 +362,7 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
             // A new layout places other instances at each index: none of them has a previous frame.
             proxy.previousModelFrame = 0U;
         }
-        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroups();
+        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroupsOfNonMeshProxy();
     }
     return proxy.id;
 }
@@ -346,11 +370,11 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
 RenderProxyId RenderScene::UpsertSurfaceCast(const SurfaceCastRenderProxyDesc& desc) {
     auto [it, inserted] = surfaceCasts_.try_emplace(desc.entityId);
     SurfaceCastRenderProxy& proxy = it->second;
-    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroups(); return proxy.id; }
+    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroupsOfNonMeshProxy(); return proxy.id; }
     if (proxy.desc.materialAssetId != desc.materialAssetId || proxy.desc.model != desc.model || proxy.desc.localCenter != desc.localCenter ||
         proxy.desc.size != desc.size || proxy.desc.radius != desc.radius || proxy.desc.height != desc.height ||
         proxy.desc.receiverLayerMask != desc.receiverLayerMask || proxy.desc.order != desc.order || proxy.desc.region != desc.region || proxy.desc.visible != desc.visible) {
-        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroups();
+        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroupsOfNonMeshProxy();
     }
     return proxy.id;
 }
@@ -358,9 +382,9 @@ RenderProxyId RenderScene::UpsertSurfaceCast(const SurfaceCastRenderProxyDesc& d
 RenderProxyId RenderScene::UpsertSpaceStroke(const SpaceStrokeRenderProxyDesc& desc) {
     auto [it, inserted] = spaceStrokes_.try_emplace(desc.entityId);
     SpaceStrokeRenderProxy& proxy = it->second;
-    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroups(); return proxy.id; }
+    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroupsOfNonMeshProxy(); return proxy.id; }
     if (proxy.desc.meshAssetId != desc.meshAssetId || proxy.desc.materialAssetId != desc.materialAssetId || proxy.desc.model != desc.model || proxy.desc.controlPoints != desc.controlPoints || proxy.desc.controlPointCount != desc.controlPointCount || proxy.desc.splineSegments != desc.splineSegments || proxy.desc.mode != desc.mode || proxy.desc.width != desc.width || proxy.desc.cableSag != desc.cableSag || proxy.desc.layer != desc.layer || proxy.desc.closed != desc.closed || proxy.desc.visible != desc.visible || proxy.desc.castsShadow != desc.castsShadow || proxy.desc.receivesShadow != desc.receivesShadow) {
-        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroups();
+        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroupsOfNonMeshProxy();
     }
     return proxy.id;
 }
@@ -381,11 +405,20 @@ const std::optional<SceneRenderAmbientRadiance>& RenderScene::AmbientRadiance() 
     return ambientRadiance_;
 }
 
+void RenderScene::SetLocalReflectionProbes(std::vector<SceneRenderReflectionProbe> probes) {
+    localReflectionProbes_ = std::move(probes);
+}
+
+std::span<const SceneRenderReflectionProbe> RenderScene::LocalReflectionProbes() const noexcept {
+    return localReflectionProbes_;
+}
+
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     const auto found = meshes_.find(entityId);
     if (found == meshes_.end()) return false;
     if (!RemoveMeshInstance(found->second)) InvalidateDrawGroups();
     else meshContentRevision_ = NextContentRevision();
+    NoteNonMeshShadowCasterChange();
     meshes_.erase(found);
     meshSetVersion_ = NextContentRevision();
     sortedMeshProxies_.dirty = true;
@@ -425,7 +458,7 @@ bool RenderScene::ApplyGeometrySwarmTransform(std::uint64_t entityId, const std:
 }
 bool RenderScene::UpdateGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
     if (!ApplyGeometrySwarmTransform(entityId, model)) return false;
-    InvalidateDrawGroups();
+    InvalidateDrawGroupsOfNonMeshProxy();
     return true;
 }
 bool RenderScene::ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
@@ -449,18 +482,18 @@ bool RenderScene::ApplySpaceStrokeTransform(std::uint64_t entityId, const std::a
 }
 bool RenderScene::UpdateSurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
     if (!ApplySurfaceCastTransform(entityId, model)) return false;
-    InvalidateDrawGroups();
+    InvalidateDrawGroupsOfNonMeshProxy();
     return true;
 }
 bool RenderScene::UpdateSpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
     if (!ApplySpaceStrokeTransform(entityId, model)) return false;
-    InvalidateDrawGroups();
+    InvalidateDrawGroupsOfNonMeshProxy();
     return true;
 }
 bool RenderScene::RemoveVisibilityBlocker(std::uint64_t entityId) noexcept { return visibilityBlockers_.erase(entityId) != 0U; }
-bool RenderScene::RemoveGeometrySwarm(std::uint64_t entityId) noexcept { const bool removed = geometrySwarms_.erase(entityId) != 0U; if (removed) InvalidateDrawGroups(); return removed; }
-bool RenderScene::RemoveSurfaceCast(std::uint64_t entityId) noexcept { const bool removed = surfaceCasts_.erase(entityId) != 0U; if (removed) InvalidateDrawGroups(); return removed; }
-bool RenderScene::RemoveSpaceStroke(std::uint64_t entityId) noexcept { const bool removed = spaceStrokes_.erase(entityId) != 0U; if (removed) InvalidateDrawGroups(); return removed; }
+bool RenderScene::RemoveGeometrySwarm(std::uint64_t entityId) noexcept { const bool removed = geometrySwarms_.erase(entityId) != 0U; if (removed) InvalidateDrawGroupsOfNonMeshProxy(); return removed; }
+bool RenderScene::RemoveSurfaceCast(std::uint64_t entityId) noexcept { const bool removed = surfaceCasts_.erase(entityId) != 0U; if (removed) InvalidateDrawGroupsOfNonMeshProxy(); return removed; }
+bool RenderScene::RemoveSpaceStroke(std::uint64_t entityId) noexcept { const bool removed = spaceStrokes_.erase(entityId) != 0U; if (removed) InvalidateDrawGroupsOfNonMeshProxy(); return removed; }
 
 const MeshRenderProxy* RenderScene::FindMeshByEntity(std::uint64_t entityId) const noexcept {
     const auto it = meshes_.find(entityId);
@@ -492,6 +525,7 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
     if (removed != 0U) {
         sortedMeshProxies_.dirty = true;
         meshContentRevision_ = NextContentRevision();
+        NoteNonMeshShadowCasterChange();
     }
     return removed;
 }
@@ -536,7 +570,7 @@ std::uint32_t RenderScene::RemoveGeometrySwarmsNotInSorted(std::span<const std::
         if (std::ranges::binary_search(sortedEntityIds, it->first)) { ++it; continue; }
         it = geometrySwarms_.erase(it); ++removed;
     }
-    if (removed != 0U) InvalidateDrawGroups();
+    if (removed != 0U) InvalidateDrawGroupsOfNonMeshProxy();
     return removed;
 }
 std::uint32_t RenderScene::RemoveSurfaceCastsNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept {
@@ -545,7 +579,7 @@ std::uint32_t RenderScene::RemoveSurfaceCastsNotInSorted(std::span<const std::ui
         if (std::ranges::binary_search(sortedEntityIds, it->first)) { ++it; continue; }
         it = surfaceCasts_.erase(it); ++removed;
     }
-    if (removed != 0U) InvalidateDrawGroups();
+    if (removed != 0U) InvalidateDrawGroupsOfNonMeshProxy();
     return removed;
 }
 std::uint32_t RenderScene::RemoveSpaceStrokesNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept {
@@ -554,7 +588,7 @@ std::uint32_t RenderScene::RemoveSpaceStrokesNotInSorted(std::span<const std::ui
         if (std::ranges::binary_search(sortedEntityIds, it->first)) { ++it; continue; }
         it = spaceStrokes_.erase(it); ++removed;
     }
-    if (removed != 0U) InvalidateDrawGroups();
+    if (removed != 0U) InvalidateDrawGroupsOfNonMeshProxy();
     return removed;
 }
 
@@ -637,7 +671,7 @@ bool RenderScene::SetRenderOrigin(const kb::math::DVec3& origin) {
     for (auto& [entityId, proxy] : surfaceCasts_) proxy.pulledWorldVersion = kStale;
     for (auto& [entityId, proxy] : spaceStrokes_) proxy.pulledWorldVersion = kStale;
     lightContentRevision_ = NextContentRevision();
-    InvalidateDrawGroups();
+    InvalidateDrawGroupsOfNonMeshProxy();
     for (const auto& [listenerId, listener] : renderOriginListeners_) {
         static_cast<void>(listenerId);
         if (listener) listener(previous, renderOrigin_);
@@ -920,6 +954,11 @@ bool RenderScene::RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept {
     return true;
 }
 
+void RenderScene::InvalidateDrawGroupsOfNonMeshProxy() noexcept {
+    NoteNonMeshShadowCasterChange();
+    InvalidateDrawGroups();
+}
+
 void RenderScene::InvalidateDrawGroups() noexcept {
     meshContentRevision_ = NextContentRevision();
     drawGroupsDirty_ = true;
@@ -1073,9 +1112,16 @@ void RenderScene::RecordPreviousSwarmModel(GeometrySwarmRenderProxy& proxy, cons
     proxy.previousModelFrame = motionFrame_;
 }
 
-RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged) {
+RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& worldModel, bool markGroupChanged) {
+    auto model = worldModel;
+    for (std::size_t component = 0; component < 3; ++component) {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            model[12 + component] += worldModel[axis * 4 + component] * proxy.desc.localRenderOffset[axis];
+        }
+    }
     if (proxy.desc.model != model) {
         RecordPreviousModel(proxy, proxy.desc.model);
+        if (CastsMeshShadow(proxy.desc)) proxy.shadowChangeFrame = motionFrame_;
     }
     proxy.desc.model = model; // source of truth, always current
 

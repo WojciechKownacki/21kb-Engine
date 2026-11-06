@@ -2,10 +2,14 @@
 
 #include "assets/AssetFileSystem.hpp"
 #include "assets/AssetPathUtilities.hpp"
+#include "assets/ImportedAssetLodBlock.hpp"
+#include "engine/assets/AssetImportRecord.hpp"
 #include "engine/assets/AssetImportCatalog.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/GltfExternalResources.hpp"
 #include "engine/assets/ImportedAsset.hpp"
+#include "engine/localization/LocalizationCatalogIO.hpp"
+#include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,6 +36,9 @@ constexpr std::uint32_t ImportContainerWithResourcesVersion = 2U;
 // header and names, the transform (scale, then Euler degrees x y z, as IEEE floats), the resource
 // table (possibly empty), then the payload. Imports without a transform keep writing 1 or 2.
 constexpr std::uint32_t ImportContainerWithTransformVersion = 3U;
+// A model container with its levels-of-detail settings (AssetMeshLodSettings) after the transform; written
+// only when the settings differ from the defaults, so every other container keeps its bytes.
+constexpr std::uint32_t ImportContainerWithLodVersion = detail::kImportContainerWithLodVersion;
 constexpr std::uint64_t FnvPrime = 1099511628211ULL;
 [[nodiscard]] std::string SanitizeStem(std::string name) {
     for (char& character : name) {
@@ -236,9 +243,11 @@ void WriteF32(std::ostream& output, float value) {
     std::uint64_t sourceHash,
     std::uint16_t importOptions,
     const AssetMeshImportTransform& transform,
+    const AssetMeshLodSettings& lod,
     std::span<const ImportedAssetResource> resources) {
     const std::filesystem::path tempPath = outputPath.string() + ".tmp";
-    const bool writesTransform = !transform.IsIdentity();
+    const bool writesLod = !lod.IsDefault();
+    const bool writesTransform = writesLod || !transform.IsIdentity();
     bool wrote = false;
     {
         std::ofstream output{ tempPath, std::ios::binary | std::ios::trunc };
@@ -246,7 +255,8 @@ void WriteF32(std::ostream& output, float value) {
             return false;
         }
         output.write(AssetMagic.data(), static_cast<std::streamsize>(AssetMagic.size()));
-        WriteU32(output, writesTransform ? ImportContainerWithTransformVersion
+        WriteU32(output, writesLod ? ImportContainerWithLodVersion
+                : writesTransform ? ImportContainerWithTransformVersion
                 : resources.empty() ? ImportFormatVersion : ImportContainerWithResourcesVersion);
         WriteU16(output, static_cast<std::uint16_t>(category));
         WriteU16(output, importOptions);
@@ -260,6 +270,7 @@ void WriteF32(std::ostream& output, float value) {
             WriteF32(output, transform.rotationDegrees[1]);
             WriteF32(output, transform.rotationDegrees[2]);
         }
+        if (wrote && writesLod) detail::WriteLodBlock(output, lod);
         wrote = wrote
             && ((resources.empty() && !writesTransform) || WriteResources(output, resources))
             && CopyPayload(output, sourcePath)
@@ -335,6 +346,11 @@ struct ImportedAssetHeader {
     std::string sourceName;
     std::string sourceExtension;
     AssetMeshImportTransform transform{};
+    AssetMeshLodSettings lod{};
+    std::uint32_t version = 0U;
+    // Where the fixed header and the names end, and where the resource table (the payload, in a version-1 container) begins.
+    std::streamoff namesEnd = 0;
+    std::streamoff bodyStart = 0;
 };
 
 [[nodiscard]] std::optional<ImportedAssetHeader> ReadImportedAssetHeader(const std::filesystem::path& assetPath) {
@@ -352,20 +368,61 @@ struct ImportedAssetHeader {
         magic != AssetMagic ||
         !ReadU32(input, version) ||
         (version != ImportFormatVersion && version != ImportContainerWithResourcesVersion &&
-            version != ImportContainerWithTransformVersion) ||
+            version != ImportContainerWithTransformVersion && version != ImportContainerWithLodVersion) ||
         !ReadU16(input, category) ||
         !ReadU16(input, flags) ||
         !ReadU64(input, header.sourceSize) ||
         !ReadU64(input, header.sourceHash) ||
         !ReadString(input, header.sourceName) ||
-        !ReadString(input, header.sourceExtension) ||
-        (version == ImportContainerWithTransformVersion && !ReadTransform(input, header.transform))) {
+        !ReadString(input, header.sourceExtension)) {
         return std::nullopt;
     }
+    header.namesEnd = input.tellg();
+    if ((version >= ImportContainerWithTransformVersion && !ReadTransform(input, header.transform)) ||
+        (version == ImportContainerWithLodVersion && !detail::ReadLodBlock(input, header.lod))) {
+        return std::nullopt;
+    }
+    header.version = version;
+    header.bodyStart = input.tellg();
 
     header.category = static_cast<AssetImportCategory>(category);
     header.importOptions = flags;
     return header;
+}
+
+// Writes `path` again with other levels-of-detail settings: the same fixed header, names, transform and resources, and the same payload bytes.
+[[nodiscard]] bool RewriteContainerWithLod(const std::filesystem::path& path, const ImportedAssetHeader& header, const AssetMeshLodSettings& lod) {
+    std::vector<char> bytes;
+    {
+        std::ifstream input{ path, std::ios::binary };
+        if (!input.is_open()) return false;
+        bytes.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    }
+    if (bytes.size() < static_cast<std::size_t>(header.bodyStart) || header.namesEnd < 12) return false;
+    const std::filesystem::path tempPath = path.string() + ".tmp";
+    bool wrote = false;
+    {
+        std::ofstream output{ tempPath, std::ios::binary | std::ios::trunc };
+        if (!output.is_open()) return false;
+        output.write(AssetMagic.data(), static_cast<std::streamsize>(AssetMagic.size()));
+        WriteU32(output, lod.IsDefault() ? ImportContainerWithTransformVersion : ImportContainerWithLodVersion);
+        output.write(bytes.data() + 12, static_cast<std::streamsize>(header.namesEnd - 12));
+        WriteF32(output, header.transform.scale);
+        WriteF32(output, header.transform.rotationDegrees[0]);
+        WriteF32(output, header.transform.rotationDegrees[1]);
+        WriteF32(output, header.transform.rotationDegrees[2]);
+        if (!lod.IsDefault()) detail::WriteLodBlock(output, lod);
+        if (header.version == ImportFormatVersion) WriteU32(output, 0U);
+        output.write(bytes.data() + header.bodyStart, static_cast<std::streamsize>(bytes.size() - static_cast<std::size_t>(header.bodyStart)));
+        wrote = output.good();
+    }
+    std::error_code error;
+    if (wrote) std::filesystem::rename(tempPath, path, error);
+    if (!wrote || error) {
+        std::filesystem::remove(tempPath, error);
+        return false;
+    }
+    return true;
 }
 
 [[nodiscard]] bool SameVirtualFolder(const std::filesystem::path& left, const std::filesystem::path& right) {
@@ -441,6 +498,38 @@ struct ImportedAssetHeader {
         return result;
     }
 
+    if (AssetPathUtilities::LowerExtension(sourcePath.extension()) == kb::localization::kLocalizationCatalogAssetExtension) {
+        if (!kb::localization::LocalizationCatalogIO::Load(sourcePath)) {
+            result.error = "Localization catalog could not be parsed.";
+            result.status = AssetImportItemStatus::Failed;
+            return result;
+        }
+        result.sourceHash = AssetFileSystem::HashFile(sourcePath);
+        const auto stem = SanitizeStem(sourcePath.stem().string());
+        for (int index = 0; index < 10000; ++index) {
+            const auto name = stem + (index == 0 ? std::string{} : "_" + std::to_string(index)) + ".kbloc";
+            const auto path = destinationFolder / name;
+            const bool exists = std::filesystem::exists(path, error);
+            if (error) break;
+            if (exists && AssetFileSystem::HashFile(path) != result.sourceHash) continue;
+            if (!exists && !std::filesystem::copy_file(sourcePath, path, std::filesystem::copy_options::none, error)) break;
+            result.assetPhysicalPath = path;
+            result.virtualPath = destinationVirtualFolder / name;
+            result.id = MakeAssetId(NormalizeAssetPath(result.virtualPath) + ":" + kb::localization::kLocalizationCatalogAssetType);
+            result.assetHash = AssetFileSystem::HashFile(path);
+            AssetMetadata metadata{.id = result.id, .type = kb::localization::kLocalizationCatalogAssetType,
+                .name = path.stem().string(), .virtualPath = result.virtualPath, .physicalPath = path,
+                .sourceExtension = ".kbloc", .contentHash = result.assetHash};
+            metadata.dependencies = kb::localization::LocalizationCatalogAssetLoader{}.DiscoverDependencies(metadata, manager.Registry());
+            static_cast<void>(manager.RegisterAsset(std::move(metadata)));
+            result.status = exists ? AssetImportItemStatus::Reused : AssetImportItemStatus::Created;
+            return result;
+        }
+        result.status = AssetImportItemStatus::Failed;
+        result.error = "Localization catalog destination could not be written.";
+        return result;
+    }
+
     std::string resourceError;
     const std::optional<std::vector<ImportedAssetResource>> resources =
         CollectSourceResources(sourcePath, result.category, resourceError);
@@ -489,7 +578,7 @@ struct ImportedAssetHeader {
     const std::string runtimeType{ RuntimeAssetType(result.category) };
     result.id = MakeAssetId(NormalizeAssetPath(result.virtualPath) + ":" + runtimeType);
 
-    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash, importOptions, transform, *resources)) {
+    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash, importOptions, transform, AssetMeshLodSettings{}, *resources)) {
         result.error = "Imported asset container could not be written.";
         result.status = AssetImportItemStatus::Failed;
         return result;
@@ -574,7 +663,7 @@ AssetImportItemResult AssetImportService::ReimportFile(
     const std::uint16_t importOptions = AssetImportOptionFlags(options);
     // The new container is written beside the old one and only then put in its place, so a failure leaves the old asset as it was.
     const std::filesystem::path staged = existing->physicalPath.string() + ".reimport";
-    if (!WriteAssetContainer(staged, sourcePath, previous->category, sourceSize, result.sourceHash, importOptions, transform, *resources)) {
+    if (!WriteAssetContainer(staged, sourcePath, previous->category, sourceSize, result.sourceHash, importOptions, transform, previous->lod, *resources)) {
         std::filesystem::remove(staged, error);
         result.status = AssetImportItemStatus::Failed;
         result.error = "The new asset container could not be written.";
@@ -609,6 +698,42 @@ AssetImportItemResult AssetImportService::ReimportFile(
     static_cast<void>(manager.Unload(id));
     result.status = AssetImportItemStatus::Updated;
     return result;
+}
+
+std::optional<AssetMeshLodSettings> AssetImportService::ReadMeshLod(const std::filesystem::path& containerPath) {
+    const std::optional<ImportedAssetHeader> header = ReadImportedAssetHeader(containerPath);
+    if (!header.has_value() || header->category != AssetImportCategory::Model) return std::nullopt;
+    return header->lod;
+}
+
+std::string AssetImportService::SetMeshLod(AssetManager& manager, AssetId id, const AssetMeshLodSettings& lod) {
+    if (!lod.IsValid()) return "The levels-of-detail settings are not valid: 1 to 8 levels, shares above 0 and below 100 that fall level by level, deviations above 0 up to 100.";
+    const AssetMetadata* existing = manager.Registry().Find(id);
+    if (existing == nullptr || existing->physicalPath.empty()) return "The asset is not in the project.";
+    const std::optional<ImportedAssetHeader> header = ReadImportedAssetHeader(existing->physicalPath);
+    if (!header.has_value() || header->category != AssetImportCategory::Model) return "The asset is not an imported model.";
+    if (header->lod == lod) return {};
+    if (!RewriteContainerWithLod(existing->physicalPath, *header, lod)) return "The asset container could not be rewritten.";
+    const std::uint64_t newHash = AssetFileSystem::HashFile(existing->physicalPath);
+    if (!WriteMeta(MetaPathForAssetPath(existing->physicalPath), id, existing->virtualPath, std::filesystem::path{ header->sourceName + header->sourceExtension },
+            header->category, header->sourceSize, header->sourceHash, newHash)) {
+        return "The asset meta could not be updated.";
+    }
+    // The levels are the asset's own setting, not an edit of what the import wrote: keep the record in step so a reimport does not call it a local override.
+    const std::filesystem::path recordPath = AssetImportRecordIO::PathFor(existing->physicalPath);
+    std::error_code ignored;
+    if (std::filesystem::is_regular_file(recordPath, ignored)) {
+        if (std::optional<AssetImportRecord> record = AssetImportRecordIO::Read(recordPath); record.has_value()) {
+            const std::string virtualPath = NormalizeAssetPath(existing->virtualPath);
+            if (const AssetImportRecordEntry* entry = record->Find(virtualPath); entry != nullptr) {
+                record->Set(virtualPath, entry->assetType, newHash);
+                static_cast<void>(AssetImportRecordIO::Write(recordPath, *record));
+            }
+        }
+    }
+    static_cast<void>(manager.DiscoverMountedAssets());
+    static_cast<void>(manager.Unload(id));
+    return {};
 }
 
 AssetImportResult AssetImportService::ImportFiles(

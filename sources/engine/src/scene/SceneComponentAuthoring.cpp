@@ -137,6 +137,7 @@ const std::array kEntries{
         },
         [](Scene& scene, SceneEntity entity) { scene.Components().SpaceStrokes().Remove(entity); },
         [](const ScenePrefabNodeComponents& node) { return node.spaceStroke.has_value(); } },
+    Entry{ { "River", "River", {} }, KB_COMPONENT(Rivers, river, RiverComponent{}) },
     Entry{ { "Trail Renderer", "Trail Renderer", {} }, KB_COMPONENT(HistoryRibbons, historyRibbon, HistoryRibbonComponent{}) },
     Entry{ { "Lens Flare", "Lens Flare", {} }, KB_COMPONENT(LensEchoes, lensEcho, LensEchoComponent{}) },
     Entry{ { "NavAgent", "Nav Agent", {} }, KB_COMPONENT(NavAgents, navAgent, NavAgent{}) },
@@ -169,9 +170,6 @@ std::string_view SceneComponentAuthoring::CanonicalName(std::string_view id) noe
     if (id == "Audio Source") return "AudioSource";
     if (id == "Audio Listener") return "AudioListener";
     if (id == "3D Radiance Emitter") return "Light";
-    if (id == "Kreska przestrzenna") return "Line Renderer";
-    if (id == "Wst\xC4\x99" "ga historii") return "Trail Renderer";
-    if (id == "Echo soczewki") return "Lens Flare";
     return id;
 }
 

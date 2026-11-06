@@ -1,5 +1,11 @@
 #include "engine/script/ScriptValue.hpp"
 
+#include <charconv>
+#include <cerrno>
+#include <cstdlib>
+#include <string>
+#include <system_error>
+#include <type_traits>
 #include <utility>
 
 namespace kb::script {
@@ -207,6 +213,136 @@ kb::visual::VisualGraphValueType ToVisualGraphValueType(ScriptValueType type) no
         break;
     }
     return kb::visual::VisualGraphValueType::Void;
+}
+
+namespace {
+
+template <typename Number>
+[[nodiscard]] std::string NumberText(Number value) {
+    char buffer[40];
+    const std::to_chars_result written = std::to_chars(buffer, buffer + sizeof(buffer), value);
+    return std::string{ buffer, written.ptr };
+}
+
+template <typename Integer>
+[[nodiscard]] bool ParseWhole(std::string_view text, Integer& output) noexcept {
+    const std::from_chars_result parsed = std::from_chars(text.data(), text.data() + text.size(), output);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+}
+
+template <typename Real>
+[[nodiscard]] bool ParseReal(std::string_view text, Real& output) {
+    const std::string copy{ text };
+    char* end = nullptr;
+    errno = 0;
+    if constexpr (std::is_same_v<Real, float>) {
+        output = std::strtof(copy.c_str(), &end);
+    } else {
+        output = std::strtod(copy.c_str(), &end);
+    }
+    return errno == 0 && end == copy.c_str() + copy.size();
+}
+
+} // namespace
+
+std::string FormatValueText(const ScriptValue& value) {
+    switch (value.Type()) {
+    case ScriptValueType::Bool:
+        return value.AsBool() ? "true" : "false";
+    case ScriptValueType::Int:
+        return NumberText(value.AsInt());
+    case ScriptValueType::Float:
+        return NumberText(value.AsFloat());
+    case ScriptValueType::Int64:
+        return NumberText(value.AsInt64());
+    case ScriptValueType::Double:
+        return NumberText(value.AsDouble());
+    case ScriptValueType::UInt32:
+        return NumberText(value.AsUInt32());
+    case ScriptValueType::Entity:
+    case ScriptValueType::Component:
+    case ScriptValueType::Hash:
+        return NumberText(value.AsUInt64());
+    case ScriptValueType::String:
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        return value.AsString();
+    case ScriptValueType::Void:
+        break;
+    }
+    return {};
+}
+
+std::optional<ScriptValue> TryParseValueText(std::string_view text, ScriptValueType type) {
+    switch (type) {
+    case ScriptValueType::String:
+        return ScriptValue{ std::string{ text } };
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        return ScriptValue{ std::string{ text }, type };
+    case ScriptValueType::Void:
+        return std::nullopt;
+    default:
+        break;
+    }
+    if (text.empty()) {
+        return std::nullopt;
+    }
+    switch (type) {
+    case ScriptValueType::Bool:
+        if (text == "true" || text == "1") {
+            return ScriptValue{ true };
+        }
+        if (text == "false" || text == "0") {
+            return ScriptValue{ false };
+        }
+        return std::nullopt;
+    case ScriptValueType::Int: {
+        int parsed = 0;
+        return ParseWhole(text, parsed) ? std::optional<ScriptValue>{ ScriptValue{ parsed } } : std::nullopt;
+    }
+    case ScriptValueType::Float: {
+        float parsed = 0.0F;
+        return ParseReal(text, parsed) ? std::optional<ScriptValue>{ ScriptValue{ parsed } } : std::nullopt;
+    }
+    case ScriptValueType::Double: {
+        double parsed = 0.0;
+        return ParseReal(text, parsed) ? std::optional<ScriptValue>{ ScriptValue{ parsed } } : std::nullopt;
+    }
+    case ScriptValueType::Int64: {
+        std::int64_t parsed = 0;
+        return ParseWhole(text, parsed) ? std::optional<ScriptValue>{ ScriptValue{ parsed } } : std::nullopt;
+    }
+    case ScriptValueType::UInt32: {
+        std::uint32_t parsed = 0U;
+        return ParseWhole(text, parsed) ? std::optional<ScriptValue>{ ScriptValue{ parsed } } : std::nullopt;
+    }
+    case ScriptValueType::Entity:
+    case ScriptValueType::Component:
+    case ScriptValueType::Hash: {
+        std::uint64_t parsed = 0U;
+        return ParseWhole(text, parsed) ? std::optional<ScriptValue>{ ScriptValue{ parsed, type } } : std::nullopt;
+    }
+    case ScriptValueType::String:
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+    case ScriptValueType::Void:
+        break;
+    }
+    return std::nullopt;
+}
+
+std::string FormatTypedValueText(const ScriptValue& value) {
+    return std::string{ ToString(value.Type()) } + ':' + FormatValueText(value);
+}
+
+std::optional<ScriptValue> TryParseTypedValueText(std::string_view text) {
+    const std::size_t separator = text.find(':');
+    ScriptValueType type = ScriptValueType::Void;
+    if (separator == std::string_view::npos || !TryParse(text.substr(0U, separator), type)) {
+        return std::nullopt;
+    }
+    return TryParseValueText(text.substr(separator + 1U), type);
 }
 
 } // namespace kb::script

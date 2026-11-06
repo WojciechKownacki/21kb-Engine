@@ -76,14 +76,32 @@ void SetShadowViewOrigin(std::array<float, 16>& view, const bx::Vec3& origin) no
         return 1.0F;
     case SceneRenderShadowFilter::Pcf3x3:
         return 3.0F;
-    case SceneRenderShadowFilter::Evsm:
-        return 4.0F;
-    case SceneRenderShadowFilter::Msm:
-        return 5.0F;
     case SceneRenderShadowFilter::Pcss:
         return 6.0F;
     }
     return 3.0F;
+}
+
+// The shader's filter mode: 1 hard, 2 PCF only, 3 PCF that turns soft where the light has a source size, 6 PCSS.
+[[nodiscard]] float ShadowFilterModeValue(RenderLightShadowFilter filter, SceneRenderShadowFilter projectFilter) noexcept {
+    switch (filter) {
+    case RenderLightShadowFilter::Hard:
+        return 1.0F;
+    case RenderLightShadowFilter::Pcf:
+        return 2.0F;
+    case RenderLightShadowFilter::Pcss:
+        return 6.0F;
+    case RenderLightShadowFilter::Default:
+        break;
+    }
+    return ShadowFilterModeValue(projectFilter);
+}
+
+// The map size a light's quality asks for: a multiple of 64, between 256 and 8192.
+[[nodiscard]] std::uint32_t ShadowMapSizeFor(std::uint32_t projectSize, RenderLightShadowQuality quality) noexcept {
+    constexpr std::array<float, 5> kScale{ 1.0F, 0.5F, 0.75F, 1.0F, 2.0F };
+    const float scaled = static_cast<float>(projectSize) * kScale[static_cast<std::size_t>(quality)];
+    return std::clamp(static_cast<std::uint32_t>(std::lround(scaled / 64.0F)) * 64U, 256U, 8192U);
 }
 
 [[nodiscard]] Basis LightBasisFromQuat(const std::array<float, 4>& q) noexcept {
@@ -149,6 +167,15 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
         lightingConfig.shadowDistance = light.shadowDistance;
     }
     lightingConfig.shadowStrength *= std::clamp(light.shadowStrength, 0.0F, 1.0F);
+    // Its own bias, filter, quality and cascades too.
+    const float biasTexels = std::max(light.shadowBias > 0.0F ? light.shadowBias : lightingConfig.shadowDepthBias, 0.0F);
+    const float normalBiasTexels = std::max(light.shadowNormalBias > 0.0F ? light.shadowNormalBias : lightingConfig.shadowNormalBias, 0.0F);
+    const float filterMode = ShadowFilterModeValue(light.shadowFilter, lightingConfig.shadowFilter);
+    lightingConfig.shadowMapSize = ShadowMapSizeFor(lightingConfig.shadowMapSize, light.shadowQuality);
+    if (light.shadowCascadeCount > 0U) {
+        lightingConfig.shadowCascadeCount = light.shadowCascadeCount;
+    }
+    const float cascadeRatio = light.shadowCascadeDistribution >= 1.5F ? light.shadowCascadeDistribution : 4.0F;
     // Tangent of half the source angle (degrees; Source Angle): the penumbra per metre
     // between occluder and receiver.
     const float sourceTan = std::tan(bx::toRad(0.5F * std::clamp(light.sourceRadius, 0.0F, 10.0F)));
@@ -195,9 +222,9 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     setup.casterCount = focusCamera ? casterBounds.focusedCasterCount : casterBounds.casterCount;
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
 
-    // Cascades are camera-centred squares, each a quarter of the next (stable under camera rotation), so a
-    // 1000 m shadow distance still gives a sharp 15.6 m first cascade; a cascade needs a camera focus,
-    // otherwise the single bounds-fitted map is used.
+    // Cascades are camera-centred squares, each 1 / cascadeRatio (4 unless the light says) of the next (stable
+    // under camera rotation), so a 1000 m shadow distance still gives a sharp 15.6 m first cascade; a cascade
+    // needs a camera focus, otherwise the single bounds-fitted map is used.
     constexpr std::uint32_t kMaxCascades = SceneRenderShadowMapBinding::kMaxCascades;
     const std::uint32_t cascadeCount = focusCamera
         ? std::clamp(lightingConfig.shadowCascadeCount, 1U, std::clamp(maxCascades, 1U, kMaxCascades)) : 1U;
@@ -208,7 +235,7 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     setup.binding.cascadeCount = cascadeCount;
     for (std::uint32_t cascade = 0U; cascade < cascadeCount; ++cascade) {
         const float cascadeRadius = focusCamera
-            ? lightingConfig.shadowDistance / static_cast<float>(1U << (2U * (cascadeCount - 1U - cascade)))
+            ? lightingConfig.shadowDistance / std::pow(cascadeRatio, static_cast<float>(cascadeCount - 1U - cascade))
             : radius;
         const float orthoHeight = 2.0F * cascadeRadius;
         SceneRenderCamera& camera = setup.cascadeCameras[cascade];
@@ -229,6 +256,10 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
         setup.binding.cascadeAtlas[cascade * 4U + 2U] = tileScale;
         // Penumbra in atlas uv per unit of shadow depth (the depth spans the projection's far - near).
         const float depthRange = maximumDepth - minimumDepth + 2.0F - 0.1F;
+        // Bias and normal offset in texels of this cascade: the same on screen for every cascade and map size.
+        const float texelWorld = orthoHeight / static_cast<float>(std::max(tileSize, 1U));
+        setup.binding.cascadeBias[cascade * 4U + 0U] = depthRange > 0.0F ? biasTexels * texelWorld / depthRange : 0.0F;
+        setup.binding.cascadeBias[cascade * 4U + 1U] = normalBiasTexels * texelWorld;
         setup.binding.cascadeAtlas[cascade * 4U + 3U] = sourceTan * depthRange * tileScale / std::max(orthoHeight, 0.001F);
     }
     setup.camera = setup.cascadeCameras[0];
@@ -237,10 +268,10 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     setup.binding.cascadeInfo = { static_cast<float>(cascadeCount), tileSize == 0U ? 0.0F : 2.0F / static_cast<float>(tileSize),
         std::clamp(lightingConfig.shadowCascadeBlend, 0.0F, 0.4F), 0.0F };
     setup.binding.params = {
-        std::max(lightingConfig.shadowDepthBias, 0.0F),
+        0.0F,
         std::clamp(lightingConfig.shadowStrength, 0.0F, 1.0F),
         setup.atlasSize == 0U ? 0.0F : 1.0F / static_cast<float>(setup.atlasSize),
-        ShadowFilterModeValue(lightingConfig.shadowFilter),
+        filterMode,
     };
     setup.valid = true;
     return setup;

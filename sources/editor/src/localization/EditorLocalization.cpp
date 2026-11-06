@@ -28,7 +28,7 @@
 namespace kb::editor {
 namespace {
 
-// The languages of the moonswar client, which the editors follow.
+// Languages available in the editor interface.
 constexpr std::array<EditorLanguage, 33> kLanguages{ {
     { "en", "English", "English" },
     { "pl", "Polski", "Polish" },

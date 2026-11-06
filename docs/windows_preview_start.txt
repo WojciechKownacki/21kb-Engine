@@ -1,0 +1,12 @@
+21kb Windows test build
+
+Unpack the complete archive into a writable directory, then run bin\kb_editor.exe.
+Keep the extracted directory path short enough for the Windows compiler tools.
+
+C++ authoring requires a compatible x64 MSVC toolchain and CMake. Start the editor
+from a configured developer command prompt with these tools available.
+Build Game also requires a Python interpreter selected in its Builder setting.
+Development is the test package policy; Release retains the signing requirements.
+
+See docs\windows_preview.md for verified workflows and current limitations.
+Use bin\kb_cli.exe api --search <term> to find the public API and examples.

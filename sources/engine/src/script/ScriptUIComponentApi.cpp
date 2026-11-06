@@ -170,7 +170,7 @@ namespace {
 
 struct PropertyCatalogCache {
     std::array<std::vector<ScriptSceneComponentPropertyDesc>,
-               static_cast<std::size_t>(kb::scene::UIComponentType::WidgetSwitcher) + 1U>
+               static_cast<std::size_t>(kb::scene::UIComponentType::Accessibility) + 1U>
         properties;
 
     PropertyCatalogCache() {

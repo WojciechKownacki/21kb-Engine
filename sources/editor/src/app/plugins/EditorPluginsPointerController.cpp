@@ -44,6 +44,9 @@ bool EditorPluginsPointerController::HandlePointerDown(const RECT& content, int 
     case PluginsPanelHitKind::ParticleProviderCancel:
         sceneContext_.CancelParticleProviderMigration();
         return true;
+    case PluginsPanelHitKind::ReloadScene:
+        // Keeps unsaved edits, as entering Play mode would.
+        return sceneContext_.ReloadSceneFromProject();
     case PluginsPanelHitKind::None:
     default:
         return sceneContext_.Plugins().SetHoveredPluginIndex(std::numeric_limits<std::size_t>::max());

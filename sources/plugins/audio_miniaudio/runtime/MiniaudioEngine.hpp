@@ -2,6 +2,8 @@
 
 #include "engine/audio/AudioPlayback.hpp"
 #include "runtime/MiniaudioMeterNode.hpp"
+#include "runtime/MiniaudioAllocationTracker.hpp"
+#include "engine/audio/AudioDiagnostics.hpp"
 
 #include <miniaudio.h>
 #include <mutex>
@@ -25,7 +27,10 @@ public:
 
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bool IsPlaybackAvailable() const noexcept;
+    [[nodiscard]] bool SetPlatformSuspended(bool suspended) noexcept;
+    [[nodiscard]] bool IsPlatformSuspended() const noexcept { return platformSuspended_; }
     [[nodiscard]] kb::audio::AudioDeviceStatus Status() const noexcept;
+    [[nodiscard]] kb::audio::AudioRuntimeDiagnostics Diagnostics() const;
     [[nodiscard]] ma_engine& Native() noexcept;
     [[nodiscard]] ma_result ReadPcm(float* output, ma_uint64 frames, ma_uint64* framesRead);
     [[nodiscard]] std::unique_lock<std::mutex> LockGraph();
@@ -39,13 +44,19 @@ private:
     static void ObserveOutput(void* user, float* frames, ma_uint64 frameCount) noexcept;
     std::atomic<double> outputActiveUntilMs_{0.0};
 #endif
+    std::atomic<bool> graphReady_{false};
     std::mutex graphMutex_;
     MiniaudioMeterAccumulator masterMeter_;
     std::atomic<std::uint64_t> renderedFrames_{0U};
+    MiniaudioAllocationTracker allocations_;
+    std::atomic<std::uint64_t> deviceBlocks_{0U}, deviceFrames_{0U}, shortBlocks_{0U}, deadlineMisses_{0U}, worstCallbackNs_{0U};
+    std::atomic<std::uint32_t> periodFrames_{0U};
+    std::uint64_t generation_ = 0U;
     ma_engine engine_{};
     bool initialized_ = false;
     bool playbackAvailable_ = false;
     bool initializationFailed_ = false;
+    bool platformSuspended_ = false;
 };
 
 } // namespace kb::audio_miniaudio

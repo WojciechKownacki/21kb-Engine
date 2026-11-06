@@ -121,11 +121,8 @@ bool EditorMap2DService::RefreshPreview(kb::scene::Scene& scene, kb::assets::Ass
                 const auto instance = scene.Prefabs().Instantiate(*prefab.Get(), {.parent = scene.Entities().Object(chunk.entity)});
                 if (instance.Empty()) continue;
                 const auto entity = instance.RootObject().Entity(); auto transform = scene.Transforms().Get(entity);
-                const float x = (static_cast<float>(Map2DTileKeyX(cell)) + 0.5F - static_cast<float>(map.width) * 0.5F) * map.tileSize;
-                const float y = static_cast<float>(Map2DTileKeyY(cell)) + 1.0F, elevation = static_cast<float>(Map2DTileKeyZ(cell)) * map.floorHeight;
-                transform.localPosition = transform.localPosition + (map.orientation == Map2DOrientation::Wall
-                    ? Vec3{x,(static_cast<float>(map.height)-y)*map.tileSize,-elevation}
-                    : Vec3{x,elevation,(static_cast<float>(map.height)*0.5F-y)*map.tileSize});
+                const auto local=Map2DCellLocalPoint(map,Map2DTileKeyX(cell),Map2DTileKeyY(cell),Map2DTileKeyZ(cell),true);
+                transform.localPosition=transform.localPosition+Vec3{static_cast<float>(local[0]),static_cast<float>(local[1]),static_cast<float>(local[2])};
                 scene.Transforms().Set(entity, transform);
             }
             chunk.tiles = tiles; chunk.settings = identity; chunk.frame = frame;

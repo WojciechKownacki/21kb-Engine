@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import struct
+import json
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,24 @@ class CompareImagesTests(unittest.TestCase):
             first = Path(directory) / "a.png"
             write_png(first, flat(2, 2, (1, 2, 3)))
             self.assertEqual(self.run_script(str(first), str(Path(directory) / "missing.png")).returncode, 2)
+
+    def test_failed_comparison_retains_diff_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_png(root / "a.png", flat(8, 6, (180, 180, 180)))
+            write_png(root / "b.png", flat(8, 6, (110, 110, 110)))
+            result = self.run_script(str(root / "a.png"), str(root / "b.png"),
+                                     "--diff", str(root / "diff.png"), "--report", str(root / "report.json"))
+            self.assertEqual(result.returncode, 1)
+            report = json.loads((root / "report.json").read_text())
+            self.assertEqual(report["result"], "FAIL")
+            self.assertEqual(report["statistics"]["mean"], 70)
+            self.assertEqual(compare_images.read_png(root / "diff.png")[0][0], (255, 255, 255))
+
+    def test_nonfinite_or_out_of_range_thresholds_cannot_pass(self) -> None:
+        for option, value in (("--max-mean", "nan"), ("--max-differing", "inf"),
+                              ("--pixel-tolerance", "256"), ("--max-differing", "-1")):
+            self.assertEqual(self.run_script("a.png", "b.png", option, value).returncode, 2)
 
 
 if __name__ == "__main__":

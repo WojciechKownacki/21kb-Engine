@@ -1,4 +1,6 @@
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/ecs/JobGraph.hpp"
+#include "ecs/WorkerPoolGraphExecutor.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -675,6 +677,14 @@ public:
 
         batchAvailable_.notify_all();
         return JobHandle{ std::move(completion) };
+    }
+
+    [[nodiscard]] bool IsWorkerThread() const noexcept {
+        std::lock_guard lock{mutex_};
+        const auto current = std::this_thread::get_id();
+        return std::any_of(workers_.begin(), workers_.end(), [current](const std::thread& worker) {
+            return worker.get_id() == current;
+        });
     }
 
     [[nodiscard]] bool Running() const noexcept {
@@ -1426,13 +1436,21 @@ void WorkerPool::Stop() {
 }
 
 void WorkerPool::Run(std::span<const WorkerPoolJob> jobs) {
+    if (const auto bridge = graphBridge_.load(); bridge && bridge->RunJobs(*this, jobs)) return;
     if (state_ == nullptr) {
         throw std::logic_error("ECS worker pool must be started before running jobs");
     }
     state_->Run(jobs);
 }
 
+WorkerPoolGraphResult WorkerPool::RunGraph(JobGraph graph, std::span<const WorkerPoolJob> jobs, std::stop_token cancellation) {
+    if (state_ && state_->IsWorkerThread())
+        throw std::logic_error("graph dispatch from a worker of the same pool is not supported");
+    return detail::ExecuteGraph(*this, std::move(graph), jobs, cancellation, graphBridge_, graphDispatchMutex_);
+}
+
 void WorkerPool::RunBatches(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context) {
+    if (const auto bridge = graphBridge_.load(); bridge && bridge->RunBatches(*this, batches, callback, context)) return;
     if (state_ == nullptr) {
         throw std::logic_error("ECS worker pool must be started before running batches");
     }
@@ -1440,6 +1458,7 @@ void WorkerPool::RunBatches(std::span<const WorkerPoolBatch> batches, WorkerPool
 }
 
 JobHandle WorkerPool::Submit(std::vector<WorkerPoolJob> jobs) {
+    if (const auto bridge = graphBridge_.load(); bridge && bridge->IsCurrent(*this)) throw std::logic_error("asynchronous submission from a graph job is not supported");
     if (state_ == nullptr) {
         throw std::logic_error("ECS worker pool must be started before submitting jobs");
     }
@@ -1447,6 +1466,7 @@ JobHandle WorkerPool::Submit(std::vector<WorkerPoolJob> jobs) {
 }
 
 JobHandle WorkerPool::SubmitBatches(std::vector<WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context) {
+    if (const auto bridge = graphBridge_.load(); bridge && bridge->IsCurrent(*this)) throw std::logic_error("asynchronous submission from a graph job is not supported");
     if (state_ == nullptr) {
         throw std::logic_error("ECS worker pool must be started before submitting batches");
     }
@@ -1454,6 +1474,7 @@ JobHandle WorkerPool::SubmitBatches(std::vector<WorkerPoolBatch> batches, Worker
 }
 
 void WorkerPool::ParallelForChunks(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context) {
+    if (const auto bridge = graphBridge_.load(); bridge && bridge->RunChunks(*this, chunks, callback, context)) return;
     if (state_ == nullptr) {
         throw std::logic_error("ECS worker pool must be started before running chunks");
     }
@@ -1461,6 +1482,7 @@ void WorkerPool::ParallelForChunks(std::span<const WorkerPoolChunk> chunks, Work
 }
 
 JobHandle WorkerPool::SubmitParallelForChunks(std::vector<WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context) {
+    if (const auto bridge = graphBridge_.load(); bridge && bridge->IsCurrent(*this)) throw std::logic_error("asynchronous submission from a graph job is not supported");
     if (chunks.empty()) {
         return {};
     }

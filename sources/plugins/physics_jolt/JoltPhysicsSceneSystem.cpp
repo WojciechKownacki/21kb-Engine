@@ -1,16 +1,31 @@
 #include "JoltPhysicsSceneSystem.hpp"
 #include "JoltStaticBodyBatchCache.hpp"
+#include "JoltMemoryTelemetry.hpp"
+#include "JoltTerrainCollision.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/QueryFilter.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/core/RuntimeState.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsAssembly.hpp"
+#include "engine/scene/SceneSurfaceGeometry.hpp"
+#include "engine/scene/SceneAnimatorComponents.hpp"
+#include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneColliderComponents.hpp"
+#include "engine/scene/SceneJointComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
+#include <functional>
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -35,6 +50,7 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Body/MotionType.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
@@ -59,6 +75,14 @@
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 
 #include <algorithm>
 #include <atomic>
@@ -169,6 +193,7 @@ public:
         std::lock_guard lock{ mutex_ };
         if (instanceCount_ == 0U && !registered_) {
             JPH::RegisterDefaultAllocator();
+            memory::Install();
             if (JPH::Factory::sInstance == nullptr) {
                 JPH::Factory::sInstance = new JPH::Factory();
             }
@@ -752,6 +777,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
             ClampPositive(collider.boxSize.y * scaleY * 0.5F),
             ClampPositive(collider.boxSize.z * scaleZ * 0.5F)));
     case ColliderShape::Mesh:
+    case ColliderShape::Terrain:
         break;
     }
     throw std::invalid_argument("Collider has an unsupported shape");
@@ -1132,6 +1158,17 @@ public:
         return drained_;
     }
 
+    [[nodiscard]] std::vector<RawContactEvent> CapturePending() {
+        std::lock_guard lock(mutex_);
+        return pending_;
+    }
+
+    void RestorePending(const std::vector<RawContactEvent>& events) {
+        std::lock_guard lock(mutex_);
+        pending_ = events;
+        drained_.clear();
+    }
+
     void DiscardBody(JPH::BodyID bodyId) {
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.erase(
@@ -1172,7 +1209,10 @@ private:
 
 } // namespace
 
-class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend, public JPH::CharacterContactListener {
+#include "JoltPhysicsAssemblies.inl"
+
+class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend, public JPH::CharacterContactListener,
+    public kb::core::IRuntimeStateProvider {
 public:
     explicit Impl(JoltPhysicsSceneSystemSettings settings)
         : settings_(settings)
@@ -1226,6 +1266,8 @@ public:
     // ObjectVsBroadPhaseLayerFilter above), so this is safe to call at any
     // point in Impl's lifetime, before or after Init/bodies exist - no
     // re-Init of physicsSystem_ needed.
+    std::optional<std::uint64_t> MemoryUsageBytes() const noexcept override { return memory::Read(); }
+
     bool ConfigureLayers(const kb::scene::PhysicsLayersAsset& layers) noexcept override {
         JoinStep();
         for (std::uint32_t a = 0U; a < kb::scene::kPhysicsLayerCount; ++a) {
@@ -1249,6 +1291,8 @@ public:
 
     ~Impl() override {
         StopStepDriver();
+        if (scene_ && assemblies_) kb::scene::PhysicsAssemblies::UnregisterBackend(*scene_, *assemblies_);
+        assemblies_.reset();
         RemoveAllCharacters();
         RemoveAllJoints();
         RemoveAllBodies();
@@ -1289,15 +1333,19 @@ public:
     void OnFixedUpdate(SceneSystemContext& context) {
         PublishPendingStep(context);
         BreakOverloadedJoints(context);
+        if (assemblies_) assemblies_->PrepareBodies();
         RefreshCollisionMeshes(context.GetScene());
         SynchronizeBodies(context);
         pendingPushes_.clear();  // queued for a body this synchronization did not create
         std::erase_if(collisionMeshes_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
+        std::erase_if(terrains_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
+        ApplyTerrainUpdates();
         ApplyPendingRigidbodyRootMotion(context);
         SynchronizeJoints(context);
         SynchronizeCharacters(context);
         pendingCharacterMoves_.clear();  // queued for a character this synchronization did not create
         UpdateCharacters(context);
+        if (assemblies_) assemblies_->BeforeStep(context.DeltaSeconds());
         const bool contactEvents = kb::scene::PhysicsBackend::HasCollisionEventConsumer(context.GetScene());
         if (contactListener_.Enabled() != contactEvents) {
             // Pair state tracked while disabled would be stale; start clean when events (re)start.
@@ -1324,6 +1372,7 @@ public:
         WriteBack(context);
         WriteBackCharacters(context);
         FinalizeWriteBackLocalPoses(context);
+        if (assemblies_) assemblies_->AfterStep();
         DispatchContactEvents(context);
     }
 
@@ -1386,6 +1435,7 @@ public:
         JoinStep();
         stepAwaitingWriteBack_ = false;
         pendingLaunchSeconds_ = 0.0F;
+        assemblies_.reset();
         // LIB-130: a constraint references its two bodies internally -
         // remove joints BEFORE the bodies they connect, matching the real
         // dependency order (mirrors why Jolt itself requires
@@ -1394,14 +1444,22 @@ public:
         RemoveAllJoints();
         RemoveAllBodies();
         collisionMeshes_.clear();
+        terrains_.clear();
         collisionAssetRevision_ = 0;
+        stateIdentity_.reset();
     }
 
-    void AttachScene(kb::scene::Scene& scene) noexcept {
+    void AttachScene(kb::scene::Scene& scene) {
+        if (!stateIdentity_) stateIdentity_ = std::make_shared<const int>(0);
         scene_ = &scene;
+        assemblies_ = std::make_unique<JoltPhysicsAssemblies>(scene,physicsSystem_,ToObjectLayer(0U,false),
+            [this](SceneEntity entity) { const auto* id=FindCurrentBodyId(entity);return id?*id:JPH::BodyID{}; },
+            [this] { if(scene_) {SceneSystemContext context(*scene_,0.0F);PublishPendingStep(context);} JoinStep(); });
+        kb::scene::PhysicsAssemblies::RegisterBackend(scene,*assemblies_);
     }
 
     void DetachScene() noexcept {
+        if (scene_ && assemblies_) kb::scene::PhysicsAssemblies::UnregisterBackend(*scene_,*assemblies_);
         scene_ = nullptr;
     }
 
@@ -2278,6 +2336,7 @@ private:
         constraint->SetNumPositionStepsOverride(10U);
         physicsSystem_.AddConstraint(constraint);
         joints_.emplace(entity.Id(), JointRecord{ .constraint = constraint, .signature = signature });
+        ++topologyRevision_;
     }
 
     void RemoveAllJoints() {
@@ -2403,6 +2462,7 @@ private:
         const JPH::Ref<JPH::CharacterVirtual> character = new JPH::CharacterVirtual(
             &characterSettings, ToJoltPosition(scene_->Transforms().WorldTranslation(entity, transform)), ToJolt(transform.worldRotation), entity.Id(), &physicsSystem_);
         character->SetListener(this);
+        ++topologyRevision_;
         characters_.emplace(entity.Id(), CharacterRecord{
                                               .character = character,
                                               .signature = signature,
@@ -2711,6 +2771,113 @@ private:
         return scaled.Get();
     }
 
+    [[nodiscard]] JPH::RefConst<JPH::Shape> CreateTerrainShape(const ColliderComponent& collider, Vec3 scale) {
+        if (collider.meshAssetId == 0 || !IsFinite(scale) ||
+            std::abs(scale.x) < MinimumShapeExtent || std::abs(scale.y) < MinimumShapeExtent || std::abs(scale.z) < MinimumShapeExtent) {
+            throw std::invalid_argument("Terrain collider requires a terrain asset and finite nonzero scale");
+        }
+        auto cached = terrains_.find(collider.meshAssetId);
+        if (cached == terrains_.end()) {
+            std::vector<std::uint8_t> bytes;
+            std::string error;
+            if (!scene_->Assets().Manager().ReadSourceBytes(kb::assets::AssetId{collider.meshAssetId}, bytes, error)) {
+                throw std::runtime_error("Terrain asset read failed: " + error);
+            }
+            const std::optional<kb::assets::TerrainAsset> terrain = kb::assets::TerrainAssetIO::Load(bytes, &error);
+            if (!terrain) throw std::runtime_error("Terrain asset load failed: " + error);
+            std::optional<TerrainCollisionField> field = TerrainCollisionField::Build(*terrain, error);
+            if (!field) throw std::invalid_argument(error);
+            JPH::Ref<JPH::HeightFieldShape> shape = CreateTerrainHeightField(*field, error);
+            if (shape == nullptr) throw std::runtime_error(error);
+            cached = terrains_.emplace(collider.meshAssetId, TerrainRecord{ std::move(*field), std::move(shape), std::nullopt, false }).first;
+        }
+        const auto scaled = cached->second.shape->ScaleShape(ToJolt(scale));
+        if (scaled.HasError()) throw std::runtime_error("Terrain scaling failed: " + std::string{scaled.GetError().c_str()});
+        return scaled.Get();
+    }
+
+    // kb::scene::IPhysicsBackend: only the field is touched here, not the shape, so this can run while a step
+    // is in flight; ApplyTerrainUpdates puts everything collected over a fixed update into the shape in one go.
+    bool UpdateTerrain(std::uint64_t assetId, const kb::assets::TerrainAsset& terrain,
+        const kb::assets::TerrainSampleRegion& region) noexcept override {
+        const auto found = terrains_.find(assetId);
+        if (found == terrains_.end()) return false;
+        TerrainRecord& record = found->second;
+        try {
+            std::optional<TerrainFieldRect> changed = record.field.Update(terrain, region);
+            if (!changed) {
+                // A resized terrain, or a region the field cannot place: take the whole terrain again.
+                std::string error;
+                std::optional<TerrainCollisionField> field = TerrainCollisionField::Build(terrain, error);
+                if (!field) return false;
+                record.field = std::move(*field);
+                record.rebuild = true;
+                changed = record.field.WholeRect();
+            }
+            record.dirty = record.dirty ? MergeTerrainFieldRects(*record.dirty, *changed) : *changed;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    // Gives every terrain shape the changes collected since the last fixed update: a rewrite of the changed
+    // rectangle in place, or a new shape when the terrain was reconfigured or the ground left the height range
+    // the shape was made for. Runs with the world idle, before the step.
+    void ApplyTerrainUpdates() {
+        JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
+        for (auto& [assetId, record] : terrains_) {
+            if (!record.dirty) continue;
+            struct User {
+                JPH::BodyID bodyId;
+                Vec3 scale;
+                JPH::Vec3 centerOfMass;
+            };
+            std::vector<User> users;
+            for (const auto& [entityId, body] : bodies_) {
+                if (body.signature.shape != ColliderShape::Terrain || body.signature.meshAssetId != assetId) continue;
+                users.push_back({ body.bodyId, body.signature.scale, bodyInterface.GetShape(body.bodyId)->GetCenterOfMass() });
+            }
+            const TerrainFieldRect rect = *record.dirty;
+            record.dirty.reset();
+            if (!record.rebuild && !ApplyTerrainFieldRect(*record.shape, record.field, rect)) record.rebuild = true;
+            if (record.rebuild) {
+                std::string error;
+                JPH::Ref<JPH::HeightFieldShape> shape = CreateTerrainHeightField(record.field, error);
+                if (shape == nullptr) throw std::runtime_error(error);
+                record.shape = std::move(shape);
+                record.rebuild = false;
+                for (const User& user : users) {
+                    const auto scaled = record.shape->ScaleShape(ToJolt(user.scale));
+                    if (scaled.HasError()) throw std::runtime_error("Terrain scaling failed: " + std::string{scaled.GetError().c_str()});
+                    bodyInterface.SetShape(user.bodyId, scaled.Get(), false, JPH::EActivation::DontActivate);
+                }
+            } else {
+                // The shape was rewritten in place: its bodies take its new bounds and drop their contacts with it.
+                for (const User& user : users) {
+                    bodyInterface.NotifyShapeChanged(user.bodyId, user.centerOfMass, false, JPH::EActivation::DontActivate);
+                }
+            }
+            // Bodies resting on or inside the changed ground have to find out.
+            const JPH::AABox local(
+                JPH::Vec3(record.field.OriginX() + static_cast<float>(rect.minX) * record.field.SpacingX(), record.shape->GetMinHeightValue(),
+                    record.field.OriginZ() + static_cast<float>(rect.minZ) * record.field.SpacingZ()),
+                JPH::Vec3(record.field.OriginX() + static_cast<float>(rect.maxX) * record.field.SpacingX(), record.shape->GetMaxHeightValue(),
+                    record.field.OriginZ() + static_cast<float>(rect.maxZ) * record.field.SpacingZ()));
+            for (const User& user : users) {
+                const JPH::RMat44 world = bodyInterface.GetWorldTransform(user.bodyId);
+                JPH::AABox bounds;
+                for (int corner = 0; corner < 8; ++corner) {
+                    const JPH::Vec3 point = local.GetSupport(JPH::Vec3(
+                        corner & 1 ? 1.0F : -1.0F, corner & 2 ? 1.0F : -1.0F, corner & 4 ? 1.0F : -1.0F));
+                    const JPH::RVec3 placed = world * JPH::Vec3(point.GetX() * user.scale.x, point.GetY() * user.scale.y, point.GetZ() * user.scale.z);
+                    bounds.Encapsulate(JPH::Vec3(static_cast<float>(placed.GetX()), static_cast<float>(placed.GetY()), static_cast<float>(placed.GetZ())));
+                }
+                bodyInterface.ActivateBodiesInAABox(bounds, {}, {});
+            }
+        }
+    }
+
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform,
         const kb::math::DVec3& worldPosition) {
         // A scene replacement can fill the backend with old bodies before the
@@ -2728,11 +2895,13 @@ private:
                 }
             }
         }
-        if (collider.shape == ColliderShape::Mesh && rigidbody.bodyType != RigidbodyBodyType::Static) {
-            throw std::invalid_argument("Triangle mesh colliders require a static rigidbody");
+        if ((collider.shape == ColliderShape::Mesh || collider.shape == ColliderShape::Terrain) &&
+            rigidbody.bodyType != RigidbodyBodyType::Static) {
+            throw std::invalid_argument("Triangle mesh and terrain colliders require a static rigidbody");
         }
-        JPH::RefConst<JPH::Shape> shape = collider.shape == ColliderShape::Mesh
-            ? CreateMeshShape(collider, transform.worldScale) : CreateShape(collider, transform.worldScale);
+        JPH::RefConst<JPH::Shape> shape = collider.shape == ColliderShape::Mesh ? CreateMeshShape(collider, transform.worldScale)
+            : collider.shape == ColliderShape::Terrain ? CreateTerrainShape(collider, transform.worldScale)
+            : CreateShape(collider, transform.worldScale);
         const kb::math::DVec3 bodyPosition = worldPosition + ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation);
         if (!IsFinite(bodyPosition)) {
             throw std::invalid_argument("Physics body position overflowed");
@@ -2770,6 +2939,7 @@ private:
         if (body.IsInvalid()) {
             throw std::runtime_error("Physics body capacity exhausted");
         }
+        ++topologyRevision_;
         return body;
     }
 
@@ -3208,6 +3378,7 @@ private:
     mutable std::atomic<bool> stepInFlight_{ false };
     bool stepAwaitingWriteBack_ = false;
     float pendingLaunchSeconds_ = 0.0F; // a pipelined step decided in a fixed update, started at the end of the update
+    std::unique_ptr<JoltPhysicsAssemblies> assemblies_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
     struct PendingPush {
         Vec3 force{};
@@ -3241,6 +3412,15 @@ private:
         bool valid = true;
     };
     std::unordered_map<std::uint64_t, CollisionMeshRecord> collisionMeshes_;
+    // The height field of a terrain asset, shared by the bodies that use it. The field is the terrain's samples
+    // as the shape holds them; `dirty` is what a terrain edit changed there and the shape has not taken yet.
+    struct TerrainRecord {
+        TerrainCollisionField field;
+        JPH::Ref<JPH::HeightFieldShape> shape;
+        std::optional<TerrainFieldRect> dirty;
+        bool rebuild = false;
+    };
+    std::unordered_map<std::uint64_t, TerrainRecord> terrains_;
     std::uint64_t collisionAssetRevision_ = 0;
     std::unordered_map<std::uint64_t, RootMotionQueue> pendingRigidbodyRootMotion_;
     kb::scene::Scene* scene_ = nullptr;
@@ -3265,6 +3445,245 @@ private:
     // Besides preventing duplicate entity callbacks for compound shapes,
     // this retains the last manifold payload needed by OnContactRemoved.
     std::map<BodyContactKey, ActiveBodyContact> activeContacts_;
+    std::shared_ptr<const int> stateIdentity_ = std::make_shared<const int>(0);
+    std::uint64_t topologyRevision_ = 0U;
+
+    struct RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
+        // Keep the SDK allocator/type registry alive until retained shapes and settings are released.
+        JoltRuntime runtime;
+        std::shared_ptr<const int> identity;
+        mutable JPH::StateRecorderImpl physics;
+        std::size_t payloadBytes = 0U;
+        decltype(bodies_) bodies;
+        std::unordered_map<std::uint64_t, JPH::BodyCreationSettings> bodySettings;
+        std::unordered_map<std::uint64_t, JointSignature> joints;
+        std::vector<std::pair<std::uint64_t, JPH::Ref<JPH::TwoBodyConstraintSettings>>> orderedJoints;
+        decltype(characters_) characters;
+        std::unordered_map<std::uint64_t, JPH::RefConst<JPH::Shape>> characterShapes;
+        std::unordered_map<std::uint64_t, CharacterControllerComponent> characterComponents;
+        mutable std::unordered_map<std::uint64_t, JPH::StateRecorderImpl> characterStates;
+        decltype(activeContacts_) activeContacts;
+        decltype(pendingPushes_) pendingPushes;
+        decltype(pendingCharacterMoves_) pendingCharacterMoves;
+        decltype(pendingRigidbodyRootMotion_) rigidbodyRootMotion;
+        decltype(pendingCharacterRootMotion_) characterRootMotion;
+        std::vector<RawContactEvent> rawContacts;
+        std::vector<kb::scene::PendingCollisionEvent> collisionEvents;
+        decltype(brokenJoints_) brokenJoints;
+        std::uint64_t topologyRevision = 0U;
+        bool contactEventsEnabled = false;
+        std::array<bool, kObjectLayerCount * kObjectLayerCount> layers{};
+        JPH::PhysicsSettings settings;
+        [[nodiscard]] std::size_t PayloadBytes() const noexcept override { return payloadBytes; }
+    };
+
+public:
+    std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override {
+        error.clear();
+        if (scene_ == nullptr) { error = "Physics provider is not attached to a scene"; return {}; }
+        if (assemblies_ && !assemblies_->Empty()) { error = "Runtime snapshots of active physics assemblies are not supported"; return {}; }
+        SceneSystemContext context{*scene_, 0.0F};
+        PublishPendingStep(context);
+        JoinStep();
+        auto snapshot = std::make_unique<RuntimeSnapshot>();
+        snapshot->identity = stateIdentity_;
+        physicsSystem_.SaveState(snapshot->physics);
+        if (snapshot->physics.IsFailed()) { error = "Physics solver state capture failed"; return {}; }
+        snapshot->payloadBytes = snapshot->physics.GetDataSize();
+        snapshot->bodies = bodies_;
+        for (const auto& [id, record] : bodies_) {
+            JPH::BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), record.bodyId);
+            if (!lock.Succeeded()) { error = "Physics body disappeared during capture"; return {}; }
+            snapshot->bodySettings.emplace(id, lock.GetBody().GetBodyCreationSettings());
+        }
+        for (const auto& [id, record] : joints_) snapshot->joints.emplace(id, record.signature);
+        for (const auto& constraint : physicsSystem_.GetConstraints()) {
+            const auto found = std::find_if(joints_.begin(), joints_.end(), [&](const auto& entry) {
+                return entry.second.constraint == constraint;
+            });
+            const auto settings = constraint->GetConstraintSettings();
+            auto* typed = constraint->GetType() == JPH::EConstraintType::TwoBodyConstraint
+                ? static_cast<JPH::TwoBodyConstraintSettings*>(settings.GetPtr()) : nullptr;
+            if (found == joints_.end() || typed == nullptr) { error = "Physics constraint cannot be reconstructed"; return {}; }
+            snapshot->orderedJoints.emplace_back(found->first, typed);
+        }
+        snapshot->characters = characters_;
+        for (const auto& [id, record] : characters_) {
+            auto& state = snapshot->characterStates[id];
+            record.character->SaveState(state);
+            if (state.IsFailed()) { error = "Physics character state capture failed"; return {}; }
+            snapshot->payloadBytes += state.GetDataSize();
+            snapshot->characterShapes.emplace(id, record.character->GetShape());
+            const auto* component = scene_->Components().CharacterControllers().TryGet(SceneEntity{id});
+            if (component == nullptr) { error = "Physics character component disappeared during capture"; return {}; }
+            snapshot->characterComponents.emplace(id, *component);
+            snapshot->characters.at(id).character = nullptr;
+        }
+        snapshot->activeContacts = activeContacts_;
+        snapshot->pendingPushes = pendingPushes_;
+        snapshot->pendingCharacterMoves = pendingCharacterMoves_;
+        snapshot->rigidbodyRootMotion = pendingRigidbodyRootMotion_;
+        snapshot->characterRootMotion = pendingCharacterRootMotion_;
+        snapshot->rawContacts = contactListener_.CapturePending();
+        snapshot->collisionEvents = kb::scene::PhysicsBackend::DrainPendingCollisionEvents(*scene_);
+        for (const auto& event : snapshot->collisionEvents) kb::scene::PhysicsBackend::QueueCollisionEvent(*scene_, event);
+        snapshot->brokenJoints = brokenJoints_;
+        snapshot->topologyRevision = topologyRevision_;
+        snapshot->contactEventsEnabled = contactListener_.Enabled();
+        snapshot->settings = physicsSystem_.GetPhysicsSettings();
+        for (JPH::ObjectLayer a = 0; a < kObjectLayerCount; ++a) {
+            for (JPH::ObjectLayer b = 0; b < kObjectLayerCount; ++b) {
+                snapshot->layers[a * kObjectLayerCount + b] = objectLayerPairFilter_.ShouldCollide(a, b);
+            }
+        }
+        return snapshot;
+    }
+
+    bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const override {
+        error.clear();
+        if (assemblies_ && !assemblies_->Empty()) {error="Runtime snapshots of active physics assemblies are not supported";return false;}
+        const auto* snapshot = dynamic_cast<const RuntimeSnapshot*>(&state);
+        if (scene_ == nullptr || snapshot == nullptr || snapshot->identity != stateIdentity_) {
+            error = "Physics snapshot belongs to a different provider lifetime"; return false;
+        }
+        // The caller restores ECS definitions first. Native objects may have been removed or replaced.
+        for (const auto& [id, saved] : snapshot->bodies) {
+            const SceneEntity entity{id};
+            if (!scene_->Entities().IsAlive(entity)) { error = "Restore ECS entities before physics state"; return false; }
+            const auto* transform = scene_->Transforms().TryGet(entity);
+            const auto* collider = scene_->Components().Colliders().TryGet(entity);
+            const auto* rigidbody = scene_->Components().Rigidbodies().TryGet(entity);
+            RigidbodyComponent implicitStatic;
+            implicitStatic.bodyType = RigidbodyBodyType::Static;
+            if (transform == nullptr || collider == nullptr
+                || !(MakeSignature(rigidbody != nullptr ? *rigidbody : implicitStatic, *collider, *transform) == saved.signature)) {
+                error = "Restore matching ECS body components before physics state"; return false;
+            }
+        }
+        for (const auto& [id, saved] : snapshot->joints) {
+            const auto* joint = scene_->Components().Joints().TryGet(SceneEntity{id});
+            if (joint == nullptr || !(MakeJointSignature(*joint, saved.ownerBodyId, saved.connectedBodyId) == saved)) {
+                error = "Restore matching ECS joint components before physics state"; return false;
+            }
+        }
+        for (const auto& [id, saved] : snapshot->characters) {
+            const SceneEntity entity{id};
+            const auto* transform = scene_->Transforms().TryGet(entity);
+            const auto* component = scene_->Components().CharacterControllers().TryGet(entity);
+            if (transform == nullptr || component == nullptr || !(MakeCharacterSignature(*component, *transform) == saved.signature)) {
+                error = "Restore matching ECS character components before physics state"; return false;
+            }
+        }
+        for (const auto& [id, record] : bodies_) {
+            static_cast<void>(record);
+            if (!snapshot->bodies.contains(id) && scene_->Entities().IsAlive(SceneEntity{id})
+                && scene_->Components().Colliders().TryGet(SceneEntity{id}) != nullptr) {
+                error = "Remove extra ECS body definitions before physics state"; return false;
+            }
+        }
+        return true;
+    }
+
+    void ReconstructRuntimeTopology(const RuntimeSnapshot& snapshot) {
+        RemoveAllCharacters();
+        RemoveAllJoints();
+        RemoveAllBodies();
+        auto& interface = physicsSystem_.GetBodyInterface();
+        for (const auto& [id, record] : snapshot.bodies) {
+            if (interface.CreateBodyWithID(record.bodyId, snapshot.bodySettings.at(id)) == nullptr) {
+                throw std::runtime_error("Physics snapshot body reconstruction failed");
+            }
+            interface.AddBody(record.bodyId, JPH::EActivation::DontActivate);
+            bodies_.emplace(id, record);
+            entityByBodyId_.emplace(record.bodyId, SceneEntity{id});
+        }
+        // Native solver snapshots address constraints by their manager index.
+        for (const auto& [id, settings] : snapshot.orderedJoints) {
+            const auto& signature = snapshot.joints.at(id);
+            const JPH::BodyID ids[]{signature.ownerBodyId, signature.connectedBodyId};
+            JPH::BodyLockMultiWrite lock(physicsSystem_.GetBodyLockInterface(), ids, signature.connectedBodyId.IsInvalid() ? 1 : 2);
+            auto* first = lock.GetBody(0);
+            auto* second = signature.connectedBodyId.IsInvalid() ? &JPH::Body::sFixedToWorld : lock.GetBody(1);
+            if (first == nullptr || second == nullptr) throw std::runtime_error("Physics snapshot joint bodies are unavailable");
+            JPH::Ref<JPH::Constraint> constraint = settings->Create(*first, *second);
+            physicsSystem_.AddConstraint(constraint);
+            joints_.emplace(id, JointRecord{.constraint = constraint, .signature = signature});
+        }
+        for (const auto& [id, saved] : snapshot.characters) {
+            const auto& component = snapshot.characterComponents.at(id);
+            JPH::CharacterVirtualSettings settings;
+            settings.mShape = snapshot.characterShapes.at(id);
+            settings.mShapeOffset = ToJolt(component.center);
+            settings.mMaxSlopeAngle = JPH::DegreesToRadians(component.slopeLimitDegrees);
+            auto record = saved;
+            record.character = new JPH::CharacterVirtual(&settings, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), id, &physicsSystem_);
+            record.character->SetListener(this);
+            characters_.emplace(id, std::move(record));
+        }
+        bodySyncCache_.clear();
+        bodySyncCacheValid_ = false;
+        staticBodyBatchCache_.Finish(0U);
+        // Generations remain monotonic across branches of snapshot history.
+        // Rewinding one could make a later unrelated topology reuse an old generation.
+        ++topologyRevision_;
+    }
+
+    bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) override {
+        if (!ValidateRuntimeState(state, error)) return false;
+        SceneSystemContext context{*scene_, 0.0F};
+        PublishPendingStep(context);
+        JoinStep();
+        const auto& snapshot = static_cast<const RuntimeSnapshot&>(state);
+        if (snapshot.topologyRevision != topologyRevision_ || snapshot.bodies.size() != bodies_.size()
+            || snapshot.joints.size() != joints_.size() || snapshot.characters.size() != characters_.size()) {
+            ReconstructRuntimeTopology(snapshot);
+        }
+        physicsSystem_.SetPhysicsSettings(snapshot.settings);
+        for (JPH::ObjectLayer a = 0; a < kObjectLayerCount; ++a) {
+            for (JPH::ObjectLayer b = a; b < kObjectLayerCount; ++b) {
+                if (snapshot.layers[a * kObjectLayerCount + b]) objectLayerPairFilter_.EnableCollision(a, b);
+                else objectLayerPairFilter_.DisableCollision(a, b);
+            }
+        }
+        snapshot.physics.Rewind();
+        if (!physicsSystem_.RestoreState(snapshot.physics) || snapshot.physics.IsFailed()) {
+            error = "Physics solver state restore failed"; return false;
+        }
+        for (const auto& [id, saved] : snapshot.bodies) bodies_.at(id) = saved;
+        for (const auto& [id, saved] : snapshot.characters) {
+            auto& recorder = snapshot.characterStates.at(id);
+            recorder.Rewind();
+            const auto character = characters_.at(id).character;
+            characters_.at(id) = saved;
+            characters_.at(id).character = character;
+            characters_.at(id).character->RestoreState(recorder);
+        }
+        activeContacts_ = snapshot.activeContacts;
+        pendingPushes_ = snapshot.pendingPushes;
+        pendingCharacterMoves_ = snapshot.pendingCharacterMoves;
+        pendingRigidbodyRootMotion_ = snapshot.rigidbodyRootMotion;
+        pendingCharacterRootMotion_ = snapshot.characterRootMotion;
+        brokenJoints_ = snapshot.brokenJoints;
+        nonStaticBodies_.clear();
+        for (auto& [id, body] : bodies_) {
+            body.writeBackSettled = false;
+            if (body.signature.bodyType != RigidbodyBodyType::Static) {
+                const SceneEntity entity{id};
+                nonStaticBodies_.push_back({entity, &body, scene_->Transforms().TryGet(entity),
+                    scene_->Components().Rigidbodies().TryGet(entity)});
+            }
+        }
+        writeBackStorageVersion_ = context.EcsWorld().NativeStorage().StructuralVersion();
+        writeBackPoses_.clear();
+        WriteBack(context);
+        WriteBackCharacters(context);
+        FinalizeWriteBackLocalPoses(context);
+        contactListener_.SetEnabled(snapshot.contactEventsEnabled);
+        contactListener_.RestorePending(snapshot.rawContacts);
+        static_cast<void>(kb::scene::PhysicsBackend::DrainPendingCollisionEvents(*scene_));
+        for (const auto& event : snapshot.collisionEvents) kb::scene::PhysicsBackend::QueueCollisionEvent(*scene_, event);
+        return true;
+    }
 };
 
 JoltPhysicsSceneSystem::JoltPhysicsSceneSystem()
@@ -3274,6 +3693,21 @@ JoltPhysicsSceneSystem::JoltPhysicsSceneSystem(JoltPhysicsSceneSystemSettings se
     : impl_(std::make_unique<Impl>(settings)) {}
 
 JoltPhysicsSceneSystem::~JoltPhysicsSceneSystem() = default;
+
+std::unique_ptr<kb::core::RuntimeStateSnapshot> JoltPhysicsSceneSystem::CaptureRuntimeState(std::string& error) {
+    if (!impl_) { error = "Physics scene system has no runtime implementation"; return {}; }
+    return impl_->CaptureRuntimeState(error);
+}
+
+bool JoltPhysicsSceneSystem::ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const {
+    if (!impl_) { error = "Physics scene system has no runtime implementation"; return false; }
+    return impl_->ValidateRuntimeState(state, error);
+}
+
+bool JoltPhysicsSceneSystem::RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) {
+    if (!impl_) { error = "Physics scene system has no runtime implementation"; return false; }
+    return impl_->RestoreRuntimeState(state, error);
+}
 
 JoltPhysicsSceneSystem::JoltPhysicsSceneSystem(JoltPhysicsSceneSystem&&) noexcept = default;
 

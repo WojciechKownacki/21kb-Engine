@@ -60,6 +60,7 @@ enum class EditorAssetContextCommand {
     NewAudioMixer,
     NewParticleEffect,
     NewPostProcessProfile,
+    NewUITheme,
     NewImportPreset,
     ExtractMaterials,
     AddLighting,
@@ -72,6 +73,8 @@ enum class EditorAssetContextCommand {
     Refresh,
     Reimport,
     UndoReimport,
+    NewBlendSpace2D,
+    NewGameplayGraph,
 };
 
 enum class EditorAssetDropAction {

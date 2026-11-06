@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/post/SceneFogProfile.hpp"
+
 #include "kb/render/frame/RenderPassKind.hpp"
 #include "kb/render/particles/ParticleGpuUpdateFailure.hpp"
 #include "kb/render/resources/RenderResources.hpp"
@@ -44,9 +46,23 @@ enum class RenderLightKind : std::uint8_t {
 enum class SceneRenderShadowFilter : std::uint8_t {
     Hard,
     Pcf3x3,
-    Evsm,
-    Msm,
     Pcss,
+};
+
+// A light's own shadow filter and quality over the project's (kb::scene::LightShadowFilter / LightShadowQuality).
+enum class RenderLightShadowFilter : std::uint8_t {
+    Default,
+    Hard,
+    Pcf,
+    Pcss,
+};
+
+enum class RenderLightShadowQuality : std::uint8_t {
+    Default,
+    Low,
+    Medium,
+    High,
+    Ultra,
 };
 
 enum class SceneRenderEnvironmentMode : std::uint8_t {
@@ -125,9 +141,6 @@ enum class SceneRenderLightingPath : std::uint8_t {
 enum class SceneRenderGlobalIlluminationMode : std::uint8_t {
     Disabled,
     SsGi,
-    Ddgi,
-    ProbeGrid,
-    Lightmaps,
     // Bounce light traced through a coarse voxel copy of the scene (all mesh instances as boxes), so
     // objects outside the camera's view still light what is on screen.
     VoxelGrid,
@@ -147,6 +160,15 @@ enum class SceneRenderCameraClearMode : std::uint8_t {
     DontClear,
 };
 
+// What terrain chunks measure their level of detail by: where the view looks from and how many pixels a unit covers at
+// distance one (the whole view for an orthographic camera). Unset (no scale) means the camera it sits in.
+struct SceneRenderLevelOfDetailView {
+    [[nodiscard]] bool operator==(const SceneRenderLevelOfDetailView&) const noexcept = default;
+    std::array<float, 3> eye{};
+    float pixelsPerUnit = 0.0F;
+    bool orthographic = false;
+};
+
 struct SceneRenderCamera {
     [[nodiscard]] bool operator==(const SceneRenderCamera&) const noexcept = default;
     std::array<float, 16> view{};
@@ -155,6 +177,13 @@ struct SceneRenderCamera {
     // conservative guard band containing every sample in the pixel sequence.
     std::array<float, 2> temporalProjectionOffset{};
     std::array<float, 2> cullingGuardBand{};
+    // Height in pixels of the target the camera renders to; level of detail that depends on the size of a pixel (a
+    // terrain chunk) reads it. 0 when the camera is not tied to a target: such a camera is taken as kDefaultViewportHeight.
+    static constexpr std::uint32_t kDefaultViewportHeight = 1080U;
+    std::uint32_t viewportHeight = 0U;
+    // Set on the camera of a shadow pass: it draws the surface of the view it shades, so its chunks take the level
+    // that view picks (a surface of another level casts a shadow onto the one the view draws).
+    SceneRenderLevelOfDetailView levelOfDetailView{};
     [[nodiscard]] std::array<float, 16> CullingProjection() const noexcept {
         auto result = projection;
         result[8] -= temporalProjectionOffset[0];
@@ -206,6 +235,8 @@ struct SceneRenderMeshInstance {
     bool detailSwitchEnabled = false;
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
+    // The mesh never moves while the scene runs (MeshMobility::Static): it has no motion to draw.
+    bool isStatic = false;
 };
 
 // The model an instance was drawn with in the previous motion frame, as seen from `motionFrame`: what it
@@ -270,6 +301,8 @@ struct SceneRenderReflectionProbe {
     std::uint8_t maxMip = 1U;
     SceneRenderReflectionProbeShape shape = SceneRenderReflectionProbeShape::Infinite;
     bool parallaxCorrection = false;
+    // Optional authored cube texture; the runtime resolves this before submission.
+    std::uint64_t radianceAssetId = 0U;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(radianceTexture) && intensity > 0.0F && maxMip > 0U;
@@ -347,10 +380,19 @@ struct SceneRenderLightingConfig {
     std::uint32_t shadowMapSize = 2048U;
     std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;
-    float shadowDistance = 1000.0F;
-    float shadowDepthBias = 0.002F;
+    // How far from the camera the sun's shadow reaches.
+    float shadowDistance = 150.0F;
+    // Shadow bias along the light and the lookup's offset along the surface normal, both in texels of the shadow map
+    // (a light's own values replace them): a texel is the same size on screen whatever the map and the cascade.
+    float shadowDepthBias = 1.5F;
+    float shadowNormalBias = 1.0F;
     float shadowStrength = 1.0F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;
+    // Point, spot and area lights that get a shadow map (at most 32, the atlas rows), picked by their importance in the
+    // frame. A point or area light's cube shadow takes six passes; a phone-class device draws none of them (its
+    // spot lights keep their single pass), because it has no one-pass cube shadow.
+    std::uint32_t pointShadowMaxLights = 32U;
+    bool pointShadowCubeEnabled = true;
     // Width of the fade between neighbouring cascades, as a fraction of the finer cascade (0 = hard switch).
     float shadowCascadeBlend = 0.1F;
     bool shadowsEnabled = true;
@@ -360,6 +402,7 @@ struct SceneRenderLightingConfig {
     bool volumetricLightingEnabled = false;
     // Exponential height fog (ScenePostProcessSettings): density at fogBaseHeight, its falloff per
     // metre above it and the colour it lights to; volumetric fog scatters the lights in it.
+    SceneFogProfile fogProfile = SceneFogProfile::Automatic;
     bool fogEnabled = false;
     float fogDensity = 0.02F;
     float fogHeightFalloff = 0.2F;
@@ -385,12 +428,13 @@ struct ScenePointShadowBinding {
     std::uint32_t lightCount = 0U;
     std::array<std::uint64_t, kMaxLights> entityId{};
     std::array<float, 4U * kMaxLights> positionRange{}; // xyz = light position, w = far plane
-    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m), z = source radius (m)
-    // Each light's Shadow Strength (0..1); full strength unless the light sets its own.
-    std::array<float, kMaxLights> lightStrength = [] {
-        std::array<float, kMaxLights> strengths{};
-        strengths.fill(1.0F);
-        return strengths;
+    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (texels), z = source radius (m)
+    // Per light: x = Shadow Strength (0..1; full unless the light sets its own), y = normal bias (texels),
+    // z = filter (0 the light's source size decides, 1 hard, 2 PCF only, 3 PCSS).
+    std::array<float, 4U * kMaxLights> lightParams = [] {
+        std::array<float, 4U * kMaxLights> params{};
+        for (std::uint32_t light = 0U; light < kMaxLights; ++light) params[light * 4U] = 1.0F;
+        return params;
     }();
     std::array<float, 4U * kMaxLights> spot{};          // xyz = spot axis, w = tan(half fov); w = 0 for a cube light
     std::array<float, 4U> atlas{};                      // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
@@ -412,6 +456,8 @@ struct SceneRenderShadowMapBinding {
     std::array<float, 16U * kMaxCascades> cascadeViewProjection{};
     std::array<float, 4U * kMaxCascades> cascadeAtlas{ 0.0F, 0.0F, 1.0F, 0.0F };
     std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin, z = blend width (tile uv)
+    // Per cascade: x = depth bias (shadow depth units), y = normal offset (m); both follow the cascade's texel size.
+    std::array<float, 4U * kMaxCascades> cascadeBias{};
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;
@@ -429,14 +475,28 @@ enum class SceneRenderMeshPassMode : std::uint8_t {
     OpaqueAndTransparent,
 };
 
+struct SceneMeshCoverageMetric {
+    bool available = false;
+    std::uint64_t frame = 0U;
+    std::uint64_t passingSamples = 0U;
+    std::uint64_t particleSamples = 0U;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    std::uint32_t measuredDraws = 0U;
+    std::uint32_t particleDraws = 0U;
+};
+
 struct SceneRenderSubmitStats {
+    // Resolved fog profile, and 0=off / 1=height / 2=height plus volumetric march.
+    std::uint32_t fogProfile = 0;
+    std::uint32_t fogMode = 0;
     std::uint32_t visibleMeshCount = 0;
     std::uint32_t visibleDrawGroupCount = 0;
     std::uint32_t culledInstanceCount = 0;
     std::uint32_t submittedMeshCount = 0;
     std::uint32_t submittedDrawGroupCount = 0;
     std::uint32_t submittedDrawCallCount = 0;
-    // G-buffer draws of graph materials that write the model colour (the custom data target).
+    // G-buffer draws that write model color/layer data to the optional fifth target.
     std::uint32_t shadingModelColorDrawCallCount = 0;
     // Motion vector instances drawn with an uploaded previous model (draws with an instance that moved).
     std::uint32_t motionVectorMovedInstanceCount = 0;
@@ -507,9 +567,16 @@ struct SceneRenderSubmitStats {
     std::uint32_t localReflectionProbeCount = 0;
     std::uint32_t parallaxCorrectedProbeCount = 0;
     std::uint32_t globalIlluminationMode = 0;
+    std::uint32_t giGeometryMeshCount = 0;
+    std::uint32_t giBoundingBoxMeshCount = 0;
+    std::uint32_t selectedShadowLightCount = 0;
+    std::uint32_t droppedShadowLightCount = 0;
     std::uint32_t shadowCasterCount = 0;
     std::uint32_t submittedShadowCasterCount = 0;
     std::uint32_t submittedShadowDrawCallCount = 0;
+    // Triangles of the submitted draws (instances times the triangles of the drawn level), all passes and the shadow passes.
+    std::uint64_t submittedTriangleCount = 0;
+    std::uint64_t submittedShadowTriangleCount = 0;
     std::uint32_t shadowMapSize = 0;
     std::uint32_t shadowFilterSampleCount = 0;
     std::uint64_t shadowLightEntityId = 0;
@@ -606,6 +673,10 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // written and their pixels keep the camera motion.
     MotionVectorGpuInstancesUnsupported,
     ParticleGpuUpdateRejected,
+    ShadowLightLimit,
+    GiBoundingBoxFallback,
+    MaterialShadingFallback,
+    ReflectionProbeUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -735,6 +806,8 @@ struct SceneRenderDiagnostics {
         lhs.environmentLightingMode = rhs.environmentLightingMode;
         lhs.environmentLightingSampleCount = rhs.environmentLightingSampleCount;
     }
+    lhs.fogProfile = rhs.fogProfile != 0U ? rhs.fogProfile : lhs.fogProfile;
+    lhs.fogMode = rhs.fogMode > lhs.fogMode ? rhs.fogMode : lhs.fogMode;
     lhs.reflectionProbeCount += rhs.reflectionProbeCount;
     lhs.localReflectionProbeCount += rhs.localReflectionProbeCount;
     lhs.parallaxCorrectedProbeCount += rhs.parallaxCorrectedProbeCount;
@@ -742,9 +815,15 @@ struct SceneRenderDiagnostics {
     lhs.shadowCasterCount += rhs.shadowCasterCount;
     lhs.submittedShadowCasterCount += rhs.submittedShadowCasterCount;
     lhs.submittedShadowDrawCallCount += rhs.submittedShadowDrawCallCount;
+    lhs.submittedTriangleCount += rhs.submittedTriangleCount;
+    lhs.submittedShadowTriangleCount += rhs.submittedShadowTriangleCount;
     lhs.shadowMapSize = rhs.shadowMapSize != 0U ? rhs.shadowMapSize : lhs.shadowMapSize;
     lhs.shadowFilterSampleCount = rhs.shadowFilterSampleCount != 0U ? rhs.shadowFilterSampleCount : lhs.shadowFilterSampleCount;
     lhs.shadowLightEntityId = rhs.shadowLightEntityId != 0U ? rhs.shadowLightEntityId : lhs.shadowLightEntityId;
+    lhs.giGeometryMeshCount += rhs.giGeometryMeshCount;
+    lhs.giBoundingBoxMeshCount += rhs.giBoundingBoxMeshCount;
+    lhs.selectedShadowLightCount += rhs.selectedShadowLightCount;
+    lhs.droppedShadowLightCount += rhs.droppedShadowLightCount;
     lhs.shadowMapAllocationBytes = rhs.shadowMapAllocationBytes != 0U ? rhs.shadowMapAllocationBytes : lhs.shadowMapAllocationBytes;
     lhs.missingMeshBindingCount += rhs.missingMeshBindingCount;
     lhs.missingMeshResourceCount += rhs.missingMeshResourceCount;

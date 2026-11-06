@@ -48,7 +48,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
         RECT client{};
         GetClientRect(state.window, &client);
         const DockLayout layout = state.dockModel.Queries().BuildLayout(
-            client.right, client.bottom, state.metrics.menuHeight, state.metrics.toolbarHeight,
+            client.right, client.bottom, state.metrics.menuHeight, state.metrics.statusBarHeight,
             state.metrics.tabStripHeight, state.metrics.tabMinWidth, state.metrics.tabWidth,
             state.metrics.splitterSize);
         const DockPanel* targetPanel = nullptr;
@@ -125,6 +125,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
         return false;
     }
 
+    static_cast<void>(state.rawMouse.Register(state.window));
     EditorMainWindow::EnableDarkMode(state.window);
     static_cast<void>(state.sceneContext.LoadEditorSettings());
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
@@ -145,6 +146,9 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
     EditorWorkspaceSession::Restore(state.dockModel, state.sceneContext);
+    state.extensions=std::make_unique<EditorExtensionHost>(state.sceneContext,state.dockModel);
+    std::string extensionError;
+    if(!state.extensions->LoadProject(extensionError)) state.sceneContext.Console().Error("Extension",extensionError);
     RestoreParticleEditorHostSession(state);
     // A panel the session left torn off needs its window back, or it would be neither
     // in the dock tree nor on screen. The particle editor has already made its own by
@@ -170,6 +174,7 @@ void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 
+    state.rawMouse.Reset();
     if (state.window != nullptr) {
         static_cast<void>(UnregisterTouchWindow(state.window));
         DestroyWindow(state.window);

@@ -1,4 +1,5 @@
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/EditorAssetEditScope.hpp"
 #include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
@@ -16,7 +17,7 @@
 namespace kb::editor {
 namespace {
 
-constexpr int kHeaderHeight = 30;
+constexpr int kHeaderHeight = 30 + kAssetEditScopeHeight;
 
 [[nodiscard]] COLORREF ThemeColor(EditorColor color) noexcept {
     return RGB(color.r, color.g, color.b);
@@ -231,7 +232,8 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
     y += 21;
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerState& state : layer.states) {
-            const std::string reference = state.clipReference.empty() ? state.blendParameter : state.clipReference;
+            const std::string reference = !state.blendSpaceReference.empty() ? state.blendSpaceReference :
+                state.clipReference.empty() ? state.blendParameter : state.clipReference;
             if (!reference.empty()) row(reference);
             for (const kb::scene::AnimatorControllerState::BlendChild& child : state.blendChildren) {
                 if (!child.clipReference.empty()) row(child.clipReference);
@@ -242,6 +244,30 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
 }
 
 } // namespace
+
+std::vector<kb::render::PhysicsDebugLine> AnimatorEditorPanelRenderer::TargetMarkers(
+    const kb::scene::AnimatorDebugInstanceSnapshot& debug) {
+    std::vector<kb::render::PhysicsDebugLine> lines;
+    const auto append = [&lines](const kb::scene::AnimatorIkTarget& target, std::array<float, 3> color) {
+        const auto position = target.preciseWorldPosition.value_or(kb::math::DVec3{
+            target.worldPosition.x, target.worldPosition.y, target.worldPosition.z });
+        constexpr double radius = 0.12;
+        for (int axis = 0; axis < 3; ++axis) {
+            kb::render::PhysicsDebugLine line{};
+            line.from = {static_cast<float>(position.x), static_cast<float>(position.y), static_cast<float>(position.z)};
+            line.to = line.from;
+            line.from[axis] -= static_cast<float>(radius);
+            line.to[axis] += static_cast<float>(radius);
+            line.color = color;
+            lines.push_back(line);
+        }
+    };
+    for (const auto& constraint : debug.constraints) {
+        if (constraint.hasTarget) append(constraint.targetValue, {1.0F, 0.65F, 0.1F});
+        if (constraint.hasPoleTarget) append(constraint.poleTargetValue, {0.2F, 0.8F, 1.0F});
+    }
+    return lines;
+}
 
 void AnimatorEditorPanelRenderer::Paint(
     HDC dc,
@@ -280,8 +306,11 @@ void AnimatorEditorPanelRenderer::Paint(
                                 : "  |  " + EditorLocalization::Format("animatorEditor.previewMesh", "Preview {mesh}", { { "mesh", previewMesh->name } })) +
         "  |  " + EditorLocalization::Format("animatorEditor.debugTarget", "Debug {target} (click to switch)",
             { { "target", sceneContext.AnimatorEditorDebugTargetLabel() } });
-    DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + kHeaderHeight },
+    DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + 30 },
         title + "  >  " + (motion == nullptr ? std::string{ EditorText("animatorEditor.stateMachine", "State Machine") } : motion->name), ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
+
+    DrawText(dc, RECT{content.left + 10, content.top + 30, content.right - 10, content.top + kHeaderHeight},
+        AssetEditScopeText(), ThemeColor(theme.textSecondary), 11);
 
     const AnimatorEditorPanelLayout layout = ResolveLayout(
         RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
@@ -292,6 +321,12 @@ void AnimatorEditorPanelRenderer::Paint(
         DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, EditorText("animatorEditor.motionDocument", "Motion / Blend Document"), ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
         if (!motion->clipReference.empty()) {
             DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.c_str(), ThemeColor(theme.textSecondary), 12);
+        } else if (!motion->blendSpaceReference.empty()) {
+            const std::string axes = "BlendSpace2D | " + motion->blendParameter + " / " + motion->blendParameterY;
+            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
+                axes.c_str(), ThemeColor(theme.accent), 12, FW_SEMIBOLD);
+            DrawText(dc, RECT{ layout.graph.left + 20, layout.graph.top + 70, layout.graph.right - 12, layout.graph.top + 90 },
+                motion->blendSpaceReference.c_str(), ThemeColor(theme.textSecondary), 11);
         } else {
             DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
                 EditorLocalization::Format("animatorEditor.blendTree1D", "1D Blend Tree | {parameter}", { { "parameter", motion->blendParameter } }), ThemeColor(theme.accent), 12, FW_SEMIBOLD);
@@ -305,20 +340,22 @@ void AnimatorEditorPanelRenderer::Paint(
     }
     PaintDetails(dc, layout.details, controller, debug, theme);
     if (sceneViewport == nullptr) return;
-    const std::uint64_t revision = sceneContext.AnimatorEditorPreviewRevision();
+    const bool previewTarget = sceneContext.AnimatorEditorDebuggingPreview();
+    const std::uint64_t revision = previewTarget ? sceneContext.AnimatorEditorPreviewRevision() : sceneContext.SceneRenderRevision();
     EditorSceneBgfxViewport::PresentSettings settings{};
     settings.viewportKey = panel.id;
-    settings.editorSceneOverlaysEnabled = false;
+    settings.editorSceneOverlaysEnabled = true;
+    if (debug != nullptr) settings.physicsDebugLines = TargetMarkers(*debug);
     settings.sceneRevision = revision;
     settings.sceneDirtyBaseRevision = revision;
-    settings.sceneFullSyncRequired = false;
+    settings.sceneFullSyncRequired = !previewTarget;
     settings.msaaSamples = renderBackendSettings.MsaaSamples();
     settings.shadowPassEnabled = renderBackendSettings.ShadowsEnabled();
     settings.postProcessEnabled = true;
     settings.selectionMaskEnabled = false;
     settings.selectionOutlineEnabled = false;
     settings.gpuDrivenRuntimeDispatchEnabled = renderBackendSettings.GpuDrivenEnabled();
-    sceneViewport->Present(dc, host, layout.preview, *sceneContext.AnimatorEditorPreviewScene(), theme, settings);
+    sceneViewport->Present(dc, host, layout.preview, (sceneContext.AnimatorEditorDebuggingPreview() ? *sceneContext.AnimatorEditorPreviewScene() : sceneContext.Scene()), theme, settings);
 }
 
 std::optional<std::uint64_t> AnimatorEditorPanelRenderer::GraphStateAt(

@@ -9,6 +9,7 @@
 #include "scene/pipeline/MeshPipelineGpuDrivenRecorder.hpp"
 #include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "scene/pipeline/MeshPipelineResourceResolver.hpp"
+#include "scene/pipeline/MeshPipelineTerrainLod.hpp"
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
 #include <algorithm>
@@ -197,6 +198,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
 
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
+    std::vector<std::uint8_t> chainLevels;
     for (const SceneMeshBatch& batch : desc.meshBatches) {
         SceneMeshBatchCommandCache::BatchScope batchScope(desc.batchCommandCache, result, batch,
             writeCommandCount, acceptedInstanceCount, desc.diagnostics);
@@ -246,8 +248,20 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
             .bounds = meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds,
         };
         const std::vector<RenderMeshSection>* sections = meshResource == nullptr ? nullptr : &meshResource->sections;
-        const std::uint32_t sectionCount = sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size());
-        for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
+        constexpr std::uint8_t kLevelNotChosen = UINT8_MAX;
+        if (meshResource != nullptr && meshResource->lods.size() > 1U) chainLevels.assign(batch.instances.size(), kLevelNotChosen);
+        else chainLevels.clear();
+        // A terrain chooses the level of every chunk; only the sections of the chosen levels are visited.
+        const bool terrainChunks = MeshPipelineTerrainLod::IsTerrain(meshResource);
+        if (terrainChunks) {
+            MeshPipelineTerrainLod::SelectChunkLevels(*meshResource, batch.instances, desc.camera, frustum, result.terrainChunkLevels);
+            MeshPipelineTerrainLod::CollectSections(*meshResource, result.terrainChunkLevels, batch.instances.size(), result.terrainSectionList);
+        }
+        const std::uint32_t sectionCount = terrainChunks
+            ? static_cast<std::uint32_t>(result.terrainSectionList.size())
+            : (sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size()));
+        for (std::uint32_t sectionListIndex = 0U; sectionListIndex < sectionCount; ++sectionListIndex) {
+            const std::uint32_t sectionIndex = terrainChunks ? result.terrainSectionList[sectionListIndex] : sectionListIndex;
             const RenderMeshSection& section = sections == nullptr || sections->empty() ? fallbackSection : (*sections)[sectionIndex];
             const std::uint32_t sectionVertexCount = section.vertexCount != 0U
                 ? section.vertexCount
@@ -271,16 +285,26 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, cullingMask)) {
                     continue;
                 }
-                std::uint8_t selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
-                if (instance.detailSwitchEnabled) {
-                    if (const auto selected = result.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != result.detailSwitchLevels.end()) {
-                        selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
+                // A mesh with a chain of levels is scanned once per section of every level; the level an instance
+                // draws does not depend on the section, so it is chosen the first time and kept for the batch.
+                if (terrainChunks && !MeshPipelineTerrainLod::Draws(*meshResource, result.terrainChunkLevels, instanceIndex, section)) {
+                    continue;
+                }
+                std::uint8_t selectedLod = terrainChunks ? section.lodLevel
+                    : (chainLevels.empty() ? std::uint8_t{ 0U } : chainLevels[instanceIndex]);
+                if (!terrainChunks && (selectedLod == kLevelNotChosen || chainLevels.empty())) {
+                    selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
+                    if (instance.detailSwitchEnabled) {
+                        if (const auto selected = result.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != result.detailSwitchLevels.end()) {
+                            selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
+                        }
                     }
+                    if (!chainLevels.empty()) chainLevels[instanceIndex] = selectedLod;
                 }
                 if (meshResource != nullptr && !meshResource->lods.empty()) {
                     ++result.stats.lodSelectionCount;
                 }
-                if (selectedLod != section.lodLevel) {
+                if (!terrainChunks && selectedLod != section.lodLevel) {
                     continue;
                 }
                 const std::uint64_t materialAssetId = MeshPipelineResourceResolver::MaterialAssetForSectionInstance(batch, instance, meshResource, section);
@@ -320,14 +344,25 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask, &section)) {
                     continue;
                 }
+                if (desc.pass == MeshPassType::MotionVectors && desc.motionFrame != 0U &&
+                    !MeshPipelinePassPolicy::HasOwnMotion(instance, materialResource, desc.motionFrame)) {
+                    continue;
+                }
                 // The material's World Position Offset reach (Max World Position Offset Displacement).
                 const float boundsMargin = MeshPipelineVisibility::MaterialBoundsMargin(materialResource);
                 const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
                     ? instance.boundsOverride
                     : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
+                const bool gpuFrustumCull = meshResource != nullptr &&
+                    (meshResource->gpuCullingEnabled || meshResource->indirectDrawsEnabled) &&
+                    desc.gpuDrivenSupport.computeCullingSupported && desc.gpuDrivenSupport.indirectDrawSupported &&
+                    desc.gpuDrivenSupport.runtimeGpuDispatchSupported &&
+                    desc.maxDrawCommands == 0U && desc.maxVisibleInstances == 0U &&
+                    (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::GBuffer ||
+                     desc.pass == MeshPassType::Depth || desc.pass == MeshPassType::ShadowDepth);
                 while (clusterIndex < batch.visibilityClusters.size() &&
                     batch.visibilityClusters[clusterIndex].firstInstance < instanceIndex) ++clusterIndex;
-                if (clusterIndex < batch.visibilityClusters.size() &&
+                if (!gpuFrustumCull && clusterIndex < batch.visibilityClusters.size() &&
                     batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
                     localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
                     !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides &&
@@ -349,7 +384,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 const RenderBoundsSphere worldBounds = MeshPipelineVisibility::GrowBounds(
                     MeshPipelineVisibility::TransformBounds(localBounds, instance.model), boundsMargin);
                 const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
-                if (!MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {
+                if (!gpuFrustumCull && !MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {
                     ++culledForSection;
                     continue;
                 }
@@ -448,6 +483,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     drawCommandIndex = static_cast<std::uint32_t>(writeCommandCount);
                     ++writeCommandCount;
                 }
+                command->gpuFrustumCull = gpuFrustumCull;
                 MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, meshResource, meshletRange);
                 lastCommandKey = commandKey;
                 lastCommandIndex = drawCommandIndex;

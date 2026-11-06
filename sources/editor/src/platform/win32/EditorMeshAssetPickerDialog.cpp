@@ -1977,6 +1977,28 @@ EditorUIEntityPickerDialog::Result EditorUIEntityPickerDialog::Show(
     return {.accepted = result.accepted, .entity = kb::scene::SceneEntity{result.assetId.value}};
 }
 
+EditorUIClickPickerDialog::Result EditorUIClickPickerDialog::Show(
+    HWND owner, const EditorTheme& theme, const std::vector<UIClickChoice>& choices,
+    const EditorAssetPickerWindowOptions& options) {
+    // Rows are keyed by a 64-bit id: the entry's position + 1, so 0 stays the value Clear returns.
+    std::vector<AssetPickerRow> rows;
+    for (std::size_t index = 0; index < choices.size(); ++index) {
+        const UIClickChoice& choice = choices[index];
+        rows.push_back({kb::assets::AssetId{index + 1U},
+            choice.createFunction ? EditorLocalization::Format("assetPicker.newFunction", "New function {name}", {{"name", choice.function}})
+                                  : choice.function,
+            choice.scriptName});
+    }
+    AssetPickerWindow window{theme, std::move(rows), kb::assets::AssetId{}, std::string{ EditorText("assetPicker.selectClick", "On Click") },
+        std::string{ EditorText("assetPicker.chooseClick", "Choose the script function that runs when the button is clicked.") },
+        std::string{ EditorText("assetPicker.clearClick", "Run nothing on click") }, HeroIconKind::RectangleGroup};
+    const AssetPickerResult result = window.Show(owner, options);
+    Result output{.accepted = result.accepted};
+    if (result.accepted && result.assetId.value >= 1U && result.assetId.value <= choices.size())
+        output.choice = choices[static_cast<std::size_t>(result.assetId.value - 1U)];
+    return output;
+}
+
 } // namespace kb::editor
 
 #endif

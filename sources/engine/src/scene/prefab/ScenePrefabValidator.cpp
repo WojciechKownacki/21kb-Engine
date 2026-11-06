@@ -63,6 +63,7 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab, std::size_t rootDe
         if (node.components.geometrySwarm.has_value() && !IsGeometrySwarmComponentPersistable(*node.components.geometrySwarm)) return false;
         if (node.components.surfaceCast.has_value() && !IsSurfaceCastComponentPersistable(*node.components.surfaceCast)) return false;
         if (node.components.facingPanel.has_value() && !IsFacingPanelComponentPersistable(*node.components.facingPanel)) return false;
+        if (node.components.river.has_value() && !IsRiverComponentValid(*node.components.river)) return false;
         if (node.components.spaceStroke.has_value() && !IsSpaceStrokeComponentPersistable(*node.components.spaceStroke)) return false;
         if (node.components.historyRibbon.has_value() && !IsHistoryRibbonComponentPersistable(*node.components.historyRibbon)) return false;
         if (node.components.particleEffect.has_value() && !IsParticleEffectComponentPersistable(*node.components.particleEffect)) return false;

@@ -81,7 +81,7 @@ bool ScriptNetworkRuntime::Connected() const {
     if (role_ == Role::Server) {
         return server_ != nullptr;
     }
-    return connection_ != nullptr && connection_->State() == ClientState::Connected;
+    return clientAuthorized_ && connection_ != nullptr && connection_->State() == ClientState::Connected;
 }
 
 std::size_t ScriptNetworkRuntime::PlayerCount() const {
@@ -221,7 +221,7 @@ bool ScriptNetworkRuntime::CallRpc(const std::string& name, std::uint64_t target
         error = "the session has not started";
         return false;
     }
-    if (role_ == Role::Client && (replication_ == nullptr || !replication_->Ready())) {
+    if (role_ == Role::Client && (!clientAuthorized_ || replication_ == nullptr || !replication_->Ready())) {
         error = "the connection is not ready";
         return false;
     }

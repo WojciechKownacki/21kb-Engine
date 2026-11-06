@@ -2,14 +2,22 @@
 
 #include "CliCommon.hpp"
 
+#include "engine/scene/RiverGeometry.hpp"
+
 #include <filesystem>
 #include <istream>
 #include <optional>
 #include <string>
 
 namespace kb::cli {
+[[nodiscard]] int RunBlendSpace2DCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunVisualGraphCommand(const ArgumentList& arguments, CommandIo io);
 
+[[nodiscard]] int RunLuaDebugCommand(const ArgumentList& arguments, CommandIo io);
+
+[[nodiscard]] int RunLayoutCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunGuideCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io);
@@ -17,7 +25,25 @@ namespace kb::cli {
 [[nodiscard]] int RunAbilityCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAiCommand(const ArgumentList& arguments, CommandIo io);
 // World 2D maps: new/view work on a scene (CliEntityCommands.cpp), the rest on map and tileset files.
+[[nodiscard]] int RunVectorShapeNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunVectorShapeShowCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunVectorShapeSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMap2DCommand(const ArgumentList& arguments, CommandIo io);
+// Terrain files (.kbterrain): the Terrain Editor's brushes, layers and heightmaps (CliTerrainCommands.cpp).
+[[nodiscard]] int RunTerrainCommand(const ArgumentList& arguments, CommandIo io);
+// Rivers of a scene (terrain river add|move|remove|list, CliEntityCommands.cpp) and, for terrain river carve, the
+// river with the places of its entity and of the entity that draws the terrain (world position, rotation, scale).
+struct RiverCarveSource {
+    std::string name;
+    kb::scene::RiverComponent river;
+    kb::scene::RiverPlacement riverPlacement;
+    kb::scene::RiverPlacement terrainPlacement;
+};
+[[nodiscard]] int RunRiverSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] std::optional<RiverCarveSource> LoadRiverForCarve(
+    const ArgumentList& arguments, const std::filesystem::path& terrainFile, CommandIo io);
+// How many levels of detail an imported model gets (CliMeshLodCommands.cpp).
+[[nodiscard]] int RunMeshLodCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io);
 // Places a baked navigation mesh in the scene of --project/--scene (once), as the editor's Bake does.
 [[nodiscard]] bool PlaceSceneNavMesh(const ArgumentList& arguments, const std::filesystem::path& navMesh, CommandIo io);
@@ -32,8 +58,12 @@ namespace kb::cli {
 [[nodiscard]] int RunValidateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneListCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunInputActionCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPrefabCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneDuplicateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneLightmapCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialShowCommand(const ArgumentList& arguments, CommandIo io);
@@ -44,6 +74,9 @@ namespace kb::cli {
 [[nodiscard]] int RunPostProcessNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVfxCommand(std::string_view command, const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunVfxProfileCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunParticleProcessCookCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunRenderEffectRunCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunRenderEffectExportCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRendererInfoCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPostProcessSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io);
@@ -62,6 +95,9 @@ namespace kb::cli {
 [[nodiscard]] int RunPackSetKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackSetVerifyCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunReleaseCommand(const ArgumentList& arguments, CommandIo io);
+// Cook, stage and render the project with the engine's cooker and player (CliBuildCommands.cpp).
+[[nodiscard]] int RunBuildCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunCaptureCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunNavMeshCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPhysicsLayersCommand(const ArgumentList& arguments, CommandIo io);

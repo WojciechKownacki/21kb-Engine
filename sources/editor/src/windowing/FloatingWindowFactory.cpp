@@ -1,4 +1,5 @@
 #include "windowing/FloatingWindowFactory.hpp"
+#include "windowing/EditorDisplayRecovery.hpp"
 
 #if defined(_WIN32)
 #include "platform/win32/Win32ErrorReporter.hpp"
@@ -10,15 +11,16 @@ namespace kb::editor {
 HWND FloatingWindowFactory::Create(HINSTANCE instance, HWND owner, const wchar_t* className, const std::string& titleText, const DockRect& rect) noexcept {
     const std::wstring title(titleText.begin(), titleText.end());
     const LONG_PTR ownerApplication = GetWindowLongPtrW(owner, GWLP_USERDATA);
+    const auto recovered = RecoverNativeDisplayRect(rect);
     HWND floating = CreateWindowExW(
         ExtendedStyle,
         className,
         title.c_str(),
         Style,
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
+        recovered.x,
+        recovered.y,
+        recovered.width,
+        recovered.height,
         owner,
         nullptr,
         instance,

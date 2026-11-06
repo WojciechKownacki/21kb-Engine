@@ -34,6 +34,7 @@ struct Map2DSprite {
     std::uint32_t tint = 0xFFFFFFFFU; // RGBA, red in the most significant byte.
     float offsetX = 0.0F; // Tile units, positive right/down in the map.
     float offsetY = 0.0F;
+    float animationPhaseSeconds = 0.0F; // Nonnegative per-instance clip offset.
 
     [[nodiscard]] bool IsValid() const noexcept { return sheet != kNoSheet; }
     friend bool operator==(const Map2DSprite&, const Map2DSprite&) = default;
@@ -116,6 +117,8 @@ enum class Map2DOrientation : std::uint8_t {
     Wall,
 };
 
+enum class Map2DTopology : std::uint8_t { Rectangular, Isometric, Hexagonal };
+
 // How the map's play camera frames and follows. Every default keeps the plain camera: the view height
 // of the map, still, centred on the map.
 struct Map2DCamera {
@@ -131,6 +134,8 @@ struct Map2DCamera {
     float deadZoneHeight = 0.0F;
     // Keeps the view inside the map (a map smaller than the view stays centred).
     bool clampToMap = false;
+    // Magnification relative to the configured view; pixel-perfect views use whole screen pixels.
+    float zoom = 1.0F;
     friend bool operator==(const Map2DCamera&, const Map2DCamera&) = default;
 };
 
@@ -159,9 +164,24 @@ struct Map2DAsset {
     bool sortByY = false;
     bool lit = false;
     Map2DCamera camera;
+    // Declared types are the variants of their defaults. Older maps may keep undeclared fields.
+    std::uint32_t propertySchemaVersion = 0U;
+    Map2DProperties propertyDefaults;
     // Non-empty tiles by Map2DTileKey.
     std::map<std::uint64_t, Map2DTile> tiles;
+    Map2DTopology topology = Map2DTopology::Rectangular;
 };
+
+[[nodiscard]] std::string_view Map2DTopologyName(Map2DTopology topology) noexcept;
+// Projected X/down coordinates, in metres from the map's bounding top-left.
+// Integer grid boundaries surround half-integer cell centres. Hex cells use axial q/r.
+[[nodiscard]] std::array<double, 2> Map2DProjectedSize(const Map2DAsset& map) noexcept;
+[[nodiscard]] std::array<double, 2> Map2DProjectGrid(const Map2DAsset& map, double x, double y) noexcept;
+[[nodiscard]] std::optional<std::array<int, 2>> Map2DCellAtPlane(const Map2DAsset& map, double x, double down) noexcept;
+[[nodiscard]] std::array<double, 3> Map2DCellLocalPoint(const Map2DAsset& map, double x, double y, std::int32_t floor = 0, bool footpoint = false) noexcept;
+[[nodiscard]] double Map2DCellHeight(const Map2DAsset& map) noexcept;
+[[nodiscard]] std::span<const std::array<int, 2>> Map2DNeighbourOffsets(Map2DTopology topology, bool diagonals = false) noexcept;
+[[nodiscard]] std::span<const std::array<float, 2>> Map2DCellOutline(Map2DTopology topology) noexcept;
 
 // Ordered by floor, then row, then column. The floor is stored offset by 50 so lower floors sort first.
 [[nodiscard]] constexpr std::uint64_t Map2DTileKey(std::uint32_t x, std::uint32_t y, std::int32_t z) noexcept {
@@ -175,6 +195,10 @@ struct Map2DAsset {
 [[nodiscard]] std::string_view Map2DOrientationName(Map2DOrientation orientation) noexcept;
 
 [[nodiscard]] bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error = nullptr);
+[[nodiscard]] std::optional<Map2DValue> ParseMap2DPropertyValue(std::string_view type, std::string_view text);
+// Atomically declare/change a field, optionally renaming it and migrating all stored overrides.
+[[nodiscard]] bool SetMap2DPropertySchema(Map2DAsset& map, std::string_view name, Map2DValue defaultValue,
+    std::string_view previousName = {}, std::string* error = nullptr);
 [[nodiscard]] bool IsMap2DCollisionValid(const Map2DCollision& collision) noexcept;
 [[nodiscard]] Map2DCollision Map2DCellCollision(const Map2DAsset& map, const Map2DTile& tile);
 [[nodiscard]] const Map2DTileDefinition* Map2DDefinition(const Map2DAsset& map, Map2DSprite sprite) noexcept;

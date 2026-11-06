@@ -2,6 +2,7 @@
 
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "kb/render/ShaderLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 
@@ -90,6 +91,8 @@ bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes) {
         : std::min(maxBufferBytes, kb::scene::kParticleEffectMaxGpuResourceBytes);
     const bgfx::Caps* caps = bgfx::getCaps();
     if (caps == nullptr || (caps->supported & BGFX_CAPS_COMPUTE) == 0U) return false;
+    processFrameUniform_ = bgfx::createUniform("u_particleProcessFrame", bgfx::UniformType::Vec4);
+    processInverseUniform_ = bgfx::createUniform("u_particleProcessInverse", bgfx::UniformType::Mat4);
     program_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_emit.sc");
     motionUniform_ = bgfx::createUniform("u_gpuParticleMotion", bgfx::UniformType::Vec4);
     timeUniform_ = bgfx::createUniform("u_gpuParticleTime", bgfx::UniformType::Vec4);
@@ -158,6 +161,9 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     fallbackDepth_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(collideProgram_)) bgfx::destroy(collideProgram_);
     collideProgram_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(processFrameUniform_)) bgfx::destroy(processFrameUniform_);
+    if (bgfx::isValid(processInverseUniform_)) bgfx::destroy(processInverseUniform_);
+    processFrameUniform_ = BGFX_INVALID_HANDLE; processInverseUniform_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(program_)) bgfx::destroy(program_);
     program_ = BGFX_INVALID_HANDLE;
 }
@@ -278,7 +284,60 @@ bool ParticleGpuEmitterSimulation::EnsureState(Emitter& emitter) noexcept {
     return true;
 }
 
+bool ParticleGpuEmitterSimulation::EnsureCustomProcess(Emitter& emitter, std::uint64_t assetId, kb::assets::AssetManager* assets) noexcept {
+    try {
+        if (assetId == 0U) {
+            if (bgfx::isValid(emitter.customProgram)) bgfx::destroy(emitter.customProgram);
+            if (bgfx::isValid(emitter.customState)) bgfx::destroy(emitter.customState);
+            if (bgfx::isValid(emitter.customZeros)) bgfx::destroy(emitter.customZeros);
+            emitter.customProgram = BGFX_INVALID_HANDLE; emitter.customState = BGFX_INVALID_HANDLE;
+            emitter.customZeros = BGFX_INVALID_HANDLE; emitter.customAsset.reset();
+            allocatedBytes_ -= emitter.customBytes; emitter.bytes -= emitter.customBytes; emitter.customBytes = 0U;
+            return true;
+        }
+        if (!assets || bgfx::getCaps()->limits.maxComputeBindings < 4U || !bgfx::isValid(processFrameUniform_) || !bgfx::isValid(processInverseUniform_)) return false;
+        auto asset = assets->Load<kb::particles::ParticleProcessAsset>(kb::assets::AssetId{assetId}).Shared();
+        if (!asset) return false;
+        if (asset == emitter.customAsset && bgfx::isValid(emitter.customProgram)) return true;
+        const auto profile = RenderMaterialGraphShaderBackendName(RenderMaterialGraphShaderBackendForActiveRenderer());
+        const auto variant = asset->programs.find(std::string{profile});
+        if (variant == asset->programs.end()) return false;
+        const auto memory = bgfx::copy(variant->second.data(), static_cast<std::uint32_t>(variant->second.size()));
+        if (!memory) return false;
+        auto shader = bgfx::createShader(memory);
+        if (!bgfx::isValid(shader)) return false;
+        auto program = bgfx::createProgram(shader, true);
+        if (!bgfx::isValid(program)) return false;
+        auto state = emitter.customState, zeros = emitter.customZeros;
+        std::uint64_t bytes = 0U;
+        if (!bgfx::isValid(state)) {
+            bytes = static_cast<std::uint64_t>(emitter.capacity) * kStateBytes * 2U;
+            if (allocatedBytes_ + bytes > maxBufferBytes_) { bgfx::destroy(program); return false; }
+            auto zero = bgfx::alloc(emitter.capacity * kStateBytes);
+            if (!zero) { bgfx::destroy(program); return false; }
+            std::memset(zero->data, 0, zero->size);
+            zeros = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ);
+            state = bgfx::createDynamicVertexBuffer(emitter.capacity, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
+            if (!bgfx::isValid(zeros) || !bgfx::isValid(state)) {
+                if (bgfx::isValid(zeros)) bgfx::destroy(zeros);
+                if (bgfx::isValid(state)) bgfx::destroy(state);
+                bgfx::destroy(program); return false;
+            }
+        }
+        if (bgfx::isValid(emitter.customProgram)) bgfx::destroy(emitter.customProgram);
+        emitter.customProgram = program; emitter.customState = state; emitter.customZeros = zeros;
+        emitter.customAsset = std::move(asset); emitter.initializeCustom = true;
+        emitter.customBytes += bytes; emitter.bytes += bytes; allocatedBytes_ += bytes;
+        return true;
+    } catch (...) { return false; }
+}
+
 void ParticleGpuEmitterSimulation::Destroy(Emitter& emitter) noexcept {
+    if (bgfx::isValid(emitter.customProgram)) bgfx::destroy(emitter.customProgram);
+    if (bgfx::isValid(emitter.customState)) bgfx::destroy(emitter.customState);
+    if (bgfx::isValid(emitter.customZeros)) bgfx::destroy(emitter.customZeros);
+    emitter.customProgram = BGFX_INVALID_HANDLE; emitter.customState = BGFX_INVALID_HANDLE;
+    emitter.customZeros = BGFX_INVALID_HANDLE; emitter.customAsset.reset();
     if (bgfx::isValid(emitter.spawns)) bgfx::destroy(emitter.spawns);
     if (bgfx::isValid(emitter.spawnUpload)) bgfx::destroy(emitter.spawnUpload);
     if (bgfx::isValid(emitter.instances)) bgfx::destroy(emitter.instances);
@@ -325,6 +384,7 @@ void ParticleGpuEmitterSimulation::Clear(Emitter& emitter) noexcept {
     bgfx::update(emitter.spawnUpload, 0U, zero);
     emitter.initializeSpawns = true;
     emitter.initializeState = bgfx::isValid(emitter.state);
+    emitter.initializeCustom = bgfx::isValid(emitter.customState);
     emitter.pendingBirths = 0U;
 }
 
@@ -336,9 +396,12 @@ void ParticleGpuEmitterSimulation::FlushUploads(bgfx::ViewId viewId, Emitter& em
         bgfx::blit(viewId, bgfx::BufferRegion{.handle = destination, .offset = offset},
             bgfx::BufferRegion{.handle = source, .offset = offset, .size = count * kStateBytes});
     };
+    if (emitter.initializeCustom) copyRange(emitter.customState, emitter.customZeros, 0U, emitter.capacity);
     if (emitter.initializeState) copyRange(emitter.state, emitter.stateZeros, 0U, emitter.capacity);
     const auto births = [&](std::uint32_t slot, std::uint32_t count) {
         copyRange(emitter.spawns, emitter.spawnUpload, slot, count);
+        if (bgfx::isValid(emitter.customState) && !emitter.initializeCustom)
+            copyRange(emitter.customState, emitter.customZeros, slot, count);
         // Invalidate live and contact-death stamps even when a recycled birth has the same time.
         if (bgfx::isValid(emitter.state) && !emitter.initializeState)
             copyRange(emitter.state, emitter.stateZeros, slot, count);
@@ -353,6 +416,7 @@ void ParticleGpuEmitterSimulation::FlushUploads(bgfx::ViewId viewId, Emitter& em
     }
     emitter.initializeSpawns = false;
     emitter.initializeState = false;
+    emitter.initializeCustom = false;
     emitter.pendingBirths = 0U;
 }
 
@@ -397,7 +461,7 @@ void ParticleGpuEmitterSimulation::Rebase(bgfx::ViewId viewId, std::uint64_t sce
 }
 
 void ParticleGpuEmitterSimulation::Apply(
-    std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands) noexcept {
+    std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands, kb::assets::AssetManager* assets) noexcept {
     if (!IsReady()) return;
     SceneClock& clock = scenes_[sceneId];
     const auto clearRejection = [&](const kb::particles::ParticleGpuEmitterKey& key) {
@@ -445,6 +509,9 @@ void ParticleGpuEmitterSimulation::Apply(
                 reject(command.key, ParticleGpuUpdateFailure::InvalidParameters);
                 continue;
             }
+            if (params.customProcessAssetId != 0U && (params.output != kb::particles::ParticleRenderOutput::Billboard || !bgfx::isValid(collideProgram_))) {
+                reject(command.key, ParticleGpuUpdateFailure::CustomProcess); continue;
+            }
             params.plane.distance += kb::math::Dot(params.plane.normal, recordOffset);
             const std::uint32_t capacity = std::clamp(params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
             if (found == emitters_.end() || found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(params)) {
@@ -452,6 +519,10 @@ void ParticleGpuEmitterSimulation::Apply(
                 if (!Create(replacement, params)) {
                     reject(command.key, ParticleGpuUpdateFailure::ResourceCreation);
                     continue;
+                }
+                if (!EnsureCustomProcess(replacement, params.customProcessAssetId, assets)) {
+                    allocatedBytes_ -= replacement.bytes; Destroy(replacement);
+                    reject(command.key, ParticleGpuUpdateFailure::CustomProcess); continue;
                 }
                 invalidateDraw(command.key);
                 if (found == emitters_.end()) found = emitters_.emplace(key, std::move(replacement)).first;
@@ -461,9 +532,20 @@ void ParticleGpuEmitterSimulation::Apply(
                     found->second = std::move(replacement);
                 }
             } else {
+                const bool hadState = bgfx::isValid(found->second.state);
                 if (params.NeedsState() && !EnsureState(found->second)) {
                     reject(command.key, ParticleGpuUpdateFailure::StateAllocation);
                     continue;
+                }
+                if (!EnsureCustomProcess(found->second, params.customProcessAssetId, assets)) {
+                    if (!hadState && bgfx::isValid(found->second.state)) {
+                        bgfx::destroy(found->second.state); bgfx::destroy(found->second.stateZeros);
+                        found->second.state = BGFX_INVALID_HANDLE; found->second.stateZeros = BGFX_INVALID_HANDLE;
+                        found->second.initializeState = false;
+                        const auto bytes = static_cast<std::uint64_t>(found->second.capacity) * kStateBytes * 2U;
+                        allocatedBytes_ -= bytes; found->second.bytes -= bytes;
+                    }
+                    reject(command.key, ParticleGpuUpdateFailure::CustomProcess); continue;
                 }
                 found->second.params = params;
                 found->second.params.capacity = capacity;
@@ -472,6 +554,10 @@ void ParticleGpuEmitterSimulation::Apply(
             clearRejection(command.key);
         }
         if (found == emitters_.end()) continue;
+        if (!command.hasParams && found->second.params.customProcessAssetId != 0U) {
+            if (!EnsureCustomProcess(found->second, found->second.params.customProcessAssetId, assets))
+                reject(command.key, ParticleGpuUpdateFailure::CustomProcess);
+        }
         if (command.hasWorldMatrix) {
             found->second.world = command.worldMatrix;
             found->second.world[12] += offset.x;
@@ -616,6 +702,16 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         bgfx::setUniform(basisUniform_, emitter.basis.data(), 3U);
         const std::uint32_t threads = emitter.capacity * emitter.perSlot;
         bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (threads + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
+        if (bgfx::isValid(emitter.customProgram)) {
+            const std::array<float, 4> processFrame{static_cast<float>(clock.now), static_cast<float>(emitter.capacity), params.localSpace ? 1.0F : 0.0F, 0.0F};
+            bgfx::setUniform(processFrameUniform_, processFrame.data());
+            bgfx::setUniform(processInverseUniform_, emitter.worldInverse.data());
+            bgfx::setBuffer(0U, emitter.spawns, bgfx::Access::Read);
+            bgfx::setBuffer(1U, emitter.instances, bgfx::Access::ReadWrite);
+            bgfx::setBuffer(2U, emitter.state, bgfx::Access::ReadWrite);
+            bgfx::setBuffer(3U, emitter.customState, bgfx::Access::ReadWrite);
+            bgfx::dispatch(viewId, emitter.customProgram, (emitter.capacity + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
+        }
         bgfx::DynamicVertexBufferHandle drawn = emitter.instances;
         if (sortNow && bgfx::isValid(emitter.sortedInstances)) {
             SortInstances(viewId, emitter, collision, static_cast<float>(clock.now));

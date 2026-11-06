@@ -35,6 +35,7 @@ enum class ScenePrefabBakedComponentMask : std::uint64_t {
     Collider2D = 1ULL << 46U,
     Body2D = 1ULL << 45U,
     Sprite2D = 1ULL << 44U,
+    River = 1ULL << 48U,
 
     StreamFocus = 1ULL << 19U,
     WorldBackdrop = 1ULL << 20U,
@@ -92,6 +93,7 @@ struct ScenePrefabBakedArchetype {
     std::vector<Collider2DComponent> colliders2D;
     std::vector<Body2DComponent> bodies2D;
     std::vector<Sprite2DComponent> sprites2D;
+    std::vector<RiverComponent> rivers;
 
     std::vector<StreamFocusComponent> streamFocuses;
     std::vector<WorldBackdropComponent> worldBackdrops;

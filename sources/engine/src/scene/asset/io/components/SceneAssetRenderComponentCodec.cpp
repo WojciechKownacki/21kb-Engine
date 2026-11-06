@@ -5,7 +5,7 @@
 
 namespace kb::scene {
 
-bool SceneAssetRenderComponentCodec::ReadMeshRenderer(SceneAssetBinaryIO::ByteReader& input, MeshRendererComponent& output) {
+bool SceneAssetRenderComponentCodec::ReadMeshRenderer(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, MeshRendererComponent& output) {
     if (!input.ReadUInt64(output.meshAssetId) ||
         !input.ReadUInt64(output.materialAssetId) ||
         !input.ReadUInt32(output.materialSlotOverrideCount) ||
@@ -17,8 +17,18 @@ bool SceneAssetRenderComponentCodec::ReadMeshRenderer(SceneAssetBinaryIO::ByteRe
             return false;
         }
     }
-    return input.ReadBool(output.castsShadow) && input.ReadBool(output.receivesShadow) && input.ReadUInt32(output.layer)
-        && IsMeshRendererComponentValid(output);
+    if (!input.ReadBool(output.castsShadow) || !input.ReadBool(output.receivesShadow) || !input.ReadUInt32(output.layer)) {
+        return false;
+    }
+    if (fileVersion >= SceneDocument::MeshLodAndShadowQualityFileVersion) {
+        std::uint32_t mobility = 0U;
+        if (!input.ReadInt32(output.lodBias) || !input.ReadBool(output.lodEnabled) || !input.ReadUInt32(mobility) ||
+            mobility > static_cast<std::uint32_t>(MeshMobility::Static)) {
+            return false;
+        }
+        output.mobility = static_cast<MeshMobility>(mobility);
+    }
+    return IsMeshRendererComponentValid(output);
 }
 
 void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>& output, const MeshRendererComponent& meshRenderer) {
@@ -31,6 +41,9 @@ void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>
     SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.castsShadow ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.receivesShadow ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt32(output, meshRenderer.layer);
+    SceneAssetBinaryIO::WriteInt32(output, meshRenderer.lodBias);
+    SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.lodEnabled ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(meshRenderer.mobility));
 }
 
 bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, LightComponent& output) {
@@ -63,6 +76,17 @@ bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& i
         }
         output.mobility = static_cast<LightMobility>(mobility);
     }
+    if (fileVersion >= SceneDocument::MeshLodAndShadowQualityFileVersion) {
+        std::uint32_t filter = 0U;
+        std::uint32_t quality = 0U;
+        if (!input.ReadFloat(output.shadowBias) || !input.ReadFloat(output.shadowNormalBias) || !input.ReadUInt32(filter) ||
+            !input.ReadUInt32(quality) || !input.ReadUInt32(output.shadowCascadeCount) || !input.ReadFloat(output.shadowCascadeDistribution) ||
+            filter > static_cast<std::uint32_t>(LightShadowFilter::Pcss) || quality > static_cast<std::uint32_t>(LightShadowQuality::Ultra)) {
+            return false;
+        }
+        output.shadowFilter = static_cast<LightShadowFilter>(filter);
+        output.shadowQuality = static_cast<LightShadowQuality>(quality);
+    }
     output.kind = static_cast<LightKind>(kind);
     output.castsShadow = castsShadow;
     output.useColorTemperature = useColorTemperature;
@@ -88,6 +112,12 @@ void SceneAssetRenderComponentCodec::WriteLight(std::vector<std::uint8_t>& outpu
     SceneAssetBinaryIO::WriteFloat(output, light.shadowStrength);
     SceneAssetBinaryIO::WriteFloat(output, light.shadowDistance);
     SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(light.mobility));
+    SceneAssetBinaryIO::WriteFloat(output, light.shadowBias);
+    SceneAssetBinaryIO::WriteFloat(output, light.shadowNormalBias);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(light.shadowFilter));
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(light.shadowQuality));
+    SceneAssetBinaryIO::WriteUInt32(output, light.shadowCascadeCount);
+    SceneAssetBinaryIO::WriteFloat(output, light.shadowCascadeDistribution);
 }
 
 } // namespace kb::scene

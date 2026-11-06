@@ -47,3 +47,21 @@ and assign it with `kb_cli scene-post-process`. Automation scenarios use the `ex
 
 One animation per sprite (a run of consecutive cells); several named clips need several sprites or a script that changes `cell`
 and `frameCount`. A sprite is one quad: no mesh deformation or skeletal 2D animation.
+
+## Tilemap animation and bounds
+
+Map dimensions are 1–4096 tiles on each axis. Coordinates start at zero and must be less than the corresponding dimension; floors range from -50 through 50. A map supports 256 sheets and 32 combined item/border sprites per cell. Invalid dimensions and out-of-range imported cells are rejected; an intentional valid shrink removes cells outside the new area and can be undone in the editor.
+
+Maps store sparse cells, grouped at runtime into occupied 16×16 chunks per floor. An animation frame change rebuilds only chunks containing changed frames. Unchanged frames and paused animation do not rebuild geometry.
+
+In the map animation editor, the speed form also sets a phase in seconds for selected instances of that graphic. The optional sixth sprite-transform value stores this phase: `sheet:cell@rotation/flip/tint/offsetX/offsetY/phaseSeconds`. Existing five-value sprites retain phase zero. Clips loop through their frame list at their authored FPS. CLI painting accepts `--phase <seconds>` with `--sprite` and `--cell`.
+
+Scripts can call `CallFunction("Map2D.SetAnimationPaused", {entity=self.entity, paused=true})` and pass `false` to resume from the same animation clock. This controls one map without pausing simulation. Reloading the source resets its clock while retaining its pause state; starting a new play session starts unpaused. Authored instance phases survive save/reload.
+
+## Tilemap floors and drawing order
+
+Sprite2D and TilemapRenderer use the same drawing-order unit: each `sortingOrder` step moves the image 0.5 local units toward the viewer (negative Z for wall maps, positive Y for flat maps). On the same plane and floor, a higher order draws in front. This is a depth offset, not a screen overlay: entity transforms and map floors still affect depth. Use matching transforms and floors for layers that should be ordered only by this setting.
+
+A map floor contributes `floor * floorHeight` to depth. Within a cell the ground is below borders, followed by items in their stored order. Optional Y sorting adds less than 0.4 local units by map row, so lower rows cover higher rows within the same floor and drawing order. It sorts tiles within that map; independent Sprite2D objects use their own transform and drawing order. Parallax moves a layer with the camera and does not change its drawing order.
+
+Tile atlas textures referenced by maps cook as exact-size RGBA8 with one mip level. This supports padding, gaps and partial image rows without resizing UV coordinates or averaging neighboring cells into lower mips. It uses four bytes per source texel; other textures retain their target compression policy. Graphic polygon/slope outlines follow sprite rotation, flip, aspect and offset. Explicit per-cell collision overrides and one-way platforms remain grid-based.

@@ -18,6 +18,9 @@ struct RendererShadowSubmitDesc {
     ShadowMapResource& shadowMap;
     ShadowMapResource& pointShadowMap;
     const RenderSceneSubmitDesc& sceneDesc;
+    // The view the shadows are for, sized to its target (viewportHeight): terrain chunks drawn into a shadow map take the
+    // level of detail this view picks.
+    const SceneRenderCamera* viewCamera = nullptr;
     const RenderViewportPlan& viewportPlan;
     const SceneRenderLightingConfig& lightingConfig;
     SceneGpuDrivenFeatureSupport gpuDrivenSupport{};

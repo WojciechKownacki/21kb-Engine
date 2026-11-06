@@ -21,6 +21,18 @@ DockSplitLayoutParts DockSplitLayoutBuilder::Build(const DockNode& node, const D
         };
     }
 
+    // A collapsed drawer keeps only its tab strip, and the panel above it takes the rest.
+    if (settings.collapsedLeafId != 0 && node.second && node.second->kind == DockNode::Kind::Leaf &&
+        node.second->id == settings.collapsedLeafId) {
+        const int collapsedHeight = std::min(rect.height, settings.tabStripHeight + 2);
+        const int splitY = rect.y + rect.height - collapsedHeight;
+        return DockSplitLayoutParts{
+            .first = DockGeometry::MakeRect(rect.x, rect.y, rect.width, rect.height - collapsedHeight),
+            .splitter = DockGeometry::MakeRect(rect.x, splitY - splitter / 2, rect.width, splitter),
+            .second = DockGeometry::MakeRect(rect.x, splitY, rect.width, collapsedHeight),
+        };
+    }
+
     const int firstHeight = DockGeometry::ClampInt(static_cast<int>(std::round(static_cast<float>(rect.height) * node.ratio)), 80, std::max(80, rect.height - 80));
     const int splitY = rect.y + firstHeight;
     const DockRect splitterRect = DockGeometry::MakeRect(rect.x, splitY - splitter / 2, rect.width, splitter);

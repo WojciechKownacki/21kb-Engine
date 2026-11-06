@@ -96,9 +96,9 @@ RendererCapabilityReport BuildRendererCapabilityReport(bgfx::RendererType::Enum 
     report.textureBlitSupported = true;
     report.textureReadbackSupported = true;
     report.hdrExposureMeteringSupported = report.textureBlitSupported && report.textureReadbackSupported;
-    report.gpuDrivenComputeCullingSupported = report.computeSupported;
-    report.gpuDrivenIndirectSubmitSupported = false;
-    report.gpuDrivenMeshletSubmitSupported = false;
+    report.gpuDrivenComputeCullingSupported = report.computeSupported && report.indirectDrawSupported;
+    report.gpuDrivenIndirectSubmitSupported = report.gpuDrivenComputeCullingSupported;
+    report.gpuDrivenMeshletSubmitSupported = report.gpuDrivenComputeCullingSupported;
     report.particleInstancingSupported = true;
     report.particleGpuDrawingSupported = report.particleInstancingSupported;
     report.particleSubtractiveBlendSupported = report.particleGpuDrawingSupported;

@@ -40,6 +40,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , surfaceCasts_(world, components.SurfaceCastComponentId())
     , facingPanels_(world, components.FacingPanelComponentId())
     , spaceStrokes_(world, components.SpaceStrokeComponentId())
+    , rivers_(world, components.RiverComponentId())
     , historyRibbons_(world, components.HistoryRibbonComponentId())
     , particleEffects_(world, components.ParticleEffectComponentId())
     , lensEchoes_(world, components.LensEchoComponentId())
@@ -205,7 +206,9 @@ SceneSurfaceCastComponentStore& SceneComponentStorage::SurfaceCasts() noexcept {
 const SceneFacingPanelComponentStore& SceneComponentStorage::FacingPanels() const noexcept { return facingPanels_; }
 SceneFacingPanelComponentStore& SceneComponentStorage::FacingPanels() noexcept { return facingPanels_; }
 const SceneSpaceStrokeComponentStore& SceneComponentStorage::SpaceStrokes() const noexcept { return spaceStrokes_; }
+const SceneRiverComponentStore& SceneComponentStorage::Rivers() const noexcept { return rivers_; }
 SceneSpaceStrokeComponentStore& SceneComponentStorage::SpaceStrokes() noexcept { return spaceStrokes_; }
+SceneRiverComponentStore& SceneComponentStorage::Rivers() noexcept { return rivers_; }
 const SceneHistoryRibbonComponentStore& SceneComponentStorage::HistoryRibbons() const noexcept { return historyRibbons_; }
 SceneHistoryRibbonComponentStore& SceneComponentStorage::HistoryRibbons() noexcept { return historyRibbons_; }
 const SceneParticleEffectComponentStore& SceneComponentStorage::ParticleEffects() const noexcept {

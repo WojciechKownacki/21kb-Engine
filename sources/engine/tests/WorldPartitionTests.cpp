@@ -141,7 +141,7 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override { return typeid(int); }
     [[nodiscard]] std::vector<std::string> Extensions() const override { return { ".obj" }; }
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest&) override {
-        return { .asset = std::make_shared<int>(1), .error = {} };
+        return { .asset = std::make_shared<int>(1), .error = {}, .residentBytes = sizeof(int) };
     }
 };
 
@@ -717,6 +717,7 @@ void RunBudgetTests() {
 void RunMemoryReportTests() {
     WorldFixture fixture = BuildFixtureWorld("memory", false);
     Check(WorldCellBuilder::Build(fixture.descriptor, nullptr).succeeded, "memory world must build");
+    std::ofstream{fixture.root / "Measured.obj", std::ios::binary} << std::string(512U, 'x');
     StreamingHarness harness = MountWorld(fixture, true);
     WorldPartitionRuntime runtime = harness.Runtime();
     std::uint64_t scriptBytes = 10'000U;
@@ -726,6 +727,13 @@ void RunMemoryReportTests() {
     runtime.ConfigureBudget({ .maxLoadRequestsPerFrame = 8U, .maxPendingLoads = 8U, .maxResidentBytes = 1ULL << 30U, .maxMillisecondsPerFrame = 50.0 });
     const WorldMemoryReport empty = runtime.MemoryReport();
     Check(empty.estimatedResidentBytes == 0U && empty.samples == 0U && empty.measuredBytes == 0U && empty.errorRatio == 0.0, "an empty world reports nothing resident");
+    const auto measuredAsset = harness.scene->Assets().Manager().Load<int>("/Game/Measured.obj");
+    Check(measuredAsset.IsLoaded(), "load a measured payload before world streaming");
+    const auto measuredOnly = runtime.MemoryReport().categories[static_cast<std::size_t>(WorldMemoryKind::AssetsCpu)];
+    Check(measuredOnly.source == WorldMemorySource::Measured && measuredOnly.bytes == sizeof(int) && measuredOnly.knownPayloadBytes == sizeof(int),
+        "complete loader coverage measures decoded bytes rather than file size");
+    const auto unmeasuredAsset = harness.scene->Assets().Manager().Load<WorldDescriptor>("/Game/Worlds/Forest.21kbworld");
+    Check(unmeasuredAsset.IsLoaded(), "load an explicitly uninstrumented descriptor for partial coverage");
     const std::uint64_t source = runtime.AddSource({ .position = { 50.0, 0.0, 50.0 }, .loadRadius = 120.0, .unloadRadius = 180.0, .priority = 0 });
     Settle(harness);
     // The host's script heap and graphics memory grew as the cells loaded.
@@ -737,21 +745,50 @@ void RunMemoryReportTests() {
             report.residentUnits == runtime.Stats().loadedUnits, "the report carries the budget and what it charged for the resident cells");
     Check(category(WorldMemoryKind::Instances).source == WorldMemorySource::Measured && category(WorldMemoryKind::Instances).bytes > 0U,
         "the instances are read from the scene's ECS storage");
-    Check(category(WorldMemoryKind::AssetsCpu).source == WorldMemorySource::Estimated, "assets are estimated from the files of the loaded assets");
+    Check(category(WorldMemoryKind::AssetsCpu).source == WorldMemorySource::Estimated &&
+        category(WorldMemoryKind::AssetsCpu).knownPayloadBytes >= sizeof(int) + sizeof(WorldCellIndex) && category(WorldMemoryKind::AssetsCpu).unmeasuredPayloads > 0U,
+        "incomplete loader coverage retains an explicit file estimate alongside measured payload bytes");
     Check(category(WorldMemoryKind::Scripts).source == WorldMemorySource::Measured && category(WorldMemoryKind::Scripts).bytes == 40'000U &&
             category(WorldMemoryKind::Gpu).source == WorldMemorySource::Measured && category(WorldMemoryKind::Gpu).bytes == 2'000'000U &&
             category(WorldMemoryKind::Gpu).baselineBytes == 3'000'000U, "host probes count growth since the world was placed");
     Check(category(WorldMemoryKind::Physics).source == WorldMemorySource::Unavailable && category(WorldMemoryKind::Physics).bytes == 0U &&
             report.hasUnavailableKinds && category(WorldMemoryKind::Physics).note.find("no reading") != std::string::npos, "a kind nobody reads is reported unavailable, not guessed");
     std::uint64_t sum = 0U;
-    for (const WorldMemoryCategory& entry : report.categories) sum += entry.bytes;
-    Check(report.measuredBytes == sum && report.errorRatio > 0.0, "the measured total is the sum of the kinds that have a reading");
+    for (const WorldMemoryCategory& entry : report.categories) {
+        if (entry.source == WorldMemorySource::Measured) sum += entry.bytes;
+    }
+    Check(report.measuredBytes == sum && report.errorRatio > 0.0, "only measured kinds contribute to the measured total");
+    Check(report.hasEstimatedKinds && report.estimatedBytes == category(WorldMemoryKind::AssetsCpu).bytes,
+        "file-size estimates have their own total");
+    std::filesystem::path loadedFile;
+    for (const auto& metadata : harness.scene->Assets().Manager().Registry().All()) {
+        if (harness.scene->Assets().Manager().IsLoaded(metadata.id) && !metadata.physicalPath.empty()) {
+            loadedFile = metadata.physicalPath;
+            break;
+        }
+    }
+    Check(!loadedFile.empty(), "the fixture must have a loaded asset file");
+    const auto hiddenFile = std::filesystem::path{loadedFile.string() + ".hidden"};
+    std::filesystem::rename(loadedFile, hiddenFile);
+    const WorldMemoryReport missing = runtime.MemoryReport();
+    std::filesystem::rename(hiddenFile, loadedFile);
+    Check(missing.categories[static_cast<std::size_t>(WorldMemoryKind::AssetsCpu)].source == WorldMemorySource::Unavailable &&
+            missing.hasUnavailableKinds && missing.estimatedBytes == 0U && missing.measuredBytes == report.measuredBytes,
+        "a missing loaded file makes the asset estimate unavailable without changing measured totals");
     Check(report.samples >= 1U && report.minimumErrorRatio > 0.0 && report.minimumErrorRatio <= report.maximumErrorRatio, "the error ratio is sampled as the resident cells settle");
     std::printf("world_memory resident_units=%zu estimated=%llu instances=%llu assets=%llu ratio_without_host_probes=%.3f samples=%u\n", report.residentUnits,
         static_cast<unsigned long long>(report.estimatedResidentBytes), static_cast<unsigned long long>(category(WorldMemoryKind::Instances).bytes),
         static_cast<unsigned long long>(category(WorldMemoryKind::AssetsCpu).bytes),
-        report.estimatedResidentBytes == 0U ? 0.0 : static_cast<double>(category(WorldMemoryKind::Instances).bytes + category(WorldMemoryKind::AssetsCpu).bytes) / static_cast<double>(report.estimatedResidentBytes),
+        report.estimatedResidentBytes == 0U ? 0.0 : static_cast<double>(category(WorldMemoryKind::Instances).bytes) / static_cast<double>(report.estimatedResidentBytes),
         report.samples);
+
+    // Late host allocations must update the range even when no cell count changes.
+    gpuBytes += 1'000'000U;
+    const WorldMemoryReport late = runtime.MemoryReport();
+    Check(late.residentUnits == report.residentUnits && late.errorRatio > report.errorRatio &&
+            late.maximumErrorRatio == late.errorRatio && late.samples > report.samples,
+        "late memory growth at fixed residency updates the sampled error range");
+    gpuBytes -= 1'000'000U;
 
     // Moving the source away unloads the cells: what the instances hold goes down with them.
     const std::uint64_t instancesLoaded = category(WorldMemoryKind::Instances).bytes;
@@ -761,6 +798,101 @@ void RunMemoryReportTests() {
     Check(after.estimatedResidentBytes < report.estimatedResidentBytes &&
             after.categories[static_cast<std::size_t>(WorldMemoryKind::Instances)].bytes < instancesLoaded, "unloading the cells lowers the estimate and the measured instances");
     Check(after.samples > report.samples, "a settled unload is sampled too");
+    harness.scene.reset();
+    std::filesystem::remove_all(fixture.root);
+}
+
+// Repeated topology changes exercise real cell deserialization and entity/reference lifetime.
+// Meshes use the engine fixture loader; renderer memory requires a separate packaged-host check.
+void RunLongTraversalTests() {
+    WorldFixture fixture = BuildFixtureWorld("long_traversal", true);
+    RecordingHlodBaker baker;
+    Check(WorldCellBuilder::Build(fixture.descriptor, &baker).succeeded, "traversal world must build");
+    StreamingHarness harness = MountWorld(fixture, true);
+    auto runtime = harness.Runtime();
+    constexpr std::uint64_t budget = 128U * 1024U;
+    runtime.ConfigureBudget({ .maxLoadRequestsPerFrame = 2U, .maxPendingLoads = 2U,
+        .maxResidentBytes = budget, .maxMillisecondsPerFrame = 2.0 });
+    const auto source = runtime.AddSource({ .position = { 50.0, 0.0, 50.0 }, .loadRadius = 120.0, .unloadRadius = 180.0 });
+    std::vector<double> frameTimes;
+    std::uint64_t peakInstances = 0U;
+    std::size_t interruptedLoads = 0U;
+    const auto tick = [&] {
+        const auto start = std::chrono::steady_clock::now();
+        static_cast<void>(harness.scene->Runtime().Update(1.0F / 60.0F));
+        frameTimes.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        const auto stats = runtime.Stats();
+        Check(stats.failedUnits == 0U && stats.residentBytes <= budget, "traversal respects the cell budget without failed loads");
+        peakInstances = (std::max)(peakInstances, static_cast<std::uint64_t>(harness.scene->Runtime().EcsWorld().TelemetrySnapshot().usedBytes));
+        static_cast<void>(runtime.DrainEvents());
+    };
+    const auto settle = [&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+        int quiet = 0;
+        while (quiet < 3) {
+            Check(std::chrono::steady_clock::now() < deadline, "long traversal must settle");
+            tick();
+            const auto stats = runtime.Stats();
+            quiet = !runtime.Worlds().empty() && runtime.Worlds()[0].ready && stats.loadingUnits == 0U &&
+                stats.unloadingUnits == 0U && stats.requestsThisFrame == 0U ? quiet + 1 : 0;
+            std::this_thread::yield();
+        }
+    };
+    const auto move = [&](WorldPoint point) {
+        Check(runtime.UpdateSource(source, { .position = point, .loadRadius = 120.0, .unloadRadius = 180.0 }), "traversal source exists");
+    };
+    std::size_t baselineEntities = 0U;
+    std::uint64_t baselineInstances = 0U;
+    for (unsigned round = 0U; round < 32U; ++round) {
+        // Do not settle between teleports: the next source invalidates pending cell requests.
+        for (unsigned jump = 0U; jump < 8U; ++jump) {
+            move(jump % 2U == 0U ? WorldPoint{-150.0, 0.0, -150.0} : WorldPoint{250.0, 0.0, 250.0});
+            tick();
+            interruptedLoads += runtime.Stats().loadingUnits;
+        }
+        for (const WorldPoint point : std::array<WorldPoint, 4U>{{ {-150.0, 0.0, -150.0}, {250.0, 0.0, -150.0},
+                {250.0, 0.0, 50.0}, {50.0, 0.0, 50.0} }}) {
+            move(point);
+            runtime.SetDataLayerActive("night", round % 2U == 0U);
+            settle();
+            Check(HasEntityNamed(*harness.scene, "Sun"), "persistent objects survive every trip");
+            struct ReferenceCheck { scene::Scene* target; std::size_t joints = 0U; } references{harness.scene.get()};
+            harness.scene->Transforms().ForEach([](scene::SceneEntity entity, const scene::TransformComponent&, void* context) {
+                auto& state = *static_cast<ReferenceCheck*>(context);
+                if (state.target->Entities().Name(entity) != "Swing_part") return;
+                const auto* joint = state.target->Components().Joints().TryGet(entity);
+                Check(joint != nullptr && state.target->Entities().Name(joint->connectedEntity) == "Anchor",
+                    "streamed joints must resolve to the current anchor after reloading");
+                ++state.joints;
+            }, &references);
+            Check(references.joints == (HasEntityNamed(*harness.scene, "Swing") ? 1U : 0U), "linked objects reload together");
+            for (const auto cell : runtime.LoadedCells(harness.world)) {
+                Check(!runtime.IsHlodVisible(harness.world, cell), "a loaded cell must not retain its HLOD proxy");
+            }
+        }
+        runtime.SetDataLayerActive("night", false);
+        move({5000.0, 0.0, 5000.0});
+        settle();
+        Check(Loaded(harness).empty() && runtime.Stats().visibleHlods == 0U && !HasEntityNamed(*harness.scene, "Lantern"),
+            "leaving the world releases cells, layers and proxies");
+        const auto instances = static_cast<std::uint64_t>(harness.scene->Runtime().EcsWorld().TelemetrySnapshot().usedBytes);
+        if (round == 0U) {
+            baselineEntities = harness.scene->Entities().Count();
+            baselineInstances = instances;
+        } else {
+            Check(harness.scene->Entities().Count() == baselineEntities && instances <= baselineInstances + 4096U,
+                "repeated trips must not accumulate entities or ECS storage after unloading");
+        }
+    }
+    Check(interruptedLoads > 0U, "teleports must encounter pending loads");
+    move({50.0, 0.0, 50.0});
+    settle();
+    Check(Loaded(harness) == Square(-1, 1, -1, 1) && HasEntityNamed(*harness.scene, "Tree 0,0"), "returning restores the starting neighbourhood");
+    std::ranges::sort(frameTimes);
+    const double p99 = frameTimes[frameTimes.size() * 99U / 100U];
+    Check(p99 < 50.0 && frameTimes.back() < 500.0, "cell traversal must stay within its frame latency bounds");
+    std::printf("world_traversal rounds=32 teleports=256 frames=%zu pending_loads=%zu peak_ecs_bytes=%llu p99_ms=%.3f max_ms=%.3f\n",
+        frameTimes.size(), interruptedLoads, static_cast<unsigned long long>(peakInstances), p99, frameTimes.back());
     harness.scene.reset();
     std::filesystem::remove_all(fixture.root);
 }
@@ -1019,6 +1151,7 @@ void RunWorldPartitionTests() {
     RunBudgetTests();
     RunMemoryReportTests();
     RunDeterminismTests();
+    RunLongTraversalTests();
     RunUnbuiltWorldTests();
     RunFarWorldTests();
 }

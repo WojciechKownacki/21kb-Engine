@@ -30,7 +30,8 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     kb::scene::Scene& scene,
     const kb::audio::AudioPlayDesc& desc,
     const MiniaudioClipResolver& clipResolver,
-    ma_sound_group* group) {
+    ma_sound_group* group,
+    kb::audio::SpatialAudioMode mode) {
     const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
     if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
         return kb::audio::AudioPlayDescValidationResult(validation);
@@ -64,8 +65,9 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     }
 
     auto sound = std::make_unique<MiniaudioSound>();
-    if (sound->Initialize(engine, resolution.clip, desc.spatial, group) != MA_SUCCESS) {
-        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice could not be created" };
+    const auto initialized=sound->Initialize(engine, resolution.clip, desc.spatial, group, 0, mode);
+    if (initialized != MA_SUCCESS) {
+        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = mode==kb::audio::SpatialAudioMode::Panning ? "audio voice could not be created" : std::string{"spatial voice requires mono HRTF or four-channel AmbiX and a supported SDK: "}+ma_result_description(initialized) };
     }
 
     MiniaudioSoundSettings settings{

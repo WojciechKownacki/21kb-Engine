@@ -157,6 +157,38 @@ struct RenderBoundsBox {
     }
 };
 
+// How a terrain mesh is cut into chunks and what each chunk costs at each level of detail. The scene pipeline picks
+// the level of every chunk from it; the mesh holds one range of triangles per chunk and level (one section per
+// material layer) and, for the chunks whose neighbours may sit at another level, a skirt that closes the gap.
+struct RenderTerrainChunkGrid {
+    std::uint32_t chunkCountX = 0U;
+    std::uint32_t chunkCountZ = 0U;
+    std::uint32_t lodCount = 0U;
+    // Screen error, in pixels, a chunk may show at the level chosen for it.
+    float lodPixelError = 2.0F;
+    // [lod * chunkCount + chunk]: the first section of the chunk at that level (one per material layer), or
+    // UINT32_MAX when the chunk has no triangles.
+    std::vector<std::uint32_t> sectionIndices;
+    // Same indexing: the section holding the skirt of the chunk at that level, or UINT32_MAX when it has none.
+    std::vector<std::uint32_t> skirtSectionIndices;
+    // [chunk * lodCount + lod]: the largest distance, in mesh units, between the surface of the chunk at that level
+    // and its full-resolution surface. Level 0 is 0 and the values never decrease with the level.
+    std::vector<float> lodError;
+    // [chunk]: how far the skirt of the chunk hangs below its edge; closes any gap to a neighbour at another level.
+    std::vector<float> skirtDepth;
+    // [chunk]: the largest error of the border of the chunk over its levels; a skirt hangs by this and the largest
+    // of its neighbours.
+    std::vector<float> borderError;
+
+    [[nodiscard]] std::uint32_t ChunkCount() const noexcept { return chunkCountX * chunkCountZ; }
+    [[nodiscard]] bool Valid() const noexcept {
+        const std::size_t chunks = ChunkCount();
+        return chunks != 0U && lodCount != 0U && sectionIndices.size() == chunks * lodCount &&
+            skirtSectionIndices.size() == sectionIndices.size() && lodError.size() == chunks * lodCount &&
+            skirtDepth.size() == chunks && borderError.size() == chunks;
+    }
+};
+
 struct RenderMeshSectionDesc {
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
@@ -172,6 +204,10 @@ struct RenderMeshSectionDesc {
     // UINT8_MAX for ordinary meshes; 0..3 for a terrain material pass.
     std::uint8_t terrainLayerIndex = UINT8_MAX;
     bool terrainLayerActive = true;
+    // The chunk of a terrain mesh this section draws (RenderTerrainChunkGrid), UINT32_MAX for other meshes; a skirt
+    // section is drawn only where a neighbouring chunk is at another level.
+    std::uint32_t terrainChunk = UINT32_MAX;
+    bool terrainSkirt = false;
 };
 
 struct RenderMeshSection {
@@ -184,6 +220,8 @@ struct RenderMeshSection {
     std::uint8_t lodLevel = 0;
     std::uint8_t terrainLayerIndex = UINT8_MAX;
     bool terrainLayerActive = true;
+    std::uint32_t terrainChunk = UINT32_MAX;
+    bool terrainSkirt = false;
 };
 
 struct RenderMeshletDesc {
@@ -257,6 +295,7 @@ struct RenderMeshDesc {
     std::uint64_t rasterStateExtra = 0;
     bool doubleSided = false;
     bool dynamicVertexBuffer = false;
+    const RenderTerrainChunkGrid* terrainChunks = nullptr;
     const std::uint8_t* terrainLayerWeights = nullptr;
     std::uint32_t terrainLayerWeightBytes = 0U;
     std::uint16_t terrainLayerWeightWidth = 0U;
@@ -272,6 +311,7 @@ struct RenderMeshProxyGeometry {
 };
 
 struct RenderMeshResource {
+    std::uint64_t estimatedGpuBytes = 0U;
     bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle dynamicVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
@@ -291,6 +331,7 @@ struct RenderMeshResource {
     bool indirectDrawsEnabled = false;
     bool meshletCullingEnabled = false;
     RenderMeshSkinningDesc skinning{};
+    RenderTerrainChunkGrid terrainChunks;
     bgfx::TextureHandle terrainLayerWeightTexture = BGFX_INVALID_HANDLE;
     std::uint16_t terrainLayerWeightWidth = 0U;
     std::uint16_t terrainLayerWeightHeight = 0U;
@@ -333,6 +374,9 @@ struct RenderMaterialDesc {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
+    bool bakedLightmap = false;
+    bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;
@@ -481,6 +525,9 @@ struct RenderMaterialResource {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
+    bool bakedLightmap = false;
+    bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;
@@ -525,6 +572,7 @@ struct RenderTextureDesc {
 };
 
 struct RenderTextureResource {
+    std::uint64_t estimatedGpuBytes = 0U;
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
     std::uint16_t width = 0;
     std::uint16_t height = 0;

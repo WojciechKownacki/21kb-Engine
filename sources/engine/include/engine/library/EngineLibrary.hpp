@@ -36,7 +36,7 @@ namespace kb::library {
 //
 // LIB-023/LIB-024 attach a manifest hash derived from the registered
 // ScriptApiCatalog to detect accidental breaking changes between builds;
-// this struct is the version half of that future manifest.
+// this struct supplies the manifest's semantic version.
 struct LibraryApiVersion {
     std::uint16_t major = 0U;
     std::uint16_t minor = 0U;

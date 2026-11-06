@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/StatelessSceneSystem.hpp"
 
 namespace kb::input {
 
@@ -10,7 +11,7 @@ namespace kb::input {
 // (LIB-115) - all reading the primary's shared physical device state. Platform
 // code is responsible for filling the primary subsystem's device state before
 // Update runs.
-class InputPollingSystem final : public kb::scene::SceneSystem {
+class InputPollingSystem final : public kb::scene::SceneSystem, public kb::scene::IStatelessSceneSystem {
 public:
     void OnUpdate(kb::scene::SceneSystemContext& context) override;
 };

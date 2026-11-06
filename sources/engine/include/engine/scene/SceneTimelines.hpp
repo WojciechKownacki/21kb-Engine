@@ -26,6 +26,12 @@ struct TimelineMarkerEvent {
     std::uint64_t assetId = 0U;
     TimelineMarkerId markerId = 0U;
     float timeSeconds = 0.0F;
+    // Empty for legacy markers; named keys dispatch through OnTimelineEvent.
+    std::string eventName;
+    std::string payload;
+    // Clip keys share traversal ordering but dispatch the animation event schema.
+    bool animationEvent = false;
+    float normalizedTime = 0.0F;
 };
 
 class SceneTimelineQueries {
@@ -49,6 +55,9 @@ public:
     [[nodiscard]] bool Release(std::uint64_t instance) noexcept;
     [[nodiscard]] bool Exists(std::uint64_t instance) const noexcept;
     [[nodiscard]] bool Play(std::uint64_t instance) noexcept;
+    // Signed nonzero rate; negative values play toward zero. Seek is silent.
+    // Looping preserves crossed markers in traversal order, including wraps.
+    [[nodiscard]] bool SetPlayback(std::uint64_t instance, float rate, bool loop) noexcept;
     [[nodiscard]] bool Pause(std::uint64_t instance) noexcept;
     [[nodiscard]] bool IsPlaying(std::uint64_t instance) const noexcept;
     [[nodiscard]] bool Seek(std::uint64_t instance, float timeSeconds);

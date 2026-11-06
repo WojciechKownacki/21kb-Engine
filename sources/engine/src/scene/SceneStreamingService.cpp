@@ -104,7 +104,7 @@ void RetireSource(Scene& scene, Streaming::Job& job) {
         });
 }
 
-std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bool workerBusy) {
+std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bool workerBusy, Clock::time_point deadline) {
     auto& manager = scene.Assets().Manager();
     if (job.status == SceneLoadStatus::Ready && !scene.Entities().IsAlive(job.root)) {
         BeginUnload(scene, job, false);
@@ -180,7 +180,7 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
                 static_cast<void>(batch.AddNode(std::move(node)));
             }
             const auto instance = scene.Prefabs().Instantiate(batch,
-                ScenePrefabInstantiationSettings{.parent = scene.Entities().Object(job.root)});
+                ScenePrefabInstantiationSettings{.parent = scene.Entities().Object(job.root), .syncWorldHierarchy = true});
             if (instance.ObjectCount() != count) throw std::runtime_error("Streaming bulk creation failed");
             for (std::size_t index = 0U; index < count; ++index) {
                 const auto object = instance.ObjectAt(static_cast<std::uint32_t>(index));
@@ -196,7 +196,9 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
             return count;
         }
         const std::size_t activate = std::min<std::size_t>({remaining, 32U, nodes.size() - job.activated});
-        for (std::size_t index = job.activated; index < job.activated + activate; ++index) {
+        std::size_t completed = 0U;
+        for (; completed < activate && (completed == 0U || Clock::now() < deadline); ++completed) {
+            const std::size_t index = job.activated + completed;
             const auto object = job.objects[index];
             if (!scene.Entities().IsAlive(object)) throw std::runtime_error("Streaming entity disappeared during activation");
             auto components = nodes[index].components;
@@ -207,7 +209,7 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
             scene.Tags().RegisterAssignedTags(object.Entity());
             scene.Entities().SetActive(object, true);
         }
-        job.activated += activate;
+        job.activated += completed;
         job.progress = 0.55F + 0.45F * static_cast<float>(job.activated) / static_cast<float>(nodes.size());
         if (job.activated == nodes.size()) {
             auto& state = SceneAccess::State(scene);
@@ -222,11 +224,11 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
             std::vector<SceneObject>{}.swap(job.objects);
             ScenePrefabReferenceResolver::EntityMap{}.swap(job.references);
         }
-        return activate;
+        return completed;
     }
     if (job.status == SceneLoadStatus::Unloading) {
         std::size_t operations = 0U;
-        while (!job.unloadStack.empty() && operations < remaining) {
+        while (!job.unloadStack.empty() && operations < remaining && (operations == 0U || Clock::now() < deadline)) {
             const auto entity = job.unloadStack.back();
             if (!scene.Entities().IsAlive(entity)) job.unloadStack.pop_back();
             else if (const auto children = scene.Hierarchy().ChildCount(entity); children != 0U)
@@ -373,7 +375,9 @@ void SceneStreamingService::Pump(Scene& scene) {
         const bool busy = std::ranges::any_of(streaming.jobs, [](const auto& candidate) { return candidate.preparation.valid(); });
         std::size_t operations = 0U;
         try {
-            operations = Advance(scene, job, streaming.settings.maxOperationsPerFrame - streaming.stats.operations, busy);
+            operations = Advance(scene, job, streaming.settings.maxOperationsPerFrame - streaming.stats.operations, busy,
+                start + std::chrono::duration_cast<Clock::duration>(
+                    std::chrono::duration<double, std::milli>(streaming.settings.maxMillisecondsPerFrame)));
         } catch (const std::exception& error) {
             job.error = error.what();
             BeginUnload(scene, job, true);

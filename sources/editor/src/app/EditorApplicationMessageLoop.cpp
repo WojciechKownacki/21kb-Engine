@@ -1,5 +1,6 @@
 #include <array>
 #include "app/EditorApplicationMessageLoop.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
 #include "app/EditorAudioAssetPreview.hpp"
 #include "scene/audio/EditorAudioMixerRuntime.hpp"
 
@@ -26,6 +27,7 @@
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "profiler/EditorProfilerSampler.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewPresentSettings.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -48,10 +50,12 @@
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
+#include "scene/EditorTerrainJobs.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
+#include "scene/StaticMeshEditorSession.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
@@ -194,8 +198,7 @@ constexpr int kMaxMessagesPerPump = 128;
     return state.dockModel.Queries().BuildLayout(
         client.right - client.left,
         client.bottom - client.top,
-        state.metrics.menuHeight,
-        state.metrics.toolbarHeight,
+        state.metrics.menuHeight, state.metrics.statusBarHeight,
         state.metrics.tabStripHeight,
         state.metrics.tabMinWidth,
         state.metrics.tabWidth,
@@ -307,6 +310,28 @@ void InvalidatePanelKind(EditorApplicationState& state, DockPanelKind kind) noex
 }
 
 void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
+// Shows the Static Mesh window an Open asked for, closes its session once its tab is gone, and advances it; true
+// while the window keeps changing.
+[[nodiscard]] bool TickStaticMeshEditor(EditorApplicationState& state, float deltaSeconds) {
+    StaticMeshEditorSession& session = StaticMeshEditorSession::Instance();
+    if (session.ConsumeOpenRequest()) {
+        static_cast<void>(state.dockModel.Commands().SetPanelTitle(DockPanelKind::StaticMeshEditor, session.Title()));
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::StaticMeshEditor, DockArea::Center));
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+    }
+    if (!session.IsOpen()) return false;
+    const std::vector<DockPanel>& panels = state.dockModel.Queries().Panels();
+    if (std::ranges::none_of(panels, [](const DockPanel& panel) { return panel.kind == DockPanelKind::StaticMeshEditor && panel.visible; })) {
+        session.Close();
+        return false;
+    }
+    if (!session.Tick(deltaSeconds)) return session.Building();
+    state.sceneViewport.RequestPresent();
+    InvalidatePanelKind(state, DockPanelKind::StaticMeshEditor);
+    return true;
+}
+
     InvalidatePanelKind(state, DockPanelKind::Inspector);
 }
 
@@ -561,6 +586,156 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     return presented;
 }
 
+// The status bar counts the Console's errors and warnings and names the graphics API once the
+// viewport has started. Whatever logs - a script, an import, play mode - repaints only the bar,
+// and only when one of those actually changed.
+void InvalidateStatusBarOnChange(EditorApplicationState& state) noexcept {
+    const std::vector<EditorConsoleEntry>& entries = state.sceneContext.Console().Entries();
+    const std::uint64_t sequence = entries.empty() ? 0U : entries.back().sequence;
+    const std::uint64_t count = static_cast<std::uint64_t>(entries.size());
+    const bool rendererInitialized = state.sceneViewport.RendererInitialized();
+    if (sequence == state.lastStatusConsoleEntrySequence && count == state.lastStatusConsoleEntryCount &&
+        rendererInitialized == state.lastStatusRendererInitialized) {
+        return;
+    }
+    state.lastStatusConsoleEntrySequence = sequence;
+    state.lastStatusConsoleEntryCount = count;
+    state.lastStatusRendererInitialized = rendererInitialized;
+    RECT client{};
+    if (state.window == nullptr || GetClientRect(state.window, &client) == 0) {
+        return;
+    }
+    const RECT bar{ client.left, std::max(client.top, client.bottom - state.metrics.statusBarHeight), client.right, client.bottom };
+    InvalidateRect(state.window, &bar, FALSE);
+}
+
+// A window too short for the default arrangement - a laptop screen - collapses the bottom drawer
+// to its tabs so the scene keeps its height; growing past the line opens it again. Only the
+// crossing counts, so Ctrl+Space decides in between.
+void UpdateDrawerForWindowHeight(EditorApplicationState& state) noexcept {
+    constexpr LONG kCompactWindowHeight = 820;
+    RECT client{};
+    if (state.window == nullptr || IsIconic(state.window) != 0 || GetClientRect(state.window, &client) == 0) {
+        return;
+    }
+    const bool compact = client.bottom - client.top < kCompactWindowHeight;
+    if (compact == state.compactWindow) {
+        return;
+    }
+    state.compactWindow = compact;
+    if (state.dockModel.Commands().SetDrawerCollapsed(compact)) {
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+    }
+}
+
+// The Agent panel: finds the agents the first time it is shown, moves what the agent wrote into
+// the conversation, and when a request ends shows the agent's work - the scene and the project's
+// assets read back from disk, unless you edited the scene meanwhile.
+void PumpAgentPanel(EditorApplicationState& state) {
+    EditorAgentPanelState& agent = state.sceneContext.AgentPanel();
+    const bool docked = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, state.window, state.window, state.dockModel, state.floatingWindows, state.metrics).has_value();
+    if (docked) {
+        agent.Prepare();
+    }
+    // The bar's dock and undock buttons: the conversation moves between the bar over the Scene
+    // View and the Agent tab of the bottom drawer, which comes forward or steps back.
+    switch (agent.TakeDockRequest()) {
+    case EditorAgentPanelState::DockRequest::Dock:
+        static_cast<void>(state.dockModel.Commands().SetDrawerCollapsed(false));
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+        agent.FocusInput(true);
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+        break;
+    case EditorAgentPanelState::DockRequest::Undock:
+        // The panel closes wherever it was docked; the bubble takes over, and docking brings it back.
+        for (const DockPanel& panel : state.dockModel.Queries().Panels()) {
+            if (panel.kind == DockPanelKind::Agent) {
+                static_cast<void>(state.dockModel.Commands().ClosePanel(panel.id));
+            }
+        }
+        agent.FocusInput(true);
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+        break;
+    case EditorAgentPanelState::DockRequest::None:
+        break;
+    }
+    bool projectChanged = false;
+    if (agent.Pump(projectChanged)) {
+        InvalidatePanelKind(state, DockPanelKind::Agent);
+        if (!docked) {
+            // The bar lives in an overlay the main window's paint places and repaints.
+            InvalidateRect(state.window, nullptr, FALSE);
+        }
+    }
+    // A change that lands during Play or while a prefab is open is shown once that ends.
+    static bool reloadPending = false;
+    reloadPending = reloadPending || projectChanged;
+    if (!reloadPending || state.playMode.IsPlaying() || state.sceneContext.InPrefabEditMode()) {
+        return;
+    }
+    reloadPending = false;
+    if (state.sceneContext.SceneDocumentDirty()) {
+        agent.Add(EditorAgentEntryKind::Info, "The scene has edits made while the agent worked, so it was not reloaded. Save or reopen it to see both.");
+        InvalidatePanelKind(state, DockPanelKind::Agent);
+        return;
+    }
+    // The scene from its file as one undoable step, with the selection and undo history kept, and
+    // the materials, textures and scripts the agent changed or added picked up too.
+    if (state.sceneContext.ReloadSceneAfterExternalChange()) {
+        agent.Add(EditorAgentEntryKind::Info, "Reloaded the scene and assets with the agent's changes (Ctrl+Z undoes them).");
+    }
+    state.sceneViewport.RequestPresent();
+    InvalidateRect(state.window, nullptr, FALSE);
+}
+
+// The "Used by" column of Project Files follows the scene a few times a second, and only while the
+// list view shows it outside play mode and drags: capturing the scene is not free.
+void RefreshAssetUsersForList(EditorApplicationState& state) {
+    if (state.sceneContext.AssetBrowser().ViewMode() != EditorAssetViewMode::List || state.playMode.IsPlaying() ||
+        state.sceneContext.Gizmo().IsDragging() || state.sceneContext.HasActiveViewportCameraNavigation()) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - state.lastAssetUsersRefresh < std::chrono::milliseconds{ 300 }) {
+        return;
+    }
+    state.lastAssetUsersRefresh = now;
+    if (state.sceneContext.RefreshAssetUsers()) {
+        InvalidatePanelKind(state, DockPanelKind::Assets);
+    }
+}
+
+// Whether a visible Scene View has Realtime on and may draw every frame. Only while the editor
+// is the application in front: behind another window it would spend the GPU on frames nobody
+// watches, so it pauses there and its counter falls back to IDLE.
+[[nodiscard]] bool SceneRealtimeActive(EditorApplicationState& state) {
+    DWORD foregroundProcess = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
+    if (foregroundProcess != GetCurrentProcessId() || state.window == nullptr || IsIconic(state.window) != 0) {
+        return false;
+    }
+    const auto realtimeIn = [&state](HWND host) {
+        if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0) {
+            return false;
+        }
+        const std::optional<EditorResolvedPanelContent> panel = EditorPanelContentResolver::ResolvePanel(
+            DockPanelKind::Scene, host, state.window, state.dockModel, state.floatingWindows, state.metrics);
+        return panel.has_value() && state.sceneContext.ViewportPreview(panel->panelId).Realtime();
+    };
+    if (realtimeIn(state.window)) {
+        return true;
+    }
+    for (HWND window : state.floatingWindows.Queries().Windows()) {
+        if (realtimeIn(window)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] bool PresentVisibleViewports(EditorApplicationState& state) {
     const bool refreshToolbar = ShouldRefreshSceneToolbars();
     const bool explicitPresentRequested = state.sceneViewport.PresentRequested();
@@ -590,7 +765,8 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     const bool thumbnailPresent =
         EditorMaterialThumbnailCache().HasPendingWork() ||
         EditorParticleThumbnailCache().HasPendingWork();
-    const bool continuousPresent = playPresent || materialPresent || particlePresent;
+    const bool realtimePresent = !playPresent && SceneRealtimeActive(state);
+    const bool continuousPresent = playPresent || materialPresent || particlePresent || realtimePresent;
     // The toolbar refresh only repaints cached counters. It must not manufacture a GPU frame:
     // doing so submitted every visible viewport exactly four times per second while idle.
     if (continuousPresent || thumbnailPresent) {
@@ -626,6 +802,7 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
             << " reason(explicit=" << (explicitPresentRequested ? 1 : 0)
             << ",toolbar=" << (refreshToolbar ? 1 : 0)
             << ",play=" << (playPresent ? 1 : 0)
+            << ",realtime=" << (realtimePresent ? 1 : 0)
             << ",material=" << (materialPresent ? 1 : 0)
             << ",thumbnail=" << (thumbnailPresent ? 1 : 0)
             << ",import=" << (importedItems > 0U ? 1 : 0)
@@ -640,6 +817,24 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     }
     if (mainPresented || floatingPresented) {
         state.sceneViewport.ClearPresentRequest();
+        // The cost of this present is the frame the profiler reports.
+        const ProfilerSelection& profilerSelection = state.sceneContext.EditorConfig().profiler;
+        EditorProfilerState& profiler = state.sceneContext.Profiler();
+        const kb::render::SceneRenderSubmitStats renderStats = state.sceneViewport.LastSceneSubmitStats();
+        profiler.AddOwnCost(state.sceneViewport.LastTextOverlayMilliseconds());
+        EditorProfilerSampler::Sample(profiler, profilerSelection, state.sceneContext.Scene(),
+            EditorProfilerFrame{ .presentMilliseconds = presentMs, .beginMilliseconds = beginMs, .mainMilliseconds = mainMs,
+                .floatingMilliseconds = floatMs, .endMilliseconds = endMs, .waitMilliseconds = state.sceneViewport.LastEndFrameMilliseconds(),
+                .gameTickMilliseconds = profiler.GameTick() },
+            &renderStats);
+        const auto sampled = std::chrono::steady_clock::now();
+        profiler.RefreshOverlay(profilerSelection, sampled);
+        // The Profiler panel follows the frames, ten times a second at most.
+        static std::chrono::steady_clock::time_point lastProfilerPanelRepaint{};
+        if (sampled - lastProfilerPanelRepaint >= std::chrono::milliseconds{ 100 }) {
+            lastProfilerPanelRepaint = sampled;
+            EditorWindowInvalidator::InvalidateDockPanel(state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Profiler);
+        }
     }
     if (scenePresented) {
         state.sceneContext.AcknowledgeSceneRenderSubmitted();
@@ -1176,6 +1371,7 @@ void TickVisualStress(EditorApplicationState& state) {
 }
 
 void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
+    state.sceneContext.PollLuaDebugger();
     // LIB-153: the editor is the host that owns the physical XInput devices, so it owns
     // the haptics actuator too. Function-local static: one process-wide backend whose
     // destructor (and the not-playing branch below) silences every motor - leaving Play
@@ -1203,13 +1399,14 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     }
     const auto tickStart = std::chrono::steady_clock::now();
     // Feed real device input to the runtime before systems tick (Input phase).
-    kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
     const auto pointerStart = std::chrono::steady_clock::now();
     ConfigurePlayModePointerViewport(state);
     const auto collectStart = std::chrono::steady_clock::now();
-    state.inputCollector.Collect(input.MutableDeviceState(), state.window);
+    state.inputCollector.Collect(state.sceneContext.Scene(), state.window);
     const auto runtimeStart = std::chrono::steady_clock::now();
+    state.sceneViewport.PrepareParticleScene(state.sceneContext.Scene());
     const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);
+    state.inputCollector.SynchronizeTextInput(state.sceneContext.Scene(), state.window);
     const auto runtimeEnd = std::chrono::steady_clock::now();
     if (VisualStressEnabled()) {
         StressFrameStages().sceneUpdateMs = std::chrono::duration<double, std::milli>(
@@ -1280,6 +1477,11 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (terrainStrokeChanged) {
         state.sceneViewport.RequestPresent();
     }
+    // A background terrain job (a new world, an erosion): its progress on screen, and its result when it is done.
+    if (EditorTerrainJobs::Poll(state.sceneContext)) {
+        state.sceneViewport.RequestPresent();
+        if (state.window != nullptr) InvalidateRect(state.window, nullptr, FALSE);
+    }
 
     bool navigationChanged = false;
     if (state.sceneContext.HasActiveViewportCameraNavigation()) {
@@ -1319,6 +1521,9 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (animationPreviewCameraChanged || animationPreviewPlaybackChanged) {
         state.sceneViewport.RequestPresent();
     }
+    state.sceneViewport.PrepareParticleScene(state.sceneContext.Scene());
+    if (const auto* preview = state.sceneContext.ParticleEditorPreviewScene())
+        state.sceneViewport.PrepareParticleScene(*preview);
     const bool particlePanelVisible = ParticleEditorPanelIsVisible(state);
     const bool particlePreviewChanged =
         particlePanelVisible && state.sceneContext.TickParticleEditorPreview(deltaSeconds);
@@ -1328,9 +1533,35 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
+    if (state.sceneContext.ConsumeGameplayGraphOpenRequest()) {
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::GameplayGraphEditor,DockArea::Center));
+        InvalidateRect(state.window,nullptr,FALSE);
+    }
+    if (auto* graph=state.sceneContext.GameplayGraphEditor(); graph && !graph->manualPreview && graph->Execute(std::min(deltaSeconds,0.25F))) {
+    const bool staticMeshEditorChanged = TickStaticMeshEditor(state, deltaSeconds);
+        EditorWindowInvalidator::InvalidateDockPanel(state.window,state.dockModel,state.floatingWindows,state.metrics,DockPanelKind::GameplayGraphEditor);
+    }
+    if (state.sceneContext.ConsumeBlendSpace2DEditorOpenRequest()) {
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::BlendSpace2DEditor,DockArea::Center));
+        InvalidateRect(state.window,nullptr,FALSE);
+    }
+    const bool timelinePreviewChanged = state.sceneContext.TickTimelineEditorPreview(deltaSeconds);
+    if (state.sceneContext.TickBlendSpace2DPreview(deltaSeconds)) {
+        state.sceneViewport.RequestPresent();
+        EditorWindowInvalidator::InvalidateDockPanel(state.window,state.dockModel,state.floatingWindows,state.metrics,DockPanelKind::BlendSpace2DEditor);
+    }
+    if (timelinePreviewChanged) {
+        state.sceneViewport.RequestPresent();
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::TimelineEditor);
+    }
     const bool audioMetersChanged = EditorAudioMixerRuntime::ShouldRefresh(state.sceneContext.Scene());
-    if (audioMetersChanged) EditorWindowInvalidator::InvalidateDockPanel(
-        state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Inspector);
+    if (audioMetersChanged) {
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Inspector);
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::AudioMixer);
+    }
     if (audioPreviewChanged) {
         EditorWindowInvalidator::InvalidateDockPanel(
             state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Assets);
@@ -1379,7 +1610,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const bool viewportsPresented = PresentVisibleViewports(state);
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
-        sceneParticlesChanged || scriptSaved ||
+        sceneParticlesChanged || scriptSaved || timelinePreviewChanged ||
         audioPreviewChanged || audioMetersChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
@@ -1526,14 +1757,19 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         if (stressEnabled) {
             StressFrameStages() = {};
         }
+        // No autosave while an agent works: it writes the same files, and the later writer would win.
         if (state.sceneContext.TickAutosave(
                 wallDeltaSeconds,
-                EditorEditCommandPolicy::CanExecute(state.sceneContext))) {
+                EditorEditCommandPolicy::CanExecute(state.sceneContext) && !state.sceneContext.AgentPanel().AnyRunning())) {
             InvalidateRect(state.window, nullptr, FALSE);
         }
         const auto playStart = stressEnabled ? std::chrono::steady_clock::now()
             : std::chrono::steady_clock::time_point{};
+        const auto gameTickStart = std::chrono::steady_clock::now();
         TickPlayMode(state, deltaSeconds);
+        state.sceneContext.Profiler().NoteGameTick(state.playMode.IsPlaying()
+            ? std::optional<double>{ std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gameTickStart).count() }
+            : std::nullopt);
         const double playMs = stressEnabled ? std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - playStart).count() : 0.0;
         static_cast<void>(TickPointerDragFrame(state));
@@ -1564,6 +1800,10 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 40.0);
         }
         nextEditorFrame = currentTick + editorFrameInterval;
+        InvalidateStatusBarOnChange(state);
+        UpdateDrawerForWindowHeight(state);
+        RefreshAssetUsersForList(state);
+        PumpAgentPanel(state);
 
         if (state.playMode.IsPaused()) {
             if (state.window != nullptr) {
@@ -1608,6 +1848,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 EditorAudioAssetPreview::HasActivePreview() ||
                 state.sceneContext.AssetImportInProgress() ||
                 state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
+                state.sceneContext.AgentPanel().AnyRunning() || state.sceneContext.AgentPanel().CheckingAccount() ||
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {

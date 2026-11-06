@@ -245,6 +245,12 @@ const ScriptRuntimeAssetPrepareResult& ScriptRuntimeSceneSystem::LastPrepareResu
     return lastPrepareResult_;
 }
 
+std::vector<ScriptUIDispatch> ScriptRuntimeSceneSystem::TakeUIDispatches() {
+    std::vector<ScriptUIDispatch> taken;
+    taken.swap(uiDispatches_);
+    return taken;
+}
+
 void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
     kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
     scene.Assets().Manager().PumpAsyncLoads();
@@ -550,24 +556,37 @@ void ScriptRuntimeSceneSystem::DispatchPendingTimelineMarkerEvents(
     for (const kb::scene::TimelineMarkerEvent& pending :
          scene.Timelines().DrainMarkerEvents()) {
         ScriptEvent event;
-        event.name = "OnTimelineMarker";
+        event.name = pending.animationEvent ? "OnAnimationEvent" :
+            (pending.eventName.empty() ? "OnTimelineMarker" : "OnTimelineEvent");
         event.target = pending.target;
         event.arguments.push_back(
             { "schemaMajor", ScriptValue{ pending.schemaMajor } });
         event.arguments.push_back(
             { "schemaMinor", ScriptValue{ pending.schemaMinor } });
-        event.arguments.push_back(
-            { "instance",
-              ScriptValue{
-                  pending.instanceId, ScriptValueType::Hash } });
-        event.arguments.push_back(
-            { "asset",
-              ScriptValue{ pending.assetId, ScriptValueType::Hash } });
-        event.arguments.push_back(
-            { "marker",
-              ScriptValue{ pending.markerId, ScriptValueType::Hash } });
-        event.arguments.push_back(
-            { "time", ScriptValue{ pending.timeSeconds } });
+        if (pending.animationEvent) {
+            event.arguments.push_back({"event", ScriptValue{pending.markerId, ScriptValueType::Hash}});
+            event.arguments.push_back({"clip", ScriptValue{pending.assetId, ScriptValueType::Hash}});
+            event.arguments.push_back({"layer", ScriptValue{std::string{"Timeline"}}});
+            event.arguments.push_back({"state", ScriptValue{std::string{"Clip"}}});
+            event.arguments.push_back({"normalizedTime", ScriptValue{pending.normalizedTime}});
+        } else {
+            event.arguments.push_back(
+                { "instance",
+                  ScriptValue{
+                      pending.instanceId, ScriptValueType::Hash } });
+            event.arguments.push_back(
+                { "asset",
+                  ScriptValue{ pending.assetId, ScriptValueType::Hash } });
+            event.arguments.push_back(
+                { "marker",
+                  ScriptValue{ pending.markerId, ScriptValueType::Hash } });
+            event.arguments.push_back(
+                { "time", ScriptValue{ pending.timeSeconds } });
+            if (!pending.eventName.empty()) {
+                event.arguments.push_back({ "name", ScriptValue{ pending.eventName } });
+                event.arguments.push_back({ "payload", ScriptValue{ pending.payload } });
+            }
+        }
         const ScriptEventDeliveryResult delivery =
             runtime_.Events().Emit(scene, event, pending.target);
         for (const std::string& error : delivery.errors) {
@@ -578,14 +597,18 @@ void ScriptRuntimeSceneSystem::DispatchPendingTimelineMarkerEvents(
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene, float deltaSeconds) {
-    const auto dispatch = [&](ScriptEvent event) {
+    const auto dispatch = [&](ScriptEvent event, kb::scene::SceneEntity widget) {
         const ScriptEventDeliveryResult delivery = runtime_.Events().Emit(
             scene, event, event.target, {}, ScriptEventBusAudience::ExcludeBehaviourBridges);
         for (const std::string& error : delivery.errors) {
             lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
         }
         event.observationAlreadyNotified = true;
-        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+        ScriptRuntimeExecutionResult dispatched = runtime_.DispatchEventAndDrain(scene, event, deltaSeconds);
+        if (uiDispatches_.size() >= 256U) uiDispatches_.erase(uiDispatches_.begin());
+        uiDispatches_.push_back(ScriptUIDispatch{ .name = event.name, .widget = widget, .target = event.target,
+            .answered = static_cast<std::uint32_t>(dispatched.executedBehaviours) });
+        MergeResult(lastResult_, std::move(dispatched));
     };
 
     const std::size_t maximumRounds = ScriptRuntimeDispatchOptions{}.maxEventDepth;
@@ -614,14 +637,14 @@ void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene, 
             const std::string action{ kb::scene::SceneUIEventName(pending) };
             event.arguments.push_back({ "action", ScriptValue{ action } });
             event.arguments.push_back({ "other", ScriptValue{ pending.other.Id(), ScriptValueType::Entity } });
-            dispatch(event);
+            dispatch(event, pending.entity);
 
             if (pending.type == kb::scene::SceneUIEventType::Clicked && !action.empty() && action != event.name) {
                 // The action goes to the selectable's event target when it names one.
                 event.name = action;
                 event.target = pending.actionTarget.IsValid() ? pending.actionTarget : pending.entity;
                 event.observationAlreadyNotified = false;
-                dispatch(std::move(event));
+                dispatch(std::move(event), pending.entity);
             }
         }
     }

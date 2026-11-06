@@ -14,7 +14,7 @@ enum class ParticleGpuFallbackReason : std::uint8_t {
     Output, LocalAlignment, Flipbook, ParticleCapacity, MeshAssets, LocalTrail,
     TrailHistory, LocalPlane, TrailCollision, ContactDeath, TrailField,
     RepeatedNoise, RepeatedAxisRotation, RepeatedAttraction, TorusSwirl, Separation,
-    CollisionEvent, WhileAliveEvent, Beam, AbsolutePosition, MeshSpawn, EventMotion,
+    CollisionEvent, WhileAliveEvent, Beam, AbsolutePosition, MeshSpawn, EventMotion, GeometryCollision,
 };
 
 [[nodiscard]] constexpr std::string_view ParticleGpuFallbackReasonName(ParticleGpuFallbackReason reason) noexcept {
@@ -46,6 +46,7 @@ enum class ParticleGpuFallbackReason : std::uint8_t {
     case ParticleGpuFallbackReason::Beam: return "beam";
     case ParticleGpuFallbackReason::AbsolutePosition: return "absolute-position";
     case ParticleGpuFallbackReason::MeshSpawn: return "mesh-spawn";
+    case ParticleGpuFallbackReason::GeometryCollision: return "geometry-collision";
     case ParticleGpuFallbackReason::EventMotion: return "event-motion";
     }
     return "unknown";

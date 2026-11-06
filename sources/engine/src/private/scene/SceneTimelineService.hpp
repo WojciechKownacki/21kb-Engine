@@ -15,6 +15,8 @@ public:
         const Scene& scene, std::uint64_t instance) noexcept;
     [[nodiscard]] static bool Play(
         Scene& scene, std::uint64_t instance) noexcept;
+    [[nodiscard]] static bool SetPlayback(
+        Scene& scene, std::uint64_t instance, float rate, bool loop) noexcept;
     [[nodiscard]] static bool Pause(
         Scene& scene, std::uint64_t instance) noexcept;
     [[nodiscard]] static bool IsPlaying(

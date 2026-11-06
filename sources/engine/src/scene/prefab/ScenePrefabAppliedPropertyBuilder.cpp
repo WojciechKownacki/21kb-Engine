@@ -5,9 +5,12 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
+#include <algorithm>
+#include <span>
 #include <sstream>
 #include <string>
 
@@ -256,6 +259,18 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = std::to_string(meshRenderer->layer);
             return true;
         }
+        if (propertyPath == "meshRenderer.lodBias") {
+            property.value = std::to_string(meshRenderer->lodBias);
+            return true;
+        }
+        if (propertyPath == "meshRenderer.lodEnabled") {
+            property.value = ToString(meshRenderer->lodEnabled);
+            return true;
+        }
+        if (propertyPath == "meshRenderer.mobility") {
+            property.value = std::to_string(static_cast<int>(meshRenderer->mobility));
+            return true;
+        }
     }
     if (StartsWith(propertyPath, "light")) {
         const LightComponent* light = components.Lights().TryGet(entity);
@@ -332,6 +347,30 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "light.mobility") {
             property.value = std::to_string(static_cast<int>(light->mobility));
+            return true;
+        }
+        if (propertyPath == "light.shadowBias") {
+            property.value = std::to_string(light->shadowBias);
+            return true;
+        }
+        if (propertyPath == "light.shadowNormalBias") {
+            property.value = std::to_string(light->shadowNormalBias);
+            return true;
+        }
+        if (propertyPath == "light.shadowFilter") {
+            property.value = std::to_string(static_cast<int>(light->shadowFilter));
+            return true;
+        }
+        if (propertyPath == "light.shadowQuality") {
+            property.value = std::to_string(static_cast<int>(light->shadowQuality));
+            return true;
+        }
+        if (propertyPath == "light.shadowCascadeCount") {
+            property.value = std::to_string(light->shadowCascadeCount);
+            return true;
+        }
+        if (propertyPath == "light.shadowCascadeDistribution") {
+            property.value = std::to_string(light->shadowCascadeDistribution);
             return true;
         }
         if (propertyPath == "light.layerMask") {
@@ -461,6 +500,13 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (behaviour == nullptr) {
             return false;
+        }
+        if (StartsWith(propertyPath, "behaviour.variable.")) {
+            const std::string_view name = propertyPath.substr(std::string_view{ "behaviour.variable." }.size());
+            const std::span<const BehaviourVariableOverride> overrides = scene.Entities().BehaviourVariableOverrides(entity);
+            const auto match = std::ranges::find_if(overrides, [name](const BehaviourVariableOverride& entry) { return entry.name == name; });
+            property.value = match == overrides.end() ? "default" : kb::script::FormatTypedValueText(match->value);
+            return true;
         }
         if (propertyPath == "behaviour.behaviourAssetId") {
             property.value = std::to_string(behaviour->behaviourAssetId);

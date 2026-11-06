@@ -62,9 +62,21 @@ bool ScenePrefabAssetLightParser::Parse(const ScenePrefabAssetFieldMap& fields, 
         || !ParseOptionalField(fields, "light.layerMask", light.layerMask)
         || !ParseOptionalField(fields, "light.sourceRadius", light.sourceRadius)
         || !ParseOptionalField(fields, "light.shadowStrength", light.shadowStrength)
-        || !ParseOptionalField(fields, "light.shadowDistance", light.shadowDistance)) {
+        || !ParseOptionalField(fields, "light.shadowDistance", light.shadowDistance)
+        || !ParseOptionalField(fields, "light.shadowBias", light.shadowBias)
+        || !ParseOptionalField(fields, "light.shadowNormalBias", light.shadowNormalBias)
+        || !ParseOptionalField(fields, "light.shadowCascadeCount", light.shadowCascadeCount)
+        || !ParseOptionalField(fields, "light.shadowCascadeDistribution", light.shadowCascadeDistribution)) {
         return false;
     }
+    std::uint32_t shadowFilter = static_cast<std::uint32_t>(light.shadowFilter);
+    std::uint32_t shadowQuality = static_cast<std::uint32_t>(light.shadowQuality);
+    if (!ParseOptionalField(fields, "light.shadowFilter", shadowFilter) || shadowFilter > static_cast<std::uint32_t>(LightShadowFilter::Pcss) ||
+        !ParseOptionalField(fields, "light.shadowQuality", shadowQuality) || shadowQuality > static_cast<std::uint32_t>(LightShadowQuality::Ultra)) {
+        return false;
+    }
+    light.shadowFilter = static_cast<LightShadowFilter>(shadowFilter);
+    light.shadowQuality = static_cast<LightShadowQuality>(shadowQuality);
     std::uint32_t mobility = static_cast<std::uint32_t>(light.mobility);
     if (!ParseOptionalField(fields, "light.mobility", mobility) ||
         mobility > static_cast<std::uint32_t>(LightMobility::Static)) {

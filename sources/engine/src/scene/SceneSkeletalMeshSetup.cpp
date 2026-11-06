@@ -19,10 +19,11 @@ SkeletalMeshSetupResult SceneSkeletalMeshSetup::Attach(Scene& scene, SceneEntity
     if (metadata == nullptr || metadata->type != kSkeletalMeshAssetType) {
         return { .error = "the asset is not a Skeletal Mesh (import a rigged model with its skeleton first)" };
     }
-    std::string error;
-    const std::optional<SkeletalMeshAssetBinding> binding = SkeletalMeshAssetIO::LoadBinding(metadata->physicalPath, &error);
-    if (!binding || binding->skeletonAssetId == 0U || binding->skeletonCompatibilitySignature == 0U) {
-        return { .error = "the Skeletal Mesh names no skeleton" + (error.empty() ? std::string{} : ": " + error) };
+    const auto loaded = scene.Assets().Manager().Load<SkeletalMeshAsset>(skeletalMeshAssetId);
+    if (!loaded.IsLoaded()) return { .error = "the Skeletal Mesh could not be loaded: " + scene.Assets().Manager().LastError() };
+    const auto binding = loaded.Shared();
+    if (binding->skeletonAssetId == 0U || binding->skeletonCompatibilitySignature == 0U) {
+        return { .error = "the Skeletal Mesh names no skeleton" };
     }
     if (scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ binding->skeletonAssetId }) == nullptr) {
         return { .error = "the Skeletal Mesh's skeleton is missing from the project (re-import the model)" };

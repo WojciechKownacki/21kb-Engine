@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/resources/RenderHandles.hpp"
+#include "kb/render/resources/RenderUploadMemory.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/resources/detail/RenderResourceSlotPool.hpp"
 
@@ -10,7 +11,20 @@
 
 namespace kb::render {
 
+// Logical GPU payload estimates owned by this registry, including its deferred
+// destruction queue. Excludes driver padding, staging, shader programs and
+// framebuffer/palette allocations owned elsewhere. Not measured VRAM residency.
+struct RenderResourceMemoryStats {
+    std::uint64_t meshBytes = 0U, textureBytes = 0U;
+    std::uint64_t pendingMeshBytes = 0U, pendingTextureBytes = 0U;
+    std::uint64_t peakRetainedBytes = 0U, allocatedBytes = 0U, releasedBytes = 0U;
+    [[nodiscard]] std::uint64_t RetainedBytes() const noexcept {
+        return meshBytes + textureBytes + pendingMeshBytes + pendingTextureBytes;
+    }
+};
+
 struct RenderResourceRegistryStats {
+    RenderResourceMemoryStats memory{};
     std::uint64_t frameNumber = 0;
     std::uint32_t meshCount = 0;
     std::uint32_t materialCount = 0;
@@ -60,6 +74,10 @@ public:
         std::uint16_t y,
         std::uint16_t width,
         std::uint16_t height);
+    // Publish bounded, immutable CPU triangles for GI when the render mesh has
+    // no retained copy. Dynamic vertex uploads invalidate this proxy; republish
+    // the updated geometry afterwards. Two empty arrays clear it explicitly.
+    [[nodiscard]] bool SetMeshProxyGeometry(RenderMeshHandle handle, const RenderMeshProxyGeometry& geometry);
     void DestroyMesh(RenderMeshHandle handle) noexcept;
 
     [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc);
@@ -75,6 +93,15 @@ public:
     [[nodiscard]] const RenderTextureResource* FindTexture(RenderTextureHandle handle) const noexcept;
     [[nodiscard]] bool ContainsTexture(RenderTextureHandle handle) const noexcept;
     void DestroyTexture(RenderTextureHandle handle) noexcept;
+
+    // Includes resources queued for deferred destruction, until their release is submitted.
+    [[nodiscard]] bool RetainsMesh(RenderMeshHandle handle) const noexcept { return meshes_.Retains(handle); }
+    [[nodiscard]] bool RetainsTexture(RenderTextureHandle handle) const noexcept { return textures_.Retains(handle); }
+
+    [[nodiscard]] const bgfx::Memory* CopyUploadMemory(const void* data, std::uint32_t size) {
+        return uploads_.Copy(data, size);
+    }
+    [[nodiscard]] std::uint64_t PendingUploadBytes() const noexcept { return uploads_.PendingBytes(); }
 
     void Reserve(const RenderResourceRegistryReserveDesc& desc);
     void TickFrame() noexcept;
@@ -103,7 +130,10 @@ private:
     detail::RenderResourceSlotPool<RenderMeshResource> meshes_;
     detail::RenderResourceSlotPool<RenderMaterialResource> materials_;
     detail::RenderResourceSlotPool<RenderTextureResource> textures_;
+    RenderUploadMemory uploads_;
     std::vector<DeferredDestroyEntry> deferredDestroy_;
+    RenderResourceMemoryStats memory_{};
+    void ObserveAllocation(std::uint64_t bytes) noexcept;
     std::uint64_t frameNumber_ = 0;
     std::uint64_t nextResourceVersion_ = 1;
 };

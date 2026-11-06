@@ -264,6 +264,7 @@ bool IntersectRayCollider(
         outNormal = Rotate(transform.worldRotation, outNormal);
         return true;
     case ColliderShape::Mesh:
+    case ColliderShape::Terrain:
         return false;
     }
     return false;

@@ -68,6 +68,9 @@ void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) 
     if (components.collider.has_value() && components.collider->shape == ColliderShape::Mesh) {
         sink(components.collider->meshAssetId, std::string_view{"collisionMesh"}, nullptr);
     }
+    if (components.collider.has_value() && components.collider->shape == ColliderShape::Terrain) {
+        sink(components.collider->meshAssetId, std::string_view{"terrain"}, nullptr);
+    }
     if (components.tilemap.has_value()) sink(components.tilemap->mapAssetId, "tilemap", nullptr);
     if (components.sprite2D.has_value()) {
         sink(components.sprite2D->imageAssetId, std::string_view{ "sprite2dImage" }, nullptr);
@@ -100,6 +103,11 @@ void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) 
     }
     if (components.surfaceCast.has_value()) {
         sink(components.surfaceCast->materialAssetId, std::string_view{ "surfaceCastMaterial" }, nullptr);
+    }
+    if (components.river.has_value()) {
+        sink(components.river->materialAssetId, std::string_view{ "riverMaterial" }, nullptr);
+        sink(components.river->waterfallMaterialAssetId, std::string_view{ "riverWaterfallMaterial" }, nullptr);
+        sink(components.river->mistEffectAssetId, std::string_view{ "riverMistEffect" }, nullptr);
     }
     if (components.spaceStroke.has_value()) {
         sink(components.spaceStroke->meshAssetId, std::string_view{ "spaceStrokeMesh" }, nullptr);

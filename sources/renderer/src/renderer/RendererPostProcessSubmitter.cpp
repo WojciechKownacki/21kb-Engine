@@ -54,7 +54,11 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
     };
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     const bool effectiveJitter = desc.jitter[0] != 0.0F || desc.jitter[1] != 0.0F;
-    const bgfx::TextureHandle sceneDepthTexture = desc.sceneDesc.SceneOverlayDepthTexture();
+    // GBuffer depth precedes opaque forward composition (advanced/baked surfaces).
+    // The final single-sample scene depth contains both deferred and forward depth writes.
+    const bgfx::TextureHandle sceneDepthTexture = postProcessSettings.depthOfFieldEnabled
+        ? (desc.sceneDesc.target.msaaSamples == 0U ? desc.sceneDesc.target.depthTexture : bgfx::TextureHandle{bgfx::kInvalidHandle})
+        : desc.sceneDesc.SceneOverlayDepthTexture();
 
     {
         std::ostringstream message;
@@ -125,6 +129,8 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
                 0.0F,
                 0.0F,
             },
+            .viewDepthPlane = desc.sceneCamera == nullptr ? std::array<float,4>{0,0,1,0} : std::array<float,4>{
+                desc.sceneCamera->view[2], desc.sceneCamera->view[6], desc.sceneCamera->view[10], desc.sceneCamera->view[14]},
             .historyValid = temporalHistoryValid,
         },
     });

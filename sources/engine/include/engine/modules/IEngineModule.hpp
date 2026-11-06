@@ -20,6 +20,11 @@ class EngineModuleContext;
 //   OnSceneDetach when that scene is torn down
 //   OnDisable     before unload
 //   OnUnload      once, in reverse load order
+// If OnLoad/OnEnable throws, the host calls OnUnload/OnDisable for that
+// partially started step too, then rolls back earlier steps in reverse order.
+// Cleanup must tolerate partial initialization and release owned registrations
+// and callbacks before returning. It must not throw; cleanup failures are reported
+// and do not prevent the host from rolling back the remaining modules.
 // Default implementations are no-ops so a module only overrides what it needs.
 class IEngineModule {
 public:

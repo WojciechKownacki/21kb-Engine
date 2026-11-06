@@ -1,0 +1,383 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "SharedTheme",
+      "template": "Empty"
+    },
+    {
+      "op": "create_asset",
+      "id": "CreatedTheme",
+      "type": "ui_theme",
+      "folder": "/Game/UI"
+    },
+    {
+      "op": "theme_field",
+      "asset": "CreatedTheme",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "text": "26"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/UI/Shared.kbtheme",
+      "content": "KB_UI_THEME 1\n1\n\"kb21.ui.text\" \"fontSize\" 3 24\n1\n\"large\"\n1\n\"kb21.ui.text\" \"fontSize\" 3 36\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "create_entity",
+      "id": "canvas",
+      "name": "Canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "canvas",
+      "component": "preset:Canvas"
+    },
+    {
+      "op": "create_entity",
+      "id": "First",
+      "name": "First"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "First",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "First",
+      "component": "preset:Text"
+    },
+    {
+      "op": "set_property",
+      "entity": "First",
+      "component": "kb21.ui.rect-transform",
+      "property": "themeAssetId",
+      "value": "/Game/UI/Shared.kbtheme"
+    },
+    {
+      "op": "create_entity",
+      "id": "Second",
+      "name": "Second"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "Second",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "Second",
+      "component": "preset:Text"
+    },
+    {
+      "op": "set_property",
+      "entity": "Second",
+      "component": "kb21.ui.rect-transform",
+      "property": "themeAssetId",
+      "value": "/Game/UI/Shared.kbtheme"
+    },
+    {
+      "op": "create_entity",
+      "id": "Local",
+      "name": "Local"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "Local",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "Local",
+      "component": "preset:Text"
+    },
+    {
+      "op": "set_property",
+      "entity": "Local",
+      "component": "kb21.ui.rect-transform",
+      "property": "themeAssetId",
+      "value": "/Game/UI/Shared.kbtheme"
+    },
+    {
+      "op": "set_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 24
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 24
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "theme_field",
+      "asset": "/Game/UI/Shared.kbtheme",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "text": "48"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "shared-theme-editor",
+      "width": 900,
+      "height": 700
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 24
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 24
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "set_property",
+      "entity": "First",
+      "component": "kb21.ui.rect-transform",
+      "property": "themeVariant",
+      "value": "large"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 36
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "theme_field",
+      "asset": "/Game/UI/Shared.kbtheme",
+      "variant": "large",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "text": "40"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 40
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 36
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 40
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/SharedTheme.21kbscene"
+    },
+    {
+      "op": "reload_scene"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 40
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 3,
+      "dt": 0.016666666666666666
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "First",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 40
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Second",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48
+    },
+    {
+      "op": "assert_resolved_ui_property",
+      "entity": "Local",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 30
+    }
+  ]
+}

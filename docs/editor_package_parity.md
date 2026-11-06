@@ -3,6 +3,10 @@
 `kb_editor_scene3d_parity_packaged` checks that a 3D scene drawn by the editor's Play view and by the packaged player looks the
 same. It is one representative scene, not a promise for every scene or every graphics backend (see Limits).
 
+`kb_editor_native_image_regression` extends that fixture with scripted cube motion, three capture times and reviewed images
+for each locally supported native backend. See [Native image regression](renderer_image_regression.md) for execution,
+reference review, artifacts and package isolation.
+
 ## What it does
 
 1. The editor runs `sources/editor/tests/Scene3DParityScenario.json` headless: it builds a scene (a sun with shadows, a point light, a
@@ -34,5 +38,5 @@ The measured difference at frame 240 is a mean of 0.007 with 0.01% of pixels ove
 - Animation: the scene has no animated mesh (the editor scenario has no skeletal fixture); a skinned character is not compared.
 - The terrain is authored with the Terrain Editor plugin, which is switched off before the cook (it is an editor plugin, and the
   cooker asks for a runtime module of every plugin that is on); the terrain asset itself is cooked and drawn.
-- The particle effect is the default effect; its motion is time-driven, so it is the only part of the picture allowed to differ.
+- The particle effect is the default effect. Comparison limits cover the entire image; no particle region is masked.
 - It compares pictures, not performance or memory.

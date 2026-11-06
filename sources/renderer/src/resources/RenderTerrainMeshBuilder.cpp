@@ -1,5 +1,7 @@
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 
+#include "resources/ForEachParallel.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -7,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,6 +40,10 @@ namespace {
     }
     return false;
 }
+
+// A layer whose weight stays under this (3% of the surface) in a whole chunk is not drawn there: the tail of a soft
+// brush would otherwise cost a pass over every chunk it brushes, for a difference no one can see.
+constexpr std::uint8_t kVisibleLayerWeight = 8U;
 
 [[nodiscard]] bool TerrainChunkLayerHasWeight(
     const kb::assets::TerrainAsset& terrain,
@@ -67,7 +75,7 @@ namespace {
         for (std::uint32_t x = minX; x <= maxX; ++x) {
             const std::size_t offset =
                 (static_cast<std::size_t>(y) * terrain.layerWeightWidth + x) * 4U + layer;
-            if (terrain.layerWeights[offset] != 0U) return true;
+            if (terrain.layerWeights[offset] >= kVisibleLayerWeight) return true;
         }
     }
     return false;
@@ -107,24 +115,6 @@ namespace {
     };
 }
 
-void BuildLodTable(RenderMeshAssetData& mesh) {
-    mesh.lods.clear();
-    std::size_t firstSection = 0U;
-    while (firstSection < mesh.sections.size()) {
-        const std::uint8_t level = mesh.sections[firstSection].lodLevel;
-        std::size_t endSection = firstSection + 1U;
-        while (endSection < mesh.sections.size() && mesh.sections[endSection].lodLevel == level) ++endSection;
-        mesh.lods.push_back(RenderMeshLodDesc{
-            .firstSection = static_cast<std::uint32_t>(firstSection),
-            .sectionCount = static_cast<std::uint32_t>(endSection - firstSection),
-            .firstMeshlet = static_cast<std::uint32_t>(firstSection),
-            .meshletCount = static_cast<std::uint32_t>(endSection - firstSection),
-            .minScreenCoverage = level == 0U ? 0.18F : (level == 1U ? 0.055F : (level == 2U ? 0.015F : 0.0F)),
-        });
-        firstSection = endSection;
-    }
-}
-
 [[nodiscard]] std::uint64_t TerrainTopologyKey(const kb::assets::TerrainAsset& terrain) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
     const auto append = [&hash](std::uint64_t value) noexcept {
@@ -135,6 +125,7 @@ void BuildLodTable(RenderMeshAssetData& mesh) {
     append(terrain.height);
     append(terrain.chunkQuads);
     append(terrain.lodCount);
+    append(std::bit_cast<std::uint32_t>(terrain.lodPixelError));
     append(std::bit_cast<std::uint32_t>(terrain.worldSizeX));
     append(std::bit_cast<std::uint32_t>(terrain.worldSizeZ));
     append(terrain.materialLayers.size());
@@ -183,90 +174,427 @@ void ExpandBounds(RenderBoundsSphere& bounds, const RenderStaticMeshVertexP3N3T4
     };
 }
 
+constexpr std::uint32_t kTileCells = 8U;
+
+// Chunks of a terrain mesh. Every chunk draws the part of the shared grid inside it at each level of detail; a level
+// that steps over 2^level quads has a skirt, a wall hung below the border of the chunk, that hides the gap to a
+// neighbour drawn at another level. The vertices of the skirts follow the grid in the vertex buffer, one run per
+// chunk with a vertex for every full-resolution vertex of its border.
+struct ChunkLayout {
+    std::uint32_t quadsX = 0U;
+    std::uint32_t quadsZ = 0U;
+    std::uint32_t chunkQuads = 0U;
+    std::uint32_t countX = 0U;
+    std::uint32_t countZ = 0U;
+    std::uint32_t lodCount = 0U;
+    std::uint32_t ringStride = 0U;
+    std::uint32_t gridVertices = 0U;
+    float cellSize = 0.0F;
+    [[nodiscard]] std::uint32_t Count() const noexcept { return countX * countZ; }
+};
+
+[[nodiscard]] ChunkLayout MakeChunkLayout(const kb::assets::TerrainAsset& terrain) noexcept {
+    ChunkLayout layout{};
+    layout.quadsX = terrain.width - 1U;
+    layout.quadsZ = terrain.height - 1U;
+    layout.chunkQuads = terrain.chunkQuads;
+    layout.countX = (layout.quadsX + terrain.chunkQuads - 1U) / terrain.chunkQuads;
+    layout.countZ = (layout.quadsZ + terrain.chunkQuads - 1U) / terrain.chunkQuads;
+    // A level steps over 2^level quads; the smallest chunk must hold at least one cell of the coarsest level.
+    const std::uint32_t smallestExtent = std::min({ terrain.chunkQuads, layout.quadsX, layout.quadsZ });
+    layout.lodCount = std::min(terrain.lodCount, static_cast<std::uint32_t>(std::bit_width(smallestExtent)));
+    layout.ringStride = 4U * terrain.chunkQuads;
+    layout.gridVertices = terrain.width * terrain.height;
+    layout.cellSize = std::min(
+        terrain.worldSizeX / static_cast<float>(layout.quadsX), terrain.worldSizeZ / static_cast<float>(layout.quadsZ));
+    return layout;
+}
+
+[[nodiscard]] std::size_t TotalVertexCount(const ChunkLayout& layout) noexcept {
+    return static_cast<std::size_t>(layout.gridVertices) + static_cast<std::size_t>(layout.Count()) * layout.ringStride;
+}
+
+// Vertex ranges of a chunk: x0..x1 and z0..z1 are vertex coordinates, so neighbouring chunks share their border.
+struct ChunkRange {
+    std::uint32_t x0 = 0U;
+    std::uint32_t x1 = 0U;
+    std::uint32_t z0 = 0U;
+    std::uint32_t z1 = 0U;
+    [[nodiscard]] std::uint32_t Width() const noexcept { return x1 - x0; }
+    [[nodiscard]] std::uint32_t Depth() const noexcept { return z1 - z0; }
+    [[nodiscard]] std::uint32_t Perimeter() const noexcept { return 2U * (Width() + Depth()); }
+};
+
+[[nodiscard]] ChunkRange RangeOfChunk(const ChunkLayout& layout, std::uint32_t chunk) noexcept {
+    const std::uint32_t chunkX = chunk % layout.countX;
+    const std::uint32_t chunkZ = chunk / layout.countX;
+    return ChunkRange{
+        .x0 = chunkX * layout.chunkQuads,
+        .x1 = std::min((chunkX + 1U) * layout.chunkQuads, layout.quadsX),
+        .z0 = chunkZ * layout.chunkQuads,
+        .z1 = std::min((chunkZ + 1U) * layout.chunkQuads, layout.quadsZ),
+    };
+}
+
+// The way round the chunk: its south edge towards +x, the east edge towards +z, the north edge towards -x and the
+// west edge towards -z. A skirt segment between two of its vertices faces away from the chunk.
+[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> PerimeterVertex(const ChunkRange& range, std::uint32_t position) noexcept {
+    const std::uint32_t width = range.Width();
+    const std::uint32_t depth = range.Depth();
+    if (position < width) return { range.x0 + position, range.z0 };
+    position -= width;
+    if (position < depth) return { range.x1, range.z0 + position };
+    position -= depth;
+    if (position < width) return { range.x1 - position, range.z1 };
+    position -= width;
+    return { range.x0, range.z1 - position };
+}
+
+// A side of the chunk has a skirt only where another chunk lies beyond it.
+struct SkirtSides {
+    bool south = false;
+    bool east = false;
+    bool north = false;
+    bool west = false;
+};
+
+[[nodiscard]] SkirtSides SidesWithNeighbour(const ChunkLayout& layout, std::uint32_t chunk) noexcept {
+    const std::uint32_t chunkX = chunk % layout.countX;
+    const std::uint32_t chunkZ = chunk / layout.countX;
+    return SkirtSides{
+        .south = chunkZ > 0U,
+        .east = chunkX + 1U < layout.countX,
+        .north = chunkZ + 1U < layout.countZ,
+        .west = chunkX > 0U,
+    };
+}
+
+// How far one level of a chunk strays from the full-resolution surface, over every vertex of the chunk and over its
+// border alone (the border decides how far a skirt has to hang).
+struct LevelError {
+    float all = 0.0F;
+    float border = 0.0F;
+};
+
+[[nodiscard]] LevelError MeasureLevelError(
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkRange& range,
+    std::uint32_t step) noexcept {
+    LevelError error{};
+    const std::uint32_t cellsX = range.Width() / step;
+    const std::uint32_t cellsZ = range.Depth() / step;
+    const float inverseStep = 1.0F / static_cast<float>(step);
+    for (std::uint32_t z = range.z0; z <= range.z1; ++z) {
+        const std::uint32_t cellZ = std::min((z - range.z0) / step, cellsZ - 1U);
+        const std::uint32_t cellZ0 = range.z0 + cellZ * step;
+        const float v = static_cast<float>(z - cellZ0) * inverseStep;
+        for (std::uint32_t x = range.x0; x <= range.x1; ++x) {
+            const std::uint32_t cellX = std::min((x - range.x0) / step, cellsX - 1U);
+            const std::uint32_t cellX0 = range.x0 + cellX * step;
+            const float u = static_cast<float>(x - cellX0) * inverseStep;
+            const float a = terrain.heights[VertexIndex(terrain, cellX0, cellZ0)];
+            const float b = terrain.heights[VertexIndex(terrain, cellX0 + step, cellZ0)];
+            const float c = terrain.heights[VertexIndex(terrain, cellX0, cellZ0 + step)];
+            const float d = terrain.heights[VertexIndex(terrain, cellX0 + step, cellZ0 + step)];
+            // The cell is split along b-c, as the triangles of the mesh are.
+            const float level = u + v <= 1.0F
+                ? a + u * (b - a) + v * (c - a)
+                : d + (1.0F - u) * (c - d) + (1.0F - v) * (b - d);
+            const float distance = std::abs(terrain.heights[VertexIndex(terrain, x, z)] - level);
+            error.all = std::max(error.all, distance);
+            if (x == range.x0 || x == range.x1 || z == range.z0 || z == range.z1) error.border = std::max(error.border, distance);
+        }
+    }
+    return error;
+}
+
+struct ChunkErrors {
+    std::array<float, 8U> level{};
+    float border = 0.0F;
+};
+
+// The errors of every level of one chunk. They never decrease with the level, so a chunk that looks right at a
+// coarse level also looks right at a finer one.
+[[nodiscard]] ChunkErrors MeasureChunkErrors(
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkLayout& layout,
+    std::uint32_t chunk) noexcept {
+    ChunkErrors errors{};
+    const ChunkRange range = RangeOfChunk(layout, chunk);
+    for (std::uint32_t lod = 1U; lod < layout.lodCount; ++lod) {
+        const LevelError measured = MeasureLevelError(terrain, range, 1U << lod);
+        errors.level[lod] = std::max(errors.level[lod - 1U], measured.all);
+        errors.border = std::max(errors.border, measured.border);
+    }
+    return errors;
+}
+
+void StoreChunkErrors(RenderTerrainChunkGrid& grid, std::uint32_t chunk, const ChunkErrors& errors) noexcept {
+    for (std::uint32_t lod = 0U; lod < grid.lodCount; ++lod) grid.lodError[static_cast<std::size_t>(chunk) * grid.lodCount + lod] = errors.level[lod];
+    grid.borderError[chunk] = errors.border;
+}
+
+// Two chunks at different levels part, at their shared border, by at most the sum of the errors of the two borders.
+[[nodiscard]] float SkirtDepthOfChunk(
+    const ChunkLayout& layout,
+    const RenderTerrainChunkGrid& grid,
+    std::uint32_t chunk) noexcept {
+    const std::uint32_t chunkX = chunk % layout.countX;
+    const std::uint32_t chunkZ = chunk / layout.countX;
+    float neighbour = 0.0F;
+    if (chunkX > 0U) neighbour = std::max(neighbour, grid.borderError[chunk - 1U]);
+    if (chunkX + 1U < layout.countX) neighbour = std::max(neighbour, grid.borderError[chunk + 1U]);
+    if (chunkZ > 0U) neighbour = std::max(neighbour, grid.borderError[chunk - layout.countX]);
+    if (chunkZ + 1U < layout.countZ) neighbour = std::max(neighbour, grid.borderError[chunk + layout.countX]);
+    const float depth = grid.borderError[chunk] + neighbour;
+    // A hair more than the sum, as the heights are floats; and never less than half a cell, so that even where the
+    // two borders agree the wall is there for the pixels the rasteriser leaves between triangles that meet in a T.
+    return std::max(depth + layout.cellSize * 0.001F, layout.cellSize * 0.5F);
+}
+
+// The skirt vertices of one chunk: a copy of every vertex of its border, hung `depth` below it.
+template <typename Vertex>
+void WriteChunkRing(
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkLayout& layout,
+    std::uint32_t chunk,
+    float depth,
+    Vertex* vertices) noexcept {
+    const ChunkRange range = RangeOfChunk(layout, chunk);
+    Vertex* ring = vertices + layout.gridVertices + static_cast<std::size_t>(chunk) * layout.ringStride;
+    const std::uint32_t length = range.Perimeter();
+    for (std::uint32_t position = 0U; position < length; ++position) {
+        const auto [x, z] = PerimeterVertex(range, position);
+        Vertex vertex = vertices[VertexIndex(terrain, x, z)];
+        vertex.y -= depth;
+        ring[position] = vertex;
+    }
+}
+
+// Calls visit(position, next, topA, topB) for every segment of the skirt of a chunk at the level whose cells span `step`
+// quads: its place on the way round the chunk and the grid vertices of its top. A segment beside a hole has no
+// skirt: nothing is there to hide a gap behind.
+template <typename Visit>
+void ForEachSkirtSegment(
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkLayout& layout,
+    std::uint32_t chunk,
+    std::uint32_t step,
+    Visit&& visit) noexcept {
+    const ChunkRange range = RangeOfChunk(layout, chunk);
+    const SkirtSides sides = SidesWithNeighbour(layout, chunk);
+    const std::uint32_t width = range.Width();
+    const std::uint32_t depth = range.Depth();
+    const std::uint32_t length = range.Perimeter();
+    const std::array<std::array<std::uint32_t, 3U>, 4U> runs{ {
+        { sides.south ? 1U : 0U, 0U, width },
+        { sides.east ? 1U : 0U, width, depth },
+        { sides.north ? 1U : 0U, width + depth, width },
+        { sides.west ? 1U : 0U, 2U * width + depth, depth },
+    } };
+    for (const auto& run : runs) {
+        if (run[0] == 0U) continue;
+        for (std::uint32_t position = run[1]; position < run[1] + run[2]; position += step) {
+            const std::uint32_t next = position + step == length ? 0U : position + step;
+            const auto [xa, za] = PerimeterVertex(range, position);
+            const auto [xb, zb] = PerimeterVertex(range, next);
+            // The cell inside the chunk that the segment is the edge of.
+            const bool alongX = za == zb;
+            const std::uint32_t cellX = alongX ? std::min(xa, xb) : (xa == range.x0 ? range.x0 : xa - step);
+            const std::uint32_t cellZ = alongX ? (za == range.z0 ? range.z0 : za - step) : std::min(za, zb);
+            if (CoarseCellHasHole(terrain, cellX, cellZ, step)) continue;
+            visit(position, next, static_cast<std::uint32_t>(VertexIndex(terrain, xa, za)), static_cast<std::uint32_t>(VertexIndex(terrain, xb, zb)));
+        }
+    }
+}
+
+// Number of indices of the skirt of a chunk at the level whose cells span `step` quads.
+[[nodiscard]] std::uint32_t SkirtIndexCount(
+    const kb::assets::TerrainAsset& terrain, const ChunkLayout& layout, std::uint32_t chunk, std::uint32_t step) noexcept {
+    std::uint32_t indices = 0U;
+    ForEachSkirtSegment(terrain, layout, chunk, step, [&indices](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) { indices += 6U; });
+    return indices;
+}
+
+// Writes the triangles of that skirt, facing away from the chunk.
+void WriteChunkSkirt(
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkLayout& layout,
+    std::uint32_t chunk,
+    std::uint32_t step,
+    std::uint32_t* out) noexcept {
+    const std::uint32_t ringBase = layout.gridVertices + chunk * layout.ringStride;
+    ForEachSkirtSegment(terrain, layout, chunk, step, [&](std::uint32_t position, std::uint32_t next, std::uint32_t topA, std::uint32_t topB) {
+        *out++ = topA; *out++ = topB; *out++ = ringBase + position;
+        *out++ = topB; *out++ = ringBase + next; *out++ = ringBase + position;
+    });
+}
+
+// The bounds of a chunk, its skirt included, from the heights of its vertices.
+[[nodiscard]] RenderBoundsSphere ChunkBounds(
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkRange& range,
+    float skirtDepth) noexcept {
+    float minimum = std::numeric_limits<float>::max();
+    float maximum = std::numeric_limits<float>::lowest();
+    for (std::uint32_t z = range.z0; z <= range.z1; ++z) {
+        for (std::uint32_t x = range.x0; x <= range.x1; ++x) {
+            const float height = terrain.heights[VertexIndex(terrain, x, z)];
+            minimum = std::min(minimum, height);
+            maximum = std::max(maximum, height);
+        }
+    }
+    const float cellX = terrain.worldSizeX / static_cast<float>(terrain.width - 1U);
+    const float cellZ = terrain.worldSizeZ / static_cast<float>(terrain.height - 1U);
+    const float minX = static_cast<float>(range.x0) * cellX - terrain.worldSizeX * 0.5F;
+    const float maxX = static_cast<float>(range.x1) * cellX - terrain.worldSizeX * 0.5F;
+    const float minZ = static_cast<float>(range.z0) * cellZ - terrain.worldSizeZ * 0.5F;
+    const float maxZ = static_cast<float>(range.z1) * cellZ - terrain.worldSizeZ * 0.5F;
+    const float halfX = (maxX - minX) * 0.5F;
+    const float halfY = (maximum - (minimum - skirtDepth)) * 0.5F;
+    const float halfZ = (maxZ - minZ) * 0.5F;
+    return RenderBoundsSphere{
+        .center = { minX + halfX, minimum - skirtDepth + halfY, minZ + halfZ },
+        .radius = std::max(std::sqrt(halfX * halfX + halfY * halfY + halfZ * halfZ), 0.000001F),
+    };
+}
+
 } // namespace
 
 std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::assets::TerrainAsset& terrain) {
     if (!kb::assets::IsTerrainAssetValid(terrain)) return std::nullopt;
 
-    RenderMeshAssetData mesh{};
-    mesh.vertices.reserve(terrain.heights.size());
-    for (std::uint32_t z = 0U; z < terrain.height; ++z) {
-        for (std::uint32_t x = 0U; x < terrain.width; ++x) mesh.vertices.push_back(BuildVertex(terrain, x, z));
-    }
+    const ChunkLayout layout = MakeChunkLayout(terrain);
+    const std::uint32_t chunkCount = layout.Count();
+    const std::uint32_t lodCount = layout.lodCount;
 
-    const std::uint32_t quadsX = terrain.width - 1U;
-    const std::uint32_t quadsZ = terrain.height - 1U;
-    const std::uint32_t maxLodsFromChunk = 1U + static_cast<std::uint32_t>(std::log2(static_cast<float>(terrain.chunkQuads)));
-    const std::uint32_t lodCount = std::min(terrain.lodCount, maxLodsFromChunk);
-    const std::uint32_t chunkCountX = (quadsX + terrain.chunkQuads - 1U) / terrain.chunkQuads;
-    const std::uint32_t chunkCountZ = (quadsZ + terrain.chunkQuads - 1U) / terrain.chunkQuads;
+    RenderMeshAssetData mesh{};
+    mesh.vertices.resize(TotalVertexCount(layout));
+    ForEachParallel(terrain.height, [&](std::size_t row) {
+        for (std::uint32_t x = 0U; x < terrain.width; ++x) {
+            mesh.vertices[row * terrain.width + x] = BuildVertex(terrain, x, static_cast<std::uint32_t>(row));
+        }
+    });
+
+    // How far each level of each chunk strays from the surface, and so how far a skirt has to hang.
+    RenderTerrainChunkGrid grid{};
+    grid.chunkCountX = layout.countX;
+    grid.chunkCountZ = layout.countZ;
+    grid.lodCount = lodCount;
+    grid.lodPixelError = terrain.lodPixelError;
+    grid.lodError.assign(static_cast<std::size_t>(chunkCount) * lodCount, 0.0F);
+    grid.borderError.assign(chunkCount, 0.0F);
+    grid.skirtDepth.assign(chunkCount, 0.0F);
+    ForEachParallel(chunkCount, [&](std::size_t chunk) {
+        StoreChunkErrors(grid, static_cast<std::uint32_t>(chunk), MeasureChunkErrors(terrain, layout, static_cast<std::uint32_t>(chunk)));
+    });
+    ForEachParallel(chunkCount, [&](std::size_t chunk) {
+        grid.skirtDepth[chunk] = SkirtDepthOfChunk(layout, grid, static_cast<std::uint32_t>(chunk));
+        WriteChunkRing(terrain, layout, static_cast<std::uint32_t>(chunk), grid.skirtDepth[chunk], mesh.vertices.data());
+    });
+
     const std::uint32_t materialLayerCount = std::max<std::uint32_t>(
         1U, static_cast<std::uint32_t>(terrain.materialLayers.size()));
-    std::vector<std::uint8_t> chunkLayerActive(
-        static_cast<std::size_t>(chunkCountX) * chunkCountZ * materialLayerCount,
-        1U);
-    for (std::uint32_t chunkZ = 0U; chunkZ < chunkCountZ; ++chunkZ) {
-        for (std::uint32_t chunkX = 0U; chunkX < chunkCountX; ++chunkX) {
-            for (std::uint32_t layer = 1U; layer < materialLayerCount; ++layer) {
-                const std::size_t activeIndex =
-                    (static_cast<std::size_t>(chunkZ) * chunkCountX + chunkX) * materialLayerCount + layer;
-                chunkLayerActive[activeIndex] = TerrainChunkLayerHasWeight(
-                    terrain, chunkX, chunkZ, layer) ? 1U : 0U;
+    std::vector<std::uint8_t> chunkLayerActive(static_cast<std::size_t>(chunkCount) * materialLayerCount, 1U);
+    ForEachParallel(chunkCount, [&](std::size_t chunk) {
+        for (std::uint32_t layer = 1U; layer < materialLayerCount; ++layer) {
+            chunkLayerActive[chunk * materialLayerCount + layer] = TerrainChunkLayerHasWeight(
+                terrain, static_cast<std::uint32_t>(chunk) % layout.countX, static_cast<std::uint32_t>(chunk) / layout.countX,
+                layer) ? 1U : 0U;
+        }
+    });
+
+    // The triangles of every chunk at every level, the skirt of that chunk and level behind them. Counting first
+    // lets every chunk write its own range.
+    const std::size_t taskCount = static_cast<std::size_t>(lodCount) * chunkCount;
+    std::vector<std::uint32_t> mainIndexCount(taskCount);
+    std::vector<std::uint32_t> skirtIndexCount(taskCount);
+    ForEachParallel(taskCount, [&](std::size_t task) {
+        const std::uint32_t step = 1U << (task / chunkCount);
+        const std::uint32_t chunk = static_cast<std::uint32_t>(task % chunkCount);
+        const ChunkRange range = RangeOfChunk(layout, chunk);
+        std::uint32_t cells = 0U;
+        for (std::uint32_t z = range.z0; z + step <= range.z1; z += step) {
+            for (std::uint32_t x = range.x0; x + step <= range.x1; x += step) {
+                if (!CoarseCellHasHole(terrain, x, z, step)) ++cells;
             }
         }
+        mainIndexCount[task] = cells * 6U;
+        skirtIndexCount[task] = cells == 0U ? 0U : SkirtIndexCount(terrain, layout, chunk, step);
+    });
+    std::vector<std::size_t> firstIndex(taskCount + 1U);
+    for (std::size_t task = 0U; task < taskCount; ++task) {
+        firstIndex[task + 1U] = firstIndex[task] + mainIndexCount[task] + skirtIndexCount[task];
     }
-    mesh.terrainChunkCountX = chunkCountX;
-    mesh.terrainChunkCountZ = chunkCountZ;
-    mesh.terrainLodCount = lodCount;
-    mesh.terrainSectionIndices.assign(
-        static_cast<std::size_t>(lodCount) * chunkCountX * chunkCountZ,
-        UINT32_MAX);
-    for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
-        const std::uint32_t step = 1U << lod;
-        for (std::uint32_t chunkZ = 0U; chunkZ < quadsZ; chunkZ += terrain.chunkQuads) {
-            const std::uint32_t chunkEndZ = std::min(chunkZ + terrain.chunkQuads, quadsZ);
-            for (std::uint32_t chunkX = 0U; chunkX < quadsX; chunkX += terrain.chunkQuads) {
-                const std::uint32_t chunkEndX = std::min(chunkX + terrain.chunkQuads, quadsX);
-                const std::uint32_t firstIndex = static_cast<std::uint32_t>(mesh.indices32.size());
-                for (std::uint32_t z = chunkZ; z + step <= chunkEndZ; z += step) {
-                    for (std::uint32_t x = chunkX; x + step <= chunkEndX; x += step) {
-                        if (CoarseCellHasHole(terrain, x, z, step)) continue;
+    mesh.indices32.resize(firstIndex[taskCount]);
+    ForEachParallel(taskCount, [&](std::size_t task) {
+        const std::uint32_t step = 1U << (task / chunkCount);
+        const std::uint32_t chunk = static_cast<std::uint32_t>(task % chunkCount);
+        const ChunkRange range = RangeOfChunk(layout, chunk);
+        std::uint32_t* out = mesh.indices32.data() + firstIndex[task];
+        // Cells in tiles of kTileCells by kTileCells: the vertices of a tile stay in the cache of the GPU while it is drawn.
+        const std::uint32_t tile = kTileCells * step;
+        for (std::uint32_t tileZ = range.z0; tileZ < range.z1; tileZ += tile) {
+            for (std::uint32_t tileX = range.x0; tileX < range.x1; tileX += tile) {
+                for (std::uint32_t z = tileZ; z < std::min(tileZ + tile, range.z1); z += step) {
+                    for (std::uint32_t x = tileX; x < std::min(tileX + tile, range.x1); x += step) {
+                        if (x + step > range.x1 || z + step > range.z1 || CoarseCellHasHole(terrain, x, z, step)) continue;
                         const std::uint32_t a = static_cast<std::uint32_t>(VertexIndex(terrain, x, z));
                         const std::uint32_t b = static_cast<std::uint32_t>(VertexIndex(terrain, x + step, z));
                         const std::uint32_t c = static_cast<std::uint32_t>(VertexIndex(terrain, x, z + step));
                         const std::uint32_t d = static_cast<std::uint32_t>(VertexIndex(terrain, x + step, z + step));
-                        mesh.indices32.insert(mesh.indices32.end(), { a, c, b, b, c, d });
-                    }
-                }
-                const std::uint32_t indexCount = static_cast<std::uint32_t>(mesh.indices32.size()) - firstIndex;
-                if (indexCount != 0U) {
-                    const std::size_t terrainSectionIndex =
-                        static_cast<std::size_t>(lod) * chunkCountX * chunkCountZ +
-                        static_cast<std::size_t>(chunkZ / terrain.chunkQuads) * chunkCountX +
-                        chunkX / terrain.chunkQuads;
-                    mesh.terrainSectionIndices[terrainSectionIndex] = static_cast<std::uint32_t>(mesh.sections.size());
-                    for (std::uint32_t layer = 0U; layer < materialLayerCount; ++layer) {
-                        const std::size_t activeIndex =
-                            (static_cast<std::size_t>(chunkZ / terrain.chunkQuads) * chunkCountX +
-                             chunkX / terrain.chunkQuads) * materialLayerCount + layer;
-                        mesh.sections.push_back(RenderMeshSectionDesc{
-                            .indexStart = firstIndex,
-                            .indexCount = indexCount,
-                            .materialSlot = layer,
-                            .lodLevel = static_cast<std::uint8_t>(lod),
-                            .terrainLayerIndex = terrain.materialLayers.empty()
-                                ? static_cast<std::uint8_t>(UINT8_MAX)
-                                : static_cast<std::uint8_t>(layer),
-                            .terrainLayerActive = chunkLayerActive[activeIndex] != 0U,
-                        });
+                        *out++ = a; *out++ = c; *out++ = b;
+                        *out++ = b; *out++ = c; *out++ = d;
                     }
                 }
             }
         }
+        if (skirtIndexCount[task] != 0U) WriteChunkSkirt(terrain, layout, chunk, step, out);
+    });
+
+    grid.sectionIndices.assign(taskCount, UINT32_MAX);
+    grid.skirtSectionIndices.assign(taskCount, UINT32_MAX);
+    const std::uint8_t skirtLayer = terrain.materialLayers.empty() ? static_cast<std::uint8_t>(UINT8_MAX) : std::uint8_t{ 0U };
+    for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
+        for (std::uint32_t chunk = 0U; chunk < chunkCount; ++chunk) {
+            const std::size_t task = static_cast<std::size_t>(lod) * chunkCount + chunk;
+            if (mainIndexCount[task] == 0U) continue;
+            grid.sectionIndices[task] = static_cast<std::uint32_t>(mesh.sections.size());
+            for (std::uint32_t layer = 0U; layer < materialLayerCount; ++layer) {
+                mesh.sections.push_back(RenderMeshSectionDesc{
+                    .indexStart = static_cast<std::uint32_t>(firstIndex[task]),
+                    .indexCount = mainIndexCount[task],
+                    .materialSlot = layer,
+                    .lodLevel = static_cast<std::uint8_t>(lod),
+                    .terrainLayerIndex = terrain.materialLayers.empty()
+                        ? static_cast<std::uint8_t>(UINT8_MAX)
+                        : static_cast<std::uint8_t>(layer),
+                    .terrainLayerActive = chunkLayerActive[static_cast<std::size_t>(chunk) * materialLayerCount + layer] != 0U,
+                    .terrainChunk = chunk,
+                });
+            }
+            if (skirtIndexCount[task] == 0U) continue;
+            grid.skirtSectionIndices[task] = static_cast<std::uint32_t>(mesh.sections.size());
+            mesh.sections.push_back(RenderMeshSectionDesc{
+                .indexStart = static_cast<std::uint32_t>(firstIndex[task] + mainIndexCount[task]),
+                .indexCount = skirtIndexCount[task],
+                .materialSlot = 0U,
+                .lodLevel = static_cast<std::uint8_t>(lod),
+                .terrainLayerIndex = skirtLayer,
+                .terrainChunk = chunk,
+                .terrainSkirt = true,
+            });
+        }
     }
     if (mesh.indices32.empty() || !RenderMeshAssetBuilder::Finalize(
-            mesh, RenderMeshFinalizeOptions{ .optimizeVertexFetch = false })) return std::nullopt;
-    BuildLodTable(mesh);
+            mesh, RenderMeshFinalizeOptions{ .optimizeVertexFetch = false, .optimizeVertexCache = false })) return std::nullopt;
+    const std::vector<float> skirtDepths = grid.skirtDepth;
+    mesh.terrainChunks = std::make_shared<const RenderTerrainChunkGrid>(std::move(grid));
+    // Finalize derived the tangents of the grid from the triangles; a skirt vertex wears the tangent of the vertex
+    // it hangs from.
+    ForEachParallel(chunkCount, [&](std::size_t chunk) {
+        WriteChunkRing(terrain, layout, static_cast<std::uint32_t>(chunk), skirtDepths[chunk], mesh.tangentVertices.data());
+    });
     if (terrain.materialLayers.empty()) {
         mesh.materialSlots.push_back(RenderMaterialSlotDesc{});
         mesh.materialNames.emplace_back("Terrain");
@@ -300,13 +628,9 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
 bool RenderTerrainMeshBuilder::PrepareDynamicPreview(
     const kb::assets::TerrainAsset& terrain,
     RenderMeshAssetData& mesh) noexcept {
-    const std::size_t vertexCount = static_cast<std::size_t>(terrain.width) * terrain.height;
-    if (!kb::assets::IsTerrainAssetValid(terrain) ||
-        mesh.tangentVertices.size() != vertexCount ||
-        mesh.terrainChunkCountX == 0U || mesh.terrainChunkCountZ == 0U ||
-        mesh.terrainLodCount == 0U ||
-        mesh.terrainSectionIndices.size() != static_cast<std::size_t>(mesh.terrainChunkCountX) *
-            mesh.terrainChunkCountZ * mesh.terrainLodCount ||
+    if (!kb::assets::IsTerrainAssetValid(terrain)) return false;
+    const std::size_t vertexCount = TotalVertexCount(MakeChunkLayout(terrain));
+    if (mesh.tangentVertices.size() != vertexCount || mesh.terrainChunks == nullptr || !mesh.terrainChunks->Valid() ||
         mesh.dynamicTopologyKey != TerrainTopologyKey(terrain)) {
         return false;
     }
@@ -338,13 +662,14 @@ bool RenderTerrainMeshBuilder::UpdateDynamicPreview(
     const kb::assets::TerrainAsset& terrain,
     const RenderTerrainMeshUpdateRegion& region,
     RenderMeshAssetData& mesh) noexcept {
-    if (!mesh.dynamicVertexUpdates || mesh.tangentVertices.size() != terrain.heights.size() ||
-        mesh.terrainChunkCountX == 0U || mesh.terrainChunkCountZ == 0U ||
-        mesh.terrainLodCount == 0U ||
+    const ChunkLayout layout = MakeChunkLayout(terrain);
+    if (!mesh.dynamicVertexUpdates || mesh.tangentVertices.size() != TotalVertexCount(layout) ||
+        mesh.terrainChunks == nullptr || !mesh.terrainChunks->Valid() || mesh.terrainChunks->ChunkCount() != layout.Count() ||
         region.minX > region.maxX || region.minZ > region.maxZ ||
         region.maxX >= terrain.width || region.maxZ >= terrain.height) {
         return false;
     }
+    RenderTerrainChunkGrid grid = *mesh.terrainChunks;
     const std::uint32_t minX = region.minX == 0U ? 0U : region.minX - 1U;
     const std::uint32_t minZ = region.minZ == 0U ? 0U : region.minZ - 1U;
     const std::uint32_t maxX = std::min(region.maxX + 1U, terrain.width - 1U);
@@ -369,45 +694,75 @@ bool RenderTerrainMeshBuilder::UpdateDynamicPreview(
         });
     }
 
+    // The chunks that hold a changed vertex have new errors; the chunks next to them hang their skirts by those.
+    const std::uint32_t changedMinX = minX == 0U ? 0U : (minX - 1U) / terrain.chunkQuads;
+    const std::uint32_t changedMinZ = minZ == 0U ? 0U : (minZ - 1U) / terrain.chunkQuads;
+    const std::uint32_t changedMaxX = std::min(maxX / terrain.chunkQuads, layout.countX - 1U);
+    const std::uint32_t changedMaxZ = std::min(maxZ / terrain.chunkQuads, layout.countZ - 1U);
+    for (std::uint32_t chunkZ = changedMinZ; chunkZ <= changedMaxZ; ++chunkZ) {
+        for (std::uint32_t chunkX = changedMinX; chunkX <= changedMaxX; ++chunkX) {
+            const std::uint32_t chunk = chunkZ * layout.countX + chunkX;
+            StoreChunkErrors(grid, chunk, MeasureChunkErrors(terrain, layout, chunk));
+        }
+    }
+    const std::uint32_t touchedMinX = changedMinX == 0U ? 0U : changedMinX - 1U;
+    const std::uint32_t touchedMinZ = changedMinZ == 0U ? 0U : changedMinZ - 1U;
+    const std::uint32_t touchedMaxX = std::min(changedMaxX + 1U, layout.countX - 1U);
+    const std::uint32_t touchedMaxZ = std::min(changedMaxZ + 1U, layout.countZ - 1U);
+    const std::uint32_t layers = std::max<std::uint32_t>(mesh.terrainLayerCount, 1U);
+    std::uint32_t ringVertices = 0U;
+    float touchedDepth = 0.0F;
+    for (std::uint32_t chunkZ = touchedMinZ; chunkZ <= touchedMaxZ; ++chunkZ) {
+        for (std::uint32_t chunkX = touchedMinX; chunkX <= touchedMaxX; ++chunkX) {
+            const std::uint32_t chunk = chunkZ * layout.countX + chunkX;
+            const ChunkRange range = RangeOfChunk(layout, chunk);
+            const float previousDepth = grid.skirtDepth[chunk];
+            grid.skirtDepth[chunk] = SkirtDepthOfChunk(layout, grid, chunk);
+            touchedDepth = std::max(touchedDepth, grid.skirtDepth[chunk]);
+            const bool holdsChange = chunkX >= changedMinX && chunkX <= changedMaxX && chunkZ >= changedMinZ && chunkZ <= changedMaxZ;
+            // A neighbour whose skirt keeps its depth has nothing new to upload.
+            if (!holdsChange && grid.skirtDepth[chunk] == previousDepth) continue;
+            WriteChunkRing(terrain, layout, chunk, grid.skirtDepth[chunk], mesh.tangentVertices.data());
+            mesh.dynamicVertexUpdateRanges.push_back(RenderMeshVertexUpdateRange{
+                .firstVertex = layout.gridVertices + chunk * layout.ringStride,
+                .vertexCount = range.Perimeter(),
+            });
+            ringVertices += range.Perimeter();
+            const RenderBoundsSphere bounds = ChunkBounds(terrain, range, grid.skirtDepth[chunk]);
+            for (std::uint32_t lod = 0U; lod < grid.lodCount; ++lod) {
+                const std::size_t task = static_cast<std::size_t>(lod) * grid.ChunkCount() + chunk;
+                const std::uint32_t first = grid.sectionIndices[task];
+                if (first == UINT32_MAX) continue;
+                const std::uint32_t skirt = grid.skirtSectionIndices[task];
+                for (std::uint32_t layer = 0U; layer <= layers; ++layer) {
+                    const std::uint32_t sectionIndex = layer < layers ? first + layer : skirt;
+                    if (sectionIndex == UINT32_MAX || sectionIndex >= mesh.sections.size()) continue;
+                    mesh.sections[sectionIndex].bounds = bounds;
+                    if (sectionIndex < mesh.meshlets.size()) mesh.meshlets[sectionIndex].bounds = bounds;
+                    mesh.dynamicSectionUpdateIndices.push_back(sectionIndex);
+                }
+            }
+        }
+    }
+    mesh.vertexUpdateCount += ringVertices;
+
     const float worldMinX = static_cast<float>(minX) * (terrain.worldSizeX / static_cast<float>(terrain.width - 1U)) - terrain.worldSizeX * 0.5F;
     const float worldMaxX = static_cast<float>(maxX) * (terrain.worldSizeX / static_cast<float>(terrain.width - 1U)) - terrain.worldSizeX * 0.5F;
     const float worldMinZ = static_cast<float>(minZ) * (terrain.worldSizeZ / static_cast<float>(terrain.height - 1U)) - terrain.worldSizeZ * 0.5F;
     const float worldMaxZ = static_cast<float>(maxZ) * (terrain.worldSizeZ / static_cast<float>(terrain.height - 1U)) - terrain.worldSizeZ * 0.5F;
+    const float lowest = minimumHeight - touchedDepth;
     const std::array<RenderStaticMeshVertexP3N3T4UV2, 8U> corners{
-        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = minimumHeight, .z = worldMinZ },
-        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = minimumHeight, .z = worldMinZ },
-        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = minimumHeight, .z = worldMaxZ },
-        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = minimumHeight, .z = worldMaxZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = lowest, .z = worldMinZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = lowest, .z = worldMinZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = lowest, .z = worldMaxZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = lowest, .z = worldMaxZ },
         RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = maximumHeight, .z = worldMinZ },
         RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = maximumHeight, .z = worldMinZ },
         RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = maximumHeight, .z = worldMaxZ },
         RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = maximumHeight, .z = worldMaxZ },
     };
     for (const RenderStaticMeshVertexP3N3T4UV2& corner : corners) ExpandBounds(mesh.bounds, corner);
-    const std::uint32_t minChunkX = minX == 0U ? 0U : (minX - 1U) / terrain.chunkQuads;
-    const std::uint32_t minChunkZ = minZ == 0U ? 0U : (minZ - 1U) / terrain.chunkQuads;
-    const std::uint32_t maxChunkX = std::min(maxX / terrain.chunkQuads, mesh.terrainChunkCountX - 1U);
-    const std::uint32_t maxChunkZ = std::min(maxZ / terrain.chunkQuads, mesh.terrainChunkCountZ - 1U);
-    for (std::uint32_t lod = 0U; lod < mesh.terrainLodCount; ++lod) {
-        for (std::uint32_t chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
-            for (std::uint32_t chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
-                const std::size_t terrainSectionIndex =
-                    static_cast<std::size_t>(lod) * mesh.terrainChunkCountX * mesh.terrainChunkCountZ +
-                    static_cast<std::size_t>(chunkZ) * mesh.terrainChunkCountX + chunkX;
-                if (terrainSectionIndex >= mesh.terrainSectionIndices.size()) continue;
-                const std::uint32_t sectionIndex = mesh.terrainSectionIndices[terrainSectionIndex];
-                if (sectionIndex == UINT32_MAX || sectionIndex >= mesh.sections.size()) continue;
-                for (std::uint32_t layer = 0U; layer < std::max<std::uint32_t>(mesh.terrainLayerCount, 1U); ++layer) {
-                    const std::uint32_t layeredSectionIndex = sectionIndex + layer;
-                    if (layeredSectionIndex >= mesh.sections.size()) break;
-                    RenderBoundsSphere& sectionBounds = mesh.sections[layeredSectionIndex].bounds;
-                    for (const RenderStaticMeshVertexP3N3T4UV2& corner : corners) ExpandBounds(sectionBounds, corner);
-                    if (layeredSectionIndex < mesh.meshlets.size()) mesh.meshlets[layeredSectionIndex].bounds = sectionBounds;
-                    mesh.dynamicSectionUpdateIndices.push_back(layeredSectionIndex);
-                }
-            }
-        }
-    }
+    mesh.terrainChunks = std::make_shared<const RenderTerrainChunkGrid>(std::move(grid));
     mesh.RefreshDesc();
     return true;
 }
@@ -449,18 +804,19 @@ bool RenderTerrainMeshBuilder::UpdateDynamicLayerPreview(
     const std::uint32_t maxTerrainZ = std::min(
         terrainQuadsZ,
         static_cast<std::uint32_t>((static_cast<std::uint64_t>(region.y + region.height) * terrainQuadsZ + maxWeightY - 1U) / maxWeightY));
-    const std::uint32_t minChunkX = std::min(minTerrainX / terrain.chunkQuads, mesh.terrainChunkCountX - 1U);
-    const std::uint32_t minChunkZ = std::min(minTerrainZ / terrain.chunkQuads, mesh.terrainChunkCountZ - 1U);
-    const std::uint32_t maxChunkX = std::min(maxTerrainX / terrain.chunkQuads, mesh.terrainChunkCountX - 1U);
-    const std::uint32_t maxChunkZ = std::min(maxTerrainZ / terrain.chunkQuads, mesh.terrainChunkCountZ - 1U);
-    for (std::uint32_t lod = 0U; lod < mesh.terrainLodCount; ++lod) {
+    if (mesh.terrainChunks == nullptr) return false;
+    const RenderTerrainChunkGrid& grid = *mesh.terrainChunks;
+    const std::uint32_t minChunkX = std::min(minTerrainX / terrain.chunkQuads, grid.chunkCountX - 1U);
+    const std::uint32_t minChunkZ = std::min(minTerrainZ / terrain.chunkQuads, grid.chunkCountZ - 1U);
+    const std::uint32_t maxChunkX = std::min(maxTerrainX / terrain.chunkQuads, grid.chunkCountX - 1U);
+    const std::uint32_t maxChunkZ = std::min(maxTerrainZ / terrain.chunkQuads, grid.chunkCountZ - 1U);
+    for (std::uint32_t lod = 0U; lod < grid.lodCount; ++lod) {
         for (std::uint32_t chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
             for (std::uint32_t chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
-                const std::size_t terrainSectionIndex =
-                    static_cast<std::size_t>(lod) * mesh.terrainChunkCountX * mesh.terrainChunkCountZ +
-                    static_cast<std::size_t>(chunkZ) * mesh.terrainChunkCountX + chunkX;
-                if (terrainSectionIndex >= mesh.terrainSectionIndices.size()) continue;
-                const std::uint32_t firstSection = mesh.terrainSectionIndices[terrainSectionIndex];
+                const std::size_t task = static_cast<std::size_t>(lod) * grid.ChunkCount() +
+                    static_cast<std::size_t>(chunkZ) * grid.chunkCountX + chunkX;
+                const std::uint32_t firstSection = grid.sectionIndices[task];
+                if (firstSection == UINT32_MAX) continue;
                 for (std::uint32_t layer = 1U; layer < mesh.terrainLayerCount; ++layer) {
                     const std::uint32_t sectionIndex = firstSection + layer;
                     if (sectionIndex >= mesh.sections.size()) continue;

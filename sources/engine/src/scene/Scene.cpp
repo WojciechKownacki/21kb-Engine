@@ -5,11 +5,14 @@
 #include "engine/audio/AudioMixerAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/ui/DynamicImageAsset.hpp"
+#include "scene/SceneUIMedia.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputAssetLoaders.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/localization/LocalizationCatalogAssetLoader.hpp"
+#include "engine/ui/UIThemeAssetLoader.hpp"
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
@@ -17,13 +20,17 @@
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
+#include "engine/scene/VectorShape2DAssetLoader.hpp"
+#include "engine/particles/ParticleProcessAsset.hpp"
 #include "engine/scene/AiBehaviourAssetLoader.hpp"
 #include "engine/scene/SkeletonAssetLoader.hpp"
 #include "engine/scene/SkeletalMeshAssetLoader.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/TimelineAssetLoader.hpp"
 #include "engine/scene/AnimationAssetLoaders.hpp"
+#include "engine/scene/BlendSpace2DAssetLoader.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
+#include "engine/scene/PhysicsAssembly.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
@@ -104,11 +111,16 @@ Scene::Scene(
     const bool registeredLuaScriptLoader = state_->assets.RegisterLoader(std::make_unique<kb::script::LuaScriptAssetLoader>());
     const bool registeredNativeBehaviourLoader = state_->assets.RegisterLoader(std::make_unique<kb::script::NativeBehaviourDescriptorAssetLoader>());
     const bool registeredVisualGraphLoader = state_->assets.RegisterLoader(std::make_unique<kb::visual::VisualGraphAssetLoader>());
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::input::InputRecordingAssetLoader>()));
     const bool registeredInputActionLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputActionAssetLoader>());
     const bool registeredInputContextLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputMappingContextAssetLoader>());
     const bool registeredAudioClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioClipAssetLoader>());
     const bool registeredAudioMixerLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioMixerAssetLoader>());
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<DynamicImageAssetLoader>()));
+    InitializeUIMedia(*this);
     const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsAssemblyAssetLoader>()));
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::scene::VectorShape2DAssetLoader>()));
     const bool registeredPhysicsLayersLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsLayersAssetLoader>());
     const bool registeredParticleEffectLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>());
     const bool registeredAiBehaviourLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AiBehaviourAssetLoader>());
@@ -117,9 +129,11 @@ Scene::Scene(
     const bool registeredCollisionMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::CollisionMeshAssetLoader>());
     const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
+    const bool registeredBlendSpace2DLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::BlendSpace2DAssetLoader>());
     const bool registeredAbilityLoader = state_->assets.RegisterLoader(std::make_unique<kb::gameplay::AbilityAssetLoader>());
     static_cast<void>(registeredAbilityLoader);
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
+    const bool registeredUIThemeLoader = state_->assets.RegisterLoader(std::make_unique<UIThemeAssetLoader>());
     const bool registeredLocalizationLoader = state_->assets.RegisterLoader(std::make_unique<kb::localization::LocalizationCatalogAssetLoader>());
     const bool registeredWorldLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldDescriptorAssetLoader>());
     const bool registeredWorldCellsLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldCellIndexAssetLoader>());
@@ -136,13 +150,16 @@ Scene::Scene(
     static_cast<void>(registeredImportedAssetLoader);
     static_cast<void>(registeredPhysicsLayersLoader);
     static_cast<void>(registeredParticleEffectLoader);
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::particles::ParticleProcessAssetLoader>()));
     static_cast<void>(registeredAiBehaviourLoader);
     static_cast<void>(registeredSkeletonLoader);
     static_cast<void>(registeredSkeletalMeshLoader);
     static_cast<void>(registeredCollisionMeshLoader);
     static_cast<void>(registeredAnimationClipLoader);
     static_cast<void>(registeredAnimatorControllerLoader);
+    static_cast<void>(registeredBlendSpace2DLoader);
     static_cast<void>(registeredTimelineLoader);
+    static_cast<void>(registeredUIThemeLoader);
     static_cast<void>(registeredLocalizationLoader);
     static_cast<void>(registeredWorldLoader);
     static_cast<void>(registeredWorldCellsLoader);
@@ -187,6 +204,7 @@ Scene::Scene(
 }
 
 Scene::~Scene() {
+    ShutdownUIMedia(*this);
     if (moduleHost_ != nullptr) {
         moduleHost_->DetachScene(*this);
     }
@@ -199,6 +217,9 @@ Scene::~Scene() {
     state_->transformRootQueryCache.reset();
     if (moduleHost_ != nullptr) {
         state_->world.ReleaseUnusedQueryPlans();
+        // A released payload's weak references still point at its control block, whose
+        // destructor can live in the module. Drop them before the module unmaps.
+        static_cast<void>(state_->assets.PruneUnreferenced());
         moduleHost_->Unload();
     }
 }
@@ -241,9 +262,11 @@ const kb::input::InputSubsystem* Scene::TryGetInput(kb::input::LocalUserId user)
 }
 
 void Scene::EvaluateAllLocalUserInput(float deltaSeconds) {
+    state_->inputSubsystem.SetGameplayInputBlocked(state_->uiFrame.modalActive);
     state_->inputSubsystem.Evaluate(deltaSeconds);
     const kb::input::InputDeviceState& sharedDevice = state_->inputSubsystem.DeviceState();
     for (auto& [id, subsystem] : state_->secondaryInputSubsystems) {
+        subsystem.SetGameplayInputBlocked(state_->uiFrame.modalActive);
         subsystem.EvaluateWithDeviceState(sharedDevice, deltaSeconds);
     }
 }

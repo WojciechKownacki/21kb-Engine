@@ -40,6 +40,7 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -134,6 +135,8 @@ public:
     [[nodiscard]] static const SurfaceCastComponent* TryGetSurfaceCast(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasFacingPanel(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const FacingPanelComponent* TryGetFacingPanel(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasRiver(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const RiverComponent* TryGetRiver(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasSpaceStroke(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const SpaceStrokeComponent* TryGetSpaceStroke(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasHistoryRibbon(const Scene& scene, SceneEntity entity) noexcept;

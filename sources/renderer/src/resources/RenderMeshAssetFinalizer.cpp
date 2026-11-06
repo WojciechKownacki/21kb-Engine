@@ -1,10 +1,12 @@
 #include "resources/RenderMeshAssetFinalizer.hpp"
 
 #include "engine/math/EngineMath.hpp"
+#include "resources/ForEachParallel.hpp"
 
 #include <meshoptimizer/src/meshoptimizer.h>
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 #include <array>
 #include <cmath>
@@ -121,6 +123,25 @@ void GenerateMissingVertexNormals(RenderMeshAssetData& asset) {
     const std::uint32_t vertexCount = MeshAssetVertexCount(asset);
     if (section.vertexStart >= vertexCount) return 0U;
     return section.vertexCount == 0U ? vertexCount - section.vertexStart : section.vertexCount;
+}
+
+// Sections that draw the same triangles (a terrain chunk once per material layer) are one range to the passes that
+// read or reorder indices: the first section of each run of equal ranges stands for the run.
+[[nodiscard]] std::vector<std::uint32_t> DistinctSections(const RenderMeshAssetData& asset) {
+    std::vector<std::uint32_t> distinct;
+    distinct.reserve(asset.sections.size());
+    for (std::uint32_t index = 0U; index < asset.sections.size(); ++index) {
+        if (index != 0U) {
+            const RenderMeshSectionDesc& previous = asset.sections[index - 1U];
+            const RenderMeshSectionDesc& section = asset.sections[index];
+            if (previous.indexStart == section.indexStart && previous.indexCount == section.indexCount &&
+                previous.vertexStart == section.vertexStart && previous.vertexCount == section.vertexCount) {
+                continue;
+            }
+        }
+        distinct.push_back(index);
+    }
+    return distinct;
 }
 
 void CompactIndices(RenderMeshAssetData& asset) {
@@ -272,15 +293,25 @@ void CompactIndices(RenderMeshAssetData& asset) {
     return lhs;
 }
 
-void ComputeAssetBounds(RenderMeshAssetData& asset) noexcept {
+void ComputeAssetBounds(RenderMeshAssetData& asset) {
     const std::uint32_t indexCount = static_cast<std::uint32_t>(asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size());
     RenderBoundsSphere meshBounds{};
     RenderBoundsBox meshBox{};
-    for (RenderMeshSectionDesc& section : asset.sections) {
-        RenderBoundsBox sectionBox{};
-        section.bounds = ComputeBounds(asset, section.indexStart, section.indexCount, section.vertexStart, &sectionBox);
-        meshBounds = MergeBounds(meshBounds, section.bounds);
-        meshBox = MergeBoxes(meshBox, sectionBox);
+    // The bounds of a range are measured once and shared by the sections that draw it.
+    const std::vector<std::uint32_t> distinct = DistinctSections(asset);
+    std::vector<RenderBoundsBox> boxes(distinct.size());
+    ForEachParallel(distinct.size(), [&](std::size_t run) {
+        RenderMeshSectionDesc& section = asset.sections[distinct[run]];
+        section.bounds = ComputeBounds(asset, section.indexStart, section.indexCount, section.vertexStart, &boxes[run]);
+    });
+    for (std::size_t run = 0U; run < distinct.size(); ++run) {
+        const std::size_t end = run + 1U < distinct.size() ? distinct[run + 1U] : asset.sections.size();
+        for (std::size_t index = distinct[run]; index < end; ++index) {
+            RenderMeshSectionDesc& section = asset.sections[index];
+            section.bounds = asset.sections[distinct[run]].bounds;
+            meshBounds = MergeBounds(meshBounds, section.bounds);
+            meshBox = MergeBoxes(meshBox, boxes[run]);
+        }
     }
     if (asset.sections.empty()) {
         asset.bounds = ComputeBounds(asset, 0U, indexCount, 0U, &meshBox);
@@ -322,7 +353,7 @@ void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {
     });
 }
 
-[[nodiscard]] bool ValidateMeshAssetIndices(const RenderMeshAssetData& asset) noexcept {
+[[nodiscard]] bool ValidateMeshAssetIndices(const RenderMeshAssetData& asset) {
     const std::uint32_t vertexCount = MeshAssetVertexCount(asset);
     if (vertexCount == 0U || asset.indices32.empty()) {
         return false;
@@ -332,7 +363,10 @@ void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {
             if (index >= vertexCount) return false;
         }
     }
-    for (const RenderMeshSectionDesc& section : asset.sections) {
+    const std::vector<std::uint32_t> distinct = DistinctSections(asset);
+    std::atomic<bool> valid{ true };
+    ForEachParallel(distinct.size(), [&](std::size_t run) {
+        const RenderMeshSectionDesc& section = asset.sections[distinct[run]];
         const std::uint32_t sectionVertexCount = SectionVertexCount(asset, section);
         if (section.indexCount == 0U ||
             section.indexStart >= asset.indices32.size() ||
@@ -340,12 +374,17 @@ void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {
             section.indexCount % 3U != 0U ||
             sectionVertexCount == 0U ||
             (section.vertexCount != 0U && section.vertexCount > vertexCount - section.vertexStart)) {
-            return false;
+            valid = false;
+            return;
         }
         for (std::uint32_t offset = 0U; offset < section.indexCount; ++offset) {
-            if (asset.indices32[section.indexStart + offset] >= sectionVertexCount) return false;
+            if (asset.indices32[section.indexStart + offset] >= sectionVertexCount) {
+                valid = false;
+                return;
+            }
         }
-    }
+    });
+    if (!valid) return false;
     return asset.indices32.size() % 3U == 0U;
 }
 
@@ -362,15 +401,30 @@ void OptimizeMeshAssetVertexCache(RenderMeshAssetData& asset) {
         return;
     }
 
-    std::vector<std::uint32_t> optimizedSection;
-    for (const RenderMeshSectionDesc& section : asset.sections) {
-        optimizedSection.resize(section.indexCount);
+    const std::vector<std::uint32_t> distinct = DistinctSections(asset);
+    const auto reorder = [&](std::size_t run) {
+        const RenderMeshSectionDesc& section = asset.sections[distinct[run]];
+        std::vector<std::uint32_t> optimizedSection(section.indexCount);
         meshopt_optimizeVertexCache(
             optimizedSection.data(),
             asset.indices32.data() + section.indexStart,
             section.indexCount,
             SectionVertexCount(asset, section));
         std::copy(optimizedSection.begin(), optimizedSection.end(), asset.indices32.begin() + static_cast<std::ptrdiff_t>(section.indexStart));
+    };
+    // Ranges that do not overlap can be reordered each on its own thread; a mesh whose sections share indices
+    // is reordered section after section, as the sections of a range must not be written at the same time.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> spans;
+    spans.reserve(distinct.size());
+    for (const std::uint32_t index : distinct) {
+        spans.emplace_back(asset.sections[index].indexStart, asset.sections[index].indexStart + asset.sections[index].indexCount);
+    }
+    std::ranges::sort(spans);
+    const bool disjoint = std::ranges::adjacent_find(spans, [](const auto& lhs, const auto& rhs) { return rhs.first < lhs.second; }) == spans.end();
+    if (disjoint) {
+        ForEachParallel(distinct.size(), reorder);
+    } else {
+        for (std::size_t run = 0U; run < distinct.size(); ++run) reorder(run);
     }
 }
 
@@ -477,7 +531,8 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
     if (asset.sections.empty()) {
         accumulateRange(0U, totalIndexCount, 0U, static_cast<std::uint32_t>(asset.vertices.size()));
     } else {
-        for (const RenderMeshSectionDesc& section : asset.sections) {
+        for (const std::uint32_t sectionIndex : DistinctSections(asset)) {
+            const RenderMeshSectionDesc& section = asset.sections[sectionIndex];
             const std::uint32_t sectionVertexCount = section.vertexStart < asset.vertices.size()
                 ? (section.vertexCount == 0U
                       ? static_cast<std::uint32_t>(asset.vertices.size()) - section.vertexStart
@@ -610,7 +665,7 @@ bool RenderMeshAssetFinalizer::Finalize(
     }
     GenerateMissingVertexNormals(asset);
     EnsureTangentVertexStorage(asset);
-    OptimizeMeshAssetVertexCache(asset);
+    if (options.optimizeVertexCache) OptimizeMeshAssetVertexCache(asset);
     if (options.optimizeVertexFetch) {
         if (!asset.tangentVertices.empty()) {
             OptimizeMeshAssetVertexFetch(asset.tangentVertices, asset.indices32);

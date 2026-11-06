@@ -66,7 +66,7 @@ void MarkComponentModified(Scene& scene, SceneEntity entity) noexcept {
     X(Image, UIImage) X(RawImage, UIRawImage) X(Text, UIText) X(Border, UIBorder) X(Mask, UIMask) \
     X(Shadow, UIShadow) X(Outline, UIOutline) X(BackgroundBlur, UIBackgroundBlur) X(Selectable, UISelectable) \
     X(Button, UIButton) X(Toggle, UIToggle) X(Slider, UISlider) X(Scrollbar, UIScrollbar) X(ScrollView, UIScrollView) \
-    X(InputField, UIInputField) X(Dropdown, UIDropdown) X(ProgressBar, UIProgressBar) X(WidgetSwitcher, UIWidgetSwitcher)
+    X(InputField, UIInputField) X(Dropdown, UIDropdown) X(ProgressBar, UIProgressBar) X(WidgetSwitcher, UIWidgetSwitcher) X(Accessibility, UIAccessibility)
 
 [[nodiscard]] bool HasByType(const Scene& scene, SceneEntity entity, UIComponentType type) noexcept {
     switch (type) {

@@ -13,6 +13,10 @@ public:
     // Changes whenever the cells, the cell size or the collision settings of a tilemap change; systems that mirror a map
     // (such as the 2D physics) rebuild when it differs from the value they saw.
     [[nodiscard]] virtual std::uint64_t Revision(SceneEntity entity) const { static_cast<void>(entity); return 0U; }
+    [[nodiscard]] virtual bool SetAnimationPaused(SceneEntity entity, bool paused) { static_cast<void>(entity); static_cast<void>(paused); return false; }
+    // Inclusive cell region for prefab instances only; an inverted rectangle unloads every instance.
+    [[nodiscard]] virtual bool SetPrefabRegion(SceneEntity, int, int, int, int, std::uint32_t) { return false; }
+    [[nodiscard]] virtual std::size_t PrefabInstanceCount(SceneEntity) const { return 0U; }
     [[nodiscard]] virtual bool SetTile(SceneEntity entity, std::uint32_t x, std::uint32_t y,
         std::int32_t floor, const kb::assets::Map2DTile& tile, std::string* error = nullptr) = 0;
     [[nodiscard]] virtual bool PaintGround(SceneEntity entity, std::uint32_t x, std::uint32_t y,

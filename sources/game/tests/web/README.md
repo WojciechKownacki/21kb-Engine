@@ -409,3 +409,13 @@ and hardware-rendered native UI pixels. A further click interrupts a running
 fade and retargets it again; real PCM must remain inside the continuous blend
 envelope before returning to the authored mix. Exact real-time curve timing
 remains separate coverage. See [audio snapshots](../../../../docs/audio_snapshots.md).
+
+`run_text_bridge_tests.py --browser <browser-executable> --output <results>`
+extracts the production browser text handlers and runs them in an owned headless
+browser. DevTools typing and IME commits cover commit deduplication and repeated
+text. Isolated `DataTransfer` events cover Unicode copy/cut/paste, denied writes,
+size limits and composition cancellation; the system clipboard is never accessed.
+Native callbacks are recorded in this focused test. `kb_web_text_clipboard`
+separately exercises the production native transfer helper against real scene
+fields, including grapheme limits, read-only/password fields and focus changes.
+These focused checks do not replace the packaged browser runtime acceptance test.

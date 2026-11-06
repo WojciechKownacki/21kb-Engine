@@ -234,9 +234,18 @@ void CollectNavGeometry(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, c
             case kb::scene::ColliderShape::Capsule:
                 AppendCapsule(collider.center, collider.radius, collider.height, vertices, indices);
                 break;
+            case kb::scene::ColliderShape::Terrain:
+                // The terrain's mesh renderer on the same object already contributes this ground.
+                if (settings.renderMeshes && visible[index] && components.meshRenderer.has_value() &&
+                    components.meshRenderer->meshAssetId == collider.meshAssetId) {
+                    break;
+                }
+                [[fallthrough]];
             case kb::scene::ColliderShape::Mesh:
                 if (const std::shared_ptr<const NavSourceMesh> mesh = source != nullptr && collider.meshAssetId != 0U
-                        ? source->CollisionMesh(collider.meshAssetId) : nullptr) {
+                        ? (collider.shape == kb::scene::ColliderShape::Terrain ? source->RenderMesh(collider.meshAssetId)
+                                                                               : source->CollisionMesh(collider.meshAssetId))
+                        : nullptr) {
                     vertices = mesh->vertices;
                     indices = mesh->indices;
                 } else {

@@ -16,6 +16,8 @@ struct EditorBuildGameTargetSettings {
     // active editor build and are never written to this store.
     std::filesystem::path androidKeystore;
     std::string androidKeyAlias;
+    std::string androidFormat = "apk";
+    std::filesystem::path androidBundletool;
     // Windows Authenticode: a certificate in the user's personal store by SHA-1
     // thumbprint, or a PFX file whose password is entered for one build only.
     std::string windowsCertificateThumbprint;

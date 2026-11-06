@@ -22,6 +22,8 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
@@ -33,6 +35,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/SceneRivers.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
@@ -43,6 +46,7 @@
 #include "engine/ecs/WorkerPool.hpp"
 #include "scene/EcsRenderTransformResolver.hpp"
 #include "scene/SceneLightColor.hpp"
+#include "scene/SceneSurfaceGeometryPublisher.hpp"
 #include "scene/SceneRenderWorldTransformReader.hpp"
 #include "scene/SceneTransformMatrices.hpp"
 
@@ -239,12 +243,14 @@ namespace {
     kb::ecs::QueryExecutionSettings settings{};
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     if (!query.IsValid() || !hot.Rebuild(query, settings)) return std::nullopt;
-    hot.ForEachRange(settings.maxBatchSize, [&selected](const auto& batch) {
+    hot.ForEachRange(settings.maxBatchSize, [&selected, &scene](const auto& batch) {
         const kb::scene::AmbientRadianceComponent* components = batch.template Components<0>();
         for (std::size_t index = 0U; index < batch.Count(); ++index) {
             const kb::scene::SceneEntity entity = batch.EntityAt(index);
             const kb::scene::AmbientRadianceComponent& ambient = components[index];
             if (!entity.IsValid() || !ambient.enabled || !kb::scene::IsAmbientRadianceComponentValid(ambient)) continue;
+            if (ambient.mode == kb::scene::AmbientRadianceMode::CapturedEnvironment &&
+                scene.Components().RegionShapes().TryGet(entity) != nullptr) continue;
             const SceneRenderAmbientRadiance candidate{
                 .entityId = entity.Id(), .mode = AmbientRadianceModeOf(ambient.mode),
                 .color = { ambient.color.x, ambient.color.y, ambient.color.z },
@@ -277,6 +283,53 @@ namespace {
         }
     }
     return result;
+}
+
+[[nodiscard]] std::vector<SceneRenderReflectionProbe> ResolveLocalReflectionProbes(
+    const kb::scene::Scene& scene, const RenderScene& renderScene) {
+    std::vector<SceneRenderReflectionProbe> probes;
+    auto query = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<kb::scene::AmbientRadianceComponent>();
+    kb::ecs::UnsafeHotReadQuery<kb::scene::AmbientRadianceComponent> hot;
+    kb::ecs::QueryExecutionSettings settings{};
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (!query.IsValid() || !hot.Rebuild(query, settings)) return probes;
+    hot.ForEachRange(settings.maxBatchSize, [&](const auto& batch) {
+        const auto* components = batch.template Components<0>();
+        for (std::size_t index = 0; index < batch.Count(); ++index) {
+            const auto entity = batch.EntityAt(index);
+            const auto& ambient = components[index];
+            if (!ambient.enabled || ambient.mode != kb::scene::AmbientRadianceMode::CapturedEnvironment) continue;
+            const auto* region = scene.Components().RegionShapes().TryGet(entity);
+            const auto* transform = scene.Transforms().TryGet(entity);
+            if (region == nullptr || !region->enabled || transform == nullptr) continue;
+            const auto translation = kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, *transform), renderScene.RenderOrigin());
+            const auto offset = kb::math::Rotate(transform->worldRotation, kb::scene::Vec3{
+                region->center.x * transform->worldScale.x, region->center.y * transform->worldScale.y,
+                region->center.z * transform->worldScale.z});
+            SceneRenderReflectionProbe probe{};
+            probe.radianceAssetId = ambient.environmentAssetId;
+            probe.position[0] = translation.x + offset.x;
+            probe.position[1] = translation.y + offset.y;
+            probe.position[2] = translation.z + offset.z;
+            probe.intensity = ambient.intensity * ambient.specularIntensity;
+            probe.parallaxCorrection = true;
+            probe.shape = region->kind == kb::scene::RegionShapeKind::Sphere
+                ? SceneRenderReflectionProbeShape::Sphere : SceneRenderReflectionProbeShape::Box;
+            const float scale = std::max({std::abs(transform->worldScale.x),std::abs(transform->worldScale.y),std::abs(transform->worldScale.z)});
+            probe.influenceRadius = region->radius * scale;
+            probe.extents[0] = std::abs(region->size.x * transform->worldScale.x) * 0.5F;
+            probe.extents[1] = std::abs(region->size.y * transform->worldScale.y) * 0.5F;
+            probe.extents[2] = std::abs(region->size.z * transform->worldScale.z) * 0.5F;
+            // The public renderer probe contract uses axis-aligned boxes. Keep unsupported
+            // region kinds/rotations invalid so submission reports them instead of changing their shape.
+            if ((region->kind != kb::scene::RegionShapeKind::Sphere && region->kind != kb::scene::RegionShapeKind::Box) ||
+                (region->kind == kb::scene::RegionShapeKind::Box &&
+                 (std::abs(transform->worldRotation.x) > 0.0001F || std::abs(transform->worldRotation.y) > 0.0001F ||
+                  std::abs(transform->worldRotation.z) > 0.0001F))) probe.extents[0] = -1.0F;
+            probes.push_back(probe);
+        }
+    });
+    return probes;
 }
 
 // Converts the batched transform system's column-major 3x4 world affine into the
@@ -462,6 +515,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     std::uint32_t effectiveMaterialSlotOverrideCount = materialSlotOverrideCount;
     bool visible = visibility.visible && !renderer.previewHidden;
     auto model = RenderModel(*sync, entity, transform, renderTransform);
+    std::array<float, 3> localRenderOffset{};
     auto tilemapOwner = entity;
     const auto* ownedMap = sync->scene->Components().Tilemaps().TryGet(entity);
     bool mapMesh = ownedMap && ownedMap->mapAssetId == renderer.meshAssetId;
@@ -484,21 +538,22 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
             ancestor = sync->scene->Hierarchy().Parent(ancestor);
         }
     }
-    if (generated && !spriteVisual && !sync->scene->Components().TilemapRenderers().Has(tilemapOwner)) visible = false;
+    if (generated && mapMesh && !spriteVisual && !sync->scene->Components().TilemapRenderers().Has(tilemapOwner)) visible = false;
     if (const auto* tilemap = sync->scene->Components().TilemapRenderers().TryGet(tilemapOwner); mapMesh && tilemap) {
         visible = visible && tilemap->enabled;
         const auto* grid = sync->scene->Components().Grids().TryGet(tilemapOwner);
         const bool wall = grid != nullptr && grid->wall;
         const float lift = static_cast<float>(std::clamp(tilemap->sortingOrder, -1000, 1000)) *
             RenderMap2DMeshBuilder::kSortingOrderLift * (wall ? -1.0F : 1.0F);
+        localRenderOffset[wall ? 2U : 1U] = lift;
         const std::size_t axis = wall ? 8U : 4U;
         for (std::size_t component = 0U; component < 3U; ++component) model[12U + component] += model[axis + component] * lift;
     }
     bool castsShadow = renderer.castsShadow;
     bool receivesShadow = renderer.receivesShadow;
     std::uint32_t layer = renderer.layer & visibility.mask;
-    std::int32_t lodBias = 0;
-    bool lodEnabled = true;
+    std::int32_t lodBias = renderer.lodBias;
+    bool lodEnabled = renderer.lodEnabled;
     bool morphDeformationEnabled = false;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
@@ -558,6 +613,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
         .model = model,
+        .localRenderOffset = localRenderOffset,
         .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, geometry, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,
@@ -576,6 +632,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .lodBias = lodBias,
         .lodEnabled = lodEnabled,
         .morphDeformationEnabled = morphDeformationEnabled,
+        .isStatic = renderer.mobility == kb::scene::MeshMobility::Static,
     }));
     static_cast<void>(transform);
 }
@@ -612,8 +669,13 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .sourceRadius = light.sourceRadius,
         .shadowStrength = light.shadowStrength,
         .shadowDistance = light.shadowDistance,
-        .staticMobility = light.mobility == kb::scene::LightMobility::Static,
         .layer = light.layerMask,
+        .shadowBias = light.shadowBias,
+        .shadowNormalBias = light.shadowNormalBias,
+        .shadowFilter = static_cast<RenderLightShadowFilter>(light.shadowFilter),
+        .shadowQuality = static_cast<RenderLightShadowQuality>(light.shadowQuality),
+        .shadowCascadeCount = light.shadowCascadeCount,
+        .shadowCascadeDistribution = light.shadowCascadeDistribution,
     }));
     static_cast<void>(transform);
 }
@@ -939,6 +1001,18 @@ void EcsRenderSceneSynchronizer::SetSkinningPaletteAllocator(
     skinningPaletteAllocator_ = allocator;
 }
 
+namespace {
+
+// The water of the scene's rivers is made before the scene is read, so its objects are in this synchronization.
+// Returns the water objects it made or changed, which an incremental synchronization has to read as well.
+std::vector<std::uint64_t> SynchronizeRiverWater(kb::scene::Scene& scene) {
+    kb::scene::SceneRiverSynchronization result = kb::scene::SynchronizeSceneRivers(scene);
+    if (!result.errors.empty()) throw std::runtime_error("river water could not be built: " + result.errors.front());
+    return std::move(result.entities);
+}
+
+} // namespace
+
 void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const {
     SyncImpl(scene, renderScene, false);
 }
@@ -948,6 +1022,8 @@ void EcsRenderSceneSynchronizer::SyncStructural(const kb::scene::Scene& scene, R
 }
 
 void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const {
+    static_cast<void>(SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene)));
+    PublishSceneSurfaceGeometry(const_cast<kb::scene::Scene&>(scene));
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
@@ -1021,13 +1097,21 @@ void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderS
     const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
     renderScene.SetWorldBackdrop(worldBackdrop);
     renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
+    renderScene.SetLocalReflectionProbes(ResolveLocalReflectionProbes(scene, renderScene));
     AdvanceHistoryRibbons(scene, renderScene);
 }
 
 void EcsRenderSceneSynchronizer::SyncEntities(
     const kb::scene::Scene& scene,
     RenderScene& renderScene,
-    std::span<const std::uint64_t> entityIds) const {
+    std::span<const std::uint64_t> dirtyEntityIds) const {
+    std::vector<std::uint64_t> waterAndDirtyIds = SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene));
+    std::span<const std::uint64_t> entityIds = dirtyEntityIds;
+    if (!waterAndDirtyIds.empty()) {
+        waterAndDirtyIds.insert(waterAndDirtyIds.end(), dirtyEntityIds.begin(), dirtyEntityIds.end());
+        entityIds = waterAndDirtyIds;
+    }
+    PublishSceneSurfaceGeometry(const_cast<kb::scene::Scene&>(scene));
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
@@ -1068,6 +1152,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
     renderScene.SetWorldBackdrop(worldBackdrop);
     renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
+    renderScene.SetLocalReflectionProbes(ResolveLocalReflectionProbes(scene, renderScene));
 }
 
 void EcsRenderSceneSynchronizer::AdvanceHistoryRibbons(const kb::scene::Scene& scene, RenderScene& renderScene) const {
@@ -1259,12 +1344,15 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
     renderScene.InvalidateDrawGroupsIfFallback(
         fallbackCount > 0U ? RenderScene::TransformUpdateOutcome::Fallback : RenderScene::TransformUpdateOutcome::InPlace);
     if (geometrySwarmChanged.load(std::memory_order_relaxed)) {
+        renderScene.NoteNonMeshShadowCasterChange();
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
     if (surfaceCastChanged.load(std::memory_order_relaxed)) {
+        renderScene.NoteNonMeshShadowCasterChange();
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
     if (spaceStrokeChanged.load(std::memory_order_relaxed)) {
+        renderScene.NoteNonMeshShadowCasterChange();
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
     renderScene.AddTransformUpdateCounts(inPlace.load(std::memory_order_relaxed), fallbackCount);

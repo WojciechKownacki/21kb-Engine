@@ -47,6 +47,18 @@ def hello(text):
     assert(os == nil and io == nil and package == nil and debug == nil)
     assert(load == nil and loadfile == nil and dofile == nil and require == nil)
     assert(collectgarbage == nil and _G._G == _G and _G.os == nil and _G.io == nil)
+    for _, domain in ipairs({{"Save", "Settings"}}) do
+        for _, operation in ipairs({{"Read", "Write", "Delete"}}) do
+            local value, diagnostic = CallFunction(domain .. "." .. operation, {{slot="../escape"}})
+            assert(value == nil and string.find(diagnostic, "not a slot name", 1, true))
+        end
+    end
+    local imported, importError = Import("../Unregistered.lua")
+    assert(imported == nil and string.find(importError, "not registered", 1, true))
+    local mode = CallFunction("Net.Mode", {{}})
+    assert(mode.mode == "offline" and not mode.connected)
+    local sent, networkError = CallFunction("Net.Call", {{rpc="Probe"}})
+    assert(sent == nil and string.find(networkError, "no network session", 1, true))
     Log("{text}")
 end
 '''
@@ -282,7 +294,17 @@ def main():
     require("of the game's own left out" in cli("mod", "build", "--game", base_pack, "--cook", crates_cook, "--id", "acme.again", "--version", "1.0.0",
                                               "--output", root / "ModBuilds" / "acme.again"), "The build did not leave out the game's own assets")
 
-    (root / "result.json").write_text(json.dumps(dict(result="PASS", limitation="Windows player, development trust (no release key): the release-key "
+    # The exported game and installed mods must run without their authoring projects.
+    for name in ("Game", "Crates", "Extras", "Plain", "Other", "Foreign"):
+        source = (root / name).resolve()
+        require(source.parent == root.resolve(), "Source project escaped the test root")
+        source.rename(source.with_name(name + ".unavailable"))
+    text = play()
+    require("base game: mods=2" in text and "crates mod script ran" in text
+            and "extras mod script ran" in text and "shutdown=clean" in text,
+            "Exported mods depended on authoring project files: " + text)
+
+    (root / "result.json").write_text(json.dumps(dict(result="PASS", sourceProjectsUnavailable=True, limitation="Windows player, development trust (no release key): the release-key "
         "path is covered by the in-process test; mods are bound to one build of the game."), indent=2), encoding="utf8")
     shutil.rmtree(keys, ignore_errors=True)
     print(f"PASS: mods built, installed, disabled, removed and refused in the packaged player; {root}")

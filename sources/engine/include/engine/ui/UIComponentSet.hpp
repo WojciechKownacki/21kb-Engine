@@ -32,6 +32,8 @@
 #include "engine/ui/visual/UISprite.hpp"
 #include "engine/ui/visual/UIText.hpp"
 
+#include "engine/ui/interaction/UIAccessibility.hpp"
+
 #include <optional>
 
 namespace kb::scene {
@@ -68,6 +70,7 @@ struct UIComponentSet {
     std::optional<UIDropdown> dropdown;
     std::optional<UIProgressBar> progressBar;
     std::optional<UIWidgetSwitcher> widgetSwitcher;
+    std::optional<UIAccessibility> accessibility;
 
     [[nodiscard]] bool Empty() const noexcept {
         return !rectTransform && !canvas && !canvasScaler && !canvasGroup && !horizontalLayout && !verticalLayout &&

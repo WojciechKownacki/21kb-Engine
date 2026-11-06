@@ -21,6 +21,7 @@ constexpr std::array kComponents{
     KB_UI_DESCRIPTOR(Scrollbar, UIScrollbar, "Scrollbar"), KB_UI_DESCRIPTOR(ScrollView, UIScrollView, "Scroll View"),
     KB_UI_DESCRIPTOR(InputField, UIInputField, "Input Field"), KB_UI_DESCRIPTOR(Dropdown, UIDropdown, "Dropdown"),
     KB_UI_DESCRIPTOR(ProgressBar, UIProgressBar, "Progress Bar"), KB_UI_DESCRIPTOR(WidgetSwitcher, UIWidgetSwitcher, "Widget Switcher"),
+    KB_UI_DESCRIPTOR(Accessibility, UIAccessibility, "Accessibility"),
 };
 #undef KB_UI_DESCRIPTOR
 

@@ -478,6 +478,21 @@ void RunSceneMeshPassProgramSelectionTest() {
 
         Require(passResources.ProgramBindStats().graphProgramBindCount == 11U,
             "KBMAT-MAT07/P0.5/SMA-36: static and skinned graph program binds must be counted in submit stats");
+
+        // Publish only the compact artifact: the real full-program lookup must miss,
+        // then select the graph-preserving fallback instead of builtin PBR.
+        auto compactShader=CompileConstantColorGraphForSelection("0.15 0.35 0.65 1");
+        compactShader.reflection.shadingModel=RenderMaterialShadingModel::Subsurface;
+        compactShader.reflection.writesShadingModelColor=true;
+        Require(CookGraphForActiveBackend(compactShader,cacheRoot.generic_string(),kRenderMaterialGraphCompactGBufferPass),
+            "Compact subsurface variant must cook");
+        auto compactMaterial=MakeGraphMaterialResource(compactShader.sourceHash,RenderMaterialGraphVariantKey(compactShader),
+            RenderMaterialGraphPipelineStateKey(compactShader));
+        compactMaterial.graphProgram.writesShadingModelColor=true;
+        const auto compact=passResources.ResolveMeshPassProgram(&compactMaterial,MeshPassType::GBuffer);
+        Require(compact.graphProgram && !compact.fellBackToBuiltin && bgfx::isValid(compact.program) &&
+            compact.key.pass==kRenderMaterialGraphCompactGBufferPass,
+            "Missing full G-buffer artifact must retain the compact graph program");
 #endif
 
         passResources.Shutdown();

@@ -1,4 +1,6 @@
 #include "app/EditorExternalCodeLauncher.hpp"
+#include "engine/config/IniDocument.hpp"
+#include "engine/assets/AssetFileName.hpp"
 
 #include <filesystem>
 #include <cwchar>
@@ -17,7 +19,26 @@
 namespace kb::editor {
 namespace {
 
+[[nodiscard]] bool ValidPreference(std::string_view value) noexcept {
+    return value == "Auto" || value == "VSCode" || value == "VisualStudio";
+}
+
+[[nodiscard]] bool LoadPreferences(const std::filesystem::path& projectRoot,
+    kb::config::IniDocument& document, std::string& error) {
+    error.clear();
+    if (projectRoot.empty()) {
+        error = "Project folder is unavailable.";
+        return false;
+    }
+    const auto file = projectRoot / "Config/EditorSettings.ini";
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(file, ec);
+    if (ec) { error = "Editor settings are unavailable: " + ec.message(); return false; }
+    return !exists || document.Load(file, error);
+}
+
 #if defined(_WIN32)
+thread_local EditorExternalCodeLauncher::ProcessLauncher g_processLauncher = nullptr;
 [[nodiscard]] std::wstring EnvironmentValue(const wchar_t* name) {
     const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
     if (required == 0U) {
@@ -90,6 +111,57 @@ namespace {
     return quoted;
 }
 
+[[nodiscard]] std::filesystem::path FindVisualStudioExecutable() {
+    const auto valid = [](const std::filesystem::path& path) {
+        std::error_code ec;
+        return path.is_absolute() && std::filesystem::is_regular_file(path, ec) && !ec;
+    };
+    const std::wstring installed = EnvironmentValue(L"VSINSTALLDIR");
+    if (!installed.empty()) {
+        const auto candidate = std::filesystem::path{ installed } / "Common7/IDE/devenv.exe";
+        if (valid(candidate)) return candidate;
+    }
+    const std::wstring programFiles = EnvironmentValue(L"ProgramFiles(x86)");
+    if (programFiles.empty()) return {};
+    const auto vswhere = std::filesystem::path{ programFiles } / "Microsoft Visual Studio/Installer/vswhere.exe";
+    if (!valid(vswhere)) return {};
+    SECURITY_ATTRIBUTES security{ sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
+    HANDLE read = nullptr, write = nullptr;
+    if (!CreatePipe(&read, &write, &security, 0)) return {};
+    SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdOutput = write;
+    startup.hStdError = write;
+    PROCESS_INFORMATION process{};
+    std::wstring command = QuotePath(vswhere) + L" -latest -property installationPath -utf8";
+    const BOOL created = CreateProcessW(vswhere.c_str(), command.data(), nullptr, nullptr, TRUE,
+        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    CloseHandle(write);
+    std::string output;
+    if (created) {
+        if (WaitForSingleObject(process.hProcess, 5000U) == WAIT_OBJECT_0) {
+            DWORD available = 0, count = 0;
+            if (PeekNamedPipe(read, nullptr, 0, nullptr, &available, nullptr) && available > 0 && available < 32768U) {
+                output.resize(available);
+                if (!ReadFile(read, output.data(), available, &count, nullptr)) count = 0;
+                output.resize(count);
+            }
+        } else {
+            TerminateProcess(process.hProcess, 1);
+        }
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    CloseHandle(read);
+    while (!output.empty() && (output.back() == '\r' || output.back() == '\n')) output.pop_back();
+    if (output.empty()) return {};
+    const auto candidate = kb::assets::Utf8Path(output) / "Common7/IDE/devenv.exe";
+    return valid(candidate) ? candidate : std::filesystem::path{};
+}
+
 [[nodiscard]] std::vector<wchar_t> ChildEnvironment() {
     LPWCH inherited = GetEnvironmentStringsW();
     if (inherited == nullptr) {
@@ -117,6 +189,32 @@ namespace {
 
 } // namespace
 
+std::string EditorExternalCodeLauncher::Preference(const std::filesystem::path& projectRoot, std::string& error) {
+    kb::config::IniDocument document;
+    if (!LoadPreferences(projectRoot, document, error)) return {};
+    const std::string value{ document.GetString("SourceCode", "Editor").value_or("Auto") };
+    if (!ValidPreference(value)) { error = "SourceCode.Editor must be Auto, VSCode or VisualStudio."; return {}; }
+    return value;
+}
+
+bool EditorExternalCodeLauncher::SetPreference(const std::filesystem::path& projectRoot,
+    std::string_view preference, std::string& error) {
+    error.clear();
+    if (!ValidPreference(preference)) { error = "SourceCode.Editor must be Auto, VSCode or VisualStudio."; return false; }
+    kb::config::IniDocument document;
+    if (!LoadPreferences(projectRoot, document, error)) return false;
+    document.SetString("SourceCode", "Editor", std::string{ preference });
+    return document.Save(projectRoot / "Config/EditorSettings.ini", error);
+}
+
+#if defined(_WIN32)
+EditorExternalCodeLauncher::ProcessLauncher EditorExternalCodeLauncher::ExchangeProcessLauncher(ProcessLauncher launcher) noexcept {
+    const auto previous = g_processLauncher;
+    g_processLauncher = launcher;
+    return previous;
+}
+#endif
+
 bool EditorExternalCodeLauncher::OpenProjectFile(
     const std::filesystem::path& projectRoot,
     const std::filesystem::path& filePath,
@@ -139,17 +237,35 @@ bool EditorExternalCodeLauncher::OpenProjectFile(
         error = "Project folder or script file is unavailable.";
         return false;
     }
-    const std::filesystem::path executable = FindCodeExecutable();
+    const std::string preference = Preference(absoluteProjectRoot, error);
+    if (preference.empty()) return false;
+    bool visualStudio = preference == "VisualStudio";
+    std::filesystem::path executable = visualStudio ? FindVisualStudioExecutable() : FindCodeExecutable();
+    if (executable.empty() && preference == "Auto") {
+        executable = FindVisualStudioExecutable();
+        visualStudio = !executable.empty();
+    }
     if (executable.empty()) {
-        error = "VS Code was not found. Install it or add its 'code' command to PATH.";
+        error = preference == "VisualStudio" ? "Visual Studio was not found. Install the C++ IDE or choose VS Code in Editor Settings."
+            : preference == "VSCode" ? "VS Code was not found. Install it or choose Visual Studio in Editor Settings."
+            : "No supported code editor was found. Install Visual Studio or VS Code and select it in Editor Settings.";
         return false;
     }
 
+    std::filesystem::path workspace = absoluteProjectRoot;
+    for (auto folder = absoluteFilePath.parent_path(); !folder.empty(); folder = folder.parent_path()) {
+        const auto relative = folder.lexically_relative(absoluteProjectRoot);
+        if (relative.empty() || *relative.begin() == "..") break;
+        if (std::filesystem::is_regular_file(folder / "CMakeLists.txt", fileError) && !fileError) { workspace = folder; break; }
+        if (folder == absoluteProjectRoot || folder == folder.parent_path()) break;
+    }
     std::wstring command = QuotePath(executable) + L" "
-        + QuotePath(absoluteProjectRoot) + L" " + QuotePath(absoluteFilePath);
+        + (visualStudio ? std::wstring{} : L"--reuse-window ") + QuotePath(workspace)
+        + (visualStudio ? L" /Edit " : L" --goto ") + QuotePath(absoluteFilePath);
+    if (g_processLauncher != nullptr) return g_processLauncher(executable, command, workspace, error);
     std::vector<wchar_t> environment = ChildEnvironment();
     if (environment.empty()) {
-        error = "VS Code environment could not be prepared.";
+        error = "Code editor environment could not be prepared.";
         return false;
     }
     STARTUPINFOW startup{};
@@ -157,9 +273,9 @@ bool EditorExternalCodeLauncher::OpenProjectFile(
     PROCESS_INFORMATION process{};
     const BOOL created = CreateProcessW(
         executable.c_str(), command.data(), nullptr, nullptr, FALSE,
-        CREATE_UNICODE_ENVIRONMENT, environment.data(), absoluteProjectRoot.c_str(), &startup, &process);
+        CREATE_UNICODE_ENVIRONMENT, environment.data(), workspace.c_str(), &startup, &process);
     if (created == FALSE) {
-        error = "VS Code could not be started (Windows error " + std::to_string(GetLastError()) + ").";
+        error = "Code editor could not be started (Windows error " + std::to_string(GetLastError()) + ").";
         return false;
     }
     CloseHandle(process.hThread);

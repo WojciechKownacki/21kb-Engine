@@ -201,6 +201,18 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimatorEditor, DockArea::Center));
     }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::TimelineEditorOpened) {
+        const auto id = sceneContext_.TimelineEditorDocument().AssetId();
+        if (const auto* metadata = sceneContext_.Scene().Assets().Manager().Registry().Find(id))
+            static_cast<void>(dockModel_.Commands().SetPanelTitle(DockPanelKind::TimelineEditor,metadata->virtualPath.filename().string()));
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::TimelineEditor, DockArea::Center));
+    }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::GameplayGraphEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::GameplayGraphEditor,DockArea::Center));
+    }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::BlendSpace2DEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::BlendSpace2DEditor,DockArea::Center));
+    }
     if (assetResult == EditorAssetBrowserDoubleClickResult::ParticleEditorOpened) {
         if (const kb::assets::AssetMetadata* metadata =
                 sceneContext_.Scene().Assets().Manager().Registry().Find(sceneContext_.ParticleEditorAssetId());

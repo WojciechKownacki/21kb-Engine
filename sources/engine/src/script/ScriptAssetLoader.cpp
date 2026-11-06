@@ -3,10 +3,10 @@
 #include "engine/script/ScriptApiDeclarationParser.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/AssetFileName.hpp"
+#include "engine/assets/AssetPayloadMemory.hpp"
 
 #include <algorithm>
-#include <cerrno>
-#include <charconv>
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
@@ -107,105 +107,16 @@ namespace {
     return false;
 }
 
-[[nodiscard]] std::optional<float> TryParseFloat(std::string_view value) {
-    const std::string text{ value };
-    char* end = nullptr;
-    errno = 0;
-    const float parsedValue = std::strtof(text.c_str(), &end);
-    if (errno != 0 || end != text.c_str() + text.size()) {
-        return std::nullopt;
-    }
-    return parsedValue;
-}
-
-[[nodiscard]] std::optional<double> TryParseDouble(std::string_view value) {
-    const std::string text{ value };
-    char* end = nullptr;
-    errno = 0;
-    const double parsedValue = std::strtod(text.c_str(), &end);
-    if (errno != 0 || end != text.c_str() + text.size()) {
-        return std::nullopt;
-    }
-    return parsedValue;
-}
-
 [[nodiscard]] std::optional<ScriptValue> TryParseScriptValue(std::string_view value, ScriptValueType type) {
     value = Trim(value);
     if (value.empty()) {
         return std::nullopt;
     }
-    switch (type) {
-    case ScriptValueType::Bool:
-        if (value == "true" || value == "1") {
-            return ScriptValue{ true };
-        }
-        if (value == "false" || value == "0") {
-            return ScriptValue{ false };
-        }
-        return std::nullopt;
-    case ScriptValueType::Int:
-    {
-        int parsedValue = 0;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
+    const bool textual = type == ScriptValueType::String || type == ScriptValueType::Name || type == ScriptValueType::Guid;
+    if (textual && value.size() >= 2U && (value.front() == '"' || value.front() == '\'') && value.back() == value.front()) {
+        value = value.substr(1U, value.size() - 2U);
     }
-    case ScriptValueType::Float:
-    {
-        const std::optional<float> parsedValue = TryParseFloat(value);
-        return parsedValue.has_value() ? std::optional<ScriptValue>{ ScriptValue{ *parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::String:
-        if ((value.size() >= 2U && value.front() == '"' && value.back() == '"') ||
-            (value.size() >= 2U && value.front() == '\'' && value.back() == '\'')) {
-            return ScriptValue{ std::string{ value.substr(1U, value.size() - 2U) } };
-        }
-        return ScriptValue{ std::string{ value } };
-    case ScriptValueType::Entity:
-    {
-        std::uint64_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Entity } } : std::nullopt;
-    }
-    case ScriptValueType::Component:
-    {
-        std::uint64_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Component } } : std::nullopt;
-    }
-    case ScriptValueType::Hash:
-    {
-        std::uint64_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Hash } } : std::nullopt;
-    }
-    case ScriptValueType::UInt32:
-    {
-        std::uint32_t parsedValue = 0U;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::Int64:
-    {
-        std::int64_t parsedValue = 0;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::Double:
-    {
-        const std::optional<double> parsedValue = TryParseDouble(value);
-        return parsedValue.has_value() ? std::optional<ScriptValue>{ ScriptValue{ *parsedValue } } : std::nullopt;
-    }
-    case ScriptValueType::Name:
-    case ScriptValueType::Guid:
-        if ((value.size() >= 2U && value.front() == '"' && value.back() == '"') ||
-            (value.size() >= 2U && value.front() == '\'' && value.back() == '\'')) {
-            return ScriptValue{ std::string{ value.substr(1U, value.size() - 2U) }, type };
-        }
-        return ScriptValue{ std::string{ value }, type };
-    case ScriptValueType::Void:
-        break;
-    }
-        return std::nullopt;
+    return TryParseValueText(value, type);
 }
 
 [[nodiscard]] ScriptValue DefaultScriptValue(ScriptValueType type) {
@@ -470,6 +381,8 @@ struct NativeBehaviourDescriptorParseResult {
             result.descriptor.symbol.assign(value);
         } else if (key == "module" || key == "dll" || key == "library") {
             result.descriptor.modulePath = std::filesystem::path{ std::string{ value } };
+        } else if (key == "linked") {
+            result.descriptor.linkedModule.assign(value);
         } else if (key == "source") {
             result.descriptor.sourcePath = std::filesystem::path{ std::string{ value } };
         } else if (key == "entry" || key == "entry_point") {
@@ -510,9 +423,10 @@ std::vector<std::string> LuaScriptAssetLoader::Extensions() const {
 namespace {
 
 // Explicit dependencies also cover paths assembled dynamically by gameplay code.
-// They are ordinary Lua comments and never execute during asset discovery.
-std::optional<std::string> LuaAssetDependencies(const kb::assets::AssetLoadRequest& request,
-    const kb::assets::AssetRegistry& registry, std::vector<kb::assets::AssetId>& dependencies) {
+// Script/descriptor comments never execute during asset discovery.
+std::optional<std::string> CommentAssetDependencies(const kb::assets::AssetLoadRequest& request,
+    const kb::assets::AssetRegistry& registry, std::vector<kb::assets::AssetId>& dependencies,
+    std::string_view prefix, std::string_view language) {
     std::string error;
     const std::string source = ReadSource(request, error);
     if (!error.empty()) return error;
@@ -521,21 +435,21 @@ std::optional<std::string> LuaAssetDependencies(const kb::assets::AssetLoadReque
     while (std::getline(lines, line)) {
         std::string_view declaration = Trim(line);
         if (declaration.empty()) continue;
-        if (!declaration.starts_with("--") || declaration.starts_with("--[")) break;
-        constexpr std::string_view marker = "-- @asset";
+        if (!declaration.starts_with(prefix) || (prefix == "--" && declaration.starts_with("--["))) break;
+        const std::string marker = std::string{prefix} + " @asset";
         if (!declaration.starts_with(marker)) continue;
         declaration.remove_prefix(marker.size());
         if (!declaration.empty() && declaration.front() != ' ' && declaration.front() != '\t') continue;
         declaration = Trim(declaration);
-        const std::filesystem::path path{ declaration };
+        const std::filesystem::path path = kb::assets::Utf8Path(declaration);
         if (declaration.empty() || !declaration.starts_with('/') || declaration.starts_with("//") ||
             declaration.find('\\') != std::string_view::npos || declaration.find(':') != std::string_view::npos ||
             std::ranges::any_of(path, [](const auto& part) { return part == ".." || part == "."; })) {
-            return "Lua @asset requires a canonical virtual asset path: " + std::string{ declaration };
+            return std::string{language} + " @asset requires a canonical virtual asset path: " + std::string{ declaration };
         }
         const auto* dependency = registry.FindByPath(path);
-        if (dependency == nullptr) return "Lua @asset was not discovered: " + std::string{ declaration };
-        if (!dependency->runtimeLoadable) return "Lua @asset is editor-only: " + std::string{ declaration };
+        if (dependency == nullptr) return std::string{language} + " @asset was not discovered: " + std::string{ declaration };
+        if (!dependency->runtimeLoadable) return std::string{language} + " @asset is editor-only: " + std::string{ declaration };
         if (std::ranges::find(dependencies, dependency->id) == dependencies.end()) dependencies.push_back(dependency->id);
     }
     return std::nullopt;
@@ -550,7 +464,7 @@ kb::assets::AssetLoadRequest LooseScriptRequest(const kb::assets::AssetMetadata&
 std::vector<kb::assets::AssetId> LuaScriptAssetLoader::DiscoverDependencies(
     const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const {
     std::vector<kb::assets::AssetId> dependencies;
-    static_cast<void>(LuaAssetDependencies(LooseScriptRequest(metadata), registry, dependencies));
+    static_cast<void>(CommentAssetDependencies(LooseScriptRequest(metadata), registry, dependencies, "--", "Lua"));
     return dependencies;
 }
 
@@ -562,7 +476,7 @@ std::optional<std::string> LuaScriptAssetLoader::ValidateDependencies(
 std::optional<std::string> LuaScriptAssetLoader::ValidateRuntimeDependencies(
     const kb::assets::AssetLoadRequest& request, const kb::assets::AssetRegistry& registry) const {
     std::vector<kb::assets::AssetId> dependencies;
-    return LuaAssetDependencies(request, registry, dependencies);
+    return CommentAssetDependencies(request, registry, dependencies, "--", "Lua");
 }
 
 kb::assets::AssetLoadResult LuaScriptAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
@@ -574,10 +488,37 @@ kb::assets::AssetLoadResult LuaScriptAssetLoader::Load(const kb::assets::AssetLo
 
     LuaScriptAsset asset{ .source = std::move(source) };
     ParseLuaAssetMetadata(asset);
-    return kb::assets::AssetLoadResult{
-        .asset = std::make_shared<LuaScriptAsset>(std::move(asset)),
-        .error = {},
-    };
+    auto payload = std::make_shared<LuaScriptAsset>(std::move(asset));
+    using kb::assets::StringBufferBytes;
+    std::uint64_t bytes = sizeof(LuaScriptAsset) + StringBufferBytes(payload->source)
+        + payload->imports.capacity() * sizeof(std::string)
+        + payload->exposedVariables.capacity() * sizeof(ScriptApiPin)
+        + payload->exposedVariableDefaults.capacity() * sizeof(ScriptValue)
+        + payload->exposedVariableHasDefault.capacity() * sizeof(std::uint8_t);
+    for (const auto& import : payload->imports) bytes += StringBufferBytes(import);
+    for (const auto& pin : payload->exposedVariables) bytes += StringBufferBytes(pin.name);
+    for (const auto& value : payload->exposedVariableDefaults) {
+        if (value.Type() == ScriptValueType::String || value.Type() == ScriptValueType::Name || value.Type() == ScriptValueType::Guid) {
+            bytes += StringBufferBytes(value.AsString());
+        }
+    }
+    return kb::assets::AssetLoadResult{ .asset = std::move(payload), .error = {}, .residentBytes = bytes };
+}
+
+std::vector<kb::assets::AssetId> NativeBehaviourDescriptorAssetLoader::DiscoverDependencies(
+    const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const {
+    std::vector<kb::assets::AssetId> dependencies;
+    static_cast<void>(CommentAssetDependencies(LooseScriptRequest(metadata),registry,dependencies,"#","Native descriptor"));
+    return dependencies;
+}
+std::optional<std::string> NativeBehaviourDescriptorAssetLoader::ValidateDependencies(
+    const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const {
+    return ValidateRuntimeDependencies(LooseScriptRequest(metadata),registry);
+}
+std::optional<std::string> NativeBehaviourDescriptorAssetLoader::ValidateRuntimeDependencies(
+    const kb::assets::AssetLoadRequest& request, const kb::assets::AssetRegistry& registry) const {
+    std::vector<kb::assets::AssetId> dependencies;
+    return CommentAssetDependencies(request,registry,dependencies,"#","Native descriptor");
 }
 
 std::string_view NativeBehaviourDescriptorAssetLoader::Type() const noexcept {

@@ -1,4 +1,5 @@
 #include "engine/ecs/WorldTelemetryExport.hpp"
+#include "engine/core/JsonValue.hpp"
 
 #include <fstream>
 #include <iomanip>
@@ -182,7 +183,35 @@ std::string WorldTelemetrySnapshotToJson(const WorldTelemetrySnapshot& snapshot)
               "  }";
 
     output << "\n}\n";
-    return output.str();
+    kb::core::JsonValue document;
+    std::string error;
+    if (!kb::core::JsonValue::Parse(output.str(), document, error)) {
+        throw std::runtime_error("Invalid ECS telemetry: " + error);
+    }
+    auto descriptors = kb::core::JsonValue::MakeObject();
+    for (std::size_t index = 0; index < document.Size(); ++index) {
+        const std::string& name = document.MemberName(index);
+        const auto* value = document.Find(name);
+        if (value == nullptr || value->GetKind() != kb::core::JsonValue::Kind::Number) continue;
+        std::string unit = "count";
+        if (name.find("gigabytes_per_second") != std::string::npos) unit = "GB/s";
+        else if (name.find("bytes_per_second") != std::string::npos) unit = "bytes/s";
+        else if (name.find("nanoseconds") != std::string::npos) unit = "ns";
+        else if (name.find("percent") != std::string::npos) unit = "%";
+        else if (name.find("bytes_per_entity") != std::string::npos) unit = "bytes/entity";
+        else if (name.find("bytes") != std::string::npos) unit = "bytes";
+        const bool estimated = name.find("estimated") != std::string::npos ||
+            name == "query_bytes_touched" || name == "query_average_bytes_per_entity";
+        const bool derived = name.find("average") != std::string::npos || name.find("percent") != std::string::npos;
+        auto descriptor = kb::core::JsonValue::MakeObject();
+        descriptor.Set("unit", kb::core::JsonValue::MakeString(std::move(unit)));
+        descriptor.Set("basis", kb::core::JsonValue::MakeString(estimated ? "estimated" : derived ? "derived" : "measured"));
+        descriptors.Set(name, std::move(descriptor));
+    }
+    std::string result = output.str();
+    result.resize(result.size() - 2U);
+    result += ",\"metric_descriptors\": " + descriptors.Dump() + "\n}\n";
+    return result;
 }
 
 void ExportWorldTelemetrySnapshotToJsonFile(const WorldTelemetrySnapshot& snapshot, const std::filesystem::path& path) {

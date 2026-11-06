@@ -49,6 +49,8 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
+#include "engine/scene/RiverGeometry.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
@@ -260,6 +262,17 @@ struct ComponentAccess {
             return true; \
         } }
 
+#define KB_SCENE_ENUM(Component, field, EnumType, lastValue) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(lastValue)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<EnumType>(value.AsInt()); \
+            return true; \
+        } }
+
 #define KB_RIGIDBODY_BODY_TYPE(Component, field) \
     FieldBinding{ #field, \
         [](const void* component) noexcept -> ScriptValue { \
@@ -277,7 +290,7 @@ struct ComponentAccess {
             KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
             return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
-            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::OneWayBox)) { return false; } \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::Terrain)) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::ColliderShape>(value.AsInt()); \
             return true; \
         } }
@@ -317,7 +330,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 51> kComponentNames{
+constexpr std::array<std::string_view, 49> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -345,6 +358,7 @@ constexpr std::array<std::string_view, 51> kComponentNames{
     "Collider2D",
     "Body2D",
     "Sprite2D",
+    "River",
     "ContentInstance",
     "StreamFocus",
     "WorldBackdrop",
@@ -366,10 +380,6 @@ constexpr std::array<std::string_view, 51> kComponentNames{
     "SocketAttachment",
     "Combatant",
     "AIBrain",
-    // Older names, still accepted (SceneComponentAuthoring::CanonicalName).
-    "Kreska przestrzenna",
-    "Wst\xC4\x99" "ga historii",
-    "Echo soczewki",
 };
 
 // Value names of Int enum properties, in value order (tools accept them in place of numbers).
@@ -383,8 +393,13 @@ constexpr std::array<std::string_view, 3> kNavLinkKindNames{ "Jump", "Ladder", "
 constexpr std::array<std::string_view, 3> kCameraClearModeNames{ "SolidColor", "DepthOnly", "DontClear" };
 constexpr std::array<std::string_view, 6> kLightKindNames{ "Directional", "Point", "Spot", "AreaRect", "AreaDisk", "Tube" };
 constexpr std::array<std::string_view, 2> kLightMobilityNames{ "Movable", "Static" };
+constexpr std::array<std::string_view, 2> kMeshMobilityNames{ "Movable", "Static" };
+constexpr std::array<std::string_view, 4> kLightShadowFilterNames{ "Default", "Hard", "Pcf", "Pcss" };
+constexpr std::array<std::string_view, 5> kLightShadowQualityNames{ "Default", "Low", "Medium", "High", "Ultra" };
 constexpr std::array<std::string_view, 6> kTickGroupNames{ "Input", "Gameplay", "Physics", "Animation", "Camera", "Presentation" };
-constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
+constexpr std::array<std::string_view, 6> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh", "OneWayBox", "Terrain" };
+constexpr std::array<std::string_view, 3> kBody2DTypeNames{ "Static", "Kinematic", "Dynamic" };
+constexpr std::array<std::string_view, 3> kCollider2DShapeNames{ "Box", "Circle", "Capsule" };
 constexpr std::array<std::string_view, 4> kAnimatorRootMotionOwnerNames{ "None", "Animator", "CharacterController", "Rigidbody" };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -453,7 +468,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kSprite2DPropertyDesc
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true, kBody2DTypeNames },
     ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "linearDamping", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float, true },
@@ -467,7 +482,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kCollider2DPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true, kCollider2DShapeNames },
     ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float, true },
@@ -610,6 +625,13 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kSpaceStrokePropertyD
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
+constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kRiverPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "points", ScriptValueType::String }, ScriptSceneComponentPropertyDesc{ "pointCount", ScriptValueType::UInt32, false },
+    ScriptSceneComponentPropertyDesc{ "bankWidth", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "waterfallSlopeDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "waterfallMaterialAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "mistEffectAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
 constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kHistoryRibbonPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash },
     ScriptSceneComponentPropertyDesc{ "lifetimeSeconds", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float },
@@ -703,7 +725,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kAudioListenerProperty
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 20> kLightPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kLightKindNames },
     ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
@@ -726,13 +748,22 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 20> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shadowStrength", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "shadowDistance", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "mobility", ScriptValueType::Int, true, kLightMobilityNames },
+    ScriptSceneComponentPropertyDesc{ "shadowBias", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "shadowNormalBias", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "shadowFilter", ScriptValueType::Int, true, kLightShadowFilterNames },
+    ScriptSceneComponentPropertyDesc{ "shadowQuality", ScriptValueType::Int, true, kLightShadowQualityNames },
+    ScriptSceneComponentPropertyDesc{ "shadowCascadeCount", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "shadowCascadeDistribution", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kMeshRendererPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kMeshRendererPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "materialSlotOverrideCount", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "lodBias", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "lodEnabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "mobility", ScriptValueType::Int, true, kMeshMobilityNames },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
@@ -1094,7 +1125,7 @@ constexpr std::array<FieldBinding, 13> kCameraFields{
     KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, z),
 };
 
-constexpr std::array<FieldBinding, 20> kLightFields{
+constexpr std::array<FieldBinding, 26> kLightFields{
     KB_LIGHT_KIND(kb::scene::LightComponent, kind),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, x),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, y),
@@ -1115,13 +1146,22 @@ constexpr std::array<FieldBinding, 20> kLightFields{
     KB_FLOAT(kb::scene::LightComponent, shadowStrength),
     KB_FLOAT(kb::scene::LightComponent, shadowDistance),
     KB_LIGHT_MOBILITY(kb::scene::LightComponent, mobility),
+    KB_FLOAT(kb::scene::LightComponent, shadowBias),
+    KB_FLOAT(kb::scene::LightComponent, shadowNormalBias),
+    KB_SCENE_ENUM(kb::scene::LightComponent, shadowFilter, kb::scene::LightShadowFilter, kb::scene::LightShadowFilter::Pcss),
+    KB_SCENE_ENUM(kb::scene::LightComponent, shadowQuality, kb::scene::LightShadowQuality, kb::scene::LightShadowQuality::Ultra),
+    KB_UINT32(kb::scene::LightComponent, shadowCascadeCount),
+    KB_FLOAT(kb::scene::LightComponent, shadowCascadeDistribution),
 };
 
-constexpr std::array<FieldBinding, 4> kMeshRendererFields{
+constexpr std::array<FieldBinding, 7> kMeshRendererFields{
     KB_UINT32(kb::scene::MeshRendererComponent, materialSlotOverrideCount),
     KB_BOOL(kb::scene::MeshRendererComponent, castsShadow),
     KB_BOOL(kb::scene::MeshRendererComponent, receivesShadow),
     KB_UINT32(kb::scene::MeshRendererComponent, layer),
+    KB_INT(kb::scene::MeshRendererComponent, lodBias),
+    KB_BOOL(kb::scene::MeshRendererComponent, lodEnabled),
+    KB_SCENE_ENUM(kb::scene::MeshRendererComponent, mobility, kb::scene::MeshMobility, kb::scene::MeshMobility::Static),
 };
 
 constexpr std::array<FieldBinding, 3> kBehaviourFields{
@@ -1791,6 +1831,18 @@ constexpr std::array<FieldBinding, 10> kSpaceStrokeFields{
     FieldBinding{ "layer", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->layer }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->layer = v.AsUInt32(); return true; } },
     KB_BOOL(kb::scene::SpaceStrokeComponent, castsShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, receivesShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, enabled),
 };
+constexpr std::array<FieldBinding, 8> kRiverFields{
+    FieldBinding{ "points", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ kb::scene::RiverPointsToText(*static_cast<const kb::scene::RiverComponent*>(c)) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::String) return false; std::string error; return kb::scene::ParseRiverPointsText(v.AsString(), *static_cast<kb::scene::RiverComponent*>(c), error); } },
+    FieldBinding{ "pointCount", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->pointCount }; }, [](void*, const ScriptValue&) noexcept -> bool { return false; } },
+    FieldBinding{ "bankWidth", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->bankWidth }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat()) || v.AsFloat() < 0.0F || v.AsFloat() > 10000.0F) return false; static_cast<kb::scene::RiverComponent*>(c)->bankWidth = v.AsFloat(); return true; } },
+    FieldBinding{ "waterfallSlopeDegrees", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->waterfallSlopeDegrees }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat()) || v.AsFloat() < 5.0F || v.AsFloat() > 89.0F) return false; static_cast<kb::scene::RiverComponent*>(c)->waterfallSlopeDegrees = v.AsFloat(); return true; } },
+    FieldBinding{ "materialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->materialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->materialAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "waterfallMaterialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->waterfallMaterialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->waterfallMaterialAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "mistEffectAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->mistEffectAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->mistEffectAssetId = v.AsUInt64(); return true; } },
+    KB_BOOL(kb::scene::RiverComponent, enabled),
+};
+
 constexpr std::array<FieldBinding, 9> kHistoryRibbonFields{
     FieldBinding{ "meshAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->meshAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->meshAssetId = v.AsUInt64(); return true; } },
     FieldBinding{ "materialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->materialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->materialAssetId = v.AsUInt64(); return true; } },
@@ -1923,6 +1975,7 @@ void MarkGeometrySwarmModified(kb::scene::Scene& scene, kb::scene::SceneEntity e
 void MarkSurfaceCastModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SurfaceCasts().MarkModified(entity); }
 void MarkFacingPanelModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().FacingPanels().MarkModified(entity); }
 void MarkSpaceStrokeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SpaceStrokes().MarkModified(entity); }
+void MarkRiverModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Rivers().MarkModified(entity); }
 void MarkHistoryRibbonModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().HistoryRibbons().MarkModified(entity); }
 void MarkParticleEffectModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ParticleEffects().MarkModified(entity); }
 void MarkAudioSourceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AudioSources().MarkModified(entity); }
@@ -2109,6 +2162,10 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::SpaceStrokeComponent* component = scene.Components().SpaceStrokes().TryGet(entity);
         return ComponentAccess{ component, component, kSpaceStrokeFields, &MarkSpaceStrokeModified };
     }
+    if (componentName == "River") {
+        kb::scene::RiverComponent* component = scene.Components().Rivers().TryGet(entity);
+        return ComponentAccess{ component, component, kRiverFields, &MarkRiverModified };
+    }
     if (componentName == "Trail Renderer") {
         kb::scene::HistoryRibbonComponent* component = scene.Components().HistoryRibbons().TryGet(entity);
         return ComponentAccess{ component, component, kHistoryRibbonFields, &MarkHistoryRibbonModified };
@@ -2174,6 +2231,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Surface Cast") return kSurfaceCastPropertyDescs;
     if (componentName == "Facing Panel") return kFacingPanelPropertyDescs;
     if (componentName == "Line Renderer") return kSpaceStrokePropertyDescs;
+    if (componentName == "River") return kRiverPropertyDescs;
     if (componentName == "Trail Renderer") return kHistoryRibbonPropertyDescs;
     if (componentName == "Particle Effect") return kParticleEffectPropertyDescs;
     if (componentName == "Lens Flare") return kLensEchoPropertyDescs;
@@ -2340,6 +2398,16 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         kb::scene::SpaceStrokeComponent candidate = stroke;
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
         if (!kb::scene::IsSpaceStrokeComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Line Renderer values must remain valid" };
+    }
+    if (componentName == "River") {
+        kb::scene::RiverComponent candidate = *static_cast<const kb::scene::RiverComponent*>(component.immutable);
+        if (field->name == "points" && value.Type() == ScriptValueType::String) {
+            std::string error;
+            if (!kb::scene::ParseRiverPointsText(value.AsString(), candidate, error)) return ScriptSceneComponentMutationResult{ .error = "River points: " + error };
+        } else if (!field->write(&candidate, value)) {
+            return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        }
+        if (!kb::scene::IsRiverComponentValid(candidate)) return ScriptSceneComponentMutationResult{ .error = "River values must remain valid" };
     }
     if (componentName == "Trail Renderer") {
         const kb::scene::HistoryRibbonComponent& ribbon = *static_cast<const kb::scene::HistoryRibbonComponent*>(component.immutable);

@@ -40,6 +40,8 @@ namespace {
             .lodLevel = section.lodLevel,
             .terrainLayerIndex = section.terrainLayerIndex,
             .terrainLayerActive = section.terrainLayerActive,
+            .terrainChunk = section.terrainChunk,
+            .terrainSkirt = section.terrainSkirt,
         });
     }
     return sections;
@@ -196,6 +198,7 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
         .indirectDrawsEnabled = desc.gpuDriven.allowIndirectDraws && desc.gpuDriven.meshletCount > 0U,
         .meshletCullingEnabled = desc.gpuDriven.allowMeshletCulling && desc.gpuDriven.meshletCount > 0U,
         .skinning = desc.skinning,
+        .terrainChunks = desc.terrainChunks != nullptr ? *desc.terrainChunks : RenderTerrainChunkGrid{},
         .terrainLayerWeightWidth = desc.terrainLayerWeightWidth,
         .terrainLayerWeightHeight = desc.terrainLayerWeightHeight,
         .terrainLayerCount = desc.terrainLayerCount,

@@ -47,6 +47,10 @@ ScenePrefabOverrideFlag ScenePrefabNodeComparator::Compare(Scene& scene, SceneOb
         flags |= ScenePrefabOverrideFlag::Visibility;
     }
 
+    if (!SameBehaviourVariableOverrides(scene.Entities().BehaviourVariableOverrides(entity), node.components.behaviourVariableOverrides)) {
+        flags |= ScenePrefabOverrideFlag::Behaviour;
+    }
+
     return flags | ScenePrefabComponentComparator::Compare(scene.Components(), entity, node.components);
 }
 

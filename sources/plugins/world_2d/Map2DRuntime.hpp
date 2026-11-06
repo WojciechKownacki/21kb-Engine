@@ -28,6 +28,9 @@ public:
     [[nodiscard]] std::uint64_t Revision(kb::scene::SceneEntity entity) const override;
     [[nodiscard]] std::optional<kb::assets::Map2DTile> Tile(kb::scene::SceneEntity entity,
         std::uint32_t x, std::uint32_t y, std::int32_t floor = 0) const;
+    [[nodiscard]] bool SetAnimationPaused(kb::scene::SceneEntity entity, bool paused) override;
+    [[nodiscard]] bool SetPrefabRegion(kb::scene::SceneEntity entity, int minX, int minY, int maxX, int maxY, std::uint32_t budget) override;
+    [[nodiscard]] std::size_t PrefabInstanceCount(kb::scene::SceneEntity entity) const override;
     [[nodiscard]] bool SetTile(kb::scene::SceneEntity entity, std::uint32_t x, std::uint32_t y,
         std::int32_t floor, const kb::assets::Map2DTile& tile, std::string* error = nullptr) override;
     [[nodiscard]] bool PaintGround(kb::scene::SceneEntity entity, std::uint32_t x, std::uint32_t y,

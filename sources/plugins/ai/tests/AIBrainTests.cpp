@@ -106,6 +106,34 @@ void RunDecisionReasonTest() {
     Run(scene, 1.0F);
 }
 
+// Pausing the world stops a hunting monster where it stands and keeps what it knows: after the pause it
+// continues the same hunt of the same enemy instead of starting over.
+void RunPausePreservesHuntTest() {
+    kb::scene::Scene scene;
+    auto system = std::make_unique<kb::ai_plugin::AIBrainSystem>();
+    const kb::ai_plugin::AIBrainSystem* const brains = system.get();
+    Require(scene.Runtime().AddSceneSystem(std::move(system)).IsValid(), "the AI system could not be added");
+    const kb::scene::SceneEntity goblin = Spawn(scene, "Goblin", { 0.0F, 0.0F, 10.0F }, 2U);
+    Brain(scene, goblin, kb::scene::AIBrainPreset::Melee);
+    const kb::scene::SceneEntity hero = Spawn(scene, "Hero", { 0.0F, 0.0F, 0.0F }, 1U, 500.0F);
+    scene.Runtime().SetPlaying(true);
+    Run(scene, 1.0F);
+    const auto hunting = brains->LastDecision(goblin);
+    Require(hunting.has_value() && hunting->enemy == hero, "the monster must hunt the hero before the pause");
+    scene.Runtime().SetPlaying(false);
+    const auto stopped = At(scene, goblin);
+    Run(scene, 1.0F);
+    const auto paused = brains->LastDecision(goblin);
+    Require(Flat(stopped, At(scene, goblin)) < 0.001F, "a paused monster must not move");
+    Require(paused.has_value() && paused->enemy == hero && paused->action == hunting->action,
+        "a pause must keep the monster's enemy and decision");
+    scene.Runtime().SetPlaying(true);
+    Run(scene, 0.3F);
+    const auto resumed = brains->LastDecision(goblin);
+    Require(resumed.has_value() && resumed->enemy == hero && resumed->action == hunting->action,
+        "after the pause the monster must continue the same hunt");
+}
+
 void RunLiveRuleAndSnapshotTest() {
     using Snapshot = kb::scene::AIBrainDecisionSnapshot;
     using State = kb::scene::AIBrainDecisionState;
@@ -232,6 +260,7 @@ void RunManyBrainMeasurements() {
 
 int main() {
     RunDecisionReasonTest();
+    RunPausePreservesHuntTest();
     RunLiveRuleAndSnapshotTest();
     RunPerceptionMemoryTest();
     RunManyBrainMeasurements();

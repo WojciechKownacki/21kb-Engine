@@ -315,7 +315,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                 !moduleAuthoringOrders.insert(module.authoringOrder).second)
                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".authoringOrder",
                     "module authoring order must be a contiguous permutation", emitter.emitterId, module.moduleId);
-            if (!EnumInRange(module.type, ParticleModuleType::Separation))
+            if (!EnumInRange(module.type, ParticleModuleType::CollisionGeometry))
                 Add(result, ParticleEffectDiagnosticCode::InvalidEnum, path + ".type", "module type is invalid",
                     emitter.emitterId, module.moduleId);
             if (!PayloadMatchesType(module))
@@ -371,6 +371,16 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                             payload.maxEventsPerStep > kParticleEffectMaxEventsPerStep)
                             Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".collisionPlane",
                                 "collision plane values are invalid", emitter.emitterId, module.moduleId);
+                    } else if constexpr (std::is_same_v<T, ParticleCollisionGeometryModule>) {
+                        if(!IsValidParticleCollisionGeometry(payload))
+                            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".collisionGeometry",
+                                "invalid collision radius/response, layer mask or bounded grid samples", emitter.emitterId, module.moduleId);
+                        if(module.enabled && asset.backendPolicy==ParticleBackendPolicy::GpuVisualRequired)
+                            Add(result, ParticleEffectDiagnosticCode::UnsupportedCapability, path + ".collisionGeometry",
+                                "geometry collision requires CPU simulation; choose CpuDeterministic or GpuVisualPreferred", emitter.emitterId,module.moduleId);
+                        if(module.enabled && payload.kind==ParticleCollisionGeometryKind::PhysicsWorld && emitter.spawn.prewarmSeconds>0)
+                            Add(result, ParticleEffectDiagnosticCode::UnsupportedCapability, path + ".collisionGeometry",
+                                "physics-world collision cannot prewarm before synchronized scene geometry",emitter.emitterId,module.moduleId);
                     } else if constexpr (std::is_same_v<T, ParticleNoiseModule>) {
                         if (!Finite(payload.strength) || !Finite(payload.frequency) || payload.frequency <= 0.0F)
                             Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".noise",
@@ -425,6 +435,9 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
         if (!EnumInRange(emitter.output.alignment, ParticleAlignment::Local))
             Add(result, ParticleEffectDiagnosticCode::InvalidEnum, base + ".output.alignment", "alignment is invalid",
                 emitter.emitterId);
+        ValidateReference(emitter.customProcess, base + ".customProcess", result, emitter.emitterId);
+        if (!emitter.customProcess.Empty() && (asset.backendPolicy != ParticleBackendPolicy::GpuVisualRequired || emitter.output.type != ParticleOutputType::Billboard))
+            Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".customProcess", "custom particle process v1 requires GpuVisualRequired and Billboard output", emitter.emitterId);
         ValidateReference(emitter.output.material, base + ".output.material", result, emitter.emitterId);
         ValidateReference(emitter.output.mesh, base + ".output.mesh", result, emitter.emitterId);
         ValidateReference(emitter.output.textureAtlas, base + ".output.textureAtlas", result, emitter.emitterId);

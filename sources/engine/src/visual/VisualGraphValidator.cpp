@@ -1,4 +1,5 @@
 #include "engine/visual/VisualGraphValidator.hpp"
+#include "engine/visual/VisualGraphLiteral.hpp"
 
 #include <set>
 #include <string>
@@ -180,6 +181,15 @@ VisualGraphValidationResult VisualGraphValidator::Validate(const VisualGraphAsse
     std::set<std::uint32_t> nodeIds;
     ValidateNodes(graph, result, nodeIds);
     ValidatePins(graph, result);
+    for (const auto& node : graph.nodes) {
+        if (node.kind != VisualGraphNodeKind::GetProperty) continue;
+        if (!VisualGraphLiteral::IsSymbol(node.symbol) && node.symbol != "Self") continue;
+        const auto* value = graph.FindPin(node.id, "value", VisualGraphPinDirection::Output);
+        std::size_t count = 0;
+        for (const auto& pin : graph.pins) if (pin.nodeId == node.id) ++count;
+        if (count != 1 || !value || (node.symbol == "Self" ? value->type != VisualGraphValueType::Entity : !VisualGraphLiteral::Read(value->type, node.symbol)))
+            AddValidationError(result, node.id, "value", "invalid built-in value producer or literal");
+    }
     ValidateEdges(graph, result);
     ValidateAcyclicEdges(graph, VisualGraphEdgeKind::Execution, "execution", result);
     ValidateAcyclicEdges(graph, VisualGraphEdgeKind::Data, "data dependency", result);

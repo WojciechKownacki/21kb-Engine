@@ -188,6 +188,24 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
                 ScriptFunctionPin{ "time", ScriptValueType::Float, true },
             },
         },
+        LibraryEventDesc{
+            .name = "OnTimelineEvent",
+            .id = kb::script::ComputeEventId("OnTimelineEvent"),
+            .version = {
+                static_cast<std::uint16_t>(kb::scene::TimelineMarkerEvent::kSchemaMajor),
+                static_cast<std::uint16_t>(kb::scene::TimelineMarkerEvent::kSchemaMinor),
+            },
+            .arguments = {
+                ScriptFunctionPin{ "schemaMajor", ScriptValueType::Int, true },
+                ScriptFunctionPin{ "schemaMinor", ScriptValueType::Int, true },
+                ScriptFunctionPin{ "instance", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "asset", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "marker", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "time", ScriptValueType::Float, true },
+                ScriptFunctionPin{ "name", ScriptValueType::String, true },
+                ScriptFunctionPin{ "payload", ScriptValueType::String, true },
+            },
+        },
         };
         for (const kb::scene::SceneUIEventDescriptor& event : kb::scene::SceneUIEventCatalog()) {
             catalog.push_back(LibraryEventDesc{

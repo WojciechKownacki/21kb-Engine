@@ -30,6 +30,11 @@ struct InspectorUIPropertyRow {
     bool color = false;
     std::array<float, 4> rgba{};
     std::vector<std::string_view> choices;
+    // "On Click": not a property of the engine catalog but the pair eventName + eventTarget, chosen from the
+    // project scripts; `value` is its text.
+    bool onClick = false;
+    // Rare settings, listed after the others under a collapsed "Advanced" row.
+    bool advanced = false;
 };
 
 class InspectorUIComponentModel final {
@@ -44,6 +49,9 @@ public:
 
     // The component's name in the editor language; the engine's catalog name stays English for files
     // and tools.
+    // Selectable settings most widgets never touch (raycast, navigation, event name and target, ...): they follow
+    // the others under an "Advanced" row.
+    [[nodiscard]] static bool IsAdvancedProperty(kb::scene::UIComponentType component, std::string_view name) noexcept;
     [[nodiscard]] static std::string_view DisplayName(kb::scene::UIComponentType component);
     [[nodiscard]] static std::string_view PresetDisplayName(kb::scene::UIComponentPreset preset);
     [[nodiscard]] static InspectorSectionId Section(kb::scene::UIComponentType component) noexcept;

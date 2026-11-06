@@ -195,6 +195,7 @@ struct AuthGateHooks {
     std::function<void(std::uint64_t peer, AuthStatus status)> onLoginRefused;
     std::function<void(std::uint64_t peer, std::uint32_t missingScopes)> onCommandDenied;
     std::function<void(std::uint64_t peer, AuthKickReason reason)> onKicked;
+    std::function<void(std::uint64_t peer, DisconnectReason reason)> onDisconnected;
 };
 
 // Stands between a Host and the game server's command handling. Feed it the Host's events; what comes out is the commands of

@@ -27,7 +27,7 @@ public:
         const EditorMetrics& metrics) noexcept;
 
     void Handle(HWND messageWindow, int x, int y);
-    [[nodiscard]] static HMENU CreateHierarchyMenu();
+    [[nodiscard]] static HMENU CreateHierarchyMenu(const EditorSceneContext& sceneContext);
     [[nodiscard]] static bool ExecuteHierarchyMenuCommand(UINT command, EditorSceneContext& context, kb::scene::SceneEntity parent = {});
 
 private:

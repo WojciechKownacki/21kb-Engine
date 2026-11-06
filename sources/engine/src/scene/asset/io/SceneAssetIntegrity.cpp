@@ -41,13 +41,19 @@ SceneAssetIntegrity SceneAssetIntegrityService::ComputeFile(const std::filesyste
         .contentHashFnv1a64 = kFnvOffset,
         .contentChecksumCrc32 = 0xFFFFFFFFU,
     };
-    char value = 0;
-    while (input.get(value)) {
-        const unsigned char byte = static_cast<unsigned char>(value);
-        ++integrity.byteSize;
-        integrity.contentHashFnv1a64 ^= byte;
-        integrity.contentHashFnv1a64 *= kFnvPrime;
-        integrity.contentChecksumCrc32 = UpdateCrc32(integrity.contentChecksumCrc32, byte);
+    // Read in blocks: a scene goes through this on every load and every save, and a stream call per byte is slow
+    // for a scene of megabytes.
+    std::array<char, 64U * 1024U> block;
+    while (input) {
+        input.read(block.data(), static_cast<std::streamsize>(block.size()));
+        const std::size_t count = static_cast<std::size_t>(input.gcount());
+        integrity.byteSize += count;
+        for (std::size_t index = 0U; index < count; ++index) {
+            const unsigned char byte = static_cast<unsigned char>(block[index]);
+            integrity.contentHashFnv1a64 ^= byte;
+            integrity.contentHashFnv1a64 *= kFnvPrime;
+            integrity.contentChecksumCrc32 = UpdateCrc32(integrity.contentChecksumCrc32, byte);
+        }
     }
     integrity.contentChecksumCrc32 ^= 0xFFFFFFFFU;
     if (integrity.contentHashFnv1a64 == 0U) {

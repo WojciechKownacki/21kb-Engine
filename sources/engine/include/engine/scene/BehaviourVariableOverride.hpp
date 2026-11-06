@@ -2,6 +2,8 @@
 
 #include "engine/script/ScriptValue.hpp"
 
+#include <algorithm>
+#include <span>
 #include <string>
 
 namespace kb::scene {
@@ -17,5 +19,15 @@ struct BehaviourVariableOverride {
     std::string name;
     kb::script::ScriptValue value;
 };
+
+// Two override sets are the same when they hold the same variables with the same values, in any order.
+[[nodiscard]] inline bool SameBehaviourVariableOverrides(
+    std::span<const BehaviourVariableOverride> lhs, std::span<const BehaviourVariableOverride> rhs) noexcept {
+    return lhs.size() == rhs.size() && std::ranges::all_of(lhs, [rhs](const BehaviourVariableOverride& entry) noexcept {
+        return std::ranges::any_of(rhs, [&entry](const BehaviourVariableOverride& other) noexcept {
+            return other.name == entry.name && other.value == entry.value;
+        });
+    });
+}
 
 } // namespace kb::scene

@@ -1,6 +1,9 @@
 #include "engine/scene/AnimationAssetLoaders.hpp"
 
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
+#include "engine/scene/BlendSpace2DAssetIO.hpp"
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 
@@ -9,6 +12,24 @@
 #include <memory>
 
 namespace kb::scene {
+namespace {
+template<class Reader>
+std::optional<std::string> ValidateControllerSpaces(const AnimatorController& controller,
+    const kb::assets::AssetRegistry& registry, Reader&& reader) {
+    for (const auto& layer : controller.layers) for (const auto& state : layer.states) {
+        if (state.blendSpaceReference.empty()) continue;
+        kb::assets::AssetId id;
+        const auto* metadata = kb::assets::TryParseAssetId(state.blendSpaceReference,id) && id.IsValid()
+            ? registry.Find(id) : registry.FindByPath(kb::assets::Utf8Path(state.blendSpaceReference));
+        if (metadata == nullptr || metadata->type != kBlendSpace2DAssetType)
+            return "Animator BlendSpace2D is missing or has an incompatible type: " + state.blendSpaceReference;
+        std::string error;
+        const auto space = reader(*metadata,error);
+        if (!space || space->samples.empty()) return "Animator BlendSpace2D has no usable samples: " + error;
+    }
+    return std::nullopt;
+}
+} // namespace
 
 std::string_view AnimationClipAssetLoader::Type() const noexcept { return kAnimationClipAssetType; }
 std::type_index AnimationClipAssetLoader::PayloadType() const noexcept { return typeid(AnimationClip); }
@@ -117,6 +138,13 @@ std::vector<kb::assets::AssetId> AnimatorControllerAssetLoader::DiscoverDependen
     std::vector<kb::assets::AssetId> dependencies;
     for (const AnimatorControllerLayer& layer : controller->layers) {
         for (const AnimatorControllerState& state : layer.states) {
+            if (!state.blendSpaceReference.empty()) {
+                kb::assets::AssetId id;
+                const auto* dependency = kb::assets::TryParseAssetId(state.blendSpaceReference,id) && id.IsValid()
+                    ? registry.Find(id) : registry.FindByPath(kb::assets::Utf8Path(state.blendSpaceReference));
+                if (dependency != nullptr && dependency->type == kBlendSpace2DAssetType &&
+                    std::ranges::find(dependencies,dependency->id) == dependencies.end()) dependencies.push_back(dependency->id);
+            }
             std::vector<std::string_view> references;
             if (!state.clipReference.empty()) references.push_back(state.clipReference);
             for (const AnimatorControllerState::BlendChild& child : state.blendChildren) {
@@ -135,6 +163,30 @@ std::vector<kb::assets::AssetId> AnimatorControllerAssetLoader::DiscoverDependen
         }
     }
     return dependencies;
+}
+
+std::optional<std::string> AnimatorControllerAssetLoader::ValidateDependencies(
+    const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const {
+    std::string error;
+    const auto controller = AnimationAssetIO::LoadController(metadata.physicalPath,&error);
+    if (!controller) return error;
+    return ValidateControllerSpaces(*controller,registry,[](const auto& source,std::string& diagnostic) {
+        return BlendSpace2DAssetIO::Load(source.physicalPath,diagnostic);
+    });
+}
+
+std::optional<std::string> AnimatorControllerAssetLoader::ValidateRuntimeDependencies(
+    const kb::assets::AssetLoadRequest& request, const kb::assets::AssetRegistry& registry) const {
+    std::vector<std::uint8_t> bytes;
+    std::string error;
+    if (!request.ReadSourceBytes(bytes,error)) return error;
+    const auto controller = AnimationAssetIO::LoadController(bytes,&error);
+    if (!controller) return error;
+    return ValidateControllerSpaces(*controller,registry,[&](const auto& source,std::string& diagnostic) -> std::optional<BlendSpace2DAsset> {
+        std::vector<std::uint8_t> dependency;
+        if (!request.ReadDependencySourceBytes(source,dependency,diagnostic)) return std::nullopt;
+        return BlendSpace2DAssetIO::Load(dependency,diagnostic);
+    });
 }
 
 } // namespace kb::scene

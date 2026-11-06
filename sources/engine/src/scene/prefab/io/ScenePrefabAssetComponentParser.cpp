@@ -6,11 +6,16 @@
 #include "scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetTagsParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetNodeFieldParser.hpp"
+#include "engine/script/ScriptValue.hpp"
+#include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/CombatantFields.hpp"
 #include "scene/AIBrainFields.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cmath>
+#include <optional>
+#include <string>
+#include <utility>
 
 namespace kb::scene {
 namespace {
@@ -102,7 +107,7 @@ template <typename T>
     ColliderComponent collider;
     if (!ParseField(fields, "collider.shape", shape)
         || shape < static_cast<int>(ColliderShape::Box)
-        || shape > static_cast<int>(ColliderShape::OneWayBox)
+        || shape > static_cast<int>(ColliderShape::Terrain)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.center", collider.center)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.boxSize", collider.boxSize)
         || !ParseField(fields, "collider.radius", collider.radius)
@@ -151,6 +156,32 @@ template <typename T>
     components.regionShape = regionShape;
     return true;
 }
+
+[[nodiscard]] bool ParseRiver(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "river", present)) return false;
+    if (!present) return true;
+    RiverComponent river{};
+    if (!ParseField(fields, "river.pointCount", river.pointCount) || !IsRiverPointCountValid(river.pointCount) ||
+        !ParseField(fields, "river.bankWidth", river.bankWidth) || !ParseField(fields, "river.waterfallSlopeDegrees", river.waterfallSlopeDegrees) ||
+        !ParseField(fields, "river.materialAssetId", river.materialAssetId) ||
+        !ParseField(fields, "river.waterfallMaterialAssetId", river.waterfallMaterialAssetId) ||
+        !ParseField(fields, "river.mistEffectAssetId", river.mistEffectAssetId) || !ParseOptionalBool(fields, "river.enabled", river.enabled)) {
+        return false;
+    }
+    for (std::uint32_t index = 0U; index < river.pointCount; ++index) {
+        const std::string key = "river.point" + std::to_string(index);
+        RiverPoint& point = river.points[index];
+        if (!ScenePrefabAssetFieldParser::ParseVec3(fields, key, point.position) || !ParseField(fields, key + ".width", point.width) ||
+            !ParseField(fields, key + ".depth", point.depth) || !ParseField(fields, key + ".speed", point.speed)) {
+            return false;
+        }
+    }
+    if (!IsRiverComponentValid(river)) return false;
+    components.river = river;
+    return true;
+}
+
 
 [[nodiscard]] bool ParseGuideCurve(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasGuideCurve = false;
@@ -554,6 +585,26 @@ template <typename T>
 
     behaviour.backend = static_cast<BehaviourBackend>(backend);
     behaviour.tickGroup = static_cast<BehaviourTickGroup>(tickGroup);
+    std::uint32_t variableCount = 0U;
+    if (!ParseOptionalField(fields, "behaviour.variableCount", variableCount) || variableCount > SceneAssetFormat::MaxBehaviourVariableOverrides) {
+        return false;
+    }
+    components.behaviourVariableOverrides.clear();
+    for (std::uint32_t index = 0U; index < variableCount; ++index) {
+        const std::string key = "behaviour.variable." + std::to_string(index);
+        BehaviourVariableOverride entry;
+        std::string valueText;
+        if (!ScenePrefabAssetNodeFieldParser::ParseEscapedString(fields, key + ".name", entry.name) || entry.name.empty() ||
+            !ScenePrefabAssetNodeFieldParser::ParseEscapedString(fields, key + ".value", valueText)) {
+            return false;
+        }
+        std::optional<kb::script::ScriptValue> value = kb::script::TryParseTypedValueText(valueText);
+        if (!value.has_value()) {
+            return false;
+        }
+        entry.value = std::move(*value);
+        components.behaviourVariableOverrides.push_back(std::move(entry));
+    }
     components.behaviour = behaviour;
     return true;
 }
@@ -905,6 +956,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseSurfaceCast(fields, components)
         && ParseFacingPanel(fields, components)
         && ParseSpaceStroke(fields, components)
+        && ParseRiver(fields, components)
         && ParseHistoryRibbon(fields, components)
         && ParseParticleEffect(fields, components)
         && ParseLensEcho(fields, components)

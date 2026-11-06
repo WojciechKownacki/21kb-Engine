@@ -56,6 +56,9 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     case DockPanelKind::Console:
         icon = HeroIconKind::CommandLine;
         return true;
+    case DockPanelKind::Agent:
+        icon = HeroIconKind::Bolt;
+        return true;
     case DockPanelKind::ProjectSettings:
         icon = HeroIconKind::Gamepad2;
         return true;

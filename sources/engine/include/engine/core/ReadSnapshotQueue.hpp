@@ -72,8 +72,18 @@ public:
         return result;
     }
 
+    [[nodiscard]] std::vector<Command> CapturePending() const {
+        std::lock_guard lock{mutex_};
+        return pending_;
+    }
+
+    void RestorePending(std::vector<Command> commands) {
+        std::lock_guard lock{mutex_};
+        pending_ = std::move(commands);
+    }
+
 private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::vector<Command> pending_;
 };
 

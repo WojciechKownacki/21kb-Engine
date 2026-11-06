@@ -36,6 +36,8 @@ std::string_view ToString(AssetKind kind) noexcept {
         return "Texture";
     case AssetKind::Font:
         return "Font";
+    case AssetKind::UITheme:
+        return "UITheme";
     case AssetKind::Audio:
         return "Audio";
     case AssetKind::Prefab:
@@ -76,6 +78,8 @@ bool AssetMatchesKind(const AssetMetadata& metadata, AssetKind kind) noexcept {
             (metadata.type == "ImportedAsset" && metadata.importCategory == "Texture");
     case AssetKind::Font:
         return metadata.type == "ImportedAsset" && metadata.importCategory == "Font";
+    case AssetKind::UITheme:
+        return metadata.type == "UITheme";
     case AssetKind::Audio:
         return MetadataIsAudio(metadata);
     case AssetKind::Prefab:

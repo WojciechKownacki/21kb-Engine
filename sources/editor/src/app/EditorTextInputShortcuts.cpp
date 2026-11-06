@@ -1,9 +1,9 @@
 #include "app/EditorTextInputShortcuts.hpp"
 #include "app/EditorKeyState.hpp"
+#include "engine/platform/win32/Win32ClipboardText.hpp"
 
 #if defined(_WIN32)
 
-#include <cstring>
 
 namespace kb::editor {
 namespace {
@@ -14,28 +14,6 @@ namespace {
 
 [[nodiscard]] bool AltDown() noexcept {
     return EditorKeyDown(VK_MENU);
-}
-
-[[nodiscard]] std::wstring ToWide(std::string_view text) {
-    std::wstring wide;
-    wide.reserve(text.size());
-    for (const char character : text) {
-        wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(character)));
-    }
-    return wide;
-}
-
-[[nodiscard]] std::string ToEditorText(const wchar_t* text, std::size_t maximumLength) {
-    std::string result;
-    if (text == nullptr) {
-        return result;
-    }
-    for (const wchar_t* cursor = text; *cursor != L'\0' && result.size() < maximumLength; ++cursor) {
-        if (*cursor >= 32 && *cursor < 127) {
-            result.push_back(static_cast<char>(*cursor));
-        }
-    }
-    return result;
 }
 
 } // namespace
@@ -60,56 +38,13 @@ EditorTextInputShortcut EditorTextInputShortcuts::Resolve(WPARAM key) noexcept {
 }
 
 bool EditorTextInputShortcuts::CopyToClipboard(HWND owner, std::string_view text) noexcept {
-    const std::wstring wide = ToWide(text);
-    const SIZE_T byteCount = (wide.size() + 1U) * sizeof(wchar_t);
-    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, byteCount);
-    if (memory == nullptr) {
-        return false;
-    }
-
-    void* locked = GlobalLock(memory);
-    if (locked == nullptr) {
-        GlobalFree(memory);
-        return false;
-    }
-    std::memcpy(locked, wide.c_str(), byteCount);
-    GlobalUnlock(memory);
-
-    if (!OpenClipboard(owner)) {
-        GlobalFree(memory);
-        return false;
-    }
-    EmptyClipboard();
-    const HANDLE handle = SetClipboardData(CF_UNICODETEXT, memory);
-    CloseClipboard();
-    if (handle == nullptr) {
-        GlobalFree(memory);
-        return false;
-    }
-    return true;
+    return kb::platform::WriteWin32ClipboardText(owner, text);
 }
 
 std::optional<std::string> EditorTextInputShortcuts::PasteFromClipboard(HWND owner, std::size_t maximumLength) {
-    if (!OpenClipboard(owner)) {
-        return std::nullopt;
-    }
-
-    HANDLE handle = GetClipboardData(CF_UNICODETEXT);
-    if (handle == nullptr) {
-        CloseClipboard();
-        return std::nullopt;
-    }
-
-    const wchar_t* text = static_cast<const wchar_t*>(GlobalLock(handle));
-    if (text == nullptr) {
-        CloseClipboard();
-        return std::nullopt;
-    }
-
-    std::string result = ToEditorText(text, maximumLength);
-    GlobalUnlock(handle);
-    CloseClipboard();
-    return result;
+    auto text = kb::platform::ReadWin32ClipboardText(owner, maximumLength);
+    if (text) std::erase_if(*text, [](unsigned char value) { return value < 32U || value == 127U; });
+    return text;
 }
 
 } // namespace kb::editor

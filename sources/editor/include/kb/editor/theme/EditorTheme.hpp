@@ -31,8 +31,10 @@ struct EditorTheme {
 };
 
 struct EditorMetrics {
-    int menuHeight = 24;
-    int toolbarHeight = 48;
+    // The single top bar that holds the menus, the transport controls and Save.
+    int menuHeight = 40;
+    // Console error and warning counts along the window's bottom edge.
+    int statusBarHeight = 24;
     int floatingChromeHeight = 24;
     int floatingControlWidth = 34;
     int floatingResizeBorder = 6;
@@ -67,7 +69,7 @@ struct EditorMetrics {
         .borderPanel = EditorColor{ 49, 58, 75 },
         .textPrimary = EditorColor{ 235, 238, 247 },
         .textSecondary = EditorColor{ 184, 192, 211 },
-        .textDisabled = EditorColor{ 105, 115, 137 },
+        .textDisabled = EditorColor{ 130, 140, 162 },
         .accent = EditorColor{ 119, 119, 119 },
     };
 }

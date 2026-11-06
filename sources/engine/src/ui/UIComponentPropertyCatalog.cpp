@@ -55,6 +55,7 @@ KB_UI_SLOT(UIInputField, inputField)
 KB_UI_SLOT(UIDropdown, dropdown)
 KB_UI_SLOT(UIProgressBar, progressBar)
 KB_UI_SLOT(UIWidgetSwitcher, widgetSwitcher)
+KB_UI_SLOT(UIAccessibility, accessibility)
 
 #undef KB_UI_SLOT
 
@@ -101,6 +102,8 @@ template <typename Value>
         }
     } else if constexpr (std::is_enum_v<Value>) {
         if (const std::int32_t* value = std::get_if<std::int32_t>(&source)) {
+            using Underlying = std::underlying_type_t<Value>;
+            if (!std::in_range<Underlying>(*value)) return false;
             output = static_cast<Value>(*value);
             return true;
         }
@@ -273,6 +276,9 @@ constexpr std::array kRectTransformProperties{
     KB_NESTED(UIRectTransform, kb::math::Vec2, scale, y),
     KB_FLOAT(UIRectTransform, rotationDegrees),
     KB_INT(UIRectTransform, zOrder),
+    KB_TYPED_ASSET(UIRectTransform, themeAssetId, UITheme, "ui.theme"),
+    StringBinding<UIRectTransform, &UIRectThemeVariant, &SetUIRectThemeVariant>("themeVariant"),
+    StringBinding<UIRectTransform, &UIRectThemeOverrides, &SetUIRectThemeOverrides>("themeOverrides"),
 };
 constexpr std::array kCanvasProperties{
     KB_ENUM(UICanvas, renderMode),       KB_INT(UICanvas, sortingOrder),  KB_BOOL(UICanvas, pixelPerfect),
@@ -386,7 +392,11 @@ constexpr std::array kRawImageProperties{
 constexpr std::array kTextProperties{
     StringBinding<UIText, &UITextContent, &SetUITextContent>("content"),
     StringBinding<UIText, &UITextLocalizationKey, &SetUITextLocalizationKey>("localizationKey"),
+    StringBinding<UIText, &UITextLocalizationNumber, &SetUITextLocalizationNumber>("localizationNumber"),
+    StringBinding<UIText, &UITextFontVariations, &SetUITextFontVariations>("fontVariations"),
     KB_TYPED_ASSET(UIText, fontAssetId, Font, "ui.font"),
+    KB_TYPED_ASSET(UIText, fallbackFontAssetId, Font, "ui.fallbackFont"),
+    KB_ENUM(UIText, fontRenderMode),
     KB_FLOAT(UIText, fontSize),
     KB_COLOR(UIText, color),
     KB_ENUM(UIText, horizontalAlignment),
@@ -541,6 +551,12 @@ constexpr std::array kProgressBarProperties{
     KB_ENTITY(UIProgressBar, fillRect),
 };
 constexpr std::array kWidgetSwitcherProperties{KB_UINT(UIWidgetSwitcher, visibleChildIndex)};
+constexpr std::array kAccessibilityProperties{
+    KB_ENUM(UIAccessibility, role),
+    StringBinding<UIAccessibility,&UIAccessibilityLabel,&SetUIAccessibilityLabel>("label"),
+    StringBinding<UIAccessibility,&UIAccessibilityHint,&SetUIAccessibilityHint>("hint"),
+    KB_BOOL(UIAccessibility, hidden),
+};
 
 #undef KB_RECT
 #undef KB_VEC4
@@ -619,6 +635,8 @@ constexpr std::array kWidgetSwitcherProperties{KB_UINT(UIWidgetSwitcher, visible
         return kProgressBarProperties;
     case UIComponentType::WidgetSwitcher:
         return kWidgetSwitcherProperties;
+    case UIComponentType::Accessibility:
+        return kAccessibilityProperties;
     }
     return {};
 }
@@ -668,6 +686,7 @@ template <typename Visitor>
         KB_VISIT(Dropdown, dropdown);
         KB_VISIT(ProgressBar, progressBar);
         KB_VISIT(WidgetSwitcher, widgetSwitcher);
+        KB_VISIT(Accessibility, accessibility);
     }
 #undef KB_VISIT
     return false;
@@ -682,7 +701,7 @@ template <typename Visitor>
 } // namespace
 
 std::span<const UIComponentPropertyDescriptor> UIComponentPropertyCatalog(UIComponentType component) noexcept {
-    constexpr std::size_t kComponentCount = static_cast<std::size_t>(UIComponentType::WidgetSwitcher) + 1U;
+    constexpr std::size_t kComponentCount = static_cast<std::size_t>(UIComponentType::Accessibility) + 1U;
     static const std::array<std::vector<UIComponentPropertyDescriptor>, kComponentCount> kDescriptors = [] {
         std::array<std::vector<UIComponentPropertyDescriptor>, kComponentCount> result;
         for (std::size_t index = 0U; index < result.size(); ++index) {

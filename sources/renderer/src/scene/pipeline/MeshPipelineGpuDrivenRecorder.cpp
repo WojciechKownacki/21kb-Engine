@@ -74,7 +74,7 @@ void MeshPipelineGpuDrivenRecorder::Finalize(
     result.stats.gpuDrivenFeatureState = gpuDrivenDecision.state;
     result.stats.gpuDrivenCounterSource = gpuDrivenDecision.counterSource;
     result.stats.gpuDrivenFallbackReason = gpuDrivenDecision.fallbackReason;
-    result.stats.gpuDrivenFallbackCount = gpuDrivenDecision.UsesFallback() ? 1U : 0U;
+    result.stats.gpuDrivenFallbackCount += gpuDrivenDecision.UsesFallback() ? 1U : 0U;
     if (gpuDrivenDecision.state != SceneGpuDrivenFeatureState::CpuValidationOnly) {
         return;
     }

@@ -12,6 +12,9 @@
 #	endif // BX_PLATFORM_OSX
 #	include <bx/pixelformat.h>
 #	include "renderer_webgpu.h"
+#	if BX_PLATFORM_EMSCRIPTEN
+#		include <emscripten/emscripten.h>
+#	endif // BX_PLATFORM_EMSCRIPTEN
 
 namespace bgfx { namespace wgpu
 {
@@ -2032,6 +2035,13 @@ WGPU_IMPORT
 			while (!s_done)
 			{
 				wgpuInstanceProcessEvents(m_instance);
+			#if BX_PLATFORM_EMSCRIPTEN
+				// Browser mapping promises need an event-loop turn before their callback can run.
+				if (!s_done)
+				{
+					emscripten_sleep(0);
+				}
+			#endif // BX_PLATFORM_EMSCRIPTEN
 			}
 		}
 
@@ -2092,6 +2102,13 @@ WGPU_IMPORT
 			while (!s_done)
 			{
 				wgpuInstanceProcessEvents(m_instance);
+			#if BX_PLATFORM_EMSCRIPTEN
+				// Browser mapping promises need an event-loop turn before their callback can run.
+				if (!s_done)
+				{
+					emscripten_sleep(0);
+				}
+			#endif // BX_PLATFORM_EMSCRIPTEN
 			}
 		}
 
@@ -2301,6 +2318,13 @@ WGPU_IMPORT
 			while (!s_done)
 			{
 				wgpuInstanceProcessEvents(m_instance);
+			#if BX_PLATFORM_EMSCRIPTEN
+				// Browser mapping promises need an event-loop turn before their callback can run.
+				if (!s_done)
+				{
+					emscripten_sleep(0);
+				}
+			#endif // BX_PLATFORM_EMSCRIPTEN
 			}
 
 			g_callback->screenShot(

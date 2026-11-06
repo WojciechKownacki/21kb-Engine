@@ -61,6 +61,26 @@ class PackageContractTests(unittest.TestCase):
                 [entry["path"] for entry in manifest["files"]],
             )
 
+    def test_source_fingerprint_excludes_android_outputs_but_keeps_build_scripts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            (root / "android").mkdir()
+            (root / "android/build.gradle").write_text("plugins {}", encoding="utf-8")
+            (root / "android/Host.java").write_text("class Host {}", encoding="utf-8")
+            (root / "scripts/build").mkdir(parents=True)
+            script = root / "scripts/build/package.py"
+            script.write_text("version = 1", encoding="utf-8")
+            baseline = source_tree_fingerprint(root)
+            for directory in ("android/build", "android/.cxx", "scripts/__pycache__"):
+                (root / directory).mkdir()
+                (root / directory / "generated.bin").write_bytes(b"generated")
+            self.assertEqual(baseline, source_tree_fingerprint(root))
+            script.write_text("version = 2", encoding="utf-8")
+            self.assertNotEqual(baseline, source_tree_fingerprint(root))
+            baseline = source_tree_fingerprint(root)
+            (root / "android/Host.java").write_text("class UpdatedHost {}", encoding="utf-8")
+            self.assertNotEqual(baseline, source_tree_fingerprint(root))
+
     def test_source_fingerprint_normalizes_text_eols_but_not_binary_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)

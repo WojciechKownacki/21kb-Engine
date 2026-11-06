@@ -80,6 +80,33 @@ bool NativeScriptPluginManager::IsLoaded(std::string_view key) const noexcept {
     }) != plugins_.end();
 }
 
+NativeScriptPluginLoadResult NativeScriptPluginManager::LoadLinked(std::string key, NativeScriptPluginRegisterProc registration) {
+    NativeScriptPluginLoadResult result{};
+    if (key.empty() || registration == nullptr) {
+        result.errors.push_back("linked native script module requires a key and registration entry point");
+        return result;
+    }
+    std::optional<LoadedPlugin> previous = Detach(key);
+    if (previous.has_value()) {
+        for (const auto& symbol : previous->registeredSymbols) backend_.UnregisterSymbolCallbacks(symbol);
+    }
+    if (!RegisterPluginSymbols(registration, result.registeredSymbols, result.errors)) {
+        if (previous.has_value()) RestoreOrClose(std::move(*previous), result.errors);
+        return result;
+    }
+    result.loaded = true;
+    plugins_.push_back(LoadedPlugin{
+        .key = std::move(key),
+        .originalPath = {},
+        .loadedPath = {},
+        .entryPoint = {},
+        .library = {},
+        .registeredSymbols = result.registeredSymbols,
+        .linkedRegistration = registration,
+    });
+    return result;
+}
+
 void NativeScriptPluginManager::Unload(std::string_view key) noexcept {
     while (std::optional<LoadedPlugin> plugin = Detach(key)) {
         for (const std::string& symbol : plugin->registeredSymbols) {
@@ -128,7 +155,13 @@ bool NativeScriptPluginManager::RegisterPluginSymbols(
         return false;
     }
 
-    auto registerPlugin = reinterpret_cast<NativeScriptPluginRegisterProc>(symbol);
+    return RegisterPluginSymbols(reinterpret_cast<NativeScriptPluginRegisterProc>(symbol), registeredSymbols, errors);
+}
+
+bool NativeScriptPluginManager::RegisterPluginSymbols(
+    NativeScriptPluginRegisterProc registerPlugin,
+    std::vector<std::string>& registeredSymbols,
+    std::vector<std::string>& errors) {
     NativeScriptPluginRegistrar registrar{ backend_ };
     NativeScriptPluginApi api = registrar.CreateApi();
     if (!registerPlugin(&api)) {
@@ -152,7 +185,10 @@ bool NativeScriptPluginManager::RegisterPluginSymbols(
 void NativeScriptPluginManager::RestoreOrClose(LoadedPlugin plugin, std::vector<std::string>& errors) {
     std::vector<std::string> restoreErrors;
     std::vector<std::string> restoredSymbols;
-    if (RegisterPluginSymbols(plugin.library, plugin.entryPoint, restoredSymbols, restoreErrors)) {
+    const bool restored = plugin.linkedRegistration != nullptr
+        ? RegisterPluginSymbols(plugin.linkedRegistration, restoredSymbols, restoreErrors)
+        : RegisterPluginSymbols(plugin.library, plugin.entryPoint, restoredSymbols, restoreErrors);
+    if (restored) {
         plugin.registeredSymbols = std::move(restoredSymbols);
         plugins_.push_back(std::move(plugin));
         return;

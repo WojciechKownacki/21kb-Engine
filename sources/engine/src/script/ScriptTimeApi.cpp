@@ -150,6 +150,39 @@ ScriptFunctionCallResult SetScale(const ScriptFunctionCallContext& context, std:
     };
 }
 
+// Pause freezes the gameplay clocks (fixed-step physics, AI, animation, timers, Time.Delta) while scripts, UI and
+// audio keep running so a menu can drive the pause. Resume continues from the exact paused state.
+ScriptFunctionCallResult SetPaused(const ScriptFunctionCallContext& context, bool paused) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    context.scene->Runtime().SetPlaying(!paused);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "paused", ScriptValue{ paused } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult Pause(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    return SetPaused(context, true);
+}
+
+ScriptFunctionCallResult Resume(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    return SetPaused(context, false);
+}
+
+ScriptFunctionCallResult IsPaused(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "paused", ScriptValue{ !context.scene->Runtime().IsPlaying() } } },
+        .errors = {},
+    };
+}
+
 bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -175,6 +208,9 @@ bool ScriptTimeApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Time.FixedStepIndex", { ScriptFunctionPin{ "step", ScriptValueType::Int64, true } }, &FixedStepIndex) && ok;
     ok = RegisterFunction(host, "Time.Scale", { ScriptFunctionPin{ "scale", ScriptValueType::Float, true } }, &Scale) && ok;
     ok = RegisterFunction(host, "Time.SetScale", { ScriptFunctionPin{ "scale", ScriptValueType::Float, false } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetScale) && ok;
+    ok = RegisterFunction(host, "Time.Pause", { ScriptFunctionPin{ "paused", ScriptValueType::Bool, true } }, &Pause) && ok;
+    ok = RegisterFunction(host, "Time.Resume", { ScriptFunctionPin{ "paused", ScriptValueType::Bool, true } }, &Resume) && ok;
+    ok = RegisterFunction(host, "Time.IsPaused", { ScriptFunctionPin{ "paused", ScriptValueType::Bool, true } }, &IsPaused) && ok;
     return ok;
 }
 

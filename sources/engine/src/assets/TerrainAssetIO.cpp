@@ -16,6 +16,7 @@ namespace kb::assets {
 namespace {
 
 constexpr std::array<std::uint8_t, 8U> kMagic{ 'K', 'B', 'T', 'E', 'R', 'R', 'N', 0U };
+constexpr std::uint64_t kVersion3SettingsBytes = sizeof(float) + sizeof(std::uint32_t);
 constexpr std::uint64_t kVersion1HeaderBytes = 8U + (5U * sizeof(std::uint32_t)) + (2U * sizeof(float));
 
 void SetError(std::string* output, std::string value) {
@@ -85,7 +86,7 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(
     std::size_t cursor = kMagic.size();
     std::uint32_t version = 0U;
     TerrainAsset terrain{};
-    if (!ReadLittleEndian(bytes, cursor, version) || (version != 1U && version != TerrainAsset::CurrentVersion) ||
+    if (!ReadLittleEndian(bytes, cursor, version) || version < 1U || version > TerrainAsset::CurrentVersion ||
         !ReadLittleEndian(bytes, cursor, terrain.width) || !ReadLittleEndian(bytes, cursor, terrain.height) ||
         !ReadLittleEndian(bytes, cursor, terrain.chunkQuads) || !ReadLittleEndian(bytes, cursor, terrain.lodCount) ||
         !ReadLittleEndian(bytes, cursor, terrain.worldSizeX) || !ReadLittleEndian(bytes, cursor, terrain.worldSizeZ) ||
@@ -139,12 +140,20 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(
         }
         const std::uint64_t weightBytes = static_cast<std::uint64_t>(terrain.layerWeightWidth) *
             terrain.layerWeightHeight * TerrainAsset::MaximumMaterialLayers;
-        if (weightBytes > bytes.size() - cursor || cursor + weightBytes != bytes.size()) {
+        const std::uint64_t settingsBytes = version >= 3U ? kVersion3SettingsBytes : 0U;
+        if (weightBytes > bytes.size() - cursor || cursor + weightBytes + settingsBytes != bytes.size()) {
             SetError(error, "Terrain layer weight payload size is invalid");
             return std::nullopt;
         }
         terrain.layerWeights.assign(
-            bytes.begin() + static_cast<std::ptrdiff_t>(cursor), bytes.end());
+            bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+            bytes.begin() + static_cast<std::ptrdiff_t>(cursor + weightBytes));
+        cursor += static_cast<std::size_t>(weightBytes);
+    }
+    if (version >= 3U && (!ReadLittleEndian(bytes, cursor, terrain.lodPixelError) ||
+            !ReadLittleEndian(bytes, cursor, terrain.collisionStep))) {
+        SetError(error, "Terrain settings block is truncated");
+        return std::nullopt;
     }
     if (!IsTerrainAssetValid(terrain, error)) return std::nullopt;
     return terrain;
@@ -154,7 +163,8 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
     if (!IsTerrainAssetValid(terrain, error)) return false;
     std::vector<std::uint8_t> bytes;
     bytes.reserve(static_cast<std::size_t>(kVersion1HeaderBytes) + terrain.heights.size() * sizeof(float) +
-        terrain.holes.size() + 12U + terrain.materialLayers.size() * sizeof(std::uint64_t) + terrain.layerWeights.size());
+        terrain.holes.size() + 12U + terrain.materialLayers.size() * sizeof(std::uint64_t) + terrain.layerWeights.size() +
+        kVersion3SettingsBytes);
     bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
     AppendLittleEndian(bytes, TerrainAsset::CurrentVersion);
     AppendLittleEndian(bytes, terrain.width);
@@ -180,6 +190,8 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
         AppendLittleEndian(bytes, layer.materialAssetId);
     }
     bytes.insert(bytes.end(), terrain.layerWeights.begin(), terrain.layerWeights.end());
+    AppendLittleEndian(bytes, terrain.lodPixelError);
+    AppendLittleEndian(bytes, terrain.collisionStep);
 
     if (!scene::SceneAssetBinaryIO::WriteBytesAtomically(path, bytes)) {
         SetError(error, "Terrain asset could not replace its previous version");

@@ -16,6 +16,10 @@
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -70,6 +74,14 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     static_cast<void>(y);
     shellInteraction_.ClearPressedSave();
     shellInteraction_.ClearPressedTransport();
+    if (const auto* state=sceneContext_.GameplayGraphEditor();state && state->dragging) {
+        GameplayGraphEditorPanel::PointerUp(messageWindow,sceneContext_);
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_,messageWindow);return;
+    }
+    if (const auto* state=sceneContext_.BlendSpace2DEditor();state && state->dragging) {
+        static_cast<void>(BlendSpace2DEditorPanel::PointerUp(messageWindow,sceneContext_));
+        sceneViewport_.RequestPresent();EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_,messageWindow);return;
+    }
 
     if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
         sceneContext_.ParticleEditorWorkspace().ModuleDragActive() ||

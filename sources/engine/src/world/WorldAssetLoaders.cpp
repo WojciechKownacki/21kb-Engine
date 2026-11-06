@@ -1,6 +1,7 @@
 #include "world/WorldAssetLoaders.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/AssetPayloadMemory.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -122,7 +123,18 @@ kb::assets::AssetLoadResult WorldCellIndexAssetLoader::Load(const kb::assets::As
     if (!parsed.succeeded) {
         return { .asset = {}, .error = std::move(parsed.error) };
     }
-    return { .asset = std::make_shared<WorldCellIndex>(std::move(parsed.index)), .error = {} };
+    auto index = std::make_shared<WorldCellIndex>(std::move(parsed.index));
+    const auto buffers = [](const auto&... values) {
+        return (std::uint64_t{0} + ... + (static_cast<std::uint64_t>(values.capacity()) * sizeof(values[0])));
+    };
+    using kb::assets::StringBufferBytes;
+    std::uint64_t bytes = sizeof(*index) + StringBufferBytes(index->worldGuid) + StringBufferBytes(index->worldName) +
+        buffers(index->dataLayers, index->units, index->hlods, index->navMeshes);
+    for (const auto& layer : index->dataLayers) bytes += StringBufferBytes(layer.name);
+    for (const auto& unit : index->units) bytes += StringBufferBytes(unit.dataLayer) + StringBufferBytes(unit.scene);
+    for (const auto& hlod : index->hlods) bytes += StringBufferBytes(hlod.mesh) + buffers(hlod.materials);
+    for (const auto& navMesh : index->navMeshes) bytes += StringBufferBytes(navMesh.mesh);
+    return { .asset = std::move(index), .error = {}, .residentBytes = bytes };
 }
 
 std::vector<kb::assets::AssetId> WorldCellIndexAssetLoader::DiscoverDependencies(

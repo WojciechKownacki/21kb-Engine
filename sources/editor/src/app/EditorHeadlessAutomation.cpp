@@ -1,3 +1,6 @@
+#include "extensions/EditorExtensionHost.hpp"
+#include "inspection/InspectorAddComponentBrowserModel.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "app/EditorHeadlessPopupChecks.hpp"
@@ -19,6 +22,7 @@
 #include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/ui/InspectorUIClickHandler.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
@@ -27,7 +31,9 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
+#include "profiler/ProfilerOverlayLayout.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
+#include "rendering/ProfilerSelectionOverlayWindow.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
@@ -37,6 +43,7 @@
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/scene_viewport/EditorUIRectInteraction.hpp"
@@ -186,7 +193,7 @@ FindInspectorHit(
     InspectorPropertyId property,
     int index = -1,
     InspectorHitKind kind = InspectorHitKind::None, POINT* matchedPoint = nullptr) {
-    const bool uiField = InspectorUIComponentModel::Component(section).has_value();
+    const bool uiField = InspectorUIComponentModel::Component(section).has_value() || section == InspectorSectionId::UITheme;
     const bool addButton = section == InspectorSectionId::AddComponent &&
         property == InspectorPropertyId::AddComponentButton;
     int compactX = -1;
@@ -356,6 +363,11 @@ FindInspectorHit(
     if (panel == "inspector") return DockPanelKind::Inspector;
     if (panel == "assets") return DockPanelKind::Assets;
     if (panel == "console") return DockPanelKind::Console;
+    if (panel == "audio-mixer") return DockPanelKind::AudioMixer;
+    if (panel == "timeline") return DockPanelKind::TimelineEditor;
+    if (panel == "blend-space-2d") return DockPanelKind::BlendSpace2DEditor;
+    if (panel == "gameplay-graph") return DockPanelKind::GameplayGraphEditor;
+    if (panel == "profiler") return DockPanelKind::Profiler;
     if (panel == "project_settings") {
         return DockPanelKind::ProjectSettings;
     }
@@ -628,6 +640,8 @@ struct EditorHeadlessAutomation::Impl {
             const DockPanel panel{.id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene};
             auto settings = ScenePanelContentRenderer::BuildSettings(
                 RECT{0, -34, bounds.right, bounds.bottom}, panel, context, backendSettings);
+            settings.lightingConfig.ibl.localProbeBlending = localProbeBlending;
+            settings.lightingConfig.ibl.parallaxCorrection = probeParallax;
             settings.renderWidth = runtimeWidth;
             settings.renderHeight = runtimeHeight;
             settings.presentToHost = true;
@@ -638,7 +652,11 @@ struct EditorHeadlessAutomation::Impl {
             viewport.EndPaintLayout(deltaSeconds);
             const auto stats = viewport.LastSceneSubmitStats();
             if (stats.HasMissingResources() || stats.droppedInstanceCount != 0U) {
-                context.Console().Error("Renderer", "Runtime frame has missing resources or dropped instances.");
+                context.Console().Error("Renderer", "Runtime frame resource failure: mesh bindings=" + std::to_string(stats.missingMeshBindingCount) +
+                    " meshes=" + std::to_string(stats.missingMeshResourceCount) + " vertex formats=" + std::to_string(stats.unsupportedMeshVertexFormatCount) +
+                    " material bindings=" + std::to_string(stats.missingMaterialBindingCount) + " materials=" + std::to_string(stats.missingMaterialResourceCount) +
+                    " texture bindings=" + std::to_string(stats.missingTextureBindingCount) + " textures=" + std::to_string(stats.missingTextureResourceCount) +
+                    " dropped=" + std::to_string(stats.droppedInstanceCount));
                 return false;
             }
             const bool rendered = !renderFailed && runtimeCompositeActive &&
@@ -749,13 +767,17 @@ struct EditorHeadlessAutomation::Impl {
             window, bounds, context.Scene(), settings);
         if (animatorPreviewKey != 0U && context.AnimatorEditorPreviewScene() != nullptr) {
             constexpr RECT previewBounds{ 320, 180, 640, 360 };
-            const std::uint64_t revision = context.AnimatorEditorPreviewRevision();
+            const bool previewTarget = context.AnimatorEditorDebuggingPreview();
+            const std::uint64_t revision = previewTarget ? context.AnimatorEditorPreviewRevision() : context.SceneRenderRevision();
             EditorSceneBgfxViewport::PresentSettings previewSettings{};
             previewSettings.viewportKey = animatorPreviewKey;
-            previewSettings.editorSceneOverlaysEnabled = false;
+            previewSettings.editorSceneOverlaysEnabled = true;
+            const auto debugSnapshot = context.AnimatorEditorDebugSnapshot();
+            const auto* debugInstance = debugSnapshot ? debugSnapshot->Find(context.AnimatorEditorResolvedDebugTarget()) : nullptr;
+            if (debugInstance) previewSettings.physicsDebugLines = AnimatorEditorPanelRenderer::TargetMarkers(*debugInstance);
             previewSettings.sceneRevision = revision;
             previewSettings.sceneDirtyBaseRevision = revision;
-            previewSettings.sceneFullSyncRequired = false;
+            previewSettings.sceneFullSyncRequired = !previewTarget;
             previewSettings.msaaSamples = backendSettings.MsaaSamples();
             previewSettings.shadowPassEnabled = backendSettings.ShadowsEnabled();
             previewSettings.postProcessEnabled = true;
@@ -763,7 +785,7 @@ struct EditorHeadlessAutomation::Impl {
             previewSettings.selectionOutlineEnabled = false;
             previewSettings.gpuDrivenRuntimeDispatchEnabled = backendSettings.GpuDrivenEnabled();
             viewport.Present(
-                window, previewBounds, *context.AnimatorEditorPreviewScene(), previewSettings);
+                window, previewBounds, (context.AnimatorEditorDebuggingPreview() ? *context.AnimatorEditorPreviewScene() : context.Scene()), previewSettings);
         }
         viewport.EndPaintLayout();
         return std::string_view{ viewport.ActiveBackendLabel() } !=
@@ -791,6 +813,7 @@ struct EditorHeadlessAutomation::Impl {
     HWND scriptEditorWindow = nullptr;
     EditorSceneContext* sceneContext = nullptr;
     kb::input::Win32XInputHapticsBackend hapticsBackend;
+    bool localProbeBlending = true, probeParallax = true;
     EditorRenderBackendSettings backendSettings;
     EditorSceneBgfxViewport viewport;
     std::uint32_t runtimeWidth = 0U;
@@ -897,6 +920,8 @@ bool EditorHeadlessAutomation::AddComponent(
         Trace("add_component", false, "overlay-closed");
         return false;
     }
+    const auto matchingRows = InspectorAddComponentBrowserModel::Rows({}, searchText,
+        [this](std::string_view plugin) { return context_.IsProjectPluginEnabled(plugin); });
     InspectorPanelRenderer::Hit option{};
     bool foundOption = false;
     for (int y = filteredOverlay->top;
@@ -909,7 +934,8 @@ bool EditorHeadlessAutomation::AddComponent(
         foundOption =
             option.property ==
                 InspectorPropertyId::AddComponentOption &&
-            option.index >= 0;
+            option.index >= 0 && static_cast<std::size_t>(option.index) < matchingRows.size() &&
+            matchingRows[static_cast<std::size_t>(option.index)].id == tile->id;
     }
     if (!foundOption) {
         const InspectorPanelState& inspector = context_.Inspector();
@@ -996,9 +1022,12 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
         return false;
     }
     const int rowIndex = static_cast<int>(std::distance(rows.begin(), row));
-    const bool openedAdvanced = component == kb::scene::UIComponentType::RectTransform &&
-        !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced);
-    if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
+    // The rare settings of a widget sit under a collapsed "Advanced" row: open it for the edit.
+    const InspectorDisclosureId advancedRow = component == kb::scene::UIComponentType::RectTransform
+        ? InspectorDisclosureId::UIRectAdvanced : InspectorDisclosureId::UISelectableAdvanced;
+    const bool openedAdvanced = (component == kb::scene::UIComponentType::RectTransform || row->advanced) &&
+        !context_.Inspector().IsDisclosureExpanded(advancedRow);
+    if (openedAdvanced) context_.Inspector().ToggleDisclosure(advancedRow);
 
     kb::scene::UIComponentSet current = kb::scene::CaptureSceneUIComponents(
         context_.Scene().Components().UI(), entity);
@@ -1087,7 +1116,7 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
         return false;
     }
     if (currentValue == value) {
-        if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
+        if (openedAdvanced) context_.Inspector().ToggleDisclosure(advancedRow);
         Trace("set_ui_component_property", true, "already-set");
         return true;
     }
@@ -1155,7 +1184,7 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
     const bool succeeded = kb::scene::ReadUIComponentProperty(
             current, component, property, applied) &&
         applied == value;
-    if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
+    if (openedAdvanced) context_.Inspector().ToggleDisclosure(advancedRow);
     Trace("set_ui_component_property", succeeded, property);
     return succeeded;
 }
@@ -1294,7 +1323,7 @@ bool EditorHeadlessAutomation::VerifyUI2DEditing() {
     if (!CaptureBitmap(artifactRoot_ / "screenshots" / "ui-2d-toolbar.bmp", ScreenshotDimensions{700, 40, 96},
                        [&](HDC dc) {
                            SceneViewportToolbarRenderer::Paint(dc, RECT{0, 0, 700, 40}, MakeEditorDarkTheme(),
-                                                               context_.ViewportPreview(1U));
+                                                               context_.ViewportPreview(1U), context_.Gizmo().toolMode);
                        }))
         return false;
     const auto overlays = EditorUIRectInteraction::Overlays(context_, width, height);
@@ -1385,12 +1414,36 @@ bool EditorHeadlessAutomation::VerifyUI2DEditing() {
     context_.ClearHierarchySelection();
     const auto center = point(*original, {0.5F, 0.5F});
     if (!EditorUIRectInteraction::Begin(context_, width, height, center.x, center.y) ||
-        context_.SelectedEntity() != entity || !EditorUIRectInteraction::Update(context_, center.x + 20, center.y + 15))
+        context_.SelectedEntity() != entity || !EditorUIRectInteraction::Update(context_, center.x + 20, center.y + 15, false, false, false))
         return false;
     const auto moved = frameElement();
     if (!moved || !close(moved->corners[0], {original->corners[0].x + 20, original->corners[0].y + 15})) {
         Trace("ui_2d", false, "move-geometry-failed");
         return false;
+    }
+    // A few pixels short of the canvas edge the widget snaps onto it and the viewport draws a guide there;
+    // with snapping off it stays where the pointer put it.
+    {
+        kb::scene::SceneUIFrame frame;
+        if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(width, height, frame)) return false;
+        const auto canvasFrame = std::ranges::find(frame.elements, original->canvas, &kb::scene::SceneUIFrameElement::entity);
+        if (canvasFrame == frame.elements.end()) return false;
+        const float toEdge = canvasFrame->rect.x - original->rect.x + 3.0F;
+        if (!EditorUIRectInteraction::Update(context_, center.x + toEdge, center.y + 15, false, false, false) ||
+            std::abs(frameElement()->rect.x - (canvasFrame->rect.x + 3.0F)) > 0.1F ||
+            !EditorUIRectInteraction::Update(context_, center.x + toEdge, center.y + 15) ||
+            std::abs(frameElement()->rect.x - canvasFrame->rect.x) > 0.1F || context_.UIRectDrag()->guideX.empty()) {
+            Trace("ui_2d", false, "edge-snap-or-guide-failed");
+            return false;
+        }
+        const auto guided = EditorUIRectInteraction::Overlays(context_, width, height);
+        if (!std::ranges::any_of(guided, [&](const auto& e) {
+                return e.border && e.border->backgroundColor.r > 0.9F && e.border->backgroundColor.g < 0.3F &&
+                       std::abs(e.rect.x - canvasFrame->rect.x) < 1.0F && e.rect.height >= height;
+            })) {
+            Trace("ui_2d", false, "snap-guide-not-drawn");
+            return false;
+        }
     }
     if (!EditorUIRectInteraction::End(context_, true))
         return false;
@@ -1582,7 +1635,7 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
         }
         return std::nullopt;
     };
-    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu(context_);
     if (!menu) return fail("menu-allocation-failed");
     const HMENU create = findSubmenu(menu, "Create");
     std::vector<std::pair<const kb::scene::SceneCreateItem*, UINT>> commands;
@@ -1613,7 +1666,11 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
         if (context_.Scene().Entities().Name(entity) != item->name) return fail(id + ": wrong name");
         const auto has = [&](std::string_view component) { return kb::scene::SceneComponentAuthoring::Has(context_.Scene(), entity, component); };
         const bool shape = kb::assets::FindBuiltInShape(item->id) != nullptr;
+        const bool player = item->id == "Platformer Player" || item->id == "Top Down Player" || item->id == "Platformer Navigator";
         const bool components =
+            player ? context_.Scene().Components().CharacterControllers2D().TryGet(entity) != nullptr &&
+                context_.Scene().Components().Sprites2D().TryGet(entity) != nullptr &&
+                context_.Scene().Components().Behaviours().TryGet(entity) != nullptr :
             shape ? has("MeshRenderer") && (item->id == "Cone" || has("Collider")) :
             item->id.ends_with("Light") ? has("Light") :
             item->id == "Environment" ? has("WorldBackdrop") && has("Ambient Radiance") :
@@ -1626,7 +1683,7 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
                 kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)
             return fail(id + ": not the engine shape");
         const std::size_t created = context_.HierarchyRows().size() - baseline;
-        if (created != (map ? 6U : 1U)) return fail(id + ": created " + std::to_string(created) + " rows");
+        if (created != (map ? 6U : player ? 2U : 1U)) return fail(id + ": created " + std::to_string(created) + " rows");
         if (!context_.UndoSceneCommand() || context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
         Trace("scene_creation_menu", true, id);
     }
@@ -1646,7 +1703,7 @@ bool EditorHeadlessAutomation::VerifyUICreationMenu() {
         }
         return nullptr;
     };
-    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu(context_);
     if (!menu) return fail("menu-allocation-failed");
     const auto create = findSubmenu(menu, "Create");
     const auto widgets = create ? findSubmenu(create, "User Interface") : nullptr;
@@ -1935,7 +1992,31 @@ bool EditorHeadlessAutomation::VerifyUINavigationLinks() {
     if (shown().rfind("(missing object #", 0) != 0) return fail("deleted-target-not-reported: " + shown());
     if (!context_.UndoSceneCommand() || shown() != "NavAuditQuit") return fail("undo-delete-failed: " + shown());
     context_.SelectEntity(byName("NavAuditPlay"));
-    Trace("ui_navigation_links", true, "picker-name-clear-invalid-deleted-undo-redo");
+    // Author a modal through the same commands used by the Inspector and check
+    // its focus policy in the editor's live scene, including undo and redo.
+    const auto modal = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    context_.Scene().Entities().SetName(modal, "NavModal");
+    const auto modalButton = context_.CreateUIObject(kb::scene::UIComponentType::Button, modal);
+    context_.Scene().Entities().SetName(modalButton, "NavModalButton");
+    const auto setModal = [&](bool enabled) {
+        return context_.SetUIComponentProperty(byName("NavModal"), kb::scene::UIComponentType::Canvas, "modal", enabled);
+    };
+    const auto update = [&] { return context_.Scene().UI().Update(640.0F, 480.0F, {}, .016F); };
+    if (!modal.IsValid() || !modalButton.IsValid() ||
+        !context_.SetUIComponentProperty(modal, kb::scene::UIComponentType::Canvas, "sortingOrder", std::int32_t{10000}) ||
+        !update() || !context_.Scene().UI().SetFocus(byName("NavAuditPlay")) || !setModal(true) || !update())
+        return fail("modal-authoring-failed");
+    if (context_.Scene().UI().Focused() != byName("NavModalButton") ||
+        context_.Scene().UI().SetFocus(byName("NavAuditPlay"))) return fail("modal-focus-not-trapped");
+    context_.SelectEntity(byName("NavModal"));
+    if (!CaptureInspector("ui-modal-canvas")) return false;
+    if (!setModal(false) || !update() || context_.Scene().UI().Focused() != byName("NavAuditPlay"))
+        return fail("modal-focus-not-restored");
+    if (!context_.UndoSceneCommand() || !update() || !context_.Scene().UI().ModalCanvasActive())
+        return fail("modal-undo-failed");
+    if (!context_.RedoSceneCommand() || !update() || context_.Scene().UI().ModalCanvasActive())
+        return fail("modal-redo-failed");
+    Trace("ui_navigation_links", true, "picker-name-clear-invalid-deleted-undo-redo-modal-focus");
     return true;
 }
 
@@ -2012,6 +2093,186 @@ bool EditorHeadlessAutomation::VerifyUIWidgetFeatures() {
     if (!captured) return false;
     if (insets.left <= 0.0F || insets.bottom <= 0.0F) return fail("phone-safe-area-not-applied");
     Trace("ui_widget_features", true, "fill-rows-sprite-swap-rows-group-picker-slider-hierarchy-safe-area");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUIClickHandler() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_click_handler", false, reason); return false; };
+    const auto selectable = kb::scene::UIComponentType::Selectable;
+    // The Selectable section is the last of a button: capture with the Inspector scrolled to its end.
+    const auto CaptureInspectorBottom = [&](std::string_view checkpoint) {
+        const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context_);
+        static_cast<void>(context_.Inspector().SetScrollOffset(maxScroll, maxScroll));
+        return CaptureInspector(checkpoint);
+    };
+    const auto canvas = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    const auto createNamed = [&](std::string_view name) {
+        const auto entity = context_.CreateUIObject(kb::scene::UIComponentType::Button, canvas);
+        if (entity.IsValid()) context_.Scene().Entities().SetName(entity, name);
+        return entity;
+    };
+    if (!canvas.IsValid() || !createNamed("ClickAuditPlay").IsValid() || !createNamed("ClickAuditQuit").IsValid())
+        return fail("create-failed");
+    // Undo restores the scene from a snapshot with new entity handles, so objects are looked up by name.
+    const auto byName = [&](std::string_view name) {
+        const auto& scene = context_.Scene();
+        std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+        while (!pending.empty()) {
+            const auto entity = pending.back();
+            pending.pop_back();
+            if (scene.Entities().Name(entity) == name) return entity;
+            for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index)
+                pending.push_back(scene.Hierarchy().ChildAt(entity, index));
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const kb::assets::AssetMetadata* script = context_.Scene().Assets().Manager().Registry().FindByPath("/Game/Scripts/ClickAudit.lua");
+    if (script == nullptr) return fail("script-asset-missing");
+    const kb::assets::AssetId scriptId = script->id;
+    const std::filesystem::path scriptFile = script->physicalPath;
+    const auto described = [&](std::string_view widget) { return InspectorUIClickHandler::Describe(context_.Scene(), byName(widget)); };
+    const auto selectableOf = [&](std::string_view widget) {
+        const auto* value = context_.Scene().Components().UI().TryGet<kb::scene::UISelectable>(byName(widget));
+        return value != nullptr ? *value : kb::scene::UISelectable{};
+    };
+
+    // The row opens the list of script functions; the list picker accepts the row that is clicked, row 0 being Clear.
+    context_.SelectEntity(byName("ClickAuditPlay"));
+    const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), byName("ClickAuditPlay"), selectable);
+    if (rows.empty() || !rows.front().onClick || rows.front().value != "(none)") return fail("on-click-row-missing");
+    if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(selectable), InspectorPropertyId::UIAssetPicker, 0, InspectorHitKind::TextField))
+        return fail("on-click-picker-button-not-found");
+    if (!CaptureInspectorBottom("ui-on-click-empty")) return false;
+    const auto pick = [&]([[maybe_unused]] std::string_view widget, const std::vector<UIClickChoice>& choices, int row) {
+        return EditorUIClickPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), choices,
+            {.visible = false, .onOpened = [row](HWND picker) {
+                const int y = EditorDialogStyle::HeaderHeight + 8 + row * EditorDialogStyle::ListRowHeight +
+                    EditorDialogStyle::ListRowHeight / 2;
+                SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(EditorDialogStyle::Padding + 40, y));
+                PostMessageW(picker, WM_CLOSE, 0, 0);
+            }});
+    };
+    const auto chooseFunction = [&](std::string_view widget, std::string_view function, bool created) -> bool {
+        const auto choices = InspectorUIClickHandler::Choices(context_.Scene(), byName(widget));
+        const auto found = std::ranges::find_if(choices, [&](const UIClickChoice& choice) {
+            return choice.script == scriptId && choice.function == function && choice.createFunction == created;
+        });
+        if (found == choices.end()) return false;
+        const auto picked = pick(widget, choices, static_cast<int>(found - choices.begin()) + 1);
+        return picked.accepted && picked.choice && picked.choice->function == function &&
+            context_.SetUIClickHandler(byName(widget), &*picked.choice);
+    };
+    {
+        const auto choices = InspectorUIClickHandler::Choices(context_.Scene(), byName("ClickAuditPlay"));
+        const bool listsHooks = std::ranges::any_of(choices, [](const UIClickChoice& choice) {
+            return choice.function == "Tick" || choice.function.starts_with("OnUI");
+        });
+        if (choices.size() != 2U || listsHooks) return fail("choices-are-not-the-click-functions");
+    }
+
+    // An existing function: the widget gets the script, its event name and no separate target.
+    if (!chooseFunction("ClickAuditPlay", "QuitClicked", false)) return fail("existing-function-not-picked");
+    if (described("ClickAuditPlay") != "ClickAudit.QuitClicked" || selectableOf("ClickAuditPlay").eventTarget != 0U ||
+        UIEventName(selectableOf("ClickAuditPlay")) != "QuitClicked" ||
+        context_.Scene().Components().Behaviours().TryGet(byName("ClickAuditPlay")) == nullptr ||
+        context_.Scene().Components().Behaviours().TryGet(byName("ClickAuditPlay"))->behaviourAssetId != scriptId.value)
+        return fail("existing-function-not-stored: " + described("ClickAuditPlay"));
+    if (!CaptureInspectorBottom("ui-on-click-chosen")) return false;
+    if (!context_.UndoSceneCommand() || described("ClickAuditPlay") != "(none)" || context_.HasEntityScript(byName("ClickAuditPlay")))
+        return fail("undo-did-not-clear-click-and-script");
+    if (!context_.RedoSceneCommand() || described("ClickAuditPlay") != "ClickAudit.QuitClicked") return fail("redo-failed");
+
+    // A second button sends its click to the object that already runs the script.
+    if (!chooseFunction("ClickAuditQuit", "QuitClicked", false)) return fail("second-button-not-wired");
+    if (selectableOf("ClickAuditQuit").eventTarget != byName("ClickAuditPlay").Id() || described("ClickAuditQuit") != "ClickAudit.QuitClicked" ||
+        context_.HasEntityScript(byName("ClickAuditQuit")))
+        return fail("second-button-target-wrong: " + described("ClickAuditQuit"));
+
+    // A new function is appended to the script and is the one that answers.
+    if (!chooseFunction("ClickAuditQuit", "ClickAuditQuitClicked", true)) return fail("new-function-not-picked");
+    std::ifstream source(scriptFile, std::ios::binary);
+    const std::string text{std::istreambuf_iterator<char>(source), std::istreambuf_iterator<char>()};
+    if (text.find("function ClickAuditQuitClicked(self, event)") == std::string::npos ||
+        described("ClickAuditQuit") != "ClickAudit.ClickAuditQuitClicked")
+        return fail("new-function-not-added: " + described("ClickAuditQuit"));
+
+    // Clear empties the row.
+    const auto choices = InspectorUIClickHandler::Choices(context_.Scene(), byName("ClickAuditQuit"));
+    const auto cleared = pick("ClickAuditQuit", choices, 0);
+    if (!cleared.accepted || cleared.choice || !context_.SetUIClickHandler(byName("ClickAuditQuit"), nullptr) ||
+        described("ClickAuditQuit") != "(none)")
+        return fail("clear-failed");
+
+    // The rare Selectable settings sit under a collapsed Advanced row.
+    context_.SelectEntity(byName("ClickAuditPlay"));
+    const auto section = InspectorUIComponentModel::Section(selectable);
+    const auto all = InspectorUIComponentModel::Properties(context_.Scene(), byName("ClickAuditPlay"), selectable);
+    const auto navigation = std::ranges::find(all, std::string_view{"navigationMode"}, &InspectorUIPropertyRow::name);
+    const auto interactable = std::ranges::find(all, std::string_view{"interactable"}, &InspectorUIPropertyRow::name);
+    if (navigation == all.end() || !navigation->advanced || interactable == all.end() || interactable->advanced)
+        return fail("advanced-rows-not-split");
+    const int navigationIndex = static_cast<int>(navigation - all.begin());
+    if (context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced)) return fail("advanced-not-collapsed-by-default");
+    if (FindInspectorHit(context_, section, InspectorUIComponentModel::Property(selectable), navigationIndex))
+        return fail("advanced-row-visible-while-collapsed");
+    POINT disclosure{};
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UISelectableAdvanced, -1, InspectorHitKind::Row, &disclosure))
+        return fail("advanced-row-not-found");
+    if (!CaptureInspectorBottom("ui-selectable-advanced-collapsed")) return false;
+    if (!EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, disclosure.x, disclosure.y, impl_->viewport) ||
+        !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced))
+        return fail("advanced-row-did-not-open");
+    if (!FindInspectorHit(context_, section, InspectorUIComponentModel::Property(selectable), navigationIndex))
+        return fail("advanced-row-hidden-while-open");
+    if (!CaptureInspectorBottom("ui-selectable-advanced-open")) return false;
+    context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UISelectableAdvanced);
+    Trace("ui_click_handler", true, "picker-existing-new-clear-undo-advanced");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyInspectorShadowRows() {
+    const auto fail = [&](std::string_view reason) { Trace("inspector_shadow_rows", false, reason); return false; };
+    using P = InspectorPropertyId;
+    const auto click = [&](InspectorSectionId section, P property, InspectorHitKind kind) {
+        POINT at{};
+        if (!FindInspectorHit(context_, section, property, -1, kind, &at)) return false;
+        return EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport);
+    };
+    const auto light = context_.CreateLightObject(kb::scene::LightKind::Directional);
+    if (!light.IsValid()) return fail("light-not-created");
+    context_.SelectEntity(light);
+    if (!click(InspectorSectionId::Light, P::LightAdvanced, InspectorHitKind::Row)) return fail("light-advanced-row-not-found");
+    for (const P property : { P::LightShadowBias, P::LightShadowNormalBias, P::LightShadowFilter, P::LightShadowQuality,
+             P::LightShadowCascadeCount, P::LightShadowCascadeDistribution })
+        if (!FindInspectorHit(context_, InspectorSectionId::Light, property))
+            return fail("light-row-not-found-" + std::to_string(static_cast<int>(property)));
+    const auto lightValue = [&]() { return *context_.Scene().Components().Lights().TryGet(context_.SelectedEntity()); };
+    if (!click(InspectorSectionId::Light, P::LightShadowFilter, InspectorHitKind::TextField) ||
+        lightValue().shadowFilter != kb::scene::LightShadowFilter::Hard) return fail("filter-did-not-cycle");
+    if (!click(InspectorSectionId::Light, P::LightShadowQuality, InspectorHitKind::TextField) ||
+        lightValue().shadowQuality != kb::scene::LightShadowQuality::Low) return fail("quality-did-not-cycle");
+    if (!click(InspectorSectionId::Light, P::LightShadowCascadeCount, InspectorHitKind::TextField) ||
+        lightValue().shadowCascadeCount != 1U) return fail("cascade-count-did-not-cycle");
+    if (!CaptureInspector("inspector-light-shadow-rows")) return false;
+
+    const auto cube = context_.CreateMenuObject("Cube");
+    if (!cube.IsValid()) return fail("cube-not-created");
+    context_.SelectEntity(cube);
+    for (const P property : { P::MeshRendererLodEnabled, P::MeshRendererLodBias, P::MeshRendererMobility })
+        if (!FindInspectorHit(context_, InspectorSectionId::MeshRenderer, property))
+            return fail("mesh-row-not-found-" + std::to_string(static_cast<int>(property)));
+    const auto mesh = [&]() { return *context_.Scene().Components().MeshRenderers().TryGet(context_.SelectedEntity()); };
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererLodEnabled, InspectorHitKind::BoolField) || mesh().lodEnabled)
+        return fail("lod-toggle-failed");
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererMobility, InspectorHitKind::TextField) ||
+        mesh().mobility != kb::scene::MeshMobility::Static) return fail("mobility-did-not-cycle");
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererLodBias, InspectorHitKind::TextField) ||
+        context_.Inspector().EditedProperty() != P::MeshRendererLodBias) return fail("lod-bias-edit-did-not-start");
+    context_.Inspector().BeginTextEdit(P::MeshRendererLodBias, "3");
+    if (!InspectorPanelInteraction::HandleKeyDown(nullptr, context_, VK_RETURN) || mesh().lodBias != 3)
+        return fail("lod-bias-not-committed");
+    if (!CaptureInspector("inspector-mesh-lod-rows")) return false;
+    Trace("inspector_shadow_rows", true, "light-advanced-and-mesh-lod-rows");
     return true;
 }
 
@@ -2216,6 +2477,10 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
             return false;
         };
         const auto colorRows = InspectorUIComponentModel::Properties(context_.Scene(), entity, descriptor.type);
+        // The colours under an "Advanced" row are reached by opening it, as a person would.
+        if (std::ranges::any_of(colorRows, [](const auto& row) { return row.color && row.advanced; }) &&
+            !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced))
+            context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UISelectableAdvanced);
         for (const auto& row : colorRows) {
             if (!row.color) continue;
             if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(descriptor.type),
@@ -2296,6 +2561,8 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
                     else if constexpr (std::is_same_v<T, float>) lane = lane == 0.0F ? 0.5F : lane * 0.5F;
                     else lane = lane == 0 ? 1 : 0;
                 }, changed);
+                if (descriptor.type == kb::scene::UIComponentType::Text && property.name == "localizationNumber")
+                    changed = std::string{"2.00"};
                 auto candidate = values;
                 if (kb::scene::WriteUIComponentProperty(candidate, descriptor.type, property.name, changed) ==
                     kb::scene::UIComponentPropertyWriteResult::Succeeded && changed != value) {
@@ -2428,11 +2695,13 @@ bool EditorHeadlessAutomation::SetGamepadConnected(
     return true;
 }
 
-bool EditorHeadlessAutomation::ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics) {
+bool EditorHeadlessAutomation::ConfigureRuntimeRendering(std::uint32_t width, std::uint32_t height, bool gpuVisibilityDiagnostics, bool localProbeBlending, bool probeParallax) {
     if (width == 0U || height == 0U || width > 8192U || height > 8192U) return false;
     if (impl_->window == nullptr || SetWindowPos(impl_->window, nullptr, 0, 0,
             static_cast<int>(width), static_cast<int>(height),
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) == 0) return false;
+    impl_->localProbeBlending = localProbeBlending;
+    impl_->probeParallax = probeParallax;
     impl_->runtimeWidth = width;
     impl_->runtimeHeight = height;
     impl_->backendSettings.SetGpuDrivenEnabled(gpuVisibilityDiagnostics);
@@ -2535,7 +2804,7 @@ bool EditorHeadlessAutomation::StepRuntime(
     if (profile) {
         std::ofstream output{artifactRoot_ / "runtime-frames.csv"};
         output.imbue(std::locale::classic());
-        output << "frame,cpu_ms,simulation_ms,render_ms,gpu_delayed_ms,draws,shadow_casters,submitted_meshes,dropped,shadow_draws,missing_resources,fixed_steps,gpu_culling_dispatches,gpu_culling_upload_bytes,runtime_ms,transform_sync_ms,fixed_capture_start_ms,fixed_capture_end_ms,transform_hierarchy_ms,command_lookup_buckets,command_instance_capacity,bgfx_wait_render_ms,bgfx_wait_submit_ms,bgfx_render_cpu_ms,bgfx_gpu_frame\n";
+        output << "frame,processing_wall_ms,simulation_ms,render_ms,gpu_delayed_ms,draws,shadow_casters,submitted_meshes,dropped,shadow_draws,missing_resources,fixed_steps,gpu_culling_dispatches,gpu_culling_upload_bytes,runtime_ms,transform_sync_ms,fixed_capture_start_ms,fixed_capture_end_ms,transform_hierarchy_ms,command_lookup_buckets,command_instance_capacity,bgfx_wait_render_ms,bgfx_wait_submit_ms,bgfx_render_cpu_ms,bgfx_gpu_frame\n";
         for (std::size_t index = 0; index < samples.size(); ++index) {
             output << index;
             for (const double value : samples[index]) output << ',' << value;
@@ -2835,8 +3104,7 @@ EditorHeadlessAutomation::ProfileIdleSceneFrame(std::size_t steps) {
         return dockModel.Queries().BuildLayout(
             client.right - client.left,
             client.bottom - client.top,
-            metrics.menuHeight,
-            metrics.toolbarHeight,
+            metrics.menuHeight, metrics.statusBarHeight,
             metrics.tabStripHeight,
             metrics.tabMinWidth,
             metrics.tabWidth,
@@ -3071,7 +3339,7 @@ EditorHeadlessAutomation::VerifyWorkspaceLayoutPersistence() {
     // it - so the arrangement proves the tree itself made the round trip.
     const EditorMetrics metrics{};
     const DockLayout layout = arranged.Queries().BuildLayout(
-        1600, 960, metrics.menuHeight, metrics.toolbarHeight, metrics.tabStripHeight,
+        1600, 960, metrics.menuHeight, metrics.statusBarHeight, metrics.tabStripHeight,
         metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
     if (layout.splitters.empty()) {
         Trace("assert_workspace_layout_persistence", false, "no-splitters");
@@ -3638,6 +3906,103 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     });
 }
 
+kb::render::SceneRenderSubmitStats EditorHeadlessAutomation::SceneSubmitStats() const {
+    return impl_->viewport.LastSceneSubmitStats();
+}
+
+bool EditorHeadlessAutomation::CaptureProfilerWindow(std::string_view checkpoint, int width, int height) {
+    if (width < 800 || width > 3840 || height < 400 || height > 2160) return false;
+    const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");
+    const bool saved = CaptureBitmap(path, ScreenshotDimensions{ width, height, 96 }, [this, width, height](HDC memory) {
+        ProfilerSelectionOverlayWindow window;
+        window.PaintInto(memory, RECT{ 0, 0, width, height }, MakeEditorDarkTheme(), context_);
+    });
+    Trace("capture_profiler_window", saved, path.filename().string());
+    return saved;
+}
+
+bool EditorHeadlessAutomation::ClickProfilerWindow(int x, int y, int width, int height) {
+    ProfilerSelectionOverlayWindow window;
+    const bool hit = window.ClickAt(RECT{ 0, 0, width, height }, x, y, MakeEditorDarkTheme(), context_, impl_->viewport);
+    Trace("click_profiler_window", hit, std::to_string(x) + "," + std::to_string(y));
+    return hit;
+}
+
+bool EditorHeadlessAutomation::CaptureProfilerOverlay(std::string_view checkpoint, std::string_view sceneCheckpoint) {
+    const std::filesystem::path source = artifactRoot_ / "screenshots" / (SafeCheckpoint(sceneCheckpoint) + ".png");
+    const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Bitmap scene(source.c_str());
+    if (scene.GetLastStatus() != Gdiplus::Ok) {
+        Trace("capture_profiler_overlay", false, "scene-capture-unreadable");
+        return false;
+    }
+    const int width = static_cast<int>(scene.GetWidth());
+    const int height = static_cast<int>(scene.GetHeight());
+    const ProfilerOverlayOptions& options = context_.EditorConfig().profiler.overlay;
+    ProfilerOverlayContent content;
+    AppendProfilerOverlay(content, context_.Profiler().Overlay(), options, MakeEditorDarkTheme(),
+        ProfilerOverlayMetrics::ForTextSize(options.textSize), static_cast<float>(width), static_cast<float>(height));
+    const bool saved = CaptureBitmap(path, ScreenshotDimensions{ width, height, 96 }, [&](HDC memory) {
+        Gdiplus::Graphics graphics(memory);
+        graphics.DrawImage(&scene, 0, 0, width, height);
+        EditorSceneViewportTextOverlay renderer;
+        static_cast<void>(renderer.Paint(memory, RECT{ 0, 0, width, height }, content.labels, content.shapes));
+    });
+    Trace("capture_profiler_overlay", saved, path.filename().string());
+    return saved;
+}
+
+bool EditorHeadlessAutomation::CaptureTimelinePreview(std::string_view checkpoint) {
+    // Capture feedback is renderer bookkeeping; the preview simulation remains paused.
+    auto* scene = const_cast<kb::scene::Scene*>(context_.TimelineEditorPreview().Scene());
+    if (!scene) return false;
+    const auto output = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".png");
+    const auto request = kb::scene::SceneRenderFeedback::RequestScreenCapture(*scene,output.string());
+    if (!request) return false;
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
+        EditorSceneBgfxViewport::PresentSettings settings{};
+        settings.viewportKey = 20; settings.sceneFullSyncRequired = true;
+        settings.selectionMaskEnabled = false; settings.selectionOutlineEnabled = false;
+        impl_->viewport.BeginPaintLayout(impl_->window);
+        impl_->viewport.Present(impl_->window,RECT{0,0,960,540},*scene,settings);
+        impl_->viewport.EndPaintLayout(0.0F);
+        if (!impl_->viewport.AdvanceAsyncReadbacks()) return false;
+        const auto status = kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*scene,request);
+        if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool valid = ValidateCapturedImage(output,true);
+            Trace("capture_timeline_preview",valid,output.filename().string()); return valid;
+        }
+        if (status == kb::scene::SceneScreenCaptureStatus::Failed) return false;
+        Sleep(5);
+    }
+    return false;
+}
+
+bool EditorHeadlessAutomation::CaptureBlendSpace2DPreview(std::string_view checkpoint) {
+    const auto* state=context_.BlendSpace2DEditor();
+    auto* scene=state?const_cast<kb::scene::Scene*>(state->preview.Scene()):nullptr;
+    if (!scene) return false;
+    const auto output=artifactRoot_/"screenshots"/(SafeCheckpoint(checkpoint)+".png");
+    const auto request=kb::scene::SceneRenderFeedback::RequestScreenCapture(*scene,output.string());
+    if (!request) return false;
+    for (const auto deadline=std::chrono::steady_clock::now()+kCaptureDeadline;std::chrono::steady_clock::now()<deadline;) {
+        EditorSceneBgfxViewport::PresentSettings settings{};settings.viewportKey=21;settings.sceneFullSyncRequired=true;
+        settings.selectionMaskEnabled=false;settings.selectionOutlineEnabled=false;
+        impl_->viewport.BeginPaintLayout(impl_->window);
+        impl_->viewport.Present(impl_->window,RECT{0,0,960,540},*scene,settings);
+        impl_->viewport.EndPaintLayout(0.0F);if (!impl_->viewport.AdvanceAsyncReadbacks()) return false;
+        const auto status=kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*scene,request);
+        if (status==kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool valid=ValidateCapturedImage(output,true);Trace("capture_blend_space_preview",valid,output.filename().string());return valid;
+        }
+        if (status==kb::scene::SceneScreenCaptureStatus::Failed) return false;
+        Sleep(5);
+    }
+    return false;
+}
+
 bool EditorHeadlessAutomation::CaptureMaterialPreview(std::string_view checkpoint, int width, int height) {
     if (width < 64 || width > 3840 || height < 64 || height > 2160) {
         Trace("capture_material_preview", false, "size");
@@ -3834,7 +4199,11 @@ bool EditorHeadlessAutomation::CapturePanel(
     std::string_view panel, std::string_view checkpoint, int width, int height) {
     if (width < 240 || width > 3840 || height < 200 || height > 2160) return false;
     const RECT bounds{0, 0, width, height};
-    const auto kind = ParsePanelKind(panel);
+    auto kind = ParsePanelKind(panel);std::uint32_t panelId=1;
+    if(panel.starts_with("extension:")) {
+        auto* extensions=EditorExtensionHost::Find(context_);panelId=extensions?extensions->PanelId(panel.substr(10)):0;
+        if(panelId) kind=DockPanelKind::Generic;
+    }
     if (!kind.has_value()) {
         Trace("capture_panel", false, panel);
         return false;
@@ -3845,9 +4214,9 @@ bool EditorHeadlessAutomation::CapturePanel(
     bool panelContentCaptured = true;
     const bool saved = CaptureBitmap(
         path, ScreenshotDimensions{width, height, 96},
-        [this, kind, bounds, &panelContentCaptured](HDC memory) {
+        [this, kind, bounds, panelId, &panelContentCaptured](HDC memory) {
             const DockPanel dockPanel{
-                .id = 1U,
+                .id = panelId,
                 .kind = *kind,
                 .title = "Headless Automation",
                 .area = DockArea::Center,
@@ -3970,7 +4339,7 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
                             profile.dimensions.logicalWidth,
                             profile.dimensions.logicalHeight, dockModel,
                             theme, metrics, context_, settings, nullptr,
-                            nullptr, playMode, shellInteraction, nullptr);
+                            nullptr, playMode, shellInteraction, nullptr, EditorRenderBackendLabel(settings.Backend()));
                         return;
                     }
 
@@ -4266,6 +4635,24 @@ void EditorHeadlessAutomation::SnapshotConsole(
                << entry.category << '\t' << entry.message << '\n';
     }
     Trace("snapshot_console", output.good(), path.filename().string());
+}
+
+bool EditorHeadlessAutomation::VerifyParticleControls() {
+    const auto result = EditorHeadlessPopupChecks::VerifyParticleControls(context_, impl_->viewport);
+    Trace("verify_particle_controls", result.succeeded, result.detail);
+    return result.succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyDebuggerInteraction() {
+    const auto result = EditorHeadlessPopupChecks::VerifyDebuggerInteraction(context_, impl_->viewport);
+    Trace("verify_debugger_interaction", result.succeeded, result.detail);
+    return result.succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyWorkspaceControls() {
+    const auto result = EditorHeadlessPopupChecks::VerifyWorkspaceControls(context_, impl_->viewport);
+    Trace("verify_workspace_controls", result.succeeded, result.detail);
+    return result.succeeded;
 }
 
 bool EditorHeadlessAutomation::VerifyToolbarMenuOverlay() {

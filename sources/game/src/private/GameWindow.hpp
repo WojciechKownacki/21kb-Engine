@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/RenderSurface.hpp"
+#include "engine/platform/win32/Win32RawMouseRegistration.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -63,6 +64,7 @@ private:
     ATOM windowClass_ = 0U;
     HWND window_ = nullptr;
     kb::input::Win32InputCollector* inputCollector_ = nullptr;
+    kb::input::Win32RawMouseRegistration rawMouse_;
     std::uint32_t width_ = 0U;
     std::uint32_t height_ = 0U;
     bool resizePending_ = false;

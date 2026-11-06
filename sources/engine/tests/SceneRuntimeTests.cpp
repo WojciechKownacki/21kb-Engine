@@ -26,6 +26,9 @@ void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
 void RunSceneUIBuildFrameProfile();
 void RunSceneTransformGoldenTests();
+void WriteImportGoldenFixture(const char* directory);
+void VerifyImportGoldenPackage(const char* filename);
+void VerifyTimelineAudioProject(const char* filename);
 }
 
 namespace {
@@ -92,6 +95,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneHierarchyParentingTests();
     } else if (suite == "scene-transform-bench") {
         kb::tests::RunTransformWriteBenchmark();
+    } else if (suite == "scene-river") {
+        kb::tests::RunSceneRiverTests();
     } else if (suite == "scene-ui") {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {
@@ -106,6 +111,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneSystemParallelTests();
     } else if (suite == "scene-system-parallel-bench") {
         kb::tests::RunSceneSystemParallelBenchmark();
+    } else if (suite == "physics-runtime") {
+        kb::tests::RunPhysicsSceneSystemTests();
     } else if (suite == "physics-one-way") {
         kb::tests::RunPhysicsOneWayOnlyTest();
     } else if (suite == "physics-replay") {
@@ -136,6 +143,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-collections") {
+        kb::tests::RunScriptCollectionsTests();
     } else if (suite == "script-save") {
         kb::tests::RunScriptSaveTests();
     } else if (suite == "script-native-header") {
@@ -162,10 +171,13 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSkeletalMeshAssetTests();
     } else if (suite == "timeline-runtime") {
         kb::tests::RunTimelineRuntimeTests();
+    } else if (suite == "blend-space-2d-runtime") {
+        kb::tests::RunBlendSpace2DRuntimeTests();
     } else if (suite == "localization") {
         kb::tests::RunLocalizationTests();
     } else if (suite == "ui-text-layout") {
         kb::tests::RunUITextLineBreakingTests();
+        kb::tests::RunUIThemeTests();
     } else if (suite == "crash-consent") {
         kb::tests::RunCrashReportConsentTests();
     } else if (suite == "navigation-runtime") {
@@ -182,6 +194,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunWorldPartitionTests();
     } else if (suite == "large-world") {
         kb::tests::RunLargeWorldTests();
+    } else if (suite == "scene-behaviour-variables") {
+        kb::tests::RunSceneBehaviourVariableTests();
     } else {
         return false;
     }
@@ -204,6 +218,8 @@ void RunAllSuites() {
     kb::tests::RunPrefabHierarchyDepthTests();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
+    kb::tests::RunSceneRiverTests();
+    kb::tests::RunUIThemeTests();
     kb::tests::RunSceneSystemTests();
     kb::tests::RunScenePrefabTests();
     kb::tests::RunProjectSceneTests();
@@ -218,6 +234,7 @@ void RunAllSuites() {
     kb::tests::RunSkeletonAssetTests();
     kb::tests::RunSkeletalMeshAssetTests();
     kb::tests::RunTimelineRuntimeTests();
+    kb::tests::RunBlendSpace2DRuntimeTests();
     kb::tests::RunLocalizationTests();
     kb::tests::RunCrashReportConsentTests();
     kb::tests::RunNavigationRuntimeTests();
@@ -226,6 +243,7 @@ void RunAllSuites() {
     kb::tests::RunMotionSkeletonRuleTests();
     kb::tests::RunWorldPartitionTests();
     kb::tests::RunLargeWorldTests();
+    kb::tests::RunSceneBehaviourVariableTests();
 }
 
 } // namespace
@@ -276,6 +294,17 @@ void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 #endif
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string_view{argv[1]} == "timeline-project") {
+        kb::tests::VerifyTimelineAudioProject(argv[2]); return 0;
+    }
+    if (argc == 3 && std::string_view{argv[1]} == "write-import-golden") {
+        kb::tests::WriteImportGoldenFixture(argv[2]);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 3 && std::string_view{argv[1]} == "import-package-golden") {
+        kb::tests::VerifyImportGoldenPackage(argv[2]);
+        return EXIT_SUCCESS;
+    }
     if (argc <= 1) {
         RunAllSuites();
         return EXIT_SUCCESS;

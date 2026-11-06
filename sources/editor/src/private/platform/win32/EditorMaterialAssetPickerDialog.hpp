@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetMetadata.hpp"
+#include "inspection/ui/InspectorUIClickHandler.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -16,6 +17,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace kb::editor {
 
@@ -127,6 +129,23 @@ public:
         HWND owner, const EditorTheme& theme, const EditorSceneContext& sceneContext,
         kb::scene::SceneEntity source, kb::scene::UIComponentType component, std::string_view property,
         kb::scene::SceneEntity current, const EditorAssetPickerWindowOptions& options = {});
+#endif
+};
+
+// Picks the script function a click on a widget calls (the Inspector "On Click" row), listed as function and
+// script; Clear empties the row. `choices` is InspectorUIClickHandler::Choices.
+class EditorUIClickPickerDialog {
+public:
+#if defined(_WIN32)
+    struct Result {
+        bool accepted = false;
+        // The picked entry; empty when the row was cleared.
+        std::optional<UIClickChoice> choice;
+    };
+
+    [[nodiscard]] static Result Show(
+        HWND owner, const EditorTheme& theme, const std::vector<UIClickChoice>& choices,
+        const EditorAssetPickerWindowOptions& options = {});
 #endif
 };
 

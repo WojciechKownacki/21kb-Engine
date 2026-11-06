@@ -50,7 +50,7 @@ namespace {
 
 [[nodiscard]] bool Equals(const MeshRendererComponent& lhs, const MeshRendererComponent& rhs) noexcept {
     return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
-        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow;
+        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
 }
 
 [[nodiscard]] bool Equals(const LightComponent& lhs, const LightComponent& rhs) noexcept {
@@ -59,7 +59,9 @@ namespace {
         && lhs.areaHeight == rhs.areaHeight && lhs.contactShadowLength == rhs.contactShadowLength && lhs.volumetricScattering == rhs.volumetricScattering
         && lhs.castsShadow == rhs.castsShadow
         && lhs.sourceRadius == rhs.sourceRadius && lhs.shadowStrength == rhs.shadowStrength
-        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility;
+        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility && lhs.shadowBias == rhs.shadowBias && lhs.shadowNormalBias == rhs.shadowNormalBias
+        && lhs.shadowFilter == rhs.shadowFilter && lhs.shadowQuality == rhs.shadowQuality
+        && lhs.shadowCascadeCount == rhs.shadowCascadeCount && lhs.shadowCascadeDistribution == rhs.shadowCascadeDistribution;
 }
 
 [[nodiscard]] bool Equals(const InputComponent& lhs, const InputComponent& rhs) noexcept {
@@ -206,6 +208,7 @@ namespace {
 [[nodiscard]] bool Equals(const FacingPanelComponent& lhs, const FacingPanelComponent& rhs) noexcept {
     return lhs.mode == rhs.mode && Equals(lhs.targetPoint, rhs.targetPoint) && Equals(lhs.axis, rhs.axis) && Equals(lhs.up, rhs.up) && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equals(const RiverComponent& lhs, const RiverComponent& rhs) noexcept { return lhs == rhs; }
 [[nodiscard]] bool Equals(const SpaceStrokeComponent& lhs, const SpaceStrokeComponent& rhs) noexcept {
     return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.mode == rhs.mode && lhs.width == rhs.width &&
         lhs.cableSag == rhs.cableSag && lhs.splineSegments == rhs.splineSegments && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow &&
@@ -349,6 +352,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , surfaceCasts(scene.Components().SurfaceCasts())
     , facingPanels(scene.Components().FacingPanels())
     , spaceStrokes(scene.Components().SpaceStrokes())
+    , rivers(scene.Components().Rivers())
     , historyRibbons(scene.Components().HistoryRibbons())
     , particleEffects(scene.Components().ParticleEffects())
     , lensEchoes(scene.Components().LensEchoes())
@@ -451,6 +455,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.surfaceCasts, entity, node.components.surfaceCast);
     WriteOptionalComponent(context.facingPanels, entity, node.components.facingPanel);
     WriteOptionalComponent(context.spaceStrokes, entity, node.components.spaceStroke);
+    WriteOptionalComponent(context.rivers, entity, node.components.river);
     WriteOptionalComponent(context.historyRibbons, entity, node.components.historyRibbon);
     WriteOptionalComponent(context.particleEffects, entity, node.components.particleEffect);
     SynchronizeSceneUIComponents(context.ui, entity, node.components.ui);
@@ -458,6 +463,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     if (!node.components.lensEcho.has_value()) context.lensEchoes.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
+        if (!SameBehaviourVariableOverrides(context.entities.BehaviourVariableOverrides(entity), node.components.behaviourVariableOverrides)) {
+            context.entities.ReplaceBehaviourVariableOverrides(entity, node.components.behaviourVariableOverrides);
+        }
     }
     if (!componentMask.available || !componentMask.matches || node.components.audioSource.has_value()) {
         WriteOptionalComponent(context.audioSources, entity, node.components.audioSource);

@@ -24,6 +24,7 @@ class Scene;
 namespace kb::render {
 
 class SceneMeshSubmitter;
+class SceneMeshCoverageProbe;
 class ParticleGpuRenderer;
 class RenderScene;
 
@@ -72,7 +73,9 @@ public:
         const SceneRenderShadowMapBinding* shadowMap = nullptr,
         std::span<const std::uint64_t> selectedEntityIds = {},
         const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
-        bool terrainLayersOnly = false) const;
+        bool terrainLayersOnly = false,
+        // The view a shadow pass shades: terrain chunks take the level of detail that view picks.
+        const SceneRenderCamera* levelOfDetailCamera = nullptr) const;
     // Draws the Post Process materials of `renderScene` (Mesh Renderers whose material is of that domain, in entity
     // order, at most one per view) over `chain.input`; returns the texture holding the result.
     [[nodiscard]] bgfx::TextureHandle SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const;
@@ -111,6 +114,10 @@ public:
         std::uint64_t frame, std::uint64_t completedFrame) noexcept;
     [[nodiscard]] RenderSkinningPaletteAllocator& SkinningPalettes() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    void SetMeshCoverageEnabled(bool enabled) noexcept;
+    void BeginMeshCoverageFrame(std::uint64_t frame);
+    void EndMeshCoverageFrame();
+    [[nodiscard]] SceneMeshCoverageMetric LastMeshCoverage() const noexcept;
     [[nodiscard]] RenderResourceRegistry& Resources() noexcept;
     [[nodiscard]] const RenderResourceRegistry& Resources() const noexcept;
     [[nodiscard]] SceneRenderResourceMap& ResourceMap() noexcept;
@@ -145,6 +152,7 @@ private:
     mutable RenderSkinningPaletteAllocator motionPreviousModels_{
         RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 8192U } };
     std::unique_ptr<SceneMeshSubmitter> meshSubmitter_;
+    std::unique_ptr<SceneMeshCoverageProbe> meshCoverage_;
     std::unique_ptr<ParticleGpuRenderer> particleRenderer_;
     mutable std::vector<ParticleGpuMeshDraw> gpuMeshDrawScratch_;
     std::uint64_t gpuParticleSceneId_ = 0U;

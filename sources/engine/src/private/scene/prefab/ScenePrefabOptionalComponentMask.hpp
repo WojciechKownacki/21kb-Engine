@@ -62,6 +62,7 @@ struct ScenePrefabOptionalComponentExpectation {
         { registry.SurfaceCastComponentId(), components.surfaceCast.has_value() },
         { registry.FacingPanelComponentId(), components.facingPanel.has_value() },
         { registry.SpaceStrokeComponentId(), components.spaceStroke.has_value() },
+        { registry.RiverComponentId(), components.river.has_value() },
         { registry.HistoryRibbonComponentId(), components.historyRibbon.has_value() },
         { registry.ParticleEffectComponentId(), components.particleEffect.has_value() },
         { registry.LensEchoComponentId(), components.lensEcho.has_value() },

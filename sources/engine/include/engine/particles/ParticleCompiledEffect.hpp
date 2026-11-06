@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 8U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 11U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -49,7 +49,8 @@ struct ParticleCompiledEmitter {
                                        kb::scene::ParticleAxisRotationModule,
                                        kb::scene::ParticleAttractionModule,
                                        kb::scene::ParticleTorusSwirlModule,
-                                       kb::scene::ParticleSeparationModule>;
+                                       kb::scene::ParticleSeparationModule,
+                                       kb::scene::ParticleCollisionGeometryModule>;
 
     struct Module {
         kb::scene::ParticleStableId moduleId = 0U;
@@ -63,6 +64,7 @@ struct ParticleCompiledEmitter {
     std::uint64_t materialAssetId = 0U;
     std::uint64_t meshAssetId = 0U;
     std::uint64_t textureAtlasAssetId = 0U;
+    std::uint64_t customProcessAssetId = 0U;
     std::uint64_t shapeMeshAssetId = 0U;  // Mesh spawn shape
     float meshLodBias = 0.0F;
     bool meshCastsShadow = false;
@@ -153,6 +155,7 @@ struct ParticleCompiledEffect {
         kb::scene::ParticleEventTrigger trigger = kb::scene::ParticleEventTrigger::Death;
         kb::scene::ParticleStableId sourceModuleId = 0U;
         std::uint8_t targetEmitterIndex = 0U;
+        std::uint64_t targetEffectAssetId = 0U;
         std::uint32_t count = 1U;
         std::uint8_t maxDepth = 1U;
         std::uint32_t perStepBudget = 1U;

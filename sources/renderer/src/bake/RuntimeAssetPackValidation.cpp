@@ -273,7 +273,8 @@ struct MaterialShaderQualifier final {
         }
         const bgfx::RendererType::Enum renderer = RendererForShaderBackend(backend);
         for (const std::string_view pass : kRenderMaterialGraphScenePasses) {
-            if (!RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass)) {
+            if (!RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass,
+                    backend == kb::assets::bake::ShaderBakeBackend::Essl)) {
                 continue;
             }
             const auto validateStage = [&](std::string_view stage) {
@@ -437,6 +438,7 @@ struct MaterialShaderQualifier final {
                 if (!kb::render::bake::ReadBakedTexture(
                         payload.blocks.front().bytes, texture) ||
                     !texture.gpuBlocks.has_value() ||
+                    (texture.dimension == RenderTextureDimension::TextureCube) != (artifact.qualifier == "rgba8-cube") ||
                     !kb::render::bake::BakedTextureFormatMatchesFamily(
                         texture.gpuBlocks->format, artifact.qualifier)) {
                     return Failure("baked texture payload is corrupt for " +

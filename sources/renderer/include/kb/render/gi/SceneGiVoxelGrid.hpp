@@ -22,6 +22,20 @@ namespace kb::render {
 class SceneGiVoxelGrid {
 public:
     static constexpr std::uint32_t kDimension = 64U;
+    static constexpr std::uint64_t kMaskCacheBudgetBytes = 8U * 1024U * 1024U;
+    struct UpdateStats {
+        std::uint64_t rebuildCount = 0U;
+        std::uint64_t cachedMaskBytes = 0U;
+        std::uint64_t cpuPayloadBytes = 0U;
+        std::uint64_t gpuPayloadBytes = 0U;
+        std::uint64_t uploadedBytes = 0U;
+        std::uint32_t maskBuildCount = 0U;
+        double updateMilliseconds = 0.0;
+        bool rebuilt = false;
+    };
+    [[nodiscard]] const UpdateStats& LastUpdateStats() const noexcept { return stats_; }
+    // Discard scene-specific occupancy; the fixed-size textures are reused on the next update.
+    void ResetCache() noexcept;
 
     ~SceneGiVoxelGrid();
 
@@ -77,6 +91,7 @@ private:
     std::uint32_t occupiedVoxels_ = 0U;
     std::uint32_t geometryMeshes_ = 0U;
     std::uint32_t boundingBoxMeshes_ = 0U;
+    UpdateStats stats_{};
 };
 
 } // namespace kb::render

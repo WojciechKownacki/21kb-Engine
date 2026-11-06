@@ -1,6 +1,7 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
 #include "app/EditorEditCommandPolicy.hpp"
+#include "profiler/ProfilerPanel.hpp"
 #include "app/EditorSceneFileCommands.hpp"
 
 #if defined(_WIN32)
@@ -16,6 +17,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
 #include <filesystem>
@@ -203,8 +205,7 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
     return dockModel.Queries().BuildLayout(
         client.right - client.left,
         client.bottom - client.top,
-        metrics.menuHeight,
-        metrics.toolbarHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
@@ -305,8 +306,6 @@ void ActivatePanel(
                 if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Duplicate)) {
                     sceneViewport.RequestPresent();
                 }
-            } else if (*row == 3) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Plugins, DockArea::Right);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
             const EditorLayoutMenuRow* layoutRow = shellInteraction.LayoutMenu().Row(*row);
@@ -357,9 +356,26 @@ void ActivatePanel(
                         ". Reopen the editor to apply.");
                 sceneViewport.RequestPresent();
             } else if (*row == 1) {
+                if (sceneContext.ProjectSettings().SelectedCategory() >= static_cast<int>(ProjectSettingsCategory::EditorGeneral)) {
+                    static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Inputs)));
+                }
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 2) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
+                // Editor Settings and Plugins are pages of the one Settings window.
+                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::EditorGeneral)));
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+            } else if (*row == 3) {
+                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Plugins)));
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+            } else if (*row == 4) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, ProfilerPanel::kOpenArea);
+            } else if (*row == 5) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::AudioMixer, DockArea::Center);
+            } else if (*row == 6) {
+                // The same as Ctrl+K: the Agent panel with its request box ready.
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Agent, DockArea::Bottom);
+                sceneContext.AgentPanel().Prepare();
+                sceneContext.AgentPanel().FocusInput(true);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {
             // Like Unity's and Unreal's Help menu: the engine's pages in the browser, and About.
@@ -590,6 +606,11 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     }
 
     if (HandleSaveLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, shellInteraction)) {
+        return true;
+    }
+
+    if (EditorToolbarRenderer::HitTestStatusBarConsole(EditorToolbarRenderer::ResolveStatusBar(ToRect(layout->statusBar)), x, y)) {
+        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Console, DockArea::Bottom);
         return true;
     }
 

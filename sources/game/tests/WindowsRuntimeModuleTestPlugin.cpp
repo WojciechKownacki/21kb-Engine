@@ -33,6 +33,8 @@ extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_native_ready_count() {
     return nativeReadyCount;
 }
 
+KB_EXPORT_ENGINE_MODULE_BUILD_FINGERPRINT
+
 extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
     return kb::modules::kEngineModuleAbiVersion;
 }

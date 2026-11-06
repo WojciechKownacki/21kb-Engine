@@ -23,6 +23,7 @@ struct AddComponentRow {
     std::string label;
     HeroIconKind icon = HeroIconKind::Cube;
     std::string id; // category name (Category) or component id (Component)
+    int count = 0;  // components a Category row holds that can be added now
 };
 
 // Pure layout for the Add Component menu: which rows are visible in
@@ -41,6 +42,8 @@ public:
         std::string_view category,
         std::string_view query,
         const PluginEnabledPredicate& pluginEnabled);
+
+    [[nodiscard]] static std::string_view Description(const std::vector<AddComponentRow>& rows, int index) noexcept;
 
     [[nodiscard]] static int TotalHeight(int rowCount, int rowHeightPx) noexcept;
     // Largest valid scroll offset so the last row can reach the list bottom.

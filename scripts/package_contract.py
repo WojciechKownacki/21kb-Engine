@@ -41,13 +41,16 @@ ENGINE_BUILD_INPUTS = (
     "platform/android/settings.gradle",
     "third_party/bgfx.cmake",
     "third_party/flecs",
+    "third_party/harfbuzz",
     "third_party/jolt",
     "third_party/licenses",
     "third_party/miniaudio",
+    "third_party/sheenbidi",
     "third_party/third_party_manifest.json",
     "third_party/ufbx",
     "scripts/package_contract.py",
     "scripts/package_game.py",
+    "scripts/prebuilt_engine.py",
     "scripts/package_linux_guest.py",
     "scripts/third_party_notices.py",
     "scripts/windows_pe_resources.py",
@@ -56,7 +59,7 @@ _SOURCE_TEXT_SUFFIXES = frozenset((
     ".bat", ".bazel", ".bf", ".build", ".c", ".c3", ".camal", ".cap", ".cc",
     ".clang-format", ".cmake", ".cpp", ".cs", ".css", ".csv", ".d", ".doxygen",
     ".drawio", ".editorconfig", ".exp", ".fd", ".flecs", ".frag", ".gitattributes",
-    ".gitignore", ".gliffy", ".glsl", ".gradle", ".gyp", ".h", ".hlsl", ".hpp",
+    ".gitignore", ".gliffy", ".glsl", ".gradle", ".gyp", ".h", ".hh", ".hlsl", ".hpp",
     ".hpp11", ".html", ".idl", ".in", ".inc", ".inl", ".java", ".js", ".json",
     ".kbmat", ".kbvfx", ".kt", ".kts", ".l", ".ll", ".lua", ".md", ".metal",
     ".mk", ".mm", ".natvis", ".ninja", ".obj", ".plist", ".pro", ".properties",
@@ -68,7 +71,7 @@ _SOURCE_TEXT_NAMES = frozenset((
     "CMakeLists.txt", "CODEOWNERS", "COPYING", "Doxyfile", "gradlew", "LICENSE",
     "README", "updateGrammar", "WORKSPACE",
 ))
-_SOURCE_GENERATED_DIRECTORY_NAMES = frozenset((".gradle", "cmakefiles"))
+_SOURCE_GENERATED_DIRECTORY_NAMES = frozenset((".gradle", ".cxx", "__pycache__", "cmakefiles"))
 _SOURCE_GENERATED_FILE_NAMES = frozenset(("cmake_install.cmake",))
 _SOURCE_GENERATED_FILE_SUFFIXES = (".vcxproj", ".vcxproj.filters")
 
@@ -162,7 +165,9 @@ def _source_files(root: Path) -> list[tuple[str, Path]]:
     folded: dict[str, str] = {}
     for directory, names, file_names in os.walk(root, topdown=True, followlinks=False):
         directory_path = Path(directory)
-        names[:] = [name for name in names if name.casefold() not in _SOURCE_GENERATED_DIRECTORY_NAMES]
+        gradle_project = "build.gradle" in file_names or "build.gradle.kts" in file_names
+        names[:] = [name for name in names if name.casefold() not in _SOURCE_GENERATED_DIRECTORY_NAMES
+            and not (gradle_project and name.casefold() == "build")]
         for name in tuple(names):
             child = directory_path / name
             if child.is_symlink() or _is_reparse(child):

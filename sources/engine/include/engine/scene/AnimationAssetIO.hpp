@@ -15,7 +15,7 @@ inline constexpr const char* kAnimationClipAssetType = "AnimationClip";
 inline constexpr std::uint32_t kAnimationClipAssetSchemaVersion = 2U;
 inline constexpr const char* kAnimatorControllerAssetExtension = ".kbanimcontroller";
 inline constexpr const char* kAnimatorControllerAssetType = "AnimatorController";
-inline constexpr std::uint32_t kAnimatorControllerAssetSchemaVersion = 3U;
+inline constexpr std::uint32_t kAnimatorControllerAssetSchemaVersion = 4U;
 
 class AnimationAssetIO final {
 public:

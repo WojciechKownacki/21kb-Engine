@@ -43,6 +43,7 @@
 #include "engine/scene/SceneSurfaceCastComponents.hpp"
 #include "engine/scene/SceneFacingPanelComponents.hpp"
 #include "engine/scene/SceneSpaceStrokeComponents.hpp"
+#include "engine/scene/SceneRiverComponents.hpp"
 #include "engine/scene/SceneHistoryRibbonComponents.hpp"
 #include "engine/scene/SceneParticleEffectComponents.hpp"
 #include "engine/scene/SceneLensEchoComponents.hpp"
@@ -92,6 +93,7 @@ public:
     [[nodiscard]] SceneSurfaceCastComponentQueries SurfaceCasts() const noexcept;
     [[nodiscard]] SceneFacingPanelComponentQueries FacingPanels() const noexcept;
     [[nodiscard]] SceneSpaceStrokeComponentQueries SpaceStrokes() const noexcept;
+    [[nodiscard]] SceneRiverComponentQueries Rivers() const noexcept;
     [[nodiscard]] SceneHistoryRibbonComponentQueries HistoryRibbons() const noexcept;
     [[nodiscard]] SceneParticleEffectComponentQueries ParticleEffects() const noexcept;
     [[nodiscard]] SceneLensEchoComponentQueries LensEchoes() const noexcept;

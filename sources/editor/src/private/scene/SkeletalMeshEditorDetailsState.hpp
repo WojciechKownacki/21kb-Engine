@@ -195,6 +195,12 @@ private:
     }
 
     [[nodiscard]] static std::string Number(std::uint64_t value) { return std::to_string(value); }
+    // Signatures and content hashes are compared, not read: fixed-width hex lines them up.
+    [[nodiscard]] static std::string Hash(std::uint64_t value) {
+        std::ostringstream output;
+        output << std::uppercase << std::hex << std::setw(16) << std::setfill('0') << value;
+        return output.str();
+    }
     [[nodiscard]] static std::string Number(float value) {
         std::ostringstream output;
         output.imbue(std::locale::classic());
@@ -243,13 +249,13 @@ private:
                 { std::string{ EditorText("skeletalMeshEditor.details.path", "Path") }, skeletonMetadata_.virtualPath.generic_string() },
                 { std::string{ EditorText("skeletalMeshEditor.details.bones", "Bones") }, Number(skeleton_.bones.size()) },
                 { std::string{ EditorText("skeletalMeshEditor.details.sockets", "Sockets") }, Number(skeleton_.sockets.size()) },
-                { std::string{ EditorText("skeletalMeshEditor.details.compatibility", "Compatibility") }, Number(kb::scene::SkeletonCompatibilitySignature(skeleton_)) },
+                { std::string{ EditorText("skeletalMeshEditor.details.compatibility", "Compatibility") }, Hash(kb::scene::SkeletonCompatibilitySignature(skeleton_)) },
                 { std::string{ EditorText("skeletalMeshEditor.details.previewMesh", "Preview Mesh") }, previewMeshName_ },
             } });
             model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.importSettings", "Import Settings") }, {
                 { std::string{ EditorText("skeletalMeshEditor.details.category", "Category") }, skeletonMetadata_.importCategory },
                 { std::string{ EditorText("skeletalMeshEditor.details.source", "Source") }, skeletonMetadata_.physicalPath.generic_string() },
-                { std::string{ EditorText("skeletalMeshEditor.details.contentHash", "Content Hash") }, Number(skeletonMetadata_.contentHash) },
+                { std::string{ EditorText("skeletalMeshEditor.details.contentHash", "Content Hash") }, Hash(skeletonMetadata_.contentHash) },
                 { std::string{ EditorText("skeletalMeshEditor.details.runtimeLoadable", "Runtime Loadable") }, skeletonMetadata_.runtimeLoadable ? std::string{ EditorText("common.yes", "Yes") } : std::string{ EditorText("common.no", "No") } },
             } });
             model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.validation", "Validation") }, {
@@ -263,8 +269,10 @@ private:
         model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.asset", "Asset") }, {
             { std::string{ EditorText("skeletalMeshEditor.details.name", "Name") }, meshMetadata_.name },
             { std::string{ EditorText("skeletalMeshEditor.details.path", "Path") }, meshMetadata_.virtualPath.generic_string() },
-            { std::string{ EditorText("skeletalMeshEditor.details.skeleton", "Skeleton") }, Number(mesh_.skeletonAssetId) },
-            { std::string{ EditorText("skeletalMeshEditor.details.compatibility", "Compatibility") }, Number(mesh_.skeletonCompatibilitySignature) },
+            // The id is turned into the skeleton asset's name where the registry is at hand.
+            { std::string{ EditorText("skeletalMeshEditor.details.skeleton", "Skeleton") }, Number(mesh_.skeletonAssetId),
+                SkeletalMeshEditorDetailsAction::None, 0U, 0U, mesh_.skeletonAssetId },
+            { std::string{ EditorText("skeletalMeshEditor.details.compatibility", "Compatibility") }, Hash(mesh_.skeletonCompatibilitySignature) },
             { std::string{ EditorText("skeletalMeshEditor.details.lODs", "LODs") }, Number(mesh_.lods.size()) },
             { std::string{ EditorText("skeletalMeshEditor.details.morphTargets", "Morph Targets") }, Number(mesh_.morphTargets.size()) },
         } });

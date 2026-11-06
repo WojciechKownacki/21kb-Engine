@@ -87,7 +87,7 @@ void RunSceneLightGridGpuTests() {
             RenderStaticMeshVertexP3N3UV2{.x = -1.0F, .y = -1.0F, .z = 0.5F, .ny = 0.0F, .nz = 1.0F},
             RenderStaticMeshVertexP3N3UV2{.x = 1.0F, .y = -1.0F, .z = 0.5F, .ny = 0.0F, .nz = 1.0F},
             RenderStaticMeshVertexP3N3UV2{.x = 0.0F, .y = 1.0F, .z = 0.5F, .ny = 0.0F, .nz = 1.0F}};
-        constexpr std::array<std::uint16_t, 3> indices{0U, 1U, 2U};
+        constexpr std::array<std::uint16_t, 3> indices{0U, 2U, 1U};  // faces the camera, so the double-sided normal is not flipped
         const RenderMeshDesc mesh{.vertexData = vertices.data(), .vertexCount = 3U,
             .indices = indices.data(), .indexCount = 3U, .vertexFormat = RenderVertexFormat::P3N3UV2};
         const auto handle = renderer.Resources().RegisterMesh(mesh);

@@ -162,6 +162,9 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
                 Vec3{ collider->boxSize.x * scaleX * 0.5F, collider->boxSize.y * scaleY * 0.5F, collider->boxSize.z * scaleZ * 0.5F },
                 transform.worldRotation, color, kShapeAlpha);
             break;
+        case ColliderShape::Terrain:
+            // The collider is the surface of the terrain mesh drawn at the same place, which wireframing would only repeat.
+            break;
         case ColliderShape::Mesh: {
             const auto mesh = scene.Assets().Manager().AcquireLoaded<kb::assets::CollisionMeshAsset>(kb::assets::AssetId{collider->meshAssetId});
             if (!mesh.IsLoaded()) break;

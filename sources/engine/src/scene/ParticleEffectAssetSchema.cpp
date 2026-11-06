@@ -1,6 +1,7 @@
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace kb::scene {
@@ -9,7 +10,21 @@ bool IsRepeatableParticleModule(ParticleModuleType type) noexcept {
     return type == ParticleModuleType::Wind || type == ParticleModuleType::Drag ||
            type == ParticleModuleType::SubEmitter || type == ParticleModuleType::Noise ||
            type == ParticleModuleType::AxisRotation || type == ParticleModuleType::Attraction ||
-           type == ParticleModuleType::TorusSwirl || type == ParticleModuleType::Separation;
+           type == ParticleModuleType::TorusSwirl || type == ParticleModuleType::Separation ||
+           type == ParticleModuleType::CollisionGeometry;
+}
+
+bool IsValidParticleCollisionGeometry(const ParticleCollisionGeometryModule& v) noexcept {
+    if(static_cast<unsigned>(v.kind)>static_cast<unsigned>(ParticleCollisionGeometryKind::Heightfield)||
+        !std::isfinite(v.radius)||v.radius<0.001F||v.radius>100||!std::isfinite(v.restitution)||v.restitution<0||v.restitution>1||
+        !std::isfinite(v.friction)||v.friction<0||v.friction>1||v.maxEventsPerStep==0||v.maxEventsPerStep>kParticleEffectMaxEventsPerStep) return false;
+    if(v.kind==ParticleCollisionGeometryKind::PhysicsWorld) return v.layerMask!=0&&v.samples.empty();
+    for(float n:{v.origin.x,v.origin.y,v.origin.z}) if(!std::isfinite(n)||std::abs(n)>1000000) return false;
+    for(float n:{v.cellSize.x,v.cellSize.y,v.cellSize.z}) if(!std::isfinite(n)||n<0.001F||n>100) return false;
+    if(v.width<2||v.width>128||v.depth<2||v.depth>128) return false;
+    if(v.kind==ParticleCollisionGeometryKind::Heightfield ? v.height!=1 : (v.height<2||v.height>128)) return false;
+    const auto count=static_cast<std::uint64_t>(v.width)*v.height*v.depth;
+    return count<=32768&&count==v.samples.size()&&std::all_of(v.samples.begin(),v.samples.end(),[](float n){return std::isfinite(n)&&std::abs(n)<=1000000;});
 }
 
 bool IsValidParticleEffectUtf8(std::string_view text) noexcept {
@@ -91,6 +106,8 @@ ParticleModulePayload DefaultParticleModulePayload(ParticleModuleType type) {
         return ParticleTorusSwirlModule{};
     case ParticleModuleType::Separation:
         return ParticleSeparationModule{};
+    case ParticleModuleType::CollisionGeometry:
+        return ParticleCollisionGeometryModule{};
     }
     throw std::invalid_argument{"particle module type is invalid"};
 }

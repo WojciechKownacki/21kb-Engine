@@ -4,6 +4,20 @@ import struct
 import zlib
 
 
+def write_png(path, pixels):
+    """Write non-interlaced RGB8 rows without an optional imaging dependency."""
+    height = len(pixels)
+    width = len(pixels[0]) if height else 0
+    if width == 0 or any(len(row) != width for row in pixels):
+        raise ValueError("PNG rows must form a nonempty rectangle")
+    raw = b"".join(b"\0" + bytes(channel for pixel in row for channel in pixel[:3]) for row in pixels)
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff)
+    pathlib.Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" +
+        chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) +
+        chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
 def read_png(path):
     """RGBA8/RGB8 non-interlaced PNG to rows of (r, g, b)."""
     data = pathlib.Path(path).read_bytes()

@@ -72,6 +72,7 @@ enum SceneNodeComponentBits : std::uint64_t {
       Collider2DBit = 1ULL << 48U,
       Body2DBit = 1ULL << 47U,
       Sprite2DBit = 1ULL << 46U,
+      RiverBit = 1ULL << 50U,
 
 };
 
@@ -92,7 +93,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | RiverBit | Body2DBit | Collider2DBit | CharacterController2DBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -148,6 +149,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.collider2D.has_value(), Collider2DBit);
     include(components.body2D.has_value(), Body2DBit);
     include(components.sprite2D.has_value(), Sprite2DBit);
+    include(components.river.has_value(), RiverBit);
     return componentBits;
 }
 
@@ -173,7 +175,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & MeshRendererBit) != 0U) {
         MeshRendererComponent meshRenderer;
-        if (!SceneAssetRenderComponentCodec::ReadMeshRenderer(input, meshRenderer)) {
+        if (!SceneAssetRenderComponentCodec::ReadMeshRenderer(input, fileVersion, meshRenderer)) {
             return false;
         }
         output.meshRenderer = meshRenderer;
@@ -246,7 +248,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & BehaviourBit) != 0U) {
         BehaviourComponent behaviour;
-        if (!SceneAssetBehaviourComponentCodec::Read(input, behaviour)) {
+        if (!SceneAssetBehaviourComponentCodec::Read(input, fileVersion, behaviour, output.behaviourVariableOverrides)) {
             return false;
         }
         output.behaviour = behaviour;
@@ -736,6 +738,22 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsSprite2DComponentValid(value)) return false;
         output.sprite2D = value;
     }
+    if ((componentBits & RiverBit) != 0U) {
+        RiverComponent value{};
+        if (fileVersion < SceneDocument::RiverFileVersion) return false;
+        if (!input.ReadUInt32(value.pointCount) || !IsRiverPointCountValid(value.pointCount)) return false;
+        if (!input.ReadFloat(value.bankWidth)) return false;
+        if (!input.ReadFloat(value.waterfallSlopeDegrees)) return false;
+        if (!input.ReadUInt64(value.materialAssetId) || !input.ReadUInt64(value.waterfallMaterialAssetId) || !input.ReadUInt64(value.mistEffectAssetId)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        for (std::uint32_t index = 0U; index < value.pointCount; ++index) {
+            RiverPoint& point = value.points[index];
+            if (!SceneAssetPrimitiveCodec::ReadVec3(input, point.position)) return false;
+            if (!input.ReadFloat(point.width) || !input.ReadFloat(point.depth) || !input.ReadFloat(point.speed)) return false;
+        }
+        if (!IsRiverComponentValid(value)) return false;
+        output.river = value;
+    }
     return true;
 }
 
@@ -775,7 +793,7 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetAudioComponentCodec::WriteListener(output, *components.audioListener);
     }
     if (components.behaviour.has_value()) {
-        SceneAssetBehaviourComponentCodec::Write(output, *components.behaviour);
+        SceneAssetBehaviourComponentCodec::Write(output, *components.behaviour, components.behaviourVariableOverrides);
     }
     if (components.animator.has_value()) {
         SceneAssetBinaryIO::WriteUInt64(output, components.animator->controllerAssetId);
@@ -1174,6 +1192,23 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteInt32(output, value.sortingOrder);
         SceneAssetBinaryIO::WriteBool(output, value.wall);
         SceneAssetBinaryIO::WriteBool(output, value.visible);
+    }
+    if (components.river.has_value()) {
+        const RiverComponent& value = *components.river;
+        SceneAssetBinaryIO::WriteUInt32(output, value.pointCount);
+        SceneAssetBinaryIO::WriteFloat(output, value.bankWidth);
+        SceneAssetBinaryIO::WriteFloat(output, value.waterfallSlopeDegrees);
+        SceneAssetBinaryIO::WriteUInt64(output, value.materialAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, value.waterfallMaterialAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, value.mistEffectAssetId);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+        for (std::uint32_t index = 0U; index < value.pointCount; ++index) {
+            const RiverPoint& point = value.points[index];
+            SceneAssetPrimitiveCodec::WriteVec3(output, point.position);
+            SceneAssetBinaryIO::WriteFloat(output, point.width);
+            SceneAssetBinaryIO::WriteFloat(output, point.depth);
+            SceneAssetBinaryIO::WriteFloat(output, point.speed);
+        }
     }
 
 }

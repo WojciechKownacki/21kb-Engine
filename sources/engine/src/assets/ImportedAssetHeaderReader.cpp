@@ -12,6 +12,8 @@ constexpr std::uint32_t SupportedVersion = 1U;
 constexpr std::uint32_t ResourcesVersion = 2U;
 // Version 3 appends the model's import scale and rotation after the names; likewise unchanged here.
 constexpr std::uint32_t TransformVersion = 3U;
+// Version 4 appends the levels-of-detail record after the transform; likewise unchanged here.
+constexpr std::uint32_t LodVersion = 4U;
 
 [[nodiscard]] bool ReadU16(std::istream& input, std::uint16_t& value) {
     value = 0;
@@ -52,7 +54,7 @@ std::optional<AssetImportCategory> ImportedAssetHeaderReader::ReadCategory(const
     std::uint16_t flags = 0;
     if (magic != AssetMagic
         || !ReadU32(input, version)
-        || (version != SupportedVersion && version != ResourcesVersion && version != TransformVersion)
+        || (version != SupportedVersion && version != ResourcesVersion && version != TransformVersion && version != LodVersion)
         || !ReadU16(input, category)
         || !ReadU16(input, flags)) {
         return std::nullopt;

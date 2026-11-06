@@ -4,6 +4,8 @@
 #include "engine/scene/SceneObject.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 
+#include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -45,5 +47,26 @@ class Scene;
 // Builds the preset's hierarchy; an invalid entity for a preset that is a single object.
 [[nodiscard]] SceneEntity CreateUIHierarchy(Scene& scene, UIComponentPreset preset, SceneObject parent, std::string_view name,
                                             std::vector<SceneEntity>* created = nullptr);
+
+// A whole screen built from the widgets above, as one hierarchy that stretches over its parent (a Canvas). Its buttons
+// carry event names, so a script answers them with `function PlayClicked(self, event)` or OnUIClicked:
+//
+//   Main Menu   Title, Play (PlayClicked), Settings (SettingsClicked), Quit (QuitClicked)
+//   Pause       dimmed backdrop, Panel with Title, Resume (ResumeClicked), Settings (SettingsClicked), Main Menu (MainMenuClicked)
+//   HUD         Health (Progress Bar, top left), Score (Text, top right)
+//   Settings    dimmed backdrop, Panel with Title, Volume (Slider), Fullscreen (Toggle), Back (BackClicked)
+enum class UIScreenTemplate : std::uint8_t { MainMenu, Pause, Hud, Settings };
+
+struct UIScreenTemplateDescriptor {
+    UIScreenTemplate id{};
+    std::string_view name;
+    std::string_view summary;
+};
+
+[[nodiscard]] std::span<const UIScreenTemplateDescriptor> UIScreenTemplateCatalog() noexcept;
+[[nodiscard]] const UIScreenTemplateDescriptor* FindUIScreenTemplate(std::string_view name) noexcept;
+// Builds the screen under `parent` (an invalid object: at the scene root); `created` receives every object, root first.
+[[nodiscard]] SceneEntity CreateUIScreen(Scene& scene, UIScreenTemplate screen, SceneObject parent, std::string_view name,
+                                         std::vector<SceneEntity>* created = nullptr);
 
 } // namespace kb::scene

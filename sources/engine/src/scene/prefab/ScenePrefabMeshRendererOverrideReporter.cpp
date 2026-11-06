@@ -15,7 +15,8 @@ namespace {
         && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount
         && lhs.castsShadow == rhs.castsShadow
         && lhs.receivesShadow == rhs.receivesShadow
-        && lhs.layer == rhs.layer;
+        && lhs.layer == rhs.layer
+        && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
 }
 
 } // namespace
@@ -43,6 +44,9 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.castsShadow", ScenePrefabOverrideValueFormatter::ToString(actual->castsShadow), ScenePrefabOverrideFlag::MeshRenderer);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.receivesShadow", ScenePrefabOverrideValueFormatter::ToString(actual->receivesShadow), ScenePrefabOverrideFlag::MeshRenderer);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.layer", ScenePrefabOverrideValueFormatter::ToString(static_cast<std::uint64_t>(actual->layer)), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.lodBias", std::to_string(actual->lodBias), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.lodEnabled", ScenePrefabOverrideValueFormatter::ToString(actual->lodEnabled), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::MeshRenderer);
         return;
     }
     if (actual->meshAssetId != expected->meshAssetId) {
@@ -67,6 +71,15 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
     }
     if (actual->layer != expected->layer) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.layer", ScenePrefabOverrideValueFormatter::ToString(static_cast<std::uint64_t>(actual->layer)), ScenePrefabOverrideFlag::MeshRenderer);
+    }
+    if (actual->lodBias != expected->lodBias) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.lodBias", std::to_string(actual->lodBias), ScenePrefabOverrideFlag::MeshRenderer);
+    }
+    if (actual->lodEnabled != expected->lodEnabled) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.lodEnabled", ScenePrefabOverrideValueFormatter::ToString(actual->lodEnabled), ScenePrefabOverrideFlag::MeshRenderer);
+    }
+    if (actual->mobility != expected->mobility) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::MeshRenderer);
     }
 }
 

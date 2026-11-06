@@ -13,6 +13,7 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
@@ -728,6 +729,14 @@ void RunMixerDspRuntimeTest() {
     Require(report.backendAvailable && report.offline && report.buses.size() == 2U && report.buses[1].activeEffects == 2U
         && report.buses[1].settingsCurrent && report.buses[1].appliedEffects == mixer.buses[1].effects && report.renderedFrames == frames,
         "DSP diagnostics reported requested settings instead of actual executed state");
+    kb::script::ScriptRuntimeHost dspApi{scene};
+    const std::array dspArguments{kb::script::ScriptFunctionArgument{"bus", kb::script::ScriptValue{std::string{"Effects"}}}};
+    const auto dspState = dspApi.Functions().Call("Audio.DspState", dspArguments,
+        kb::script::ScriptFunctionCallContext{.scene = &scene});
+    Require(dspState.Succeeded() && dspState.Output("current")->AsBool()
+        && dspState.Output("activeEffects")->AsInt() == 2 && dspState.Output("error")->AsString().empty()
+        && dspState.Output("sampleRate")->AsInt() == 48000 && dspState.Output("channels")->AsInt() == 2,
+        "Audio.DspState did not expose the actual offline provider effects and format");
     mixer.buses[1].effects[0].parameters.bypass = true; save(); measure("bypass-one", 0.25 * 0.75);
     mixer.buses[1].effects = {{.id = "Equalizer", .parameters = {.kind = Kind::PeakingEqualizer, .cutoffHz = 440.0, .gainDb = 6.0}},
         {.id = "Gain", .parameters = {.kind = Kind::Compressor, .ratio = 1.0, .makeupDb = 6.0}}}; save();
@@ -3023,6 +3032,142 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     Require(sources.SoundCountForTesting() == 0U, "Destroyed source entity retained a native sound");
 }
 
+void RunAllocationDiagnosticsTest() {
+    kb::audio_miniaudio::MiniaudioAllocationTracker tracker;
+    const auto callbacks = tracker.Callbacks();
+    auto* pointer = callbacks.onMalloc(17U, callbacks.pUserData);
+    Require(pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignof(std::max_align_t) == 0U,
+        "Tracked audio allocation lost native alignment");
+    Require(tracker.current == 17U && tracker.peak == 17U, "Tracked allocation size differs from requested bytes");
+    Require(callbacks.onRealloc(pointer, std::numeric_limits<std::size_t>::max(), callbacks.pUserData) == nullptr
+        && tracker.current == 17U, "Overflow realloc changed ownership or allocation totals");
+    pointer = callbacks.onRealloc(pointer, 7U, callbacks.pUserData);
+    Require(pointer != nullptr && tracker.current == 7U && tracker.peak == 17U, "Shrink realloc corrupted accounting");
+    callbacks.onFree(pointer, callbacks.pUserData);
+    Require(tracker.current == 0U, "Tracked allocation leaked after free");
+    for (int cycle = 0; cycle < 4; ++cycle) {
+        kb::audio_miniaudio::MiniaudioEngine engine;
+        engine.Initialize(true);
+        const auto initialized = engine.Diagnostics();
+        Require(initialized.allocatedBytes > 0U && initialized.peakAllocatedBytes >= initialized.allocatedBytes,
+            "Audio engine allocations did not use the measured allocator");
+        engine.Shutdown();
+        Require(engine.Diagnostics().allocatedBytes == 0U, "Audio engine shutdown leaked tracked allocations");
+    }
+}
+
+void RunPlatformSuspensionTest(const std::filesystem::path& clipPath, bool physicalDevice) {
+    kb::scene::Scene scene;
+    RegisterClip(scene, 9852U, clipPath);
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    if (physicalDevice) {
+        Require(backend.Reinitialize(scene) == kb::audio::AudioDeviceStatus::PlaybackAvailable,
+            "Platform suspension qualification requires an OS output device");
+        const auto diagnostics = backend.RuntimeDiagnostics();
+        Require(!diagnostics.offline && !diagnostics.backend.empty() && diagnostics.backend != "Null",
+            "Platform suspension qualification must not use a null backend");
+        std::cout << "audio_suspend backend=" << diagnostics.backend << '\n';
+    } else Require(backend.ConfigureOffline(scene), "Offline suspension fixture did not initialize");
+    const auto source = scene.Entities().CreateObject({.name = "Suspension Source"});
+    const auto pausedSource = scene.Entities().CreateObject({.name = "Paused Source"});
+    for (const auto entity : {source.Entity(), pausedSource.Entity()}) {
+        scene.Components().AudioSources().Set(entity, {.clipAssetId = 9852U, .volume = 0.0F, .loop = true, .spatial = false});
+        Require(backend.PlaySource(scene, entity).Succeeded(), "Suspension source did not start");
+    }
+    const auto voice = backend.PlayOneShot(scene, {.clipAssetId = 9852U, .volume = 0.0F, .loop = true, .spatial = false});
+    const auto pausedVoice = backend.PlayOneShot(scene, {.clipAssetId = 9852U, .volume = 0.0F, .loop = true, .spatial = false});
+    Require(voice.Succeeded() && pausedVoice.Succeeded(), "Suspension voices did not start");
+    Require(backend.PauseVoice(scene, pausedVoice.voiceId) && backend.PauseSource(scene, pausedSource.Entity()).Succeeded(),
+        "User pause fixture failed");
+    const auto advance = [&] {
+        if (physicalDevice) std::this_thread::sleep_for(std::chrono::milliseconds{60});
+        else Require(backend.RenderOffline(scene, 1024U).succeeded, "Offline suspension fixture did not render");
+    };
+    advance();
+    const auto resources = backend.ResourcesForTesting();
+    const auto generation = backend.RuntimeDiagnostics().generation;
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        Require(backend.SetPlatformSuspended(scene, true) && backend.SetPlatformSuspended(scene, true),
+            "Platform suspension must be idempotent");
+        Require(backend.DeviceStatus() == kb::audio::AudioDeviceStatus::PlaybackSuspended,
+            "Platform suspension must be distinguishable from a lost device");
+        const auto cursor = backend.VoicePlaybackSeconds(scene, voice.voiceId);
+        const auto pausedCursor = backend.VoicePlaybackSeconds(scene, pausedVoice.voiceId);
+        const auto frames = backend.RuntimeDiagnostics().deviceFrames;
+        kb::scene::SceneSystemContext context{scene, 0.1F};
+        backend.OnUpdate(context);
+        if (physicalDevice) std::this_thread::sleep_for(std::chrono::milliseconds{60});
+        else Require(!backend.RenderOffline(scene, 1024U).succeeded, "Suspended offline output advanced the graph");
+        Require(backend.VoicePlaybackSeconds(scene, voice.voiceId) == cursor &&
+                backend.VoicePlaybackSeconds(scene, pausedVoice.voiceId) == pausedCursor &&
+                backend.RuntimeDiagnostics().deviceFrames == frames && SameResources(resources, backend.ResourcesForTesting()),
+            "Suspension advanced cursors or released native resources");
+        Require(backend.SetPlatformSuspended(scene, false) && backend.SetPlatformSuspended(scene, false),
+            "Platform resume must be idempotent");
+        Require(backend.IsVoicePlaying(scene, voice.voiceId) && !backend.IsVoicePlaying(scene, pausedVoice.voiceId) &&
+                backend.IsSourcePlaying(scene, source.Entity()).playing &&
+                !backend.IsSourcePlaying(scene, pausedSource.Entity()).playing,
+            "Platform resume changed explicit source or voice transport state");
+        advance();
+        Require(backend.VoicePlaybackSeconds(scene, voice.voiceId) != cursor &&
+                backend.VoicePlaybackSeconds(scene, pausedVoice.voiceId) == pausedCursor &&
+                backend.RuntimeDiagnostics().generation == generation && SameResources(resources, backend.ResourcesForTesting()),
+            "Platform resume failed to continue the existing graph without duplicating voices");
+    }
+    backend.Shutdown();
+    Require(backend.RuntimeDiagnostics().allocatedBytes == 0U, "Suspended backend shutdown leaked allocations");
+}
+
+void RunRealDeviceLifecycleTest(const std::filesystem::path& clipPath, int seconds) {
+    kb::scene::Scene scene;
+    RegisterClip(scene, 9851U, clipPath);
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds{seconds};
+    std::uint64_t blocks = 0U, misses = 0U, peak = 0U, cycles = 0U;
+    do {
+        Require(backend.Reinitialize(scene) == kb::audio::AudioDeviceStatus::PlaybackAvailable,
+            "Real-device qualification requires a started OS output device; offline fallback is not accepted");
+        const auto initial = backend.RuntimeDiagnostics();
+        Require(!initial.offline && !initial.backend.empty() && initial.backend != "Null",
+            "Device lifecycle unexpectedly used a null backend");
+        if (cycles == 0U) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{100});
+            const auto idle = backend.RuntimeDiagnostics();
+            Require(idle.deviceBlocks > initial.deviceBlocks && idle.shortBlocks == 0U,
+                "An empty graph must produce idle silence without reporting short device blocks");
+        }
+        const auto voice = backend.PlayOneShot(scene, {.clipAssetId = 9851U, .volume = 0.0F, .loop = true, .spatial = false});
+        Require(voice.Succeeded(), "Real-device loop did not start through public playback");
+        std::this_thread::sleep_for(std::chrono::milliseconds{250});
+        const auto running = backend.RuntimeDiagnostics();
+        if (!running.playbackAvailable || running.deviceBlocks <= initial.deviceBlocks || running.shortBlocks != 0U)
+            std::cerr << "Device callback observation backend=" << running.backend << " available=" << running.playbackAvailable
+                << " initialBlocks=" << initial.deviceBlocks << " blocks=" << running.deviceBlocks << " frames=" << running.deviceFrames
+                << " shortBlocks=" << running.shortBlocks << " period=" << running.periodFrames << " worstNs=" << running.worstCallbackNanoseconds << '\n';
+        Require(running.playbackAvailable && running.deviceBlocks > initial.deviceBlocks && running.deviceFrames > initial.deviceFrames
+            && running.periodFrames > 0U && running.worstCallbackNanoseconds > 0U && running.shortBlocks == 0U,
+            "Real OS audio callback did not mix complete blocks");
+        Require(backend.VoicePlaybackSeconds(scene, voice.voiceId) > 0.05F, "Real OS callback did not advance the voice audio clock");
+        blocks += running.deviceBlocks; misses += running.callbackDeadlineMisses;
+        peak = std::max(peak, running.peakAllocatedBytes);
+        Require(backend.StopPlaybackDeviceForTesting(), "OS device stop failed");
+        Require(backend.DeviceStatus() == kb::audio::AudioDeviceStatus::NoPlaybackDevice, "Stopped device still reports playback");
+        Require(backend.Reinitialize(scene) == kb::audio::AudioDeviceStatus::PlaybackAvailable, "OS device restart failed");
+        Require(backend.RuntimeDiagnostics().generation > running.generation
+            && !backend.IsVoicePlaying(scene, voice.voiceId) && SameResources(backend.ResourcesForTesting(), {}),
+            "Reset revived a stale voice or retained native resources");
+        backend.Shutdown();
+        Require(backend.RuntimeDiagnostics().allocatedBytes == 0U && SameResources(backend.ResourcesForTesting(), {}),
+            "OS audio shutdown retained engine allocations or resources");
+        ++cycles;
+        if (cycles == 1U) std::cout << "audio_device backend=" << running.backend << " sampleRate=" << running.sampleRate
+            << " periodFrames=" << running.periodFrames << '\n';
+    } while (std::chrono::steady_clock::now() < end);
+    Require(misses * 100U <= blocks, "More than one percent of real device callbacks exceeded their period budget");
+    std::cout << "audio_device cycles=" << cycles << " blocks=" << blocks << " deadlineMisses=" << misses
+        << " peakEngineAllocationBytes=" << peak << " retainedBytes=0 staleVoices=0\n";
+}
+
 void RunBackendRestartTest(const std::filesystem::path& clipPath) {
     kb::scene::Scene scene;
     RegisterClip(scene, 8401U, clipPath);
@@ -3427,6 +3572,11 @@ int RunTests(int argc, char** argv) {
     const std::filesystem::path clipPath = TestRoot() / "Runtime.wav";
     WriteSilentWav(clipPath);
     const std::string_view filter = argc > 1 ? std::string_view{ argv[1] } : std::string_view{};
+    if (filter.empty() || filter == "allocation-diagnostics") RunAllocationDiagnosticsTest();
+    if (filter.empty() || filter == "platform-suspend") RunPlatformSuspensionTest(clipPath, false);
+    if (filter == "platform-suspend-device") RunPlatformSuspensionTest(clipPath, true);
+    if (filter == "real-device") RunRealDeviceLifecycleTest(clipPath, 3);
+    if (filter == "device-soak") RunRealDeviceLifecycleTest(clipPath, 1800);
     if (filter == "mixer-dsp-workload") RunMixerDspWorkloadBenchmark();
     if (filter == "mixer-meters-workload") RunMixerDspWorkloadBenchmark(true);
     if (filter == "mixer-meters") RunMixerMeterRuntimeTest();

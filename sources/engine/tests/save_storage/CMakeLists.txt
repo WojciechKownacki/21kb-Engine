@@ -39,8 +39,20 @@ else()
     endif()
 endif()
 enable_testing()
-add_test(NAME save_storage COMMAND save_storage_tests)
-add_test(NAME save_storage_write COMMAND save_storage_tests write "${CMAKE_BINARY_DIR}/persistence")
-add_test(NAME save_storage_reload COMMAND save_storage_tests read "${CMAKE_BINARY_DIR}/persistence")
-set_tests_properties(save_storage_write PROPERTIES FIXTURES_SETUP persisted_save)
-set_tests_properties(save_storage_reload PROPERTIES FIXTURES_REQUIRED persisted_save)
+if(EMSCRIPTEN)
+    target_compile_options(save_storage_tests PRIVATE -Wno-dollar-in-identifier-extension -Wno-gnu-zero-variadic-macro-arguments)
+    target_link_options(save_storage_tests PRIVATE
+        -sALLOW_MEMORY_GROWTH=1 -sFORCE_FILESYSTEM=1 -sENVIRONMENT=web -sINVOKE_RUN=0
+        "-sEXPORTED_RUNTIME_METHODS=['callMain']" -lidbfs.js
+        --pre-js "${ENGINE}/../game/src/web/WebUserStorage.js"
+        --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
+    set_target_properties(save_storage_tests PROPERTIES SUFFIX ".html")
+    set_property(TARGET save_storage_tests APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/shell.html" "${ENGINE}/../game/src/web/WebUserStorage.js")
+else()
+    add_test(NAME save_storage COMMAND save_storage_tests)
+    add_test(NAME save_storage_write COMMAND save_storage_tests write "${CMAKE_BINARY_DIR}/persistence")
+    add_test(NAME save_storage_reload COMMAND save_storage_tests read "${CMAKE_BINARY_DIR}/persistence")
+    set_tests_properties(save_storage_write PROPERTIES FIXTURES_SETUP persisted_save)
+    set_tests_properties(save_storage_reload PROPERTIES FIXTURES_REQUIRED persisted_save)
+endif()

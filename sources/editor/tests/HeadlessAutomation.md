@@ -124,9 +124,18 @@ scenario-local aliases.
   | `add_component` | `entity`, `component` |
 | `remove_component` | `entity`, `component`; supports SkeletonBinding, DeformedGeometry, and the actual Inspector remove buttons for World2DMap and MeshRenderer. |
 | `remember_mesh_renderer`, `assert_mesh_renderer_unchanged` | `entity`; remembers and compares the mesh, materials, render flags and visibility across map edits, Undo/Redo, scene reload and Play. |
-  | `terrain_stamp` | Terrain `entity`, local `x`, `z`; optional `radius`, `strength`, `falloff`, `pressure`; commits one production Undo/Redo stroke |
+  | `terrain_stamp` | Terrain `entity`, local `x`, `z`; optional `radius`, `strength`, `falloff`, `pressure`, `mode` (`raise` `lower` `smooth` `flatten` `noise` `terrace` `cut-hole` `fill-hole` `ramp` `stamp`), `shape`, `height` (a number or `sample`), `step`, `softness`, `seed`, `invert`, `symmetry` (`x`, `z`, `xz`), `noiseKind`, `noiseScale`, `noiseOctaves`, `to` and `toHeight` (ramp), `image`, `rotation`, `blend` (stamp); commits one production Undo/Redo stroke |
+  | `terrain_paint` | Terrain `entity`, local `x`, `z`, `layer`; optional `to_x`, `to_z` (a stroke between two points), `radius`, `opacity`, `falloff`, `shape`, `erase`, `seed`, `auto` (the layer by slope: flatter than 35 degrees the first layer, steeper the last; then `layer` is not needed); commits one production Undo/Redo stroke |
   | `assert_terrain_height` | Terrain `entity`, local `x`, `z`, expected `value`; optional `tolerance` |
   | `configure_terrain`, `assert_terrain_configuration` | Terrain `entity`, `width`, `height`, `chunk_quads`, `lod_count`, `world_size_x`, `world_size_z`; configuration resamples through the production Undo/Redo path |
+  | `terrain_tool` | Terrain `entity`, `tool` (`none` `sculpt` `smooth` `flatten` `paint` `ramp` `stamp` `holes`): picks a tool of the terrain bar as a click would; `stamp` takes `image` (a height image), `paint` takes `auto` (the layer by slope); optional `radius`, `strength`, `cycle` (clicks of the variant button: Smooth/Flatten, the paint layer then Auto, the stamp blend) |
+  | `terrain_drawer` | `drawer`: `none`, `new_world` or `advanced`; opens the strip under the terrain bar |
+  | `terrain_slope_overlay` | `enabled`; colours the terrain by the angle of its slope |
+  | `terrain_world_wizard` | Terrain `entity`, `preset` (`island` `mountains` `plains` `valley`, or any terrain preset); optional `character` (0..1), `seed`, `wait` (default true), `timeout` (seconds, default 300); runs the New World job in the background and applies it as one Undo step |
+  | `terrain_erode` | Terrain `entity`, `kind` (`thermal`, `hydraulic`); optional `wait`, `timeout`; a background erosion job applied as one Undo step |
+  | `terrain_job` | `action`: `wait` (applies the running job; optional `timeout`) or `cancel` (stops it; succeeds when the terrain stays as it was) |
+  | `assert_terrain_relief` | Terrain `entity`, `min`, optional `max`: the span from the lowest to the highest height in world units |
+  | `assert_terrain_layer_weight` | Terrain `entity`, local `x`, `z`, `layer`; optional `min`, `max` (0..1): the share of that material layer there |
   | `set_animator_root_motion_owner`, `assert_animator_root_motion_owner` | Animator `entity`, owner: `none`, `animator`, `character_controller`, or `rigidbody`; setter uses the production Inspector command and rejects incompatible ownership |
   | `set_property`, `set_property_rejected`, `assert_property` | `entity`, `component`, `property`, `value`; the rejection form succeeds only when the production setter refuses the value; assertion optionally `tolerance` |
 | `assert_entity` | `entity`; optional `exists` |

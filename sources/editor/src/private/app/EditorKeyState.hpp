@@ -18,4 +18,15 @@ public:
     EditorScriptedInputScope& operator=(const EditorScriptedInputScope&) = delete;
 };
 
+// A scoped modifier for messages sent by deterministic headless controls.
+class EditorScriptedKeyScope final {
+public:
+    explicit EditorScriptedKeyScope(int key) noexcept;
+    ~EditorScriptedKeyScope();
+    EditorScriptedKeyScope(const EditorScriptedKeyScope&) = delete;
+    EditorScriptedKeyScope& operator=(const EditorScriptedKeyScope&) = delete;
+private:
+    int previous_;
+};
+
 } // namespace kb::editor

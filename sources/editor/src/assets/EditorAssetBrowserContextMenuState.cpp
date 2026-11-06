@@ -64,7 +64,10 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = std::string{ EditorText("projectFiles.menu.newInputMappingContext", "New Input Mapping Context") } });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = std::string{ EditorText("projectFiles.menu.newAudioMixer", "New Audio Mixer") } });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewPostProcessProfile, .label = std::string{ EditorText("projectFiles.menu.newPostProcessProfile", "New Post-Process Profile") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewUITheme, .label = "New UI Theme" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewImportPreset, .label = std::string{ EditorText("projectFiles.menu.newImportPreset", "New Import Preset") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewBlendSpace2D, .label = "New BlendSpace2D" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewGameplayGraph, .label = "New Gameplay Graph" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewParticleEffect, .label = std::string{ EditorText("projectFiles.menu.newParticleEffect", "New Particle Effect") }, .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = std::string{ EditorText("projectFiles.menu.add", "Add") }, .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = std::string{ EditorText("projectFiles.menu.refresh", "Refresh") } });
@@ -82,7 +85,10 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = std::string{ EditorText("projectFiles.menu.newInputMappingContext", "New Input Mapping Context") } });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = std::string{ EditorText("projectFiles.menu.newAudioMixer", "New Audio Mixer") } });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewPostProcessProfile, .label = std::string{ EditorText("projectFiles.menu.newPostProcessProfile", "New Post-Process Profile") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewUITheme, .label = "New UI Theme" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewImportPreset, .label = std::string{ EditorText("projectFiles.menu.newImportPreset", "New Import Preset") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewBlendSpace2D, .label = "New BlendSpace2D" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewGameplayGraph, .label = "New Gameplay Graph" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewParticleEffect, .label = std::string{ EditorText("projectFiles.menu.newParticleEffect", "New Particle Effect") }, .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = std::string{ EditorText("projectFiles.menu.add", "Add") }, .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = std::string{ EditorText("projectFiles.menu.refresh", "Refresh") } });

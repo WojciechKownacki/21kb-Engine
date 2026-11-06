@@ -198,6 +198,18 @@ def main():
     control = capture(cook("BounceControl"), 60)
     control_difference = sum(abs(a - b) > 2 for a, b in zip(pixels(gpu), pixels(control), strict=True))
     require(control_difference > 16, "Contact death image did not differ from the live bounce control")
+    for name in names:
+        edit(name, "effect.backendPolicy=CpuDeterministic")
+    edit("AtlasOnce", "effect.emitter[0].maxParticles=2", "effect.emitter[0].spawn.mode=Continuous",
+         "effect.emitter[0].spawn.rate.key[0].value=600")
+    overflow = capture(cook("CapacityOverflow"), 8, gpu=False)
+    rejected = [row for row in overflow["emitters"] if row["rejected_by_capacity"] > 0]
+    require(len(rejected) == 1 and rejected[0]["cpu_render_record_count"] == 2 and
+            rejected[0]["rejected_by_capacity"] == 10 and rejected[0]["dropped_particle_count"] == 10 and
+            rejected[0]["rejected_by_spawn_budget"] == 0 and rejected[0]["rejected_by_event_budget"] == 0 and
+            overflow["configured_cpu_particle_limit"] == 262144 and
+            overflow["configured_limit_basis"] == "capacity ceiling, not measured throughput",
+            "Packaged capacity overflow must report actual last-step rejections separately from configured limits")
     for invalid in [["--particle-diagnostics"], ["--particle-diagnostics", "--frames=2"], ["--particle-diagnostics", "--headless", "--frames=36001"],
                     ["--particle-samples=64"], ["--particle-samples=0"], ["--particle-samples=4097"], ["--particle-require-gpu"],
                     ["--headless", "--frames=2", "--profile-fixed-step"]]:

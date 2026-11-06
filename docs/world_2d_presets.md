@@ -1,7 +1,7 @@
 # Ready-made 2D players
 
 `kb_cli entity add --create 'Platformer Player'` and `--create 'Top Down Player'` put a playable character into the
-scene of a project that has a 2D map ([docs/world_2d_camera.md](world_2d_camera.md) describes the map camera):
+scene. The same presets are in Create > 2D Object. They use the shared component authoring API and support a 2D map ([docs/world_2d_camera.md](world_2d_camera.md) describes the map camera):
 
 ```
 kb_cli map2d new --project <dir> --name World --orientation wall          # a Map Platformer
@@ -11,19 +11,24 @@ kb_cli run --project <dir> --frames 120
 
 What the preset makes, in one command:
 
-- An entity (named `Player` unless `--name` is given) with a **CharacterController** (a capsule; gravity on for the
+- An entity (named `Player` unless `--name` is given) with a **CharacterController2D** (a capsule; gravity on for the
   platformer, off for the top-down player, which stays at its level) and a **behaviour** that runs the project's copy
-  of `Assets/Scripts/Platformer2DPlayer.lua` or `Assets/Scripts/TopDown2DPlayer.lua`. The Lua file is an ordinary asset of
+  of `Assets/Scripts/Platformer2DBox2DPlayer.lua` or `Assets/Scripts/TopDown2DBox2DPlayer.lua`. The Lua file is an ordinary asset of
   the project: edit it freely. It is written when missing and never overwritten.
 - **Input**: when the project has no input context yet, `Assets/Input/Move`, `Jump` and `PlayerInput` are written and
   set as the project's input context. Move is WASD, the arrow keys, the pad's left stick and D-pad; Jump is Space and the
   pad's A button. A project that already has an input context keeps it; it then needs a `Move` (Axis2D) and a
   `Jump` (Bool) action.
-- **Camera**: every map of the scene gets the player as its camera's follow target, smoothed and kept inside the map
+- **Visual**: a Sprite2D with 32 pixels per unit, oriented for the selected mode; assign its image in the inspector or CLI.
+- **Camera**: an orthographic child camera follows the player even without a map, becoming primary only when the scene has no primary camera. Every map of the scene gets the player as its camera's follow target, smoothed and kept inside the map
   (`kb_cli map2d set --camera-follow none` and the other `--camera-*` options change it; add `--camera-pixels-per-unit 16`
   for pixel perfect).
 
-## The platformer script
+## Legacy 3D physics scripts (`--physics 3d`)
+
+The explicit `--physics 3d` option retains the original CharacterController and scripts described below.
+
+### The platformer script
 
 Wall maps (`Map Platformer`): x runs across, y up. `Platformer2DPlayer.lua` reads `Move` (left and right) and `Jump`:
 
@@ -42,7 +47,7 @@ only, as it always did. The platformer script asks the engine for coyote time fo
 diagnostic): a jump asked for within that time of leaving the ground succeeds once, so a jump in the air, or a second one, does
 not. Any script can use the function on any character.
 
-## The top-down script
+### The top-down script
 
 Flat maps (`Map Top Down`): x runs across, z up the screen. `TopDown2DPlayer.lua` reads `Move` and moves with
 `Physics.CharacterMove`, so solid tiles stop it: `speed` (5.0) and `eightWay` (true). A diagonal is normalized to the speed
@@ -50,7 +55,7 @@ of one axis; with `eightWay` false only the stronger axis counts (four direction
 
 ## On the 2D physics (Box2D)
 
-`--physics 2d` makes the same player on the 2D physics ([docs/world_2d_physics.md](world_2d_physics.md)) instead of the 3D one:
+The default (also selected explicitly with `--physics 2d`) makes the player on the 2D physics ([docs/world_2d_physics.md](world_2d_physics.md)) instead of the 3D one:
 a **Character Controller 2D** (side view for the platformer, top down without gravity for the other) and the scripts
 `Assets/Scripts/Platformer2DBox2DPlayer.lua` (`speed`, `jumpSpeed`, `jumpBuffer`) or `Assets/Scripts/TopDown2DBox2DPlayer.lua`
 (`speed`, `eightWay`), which drive it with `CallFunction("Physics2D.MoveCharacter", ...)`, `Physics2D.IsGrounded` and
@@ -99,8 +104,73 @@ queries. Queries use the live map, including cells changed by script since loadi
 
 ## Not covered
 
-- The editor's Create menu does not list these items yet (it would need the project folder to write the script, and an
-  editor build); use the command line.
-- One-way platforms, slopes and moving platforms work in the character controller but are not exercised by the preset
-  scripts' tests.
 - The scripts assume the player's map is not rotated or scaled.
+
+## Reproducible sample workflows
+
+`ctest --test-dir <build> -R kb_editor_player2d_workflow_package --output-on-failure`
+creates a small platformer and a top-down project through the editor authoring API.
+Both use Sprite2D, native 2D collision, the preset controller, a following camera,
+a goal script and a HUD. The test drives keyboard input to clear or walk around an
+obstacle, reaches the goal, round-trips a player prefab, and repeats the input through
+the CLI and a cooked Windows player with project source files unavailable.
+The printed output directory retains both projects, command logs and captures.
+
+## Map camera settings
+
+The map editor's additional tools menu includes **Play camera...**: target entity name,
+zoom, pixel density, smoothing, horizontal/vertical drag margins and map bounds.
+These settings are saved in the map and participate in Undo/Redo. A blank target
+keeps a fixed camera; bounds and zoom still apply. Both orientations use the same settings.
+
+`kb_cli map2d set --project <project> --map <map> --camera-zoom 2` doubles the requested
+magnification. `--camera-pixels-per-unit 16` quantizes magnification to whole screen
+pixels per texel and snaps camera motion to the resulting pixel grid. Set density to
+zero for continuous zoom. Resize changes the visible area while retaining square pixels.
+
+`kb_editor_camera2d_workflow_package` checks the settings through the headless editor,
+CLI round-trip and cooked pixel readback in both orientations, with fractional camera
+motion and multiple viewport sizes/aspect ratios. `kb_editor_map2d_visual_package`
+checks atlas spacing, edge sampling and transformed graphics in cooked output.
+
+## Platformer navigation and surfaces
+
+Create **Platformer Navigator** from the 2D Object menu or with
+`kb_cli entity add --create "Platformer Navigator"`. It uses the native 2D controller
+and a project-owned Lua behaviour. Set its exposed map name, target cell, movement
+speed and jump limits. The target row is the empty cell immediately above its floor.
+The navigator walks and jumps using the physics API, holds its landing point while
+in flight, then replans against the live map. It reports moving, reached or unreachable
+in the script log. `Map2D.PlatformerWaypoint` is also available to custom behaviours.
+Use wall maps in their unrotated, unit-scale plane; jump limits must fit the character's
+jump speed and gravity. The controller's collision remains authoritative.
+
+The platformer player uses the same controller for slopes, one-way tile platforms and
+translating platforms. A grounded character follows platform translation; a jump detaches it.
+`kb_editor_platformer_navigation_package` verifies an initially unreachable goal, a live
+map edit and a physical gap crossing without teleporting. `kb_editor_platformer_surfaces_package`
+replays keyboard input on a slope, through a one-way platform and on a moving platform.
+Both tests run through GUI authoring, CLI and cooked output with source files unavailable.
+
+## Tile data and prefab streaming
+
+The map editor's **Property schema...** command declares a name, type (`bool`, `int`,
+`float`, `string`) and default. Cell overrides take precedence over graphic defaults,
+then schema defaults. Existing undeclared fields remain supported. Number editing uses
+whole numbers for declared integer fields. **Rename from** migrates overrides and
+increments the schema revision; integer/float conversions must preserve every value.
+An incompatible conversion leaves the entire map unchanged. Undo/Redo includes the
+schema and migrated cell values.
+
+The CLI equivalent is `kb_cli map2d schema --project <project> --map <map> --name rank
+--type float --default 2.5 --rename-from level`. `Map2D.GetBool`, `GetInteger`,
+`GetNumber` and `GetText` return the same effective values in the packaged runtime.
+
+Prefab cells instantiate once per cell, preserving the prefab child hierarchy.
+`Map2D.SetPrefabRegion` accepts `entity`, inclusive `minX/minY/maxX/maxY` cell bounds
+and `budget` (1..4096, default 256). It limits prefab instances, leaving authored map
+cells, graphics and collision available. An inverted region unloads all prefab cells;
+expanding it restores them from their saved prefab references. Creation and removal
+share the per-frame budget; call `Map2D.PrefabCount` to observe progress. Scene shutdown
+releases all remaining owned instances. `kb_editor_tile_data_package` repeats schema
+editing and streaming through the headless editor, CLI and cooked player.

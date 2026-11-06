@@ -1,4 +1,7 @@
 #include "engine/localization/LocalizationCatalogIO.hpp"
+#include "engine/localization/LocalizationLocale.hpp"
+#include "engine/input/InputText.hpp"
+#include "engine/assets/AssetId.hpp"
 
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
@@ -13,11 +16,11 @@ namespace kb::localization {
 namespace {
 
 [[nodiscard]] bool ValidLanguage(std::string_view language) {
-    if (language.empty() || language.size() > 32U) return false;
-    for (const unsigned char value : language) {
-        if (!std::isalnum(value) && value != '-' && value != '_') return false;
-    }
-    return true;
+    return LocalizationLocaleKey(language).has_value();
+}
+
+[[nodiscard]] bool ValidText(std::string_view text) {
+    return !text.empty() && text.find('\0') == std::string_view::npos && input::DecodeUtf8(text, {}).wellFormed;
 }
 
 [[nodiscard]] bool ValidKey(std::string_view key) {
@@ -34,22 +37,33 @@ namespace {
 }
 
 [[nodiscard]] bool ValidCatalog(const LocalizationCatalog& catalog) {
-    if (catalog.schemaVersion != LocalizationCatalog::kSchemaVersion || !ValidLanguage(catalog.fallbackLanguage)) return false;
-    const auto fallback = catalog.languages.find(catalog.fallbackLanguage);
-    if (fallback == catalog.languages.end()) return false;
+    if ((catalog.schemaVersion != 1U && catalog.schemaVersion != LocalizationCatalog::kSchemaVersion) || !ValidLanguage(catalog.fallbackLanguage)) return false;
+    const auto fallback = LocalizationLocaleKey(catalog.fallbackLanguage);
+    std::unordered_set<std::string> locales;
     for (const auto& [language, entries] : catalog.languages) {
-        if (!ValidLanguage(language) || entries.empty()) return false;
+        const auto locale = LocalizationLocaleKey(language);
+        const auto resources = catalog.resources.find(language);
+        if (!locale || (entries.empty() && (resources == catalog.resources.end() || resources->second.empty())) ||
+            !locales.insert(*locale).second) return false;
         for (const auto& [key, message] : entries) {
             if (!ValidKey(key) || (message.text.empty() == message.plurals.empty())) return false;
+            if (!message.text.empty() && !ValidText(message.text)) return false;
             if (!message.plurals.empty()) {
                 if (!message.plurals.contains("other")) return false;
                 for (const auto& [category, text] : message.plurals) {
-                    if (!ValidCategory(category) || text.empty()) return false;
+                    if (!ValidCategory(category) || !ValidText(text)) return false;
                 }
             }
         }
     }
-    return true;
+    if (catalog.schemaVersion == 1U && !catalog.resources.empty()) return false;
+    for (const auto& [language, resources] : catalog.resources) {
+        if (!catalog.languages.contains(language)) return false;
+        for (const auto& [source, target] : resources) {
+            if (source == 0U || target == 0U) return false;
+        }
+    }
+    return fallback && locales.contains(*fallback);
 }
 
 } // namespace
@@ -66,13 +80,22 @@ std::optional<LocalizationCatalog> LocalizationCatalogIO::Load(std::span<const s
     LocalizationCatalog catalog{};
     std::string token;
     std::string currentLanguage;
+    bool fallbackSeen = false;
     if (!(input >> token >> catalog.schemaVersion) || token != "schema") return std::nullopt;
     while (input >> token) {
         if (token == "fallback") {
-            if (!(input >> std::quoted(catalog.fallbackLanguage)) || !currentLanguage.empty()) return std::nullopt;
+            if (fallbackSeen || !(input >> std::quoted(catalog.fallbackLanguage)) || !currentLanguage.empty()) return std::nullopt;
+            fallbackSeen = true;
         } else if (token == "language") {
             if (!(input >> std::quoted(currentLanguage)) || !ValidLanguage(currentLanguage) || catalog.languages.contains(currentLanguage)) return std::nullopt;
             catalog.languages.emplace(currentLanguage, decltype(catalog.languages)::mapped_type{});
+        } else if (token == "resource") {
+            std::string source, target;
+            kb::assets::AssetId sourceId, targetId;
+            if (catalog.schemaVersion < 2U || currentLanguage.empty() ||
+                !(input >> std::quoted(source) >> std::quoted(target)) ||
+                !kb::assets::TryParseAssetId(source, sourceId) || !kb::assets::TryParseAssetId(target, targetId) ||
+                !catalog.resources[currentLanguage].emplace(sourceId.value, targetId.value).second) return std::nullopt;
         } else if (token == "text") {
             std::string key;
             std::string value;
@@ -102,6 +125,11 @@ bool LocalizationCatalogIO::Save(const std::filesystem::path& path, const Locali
     output << "fallback " << std::quoted(catalog.fallbackLanguage) << '\n';
     for (const auto& [language, entries] : catalog.languages) {
         output << "language " << std::quoted(language) << '\n';
+        if (const auto resources = catalog.resources.find(language); resources != catalog.resources.end()) {
+            for (const auto& [source, target] : resources->second)
+                output << "resource " << std::quoted(kb::assets::ToString(kb::assets::AssetId{source})) << ' '
+                       << std::quoted(kb::assets::ToString(kb::assets::AssetId{target})) << '\n';
+        }
         for (const auto& [key, message] : entries) {
             if (!message.text.empty()) {
                 output << "text " << std::quoted(key) << ' ' << std::quoted(message.text) << '\n';

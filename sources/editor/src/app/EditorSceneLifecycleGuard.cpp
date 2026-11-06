@@ -5,6 +5,10 @@
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorSceneDirtyPrompt.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
 
 #include <string>
 
@@ -15,6 +19,11 @@ std::optional<EditorDirtySceneResolution> EditorSceneLifecycleGuard::ConfirmDirt
     EditorSceneContext& sceneContext,
     EditorSceneTransition transition) {
     if (!EditorMap2DWindow::CloseAll(owner)) return std::nullopt;
+    if (!TimelineEditorPanel::ResolveClose(owner, sceneContext)) return std::nullopt;
+    if (!GameplayGraphEditorPanel::ResolveClose(owner,sceneContext)) return std::nullopt;
+    if (!BlendSpace2DEditorPanel::ResolveClose(owner,sceneContext)) return std::nullopt;
+    sceneContext.ClearBlendSpace2DPreview();
+    sceneContext.ClearTimelineEditorPreview();
     if (!sceneContext.SceneDocumentDirty()) {
         return EditorDirtySceneResolution::Save;
     }

@@ -6,6 +6,7 @@
 #include "kb/render/particles/ParticleRenderSpace.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+#include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
@@ -33,10 +34,6 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
         return 1U;
     case SceneRenderShadowFilter::Pcf3x3:
         return 9U;
-    case SceneRenderShadowFilter::Evsm:
-        return 4U;
-    case SceneRenderShadowFilter::Msm:
-        return 4U;
     case SceneRenderShadowFilter::Pcss:
         return 16U;
     }
@@ -57,7 +54,8 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
         // Zero resolves to the built-in opaque fallback in the mesh pipeline.
         if (id == 0U) return true;
         const auto* material = resources.FindMaterial(resourceMap.ResolveMaterial(id));
-        return material != nullptr && material->alphaMode != RenderMaterialAlphaMode::Blend;
+        return material != nullptr && material->alphaMode != RenderMaterialAlphaMode::Blend &&
+            !MeshPipelinePassPolicy::UsesAdvancedBuiltinPbr(material);
     };
     if (batch.materialAssetId != 0U) return opaque(batch.materialAssetId);
     return std::ranges::all_of(mesh->materialSlots, [&opaque](const auto& slot) {
@@ -89,7 +87,6 @@ bool SceneMeshSubmitter::Initialize() {
 
 void SceneMeshSubmitter::Shutdown() {
     instanceBuffers_.Shutdown();
-    gpuDrivenFrameResources_.Shutdown();
     gpuDrivenCullingPass_.Shutdown();
     passResources_.Shutdown();
     for (auto& commands : passCommandScratch_) commands.clear();
@@ -194,7 +191,15 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     if (!IsInitialized()) {
         return stats;
     }
+    if (!ValidLocalReflectionConfig(lightingConfig.ibl)) {
+        if (diagnostics != nullptr) diagnostics->events.push_back({.severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::ReflectionProbeUnavailable, .instanceCount = lightingConfig.ibl.reflectionProbeCount});
+        return stats;
+    }
 
+    gpuDrivenSupport.computeCullingSupported = gpuDrivenSupport.computeCullingSupported && gpuDrivenCullingPass_.IsInitialized();
+    gpuDrivenSupport.indirectDrawSupported = gpuDrivenSupport.indirectDrawSupported && gpuDrivenCullingPass_.IsInitialized();
+    gpuDrivenSupport.meshletSubmitSupported = gpuDrivenSupport.meshletSubmitSupported && gpuDrivenCullingPass_.IsInitialized();
     auto& passCommands = passCommandScratch_.at(static_cast<std::size_t>(pass));
     pipelineScratch_.commands.swap(passCommands);
     struct RestorePassCommands {
@@ -251,13 +256,32 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     const bool reuseAllowed = pass != MeshPassType::BaseTransparent && selectedEntityIds.empty() &&
         renderScene.VisibilityBlockerProxyCount() == 0U && renderScene.PortalVisibility() == nullptr &&
         (particleSnapshot == nullptr || particleSnapshot->Emitters().empty());
+    // Fully GPU-culled static batches retain camera-independent candidate lists.
+    // LOD, fading, masks, portals and bounded CPU admission keep their CPU contract.
+    const bool cameraIndependent = reuseAllowed && gpuDrivenSupport.computeCullingSupported &&
+        gpuDrivenSupport.indirectDrawSupported && gpuDrivenSupport.runtimeGpuDispatchSupported &&
+        drawBudget.maxDrawCommands == 0U && drawBudget.maxVisibleInstances == 0U &&
+        (pass == MeshPassType::BaseOpaque || pass == MeshPassType::GBuffer ||
+         pass == MeshPassType::Depth || pass == MeshPassType::ShadowDepth) &&
+        std::all_of(meshBatchSubmissionScratch_.begin(), meshBatchSubmissionScratch_.end(), [&](const SceneMeshBatch& batch) {
+            const auto* mesh = resources.FindMesh(resourceMap.ResolveMesh(batch.meshAssetId));
+            return mesh != nullptr && (mesh->gpuCullingEnabled || mesh->indirectDrawsEnabled) &&
+                mesh->lods.size() <= 1U && std::all_of(batch.instances.begin(), batch.instances.end(),
+                    [](const SceneRenderMeshInstance& i) { return !i.detailSwitchEnabled; });
+        });
+    auto reuseCamera = SceneMeshCullingCamera(camera);
+    if (cameraIndependent && reuseCamera) {
+        const auto mask = reuseCamera->cullingMask;
+        reuseCamera = SceneRenderCamera{};
+        reuseCamera->cullingMask = mask;
+    }
     const SceneMeshCommandReuseKey reuseKey{
         .sceneRevision = renderScene.MeshContentRevision(),
         .resourceRevision = resources.Revision(),
         .bindingRevision = resourceMap.Revision(),
         .detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision,
         .resources = &resources, .bindings = &resourceMap,
-        .camera = SceneMeshCullingCamera(camera),
+        .camera = reuseCamera,
         .budget = drawBudget, .gpuSupport = gpuDrivenSupport, .terrainLayersOnly = terrainLayersOnly,
     };
     const auto diagnosticCount = diagnostics == nullptr ? 0U : diagnostics->events.size();
@@ -286,6 +310,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .gpuDrivenSupport = gpuDrivenSupport,
         .terrainLayersOnly = terrainLayersOnly,
         .batchCommandCache = retainBatches ? &batchReuse : nullptr,
+        .motionFrame = motionVectors != nullptr ? motionVectors->motionFrame : 0U,
         }, pipelineScratch_);
         if (reuseAllowed && (diagnostics == nullptr || diagnosticCount == diagnostics->events.size())) {
             auto committedKey = reuseKey;
@@ -414,17 +439,6 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupCapacity());
     stats.meshDrawGroupInstanceScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupInstanceCapacity());
     stats.meshDrawGroupLookupCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupLookupScratchCapacity());
-    if (stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::ComputeCulling ||
-        stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::IndirectDrawSubmit ||
-        stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::MeshletSubmit) {
-        const SceneGpuDrivenFrameBatch gpuDrivenBatch = gpuDrivenFrameResources_.Upload(pipelineScratch_.gpuDrivenInputRecords);
-        stats += gpuDrivenCullingPass_.Submit(SceneGpuDrivenCullingPassDesc{
-            .viewId = ViewId::GpuCompute,
-            .batch = gpuDrivenBatch,
-            .camera = camera,
-            .featureState = stats.gpuDrivenFeatureState,
-        });
-    }
     const auto submitMeshCommands = [&](std::span<const MeshDrawCommand> commands) {
         SceneMeshDrawCommandSubmitter::Submit(SceneMeshDrawCommandSubmitDesc{
         .viewId = viewId,
@@ -445,6 +459,9 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .passResources = passResources_,
         .instanceBufferPool = &instanceBuffers_,
         .diagnostics = diagnostics,
+        .coverageProbe = coverageProbe_,
+        .gpuCulling = &gpuDrivenCullingPass_,
+        .camera = camera,
         .stats = stats,
         });
     };

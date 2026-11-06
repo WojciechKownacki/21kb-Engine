@@ -3,13 +3,14 @@
 uniform mat4 u_shadowCascadeViewProj[4];
 uniform vec4 u_shadowCascadeAtlas[4]; // xy = tile offset, z = tile scale, w = penumbra uv per unit of depth
 uniform vec4 u_shadowCascadeInfo;     // x = cascade count, y = tile-uv edge margin, z = tile-uv blend width
+uniform vec4 u_shadowCascadeBias[4];  // x = depth bias (shadow depth units), y = normal offset (m)
 
-// Returns the atlas shadow coordinate (xy uv, z depth) of the finest cascade that contains
-// worldPos, with w = 1 + the penumbra the light's source angle casts per unit of depth between
+// Returns the atlas shadow coordinate (xy uv, z depth, already biased) of the finest cascade that contains
+// worldPos moved along `normal` by the cascade's normal offset, with w = 1 + the penumbra the light's source angle casts per unit of depth between
 // occluder and receiver (in atlas uv; 0 = a hard light); w = 0 when no cascade covers it.
 // Near the outer edge of that cascade `coarser` holds the next cascade's coordinate with the weight
 // of its visibility in w (rising to 1 at the edge); w = 0 when no blending is needed.
-vec4 KbResolveShadowCascade(vec3 worldPos, out vec4 coarser)
+vec4 KbResolveShadowCascade(vec3 worldPos, vec3 normal, out vec4 coarser)
 {
     coarser = vec4(0.0, 0.0, 0.0, 0.0);
     int count = int(u_shadowCascadeInfo.x);
@@ -17,7 +18,7 @@ vec4 KbResolveShadowCascade(vec3 worldPos, out vec4 coarser)
         if (i >= count) {
             break;
         }
-        vec4 clip = mul(u_shadowCascadeViewProj[i], vec4(worldPos, 1.0));
+        vec4 clip = mul(u_shadowCascadeViewProj[i], vec4(worldPos + normal * u_shadowCascadeBias[i].y, 1.0));
         vec3 c = clip.xyz / max(clip.w, 0.0001);
         // The widest cascade takes everything inside its bounds; finer ones keep a margin so
         // the PCF kernel never reads a neighbouring tile.
@@ -29,15 +30,15 @@ vec4 KbResolveShadowCascade(vec3 worldPos, out vec4 coarser)
             if (i < count - 1 && band > 0.0) {
                 float edge = min(min(c.x - margin, 1.0 - margin - c.x), min(c.y - margin, 1.0 - margin - c.y));
                 float weight = 1.0 - smoothstep(0.0, band, edge);
-                vec4 nextClip = mul(u_shadowCascadeViewProj[i + 1], vec4(worldPos, 1.0));
+                vec4 nextClip = mul(u_shadowCascadeViewProj[i + 1], vec4(worldPos + normal * u_shadowCascadeBias[i + 1].y, 1.0));
                 vec3 n = nextClip.xyz / max(nextClip.w, 0.0001);
                 float nextMargin = (i + 1 == count - 1) ? 0.0 : u_shadowCascadeInfo.y;
                 if (weight > 0.0 && n.x >= nextMargin && n.x <= 1.0 - nextMargin &&
                     n.y >= nextMargin && n.y <= 1.0 - nextMargin && n.z >= 0.0 && n.z <= 1.0) {
-                    coarser = vec4(n.xy * u_shadowCascadeAtlas[i + 1].z + u_shadowCascadeAtlas[i + 1].xy, n.z, weight);
+                    coarser = vec4(n.xy * u_shadowCascadeAtlas[i + 1].z + u_shadowCascadeAtlas[i + 1].xy, n.z + u_shadowCascadeBias[i + 1].x, weight);
                 }
             }
-            return vec4(c.xy * u_shadowCascadeAtlas[i].z + u_shadowCascadeAtlas[i].xy, c.z, 1.0 + u_shadowCascadeAtlas[i].w);
+            return vec4(c.xy * u_shadowCascadeAtlas[i].z + u_shadowCascadeAtlas[i].xy, c.z + u_shadowCascadeBias[i].x, 1.0 + u_shadowCascadeAtlas[i].w);
         }
     }
     return vec4(0.0, 0.0, 0.0, 0.0);

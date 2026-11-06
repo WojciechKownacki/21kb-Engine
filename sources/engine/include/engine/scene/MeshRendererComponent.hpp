@@ -8,6 +8,15 @@ namespace kb::scene {
 
 inline constexpr std::uint32_t kMaxMeshRendererMaterialSlotOverrides = 8U;
 
+// Mesh Mobility: a Static mesh never moves while the scene runs, so the renderer draws no motion vectors for it
+// and does not look for its movement; a Movable one is followed every frame.
+inline constexpr std::uint32_t kMaxMeshRendererLodBias = 8U;
+
+enum class MeshMobility : std::uint8_t {
+    Movable,
+    Static
+};
+
 struct MeshRendererComponent {
     static constexpr std::string_view StableId = "kb21.draw.d3.solid-geometry";
     static constexpr std::uint32_t SchemaVersion = 1U;
@@ -37,6 +46,11 @@ struct MeshRendererComponent {
     // set (nonzero), this WINS over materialAssetId/materialSlotAssetIds -
     // see EcsRenderSceneSynchronizer::SyncMesh's resolution order.
     std::uint64_t materialInstanceHandle = 0U;
+    // Level of detail: a positive bias picks a coarser level than the distance would, a negative one a finer
+    // one; with lodEnabled off the mesh always draws its finest level.
+    std::int32_t lodBias = 0;
+    bool lodEnabled = true;
+    MeshMobility mobility = MeshMobility::Movable;
     // Disposable visuals created by editor/runtime systems. Not serialized as authored components.
     bool shadowOnly = false;
     bool transient = false;
@@ -44,7 +58,10 @@ struct MeshRendererComponent {
 };
 
 [[nodiscard]] constexpr bool IsMeshRendererComponentValid(const MeshRendererComponent& value) noexcept {
-    return value.materialSlotOverrideCount <= kMaxMeshRendererMaterialSlotOverrides;
+    return value.materialSlotOverrideCount <= kMaxMeshRendererMaterialSlotOverrides &&
+        value.lodBias >= -static_cast<std::int32_t>(kMaxMeshRendererLodBias) &&
+        value.lodBias <= static_cast<std::int32_t>(kMaxMeshRendererLodBias) &&
+        (value.mobility == MeshMobility::Movable || value.mobility == MeshMobility::Static);
 }
 
 } // namespace kb::scene

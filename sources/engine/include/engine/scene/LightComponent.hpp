@@ -24,6 +24,24 @@ enum class LightMobility {
     Static
 };
 
+// How a light's shadow is filtered; Default is the project's filter. Pcss widens the penumbra with the light's size.
+enum class LightShadowFilter : std::uint32_t {
+    Default,
+    Hard,
+    Pcf,
+    Pcss
+};
+
+// The resolution of a directional light's shadow maps relative to the project's: Low half, Medium three quarters,
+// High the project's own, Ultra twice. Local lights share one atlas and keep the project's.
+enum class LightShadowQuality : std::uint32_t {
+    Default,
+    Low,
+    Medium,
+    High,
+    Ultra
+};
+
 struct LightComponent {
     static constexpr std::string_view StableId = "kb21.light.d3.radiance-emitter";
     static constexpr std::uint32_t SchemaVersion = 1U;
@@ -62,6 +80,16 @@ struct LightComponent {
     float shadowStrength = 1.0F;   // 0..1, Shadow Strength
     float shadowDistance = 0.0F;   // directional, m (Shadow Distance); 0 = the project's
     LightMobility mobility = LightMobility::Movable;
+    // Shadow bias in texels of the shadow map along the light, and the offset of the lookup along the surface
+    // normal in texels; 0 = the project's. A thin object far from the light needs less than the default.
+    float shadowBias = 0.0F;
+    float shadowNormalBias = 0.0F;
+    LightShadowFilter shadowFilter = LightShadowFilter::Default;
+    LightShadowQuality shadowQuality = LightShadowQuality::Default;
+    // Directional: how many cascades the sun's shadow uses (1..4) and how much wider each one reaches than the
+    // finer one below it; 0 = the project's count and the default ratio of 4.
+    std::uint32_t shadowCascadeCount = 0U;
+    float shadowCascadeDistribution = 0.0F;
 };
 
 [[nodiscard]] constexpr bool IsLightKindValid(LightKind value) noexcept {
@@ -79,7 +107,13 @@ struct LightComponent {
         std::isfinite(value.colorTemperatureKelvin) &&
         std::isfinite(value.sourceRadius) && std::isfinite(value.shadowStrength) &&
         std::isfinite(value.shadowDistance) &&
-        (value.mobility == LightMobility::Movable || value.mobility == LightMobility::Static);
+        (value.mobility == LightMobility::Movable || value.mobility == LightMobility::Static) &&
+        std::isfinite(value.shadowBias) && value.shadowBias >= 0.0F && value.shadowBias <= 16.0F &&
+        std::isfinite(value.shadowNormalBias) && value.shadowNormalBias >= 0.0F && value.shadowNormalBias <= 16.0F &&
+        value.shadowFilter <= LightShadowFilter::Pcss && value.shadowQuality <= LightShadowQuality::Ultra &&
+        value.shadowCascadeCount <= 4U &&
+        std::isfinite(value.shadowCascadeDistribution) && value.shadowCascadeDistribution >= 0.0F &&
+        value.shadowCascadeDistribution <= 16.0F && (value.shadowCascadeDistribution == 0.0F || value.shadowCascadeDistribution >= 1.5F);
 }
 
 } // namespace kb::scene

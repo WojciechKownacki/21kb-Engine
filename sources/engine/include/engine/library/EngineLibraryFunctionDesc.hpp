@@ -88,6 +88,8 @@ struct LibraryFunctionDesc {
 // pins — proving the "wejścia, wyjścia" half of this type's contract is
 // actually bound to the registry, not merely documentation that can drift
 // silently out of sync with it.
+[[nodiscard]] bool FunctionDescMatchesSignature(const LibraryFunctionDesc& desc, const kb::script::ScriptFunctionSignature& signature);
+
 [[nodiscard]] bool FunctionDescMatchesCatalog(const LibraryFunctionDesc& desc, const kb::script::ScriptApiCatalog& catalog);
 
 } // namespace kb::library

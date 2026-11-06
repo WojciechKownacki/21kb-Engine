@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 
@@ -127,6 +128,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const FacingPanelComponent* facingPanel = sceneComponents.FacingPanels().TryGet(entity)) {
         components.facingPanel = *facingPanel;
     }
+    if (const RiverComponent* river = sceneComponents.Rivers().TryGet(entity)) {
+        components.river = *river;
+    }
     if (const SpaceStrokeComponent* spaceStroke = sceneComponents.SpaceStrokes().TryGet(entity)) {
         components.spaceStroke = *spaceStroke;
     }
@@ -150,6 +154,8 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;
+        const std::span<const BehaviourVariableOverride> overrides = scene.Entities().BehaviourVariableOverrides(entity);
+        components.behaviourVariableOverrides.assign(overrides.begin(), overrides.end());
     }
 
     if (const AudioSourceComponent* audioSource = sceneComponents.AudioSources().TryGet(entity)) {

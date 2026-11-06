@@ -37,6 +37,14 @@ public:
         return &slots_[index].resource;
     }
 
+    template <typename Handle>
+    [[nodiscard]] bool Retains(Handle handle) const noexcept {
+        const auto index = handle.Index();
+        return handle.IsValid() && index != 0U && index < slots_.size() &&
+            slots_[index].generation == handle.Generation() &&
+            (slots_[index].occupied || slots_[index].pendingDestroy);
+    }
+
     [[nodiscard]] std::uint32_t Allocate() {
         if (!freeSlots_.empty()) {
             const std::uint32_t index = freeSlots_.back();

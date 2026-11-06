@@ -1,10 +1,10 @@
-<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Game</title>
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Game</title>
 <style>
     html, body { margin:0; overflow:hidden; background:#000; color:#fff; font-family:system-ui,sans-serif; }
     #canvas { display:block; width:100vw; height:100vh; outline:0; touch-action:none; }
     #status { position:fixed; inset:0; display:grid; place-items:center; pointer-events:none; }
     #status[hidden] { display:none; }
-  </style><body><canvas id="canvas" width="300" height="150"></canvas><textarea id="output" style="display:none"></textarea>
+  </style></head><body><canvas id="canvas" width="300" height="150"></canvas><textarea id="output" style="display:none"></textarea>
 <div id="status" hidden></div><script>
     var Module = (() => {
       const status = document.querySelector('#status');
@@ -31,10 +31,12 @@
         },
         printErr: function(...args) { console.error(args.join(' ')); },
         setStatus: updateStatus,
-        onAbort: function() {
-          document.documentElement.dataset.kbError = 'runtime-aborted';
-          location.hash = 'kb-error-runtime-aborted';
+        onAbort: function(reason) {
+          document.documentElement.dataset.kbError ||= 'runtime-aborted';
+          if (!document.documentElement.dataset.kbFallback)
+            location.hash = 'kb-error-' + document.documentElement.dataset.kbError;
           updateStatus();
+          globalThis.kbReportRuntimeError?.('abort', reason);
         }
       };
     })();

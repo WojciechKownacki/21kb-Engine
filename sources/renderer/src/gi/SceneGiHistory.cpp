@@ -44,6 +44,22 @@ bool SceneGiHistory::Ensure(RenderExtent extent, bgfx::TextureFormat::Enum forma
     return true;
 }
 
+void SceneGiHistory::Reset() noexcept {
+    captured_ = false;
+    hasAccum_ = false;
+    frameIndex_ = 0U;
+}
+
+void SceneGiHistory::BeginFrame(FrameOwner owner, std::uint64_t frame, bool cameraCut) noexcept {
+    if (cameraCut || !(owner == owner_) || frame != lastFrame_ + 1U || owner.effects == 0U) Reset();
+    owner_ = owner;
+    lastFrame_ = frame;
+}
+
+void SceneGiHistory::ReleaseScene(std::uint64_t scene) noexcept {
+    if (owner_.scene == scene) Reset();
+}
+
 void SceneGiHistory::Shutdown() noexcept {
     for (std::size_t index = 0U; index < accum_.size(); ++index) {
         if (bgfx::isValid(frameBuffers_[index])) {
@@ -65,10 +81,8 @@ void SceneGiHistory::Shutdown() noexcept {
     lit_ = BGFX_INVALID_HANDLE;
     extent_ = {};
     format_ = bgfx::TextureFormat::Count;
-    frameIndex_ = 0U;
     readIndex_ = 0U;
-    captured_ = false;
-    hasAccum_ = false;
+    Reset();
 }
 
 SceneGiBinding SceneGiHistory::Binding() const noexcept {

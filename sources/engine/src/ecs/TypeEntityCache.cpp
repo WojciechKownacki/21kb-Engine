@@ -7,19 +7,19 @@
 namespace kb::ecs {
 
 Entity::IdType TypeEntityCache::Register(ecs_world_t* world, std::type_index type, std::string_view name) {
-    if (const auto it = ids_.find(type); it != ids_.end()) {
+    if (const auto it = ids_.find(std::string_view{ type.name() }); it != ids_.end()) {
         return it->second;
     }
 
     const Entity::IdType id = CreateTypeEntity(world, name);
     if (id != 0) {
-        ids_.emplace(type, id);
+        ids_.emplace(type.name(), id);
     }
     return id;
 }
 
 Entity::IdType TypeEntityCache::Find(std::type_index type) const noexcept {
-    const auto it = ids_.find(type);
+    const auto it = ids_.find(std::string_view{ type.name() });
     return it == ids_.end() ? 0 : it->second;
 }
 

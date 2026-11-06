@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/StatelessSceneSystem.hpp"
 
 #include <cstdint>
 
@@ -10,7 +11,7 @@ class Scene;
 
 // Moves NavAgent entities along their paths while the scene plays (see SceneNavigation). It runs before
 // the fixed-step simulation, so a character it moves receives its velocity in the same frame's physics.
-class NavigationSceneSystem final : public SceneSystem {
+class NavigationSceneSystem final : public SceneSystem, public IStatelessSceneSystem {
 public:
     void OnUpdate(SceneSystemContext& context) override;
 };

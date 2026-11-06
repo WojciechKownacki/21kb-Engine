@@ -35,8 +35,8 @@ void DrawSortMenuItem(HDC dc, RECT rect, const EditorTheme& theme, std::string_v
 void ProjectFilesBottomBarRenderer::Paint(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state) {
     GdiDrawing::DrawSharpFrame(dc, layout.bottomBar, Draw::Blend(Draw::Color(theme.strip), RGB(0, 0, 0), 10), Draw::Color(theme.borderPanel));
     Draw::DrawTextButton(dc, layout.sortButton, theme, SortLabel(state.SortMode()), state.IsSortMenuOpen());
-    Draw::DrawIconButton(dc, layout.listButton, theme, HeroIconKind::EllipsisHorizontal, state.ViewMode() == EditorAssetViewMode::List);
-    Draw::DrawIconButton(dc, layout.tileButton, theme, HeroIconKind::Cube, state.ViewMode() == EditorAssetViewMode::Tiles);
+    Draw::DrawIconButton(dc, layout.listButton, theme, HeroIconKind::ListBullet, state.ViewMode() == EditorAssetViewMode::List);
+    Draw::DrawIconButton(dc, layout.tileButton, theme, HeroIconKind::Grid, state.ViewMode() == EditorAssetViewMode::Tiles);
     Draw::DrawTextButton(dc, layout.recursiveButton, theme, state.Recursive() ? EditorText("projectFiles.recursive", "Recursive") : EditorText("projectFiles.currentFolder", "Current"), state.Recursive());
 
     RECT sliderLine = layout.sliderTrack;

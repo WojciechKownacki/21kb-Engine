@@ -1,4 +1,6 @@
 #include "script/lua/api/PucLuaSelfApi.hpp"
+#include "script/lua/PucLuaArguments.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
 
 #include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -17,7 +19,7 @@ namespace kb::script {
 namespace {
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return PucLuaRuntimeApi::ContextFromUpvalue(state);
 }
 
 int LuaSelfHasComponent(lua_State* state) {
@@ -26,7 +28,7 @@ int LuaSelfHasComponent(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const char* componentName = luaL_checkstring(state, 2);
+    const char* componentName = PucLuaCheckString(state, 2);
     lua_pushboolean(state, ScriptSceneComponentApi::HasComponent(context->GetScene(), context->Self(), componentName) ? 1 : 0);
     return 1;
 }
@@ -38,8 +40,8 @@ int LuaSelfGetProperty(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* componentName = luaL_checkstring(state, 2);
-    const char* propertyName = luaL_checkstring(state, 3);
+    const char* componentName = PucLuaCheckString(state, 2);
+    const char* propertyName = PucLuaCheckString(state, 3);
     const ScriptSceneComponentPropertyResult result = ScriptSceneComponentApi::GetProperty(context->GetScene(), context->Self(), componentName, propertyName);
     if (!result.succeeded) {
         lua_pushnil(state);
@@ -57,8 +59,8 @@ int LuaSelfSetProperty(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* componentName = luaL_checkstring(state, 2);
-    const char* propertyName = luaL_checkstring(state, 3);
+    const char* componentName = PucLuaCheckString(state, 2);
+    const char* propertyName = PucLuaCheckString(state, 3);
     const ScriptValue value = PucLuaValueBridge::FromLua(state, 4);
     const ScriptSceneComponentMutationResult result = ScriptSceneComponentApi::SetProperty(context->GetScene(), context->Self(), componentName, propertyName, value);
     lua_pushboolean(state, result.succeeded ? 1 : 0);
@@ -76,7 +78,7 @@ int LuaSelfGetVariable(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     const std::span<const PucLuaExposedVariableInstance> variables =
         runtime == nullptr ? std::span<const PucLuaExposedVariableInstance>{} : runtime->InstanceVariables(context->Self(), context->Asset());
@@ -97,7 +99,7 @@ int LuaSelfSetVariable(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     if (runtime == nullptr) {
         lua_pushboolean(state, 0);
@@ -129,12 +131,12 @@ void PushVariables(lua_State* state, std::span<const PucLuaExposedVariableInstan
 // (override ?? default) — the per-entity semantics, identical to Self:GetVariable
 // keyed by the field name. Without a context (declaration time) it is nil.
 int LuaInspectorIndex(lua_State* state) {
-    ScriptExecutionContext* context = static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    ScriptExecutionContext* context = PucLuaRuntimeApi::ContextFromUpvalue(state);
     if (context == nullptr) {
         lua_pushnil(state);
         return 1;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     const std::span<const PucLuaExposedVariableInstance> variables =
         runtime == nullptr ? std::span<const PucLuaExposedVariableInstance>{} : runtime->InstanceVariables(context->Self(), context->Asset());
@@ -153,11 +155,11 @@ int LuaInspectorIndex(lua_State* state) {
 // the CURRENT entity's exposed-variable instance (persisting like Self:SetVariable
 // — the value survives the per-frame default re-sync).
 int LuaInspectorNewIndex(lua_State* state) {
-    ScriptExecutionContext* context = static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    ScriptExecutionContext* context = PucLuaRuntimeApi::ContextFromUpvalue(state);
     if (context == nullptr) {
         return 0;
     }
-    const char* variableName = luaL_checkstring(state, 2);
+    const char* variableName = PucLuaCheckString(state, 2);
     PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     if (runtime != nullptr) {
         static_cast<void>(runtime->SetInstanceVariable(context->Self(), context->Asset(), variableName, PucLuaValueBridge::FromLua(state, 3)));
@@ -182,19 +184,19 @@ void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) 
         lua_newtable(state);
     }
     lua_setfield(state, -2, "variables");
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfHasComponent>, 1);
     lua_setfield(state, -2, "HasComponent");
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfGetProperty>, 1);
     lua_setfield(state, -2, "GetProperty");
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfSetProperty>, 1);
     lua_setfield(state, -2, "SetProperty");
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfGetVariable>, 1);
     lua_setfield(state, -2, "GetVariable");
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfSetVariable>, 1);
     lua_setfield(state, -2, "SetVariable");
 }
@@ -202,10 +204,10 @@ void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) 
 void PucLuaSelfApi::AttachInspector(lua_State* state, int environmentIndex, ScriptExecutionContext* context) {
     lua_newtable(state); // the Inspector proxy table — kept empty so every field access hits the metatable
     lua_createtable(state, 0, 2);
-    lua_pushlightuserdata(state, context);
+    PucLuaRuntimeApi::PushContextSlot(state, context != nullptr);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaInspectorIndex>, 1);
     lua_setfield(state, -2, "__index");
-    lua_pushlightuserdata(state, context);
+    PucLuaRuntimeApi::PushContextSlot(state, context != nullptr);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaInspectorNewIndex>, 1);
     lua_setfield(state, -2, "__newindex");
     lua_setmetatable(state, -2);

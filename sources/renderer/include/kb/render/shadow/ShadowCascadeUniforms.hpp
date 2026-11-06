@@ -12,16 +12,18 @@ struct ShadowCascadeUniforms {
     bgfx::UniformHandle viewProjection = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle atlas = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle info = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle bias = BGFX_INVALID_HANDLE;
 
     void Create() {
         constexpr auto cascades = static_cast<std::uint16_t>(SceneRenderShadowMapBinding::kMaxCascades);
         viewProjection = bgfx::createUniform("u_shadowCascadeViewProj", bgfx::UniformType::Mat4, cascades);
         atlas = bgfx::createUniform("u_shadowCascadeAtlas", bgfx::UniformType::Vec4, cascades);
         info = bgfx::createUniform("u_shadowCascadeInfo", bgfx::UniformType::Vec4);
+        bias = bgfx::createUniform("u_shadowCascadeBias", bgfx::UniformType::Vec4, cascades);
     }
 
     void Destroy() noexcept {
-        for (bgfx::UniformHandle* handle : { &viewProjection, &atlas, &info }) {
+        for (bgfx::UniformHandle* handle : { &viewProjection, &atlas, &info, &bias }) {
             if (bgfx::isValid(*handle)) {
                 bgfx::destroy(*handle);
             }
@@ -30,7 +32,7 @@ struct ShadowCascadeUniforms {
     }
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return bgfx::isValid(viewProjection) && bgfx::isValid(atlas) && bgfx::isValid(info);
+        return bgfx::isValid(viewProjection) && bgfx::isValid(atlas) && bgfx::isValid(info) && bgfx::isValid(bias);
     }
 
     // A null or invalid binding publishes zero cascades, which the shader treats as "no shadow".
@@ -40,6 +42,7 @@ struct ShadowCascadeUniforms {
         bgfx::setUniform(viewProjection, source.cascadeViewProjection.data(), SceneRenderShadowMapBinding::kMaxCascades);
         bgfx::setUniform(atlas, source.cascadeAtlas.data(), SceneRenderShadowMapBinding::kMaxCascades);
         bgfx::setUniform(info, source.cascadeInfo.data());
+        bgfx::setUniform(bias, source.cascadeBias.data(), SceneRenderShadowMapBinding::kMaxCascades);
     }
 };
 

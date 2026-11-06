@@ -1,11 +1,14 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorKeyState.hpp"
 #include "app/EditorMouseWheelRouter.hpp"
+#include "profiler/ProfilerPanel.hpp"
 
 #if defined(_WIN32)
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/AgentPanelRenderer.hpp"
 #include "rendering/BuildGamePanelLayout.hpp"
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "app/project_files/EditorProjectFilesMouseWheelController.hpp"
@@ -236,14 +239,16 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
             terrainTool.editingEnabled &&
             EditorTerrainService::IsTerrainEntity(
                 sceneContext_.Scene(), sceneContext_.SelectedEntity()) &&
-            wheelDelta != 0 && (controlDown || shiftDown)) {
+            wheelDelta != 0 && !controlDown) {
+            // The wheel sizes the brush while a terrain tool is active; Shift + wheel sets its strength and
+            // Ctrl + wheel still moves the camera.
             const float scale = wheelDelta > 0 ? 1.1F : (1.0F / 1.1F);
-            if (controlDown) {
-                terrainTool.brush.radius = std::clamp(
-                    terrainTool.brush.radius * scale, 0.1F, 100'000.0F);
-            } else {
+            if (shiftDown) {
                 terrainTool.brush.strength = std::clamp(
                     terrainTool.brush.strength * scale, 0.0F, 100'000.0F);
+            } else {
+                terrainTool.brush.radius = std::clamp(
+                    terrainTool.brush.radius * scale, 0.1F, 100'000.0F);
             }
             return true;
         }
@@ -261,11 +266,36 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         return true;
     }
 
+    // The agent conversation scrolls three lines a notch, up into older messages.
+    if (const std::optional<RECT> agentContent = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        agentContent.has_value() && x >= agentContent->left && x < agentContent->right && y >= agentContent->top && y < agentContent->bottom) {
+        EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+        agent.ScrollBy(wheelDelta / WHEEL_DELTA * 54, AgentPanelRenderer::MaximumScroll(*agentContent, agent));
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *agentContent);
+        return true;
+    }
+
+    if (const std::optional<RECT> profilerContent = EditorPanelContentResolver::Resolve(DockPanelKind::Profiler, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        profilerContent.has_value() && ProfilerPanel::Wheel(*profilerContent, x, y, wheelDelta, sceneContext_)) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *profilerContent);
+        return true;
+    }
+
     const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorPluginsPointerController pluginsPointer(sceneContext_);
     if (pluginsContent.has_value() && pluginsPointer.HandleMouseWheel(*pluginsContent, x, y, wheelDelta)) {
         EditorWindowInvalidator::InvalidatePanel(messageWindow_, *pluginsContent);
         return true;
+    }
+    // The same list on the Plugins page of Settings.
+    if (const std::optional<RECT> settingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        settingsContent.has_value() &&
+        static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Plugins) {
+        const std::optional<RECT> page = ProjectSettingsPanelRenderer::EmbeddedPage(*settingsContent, sceneContext_);
+        if (page.has_value() && pluginsPointer.HandleMouseWheel(*page, x, y, wheelDelta)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow_, *settingsContent);
+            return true;
+        }
     }
 
     const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(DockPanelKind::BuildGame, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);

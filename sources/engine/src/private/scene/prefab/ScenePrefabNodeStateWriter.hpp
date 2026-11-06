@@ -97,6 +97,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneSurfaceCastComponents surfaceCasts;
     SceneFacingPanelComponents facingPanels;
     SceneSpaceStrokeComponents spaceStrokes;
+    SceneRiverComponents rivers;
     SceneHistoryRibbonComponents historyRibbons;
     SceneParticleEffectComponents particleEffects;
     SceneLensEchoComponents lensEchoes;

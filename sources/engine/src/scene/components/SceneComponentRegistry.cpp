@@ -46,6 +46,7 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/RiverComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -101,6 +102,9 @@ void RegisterUIReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(UIRectTransform, scale, kb::ecs::ComponentFieldType::Vec2Float32),
         KB_ECS_FIELD(UIRectTransform, rotationDegrees, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(UIRectTransform, zOrder, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(UIRectTransform, themeAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIRectTransform, themeVariant, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIRectTransform, themeOverrides, kb::ecs::ComponentFieldType::Bytes),
     }));
     static_cast<void>(world.RegisterComponentReflection<UICanvas>(UICanvas::StableId, {
         KB_ECS_FIELD(UICanvas, sortingOrder, kb::ecs::ComponentFieldType::Int32),
@@ -203,6 +207,9 @@ void RegisterUIReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(UIText, wrapMode, kb::ecs::ComponentFieldType::Bytes),
         KB_ECS_FIELD(UIText, lineSpacing, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(UIText, richText, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIText, fontVariations, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, fallbackFontAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, fontRenderMode, kb::ecs::ComponentFieldType::Bytes),
     }));
     static_cast<void>(world.RegisterComponentReflection<UIBorder>(UIBorder::StableId, {
         KB_ECS_FIELD(UIBorder, backgroundColor, kb::ecs::ComponentFieldType::Vec4Float32),
@@ -385,6 +392,20 @@ void RegisterFacingPanelReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(FacingPanelComponent, enabled, kb::ecs::ComponentFieldType::Bool),
     }));
 }
+
+// The points are an array of structs; reflection lists the scalar members, the codecs carry the points.
+void RegisterRiverReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<RiverComponent>(RiverComponent::StableId, {
+        KB_ECS_FIELD(RiverComponent, pointCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(RiverComponent, bankWidth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(RiverComponent, waterfallSlopeDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(RiverComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(RiverComponent, waterfallMaterialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(RiverComponent, mistEffectAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(RiverComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 
 void RegisterSpaceStrokeReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<SpaceStrokeComponent>(SpaceStrokeComponent::StableId, {
@@ -661,6 +682,12 @@ void RegisterLightReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(LightComponent, shadowStrength, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(LightComponent, shadowDistance, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(LightComponent, mobility, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowBias, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, shadowNormalBias, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, shadowFilter, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowQuality, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowCascadeCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(LightComponent, shadowCascadeDistribution, kb::ecs::ComponentFieldType::Float32),
     }));
 }
 
@@ -702,6 +729,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , surfaceCastComponentId_(RegisterSceneComponent<SurfaceCastComponent>(world, SurfaceCastComponent::StableId))
     , facingPanelComponentId_(RegisterSceneComponent<FacingPanelComponent>(world, FacingPanelComponent::StableId))
     , spaceStrokeComponentId_(RegisterSceneComponent<SpaceStrokeComponent>(world, SpaceStrokeComponent::StableId))
+    , riverComponentId_(RegisterSceneComponent<RiverComponent>(world, RiverComponent::StableId))
     , historyRibbonComponentId_(RegisterSceneComponent<HistoryRibbonComponent>(world, HistoryRibbonComponent::StableId))
     , particleEffectComponentId_(RegisterSceneComponent<ParticleEffectComponent>(world, ParticleEffectComponent::StableId))
     , lensEchoComponentId_(RegisterSceneComponent<LensEchoComponent>(world, LensEchoComponent::StableId))
@@ -746,6 +774,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterSurfaceCastReflection(world);
     RegisterFacingPanelReflection(world);
     RegisterSpaceStrokeReflection(world);
+    RegisterRiverReflection(world);
     RegisterHistoryRibbonReflection(world);
     RegisterParticleEffectReflection(world);
     RegisterLensEchoReflection(world);
@@ -825,6 +854,7 @@ std::uint64_t SceneComponentRegistry::GeometrySwarmComponentId() const noexcept 
 std::uint64_t SceneComponentRegistry::SurfaceCastComponentId() const noexcept { return surfaceCastComponentId_; }
 std::uint64_t SceneComponentRegistry::FacingPanelComponentId() const noexcept { return facingPanelComponentId_; }
 std::uint64_t SceneComponentRegistry::SpaceStrokeComponentId() const noexcept { return spaceStrokeComponentId_; }
+std::uint64_t SceneComponentRegistry::RiverComponentId() const noexcept { return riverComponentId_; }
 std::uint64_t SceneComponentRegistry::HistoryRibbonComponentId() const noexcept { return historyRibbonComponentId_; }
 std::uint64_t SceneComponentRegistry::ParticleEffectComponentId() const noexcept { return particleEffectComponentId_; }
 std::uint64_t SceneComponentRegistry::LensEchoComponentId() const noexcept { return lensEchoComponentId_; }

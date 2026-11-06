@@ -194,6 +194,9 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
         // Transparent reuses the forward shader; the alpha blend is a render state (MAT-80), not a shader.
         return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_instanced.sc");
     }
+    if (key.pass == "GBufferLayered") {
+        return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_gbuffer_layered_instanced.sc");
+    }
     if (key.pass == "GBuffer") {
         return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_gbuffer_instanced.sc");
     }
@@ -308,6 +311,7 @@ constexpr std::uint8_t kSkinnedMotionPreviousModelStage = 13U;
 } // namespace
 
 bool SceneMeshPassResources::Initialize() {
+    if (!localReflections_.Initialize()) return false;
     if (IsInitialized()) {
         return true;
     }
@@ -356,6 +360,17 @@ bool SceneMeshPassResources::Initialize() {
     emissiveSampler_ = bgfx::createUniform("s_emissive", bgfx::UniformType::Sampler);
     terrainLayerWeightSampler_ = bgfx::createUniform("s_terrainLayerWeights", bgfx::UniformType::Sampler);
     terrainLayerParamsUniform_ = bgfx::createUniform("u_terrainLayerParams", bgfx::UniformType::Vec4);
+    clearcoatSampler_ = bgfx::createUniform("s_clearcoat", bgfx::UniformType::Sampler);
+    clearcoatRoughnessSampler_ = bgfx::createUniform("s_clearcoatRoughness", bgfx::UniformType::Sampler);
+    materialLayersUniform_ = bgfx::createUniform("u_materialLayers", bgfx::UniformType::Vec4);
+    materialSubsurfaceUniform_ = bgfx::createUniform("u_materialSubsurface", bgfx::UniformType::Vec4);
+    materialSheenUniform_ = bgfx::createUniform("u_materialSheen", bgfx::UniformType::Vec4);
+    materialOpticsUniform_ = bgfx::createUniform("u_materialOptics", bgfx::UniformType::Vec4);
+    materialAttenuationUniform_ = bgfx::createUniform("u_materialAttenuation", bgfx::UniformType::Vec4);
+    builtinSceneColorSampler_ = bgfx::createUniform("s_builtinSceneColor", bgfx::UniformType::Sampler);
+    builtinSceneColorParamsUniform_ = bgfx::createUniform("u_builtinSceneColorParams", bgfx::UniformType::Vec4);
+    fogParamsUniform_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
+    fogColorUniform_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
     materialParamsUniform_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
     materialEmissiveUniform_ = bgfx::createUniform("u_materialEmissive", bgfx::UniformType::Vec4);
     materialFlagsUniform_ = bgfx::createUniform("u_materialFlags", bgfx::UniformType::Vec4);
@@ -397,6 +412,7 @@ bool SceneMeshPassResources::Initialize() {
 }
 
 void SceneMeshPassResources::Shutdown() {
+    localReflections_.Shutdown();
     lightGrid_.Shutdown();
     if (bgfx::isValid(motionPreviousTimeUniform_)) {
         bgfx::destroy(motionPreviousTimeUniform_);
@@ -560,6 +576,13 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(dynamicParameterUniform_);
         dynamicParameterUniform_ = BGFX_INVALID_HANDLE;
     }
+    layeredGbufferUnavailable_.fill(false);
+    for (auto* handle : {&fogParamsUniform_, &fogColorUniform_, &clearcoatSampler_, &clearcoatRoughnessSampler_,
+                         &materialLayersUniform_, &materialSubsurfaceUniform_, &materialSheenUniform_, &materialOpticsUniform_,
+                         &materialAttenuationUniform_, &builtinSceneColorSampler_, &builtinSceneColorParamsUniform_}) {
+        if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+        *handle = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(materialFlagsUniform_)) {
         bgfx::destroy(materialFlagsUniform_);
         materialFlagsUniform_ = BGFX_INVALID_HANDLE;
@@ -688,6 +711,11 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(emissiveSampler_) &&
         bgfx::isValid(terrainLayerWeightSampler_) &&
         bgfx::isValid(terrainLayerParamsUniform_) &&
+        bgfx::isValid(fogParamsUniform_) && bgfx::isValid(fogColorUniform_) &&
+        bgfx::isValid(clearcoatSampler_) && bgfx::isValid(clearcoatRoughnessSampler_) &&
+        bgfx::isValid(materialLayersUniform_) && bgfx::isValid(materialSubsurfaceUniform_) && localReflections_.IsInitialized() &&
+        bgfx::isValid(materialSheenUniform_) && bgfx::isValid(materialOpticsUniform_) &&
+        bgfx::isValid(materialAttenuationUniform_) && bgfx::isValid(builtinSceneColorSampler_) && bgfx::isValid(builtinSceneColorParamsUniform_) &&
         bgfx::isValid(materialParamsUniform_) &&
         bgfx::isValid(materialEmissiveUniform_) &&
         bgfx::isValid(materialFlagsUniform_) &&
@@ -1098,18 +1126,24 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
         }
         if (IsGraphCapablePass(material, pass) &&
             (!skinned || !material->graphProgram.requiresGeneratedVertexShader)) {
-            const MaterialProgramKey key{
+            const bgfx::Caps* graphCaps = bgfx::getCaps();
+            const bool hasCompactVariant = pass == MeshPassType::GBuffer && material->graphProgram.writesShadingModelColor;
+            const std::string graphPass = hasCompactVariant &&
+                (bgfx::getRendererType() == bgfx::RendererType::OpenGLES ||
+                 (graphCaps != nullptr && graphCaps->limits.maxFBAttachments < 5U))
+                ? std::string{kRenderMaterialGraphCompactGBufferPass} : GraphMeshPassName(pass);
+            MaterialProgramKey key{
                 .materialTypeId = material->graphProgram.materialTypeId,
                 .materialTypeVersion = material->graphProgram.materialTypeVersion,
                 .graphSourceHash = material->graphProgram.graphSourceHash,
                 .variantKey = material->graphProgram.variantKey,
-                .pass = GraphMeshPassName(pass),
+                .pass = std::string{graphPass},
                 .backend = static_cast<std::uint32_t>(bgfx::getRendererType()),
                 .binaryRevision = GraphBinaryRevision(
                     graphShaderCacheRoot_,
                     material->graphProgram.graphSourceHash,
                     material->graphProgram.variantKey,
-                    GraphMeshPassName(pass),
+                    graphPass,
                     static_cast<std::uint32_t>(bgfx::getRendererType())),
                 .pipelineStateKey = material->graphProgram.pipelineStateKey,
                 .skinned = skinned,
@@ -1124,6 +1158,17 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
             bgfx::ProgramHandle graphHandle = programRegistry_.Find(key);
             if (!bgfx::isValid(graphHandle)) {
                 graphHandle = programRegistry_.Acquire(key);
+            }
+            // Missing full variant can still preserve graph evaluation through its explicit
+            // compact variant; do not discard every graph input by immediately using builtin PBR.
+            if (!bgfx::isValid(graphHandle) && hasCompactVariant && graphPass != kRenderMaterialGraphCompactGBufferPass) {
+                key.pass = kRenderMaterialGraphCompactGBufferPass;
+                key.binaryRevision = GraphBinaryRevision(graphShaderCacheRoot_, key.graphSourceHash,
+                    key.variantKey, key.pass, key.backend);
+                graphHandle = programRegistry_.Find(key);
+                if (!bgfx::isValid(graphHandle)) graphHandle = programRegistry_.Acquire(key);
+                resolution.key = key;
+                resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(key);
             }
             if (bgfx::isValid(graphHandle)) {
                 AppendUniqueValue(usedProgramKeys_, key);
@@ -1148,6 +1193,26 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
         }
     }
 
+    // The portable ES path has four color targets. A missing optional fifth-output shader
+    // uses that same fallback, diagnosed by the draw submitter; forward shading keeps both layers.
+    const bgfx::Caps* caps = bgfx::getCaps();
+    if (!resolution.graphProgram && pass == MeshPassType::GBuffer && material != nullptr &&
+        material->subsurfaceFactor > 0.0F && caps != nullptr && caps->limits.maxFBAttachments >= 5U &&
+        bgfx::getRendererType() != bgfx::RendererType::OpenGLES && !layeredGbufferUnavailable_[skinned ? 1U : 0U]) {
+        const MaterialProgramKey key = BuiltinMeshProgramKey("GBufferLayered", skinned);
+        bgfx::ProgramHandle program = programRegistry_.Find(key);
+        if (!bgfx::isValid(program)) {
+            program = programRegistry_.Acquire(key);
+            if (bgfx::isValid(program)) AppendUniqueValue(residentProgramKeys_, key);
+            else layeredGbufferUnavailable_[skinned ? 1U : 0U] = true;
+        }
+        if (bgfx::isValid(program)) {
+            AppendUniqueValue(usedProgramKeys_, key);
+            resolution.key = key;
+            resolution.program = program;
+            resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(key);
+        }
+    }
     ++programBindStats_.totalBindCount;
     if (resolution.graphProgram) {
         ++programBindStats_.graphProgramBindCount;
@@ -1275,6 +1340,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             terrainLayerEnabled ? mesh->terrainLayerWeightTexture : fallbackWhiteTexture_);
         bgfx::setUniform(terrainLayerParamsUniform_, terrainLayerParams.data());
     }
+    bgfx::setUniform(fogParamsUniform_, desc.lighting.fogParams.data());
+    bgfx::setUniform(fogColorUniform_, desc.lighting.fogColor.data());
     if (resolution.graphProgram && material != nullptr) {
         WriteRendererMaterialGraphDebugLog(
             "gpu",
@@ -1290,6 +1357,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
             lightGrid_.Bind(desc.lighting.lightGrid, 0U);
         bgfx::setUniform(materialParamsUniform_, graphMaterialParams.data());
+        const std::array<float,4> graphMaterialFlags{0.0F,0.0F,material->doubleSided ? 1.0F : 0.0F,0.0F};
+        bgfx::setUniform(materialFlagsUniform_,graphMaterialFlags.data());
         bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
         bgfx::setUniform(renderOriginOffsetUniform_, desc.renderOriginOffset.data());
         bgfx::setUniform(timeUniform_, desc.frameTime.data());
@@ -1330,13 +1399,16 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         return resolution.program;
     }
 
+    const std::uint32_t spriteSampler = material && material->pointSampling
+        ? BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP
+        : UINT32_MAX;
     if (desc.pass == MeshPassType::ShadowDepth) {
         const SceneMeshShadowMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::ResolveShadow(
             material,
             desc.resources,
             desc.resourceMap,
             fallbacks);
-        bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+        bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture, spriteSampler);
         bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
         bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
         bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
@@ -1350,7 +1422,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         desc.resources,
         desc.resourceMap,
         fallbacks);
-    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture, spriteSampler);
     bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
     bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
     bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
@@ -1360,10 +1432,22 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(1U, normalSampler_, materialBinding.normalTexture);
     bgfx::setTexture(2U, metallicRoughnessSampler_, materialBinding.metallicRoughnessTexture);
     bgfx::setTexture(3U, occlusionSampler_, materialBinding.occlusionTexture);
-    bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture);
+    bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture, spriteSampler);
     bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
     if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
         lightGrid_.Bind(desc.lighting.lightGrid, 6U);
+    bgfx::setTexture(7U, clearcoatSampler_, materialBinding.clearcoatTexture);
+    bgfx::setTexture(8U, clearcoatRoughnessSampler_, materialBinding.clearcoatRoughnessTexture);
+    bgfx::setUniform(materialLayersUniform_, materialBinding.layers.data());
+    bgfx::setUniform(materialSubsurfaceUniform_, materialBinding.subsurface.data());
+    bgfx::setUniform(materialSheenUniform_, materialBinding.sheen.data());
+    bgfx::setUniform(materialOpticsUniform_, materialBinding.optics.data());
+    localReflections_.Set(desc.lighting.ibl,fallbackWhiteCubeTexture_,11U,13U);
+    bgfx::setUniform(materialAttenuationUniform_, materialBinding.attenuation.data());
+    const bool hasSceneColor = bgfx::isValid(desc.sceneColorTexture);
+    bgfx::setTexture(10U, builtinSceneColorSampler_, hasSceneColor ? desc.sceneColorTexture : fallbackWhiteTexture_);
+    const std::array<float,4> sceneColorParams{hasSceneColor ? 1.0F : 0.0F, 0, 0, 0};
+    bgfx::setUniform(builtinSceneColorParamsUniform_, sceneColorParams.data());
     bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
     bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
     bgfx::setUniform(timeUniform_, desc.frameTime.data());

@@ -69,7 +69,18 @@ void SceneViewportToolbarDrawing::DrawIconButton(HDC dc, RECT rect, HeroIconKind
     HeroIconPainter::Draw(dc, CenteredRect(rect, SceneViewportToolbarMetrics::IconSize), icon, iconColor, 1);
 }
 
-void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view value, const EditorTheme& theme, bool active) {
+void SceneViewportToolbarDrawing::DrawToolButton(
+    HDC dc, RECT rect, HeroIconKind icon, std::string_view key, const EditorTheme& theme, bool active) {
+    DrawBase(dc, rect, theme, active);
+    const int iconTop = rect.top + ((rect.bottom - rect.top - SceneViewportToolbarMetrics::IconSize) / 2);
+    const RECT iconRect{ rect.left + 7, iconTop, rect.left + 7 + SceneViewportToolbarMetrics::IconSize, iconTop + SceneViewportToolbarMetrics::IconSize };
+    HeroIconPainter::Draw(dc, iconRect, icon, active ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(theme.textSecondary), 1);
+    RECT keyRect{ iconRect.right + 2, rect.top, rect.right - 4, rect.bottom };
+    GdiDrawing::DrawTabText(dc, keyRect, key,
+        active ? RGB(200, 228, 240) : GdiDrawing::ToColorRef(theme.textDisabled));
+}
+
+void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view value, const EditorTheme& theme, bool active, bool dimmed) {
     DrawBase(dc, rect, theme, active);
     const RECT iconRect{
         rect.left + 7,
@@ -80,7 +91,8 @@ void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKin
     const COLORREF iconColor = active ? RGB(220, 246, 255) : GdiDrawing::ToColorRef(theme.textDisabled);
     HeroIconPainter::Draw(dc, iconRect, icon, iconColor, 1);
 
-    const COLORREF textColor = active ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(theme.textPrimary);
+    // A dimmed value is one that is no longer current, such as a frame rate held while nothing draws.
+    const COLORREF textColor = active ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(dimmed ? theme.textDisabled : theme.textPrimary);
     RECT textRect = rect;
     textRect.left += 23;
     textRect.right -= 18;
@@ -93,6 +105,23 @@ void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKin
         rect.top + ((rect.bottom - rect.top - SceneViewportToolbarMetrics::ChevronSize) / 2) + SceneViewportToolbarMetrics::ChevronSize,
     };
     HeroIconPainter::Draw(dc, chevronRect, HeroIconKind::ChevronDown, GdiDrawing::ToColorRef(theme.textDisabled), 1);
+}
+
+void SceneViewportToolbarDrawing::DrawChip(HDC dc, const RECT& rect, std::string_view label, const EditorTheme& theme, bool active) {
+    FillRound(dc, rect, active ? RGB(36, 91, 111) : RGB(29, 34, 41), active ? RGB(91, 190, 220) : RGB(59, 68, 80), 7);
+    GdiDrawing::DrawCenteredText(dc, rect, label, active ? RGB(239, 252, 255) : GdiDrawing::ToColorRef(theme.textSecondary));
+}
+
+void SceneViewportToolbarDrawing::DrawValueBox(HDC dc, const RECT& rect, std::string_view text, const EditorTheme& theme) {
+    FillRound(dc, rect, RGB(22, 26, 32), RGB(52, 62, 74), 6);
+    GdiDrawing::DrawCenteredText(dc, rect, text, GdiDrawing::ToColorRef(theme.textPrimary));
+}
+
+void SceneViewportToolbarDrawing::DrawStepper(
+    HDC dc, const RECT& minus, const RECT& value, const RECT& plus, std::string_view text, const EditorTheme& theme) {
+    DrawIconButton(dc, minus, HeroIconKind::Minus, theme, false);
+    DrawValueBox(dc, value, text, theme);
+    DrawIconButton(dc, plus, HeroIconKind::Plus, theme, false);
 }
 
 void SceneViewportToolbarDrawing::DrawDivider(HDC dc, const RECT& toolbar, int x, const EditorTheme& theme) {

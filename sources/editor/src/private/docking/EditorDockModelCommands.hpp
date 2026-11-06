@@ -13,10 +13,14 @@ namespace kb::editor {
 
 class EditorDockModelCommands {
 public:
-    EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId) noexcept;
+    EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId, bool& drawerCollapsed) noexcept;
+    // Collapses the bottom drawer to its tab strip, or opens it again. Returns whether it changed.
+    [[nodiscard]] bool SetDrawerCollapsed(bool collapsed) noexcept;
 
     // Puts the workspace back to the arrangement a new project starts with.
     void ResetWorkspace();
+    [[nodiscard]] bool RegisterToolPanel(DockPanel panel);
+    [[nodiscard]] bool UnregisterToolPanel(std::uint32_t panelId);
     // Rebuilds the dock tree from a previously serialized workspace. Refuses a text
     // that does not account for exactly the panels this build has, leaving the
     // current arrangement untouched.
@@ -44,6 +48,7 @@ private:
     std::unique_ptr<DockNode>& root_;
     std::uint32_t& nextNodeId_;
     std::uint32_t& maximizedLeafId_;
+    bool& drawerCollapsed_;
 };
 
 } // namespace kb::editor

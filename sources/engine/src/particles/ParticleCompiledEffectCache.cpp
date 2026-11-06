@@ -120,6 +120,13 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
                 WriteFloat(bytes, value.friction); WriteUInt32(bytes, value.maxEventsPerStep);
                 WriteBool(bytes, value.killOnContact); break;
             }
+            case kb::scene::ParticleModuleType::CollisionGeometry: {
+                const auto& v=std::get<kb::scene::ParticleCollisionGeometryModule>(module.payload);
+                WriteUInt8(bytes,static_cast<std::uint8_t>(v.kind));WriteFloat(bytes,v.radius);WriteFloat(bytes,v.restitution);WriteFloat(bytes,v.friction);
+                WriteUInt32(bytes,v.maxEventsPerStep);WriteBool(bytes,v.killOnContact);WriteUInt32(bytes,v.layerMask);
+                WriteVec3(bytes,v.origin);WriteVec3(bytes,v.cellSize);WriteUInt32(bytes,v.width);WriteUInt32(bytes,v.height);WriteUInt32(bytes,v.depth);
+                WriteUInt32(bytes,static_cast<std::uint32_t>(v.samples.size()));for(float n:v.samples) WriteFloat(bytes,n);break;
+            }
             case kb::scene::ParticleModuleType::Noise: {
                 const auto& value = std::get<kb::scene::ParticleNoiseModule>(module.payload);
                 WriteFloat(bytes, value.strength); WriteFloat(bytes, value.frequency); break;
@@ -155,6 +162,7 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         const auto& binding = effect.eventBindings[index];
         WriteUInt8(bytes, binding.sourceEmitterIndex); WriteUInt8(bytes, static_cast<std::uint8_t>(binding.trigger));
         WriteUInt64(bytes, binding.sourceModuleId); WriteUInt8(bytes, binding.targetEmitterIndex);
+        WriteUInt64(bytes, binding.targetEffectAssetId);
         WriteUInt32(bytes, binding.count); WriteUInt8(bytes, binding.maxDepth); WriteUInt32(bytes, binding.perStepBudget);
         WriteFloat(bytes, binding.ratePerSecond);
     }
@@ -264,7 +272,7 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             !reader.U8(e.moduleCount) || e.moduleCount > kb::scene::kParticleEffectMaxModulesPerEmitter) return false;
         for (std::uint8_t index = 0U; index < e.moduleCount; ++index) {
             auto& module = e.modules[index]; std::uint8_t type = 0U;
-            if (!reader.U64(module.moduleId) || !reader.U8(type) || type > static_cast<std::uint8_t>(kb::scene::ParticleModuleType::Separation) ||
+            if (!reader.U64(module.moduleId) || !reader.U8(type) || type > static_cast<std::uint8_t>(kb::scene::ParticleModuleType::CollisionGeometry) ||
                 !reader.Bool(module.enabled)) return false;
             module.type = static_cast<kb::scene::ParticleModuleType>(type);
             switch (module.type) {
@@ -273,6 +281,13 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             case kb::scene::ParticleModuleType::Wind: { kb::scene::ParticleWindModule value; if (!reader.Vec3(value.acceleration)) return false; module.payload = value; break; }
             case kb::scene::ParticleModuleType::Drag: { kb::scene::ParticleDragModule value; if (!reader.F(value.coefficient)) return false; module.payload = value; break; }
             case kb::scene::ParticleModuleType::CollisionPlane: { kb::scene::ParticleCollisionPlaneModule value; if (!reader.Vec3(value.normal) || !reader.F(value.distance) || !reader.F(value.restitution) || !reader.F(value.friction) || !reader.U32(value.maxEventsPerStep) || !reader.Bool(value.killOnContact)) return false; module.payload = value; break; }
+            case kb::scene::ParticleModuleType::CollisionGeometry: {
+                kb::scene::ParticleCollisionGeometryModule v;std::uint8_t kind=0;std::uint32_t count=0;
+                if(!reader.U8(kind)||kind>2||!reader.F(v.radius)||!reader.F(v.restitution)||!reader.F(v.friction)||!reader.U32(v.maxEventsPerStep)||!reader.Bool(v.killOnContact)||!reader.U32(v.layerMask)||
+                    !reader.Vec3(v.origin)||!reader.Vec3(v.cellSize)||!reader.U32(v.width)||!reader.U32(v.height)||!reader.U32(v.depth)||!reader.U32(count)||count>32768) return false;
+                v.kind=static_cast<kb::scene::ParticleCollisionGeometryKind>(kind);v.samples.resize(count);for(auto& n:v.samples) if(!reader.F(n)) return false;
+                if(!kb::scene::IsValidParticleCollisionGeometry(v)) return false;module.payload=std::move(v);break;
+            }
             case kb::scene::ParticleModuleType::Noise: { kb::scene::ParticleNoiseModule value; if (!reader.F(value.strength) || !reader.F(value.frequency)) return false; module.payload = value; break; }
             case kb::scene::ParticleModuleType::AxisRotation: { kb::scene::ParticleAxisRotationModule value; if (!reader.Vec3(value.axis) || !reader.F(value.degreesPerSecond)) return false; module.payload = value; break; }
             case kb::scene::ParticleModuleType::Attraction: { kb::scene::ParticleAttractionModule value; if (!reader.Vec3(value.point) || !reader.F(value.strength) || !reader.F(value.radius)) return false; module.payload = value; break; }
@@ -289,7 +304,9 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
         auto& binding = effect.eventBindings[index]; std::uint8_t trigger = 0U;
         if (!reader.U8(binding.sourceEmitterIndex) || binding.sourceEmitterIndex >= effect.emitterCount ||
             !reader.U8(trigger) || trigger > static_cast<std::uint8_t>(kb::scene::ParticleEventTrigger::WhileAlive) ||
-            !reader.U64(binding.sourceModuleId) || !reader.U8(binding.targetEmitterIndex) || binding.targetEmitterIndex >= effect.emitterCount ||
+            !reader.U64(binding.sourceModuleId) || !reader.U8(binding.targetEmitterIndex) ||
+            !reader.U64(binding.targetEffectAssetId) ||
+            (binding.targetEffectAssetId == 0U && binding.targetEmitterIndex >= effect.emitterCount) ||
             !reader.U32(binding.count) || !reader.U8(binding.maxDepth) || !reader.U32(binding.perStepBudget) ||
             !reader.F(binding.ratePerSecond)) return false;
         binding.trigger = static_cast<kb::scene::ParticleEventTrigger>(trigger);
@@ -338,6 +355,10 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
         for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
             const auto& module = emitter.modules[index];
             if (module.moduleId == 0U) return false;
+            if(module.type==kb::scene::ParticleModuleType::CollisionGeometry &&
+                (!std::holds_alternative<kb::scene::ParticleCollisionGeometryModule>(module.payload)||!kb::scene::IsValidParticleCollisionGeometry(std::get<kb::scene::ParticleCollisionGeometryModule>(module.payload))||
+                (module.enabled&&effect.backendPolicy==kb::scene::ParticleBackendPolicy::GpuVisualRequired))) return false;
+
             for (std::uint8_t previous = 0U; previous < index; ++previous)
                 if (emitter.modules[previous].moduleId == module.moduleId) return false;
         }

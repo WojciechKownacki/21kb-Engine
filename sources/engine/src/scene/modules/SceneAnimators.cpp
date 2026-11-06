@@ -14,6 +14,7 @@ std::optional<AnimatorInstanceSkeletonView> SceneAnimatorQueries::InstanceSkelet
 std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::AttachmentTransform(SceneEntity entity, SkeletonBoneId boneId, const LocalTransform& localOffset) const noexcept { return SceneAnimatorService::AttachmentTransform(scene_, entity, boneId, localOffset); }
 std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::SocketTransform(SceneEntity entity, std::string_view socketName) const noexcept { return SceneAnimatorService::SocketTransform(scene_, entity, socketName); }
 std::optional<AnimatorStateInfo> SceneAnimatorQueries::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
+std::optional<float> SceneAnimatorQueries::Curve(SceneEntity entity, std::string_view name) const { return SceneAnimatorService::Curve(scene_, entity, name); }
 std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimatorQueries::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
 std::vector<std::string> SceneAnimatorQueries::SocketNames(SceneEntity entity) const { return SceneAnimatorService::SocketNames(scene_, entity); }
 SocketAttachmentStatus SceneAnimatorQueries::SocketAttachment(SceneEntity attachedEntity) const { return SceneAnimatorService::SocketAttachment(scene_, attachedEntity); }
@@ -37,6 +38,12 @@ bool SceneAnimators::SetInt(SceneEntity entity, std::string_view name, std::int3
 bool SceneAnimators::SetFloat(SceneEntity entity, std::string_view name, float value) noexcept { return SceneAnimatorService::SetFloat(scene_, entity, name, value); }
 bool SceneAnimators::SetTrigger(SceneEntity entity, std::string_view name) noexcept { return SceneAnimatorService::SetTrigger(scene_, entity, name, true); }
 bool SceneAnimators::ResetTrigger(SceneEntity entity, std::string_view name) noexcept { return SceneAnimatorService::SetTrigger(scene_, entity, name, false); }
+bool SceneAnimators::SetPhysicsPose(SceneEntity entity, std::span<const AnimatorPhysicsBonePose> bones) noexcept {
+    return SceneAnimatorService::SetPhysicsPose(scene_,entity,bones);
+}
+bool SceneAnimators::ClearPhysicsPose(SceneEntity entity) noexcept {
+    return SceneAnimatorService::ClearPhysicsPose(scene_,entity);
+}
 bool SceneAnimators::SetIkTarget(
     SceneEntity entity, std::string_view name,
     const AnimatorIkTarget& target) noexcept {
@@ -45,6 +52,7 @@ bool SceneAnimators::SetIkTarget(
 bool SceneAnimators::ClearIkTarget(SceneEntity entity, std::string_view name) noexcept {
     return SceneAnimatorService::ClearIkTarget(scene_, entity, name);
 }
+std::optional<float> SceneAnimators::Curve(SceneEntity entity, std::string_view name) const { return SceneAnimatorService::Curve(scene_, entity, name); }
 std::optional<AnimatorStateInfo> SceneAnimators::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
 std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimators::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
 void SceneAnimators::WaitForDebugSnapshot() { SceneAnimatorService::WaitForDebugSnapshot(scene_); }

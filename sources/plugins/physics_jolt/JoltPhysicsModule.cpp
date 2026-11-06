@@ -7,8 +7,20 @@
 #include "engine/scene/SceneRuntime.hpp"
 
 #include <memory>
+#include <stdexcept>
+#include <flecs.h>
 
 namespace kb::physics_jolt {
+
+void JoltPhysicsModule::OnLoad(kb::modules::EngineModuleContext&) {
+    // This provider owns a static ECS copy; generated bodies also allocate in
+    // the host world, so its OS hooks must be initialized for that lifetime.
+    ecs_os_init();
+}
+
+void JoltPhysicsModule::OnUnload() {
+    ecs_os_fini();
+}
 
 kb::modules::EngineModuleMetadata JoltPhysicsModule::Metadata() const {
     return kb::modules::EngineModuleMetadata{
@@ -21,12 +33,32 @@ kb::modules::EngineModuleMetadata JoltPhysicsModule::Metadata() const {
 }
 
 void JoltPhysicsModule::OnSceneAttach(kb::scene::Scene& scene) {
-    scene.Runtime().AddSceneSystem(std::make_unique<JoltPhysicsSceneSystem>());
+    if (sceneSystems_.contains(&scene)) {
+        return;
+    }
+    const auto handle = scene.Runtime().AddSceneSystem(std::make_unique<JoltPhysicsSceneSystem>());
+    if (handle.IsValid()) {
+        sceneSystems_.emplace(&scene, handle);
+    }
+}
+
+void JoltPhysicsModule::OnSceneDetach(kb::scene::Scene& scene) {
+    const auto iterator = sceneSystems_.find(&scene);
+    if (iterator == sceneSystems_.end()) {
+        return;
+    }
+    if (!scene.Runtime().RemoveSceneSystem(iterator->second) &&
+        scene.Runtime().HasSceneSystem(iterator->second)) {
+        throw std::logic_error("physics scene system could not detach during active dispatch");
+    }
+    sceneSystems_.erase(iterator);
 }
 
 } // namespace kb::physics_jolt
 
 #if !defined(KB_ENGINE_MODULE_STATIC_LINK)
+KB_EXPORT_ENGINE_MODULE_BUILD_FINGERPRINT
+
 extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
     return kb::modules::kEngineModuleAbiVersion;
 }

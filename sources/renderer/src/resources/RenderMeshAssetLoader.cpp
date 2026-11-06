@@ -6,6 +6,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/AssetMemoryInputStream.hpp"
+#include "engine/assets/AssetPayloadMemory.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -22,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <new>
@@ -34,6 +36,42 @@
 
 namespace kb::render {
 namespace {
+
+using kb::assets::StringBufferBytes;
+
+[[nodiscard]] std::optional<std::uint64_t> MeshResidentBytes(const RenderMeshAssetData& mesh) {
+    const auto buffers = [](const auto&... values) {
+        return (std::uint64_t{0} + ... + (static_cast<std::uint64_t>(values.capacity()) * sizeof(values[0])));
+    };
+    std::uint64_t bytes = sizeof(mesh) + buffers(mesh.vertices, mesh.tangentVertices, mesh.indices16, mesh.indices32,
+        mesh.sections, mesh.meshlets, mesh.lods, mesh.materialSlots, mesh.materialNames, mesh.embeddedMaterials,
+        mesh.dynamicVertexUpdateRanges, mesh.dynamicSectionUpdateIndices,
+        mesh.terrainLayerWeights, mesh.dynamicTerrainLayerWeightUpdates);
+    if (mesh.terrainChunks != nullptr) {
+        const RenderTerrainChunkGrid& grid = *mesh.terrainChunks;
+        bytes += sizeof(grid) + buffers(grid.sectionIndices, grid.skirtSectionIndices, grid.lodError, grid.skirtDepth, grid.borderError);
+    }
+    for (const auto& name : mesh.materialNames) bytes += StringBufferBytes(name);
+    for (const auto& material : mesh.embeddedMaterials) {
+        for (const auto* name : {&material.name, &material.albedoTexturePath, &material.normalTexturePath,
+                &material.metallicRoughnessTexturePath, &material.occlusionTexturePath, &material.emissiveTexturePath,
+                &material.clearcoatTexturePath, &material.clearcoatRoughnessTexturePath, &material.sheenColorTexturePath,
+                &material.transmissionTexturePath, &material.thicknessTexturePath, &material.anisotropyTexturePath,
+                &material.decalTexturePath, &material.layerMaskTexturePath}) bytes += StringBufferBytes(*name);
+    }
+    if (mesh.streaming) {
+        const auto& layout = *mesh.streaming;
+        bytes += buffers(layout.lodFirstChunk, layout.lodChunkCount, layout.lodGeometryBytes,
+            layout.lodErrors, layout.fragments, layout.chunks);
+        for (const auto& chunk : layout.chunks) bytes += buffers(chunk);
+        if (layout.primaryBlock) {
+            // Shared payload attribution cannot be recovered from one scalar reading.
+            if (layout.primaryBlock.use_count() != 1) return std::nullopt;
+            bytes += sizeof(*layout.primaryBlock) + buffers(*layout.primaryBlock);
+        }
+    }
+    return bytes;
+}
 
 [[nodiscard]] std::string LowerExtensionText(std::string extension) {
     std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
@@ -90,7 +128,9 @@ namespace {
     return mesh;
 }
 
-[[nodiscard]] std::optional<RenderMeshAssetData> LoadImportedMesh(const kb::assets::AssetLoadRequest& request) {
+// `lod` receives the container's levels-of-detail settings.
+[[nodiscard]] std::optional<RenderMeshAssetData> LoadImportedMesh(
+    const kb::assets::AssetLoadRequest& request, kb::assets::AssetMeshLodSettings& lod) {
     kb::assets::ImportedAssetLoader importedLoader;
     kb::assets::AssetLoadResult result = importedLoader.Load(request);
     if (!result.Succeeded()) {
@@ -101,6 +141,7 @@ namespace {
     if (imported == nullptr || imported->category != kb::assets::AssetImportCategory::Model) {
         return std::nullopt;
     }
+    lod = imported->meshLod;
 
     const std::string sourceExtension = LowerExtensionText(imported->sourceExtension);
     if (sourceExtension == ".obj") {
@@ -479,6 +520,11 @@ struct MeshFragmentBounds {
         error = "Baked mesh payload is malformed";
         return std::nullopt;
     }
+    // The bytes hold absolute errors; the screen coverage each instance chooses a level by is derived here, as for a source mesh.
+    std::vector<float> errors;
+    errors.reserve(layout.lods.size());
+    for (const kb::render::bake::BakedMeshLodLayout& level : layout.lods) errors.push_back(level.error);
+    kb::render::bake::AssignLodScreenCoverage(asset, errors, layout.bounds.radius);
     return asset;
 }
 
@@ -499,6 +545,7 @@ bool AssembleStreamedMeshLevels(
             return false;
         }
         RenderMeshAssetFinalizer::EnsureTangentVertexStorage(asset);
+        kb::render::bake::AssignLodScreenCoverage(asset, std::span<const float>{ layout.lodErrors }.subspan(firstLod), asset.bounds.radius);
         asset.streaming = RenderMeshStreamingLayout{
             .artifact = layout.artifact,
             .firstLod = firstLod,
@@ -577,8 +624,56 @@ std::vector<kb::assets::AssetId> RenderMeshAssetLoader::DiscoverDependencies(
 
 namespace {
 
-[[nodiscard]] kb::assets::AssetLoadResult LoadRenderMeshAsset(const kb::assets::AssetLoadRequest& request) {
+class CancelledMeshLoad final : public std::runtime_error {
+public:
+    CancelledMeshLoad() : std::runtime_error("Asset load cancelled") {}
+};
+
+class CancellableObjBuffer final : public std::streambuf {
+public:
+    CancellableObjBuffer(std::streambuf& source, const kb::assets::AssetLoadRequest& request)
+        : source_(source), request_(request) {}
+protected:
+    int_type underflow() override {
+        if (request_.IsCancellationRequested()) throw CancelledMeshLoad{};
+        const auto count = source_.sgetn(bytes_.data(), static_cast<std::streamsize>(bytes_.size()));
+        if (count == 0) return traits_type::eof();
+        setg(bytes_.data(), bytes_.data(), bytes_.data() + count);
+        return traits_type::to_int_type(*gptr());
+    }
+private:
+    std::streambuf& source_;
+    const kb::assets::AssetLoadRequest& request_;
+    std::array<char, 4096U> bytes_{};
+};
+
+[[nodiscard]] std::optional<RenderMeshAssetData> LoadCancellableObj(
+    std::istream& source, const kb::assets::AssetLoadRequest& request) {
+    CancellableObjBuffer buffer{*source.rdbuf(), request};
+    std::istream input{&buffer};
+    input.exceptions(std::ios::badbit);
+    return RenderMeshAssetBuilder::LoadObj(input);
+}
+
+// Builds the chain of a mesh read from its source. A mesh that cannot be baked keeps its single level and says why.
+void BuildRuntimeLods(RenderMeshAssetData& mesh, const kb::assets::AssetLoadRequest& request) {
+    const std::size_t indexCount = mesh.indices32.empty() ? mesh.indices16.size() : mesh.indices32.size();
+    if (!mesh.lod.BuildsChain(indexCount / 3U) || mesh.lods.size() > 1U) return;
+    RenderMeshAssetData chained;
+    const kb::render::bake::MeshBakeStatus status = kb::render::bake::BuildRuntimeLodMesh(mesh, chained);
+    if (status != kb::render::bake::MeshBakeStatus::Success) {
+        std::cerr << "RenderMesh: levels of detail not built for " << request.resolvedPath.string()
+                  << " status=" << kb::render::bake::ToString(status) << '\n';
+        return;
+    }
+    mesh = std::move(chained);
+}
+
+[[nodiscard]] kb::assets::AssetLoadResult LoadRenderMeshAsset(
+    const kb::assets::AssetLoadRequest& request, RenderMeshLodBuild lodBuild) {
     std::optional<RenderMeshAssetData> mesh;
+    kb::assets::AssetMeshLodSettings importedLod{};
+    bool fromSource = false;
     std::string packagedError;
     const std::string extension = LowerExtensionText(request.SourceExtension());
     if (extension == kb::assets::kTerrainAssetExtension) {
@@ -600,8 +695,10 @@ namespace {
     } else if (extension == kb::assets::bake::kAssetPackFileExtension) {
         mesh = LoadBakedMeshPack(request.resolvedPath);
     } else if (extension == ".21kb") {
-        mesh = LoadImportedMesh(request);
+        fromSource = true;
+        mesh = LoadImportedMesh(request, importedLod);
     } else if (request.HasSourceBytes()) {
+        fromSource = true;
         const std::span<const std::uint8_t> source = *request.sourceBytes;
         if (extension == ".gltf" || extension == ".glb") {
             mesh = RenderMeshAssetBuilder::LoadGltf(source, request.resolvedPath);
@@ -611,17 +708,20 @@ namespace {
             mesh = RenderMeshAssetBuilder::LoadFbx(bytes);
         } else {
             kb::assets::AssetMemoryInputStream input{ source };
-            mesh = RenderMeshAssetBuilder::LoadObj(input);
+            mesh = LoadCancellableObj(input, request);
         }
     } else {
+        fromSource = true;
         if (extension == ".gltf" || extension == ".glb") {
             mesh = RenderMeshAssetBuilder::LoadGltf(request.resolvedPath);
         } else if (extension == ".fbx") {
             mesh = RenderMeshAssetBuilder::LoadFbx(request.resolvedPath);
         } else {
-            mesh = RenderMeshAssetBuilder::LoadObj(request.resolvedPath);
+            std::ifstream source{request.resolvedPath, std::ios::binary};
+            if (source) mesh = LoadCancellableObj(source, request);
         }
     }
+    if (request.IsCancellationRequested()) return {.error = "Asset load cancelled"};
     if (!mesh.has_value()) {
         return kb::assets::AssetLoadResult{
             .error = packagedError.empty()
@@ -630,6 +730,8 @@ namespace {
         };
     }
     RenderMeshAssetFinalizer::EnsureTangentVertexStorage(*mesh);
+    if (fromSource) mesh->lod = importedLod;
+    if (fromSource && lodBuild == RenderMeshLodBuild::Runtime) BuildRuntimeLods(*mesh, request);
     mesh->RefreshDesc();
 
     return kb::assets::AssetLoadResult{
@@ -641,7 +743,11 @@ namespace {
 
 kb::assets::AssetLoadResult RenderMeshAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
     try {
-        return LoadRenderMeshAsset(request);
+        auto result = LoadRenderMeshAsset(request, lodBuild_);
+        if (result.Succeeded()) result.residentBytes = MeshResidentBytes(*std::static_pointer_cast<RenderMeshAssetData>(result.asset));
+        return result;
+    } catch (const CancelledMeshLoad&) {
+        return {.error = "Asset load cancelled"};
     } catch (const std::bad_alloc&) {
         return kb::assets::AssetLoadResult{ .error = "Render mesh load exceeded its memory budget" };
     } catch (const std::length_error&) {

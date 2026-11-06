@@ -29,6 +29,10 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
     std::array<int, 2> end, const Map2DPathOptions& options) {
     using Cell = std::array<int, 2>;
     Map2DPathResult result;
+    if(static_cast<unsigned>(map.topology)>static_cast<unsigned>(Map2DTopology::Hexagonal)||(options.platformer&&map.topology!=Map2DTopology::Rectangular)||
+        (map.topology==Map2DTopology::Hexagonal&&options.diagonal!=Map2DDiagonalPolicy::None)) {
+        result.status=Map2DPathStatus::InvalidOptions;return result;
+    }
     const auto started = std::chrono::steady_clock::now();
     const auto elapsed = [&] {
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
@@ -47,6 +51,7 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
         if (blocked(cell)) return true;
         if (options.platformer || clearance == 0) return false;
         for (int dx = -clearance; dx <= clearance; ++dx) for (int dy = -clearance; dy <= clearance; ++dy) {
+            if(map.topology==Map2DTopology::Hexagonal&&(std::abs(dx)+std::abs(dy)+std::abs(dx+dy))/2>clearance) continue;
             if (blocked({cell[0] + dx, cell[1] + dy})) return true;
         }
         return false;
@@ -56,7 +61,8 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
     if (options.maximumVisited == 0) return finish(Map2DPathStatus::BudgetExceeded);
     const bool diagonals = !options.platformer && options.diagonal != Map2DDiagonalPolicy::None;
     // Costs are in tenths of a step so that a diagonal step costs 14 against 10.
-    const auto distance = [diagonals](Cell a, Cell b) {
+    const auto distance = [diagonals,&map](Cell a, Cell b) {
+        if(map.topology==Map2DTopology::Hexagonal) return 5*(std::abs(a[0]-b[0])+std::abs(a[1]-b[1])+std::abs(a[0]+a[1]-b[0]-b[1]));
         const int dx = std::abs(a[0] - b[0]), dy = std::abs(a[1] - b[1]);
         return diagonals ? 10 * std::max(dx, dy) + 4 * std::min(dx, dy) : 10 * (dx + dy);
     };
@@ -109,7 +115,7 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
         };
         const int x = current.cell[0], y = current.cell[1];
         if (!options.platformer) {
-            add({x - 1, y}); add({x + 1, y}); add({x, y - 1}); add({x, y + 1});
+            for(const auto offset:Map2DNeighbourOffsets(map.topology)) add({x+offset[0],y+offset[1]});
             if (diagonals) {
                 for (const int dx : { -1, 1 }) for (const int dy : { -1, 1 }) {
                     if (options.diagonal == Map2DDiagonalPolicy::NoCornerCutting && (blocked({x + dx, y}) || blocked({x, y + dy}))) continue;

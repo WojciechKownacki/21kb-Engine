@@ -93,6 +93,7 @@ bool AndroidGamepadInput::Initialize(GameActivity& activity) noexcept {
         if (slot >= 0 && static_cast<std::size_t>(slot) < self.connected_.size()) {
             self.connected_[static_cast<std::size_t>(slot)] = status == PADDLEBOAT_CONTROLLER_JUST_CONNECTED ||
                 status == PADDLEBOAT_CONTROLLER_ACTIVE;
+            if (!self.connected_[static_cast<std::size_t>(slot)]) self.vibration_[static_cast<std::size_t>(slot)] = {};
         }
     }, this);
     // Enable standard axes before the first queued event; device-specific mappings
@@ -110,6 +111,8 @@ bool AndroidGamepadInput::Initialize(GameActivity& activity) noexcept {
 }
 
 void AndroidGamepadInput::Shutdown() noexcept {
+    StopAll();
+    focused_ = false;
     if (initialized_) {
         Paddleboat_setControllerStatusCallback(nullptr, nullptr);
         Paddleboat_destroy(env_);
@@ -128,6 +131,8 @@ void AndroidGamepadInput::OnStart() noexcept {
 }
 
 void AndroidGamepadInput::OnStop() noexcept {
+    StopAll();
+    focused_ = false;
     if (initialized_) Paddleboat_onStop(env_);
 }
 
@@ -140,6 +145,13 @@ void AndroidGamepadInput::Update() noexcept {
         if ((added & (std::uint64_t{1U} << axis)) != 0U) GameActivityPointerAxes_enableAxis(axis);
     }
     enabledAxes_ |= active;
+    const auto now = std::chrono::steady_clock::now();
+    for (std::uint32_t slot = 0; slot < vibration_.size(); ++slot) {
+        auto& effect = vibration_[slot];
+        if ((effect.low > 0.0F || effect.high > 0.0F) && now >= effect.next) {
+            if (!focused_ || !connected_[slot] || !SendVibration(slot, effect.low, effect.high)) effect = {};
+        }
+    }
 }
 
 bool AndroidGamepadInput::Process(const GameActivityKeyEvent& event) noexcept {
@@ -150,7 +162,9 @@ bool AndroidGamepadInput::Process(const GameActivityMotionEvent& event) noexcept
     return initialized_ && Paddleboat_processGameActivityMotionInputEvent(&event, sizeof(event)) != 0;
 }
 
-void AndroidGamepadInput::Publish(input::InputDeviceState& state, bool focused) const noexcept {
+void AndroidGamepadInput::Publish(input::InputDeviceState& state, bool focused) noexcept {
+    focused_ = focused;
+    if (!focused) StopAll();
     static_assert(input::InputDeviceState::kMaxGamepads <= PADDLEBOAT_MAX_CONTROLLERS);
     for (std::uint8_t slot = 0U; slot < input::InputDeviceState::kMaxGamepads; ++slot) {
         Paddleboat_Controller_Data data{};
@@ -160,6 +174,50 @@ void AndroidGamepadInput::Publish(input::InputDeviceState& state, bool focused) 
             Paddleboat_getControllerInfo(slot, &info) == PADDLEBOAT_NO_ERROR;
         if (!focused) data = {};
         ApplyAndroidGamepadSample(state, slot, connected ? &data : nullptr, connected ? &info : nullptr);
+    }
+}
+
+input::InputHapticsCapability AndroidGamepadInput::Capability(std::uint32_t slot) {
+    Paddleboat_Controller_Info info{};
+    const bool connected = slot < connected_.size() && initialized_ && connected_[slot] &&
+        Paddleboat_getControllerInfo(static_cast<int32_t>(slot), &info) == PADDLEBOAT_NO_ERROR;
+    const bool supported = connected && focused_ && (info.controllerFlags & PADDLEBOAT_CONTROLLER_FLAG_VIBRATION) != 0;
+    return { .supported = supported, .connected = connected,
+        .dualMotor = supported && (info.controllerFlags & PADDLEBOAT_CONTROLLER_FLAG_VIBRATION_DUAL_MOTOR) != 0,
+        .maxGamepads = input::InputDeviceState::kMaxGamepads,
+        .disabledReason = supported ? "" : !connected ? "Android controller is not connected" :
+            !focused_ ? "Android controller host is inactive" : "Android controller does not support vibration" };
+}
+
+bool AndroidGamepadInput::SendVibration(std::uint32_t slot, float low, float high) noexcept {
+    if (!initialized_ || env_ == nullptr || slot >= connected_.size() || !connected_[slot]) return false;
+    Paddleboat_Controller_Info info{};
+    if (Paddleboat_getControllerInfo(static_cast<int32_t>(slot), &info) != PADDLEBOAT_NO_ERROR ||
+        !(info.controllerFlags & PADDLEBOAT_CONTROLLER_FLAG_VIBRATION)) return false;
+    const bool dual = (info.controllerFlags & PADDLEBOAT_CONTROLLER_FLAG_VIBRATION_DUAL_MOTOR) != 0;
+    const Paddleboat_Vibration_Data effect{ .durationLeft = 250, .durationRight = 250,
+        .intensityLeft = dual ? low : std::max(low, high), .intensityRight = dual ? high : 0.0F };
+    const auto result = Paddleboat_setControllerVibrationData(static_cast<int32_t>(slot), &effect, env_);
+    if (env_->ExceptionCheck()) { env_->ExceptionClear(); return false; }
+    vibration_[slot].next = std::chrono::steady_clock::now() + std::chrono::milliseconds{ 150 };
+    return result == PADDLEBOAT_NO_ERROR;
+}
+
+bool AndroidGamepadInput::SetVibration(std::uint32_t slot, float low, float high) {
+    if (!std::isfinite(low) || !std::isfinite(high) || !Capability(slot).supported) return false;
+    low = std::clamp(low, 0.0F, 1.0F); high = std::clamp(high, 0.0F, 1.0F);
+    auto& effect = vibration_[slot];
+    if (effect.low == low && effect.high == high) return true;
+    if (!SendVibration(slot, low, high)) { effect = {}; return false; }
+    effect.low = low; effect.high = high;
+    return true;
+}
+
+void AndroidGamepadInput::StopAll() noexcept {
+    for (std::uint32_t slot = 0; slot < vibration_.size(); ++slot) {
+        if (vibration_[slot].low > 0.0F || vibration_[slot].high > 0.0F)
+            static_cast<void>(SendVibration(slot, 0.0F, 0.0F));
+        vibration_[slot] = {};
     }
 }
 

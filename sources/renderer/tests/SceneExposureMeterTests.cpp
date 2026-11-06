@@ -193,6 +193,27 @@ void ExposureSubmissionUsesElapsedFrameTime() {
 
 // A profile with tonemapping off still shows the scene at its exposure and display-encoded, as
 // Unity, Unreal and Godot do; only the tone curve goes.
+void SuddenBrightnessChangesConvergeWithoutOscillation() {
+    SceneExposureMeter meter;
+    meter.Prime(0.18F);
+    const SceneExposureAdaptationDesc adaptation{.enabled = true, .deltaSeconds = 1.0F / 60.0F,
+        .brightAdaptationRate = 3.0F, .darkAdaptationRate = 2.0F};
+    for (const float target : {1800.0F, 0.00018F, 18.0F, 0.18F}) {
+        float previous = meter.CurrentLuminance();
+        const bool increasing = target > previous;
+        for (unsigned frame = 0; frame < 300U; ++frame) {
+            const float next = meter.Update(target, adaptation);
+            Require(std::isfinite(next) && next > 0.0F &&
+                (increasing ? next >= previous && next <= target : next <= previous && next >= target),
+                "Sudden brightness changes caused exposure overshoot or oscillation");
+            previous = next;
+        }
+    }
+    meter.Reset();
+    Require(NearlyEqual(meter.Update(18.0F, adaptation), 18.0F),
+        "Exposure reset kept the previous brightness history");
+}
+
 void TonemapOffKeepsExposureAndDisplayEncoding() {
     PostProcessOutput output;
     output.tonemapEnabled = false;
@@ -233,6 +254,7 @@ void RunSceneExposureMeterTests() {
     TemporalExposureAdaptationUsesRatesAndHistory();
     ExposureStaysFiniteForNonFiniteInput();
     ExposureSubmissionUsesElapsedFrameTime();
+    SuddenBrightnessChangesConvergeWithoutOscillation();
     TonemapOffKeepsExposureAndDisplayEncoding();
     VignetteFollowsTheProfile();
 }

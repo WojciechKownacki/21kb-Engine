@@ -179,7 +179,11 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     int x,
     int y) {
     const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(content, sceneContext, x, y);
+    // A click in the search box starts typing there; anywhere else in the panel ends it.
+    sceneContext.ProjectSettings().Search().Focus(hit.kind == ProjectSettingsHitKind::SearchField);
     switch (hit.kind) {
+    case ProjectSettingsHitKind::SearchField:
+        return true;
     case ProjectSettingsHitKind::CategoryItem:
         // SelectCategory also closes any open dropdown; always repaint to show the
         // pressed row even when the same category is re-clicked.
