@@ -74,21 +74,22 @@ void Mix(std::uint64_t& hash, const void* data, std::size_t size) noexcept {
     return std::ranges::any_of(surfaces, [entity](const SurfaceGeometry& surface) { return surface.owner == entity; });
 }
 
-void RemoveChild(Scene& scene, SceneEntity child) {
+void RemoveChild(Scene& scene, SceneEntity child, std::vector<std::uint64_t>& touched) {
     if (!child.IsValid()) return;
+    touched.push_back(child.Id());
     SceneSurfaceGeometry::Remove(scene, child);
     scene.Entities().Destroy(child);
 }
 
 // The stream and the waterfalls numbered above `keepFalls` go; with keepStream false the stream goes too.
-void RemoveWaterChildren(Scene& scene, SceneEntity owner, bool keepStream, std::size_t keepFalls) {
+void RemoveWaterChildren(Scene& scene, SceneEntity owner, bool keepStream, std::size_t keepFalls, std::vector<std::uint64_t>& touched) {
     for (const SceneEntity child : scene.Hierarchy().ChildEntities(owner)) {
         const std::string name = scene.Entities().Name(child);
         if (name == kStreamName) {
-            if (!keepStream) RemoveChild(scene, child);
+            if (!keepStream) RemoveChild(scene, child, touched);
         } else if (name.starts_with(kFallPrefix) &&
             static_cast<std::size_t>(std::strtoull(name.c_str() + kFallPrefix.size(), nullptr, 10)) > keepFalls) {
-            RemoveChild(scene, child);
+            RemoveChild(scene, child, touched);
         }
     }
 }
@@ -136,18 +137,18 @@ struct FallFrame {
 
 } // namespace
 
-std::vector<std::string> SynchronizeSceneRivers(Scene& scene) {
-    std::vector<std::string> errors;
+SceneRiverSynchronization SynchronizeSceneRivers(Scene& scene) {
+    SceneRiverSynchronization result;
     std::vector<RiverEntry> rivers;
     static_cast<const Scene&>(scene).Components().Rivers().ForEach(&CollectRiver, &rivers);
     auto& builtKeys = SceneAccess::State(scene).riverBuildKeys;
-    if (rivers.empty() && builtKeys.empty()) return errors;
+    if (rivers.empty() && builtKeys.empty()) return result;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> current;
     for (const RiverEntry& entry : rivers) {
         const SceneEntity owner = entry.entity;
         if (!scene.Entities().IsAlive(owner)) continue;
         if (!entry.river.enabled || !IsRiverComponentValid(entry.river)) {
-            RemoveWaterChildren(scene, owner, false, 0U);
+            RemoveWaterChildren(scene, owner, false, 0U, result.entities);
             continue;
         }
         const std::uint64_t key = RiverKey(entry.river);
@@ -157,17 +158,19 @@ std::vector<std::string> SynchronizeSceneRivers(Scene& scene) {
         if (built != builtKeys.end() && built->second == key && stream.IsValid() && HasSurface(scene, stream)) continue;
         RiverSurface surface;
         if (!BuildRiverSurface(entry.river, surface)) {
-            errors.push_back("River: the water could not be built from the points of entity " + std::to_string(owner.Id()));
+            result.errors.push_back("River: the water could not be built from the points of entity " + std::to_string(owner.Id()));
             continue;
         }
         std::string error;
         if (!surface.streamVertices.empty()) {
-            if (!PublishWater(scene, owner, std::string{ kStreamName }, entry.river.materialAssetId, surface.streamVertices, surface.streamIndices, error).IsValid()) {
-                errors.push_back("River stream: " + error);
+            const SceneEntity water = PublishWater(scene, owner, std::string{ kStreamName }, entry.river.materialAssetId, surface.streamVertices, surface.streamIndices, error);
+            if (!water.IsValid()) {
+                result.errors.push_back("River stream: " + error);
                 continue;
             }
+            result.entities.push_back(water.Id());
         } else {
-            RemoveWaterChildren(scene, owner, false, surface.waterfalls.size());
+            RemoveWaterChildren(scene, owner, false, surface.waterfalls.size(), result.entities);
         }
         for (std::size_t index = 0U; index < surface.waterfalls.size(); ++index) {
             const FallFrame frame = FrameOfFall(surface, surface.waterfalls[index]);
@@ -175,9 +178,10 @@ std::vector<std::string> SynchronizeSceneRivers(Scene& scene) {
             const SceneEntity fall = PublishWater(scene, owner, FallName(index), entry.river.waterfallMaterialAssetId,
                 InFrame(mesh.vertices, frame), mesh.indices, error);
             if (!fall.IsValid()) {
-                errors.push_back("River waterfall: " + error);
+                result.errors.push_back("River waterfall: " + error);
                 continue;
             }
+            result.entities.push_back(fall.Id());
             TransformComponent transform = scene.Transforms().Get(fall);
             transform.localPosition = frame.origin;
             transform.localRotation = frame.rotation;
@@ -194,16 +198,16 @@ std::vector<std::string> SynchronizeSceneRivers(Scene& scene) {
             }
         }
         // Falls that are no more (a river that lost its steep stretch) take their objects away.
-        RemoveWaterChildren(scene, owner, true, surface.waterfalls.size());
+        RemoveWaterChildren(scene, owner, true, surface.waterfalls.size(), result.entities);
     }
     // A river that is gone takes its water with it.
     for (const auto& [id, key] : builtKeys) {
         if (current.contains(id)) continue;
         const SceneEntity owner{ id };
-        if (scene.Entities().IsAlive(owner)) RemoveWaterChildren(scene, owner, false, 0U);
+        if (scene.Entities().IsAlive(owner)) RemoveWaterChildren(scene, owner, false, 0U, result.entities);
     }
     builtKeys = std::move(current);
-    return errors;
+    return result;
 }
 
 } // namespace kb::scene

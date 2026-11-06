@@ -1004,9 +1004,11 @@ void EcsRenderSceneSynchronizer::SetSkinningPaletteAllocator(
 namespace {
 
 // The water of the scene's rivers is made before the scene is read, so its objects are in this synchronization.
-void SynchronizeRiverWater(kb::scene::Scene& scene) {
-    const std::vector<std::string> errors = kb::scene::SynchronizeSceneRivers(scene);
-    if (!errors.empty()) throw std::runtime_error("river water could not be built: " + errors.front());
+// Returns the water objects it made or changed, which an incremental synchronization has to read as well.
+std::vector<std::uint64_t> SynchronizeRiverWater(kb::scene::Scene& scene) {
+    kb::scene::SceneRiverSynchronization result = kb::scene::SynchronizeSceneRivers(scene);
+    if (!result.errors.empty()) throw std::runtime_error("river water could not be built: " + result.errors.front());
+    return std::move(result.entities);
 }
 
 } // namespace
@@ -1020,7 +1022,7 @@ void EcsRenderSceneSynchronizer::SyncStructural(const kb::scene::Scene& scene, R
 }
 
 void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const {
-    SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene));
+    static_cast<void>(SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene)));
     PublishSceneSurfaceGeometry(const_cast<kb::scene::Scene&>(scene));
     seenMeshes_.clear();
     seenCameras_.clear();
@@ -1102,8 +1104,13 @@ void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderS
 void EcsRenderSceneSynchronizer::SyncEntities(
     const kb::scene::Scene& scene,
     RenderScene& renderScene,
-    std::span<const std::uint64_t> entityIds) const {
-    SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene));
+    std::span<const std::uint64_t> dirtyEntityIds) const {
+    std::vector<std::uint64_t> waterAndDirtyIds = SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene));
+    std::span<const std::uint64_t> entityIds = dirtyEntityIds;
+    if (!waterAndDirtyIds.empty()) {
+        waterAndDirtyIds.insert(waterAndDirtyIds.end(), dirtyEntityIds.begin(), dirtyEntityIds.end());
+        entityIds = waterAndDirtyIds;
+    }
     PublishSceneSurfaceGeometry(const_cast<kb::scene::Scene&>(scene));
     seenMeshes_.clear();
     seenCameras_.clear();

@@ -6,11 +6,12 @@
 namespace kb::terrain_editor {
 namespace {
 
-// Both water materials are unlit and translucent: the colour of the water is the emissive output. The stream
+// Both water materials are unlit and translucent: the colour of the water is the base colour output. The stream
 // moves its ripples with the current the river mesh carries in its vertex normals and takes its depth tint, its
-// shore foam and the foam on its banks from DepthFade and the position across the water. Where the device can
-// sample the colour behind the water (feature levels above ES3) the water refracts it; the ES3 variant is the
-// plain tint, chosen by a Feature Level Switch in the graph itself.
+// shore foam and the foam on its banks from the depth of the water above the ground (the gap between the scene
+// depth and the water's own, in metres at the camera's 0.01 near plane) and the position across the water. Where
+// the device can sample the colour behind the water (feature levels above ES3) the water refracts it; the ES3
+// variant is the plain tint, chosen by a Feature Level Switch in the graph itself.
 constexpr std::string_view kStreamMaterial = R"KBMAT(# KB material
 version 1
 materialType builtin.pbr
@@ -102,131 +103,158 @@ graphNode 17 Multiply 0 1920
 graphParameter 17 _ ripple Core _ _ _ _ Unknown true 0 _
 graphSamplerState 17 Linear Linear Linear Repeat Repeat
 graphNode 18 ConstantScalar 0 2040
-graphParameter 18 _ fadeDistance Core 1.2 _ _ _ Unknown false 0 _
+graphParameter 18 _ fadeDistance Core 0.5 _ _ _ Unknown false 0 _
 graphSamplerState 18 Linear Linear Linear Repeat Repeat
-graphNode 19 DepthFade 0 2160
-graphParameter 19 _ depthFade Core 0.01 _ _ _ Unknown false 0 _
+graphNode 19 SceneDepth 0 2160
+graphParameter 19 _ depthFadeScene Core _ _ _ _ Unknown true 0 _
 graphSamplerState 19 Linear Linear Linear Repeat Repeat
-graphNode 20 OneMinus 0 2280
-graphParameter 20 _ shore Core _ _ _ _ Unknown true 0 _
+graphNode 20 PixelDepth 0 2280
+graphParameter 20 _ depthFadePixel Core _ _ _ _ Unknown true 0 _
 graphSamplerState 20 Linear Linear Linear Repeat Repeat
-graphNode 21 BreakVector 0 2400
-graphParameter 21 _ uvParts Core _ _ _ _ Unknown true 0 _
+graphNode 21 Subtract 0 2400
+graphParameter 21 _ depthFadeGap Core _ _ _ _ Unknown true 0 _
 graphSamplerState 21 Linear Linear Linear Repeat Repeat
-graphNode 22 ConstantScalar 0 2520
-graphParameter 22 _ two Core 2 _ _ _ Unknown false 0 _
+graphNode 22 Absolute 0 2520
+graphParameter 22 _ depthFadeGapAbs Core _ _ _ _ Unknown true 0 _
 graphSamplerState 22 Linear Linear Linear Repeat Repeat
-graphNode 23 ConstantScalar 0 2640
-graphParameter 23 _ one Core 1 _ _ _ Unknown false 0 _
+graphNode 23 Multiply 0 2640
+graphParameter 23 _ depthFadePixelSq Core _ _ _ _ Unknown true 0 _
 graphSamplerState 23 Linear Linear Linear Repeat Repeat
-graphNode 24 Multiply 0 2760
-graphParameter 24 _ u2 Core _ _ _ _ Unknown true 0 _
+graphNode 24 Divide 0 2760
+graphParameter 24 _ depthFadePerSq Core _ _ _ _ Unknown true 0 _
 graphSamplerState 24 Linear Linear Linear Repeat Repeat
-graphNode 25 Subtract 0 2880
-graphParameter 25 _ across Core _ _ _ _ Unknown true 0 _
+graphNode 25 ConstantScalar 0 2880
+graphParameter 25 _ depthFadeNear Core 0.01 _ _ _ Unknown false 0 _
 graphSamplerState 25 Linear Linear Linear Repeat Repeat
-graphNode 26 Absolute 0 3000
-graphParameter 26 _ acrossAbs Core _ _ _ _ Unknown true 0 _
+graphNode 26 Multiply 0 3000
+graphParameter 26 _ depthFadeThickness Core _ _ _ _ Unknown true 0 _
 graphSamplerState 26 Linear Linear Linear Repeat Repeat
-graphNode 27 ConstantScalar 0 3120
-graphParameter 27 _ bankStart Core 0.55 _ _ _ Unknown false 0 _
+graphNode 27 Divide 0 3120
+graphParameter 27 _ depthFadeRatio Core _ _ _ _ Unknown true 0 _
 graphSamplerState 27 Linear Linear Linear Repeat Repeat
-graphNode 28 SmoothStep 0 3240
-graphParameter 28 _ bankMask Core _ _ _ _ Unknown true 0 _
+graphNode 28 Saturate 0 3240
+graphParameter 28 _ depthFade Core _ _ _ _ Unknown true 0 _
 graphSamplerState 28 Linear Linear Linear Repeat Repeat
-graphNode 29 ConstantScalar 0 3360
-graphParameter 29 _ rippleBias Core 0.25 _ _ _ Unknown false 0 _
+graphNode 29 OneMinus 0 3360
+graphParameter 29 _ shore Core _ _ _ _ Unknown true 0 _
 graphSamplerState 29 Linear Linear Linear Repeat Repeat
-graphNode 30 Add 0 3480
-graphParameter 30 _ rippleShifted Core _ _ _ _ Unknown true 0 _
+graphNode 30 BreakVector 0 3480
+graphParameter 30 _ uvParts Core _ _ _ _ Unknown true 0 _
 graphSamplerState 30 Linear Linear Linear Repeat Repeat
-graphNode 31 Multiply 0 3600
-graphParameter 31 _ shoreFoam Core _ _ _ _ Unknown true 0 _
+graphNode 31 ConstantScalar 0 3600
+graphParameter 31 _ two Core 2 _ _ _ Unknown false 0 _
 graphSamplerState 31 Linear Linear Linear Repeat Repeat
 graphNode 32 ConstantScalar 0 3720
-graphParameter 32 _ bankWeight Core 0.4 _ _ _ Unknown false 0 _
+graphParameter 32 _ one Core 1 _ _ _ Unknown false 0 _
 graphSamplerState 32 Linear Linear Linear Repeat Repeat
 graphNode 33 Multiply 0 3840
-graphParameter 33 _ bankFoam Core _ _ _ _ Unknown true 0 _
+graphParameter 33 _ u2 Core _ _ _ _ Unknown true 0 _
 graphSamplerState 33 Linear Linear Linear Repeat Repeat
-graphNode 34 Add 0 3960
-graphParameter 34 _ foamSum Core _ _ _ _ Unknown true 0 _
+graphNode 34 Subtract 0 3960
+graphParameter 34 _ across Core _ _ _ _ Unknown true 0 _
 graphSamplerState 34 Linear Linear Linear Repeat Repeat
-graphNode 35 ConstantScalar 0 4080
-graphParameter 35 _ foamLow Core 0.35 _ _ _ Unknown false 0 _
+graphNode 35 Absolute 0 4080
+graphParameter 35 _ acrossAbs Core _ _ _ _ Unknown true 0 _
 graphSamplerState 35 Linear Linear Linear Repeat Repeat
 graphNode 36 ConstantScalar 0 4200
-graphParameter 36 _ foamHigh Core 0.6 _ _ _ Unknown false 0 _
+graphParameter 36 _ bankStart Core 0.55 _ _ _ Unknown false 0 _
 graphSamplerState 36 Linear Linear Linear Repeat Repeat
 graphNode 37 SmoothStep 0 4320
-graphParameter 37 _ foam Core _ _ _ _ Unknown true 0 _
+graphParameter 37 _ bankMask Core _ _ _ _ Unknown true 0 _
 graphSamplerState 37 Linear Linear Linear Repeat Repeat
-graphNode 38 ConstantColor 0 4440
-graphParameter 38 _ shallowColor Core 0.16%200.46%200.45%201 _ _ _ Unknown false 0 _
+graphNode 38 ConstantScalar 0 4440
+graphParameter 38 _ rippleBias Core 0.25 _ _ _ Unknown false 0 _
 graphSamplerState 38 Linear Linear Linear Repeat Repeat
-graphNode 39 ConstantColor 0 4560
-graphParameter 39 _ deepColor Core 0.03%200.17%200.24%201 _ _ _ Unknown false 0 _
+graphNode 39 Add 0 4560
+graphParameter 39 _ rippleShifted Core _ _ _ _ Unknown true 0 _
 graphSamplerState 39 Linear Linear Linear Repeat Repeat
-graphNode 40 ConstantColor 0 4680
-graphParameter 40 _ foamColor Core 0.93%200.97%200.97%201 _ _ _ Unknown false 0 _
+graphNode 40 Multiply 0 4680
+graphParameter 40 _ shoreFoam Core _ _ _ _ Unknown true 0 _
 graphSamplerState 40 Linear Linear Linear Repeat Repeat
-graphNode 41 Lerp 0 4800
-graphParameter 41 _ waterColor Core _ _ _ _ Unknown true 0 _
+graphNode 41 ConstantScalar 0 4800
+graphParameter 41 _ bankWeight Core 0.4 _ _ _ Unknown false 0 _
 graphSamplerState 41 Linear Linear Linear Repeat Repeat
-graphNode 42 ViewportUV 0 4920
-graphParameter 42 _ screenUv Core _ _ _ _ Unknown true 0 _
+graphNode 42 Multiply 0 4920
+graphParameter 42 _ bankFoam Core _ _ _ _ Unknown true 0 _
 graphSamplerState 42 Linear Linear Linear Repeat Repeat
-graphNode 43 ConstantScalar 0 5040
-graphParameter 43 _ bend Core 0.03 _ _ _ Unknown false 0 _
+graphNode 43 Add 0 5040
+graphParameter 43 _ foamSum Core _ _ _ _ Unknown true 0 _
 graphSamplerState 43 Linear Linear Linear Repeat Repeat
-graphNode 44 Subtract 0 5160
-graphParameter 44 _ rippleCentered Core _ _ _ _ Unknown true 0 _
+graphNode 44 ConstantScalar 0 5160
+graphParameter 44 _ foamLow Core 0.35 _ _ _ Unknown false 0 _
 graphSamplerState 44 Linear Linear Linear Repeat Repeat
-graphNode 45 Multiply 0 5280
-graphParameter 45 _ bendAmount Core _ _ _ _ Unknown true 0 _
+graphNode 45 ConstantScalar 0 5280
+graphParameter 45 _ foamHigh Core 0.6 _ _ _ Unknown false 0 _
 graphSamplerState 45 Linear Linear Linear Repeat Repeat
-graphNode 46 Add 0 5400
-graphParameter 46 _ bentUv Core _ _ _ _ Unknown true 0 _
+graphNode 46 SmoothStep 0 5400
+graphParameter 46 _ foam Core _ _ _ _ Unknown true 0 _
 graphSamplerState 46 Linear Linear Linear Repeat Repeat
-graphNode 47 SceneColor 0 5520
-graphParameter 47 _ behind Core _ _ _ _ Unknown true 0 _
+graphNode 47 ConstantColor 0 5520
+graphParameter 47 _ shallowColor Core 0.16%200.46%200.45%201 _ _ _ Unknown false 0 _
 graphSamplerState 47 Linear Linear Linear Repeat Repeat
-graphNode 48 Multiply 0 5640
-graphParameter 48 _ behindTinted Core _ _ _ _ Unknown true 0 _
+graphNode 48 ConstantColor 0 5640
+graphParameter 48 _ deepColor Core 0.03%200.17%200.24%201 _ _ _ Unknown false 0 _
 graphSamplerState 48 Linear Linear Linear Repeat Repeat
-graphNode 49 ConstantScalar 0 5760
-graphParameter 49 _ bodyAmount Core 0.55 _ _ _ Unknown false 0 _
+graphNode 49 ConstantColor 0 5760
+graphParameter 49 _ foamColor Core 0.93%200.97%200.97%201 _ _ _ Unknown false 0 _
 graphSamplerState 49 Linear Linear Linear Repeat Repeat
-graphNode 50 Multiply 0 5880
-graphParameter 50 _ bodyMix Core _ _ _ _ Unknown true 0 _
+graphNode 50 Lerp 0 5880
+graphParameter 50 _ waterColor Core _ _ _ _ Unknown true 0 _
 graphSamplerState 50 Linear Linear Linear Repeat Repeat
-graphNode 51 Lerp 0 6000
-graphParameter 51 _ bodyRefracted Core _ _ _ _ Unknown true 0 _
+graphNode 51 ViewportUV 0 6000
+graphParameter 51 _ screenUv Core _ _ _ _ Unknown true 0 _
 graphSamplerState 51 Linear Linear Linear Repeat Repeat
-graphNode 52 FeatureLevelSwitch 0 6120
-graphParameter 52 _ body Core _ _ _ _ Unknown false 0 _
+graphNode 52 ConstantScalar 0 6120
+graphParameter 52 _ bend Core 0.03 _ _ _ Unknown false 0 _
 graphSamplerState 52 Linear Linear Linear Repeat Repeat
-graphNode 53 Lerp 0 6240
-graphParameter 53 _ surface Core _ _ _ _ Unknown true 0 _
+graphNode 53 Subtract 0 6240
+graphParameter 53 _ rippleCentered Core _ _ _ _ Unknown true 0 _
 graphSamplerState 53 Linear Linear Linear Repeat Repeat
-graphNode 54 ConstantScalar 0 6360
-graphParameter 54 _ opacityBase Core 0.3 _ _ _ Unknown false 0 _
+graphNode 54 Multiply 0 6360
+graphParameter 54 _ bendAmount Core _ _ _ _ Unknown true 0 _
 graphSamplerState 54 Linear Linear Linear Repeat Repeat
-graphNode 55 ConstantScalar 0 6480
-graphParameter 55 _ opacityGain Core 0.65 _ _ _ Unknown false 0 _
+graphNode 55 Add 0 6480
+graphParameter 55 _ bentUv Core _ _ _ _ Unknown true 0 _
 graphSamplerState 55 Linear Linear Linear Repeat Repeat
-graphNode 56 Multiply 0 6600
-graphParameter 56 _ opacityDepth Core _ _ _ _ Unknown true 0 _
+graphNode 56 SceneColor 0 6600
+graphParameter 56 _ behind Core _ _ _ _ Unknown true 0 _
 graphSamplerState 56 Linear Linear Linear Repeat Repeat
-graphNode 57 Add 0 6720
-graphParameter 57 _ opacityRaw Core _ _ _ _ Unknown true 0 _
+graphNode 57 Multiply 0 6720
+graphParameter 57 _ behindTinted Core _ _ _ _ Unknown true 0 _
 graphSamplerState 57 Linear Linear Linear Repeat Repeat
-graphNode 58 Add 0 6840
-graphParameter 58 _ opacityFoam Core _ _ _ _ Unknown true 0 _
+graphNode 58 ConstantScalar 0 6840
+graphParameter 58 _ bodyAmount Core 0.55 _ _ _ Unknown false 0 _
 graphSamplerState 58 Linear Linear Linear Repeat Repeat
-graphNode 59 Saturate 0 6960
-graphParameter 59 _ opacity Core _ _ _ _ Unknown true 0 _
+graphNode 59 Multiply 0 6960
+graphParameter 59 _ bodyMix Core _ _ _ _ Unknown true 0 _
 graphSamplerState 59 Linear Linear Linear Repeat Repeat
+graphNode 60 Lerp 0 7080
+graphParameter 60 _ bodyRefracted Core _ _ _ _ Unknown true 0 _
+graphSamplerState 60 Linear Linear Linear Repeat Repeat
+graphNode 61 FeatureLevelSwitch 0 7200
+graphParameter 61 _ body Core _ _ _ _ Unknown false 0 _
+graphSamplerState 61 Linear Linear Linear Repeat Repeat
+graphNode 62 Lerp 0 7320
+graphParameter 62 _ surface Core _ _ _ _ Unknown true 0 _
+graphSamplerState 62 Linear Linear Linear Repeat Repeat
+graphNode 63 ConstantScalar 0 7440
+graphParameter 63 _ opacityBase Core 0.3 _ _ _ Unknown false 0 _
+graphSamplerState 63 Linear Linear Linear Repeat Repeat
+graphNode 64 ConstantScalar 0 7560
+graphParameter 64 _ opacityGain Core 0.65 _ _ _ Unknown false 0 _
+graphSamplerState 64 Linear Linear Linear Repeat Repeat
+graphNode 65 Multiply 0 7680
+graphParameter 65 _ opacityDepth Core _ _ _ _ Unknown true 0 _
+graphSamplerState 65 Linear Linear Linear Repeat Repeat
+graphNode 66 Add 0 7800
+graphParameter 66 _ opacityRaw Core _ _ _ _ Unknown true 0 _
+graphSamplerState 66 Linear Linear Linear Repeat Repeat
+graphNode 67 Add 0 7920
+graphParameter 67 _ opacityFoam Core _ _ _ _ Unknown true 0 _
+graphSamplerState 67 Linear Linear Linear Repeat Repeat
+graphNode 68 Saturate 0 8040
+graphParameter 68 _ opacity Core _ _ _ _ Unknown true 0 _
+graphSamplerState 68 Linear Linear Linear Repeat Repeat
 graphLink 1600930922 4 6561793 value 5 2756609 value
 graphLink 604782220 5 2760706 x 6 2822145 x
 graphLink 3605609945 5 2760708 z 6 2822146 y
@@ -245,60 +273,71 @@ graphLink 3137445179 13 8200193 value 15 1118209 a
 graphLink 2388026923 14 8200193 value 15 1118210 b
 graphLink 2825944089 15 1122305 value 17 1249281 a
 graphLink 302930222 16 139265 value 17 1249282 b
-graphLink 4102505002 18 139265 value 19 7081985 fadeDistance
-graphLink 2599167531 19 7086082 value 20 1445889 value
-graphLink 2253237632 2 5775361 uv 21 2756609 value
-graphLink 4202798506 21 2760706 x 24 1249281 a
-graphLink 3971453569 22 139265 value 24 1249282 b
-graphLink 1405767501 24 1253377 value 25 1183745 a
-graphLink 2286780888 23 139265 value 25 1183746 b
-graphLink 1695955367 25 1187841 value 26 1773569 value
-graphLink 199833653 27 139265 value 28 2953217 min
-graphLink 1446957434 23 139265 value 28 2953218 max
-graphLink 4193408999 26 1777665 value 28 2953219 value
-graphLink 3735681512 17 1253377 value 30 1118209 a
-graphLink 3427983902 29 139265 value 30 1118210 b
-graphLink 2436190883 20 1449985 value 31 1249281 a
-graphLink 1508699573 30 1122305 value 31 1249282 b
-graphLink 3164806694 28 2957313 value 33 1249281 a
-graphLink 770504174 32 139265 value 33 1249282 b
-graphLink 588953578 31 1253377 value 34 1118209 a
-graphLink 2772875895 33 1253377 value 34 1118210 b
-graphLink 1595475924 35 139265 value 37 2953217 min
-graphLink 2641019904 36 139265 value 37 2953218 max
-graphLink 3996736172 34 1122305 value 37 2953219 value
-graphLink 1533434086 38 270337 rgba 41 1576961 a
-graphLink 975299988 39 270337 rgba 41 1576962 b
-graphLink 1928206186 19 7086082 value 41 1576963 t
-graphLink 3531767121 17 1253377 value 44 1183745 a
-graphLink 3530999594 16 139265 value 44 1183746 b
-graphLink 3569735741 44 1187841 value 45 1249281 a
-graphLink 2077166681 43 139265 value 45 1249282 b
-graphLink 296018182 42 6168577 uv 46 1118209 a
-graphLink 2097959911 45 1253377 value 46 1118210 b
-graphLink 1676133948 46 1122305 value 47 6885377 uv
-graphLink 1120156416 47 6889473 color 48 1249281 a
-graphLink 3464742143 38 270337 rgba 48 1249282 b
-graphLink 2785248384 19 7086082 value 50 1249281 a
-graphLink 1466784268 49 139265 value 50 1249282 b
-graphLink 4018143125 48 1253377 value 51 1576961 a
-graphLink 2587678380 41 1581057 value 51 1576962 b
-graphLink 3125622581 50 1253377 value 51 1576963 t
-graphLink 1342945014 41 1581057 value 52 8785921 es3
-graphLink 408719743 51 1581057 value 52 8785922 sm5
-graphLink 3948538126 51 1581057 value 52 8785923 sm6
-graphLink 869725599 52 8790020 result 53 1576961 a
-graphLink 4220519831 40 270337 rgba 53 1576962 b
-graphLink 24667402 37 2957313 value 53 1576963 t
-graphLink 2554312410 19 7086082 value 56 1249281 a
-graphLink 669159792 55 139265 value 56 1249282 b
-graphLink 2899624694 56 1253377 value 57 1118209 a
-graphLink 180875778 54 139265 value 57 1118210 b
-graphLink 3660281686 57 1122305 value 58 1118209 a
-graphLink 3892165189 37 2957313 value 58 1118210 b
-graphLink 2217552291 58 1122305 value 59 1970177 value
-graphLink 76186884 53 1581057 value 1 69637 emissive
-graphLink 2741894862 59 1974273 value 1 69639 alpha
+graphLink 3564689970 19 7020545 value 21 1183745 a
+graphLink 1348409528 20 9773057 value 21 1183746 b
+graphLink 3969985991 21 1187841 value 22 1773569 value
+graphLink 3567505504 20 9773057 value 23 1249281 a
+graphLink 3358454179 20 9773057 value 23 1249282 b
+graphLink 727674108 22 1777665 value 24 1314817 a
+graphLink 7495878 23 1253377 value 24 1314818 b
+graphLink 3295614872 24 1318913 value 26 1249281 a
+graphLink 804917004 25 139265 value 26 1249282 b
+graphLink 3089650171 26 1253377 value 27 1314817 a
+graphLink 1075341737 18 139265 value 27 1314818 b
+graphLink 3618438856 27 1318913 value 28 1970177 value
+graphLink 3303211356 28 1974273 value 29 1445889 value
+graphLink 2555865147 2 5775361 uv 30 2756609 value
+graphLink 1429180936 30 2760706 x 33 1249281 a
+graphLink 5625009 31 139265 value 33 1249282 b
+graphLink 2655423599 33 1253377 value 34 1183745 a
+graphLink 127663156 32 139265 value 34 1183746 b
+graphLink 2068035781 34 1187841 value 35 1773569 value
+graphLink 442644659 36 139265 value 37 2953217 min
+graphLink 880820612 32 139265 value 37 2953218 max
+graphLink 549897751 35 1777665 value 37 2953219 value
+graphLink 1426366193 17 1253377 value 39 1118209 a
+graphLink 2679244156 38 139265 value 39 1118210 b
+graphLink 1790871789 29 1449985 value 40 1249281 a
+graphLink 2025700395 39 1122305 value 40 1249282 b
+graphLink 2853392036 37 2957313 value 42 1249281 a
+graphLink 1272490956 41 139265 value 42 1249282 b
+graphLink 2317293300 40 1253377 value 43 1118209 a
+graphLink 2403058389 42 1253377 value 43 1118210 b
+graphLink 623395568 44 139265 value 46 2953217 min
+graphLink 330281122 45 139265 value 46 2953218 max
+graphLink 4035175758 43 1122305 value 46 2953219 value
+graphLink 3135526708 47 270337 rgba 50 1576961 a
+graphLink 427862968 48 270337 rgba 50 1576962 b
+graphLink 3886953119 28 1974273 value 50 1576963 t
+graphLink 2759877960 17 1253377 value 53 1183745 a
+graphLink 1857502003 16 139265 value 53 1183746 b
+graphLink 4019540927 53 1187841 value 54 1249281 a
+graphLink 1096293405 52 139265 value 54 1249282 b
+graphLink 666307574 51 6168577 uv 55 1118209 a
+graphLink 3886020229 54 1253377 value 55 1118210 b
+graphLink 183022498 55 1122305 value 56 6885377 uv
+graphLink 1565799758 56 6889473 color 57 1249281 a
+graphLink 2612059391 47 270337 rgba 57 1249282 b
+graphLink 1851472487 28 1974273 value 59 1249281 a
+graphLink 3268830990 58 139265 value 59 1249282 b
+graphLink 2718095795 57 1253377 value 60 1576961 a
+graphLink 1965079144 50 1581057 value 60 1576962 b
+graphLink 939233555 59 1253377 value 60 1576963 t
+graphLink 3274566612 50 1581057 value 61 8785921 es3
+graphLink 3127987977 60 1581057 value 61 8785922 sm5
+graphLink 2372839064 60 1581057 value 61 8785923 sm6
+graphLink 2737586493 61 8790020 result 62 1576961 a
+graphLink 1083315365 49 270337 rgba 62 1576962 b
+graphLink 550276026 46 2957313 value 62 1576963 t
+graphLink 3413079949 28 1974273 value 65 1249281 a
+graphLink 3823329070 64 139265 value 65 1249282 b
+graphLink 833028916 65 1253377 value 66 1118209 a
+graphLink 597234096 63 139265 value 66 1118210 b
+graphLink 2062473972 66 1122305 value 67 1118209 a
+graphLink 1152394951 46 2957313 value 67 1118210 b
+graphLink 4031331429 67 1122305 value 68 1970177 value
+graphLink 1278298683 62 1581057 value 1 69633 baseColor
+graphLink 2317568129 68 1974273 value 1 69639 alpha
 )KBMAT";
 
 // The waterfall: streaks of white water running down the fall, thinner at its edges and soft where it meets the ground.
@@ -443,15 +482,42 @@ graphSamplerState 33 Linear Linear Linear Repeat Repeat
 graphNode 34 ConstantScalar 0 3960
 graphParameter 34 _ softDistance Core 0.7 _ _ _ Unknown false 0 _
 graphSamplerState 34 Linear Linear Linear Repeat Repeat
-graphNode 35 DepthFade 0 4080
-graphParameter 35 _ softFade Core 0.01 _ _ _ Unknown false 0 _
+graphNode 35 SceneDepth 0 4080
+graphParameter 35 _ softFadeScene Core _ _ _ _ Unknown true 0 _
 graphSamplerState 35 Linear Linear Linear Repeat Repeat
-graphNode 36 Multiply 0 4200
-graphParameter 36 _ alphaSoft Core _ _ _ _ Unknown true 0 _
+graphNode 36 PixelDepth 0 4200
+graphParameter 36 _ softFadePixel Core _ _ _ _ Unknown true 0 _
 graphSamplerState 36 Linear Linear Linear Repeat Repeat
-graphNode 37 Saturate 0 4320
-graphParameter 37 _ alpha Core _ _ _ _ Unknown true 0 _
+graphNode 37 Subtract 0 4320
+graphParameter 37 _ softFadeGap Core _ _ _ _ Unknown true 0 _
 graphSamplerState 37 Linear Linear Linear Repeat Repeat
+graphNode 38 Absolute 0 4440
+graphParameter 38 _ softFadeGapAbs Core _ _ _ _ Unknown true 0 _
+graphSamplerState 38 Linear Linear Linear Repeat Repeat
+graphNode 39 Multiply 0 4560
+graphParameter 39 _ softFadePixelSq Core _ _ _ _ Unknown true 0 _
+graphSamplerState 39 Linear Linear Linear Repeat Repeat
+graphNode 40 Divide 0 4680
+graphParameter 40 _ softFadePerSq Core _ _ _ _ Unknown true 0 _
+graphSamplerState 40 Linear Linear Linear Repeat Repeat
+graphNode 41 ConstantScalar 0 4800
+graphParameter 41 _ softFadeNear Core 0.01 _ _ _ Unknown false 0 _
+graphSamplerState 41 Linear Linear Linear Repeat Repeat
+graphNode 42 Multiply 0 4920
+graphParameter 42 _ softFadeThickness Core _ _ _ _ Unknown true 0 _
+graphSamplerState 42 Linear Linear Linear Repeat Repeat
+graphNode 43 Divide 0 5040
+graphParameter 43 _ softFadeRatio Core _ _ _ _ Unknown true 0 _
+graphSamplerState 43 Linear Linear Linear Repeat Repeat
+graphNode 44 Saturate 0 5160
+graphParameter 44 _ softFade Core _ _ _ _ Unknown true 0 _
+graphSamplerState 44 Linear Linear Linear Repeat Repeat
+graphNode 45 Multiply 0 5280
+graphParameter 45 _ alphaSoft Core _ _ _ _ Unknown true 0 _
+graphSamplerState 45 Linear Linear Linear Repeat Repeat
+graphNode 46 Saturate 0 5400
+graphParameter 46 _ alpha Core _ _ _ _ Unknown true 0 _
+graphSamplerState 46 Linear Linear Linear Repeat Repeat
 graphLink 3734937691 2 5775361 uv 5 5836801 coordinate
 graphLink 3099281862 4 4202497 value 5 5836802 time
 graphLink 401508297 3 5775361 uv 6 5836801 coordinate
@@ -485,12 +551,23 @@ graphLink 2594994131 29 139265 value 32 1118209 a
 graphLink 3781138155 31 1253377 value 32 1118210 b
 graphLink 2782192742 32 1122305 value 33 1249281 a
 graphLink 2416561654 28 1449985 value 33 1249282 b
-graphLink 3183374570 34 139265 value 35 7081985 fadeDistance
-graphLink 1697127680 33 1253377 value 36 1249281 a
-graphLink 1000593605 35 7086082 value 36 1249282 b
-graphLink 4258576577 36 1253377 value 37 1970177 value
-graphLink 1379475840 17 1581057 value 1 69637 emissive
-graphLink 2652150784 37 1974273 value 1 69639 alpha
+graphLink 2549032978 35 7020545 value 37 1183745 a
+graphLink 3013455000 36 9773057 value 37 1183746 b
+graphLink 349364743 37 1187841 value 38 1773569 value
+graphLink 937583680 36 9773057 value 39 1249281 a
+graphLink 728532355 36 9773057 value 39 1249282 b
+graphLink 2962072348 38 1777665 value 40 1314817 a
+graphLink 188227366 39 1253377 value 40 1314818 b
+graphLink 1994198456 40 1318913 value 42 1249281 a
+graphLink 1272490956 41 139265 value 42 1249282 b
+graphLink 3839734427 42 1253377 value 43 1314817 a
+graphLink 135422953 34 139265 value 43 1314818 b
+graphLink 1557869800 43 1318913 value 44 1970177 value
+graphLink 2200631753 33 1253377 value 45 1249281 a
+graphLink 3725143554 44 1974273 value 45 1249282 b
+graphLink 3351437891 45 1253377 value 46 1970177 value
+graphLink 3054744676 17 1581057 value 1 69633 baseColor
+graphLink 2079034235 46 1974273 value 1 69639 alpha
 )KBMAT";
 
 // The mist at the foot of a waterfall: a line of up to 480 soft particles (a handheld's budget) across the fall.

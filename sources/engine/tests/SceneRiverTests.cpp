@@ -55,7 +55,7 @@ void TestRiverWater() {
     kb::scene::Scene scene;
     const SceneEntity owner = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Brook" });
     scene.Components().Rivers().Set(owner, FallingRiver());
-    Require(kb::scene::SynchronizeSceneRivers(scene).empty(), "the river water is built");
+    Require(kb::scene::SynchronizeSceneRivers(scene).errors.empty(), "the river water is built");
     // The water is in children that are never saved: the stream, and an object for the one waterfall.
     Require(ChildNames(scene, owner) == std::vector<std::string>{ "River Water", "River Waterfall 1" }, "a river with one fall gets a stream and a waterfall object");
     const SceneEntity stream = Child(scene, owner, "River Water");
@@ -80,31 +80,31 @@ void TestRiverWater() {
 
     // Nothing is rebuilt while the river does not change.
     const std::uint64_t revision = kb::scene::SceneSurfaceGeometry::All(scene).front().revision;
-    Require(kb::scene::SynchronizeSceneRivers(scene).empty() && kb::scene::SceneSurfaceGeometry::All(scene).front().revision == revision, "an unchanged river is not built again");
+    Require(kb::scene::SynchronizeSceneRivers(scene).errors.empty() && kb::scene::SceneSurfaceGeometry::All(scene).front().revision == revision, "an unchanged river is not built again");
 
     // A gentler river has no waterfall: its object goes, the stream stays.
     kb::scene::RiverComponent gentle = FallingRiver();
     gentle.points[2].position.y = 9.5F;
     scene.Components().Rivers().Set(owner, gentle);
-    Require(kb::scene::SynchronizeSceneRivers(scene).empty(), "the changed river is built");
+    Require(kb::scene::SynchronizeSceneRivers(scene).errors.empty(), "the changed river is built");
     Require(ChildNames(scene, owner) == std::vector<std::string>{ "River Water" }, "a river without a steep stretch has no waterfall object");
 
     // Without the mist effect the waterfall has no mist, and a disabled river draws nothing.
     kb::scene::RiverComponent dry = FallingRiver();
     dry.mistEffectAssetId = 0U;
     scene.Components().Rivers().Set(owner, dry);
-    Require(kb::scene::SynchronizeSceneRivers(scene).empty(), "the river with no mist is built");
+    Require(kb::scene::SynchronizeSceneRivers(scene).errors.empty(), "the river with no mist is built");
     Require(scene.Components().ParticleEffects().TryGet(Child(scene, owner, "River Waterfall 1")) == nullptr, "no mist effect means no mist");
     dry.enabled = false;
     scene.Components().Rivers().Set(owner, dry);
-    Require(kb::scene::SynchronizeSceneRivers(scene).empty() && ChildNames(scene, owner).empty(), "a disabled river takes its water away");
+    Require(kb::scene::SynchronizeSceneRivers(scene).errors.empty() && ChildNames(scene, owner).empty(), "a disabled river takes its water away");
 
     // A river that is removed takes its water with it, and the published surfaces go too.
     dry.enabled = true;
     scene.Components().Rivers().Set(owner, dry);
-    Require(kb::scene::SynchronizeSceneRivers(scene).empty() && !ChildNames(scene, owner).empty(), "an enabled river draws again");
+    Require(kb::scene::SynchronizeSceneRivers(scene).errors.empty() && !ChildNames(scene, owner).empty(), "an enabled river draws again");
     scene.Components().Rivers().Remove(owner);
-    Require(kb::scene::SynchronizeSceneRivers(scene).empty() && ChildNames(scene, owner).empty() && kb::scene::SceneSurfaceGeometry::All(scene).empty(),
+    Require(kb::scene::SynchronizeSceneRivers(scene).errors.empty() && ChildNames(scene, owner).empty() && kb::scene::SceneSurfaceGeometry::All(scene).empty(),
         "a river that is removed leaves no water or surface behind");
 }
 
