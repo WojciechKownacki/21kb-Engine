@@ -15,6 +15,7 @@
 #include "engine/core/JsonValue.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -791,6 +792,92 @@ void RunAutoPaintBrushTest() {
     Require(!Op(terrain, Json(R"({"op":"paint","x":0,"z":0})"), summary, error) && error.find("auto") != std::string::npos, "painting without a layer or auto says what is needed");
 }
 
+
+// ---- splat map resolution ------------------------------------------------------------------------------
+
+[[nodiscard]] bool SplatIsNormalized(const kb::assets::TerrainAsset& terrain) {
+    for (std::size_t texel = 0U; texel < terrain.layerWeights.size(); texel += 4U) {
+        std::uint32_t sum = 0U;
+        for (std::size_t channel = 0U; channel < 4U; ++channel) {
+            const std::uint8_t weight = terrain.layerWeights[texel + channel];
+            if (channel >= terrain.materialLayers.size() && weight != 0U) return false;
+            sum += weight;
+        }
+        if (sum != 255U) return false;
+    }
+    return true;
+}
+
+void RunSplatResolutionTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    Require(!kb::terrain_editor::AddTerrainMaterialLayer(terrain, 11U, 700U) && terrain.materialLayers.empty() && terrain.layerWeights.empty(),
+        "a splat resolution that is not 512, 1024 or 2048 is refused");
+    Require(!kb::terrain_editor::SetTerrainSplatResolution(terrain, 1024U), "a terrain without layers has no splat map to resample");
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 11U, 1024U) && terrain.layerWeightWidth == 1024U &&
+            terrain.layerWeightHeight == 1024U && terrain.layerWeights.size() == 1024U * 1024U * 4U,
+        "the first layer makes a splat map of the chosen size");
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 22U, 2048U) && terrain.layerWeightWidth == 1024U &&
+            kb::terrain_editor::AddTerrainMaterialLayer(terrain, 33U), "later layers keep the size of the map");
+    std::string error;
+    Require(kb::assets::IsTerrainAssetValid(terrain, &error), error.c_str());
+    kb::terrain_editor::TerrainOpSummary summary{};
+    Require(Op(terrain, Json(R"({"op":"paint","layer":1,"x":-10,"z":0,"radius":12})"), summary, error), error.c_str());
+    Require(Op(terrain, Json(R"({"op":"paint","layer":2,"x":14,"z":10,"radius":8,"opacity":0.6})"), summary, error), error.c_str());
+    constexpr std::array<std::array<float, 2U>, 6U> probes{ { { -10.0F, 0.0F }, { -3.0F, 4.0F }, { 14.0F, 10.0F }, { 18.0F, 12.0F }, { 0.0F, -20.0F }, { 30.0F, 30.0F } } };
+    const auto weights = [&terrain](const std::array<float, 2U>& at) { return kb::terrain_editor::SampleTerrainSurface(terrain, at[0], at[1]).layerWeights; };
+    std::array<std::array<float, 4U>, probes.size()> expected{};
+    for (std::size_t probe = 0U; probe < probes.size(); ++probe) expected[probe] = weights(probes[probe]);
+    Require(expected[0][1] > 0.99F && expected[2][2] > 0.5F, "the strokes painted what the probes expect");
+    for (const std::uint32_t resolution : { 2048U, 512U, 1024U }) {
+        Require(kb::terrain_editor::SetTerrainSplatResolution(terrain, resolution) && terrain.layerWeightWidth == resolution &&
+                terrain.layerWeightHeight == resolution && terrain.layerWeights.size() == static_cast<std::size_t>(resolution) * resolution * 4U,
+            "the splat map takes the new size");
+        Require(SplatIsNormalized(terrain), "a resampled splat map sums to 255 per texel and keeps absent layers at 0");
+        Require(kb::assets::IsTerrainAssetValid(terrain, &error), error.c_str());
+        for (std::size_t probe = 0U; probe < probes.size(); ++probe) {
+            const std::array<float, 4U> now = weights(probes[probe]);
+            for (std::size_t channel = 0U; channel < 4U; ++channel) {
+                Require(std::abs(now[channel] - expected[probe][channel]) < 0.06F, "resampling keeps the painted weights where they were");
+            }
+        }
+    }
+    const std::vector<std::uint8_t> kept = terrain.layerWeights;
+    Require(kb::terrain_editor::SetTerrainSplatResolution(terrain, 1024U) && terrain.layerWeights == kept, "the size it has already changes nothing");
+    Require(!kb::terrain_editor::SetTerrainSplatResolution(terrain, 1000U) && !kb::terrain_editor::SetTerrainSplatResolution(terrain, 4096U) &&
+            terrain.layerWeightWidth == 1024U && terrain.layerWeights == kept, "another size is refused and leaves the map as it was");
+}
+
+// A dab on a 2048 map touches only the brush rectangle, and automatic painting is shared out over the cores.
+void RunSplatPerformanceTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(2049U, 2048.0F, 2048.0F);
+    for (std::uint32_t z = 0U; z < terrain.height; ++z) {
+        for (std::uint32_t x = 0U; x < terrain.width; ++x) {
+            terrain.heights[static_cast<std::size_t>(z) * terrain.width + x] =
+                30.0F * std::sin(static_cast<float>(x) * 0.012F) * std::cos(static_cast<float>(z) * 0.017F);
+        }
+    }
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 11U, 2048U) && kb::terrain_editor::AddTerrainMaterialLayer(terrain, 22U), "two layers on a 2048 map");
+    const kb::terrain_editor::TerrainLayerPaintSettings brush{ .layerIndex = 1U, .radius = 24.0F, .opacity = 0.5F };
+    constexpr int kDabs = 200;
+    std::uint64_t texels = 0U;
+    auto begin = std::chrono::steady_clock::now();
+    for (int dab = 0; dab < kDabs; ++dab) {
+        const kb::terrain_editor::TerrainLayerPaintResult result = kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrain, brush, { .localX = static_cast<float>(dab) * 4.0F - 400.0F, .localZ = static_cast<float>(dab % 7) * 30.0F - 90.0F });
+        Require(result.Changed() && result.maxX - result.minX < 60U && result.maxY - result.minY < 60U, "a dab changes only its brush rectangle");
+        texels += result.changedTexels;
+    }
+    const double dabMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count() / kDabs;
+    kb::terrain_editor::TerrainAutoPaintSettings autoPaint{ .layerIndex = 1U, .minSlopeDegrees = 6.0F, .maxSlopeDegrees = 90.0F, .slopeBlendDegrees = 2.0F };
+    begin = std::chrono::steady_clock::now();
+    const kb::terrain_editor::TerrainLayerPaintResult painted = kb::terrain_editor::ApplyTerrainAutoPaint(terrain, autoPaint);
+    const double autoMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    std::printf("Terrain splat 2048 on 2049x2049: dab radius 24 (%llu texels over %d dabs) %.3f ms; auto paint %u texels %.1f ms\n",
+        static_cast<unsigned long long>(texels), kDabs, dabMilliseconds, painted.changedTexels, autoMilliseconds);
+    Require(painted.Changed() && SplatIsNormalized(terrain), "auto paint changed the splat map and kept it normalized");
+    Require(dabMilliseconds < 2.0, "a dab on a 2048 splat map takes under 2 ms");
+}
+
 } // namespace
 
 void RunTerrainToolsTests() {
@@ -813,4 +900,6 @@ void RunTerrainToolsTests() {
     RunPresetTest();
     RunCharacterTest();
     RunAutoPaintBrushTest();
+    RunSplatResolutionTest();
+    RunSplatPerformanceTest();
 }

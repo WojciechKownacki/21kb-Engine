@@ -1,11 +1,14 @@
 #include "TerrainLayerPainter.hpp"
 
 #include "TerrainAnalysis.hpp"
+#include "TerrainParallel.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <utility>
+#include <vector>
 
 namespace kb::terrain_editor {
 namespace {
@@ -56,11 +59,13 @@ void NormalizeAfterTargetChange(
 
 bool AddTerrainMaterialLayer(
     kb::assets::TerrainAsset& terrain,
-    std::uint64_t materialAssetId) noexcept {
+    std::uint64_t materialAssetId,
+    std::uint32_t splatResolution) noexcept {
     if (terrain.materialLayers.size() >= kb::assets::TerrainAsset::MaximumMaterialLayers) return false;
     if (terrain.materialLayers.empty()) {
-        terrain.layerWeightWidth = kb::assets::TerrainAsset::DefaultLayerWeightResolution;
-        terrain.layerWeightHeight = kb::assets::TerrainAsset::DefaultLayerWeightResolution;
+        if (!IsTerrainSplatResolution(splatResolution)) return false;
+        terrain.layerWeightWidth = splatResolution;
+        terrain.layerWeightHeight = splatResolution;
         const std::size_t texelCount = static_cast<std::size_t>(terrain.layerWeightWidth) * terrain.layerWeightHeight;
         terrain.layerWeights.assign(texelCount * kChannels, 0U);
         for (std::size_t texel = 0U; texel < texelCount; ++texel) {
@@ -68,6 +73,59 @@ bool AddTerrainMaterialLayer(
         }
     }
     terrain.materialLayers.push_back(kb::assets::TerrainMaterialLayer{ .materialAssetId = materialAssetId });
+    return true;
+}
+
+bool SetTerrainSplatResolution(
+    kb::assets::TerrainAsset& terrain,
+    std::uint32_t resolution,
+    std::uint32_t maxWorkers) noexcept {
+    const std::uint32_t oldWidth = terrain.layerWeightWidth;
+    const std::uint32_t oldHeight = terrain.layerWeightHeight;
+    if (!IsTerrainSplatResolution(resolution) || terrain.materialLayers.empty() || oldWidth < 2U || oldHeight < 2U ||
+        terrain.layerWeights.size() != static_cast<std::size_t>(oldWidth) * oldHeight * kChannels) {
+        return false;
+    }
+    if (oldWidth == resolution && oldHeight == resolution) return true;
+    std::vector<std::uint8_t> resampled(static_cast<std::size_t>(resolution) * resolution * kChannels);
+    const std::uint8_t* const source = terrain.layerWeights.data();
+    const auto rows = [&](std::uint32_t first, std::uint32_t last, std::uint32_t) {
+        for (std::uint32_t y = first; y < last; ++y) {
+            const float sourceY = static_cast<float>(y) * static_cast<float>(oldHeight - 1U) / static_cast<float>(resolution - 1U);
+            const std::uint32_t y0 = std::min(static_cast<std::uint32_t>(sourceY), oldHeight - 2U);
+            const float ty = sourceY - static_cast<float>(y0);
+            for (std::uint32_t x = 0U; x < resolution; ++x) {
+                const float sourceX = static_cast<float>(x) * static_cast<float>(oldWidth - 1U) / static_cast<float>(resolution - 1U);
+                const std::uint32_t x0 = std::min(static_cast<std::uint32_t>(sourceX), oldWidth - 2U);
+                const float tx = sourceX - static_cast<float>(x0);
+                const std::uint8_t* top = source + (static_cast<std::size_t>(y0) * oldWidth + x0) * kChannels;
+                const std::uint8_t* bottom = top + static_cast<std::size_t>(oldWidth) * kChannels;
+                std::array<std::int32_t, kChannels> weight{};
+                std::int32_t sum = 0;
+                std::uint32_t largest = 0U;
+                float largestValue = -1.0F;
+                for (std::uint32_t channel = 0U; channel < kChannels; ++channel) {
+                    const float value = std::lerp(
+                        std::lerp(static_cast<float>(top[channel]), static_cast<float>(top[channel + kChannels]), tx),
+                        std::lerp(static_cast<float>(bottom[channel]), static_cast<float>(bottom[channel + kChannels]), tx), ty);
+                    weight[channel] = static_cast<std::int32_t>(std::lround(value));
+                    sum += weight[channel];
+                    if (value > largestValue) {
+                        largestValue = value;
+                        largest = channel;
+                    }
+                }
+                // The interpolated weights sum to 255; rounding leaves a unit or two to give back to the strongest.
+                weight[largest] += 255 - sum;
+                std::uint8_t* out = resampled.data() + (static_cast<std::size_t>(y) * resolution + x) * kChannels;
+                for (std::uint32_t channel = 0U; channel < kChannels; ++channel) out[channel] = static_cast<std::uint8_t>(weight[channel]);
+            }
+        }
+    };
+    ParallelForRange(0U, resolution, std::max(1U, 16384U / resolution), rows, maxWorkers);
+    terrain.layerWeights = std::move(resampled);
+    terrain.layerWeightWidth = resolution;
+    terrain.layerWeightHeight = resolution;
     return true;
 }
 
@@ -131,26 +189,39 @@ TerrainLayerPaintResult ApplyTerrainAutoPaint(
         const float t = 1.0F - outside / blend;
         return t * t * (3.0F - 2.0F * t);
     };
-    for (std::uint32_t y = 0U; y < terrain.layerWeightHeight; ++y) {
-        const float worldZ = static_cast<float>(y) / static_cast<float>(terrain.layerWeightHeight - 1U) * terrain.worldSizeZ -
-            terrain.worldSizeZ * 0.5F;
-        for (std::uint32_t x = 0U; x < terrain.layerWeightWidth; ++x) {
-            const float worldX = static_cast<float>(x) / static_cast<float>(terrain.layerWeightWidth - 1U) * terrain.worldSizeX -
-                terrain.worldSizeX * 0.5F;
-            const TerrainSurfaceSample sample = SampleTerrainSurface(terrain, worldX, worldZ);
-            const float influence = settings.opacity *
-                band(sample.slopeDegrees, settings.minSlopeDegrees, settings.maxSlopeDegrees, settings.slopeBlendDegrees) *
-                band(sample.height, settings.minHeight, settings.maxHeight, settings.heightBlend);
-            if (influence <= 0.0F) continue;
-            std::uint8_t* weights = terrain.layerWeights.data() +
-                (static_cast<std::size_t>(y) * terrain.layerWeightWidth + x) * kChannels;
-            const std::uint32_t before = weights[settings.layerIndex];
-            const std::uint32_t after = static_cast<std::uint32_t>(std::lround(
-                std::lerp(static_cast<float>(before), 255.0F, influence)));
-            if (after == before) continue;
-            NormalizeAfterTargetChange(weights, layerCount, settings.layerIndex, after);
-            MarkChanged(result, x, y);
+    // Rows are shared out over the cores; each texel is its own, so the result does not depend on the split.
+    std::array<TerrainLayerPaintResult, kTerrainMaximumWorkers> parts{};
+    const auto rows = [&](std::uint32_t first, std::uint32_t last, std::uint32_t part) {
+        for (std::uint32_t y = first; y < last; ++y) {
+            const float worldZ = static_cast<float>(y) / static_cast<float>(terrain.layerWeightHeight - 1U) * terrain.worldSizeZ -
+                terrain.worldSizeZ * 0.5F;
+            for (std::uint32_t x = 0U; x < terrain.layerWeightWidth; ++x) {
+                const float worldX = static_cast<float>(x) / static_cast<float>(terrain.layerWeightWidth - 1U) * terrain.worldSizeX -
+                    terrain.worldSizeX * 0.5F;
+                const TerrainSurfaceSample sample = SampleTerrainSurface(terrain, worldX, worldZ);
+                const float influence = settings.opacity *
+                    band(sample.slopeDegrees, settings.minSlopeDegrees, settings.maxSlopeDegrees, settings.slopeBlendDegrees) *
+                    band(sample.height, settings.minHeight, settings.maxHeight, settings.heightBlend);
+                if (influence <= 0.0F) continue;
+                std::uint8_t* weights = terrain.layerWeights.data() +
+                    (static_cast<std::size_t>(y) * terrain.layerWeightWidth + x) * kChannels;
+                const std::uint32_t before = weights[settings.layerIndex];
+                const std::uint32_t after = static_cast<std::uint32_t>(std::lround(
+                    std::lerp(static_cast<float>(before), 255.0F, influence)));
+                if (after == before) continue;
+                NormalizeAfterTargetChange(weights, layerCount, settings.layerIndex, after);
+                MarkChanged(parts[part], x, y);
+            }
         }
+    };
+    ParallelForRange(0U, terrain.layerWeightHeight, std::max(1U, 32768U / terrain.layerWeightWidth), rows);
+    for (const TerrainLayerPaintResult& part : parts) {
+        if (!part.Changed()) continue;
+        result.changedTexels += part.changedTexels;
+        result.minX = std::min(result.minX, part.minX);
+        result.minY = std::min(result.minY, part.minY);
+        result.maxX = std::max(result.maxX, part.maxX);
+        result.maxY = std::max(result.maxY, part.maxY);
     }
     return result;
 }

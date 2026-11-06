@@ -46,9 +46,25 @@ struct TerrainAutoPaintSettings {
     float opacity = 1.0F;
 };
 
+// The splat map is square and 512, 1024 or 2048 texels across.
+[[nodiscard]] constexpr bool IsTerrainSplatResolution(std::uint32_t value) noexcept {
+    return value >= kb::assets::TerrainAsset::MinimumLayerWeightResolution &&
+        value <= kb::assets::TerrainAsset::MaximumLayerWeightResolution && (value & (value - 1U)) == 0U;
+}
+
+// The first layer of a terrain makes its splat map, `splatResolution` texels across and all of that layer
+// (false for a resolution that is not one of IsTerrainSplatResolution). Later layers keep the map's size.
 [[nodiscard]] bool AddTerrainMaterialLayer(
     kb::assets::TerrainAsset& terrain,
-    std::uint64_t materialAssetId) noexcept;
+    std::uint64_t materialAssetId,
+    std::uint32_t splatResolution = kb::assets::TerrainAsset::DefaultLayerWeightResolution) noexcept;
+// Resamples the splat map of a terrain with layers to `resolution` (bilinear over the same world area, up or
+// down); every texel still sums to 255 and the channels of absent layers stay 0. `maxWorkers` caps the
+// threads (0: every core). False, and nothing changed, without layers or for another resolution.
+[[nodiscard]] bool SetTerrainSplatResolution(
+    kb::assets::TerrainAsset& terrain,
+    std::uint32_t resolution,
+    std::uint32_t maxWorkers = 0U) noexcept;
 [[nodiscard]] bool RemoveTerrainMaterialLayer(
     kb::assets::TerrainAsset& terrain,
     std::uint32_t layerIndex) noexcept;
