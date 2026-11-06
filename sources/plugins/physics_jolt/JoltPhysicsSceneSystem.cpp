@@ -1,7 +1,9 @@
 #include "JoltPhysicsSceneSystem.hpp"
 #include "JoltStaticBodyBatchCache.hpp"
 #include "JoltMemoryTelemetry.hpp"
+#include "JoltTerrainCollision.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 
 #include "engine/ecs/Query.hpp"
@@ -775,6 +777,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
             ClampPositive(collider.boxSize.y * scaleY * 0.5F),
             ClampPositive(collider.boxSize.z * scaleZ * 0.5F)));
     case ColliderShape::Mesh:
+    case ColliderShape::Terrain:
         break;
     }
     throw std::invalid_argument("Collider has an unsupported shape");
@@ -1335,6 +1338,8 @@ public:
         SynchronizeBodies(context);
         pendingPushes_.clear();  // queued for a body this synchronization did not create
         std::erase_if(collisionMeshes_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
+        std::erase_if(terrains_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
+        ApplyTerrainUpdates();
         ApplyPendingRigidbodyRootMotion(context);
         SynchronizeJoints(context);
         SynchronizeCharacters(context);
@@ -1439,6 +1444,7 @@ public:
         RemoveAllJoints();
         RemoveAllBodies();
         collisionMeshes_.clear();
+        terrains_.clear();
         collisionAssetRevision_ = 0;
         stateIdentity_.reset();
     }
@@ -2765,6 +2771,113 @@ private:
         return scaled.Get();
     }
 
+    [[nodiscard]] JPH::RefConst<JPH::Shape> CreateTerrainShape(const ColliderComponent& collider, Vec3 scale) {
+        if (collider.meshAssetId == 0 || !IsFinite(scale) ||
+            std::abs(scale.x) < MinimumShapeExtent || std::abs(scale.y) < MinimumShapeExtent || std::abs(scale.z) < MinimumShapeExtent) {
+            throw std::invalid_argument("Terrain collider requires a terrain asset and finite nonzero scale");
+        }
+        auto cached = terrains_.find(collider.meshAssetId);
+        if (cached == terrains_.end()) {
+            std::vector<std::uint8_t> bytes;
+            std::string error;
+            if (!scene_->Assets().Manager().ReadSourceBytes(kb::assets::AssetId{collider.meshAssetId}, bytes, error)) {
+                throw std::runtime_error("Terrain asset read failed: " + error);
+            }
+            const std::optional<kb::assets::TerrainAsset> terrain = kb::assets::TerrainAssetIO::Load(bytes, &error);
+            if (!terrain) throw std::runtime_error("Terrain asset load failed: " + error);
+            std::optional<TerrainCollisionField> field = TerrainCollisionField::Build(*terrain, error);
+            if (!field) throw std::invalid_argument(error);
+            JPH::Ref<JPH::HeightFieldShape> shape = CreateTerrainHeightField(*field, error);
+            if (shape == nullptr) throw std::runtime_error(error);
+            cached = terrains_.emplace(collider.meshAssetId, TerrainRecord{ std::move(*field), std::move(shape), std::nullopt, false }).first;
+        }
+        const auto scaled = cached->second.shape->ScaleShape(ToJolt(scale));
+        if (scaled.HasError()) throw std::runtime_error("Terrain scaling failed: " + std::string{scaled.GetError().c_str()});
+        return scaled.Get();
+    }
+
+    // kb::scene::IPhysicsBackend: only the field is touched here, not the shape, so this can run while a step
+    // is in flight; ApplyTerrainUpdates puts everything collected over a fixed update into the shape in one go.
+    bool UpdateTerrain(std::uint64_t assetId, const kb::assets::TerrainAsset& terrain,
+        const kb::assets::TerrainSampleRegion& region) noexcept override {
+        const auto found = terrains_.find(assetId);
+        if (found == terrains_.end()) return false;
+        TerrainRecord& record = found->second;
+        try {
+            std::optional<TerrainFieldRect> changed = record.field.Update(terrain, region);
+            if (!changed) {
+                // A resized terrain, or a region the field cannot place: take the whole terrain again.
+                std::string error;
+                std::optional<TerrainCollisionField> field = TerrainCollisionField::Build(terrain, error);
+                if (!field) return false;
+                record.field = std::move(*field);
+                record.rebuild = true;
+                changed = record.field.WholeRect();
+            }
+            record.dirty = record.dirty ? MergeTerrainFieldRects(*record.dirty, *changed) : *changed;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    // Gives every terrain shape the changes collected since the last fixed update: a rewrite of the changed
+    // rectangle in place, or a new shape when the terrain was reconfigured or the ground left the height range
+    // the shape was made for. Runs with the world idle, before the step.
+    void ApplyTerrainUpdates() {
+        JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
+        for (auto& [assetId, record] : terrains_) {
+            if (!record.dirty) continue;
+            struct User {
+                JPH::BodyID bodyId;
+                Vec3 scale;
+                JPH::Vec3 centerOfMass;
+            };
+            std::vector<User> users;
+            for (const auto& [entityId, body] : bodies_) {
+                if (body.signature.shape != ColliderShape::Terrain || body.signature.meshAssetId != assetId) continue;
+                users.push_back({ body.bodyId, body.signature.scale, bodyInterface.GetShape(body.bodyId)->GetCenterOfMass() });
+            }
+            const TerrainFieldRect rect = *record.dirty;
+            record.dirty.reset();
+            if (!record.rebuild && !ApplyTerrainFieldRect(*record.shape, record.field, rect)) record.rebuild = true;
+            if (record.rebuild) {
+                std::string error;
+                JPH::Ref<JPH::HeightFieldShape> shape = CreateTerrainHeightField(record.field, error);
+                if (shape == nullptr) throw std::runtime_error(error);
+                record.shape = std::move(shape);
+                record.rebuild = false;
+                for (const User& user : users) {
+                    const auto scaled = record.shape->ScaleShape(ToJolt(user.scale));
+                    if (scaled.HasError()) throw std::runtime_error("Terrain scaling failed: " + std::string{scaled.GetError().c_str()});
+                    bodyInterface.SetShape(user.bodyId, scaled.Get(), false, JPH::EActivation::DontActivate);
+                }
+            } else {
+                // The shape was rewritten in place: its bodies take its new bounds and drop their contacts with it.
+                for (const User& user : users) {
+                    bodyInterface.NotifyShapeChanged(user.bodyId, user.centerOfMass, false, JPH::EActivation::DontActivate);
+                }
+            }
+            // Bodies resting on or inside the changed ground have to find out.
+            const JPH::AABox local(
+                JPH::Vec3(record.field.OriginX() + static_cast<float>(rect.minX) * record.field.SpacingX(), record.shape->GetMinHeightValue(),
+                    record.field.OriginZ() + static_cast<float>(rect.minZ) * record.field.SpacingZ()),
+                JPH::Vec3(record.field.OriginX() + static_cast<float>(rect.maxX) * record.field.SpacingX(), record.shape->GetMaxHeightValue(),
+                    record.field.OriginZ() + static_cast<float>(rect.maxZ) * record.field.SpacingZ()));
+            for (const User& user : users) {
+                const JPH::RMat44 world = bodyInterface.GetWorldTransform(user.bodyId);
+                JPH::AABox bounds;
+                for (int corner = 0; corner < 8; ++corner) {
+                    const JPH::Vec3 point = local.GetSupport(JPH::Vec3(
+                        corner & 1 ? 1.0F : -1.0F, corner & 2 ? 1.0F : -1.0F, corner & 4 ? 1.0F : -1.0F));
+                    const JPH::RVec3 placed = world * JPH::Vec3(point.GetX() * user.scale.x, point.GetY() * user.scale.y, point.GetZ() * user.scale.z);
+                    bounds.Encapsulate(JPH::Vec3(static_cast<float>(placed.GetX()), static_cast<float>(placed.GetY()), static_cast<float>(placed.GetZ())));
+                }
+                bodyInterface.ActivateBodiesInAABox(bounds, {}, {});
+            }
+        }
+    }
+
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform,
         const kb::math::DVec3& worldPosition) {
         // A scene replacement can fill the backend with old bodies before the
@@ -2782,11 +2895,13 @@ private:
                 }
             }
         }
-        if (collider.shape == ColliderShape::Mesh && rigidbody.bodyType != RigidbodyBodyType::Static) {
-            throw std::invalid_argument("Triangle mesh colliders require a static rigidbody");
+        if ((collider.shape == ColliderShape::Mesh || collider.shape == ColliderShape::Terrain) &&
+            rigidbody.bodyType != RigidbodyBodyType::Static) {
+            throw std::invalid_argument("Triangle mesh and terrain colliders require a static rigidbody");
         }
-        JPH::RefConst<JPH::Shape> shape = collider.shape == ColliderShape::Mesh
-            ? CreateMeshShape(collider, transform.worldScale) : CreateShape(collider, transform.worldScale);
+        JPH::RefConst<JPH::Shape> shape = collider.shape == ColliderShape::Mesh ? CreateMeshShape(collider, transform.worldScale)
+            : collider.shape == ColliderShape::Terrain ? CreateTerrainShape(collider, transform.worldScale)
+            : CreateShape(collider, transform.worldScale);
         const kb::math::DVec3 bodyPosition = worldPosition + ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation);
         if (!IsFinite(bodyPosition)) {
             throw std::invalid_argument("Physics body position overflowed");
@@ -3297,6 +3412,15 @@ private:
         bool valid = true;
     };
     std::unordered_map<std::uint64_t, CollisionMeshRecord> collisionMeshes_;
+    // The height field of a terrain asset, shared by the bodies that use it. The field is the terrain's samples
+    // as the shape holds them; `dirty` is what a terrain edit changed there and the shape has not taken yet.
+    struct TerrainRecord {
+        TerrainCollisionField field;
+        JPH::Ref<JPH::HeightFieldShape> shape;
+        std::optional<TerrainFieldRect> dirty;
+        bool rebuild = false;
+    };
+    std::unordered_map<std::uint64_t, TerrainRecord> terrains_;
     std::uint64_t collisionAssetRevision_ = 0;
     std::unordered_map<std::uint64_t, RootMotionQueue> pendingRigidbodyRootMotion_;
     kb::scene::Scene* scene_ = nullptr;

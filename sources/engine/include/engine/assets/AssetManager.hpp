@@ -330,6 +330,10 @@ public:
     // Convenience: ValidateCompatibility(id).compatible.
     [[nodiscard]] bool IsCompatible(AssetId id) const;
 
+    // The authored bytes of a registered asset, read from its file or the runtime package the way a loader
+    // reads them (AssetLoadRequest::ReadSourceBytes), for code that decodes a source format itself.
+    [[nodiscard]] bool ReadSourceBytes(AssetId id, std::vector<std::uint8_t>& out, std::string& error) const;
+
     [[nodiscard]] std::string LastError() const;
     void SetError(std::string error) const;
     void ClearRuntimeCache() noexcept;

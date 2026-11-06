@@ -13,6 +13,8 @@ enum class ColliderShape {
     Mesh,
     // Blocks approaching bodies on its local +Y face; bodies rising from below pass through.
     OneWayBox,
+    // Height field of the terrain asset in meshAssetId, sampled every collisionStep-th height; static only.
+    Terrain,
 };
 
 struct ColliderComponent {
@@ -38,7 +40,7 @@ struct ColliderComponent {
     // interaction matrix - this field is intentionally just the raw bitmask
     // LIB-125 needs to make "z warstwa maski" real today.
     std::uint32_t layer = 0x7FFFFFFFU;
-    // Static triangle geometry in a CollisionMesh asset; zero for primitive shapes.
+    // Static triangle geometry in a CollisionMesh asset (Mesh), or the terrain asset (Terrain); zero for primitive shapes.
     std::uint64_t meshAssetId = 0;
 };
 

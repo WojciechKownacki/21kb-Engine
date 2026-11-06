@@ -9,6 +9,8 @@ add_library(kb_physics_jolt_plugin ${KB_PHYSICS_JOLT_PLUGIN_LIBRARY_TYPE}
     JoltPhysicsSceneSystem.hpp
     JoltPhysicsSceneSystem.cpp
     JoltPhysicsAssemblies.inl
+    JoltTerrainCollision.hpp
+    JoltTerrainCollision.cpp
 )
 
 target_include_directories(kb_physics_jolt_plugin
@@ -42,6 +44,19 @@ if(BUILD_TESTING AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
     kb_apply_quality_gates(kb_physics_state_tests)
     add_test(NAME kb_physics_state_tests COMMAND $<TARGET_FILE:kb_physics_state_tests>)
     set_tests_properties(kb_physics_state_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+endif()
+
+# The terrain brushes come from the terrain editor core, which exists with the renderer.
+if(BUILD_TESTING AND KB_BUILD_PROVIDER_MODULES_AS_DLL AND KB_BUILD_RENDERER)
+    add_executable(kb_physics_terrain_tests tests/TerrainCollisionTests.cpp)
+    target_link_libraries(kb_physics_terrain_tests PRIVATE kb_engine $<TARGET_NAME_IF_EXISTS:kb_terrain_editor_core>)
+    target_include_directories(kb_physics_terrain_tests PRIVATE ${PROJECT_SOURCE_DIR}/sources/engine/tests)
+    target_compile_definitions(kb_physics_terrain_tests PRIVATE
+        "KB_PHYSICS_JOLT_PLUGIN_PATH=\"$<TARGET_FILE:kb_physics_jolt_plugin>\"")
+    add_dependencies(kb_physics_terrain_tests kb_physics_jolt_plugin)
+    kb_apply_quality_gates(kb_physics_terrain_tests)
+    add_test(NAME kb_physics_terrain_tests COMMAND $<TARGET_FILE:kb_physics_terrain_tests>)
+    set_tests_properties(kb_physics_terrain_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 endif()
 
 if(BUILD_TESTING AND NOT DISABLE_CUSTOM_ALLOCATOR)

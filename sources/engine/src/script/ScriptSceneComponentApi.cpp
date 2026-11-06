@@ -290,7 +290,7 @@ struct ComponentAccess {
             KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
             return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
-            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::OneWayBox)) { return false; } \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::Terrain)) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::ColliderShape>(value.AsInt()); \
             return true; \
         } }
@@ -397,7 +397,7 @@ constexpr std::array<std::string_view, 2> kMeshMobilityNames{ "Movable", "Static
 constexpr std::array<std::string_view, 4> kLightShadowFilterNames{ "Default", "Hard", "Pcf", "Pcss" };
 constexpr std::array<std::string_view, 5> kLightShadowQualityNames{ "Default", "Low", "Medium", "High", "Ultra" };
 constexpr std::array<std::string_view, 6> kTickGroupNames{ "Input", "Gameplay", "Physics", "Animation", "Camera", "Presentation" };
-constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
+constexpr std::array<std::string_view, 6> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh", "OneWayBox", "Terrain" };
 constexpr std::array<std::string_view, 3> kBody2DTypeNames{ "Static", "Kinematic", "Dynamic" };
 constexpr std::array<std::string_view, 3> kCollider2DShapeNames{ "Box", "Circle", "Capsule" };
 constexpr std::array<std::string_view, 4> kAnimatorRootMotionOwnerNames{ "None", "Animator", "CharacterController", "Rigidbody" };

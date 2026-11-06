@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/TerrainAsset.hpp"
 #include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -266,6 +267,20 @@ public:
         static_cast<void>(durationSeconds);
         return false;
     }
+
+    // The terrain asset `assetId` (ColliderShape::Terrain) changed inside `region`. `terrain` must be the whole
+    // asset as it is now, the one the collider's source file will hold. The backend takes the new heights and
+    // holes of the region over; edits that arrive before the next fixed update are merged into one rewrite, so a
+    // brush stroke can report every stamp; the shape shows them from that update on. Call it from the thread that
+    // updates the scene. True when a body uses the asset and the change is taken; a terrain that no body uses
+    // needs nothing (its shape is made from the source file when a body appears).
+    virtual bool UpdateTerrain(
+        std::uint64_t assetId, const kb::assets::TerrainAsset& terrain, const kb::assets::TerrainSampleRegion& region) noexcept {
+        static_cast<void>(assetId);
+        static_cast<void>(terrain);
+        static_cast<void>(region);
+        return false;
+    }
 };
 
 // LIB-127: OnCollisionEnter/Stay/Exit fire for a solid-vs-solid contact;
@@ -414,6 +429,9 @@ public:
         Scene& scene, SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept;
     static bool QueueRigidbodyRootMotion(
         Scene& scene, SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept;
+    // See IPhysicsBackend::UpdateTerrain; costs nothing when the scene has no physics backend.
+    static bool UpdateTerrain(
+        Scene& scene, std::uint64_t assetId, const kb::assets::TerrainAsset& terrain, const kb::assets::TerrainSampleRegion& region) noexcept;
 };
 
 // Uses the physics acceleration structure when a backend is active. Without

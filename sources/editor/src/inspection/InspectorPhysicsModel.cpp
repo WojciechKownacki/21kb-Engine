@@ -63,6 +63,8 @@ namespace {
         return EditorText("inspector.collider.mesh", "Mesh");
     case kb::scene::ColliderShape::OneWayBox:
         return EditorText("inspector.collider.oneWay", "One-way platform");
+    case kb::scene::ColliderShape::Terrain:
+        return "Terrain";
     }
     return EditorText("inspector.collider.box", "Box");
 }
@@ -229,7 +231,8 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::ColliderComponent& c, int index
     case kb::scene::ColliderShape::Sphere: c.shape = kb::scene::ColliderShape::Capsule; break;
     case kb::scene::ColliderShape::Capsule: c.shape = kb::scene::ColliderShape::Mesh; break;
     case kb::scene::ColliderShape::Mesh: c.shape = kb::scene::ColliderShape::OneWayBox; break;
-    case kb::scene::ColliderShape::OneWayBox: c.shape = kb::scene::ColliderShape::Box; break;
+    case kb::scene::ColliderShape::OneWayBox: c.shape = kb::scene::ColliderShape::Terrain; break;
+    case kb::scene::ColliderShape::Terrain: c.shape = kb::scene::ColliderShape::Box; break;
     }
     return true;
 }

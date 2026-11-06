@@ -1177,6 +1177,20 @@ IAssetLoader* AssetManager::LoaderForExtension(const std::filesystem::path& exte
     return AssetLoaderRegistry::FindByExtension(loaders_, extension);
 }
 
+bool AssetManager::ReadSourceBytes(AssetId id, std::vector<std::uint8_t>& out, std::string& error) const {
+    const AssetMetadata* metadata = registry_.Find(id);
+    if (metadata == nullptr) {
+        error = "Asset is not registered";
+        return false;
+    }
+    const AssetLoadRequest request{
+        .metadata = *metadata,
+        .resolvedPath = ResolvePhysicalPath(*metadata),
+        .runtimePack = runtimePack_,
+    };
+    return request.ReadSourceBytes(out, error);
+}
+
 std::filesystem::path AssetManager::ResolvePhysicalPath(const AssetMetadata& metadata) const {
     return AssetPathUtilities::ResolvePhysicalPath(mounts_, metadata);
 }

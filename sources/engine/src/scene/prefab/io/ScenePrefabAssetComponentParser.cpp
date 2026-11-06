@@ -107,7 +107,7 @@ template <typename T>
     ColliderComponent collider;
     if (!ParseField(fields, "collider.shape", shape)
         || shape < static_cast<int>(ColliderShape::Box)
-        || shape > static_cast<int>(ColliderShape::OneWayBox)
+        || shape > static_cast<int>(ColliderShape::Terrain)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.center", collider.center)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.boxSize", collider.boxSize)
         || !ParseField(fields, "collider.radius", collider.radius)

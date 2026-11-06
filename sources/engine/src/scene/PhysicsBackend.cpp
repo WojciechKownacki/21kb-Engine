@@ -304,4 +304,10 @@ bool PhysicsBackend::QueueRigidbodyRootMotion(
         backend->QueueRigidbodyRootMotion(entity, localTranslation, localRotation, durationSeconds);
 }
 
+bool PhysicsBackend::UpdateTerrain(
+    Scene& scene, std::uint64_t assetId, const kb::assets::TerrainAsset& terrain, const kb::assets::TerrainSampleRegion& region) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->UpdateTerrain(assetId, terrain, region);
+}
+
 } // namespace kb::scene

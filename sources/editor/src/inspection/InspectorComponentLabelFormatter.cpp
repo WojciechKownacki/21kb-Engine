@@ -108,6 +108,8 @@ std::string_view InspectorComponentLabelFormatter::ColliderShapeName(kb::scene::
         return EditorText("inspector.collider.shape.capsule", "Capsule");
     case kb::scene::ColliderShape::Mesh:
         return EditorText("inspector.collider.shape.mesh", "Mesh");
+    case kb::scene::ColliderShape::Terrain:
+        return "Terrain";
     }
     return EditorText("inspector.unknown", "Unknown");
 }

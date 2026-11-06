@@ -49,6 +49,14 @@ struct TerrainAsset {
     std::uint32_t collisionStep = 1U;
 };
 
+// A rectangle of terrain samples, both corners included (a hole edit names the cells it changed by their corner samples).
+struct TerrainSampleRegion {
+    std::uint32_t minX = 0U;
+    std::uint32_t minZ = 0U;
+    std::uint32_t maxX = 0U;
+    std::uint32_t maxZ = 0U;
+};
+
 [[nodiscard]] bool IsTerrainResolutionValid(std::uint32_t value) noexcept;
 [[nodiscard]] bool IsTerrainAssetValid(const TerrainAsset& terrain, std::string* error = nullptr) noexcept;
 [[nodiscard]] TerrainAsset MakeFlatTerrainAsset(

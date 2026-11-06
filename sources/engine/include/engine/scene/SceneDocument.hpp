@@ -67,6 +67,7 @@ struct SceneDocument {
     //      the defaults.
     // v62: a River persists its points (position, width, depth, speed), bank width, waterfall slope and water
     //      material. Older files have no rivers.
+    // v63: a Collider can have the Terrain shape, which follows the terrain asset it names.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
@@ -82,7 +83,8 @@ struct SceneDocument {
     static constexpr std::uint32_t BehaviourVariableOverridesFileVersion = 60U;
     static constexpr std::uint32_t MeshLodAndShadowQualityFileVersion = 61U;
     static constexpr std::uint32_t RiverFileVersion = 62U;
-    static constexpr std::uint32_t CurrentFileVersion = 62U;
+    static constexpr std::uint32_t TerrainColliderFileVersion = 63U;
+    static constexpr std::uint32_t CurrentFileVersion = 63U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;
