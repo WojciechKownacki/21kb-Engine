@@ -223,8 +223,13 @@ R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - bru
                  new --project <dir> (--name <Entity> [--scene <path>] [--position x,y,z] | --terrain <file>)
                      [--resolution 129] [--size 128|256x128] [--chunk-quads 32] [--lod-count 4]
                      [--preset flat|hills|mountains|island|plateau] [--seed 1] [--threads <n>] [--max-seconds <n>]
-                     (flat unless a preset makes a whole world, generated and eroded; resolution 2^n+1, 17..2049)
-                 info --terrain <file>    (size, heights, slopes, layers, heightHash)
+                     [--material </Game/....kbmat> | --material-id <n>] [--splat-resolution 512|1024|2048]
+                     (flat unless a preset makes a whole world, generated and eroded; resolution 2^n+1, 17..2049; --material
+                     makes the first layer, with a splat map --splat-resolution texels across, default 512)
+                 info --terrain <file>    (size, heights, slopes, layers, settings, heightHash)
+                 settings --terrain <file> [--splat-resolution 512|1024|2048] [--lod-pixel-error 2] [--collision-step 1|2|4|8]
+                     (the splat map is resampled; lod-pixel-error 0.25..16 is the screen error a chunk's level of detail may
+                     have; the collision samples every collision-step-th height)
                  sample --terrain <file> --x <n> --z <n>    (height, normal, slope, layer weights)
                  brush --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole|ramp|stamp]
                      [--shape soft-round|hard-round|linear-round|bell|ring|speckle]

@@ -51,9 +51,14 @@ constexpr std::string_view kUsage =
     "  new        [--name <Entity> [--scene <path>] [--position x,y,z]] [--terrain <file>] [--resolution 129]\n"
     "             [--size 128|256x128] [--chunk-quads 32] [--lod-count 4] [--preset flat|plains|hills|valley|mountains|island|plateau] [--seed 1]\n"
     "             [--character 0..1 (gentle to dramatic, default 0.5)]\n"
+    "             [--material </Game/....kbmat> | --material-id <n>] [--splat-resolution 512|1024|2048]\n"
+    "             (a first layer, whose splat map is --splat-resolution texels across, default 512)\n"
     "             (flat unless a preset makes a whole world: generated, then eroded; resolution is 2^n+1, 17..2049;\n"
     "             --name also places it in the scene; the generating options below apply to a preset too)\n"
-    "  info       --terrain <file>              (size, heights, slopes, layers, height hash)\n"
+    "  info       --terrain <file>              (size, heights, slopes, layers, settings, height hash)\n"
+    "  settings   --terrain <file> [--splat-resolution 512|1024|2048] [--lod-pixel-error 2 (0.25..16)] [--collision-step 1|2|4|8]\n"
+    "             (the splat map is resampled to the new size; the level of detail keeps a chunk's error under\n"
+    "             --lod-pixel-error pixels; the collision samples every --collision-step-th height)\n"
     "  sample     --terrain <file> --x <n> --z <n>   (height, normal, slope and layer weights there)\n"
     "  brush      --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole|ramp|stamp]\n"
     "             [--shape soft-round|hard-round|linear-round|bell|ring|speckle]\n"
@@ -252,8 +257,22 @@ template <typename... Lists>
     return result;
 }
 
+[[nodiscard]] std::optional<std::uint64_t> ResolveMaterial(const Session& session, const ArgumentList& arguments, CommandIo io);
+
+// --splat-resolution, validated: 0 when it is not given; nullopt, with the error printed, when it is not 512, 1024 or 2048.
+[[nodiscard]] std::optional<std::uint32_t> ReadSplatResolution(const ArgumentList& arguments, CommandIo io) {
+    std::uint32_t resolution = 0U;
+    if (!ReadWhole(arguments, "splat-resolution", resolution, io)) return std::nullopt;
+    if (arguments.Option("--splat-resolution").has_value() && !kb::terrain_editor::IsTerrainSplatResolution(resolution)) {
+        io.err << "error: --splat-resolution is 512, 1024 or 2048\n";
+        return std::nullopt;
+    }
+    return resolution;
+}
+
 [[nodiscard]] int TerrainNew(const ArgumentList& arguments, CommandIo io) {
-    constexpr std::string_view allowed[]{ "name", "terrain", "scene", "position", "resolution", "size", "chunk-quads", "lod-count", "preset", "seed", "character", "threads", "max-seconds" };
+    constexpr std::string_view allowed[]{ "name", "terrain", "scene", "position", "resolution", "size", "chunk-quads", "lod-count", "preset", "seed", "character", "threads", "max-seconds",
+        "material", "material-id", "splat-resolution" };
     if (!CheckOptions(arguments, io, allowed)) return 1;
     const std::optional<std::string> name = arguments.Option("--name");
     if (!name.has_value() && !arguments.Option("--terrain").has_value()) {
@@ -293,6 +312,13 @@ template <typename... Lists>
         io.err << "error: " << error << '\n';
         return 1;
     }
+    const std::optional<std::uint32_t> splatResolution = ReadSplatResolution(arguments, io);
+    if (!splatResolution.has_value()) return 1;
+    const bool firstLayer = arguments.Option("--material").has_value() || arguments.Option("--material-id").has_value();
+    if (*splatResolution != 0U && !firstLayer) {
+        io.err << "error: the splat map is made with the first layer: add --material </Game/....kbmat> (or --material-id <n>) to --splat-resolution\n";
+        return 1;
+    }
     const std::string preset = arguments.Option("--preset").value_or("flat");
     std::uint32_t seed = 1U;
     float character = kb::terrain_editor::kTerrainDefaultCharacter;
@@ -323,6 +349,15 @@ template <typename... Lists>
         io.err << "error: " << file.generic_string() << " already exists; pass another --terrain or edit it with terrain brush\n";
         return 1;
     }
+    if (firstLayer) {
+        const std::optional<std::uint64_t> material = ResolveMaterial(Session{ *root, file, {} }, arguments, io);
+        if (!material.has_value()) return 1;
+        if (!kb::terrain_editor::AddTerrainMaterialLayer(terrain, *material, *splatResolution != 0U
+                ? *splatResolution : kb::assets::TerrainAsset::DefaultLayerWeightResolution)) {
+            io.err << "error: the first layer could not be added\n";
+            return 1;
+        }
+    }
     if (preset != "flat") {
         std::optional<kb::assets::TerrainAsset> made = RunJob(std::move(terrain), [preset, seed, character](
             kb::assets::TerrainAsset& target, TerrainTaskControl& control, std::string& failure) {
@@ -337,7 +372,8 @@ template <typename... Lists>
     }
     io.out << "created " << file.generic_string() << " (" << terrain.width << 'x' << terrain.height << " samples, "
            << FormatCliNumber(terrain.worldSizeX) << 'x' << FormatCliNumber(terrain.worldSizeZ) << " units, " << preset
-           << (preset == "flat" ? "" : ", seed " + std::to_string(seed)) << ", heightHash "
+           << (preset == "flat" ? "" : ", seed " + std::to_string(seed))
+           << (terrain.materialLayers.empty() ? "" : ", splat " + std::to_string(terrain.layerWeightWidth)) << ", heightHash "
            << Hex(kb::terrain_editor::HashTerrainHeights(terrain)) << ")\n";
     if (!name.has_value()) return 0;
 
@@ -404,8 +440,32 @@ template <typename... Lists>
     for (std::size_t index = 0U; index < terrain.materialLayers.size(); ++index) {
         io.out << "  layer " << index << ": " << LayerMaterialText(*session, terrain.materialLayers[index].materialAssetId) << '\n';
     }
-    io.out << "heightHash " << Hex(stats.heightHash) << '\n';
+    io.out << "splatResolution " << (terrain.materialLayers.empty() ? std::string{ "none" } : std::to_string(terrain.layerWeightWidth)) << '\n'
+           << "lodPixelError " << FormatCliNumber(terrain.lodPixelError) << '\n'
+           << "collisionStep " << terrain.collisionStep << '\n'
+           << "heightHash " << Hex(stats.heightHash) << '\n';
     return 0;
+}
+
+[[nodiscard]] int TerrainSettings(const ArgumentList& arguments, CommandIo io) {
+    constexpr std::string_view allowed[]{ "terrain", "splat-resolution", "lod-pixel-error", "collision-step" };
+    if (!CheckOptions(arguments, io, allowed)) return 1;
+    if (!arguments.Option("--splat-resolution") && !arguments.Option("--lod-pixel-error") && !arguments.Option("--collision-step")) {
+        io.err << "error: settings needs --splat-resolution, --lod-pixel-error or --collision-step (terrain info shows the current values)\n";
+        return 1;
+    }
+    const std::optional<std::uint32_t> splatResolution = ReadSplatResolution(arguments, io);
+    if (!splatResolution.has_value()) return 1;
+    std::optional<Session> session = OpenTerrain(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::assets::TerrainAsset& terrain = session->terrain;
+    if (!ReadFloat(arguments, "lod-pixel-error", terrain.lodPixelError, io) || !ReadWhole(arguments, "collision-step", terrain.collisionStep, io)) return 1;
+    if (*splatResolution != 0U && !kb::terrain_editor::SetTerrainSplatResolution(terrain, *splatResolution)) {
+        io.err << "error: the terrain has no material layers, so no splat map yet; add a layer first (terrain layer add)\n";
+        return 1;
+    }
+    return SaveTerrain(*session, "settings: splat " + (terrain.materialLayers.empty() ? std::string{ "none" } : std::to_string(terrain.layerWeightWidth)) +
+        ", lod pixel error " + FormatCliNumber(terrain.lodPixelError) + ", collision step " + std::to_string(terrain.collisionStep), io);
 }
 
 [[nodiscard]] int TerrainSample(const ArgumentList& arguments, CommandIo io) {
@@ -916,6 +976,7 @@ int RunTerrainCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string action = positionals.empty() ? std::string{} : positionals.front();
     if (action == "new") return TerrainNew(arguments, io);
     if (action == "info") return TerrainInfo(arguments, io);
+    if (action == "settings") return TerrainSettings(arguments, io);
     if (action == "sample") return TerrainSample(arguments, io);
     if (action == "brush") return TerrainBrush(arguments, io);
     if (action == "apply") return TerrainApply(arguments, io);

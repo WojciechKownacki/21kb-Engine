@@ -133,6 +133,53 @@ def main():
     terrain("layer", "remove", "--terrain", hills, "--index", "1")
     assert "layers 1" in terrain("info", "--terrain", hills)
 
+    # Settings: the splat map size (made with the first layer, resampled later), the chunk detail error, the collision step.
+    info = terrain("info", "--terrain", hills)
+    assert value(info, "splatResolution") == "512" and value(info, "lodPixelError") == "2" and value(info, "collisionStep") == "1", info
+    terrain("layer", "add", "--terrain", hills, "--material", "/Game/Materials/Rock.kbmat")
+    terrain("paint", "--terrain", hills, "--layer", "1", "--x", "-30", "--z", "0", "--radius", "10")
+    painted = weights(hills, -30, 0)
+    assert painted[1] > 0.99 and weights(hills, -34, 3)[1] > 0.3
+    hash_before = height_hash(hills)
+    original = file.read_bytes()
+    terrain("settings", "--terrain", hills, expected=1)                                         # nothing to set
+    for bad in (["--splat-resolution", "700"], ["--splat-resolution", "4096"], ["--splat-resolution", "big"], ["--lod-pixel-error", "0.1"],
+                ["--lod-pixel-error", "20"], ["--lod-pixel-error", "soft"], ["--collision-step", "3"], ["--collision-step", "16"],
+                ["--splat-resolution", "1024", "--collision-step", "3"], ["--splat", "1024"]):
+        terrain("settings", "--terrain", hills, *bad, expected=1)
+        assert file.read_bytes() == original, f"rejected settings changed the file: {bad}"
+    out = terrain("settings", "--terrain", hills, "--splat-resolution", "2048", "--lod-pixel-error", "3.5", "--collision-step", "2")
+    assert "splat 2048" in out and "lod pixel error 3.5" in out and "collision step 2" in out, out
+    info = terrain("info", "--terrain", hills)
+    assert "weight map 2048x2048" in info and value(info, "splatResolution") == "2048", info
+    assert value(info, "lodPixelError") == "3.5" and value(info, "collisionStep") == "2", info
+    assert height_hash(hills) == hash_before
+    for index, expected_weight in enumerate(painted):
+        assert abs(weights(hills, -30, 0)[index] - expected_weight) < 0.03, "the resampled map keeps the painted weights"
+    terrain("settings", "--terrain", hills, "--splat-resolution", "512")                      # and back down
+    assert value(terrain("info", "--terrain", hills), "splatResolution") == "512"
+    assert weights(hills, -30, 0)[1] > 0.95 and abs(sum(weights(hills, -34, 3)) - 1.0) < 0.01
+    terrain("settings", "--terrain", hills, "--lod-pixel-error", "2", "--collision-step", "1")
+    terrain("layer", "remove", "--terrain", hills, "--index", "1")
+    terrain("settings", "--terrain", hills, "--splat-resolution", "1024")                      # still has its first layer
+    assert value(terrain("info", "--terrain", hills), "splatResolution") == "1024"
+    bare = assets / "Terrains" / "Bare.kbterrain"
+    terrain("new", "--terrain", bare, "--size", "64", "--resolution", "65")
+    assert value(terrain("info", "--terrain", bare), "splatResolution") == "none"
+    terrain("settings", "--terrain", bare, "--splat-resolution", "1024", expected=1)           # no layer, no splat map yet
+    terrain("settings", "--terrain", bare, "--lod-pixel-error", "1", "--collision-step", "4")
+    # A new terrain whose first layer has the chosen splat map.
+    fine = assets / "Terrains" / "Fine.kbterrain"
+    terrain("new", "--terrain", fine, "--size", "64", "--resolution", "65", "--material", "/Game/Materials/Grass.kbmat", "--splat-resolution", "2048")
+    assert value(terrain("info", "--terrain", fine), "splatResolution") == "2048" and weights(fine, 0, 0)[0] == 1.0
+    plain = assets / "Terrains" / "PlainSplat.kbterrain"
+    terrain("new", "--terrain", plain, "--size", "64", "--resolution", "65", "--material", "/Game/Materials/Grass.kbmat")
+    assert value(terrain("info", "--terrain", plain), "splatResolution") == "512"
+    refused = assets / "Terrains" / "Refused.kbterrain"
+    terrain("new", "--terrain", refused, "--splat-resolution", "1024", expected=1)             # the map comes with a first layer
+    terrain("new", "--terrain", refused, "--material", "/Game/Materials/Grass.kbmat", "--splat-resolution", "300", expected=1)
+    assert not refused.exists()
+
     exports = project / "Exports"
     # Brushes beyond the plain ones: noise that joins up, ramp, terrace, stamp, symmetry, Ctrl, the eyedropper.
     sculpt = assets / "Terrains" / "Sculpt.kbterrain"

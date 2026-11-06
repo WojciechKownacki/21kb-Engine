@@ -318,6 +318,11 @@ kb_cli terrain info --project . --terrain /Game/Terrains/Hills.kbterrain
   `--bank-width`; nothing changes beyond). `component set --type River --set points="..."` replaces all the points.
 - `import` turns a 16-bit PNG or RAW heightmap into a terrain, `export` writes one (it prints the
   `--min`/`--max` that import needs to restore the heights). Resolution is 2^n+1 (17 to 2049).
+- The layers are painted on a splat map of 512, 1024 or 2048 texels across (a bigger map paints finer
+  detail and costs more memory). The first layer makes it: `terrain new --material /Game/Materials/Grass.kbmat
+  --splat-resolution 2048` or `layer add` (512). `terrain settings --splat-resolution 1024` resamples it later;
+  `--lod-pixel-error 0.25..16` (default 2) and `--collision-step 1|2|4|8` set the chunk detail and the collision
+  sampling of the file; `terrain info` shows them.
 - `kb_cli help terrain` lists every option.
 )md";
 
