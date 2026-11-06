@@ -528,6 +528,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "waterfallSlopeDegrees", "Waterfall Slope", "A stretch of the river falling at least this steeply (degrees) is drawn as a waterfall." },
                 LibraryComponentInspectorFieldDesc{ "materialAssetId", "Water Material", "The material of the stream." },
                 LibraryComponentInspectorFieldDesc{ "waterfallMaterialAssetId", "Waterfall Material", "The material of the waterfalls." },
+                LibraryComponentInspectorFieldDesc{ "mistEffectAssetId", "Mist Effect", "The particle effect that rises as mist at the foot of every waterfall; empty has no mist." },
                 LibraryComponentInspectorFieldDesc{ "enabled", "Visible", "Draw the water." },
             },
         },

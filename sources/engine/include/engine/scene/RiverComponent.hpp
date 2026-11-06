@@ -36,6 +36,8 @@ struct RiverComponent {
     // The water material of the stream and of its waterfalls; 0 draws with the engine's error material until one is set.
     std::uint64_t materialAssetId = 0U;
     std::uint64_t waterfallMaterialAssetId = 0U;
+    // The particle effect (.kbvfx) that rises as mist at the foot of every waterfall; 0 has no mist.
+    std::uint64_t mistEffectAssetId = 0U;
     bool enabled = true;
 };
 
@@ -47,7 +49,7 @@ struct RiverComponent {
 // Only the points in use count: the unused tail of the array is not part of the river.
 [[nodiscard]] inline bool operator==(const RiverComponent& lhs, const RiverComponent& rhs) noexcept {
     if (lhs.pointCount != rhs.pointCount || lhs.bankWidth != rhs.bankWidth || lhs.waterfallSlopeDegrees != rhs.waterfallSlopeDegrees ||
-        lhs.materialAssetId != rhs.materialAssetId || lhs.waterfallMaterialAssetId != rhs.waterfallMaterialAssetId || lhs.enabled != rhs.enabled) {
+        lhs.materialAssetId != rhs.materialAssetId || lhs.waterfallMaterialAssetId != rhs.waterfallMaterialAssetId || lhs.mistEffectAssetId != rhs.mistEffectAssetId || lhs.enabled != rhs.enabled) {
         return false;
     }
     for (std::uint32_t index = 0U; index < lhs.pointCount && index < RiverComponent::MaxPoints; ++index) {

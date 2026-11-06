@@ -165,7 +165,8 @@ template <typename T>
     if (!ParseField(fields, "river.pointCount", river.pointCount) || !IsRiverPointCountValid(river.pointCount) ||
         !ParseField(fields, "river.bankWidth", river.bankWidth) || !ParseField(fields, "river.waterfallSlopeDegrees", river.waterfallSlopeDegrees) ||
         !ParseField(fields, "river.materialAssetId", river.materialAssetId) ||
-        !ParseField(fields, "river.waterfallMaterialAssetId", river.waterfallMaterialAssetId) || !ParseOptionalBool(fields, "river.enabled", river.enabled)) {
+        !ParseField(fields, "river.waterfallMaterialAssetId", river.waterfallMaterialAssetId) ||
+        !ParseField(fields, "river.mistEffectAssetId", river.mistEffectAssetId) || !ParseOptionalBool(fields, "river.enabled", river.enabled)) {
         return false;
     }
     for (std::uint32_t index = 0U; index < river.pointCount; ++index) {

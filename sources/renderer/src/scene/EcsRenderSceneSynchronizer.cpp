@@ -35,6 +35,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/SceneRivers.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
@@ -1000,6 +1001,16 @@ void EcsRenderSceneSynchronizer::SetSkinningPaletteAllocator(
     skinningPaletteAllocator_ = allocator;
 }
 
+namespace {
+
+// The water of the scene's rivers is made before the scene is read, so its objects are in this synchronization.
+void SynchronizeRiverWater(kb::scene::Scene& scene) {
+    const std::vector<std::string> errors = kb::scene::SynchronizeSceneRivers(scene);
+    if (!errors.empty()) throw std::runtime_error("river water could not be built: " + errors.front());
+}
+
+} // namespace
+
 void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const {
     SyncImpl(scene, renderScene, false);
 }
@@ -1009,6 +1020,7 @@ void EcsRenderSceneSynchronizer::SyncStructural(const kb::scene::Scene& scene, R
 }
 
 void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const {
+    SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene));
     PublishSceneSurfaceGeometry(const_cast<kb::scene::Scene&>(scene));
     seenMeshes_.clear();
     seenCameras_.clear();
@@ -1091,6 +1103,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     const kb::scene::Scene& scene,
     RenderScene& renderScene,
     std::span<const std::uint64_t> entityIds) const {
+    SynchronizeRiverWater(const_cast<kb::scene::Scene&>(scene));
     PublishSceneSurfaceGeometry(const_cast<kb::scene::Scene&>(scene));
     seenMeshes_.clear();
     seenCameras_.clear();

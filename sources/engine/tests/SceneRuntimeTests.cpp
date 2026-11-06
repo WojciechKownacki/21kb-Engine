@@ -95,6 +95,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneHierarchyParentingTests();
     } else if (suite == "scene-transform-bench") {
         kb::tests::RunTransformWriteBenchmark();
+    } else if (suite == "scene-river") {
+        kb::tests::RunSceneRiverTests();
     } else if (suite == "scene-ui") {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {
@@ -216,6 +218,7 @@ void RunAllSuites() {
     kb::tests::RunPrefabHierarchyDepthTests();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
+    kb::tests::RunSceneRiverTests();
     kb::tests::RunUIThemeTests();
     kb::tests::RunSceneSystemTests();
     kb::tests::RunScenePrefabTests();

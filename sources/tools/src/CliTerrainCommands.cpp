@@ -87,7 +87,7 @@ constexpr std::string_view kUsage =
     "  preview    --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]\n"
     "  river      rivers of the scene, drawn as water and cut into a terrain (a River component; --scene as in entity):\n"
     "             add --project <dir> --name <Entity> --points \"x,y,z[,width,depth,speed];...\" [--index <n>] [--position x,y,z]\n"
-    "                 [--bank-width 3] [--waterfall-slope 35] [--material </Game/..kbmat>] [--fall-material </Game/..kbmat>]\n"
+    "                 [--bank-width 3] [--waterfall-slope 35] [--material </Game/..kbmat>] [--fall-material </Game/..kbmat>] [--mist-effect </Game/..kbvfx>]\n"
     "                 (makes the river with 2 or more points, or inserts points into it; x,y,z are local to the entity, y the water\n"
     "                 surface, width bank to bank, depth to the bed, speed of the current; default 4, 1, 1.5)\n"
     "             move --name <Entity> --index <n> --to \"x,y,z[,width,depth,speed]\"   (3 numbers keep width, depth and speed)\n"

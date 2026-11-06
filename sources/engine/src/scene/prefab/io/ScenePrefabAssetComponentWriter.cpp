@@ -415,6 +415,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "river.waterfallSlopeDegrees=" << river.waterfallSlopeDegrees << '\n';
         output << "river.materialAssetId=" << river.materialAssetId << '\n';
         output << "river.waterfallMaterialAssetId=" << river.waterfallMaterialAssetId << '\n';
+        output << "river.mistEffectAssetId=" << river.mistEffectAssetId << '\n';
         output << "river.enabled=" << (river.enabled ? 1 : 0) << '\n';
         for (std::uint32_t index = 0U; index < river.pointCount; ++index) {
             const std::string key = "river.point" + std::to_string(index);

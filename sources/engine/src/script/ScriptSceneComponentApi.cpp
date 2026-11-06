@@ -625,11 +625,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kSpaceStrokePropertyD
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
-constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kRiverPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kRiverPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "points", ScriptValueType::String }, ScriptSceneComponentPropertyDesc{ "pointCount", ScriptValueType::UInt32, false },
     ScriptSceneComponentPropertyDesc{ "bankWidth", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "waterfallSlopeDegrees", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "waterfallMaterialAssetId", ScriptValueType::Hash },
-    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "mistEffectAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kHistoryRibbonPropertyDescs{
@@ -1831,7 +1831,7 @@ constexpr std::array<FieldBinding, 10> kSpaceStrokeFields{
     FieldBinding{ "layer", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->layer }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->layer = v.AsUInt32(); return true; } },
     KB_BOOL(kb::scene::SpaceStrokeComponent, castsShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, receivesShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, enabled),
 };
-constexpr std::array<FieldBinding, 7> kRiverFields{
+constexpr std::array<FieldBinding, 8> kRiverFields{
     FieldBinding{ "points", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ kb::scene::RiverPointsToText(*static_cast<const kb::scene::RiverComponent*>(c)) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::String) return false; std::string error; return kb::scene::ParseRiverPointsText(v.AsString(), *static_cast<kb::scene::RiverComponent*>(c), error); } },
     FieldBinding{ "pointCount", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->pointCount }; }, [](void*, const ScriptValue&) noexcept -> bool { return false; } },
@@ -1839,6 +1839,7 @@ constexpr std::array<FieldBinding, 7> kRiverFields{
     FieldBinding{ "waterfallSlopeDegrees", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->waterfallSlopeDegrees }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat()) || v.AsFloat() < 5.0F || v.AsFloat() > 89.0F) return false; static_cast<kb::scene::RiverComponent*>(c)->waterfallSlopeDegrees = v.AsFloat(); return true; } },
     FieldBinding{ "materialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->materialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->materialAssetId = v.AsUInt64(); return true; } },
     FieldBinding{ "waterfallMaterialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->waterfallMaterialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->waterfallMaterialAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "mistEffectAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::RiverComponent*>(c)->mistEffectAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::RiverComponent*>(c)->mistEffectAssetId = v.AsUInt64(); return true; } },
     KB_BOOL(kb::scene::RiverComponent, enabled),
 };
 

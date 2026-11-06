@@ -401,6 +401,7 @@ void RegisterRiverReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(RiverComponent, waterfallSlopeDegrees, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(RiverComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
         KB_ECS_FIELD(RiverComponent, waterfallMaterialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(RiverComponent, mistEffectAssetId, kb::ecs::ComponentFieldType::Bytes),
         KB_ECS_FIELD(RiverComponent, enabled, kb::ecs::ComponentFieldType::Bool),
     }));
 }

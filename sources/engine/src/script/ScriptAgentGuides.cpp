@@ -311,7 +311,9 @@ kb_cli terrain info --project . --terrain /Game/Terrains/Hills.kbterrain
   component, a spline of points `x,y,z[,width,depth,speed]` in the entity's space: `y` is the water surface, `width`
   bank to bank, `depth` to the bed, `speed` of the current (default 4, 1, 1.5). The water is drawn as a ribbon that
   flows; a stretch that falls at least `--waterfall-slope` degrees (35) is drawn as a waterfall with its own
-  material. `river move|remove|list` edit and read the points (`remove --all` removes the river), `river carve --terrain <file>` cuts the bed and the
+  material and a mist effect at its foot (up to 480 particles). A new river gets the engine's `RiverWater`,
+  `RiverWaterfall` and `RiverMist` assets, written into Assets/Materials, unless `--material`, `--fall-material`
+  and `--mist-effect` name others; a device without scene colour draws the plain tint of the water. `river move|remove|list` edit and read the points (`remove --all` removes the river), `river carve --terrain <file>` cuts the bed and the
   banks into the terrain the scene draws from that file (deepest in the middle, eased to the water level over
   `--bank-width`; nothing changes beyond). `component set --type River --set points="..."` replaces all the points.
 - `import` turns a 16-bit PNG or RAW heightmap into a terrain, `export` writes one (it prints the

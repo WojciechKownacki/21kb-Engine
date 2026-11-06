@@ -989,6 +989,8 @@ public:
     std::uint64_t nextSurfaceGeometryRevision = 1;
     std::vector<VectorShape2DRuntimeRecord> vectorShapes2D;
     std::shared_ptr<SceneUIMediaState> uiMedia;
+    // The River data (a hash of it) the water of each river entity was last built from.
+    std::unordered_map<std::uint64_t, std::uint64_t> riverBuildKeys;
 };
 
 } // namespace kb::scene

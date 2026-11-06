@@ -19,6 +19,7 @@
 #include "engine/gameplay/AbilityAsset.hpp"
 #include "engine/project/ProjectCreator.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
+#include "RiverWaterMaterials.hpp"
 #if KB_CLI_RENDERER
 #include "engine/render/StaticLightmapBaker.hpp"
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
@@ -515,6 +516,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (((component == "AudioSource" && name == "clipAssetId") ||
         ((component == "Ambient Radiance" || component == "WorldBackdrop") && name == "environmentAssetId") ||
         (component == "ContentInstance" && name == "assetId") ||
+        (component == "River" && (name == "materialAssetId" || name == "waterfallMaterialAssetId" || name == "mistEffectAssetId")) ||
         (uiProperty != nullptr && uiProperty->type == kb::scene::UIComponentPropertyType::Asset)) && value.starts_with('/')) {
         const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
         if (metadata == nullptr) {
@@ -1946,7 +1948,7 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
 // ---- rivers: terrain river add|move|remove|list ---------------------------------------------------------
 
 constexpr std::string_view kRiverOptions[]{ "project", "scene", "name", "points", "index", "to", "all", "position", "parent", "bank-width",
-    "waterfall-slope", "material", "fall-material", "help", "json", "dry-run", "command-timeout-ms", "command-cancel-file" };
+    "waterfall-slope", "material", "fall-material", "mist-effect", "help", "json", "dry-run", "command-timeout-ms", "command-cancel-file" };
 
 [[nodiscard]] bool RiverOptionsKnown(const ArgumentList& arguments, CommandIo io) {
     std::vector<std::string> names;
@@ -2007,7 +2009,7 @@ constexpr std::string_view kRiverOptions[]{ "project", "scene", "name", "points"
     return true;
 }
 
-// The settings that are not points: --bank-width, --waterfall-slope, --material and --fall-material.
+// The settings that are not points: --bank-width, --waterfall-slope, --material, --fall-material and --mist-effect.
 [[nodiscard]] bool ApplyRiverSettings(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const ArgumentList& arguments, CommandIo io) {
     kb::scene::RiverComponent river = *scene.Components().Rivers().TryGet(entity);
     if (!ReadRiverFloat(arguments, "bank-width", 0.0F, 10000.0F, river.bankWidth, io) ||
@@ -2015,11 +2017,37 @@ constexpr std::string_view kRiverOptions[]{ "project", "scene", "name", "points"
         return false;
     }
     scene.Components().Rivers().Set(entity, river);
-    for (const auto& [option, property] : { std::pair{ "--material", "materialAssetId" }, std::pair{ "--fall-material", "waterfallMaterialAssetId" } }) {
+    for (const auto& [option, property] : { std::pair{ "--material", "materialAssetId" }, std::pair{ "--fall-material", "waterfallMaterialAssetId" },
+             std::pair{ "--mist-effect", "mistEffectAssetId" } }) {
         const std::optional<std::string> path = arguments.Option(option);
         if (path.has_value() && !ApplySetting(scene, entity, "River", std::string{ property } + "=" + *path, io)) return false;
     }
     return true;
+}
+
+// A river with no water material gets the engine's: written into the project's Materials folder (kept when it is
+// there already) and set by path, as --material would.
+[[nodiscard]] bool GiveRiverDefaultMaterials(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const ArgumentList& arguments, CommandIo io) {
+    const kb::scene::RiverComponent& river = *scene.Components().Rivers().TryGet(entity);
+    if (river.materialAssetId != 0U && river.waterfallMaterialAssetId != 0U && river.mistEffectAssetId != 0U) return true;
+    std::string error;
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(Utf8Path(arguments.Option("--project").value_or("")), error);
+    if (projectFile.empty()) {
+        io.err << "error: " << error << '\n';
+        return false;
+    }
+    kb::terrain_editor::RiverWaterMaterials files;
+    if (!kb::terrain_editor::EnsureRiverWaterMaterials(projectFile.parent_path() / "Assets" / "Materials", files, error)) {
+        io.err << "error: " << error << '\n';
+        return false;
+    }
+    static_cast<void>(scene.Assets().Discover());
+    const bool streamMissing = river.materialAssetId == 0U;
+    const bool fallMissing = river.waterfallMaterialAssetId == 0U;
+    const bool mistMissing = river.mistEffectAssetId == 0U;
+    return (!streamMissing || ApplySetting(scene, entity, "River", "materialAssetId=/Game/Materials/" + files.stream.filename().string(), io)) &&
+        (!fallMissing || ApplySetting(scene, entity, "River", "waterfallMaterialAssetId=/Game/Materials/" + files.waterfall.filename().string(), io)) &&
+        (!mistMissing || ApplySetting(scene, entity, "River", "mistEffectAssetId=/Game/Materials/" + files.mist.filename().string(), io));
 }
 
 [[nodiscard]] int RiverAdd(const ArgumentList& arguments, CommandIo io) {
@@ -2082,7 +2110,7 @@ constexpr std::string_view kRiverOptions[]{ "project", "scene", "name", "points"
         return 1;
     }
     scene.Components().Rivers().Set(entity, river);
-    if (!ApplyRiverSettings(scene, entity, arguments, io)) return 1;
+    if (!ApplyRiverSettings(scene, entity, arguments, io) || !GiveRiverDefaultMaterials(scene, entity, arguments, io)) return 1;
     return Saved(*session, std::string{ created ? "created river '" : "river '" } + *name + "': added " + std::to_string(added.size()) +
         (added.size() == 1U ? " point at " : " points from ") + std::to_string(at) + ", " + std::to_string(points.size()) + " in all", io);
 }

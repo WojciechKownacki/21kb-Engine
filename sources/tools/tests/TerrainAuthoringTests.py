@@ -291,6 +291,14 @@ def main():
     terrain("river", "remove", "--name", "Falls", "--all")
     assert "1 river" in terrain("river", "list") and "Falls" not in terrain("river", "list")
     assert "river" in run("help", "terrain") and "carve" in run("help", "terrain")
+    # A river with no materials of its own gets the engine's water, waterfall and mist, written into the project.
+    terrain("river", "add", "--name", "Creek", "--points", "-20,3,-60;20,3,-60")
+    creek = run("entity", "show", "--project", project, "--name", "Creek")
+    for asset in ("RiverWater.kbmat", "RiverWaterfall.kbmat", "RiverMist.kbvfx"):
+        assert asset in creek and (assets / "Materials" / asset).is_file(), (asset, creek)
+    assert (assets / "Materials" / "RiverMistMaterial.kbmat").is_file()
+    terrain("river", "add", "--name", "Creek", "--points", "0,3,-60", "--index", "1")   # points added later keep the materials
+    assert "RiverWater.kbmat" in run("entity", "show", "--project", project, "--name", "Creek")
 
     # The command is part of the agent surface.
     commands = run("commands")

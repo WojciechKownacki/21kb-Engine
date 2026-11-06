@@ -444,6 +444,7 @@ add_library(kb_engine STATIC
         include/engine/scene/RiverComponent.hpp
         include/engine/scene/SceneRiverComponents.hpp
         include/engine/scene/RiverGeometry.hpp
+        include/engine/scene/SceneRivers.hpp
         include/engine/scene/HistoryRibbonComponent.hpp
         include/engine/scene/SceneHistoryRibbonComponents.hpp
         include/engine/scene/ParticleEffectComponent.hpp
@@ -1134,8 +1135,8 @@ add_library(kb_engine STATIC
         src/scene/modules/components/SceneSprite2DModule.cpp
         src/scene/modules/components/SceneStreamFocusModule.cpp
       src/scene/systems/ContentInstanceSceneSystem.cpp
-      src/scene/systems/RiverSceneSystem.cpp
       src/scene/RiverGeometry.cpp
+      src/scene/SceneRivers.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
@@ -1477,7 +1478,6 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
-      src/private/scene/systems/RiverSceneSystem.hpp
     src/private/navigation/NavMeshCrowd.hpp
     src/private/navigation/NavMeshRuntime.hpp
     src/private/world/WorldAssetLoaders.hpp
@@ -2178,6 +2178,7 @@ if(BUILD_TESTING)
         tests/SceneBehaviourVariableTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
+        tests/SceneRiverTests.cpp
         tests/UITextLineBreakingTests.cpp
         tests/UIThemeTests.cpp
         tests/CrashReportConsentTests.cpp

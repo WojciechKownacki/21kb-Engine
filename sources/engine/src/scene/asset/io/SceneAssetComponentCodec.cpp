@@ -744,7 +744,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!input.ReadUInt32(value.pointCount) || !IsRiverPointCountValid(value.pointCount)) return false;
         if (!input.ReadFloat(value.bankWidth)) return false;
         if (!input.ReadFloat(value.waterfallSlopeDegrees)) return false;
-        if (!input.ReadUInt64(value.materialAssetId) || !input.ReadUInt64(value.waterfallMaterialAssetId)) return false;
+        if (!input.ReadUInt64(value.materialAssetId) || !input.ReadUInt64(value.waterfallMaterialAssetId) || !input.ReadUInt64(value.mistEffectAssetId)) return false;
         if (!input.ReadBool(value.enabled)) return false;
         for (std::uint32_t index = 0U; index < value.pointCount; ++index) {
             RiverPoint& point = value.points[index];
@@ -1200,6 +1200,7 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, value.waterfallSlopeDegrees);
         SceneAssetBinaryIO::WriteUInt64(output, value.materialAssetId);
         SceneAssetBinaryIO::WriteUInt64(output, value.waterfallMaterialAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, value.mistEffectAssetId);
         SceneAssetBinaryIO::WriteBool(output, value.enabled);
         for (std::uint32_t index = 0U; index < value.pointCount; ++index) {
             const RiverPoint& point = value.points[index];

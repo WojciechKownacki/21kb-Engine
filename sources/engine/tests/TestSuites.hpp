@@ -13,6 +13,7 @@ void RunSceneHierarchyTests();
 void RunSceneHierarchyParentingTests();
 void RunTransformWriteBenchmark();
 void RunSceneUITests();
+void RunSceneRiverTests();
 void RunSceneUIBuildFrameBenchmark();
 void RunSceneSystemTests();
 void RunScenePrefabTests();

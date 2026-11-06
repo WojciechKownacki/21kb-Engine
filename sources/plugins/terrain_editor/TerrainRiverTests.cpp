@@ -158,14 +158,14 @@ void RunRiverSurfaceTest() {
     Require(std::abs(fall.topHeight - 10.0F) < 0.01F && std::abs(fall.bottomHeight - 2.0F) < 0.01F, "the waterfall drops from 10 to 2");
     Require(std::abs(surface.samples[fall.first].position.x - 20.0F) < 0.01F && std::abs(surface.samples[fall.last].position.x - 24.0F) < 0.5F,
         "the waterfall lies between the points that make the drop");
-    Require(!surface.fallVertices.empty() && !surface.streamVertices.empty(), "the stream and the waterfall have their own triangles");
-    Require(surface.streamIndices.size() % 3U == 0U && surface.fallIndices.size() % 3U == 0U, "the surfaces are triangles");
+    Require(surface.fallMeshes.size() == 1U && !surface.fallMeshes[0].vertices.empty() && !surface.streamVertices.empty(), "the stream and the waterfall have their own triangles");
+    Require(surface.streamIndices.size() % 3U == 0U && surface.fallMeshes[0].indices.size() % 3U == 0U, "the surfaces are triangles");
     const auto inRange = [](const std::vector<kb::scene::SurfaceGeometryVertex>& vertices, const std::vector<std::uint32_t>& indices) {
         return std::ranges::all_of(indices, [&vertices](std::uint32_t index) { return index < vertices.size(); });
     };
-    Require(inRange(surface.streamVertices, surface.streamIndices) && inRange(surface.fallVertices, surface.fallIndices), "every index names a vertex");
+    Require(inRange(surface.streamVertices, surface.streamIndices) && inRange(surface.fallMeshes[0].vertices, surface.fallMeshes[0].indices), "every index names a vertex");
     // Budget: a river of 44 units is a few hundred triangles at most.
-    Require(surface.streamIndices.size() / 3U + surface.fallIndices.size() / 3U < 400U, "the water has a small triangle budget");
+    Require(surface.streamIndices.size() / 3U + surface.fallMeshes[0].indices.size() / 3U < 400U, "the water has a small triangle budget");
     // The current: a unit normal whose x and z are the velocity over the flow scale, along the flow.
     const kb::scene::SurfaceGeometryVertex middle = surface.streamVertices[1];
     const float length = std::sqrt(middle.normal.x * middle.normal.x + middle.normal.y * middle.normal.y + middle.normal.z * middle.normal.z);
@@ -175,7 +175,7 @@ void RunRiverSurfaceTest() {
     // A gentle river has no waterfall; a steeper threshold turns the same drop into a stream.
     kb::scene::RiverComponent gentle = river;
     gentle.points[2].position.y = 9.0F;
-    Require(kb::scene::BuildRiverSurface(gentle, surface) && surface.waterfalls.empty() && surface.fallVertices.empty(), "a gentle slope is no waterfall");
+    Require(kb::scene::BuildRiverSurface(gentle, surface) && surface.waterfalls.empty() && surface.fallMeshes.empty(), "a gentle slope is no waterfall");
     kb::scene::RiverComponent steep = river;
     steep.waterfallSlopeDegrees = 80.0F;
     Require(kb::scene::BuildRiverSurface(steep, surface) && surface.waterfalls.empty(), "a drop under the river's waterfall slope is a stream");

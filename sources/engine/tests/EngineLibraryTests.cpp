@@ -3567,7 +3567,7 @@ void RunComponentInspectorDescCatalogTest() {
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 845U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (845, including text rendering, themes, collision mesh and the compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 846U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (846, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

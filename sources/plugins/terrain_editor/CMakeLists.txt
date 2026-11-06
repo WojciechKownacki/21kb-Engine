@@ -24,6 +24,8 @@ add_library(kb_terrain_editor_core STATIC
     TerrainNoise.cpp
     TerrainParallel.hpp
     TerrainPresets.hpp
+    RiverWaterMaterials.hpp
+    RiverWaterMaterials.cpp
     TerrainPresets.cpp
     TerrainTask.hpp
     TerrainTask.cpp

@@ -1,8 +1,10 @@
 #include "engine/scene/RiverGeometry.hpp"
 
+#include "engine/library/EngineLibraryParsing.hpp"
+
 #include <algorithm>
-#include <charconv>
 #include <cmath>
+#include <cstdio>
 
 namespace kb::scene {
 namespace {
@@ -36,6 +38,20 @@ struct Flat {
 [[nodiscard]] Flat FlatOf(const RiverPoint& point) noexcept { return { point.position.x, point.position.z }; }
 
 [[nodiscard]] float Length(float x, float y, float z) noexcept { return std::sqrt(x * x + y * y + z * z); }
+
+// The shortest plain decimal text that reads back as the same float (an exponent only for the extremes).
+[[nodiscard]] std::string FloatText(float value) {
+    char buffer[48];
+    if (std::abs(value) >= 1.0e-4F && std::abs(value) < 1.0e7F) {
+        for (int decimals = 0; decimals <= 9; ++decimals) {
+            std::snprintf(buffer, sizeof(buffer), "%.*f", decimals, static_cast<double>(value));
+            double back = 0.0;
+            if (kb::library::TryParseDouble(buffer, back) && static_cast<float>(back) == value) return buffer;
+        }
+    }
+    std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));
+    return buffer;
+}
 
 } // namespace
 
@@ -213,9 +229,11 @@ bool BuildRiverSurface(const RiverComponent& river, RiverSurface& surface) {
     const auto stream = [&](std::uint32_t first, std::uint32_t last) {
         if (last > first) AppendStrip(surface.samples, first, last, surface.streamVertices, surface.streamIndices);
     };
-    for (const RiverWaterfall& fall : surface.waterfalls) {
+    surface.fallMeshes.resize(surface.waterfalls.size());
+    for (std::size_t index = 0U; index < surface.waterfalls.size(); ++index) {
+        const RiverWaterfall& fall = surface.waterfalls[index];
         stream(cursor, fall.first);
-        AppendStrip(surface.samples, fall.first, fall.last, surface.fallVertices, surface.fallIndices);
+        AppendStrip(surface.samples, fall.first, fall.last, surface.fallMeshes[index].vertices, surface.fallMeshes[index].indices);
         cursor = fall.last;
     }
     stream(cursor, count - 1U);
@@ -224,15 +242,13 @@ bool BuildRiverSurface(const RiverComponent& river, RiverSurface& surface) {
 
 std::string RiverPointsToText(const RiverComponent& river) {
     std::string text;
-    char buffer[32];
     for (std::uint32_t index = 0U; index < river.pointCount && index < RiverComponent::MaxPoints; ++index) {
         const RiverPoint& point = river.points[index];
         if (index != 0U) text += ';';
         const float values[6]{ point.position.x, point.position.y, point.position.z, point.width, point.depth, point.speed };
         for (int value = 0; value < 6; ++value) {
             if (value != 0) text += ',';
-            const auto result = std::to_chars(buffer, buffer + sizeof(buffer), values[value]);
-            text.append(buffer, result.ptr);
+            text += FloatText(values[value]);
         }
     }
     return text;
@@ -262,12 +278,12 @@ bool ParseRiverPointList(std::string_view text, std::vector<RiverPoint>& points,
                 error = "point " + std::to_string(count) + " has more than 6 numbers";
                 return false;
             }
-            const auto parsed = std::from_chars(item.data(), item.data() + item.size(), values[numbers]);
-            if (item.empty() || parsed.ec != std::errc{} || parsed.ptr != item.data() + item.size() || !std::isfinite(values[numbers])) {
+            double parsed = 0.0;
+            if (item.empty() || !kb::library::TryParseDouble(item, parsed) || !std::isfinite(parsed) || std::abs(parsed) > 3.0e38) {
                 error = "point " + std::to_string(count) + ": '" + std::string{ item } + "' is not a number";
                 return false;
             }
-            ++numbers;
+            values[numbers++] = static_cast<float>(parsed);
         }
         if (numbers != 3U && numbers != 6U) {
             error = "point " + std::to_string(count) + " takes x,y,z or x,y,z,width,depth,speed";

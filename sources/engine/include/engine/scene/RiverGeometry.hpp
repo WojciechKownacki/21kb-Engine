@@ -58,13 +58,19 @@ struct RiverPlacement {
 inline constexpr float kRiverUvLength = 4.0F;
 inline constexpr float kRiverFlowScale = 10.0F;
 
+// The strip of one waterfall, in the space of the river.
+struct RiverFallMesh {
+    std::vector<SurfaceGeometryVertex> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
 struct RiverSurface {
     std::vector<SurfaceGeometryVertex> streamVertices;
     std::vector<std::uint32_t> streamIndices;
-    std::vector<SurfaceGeometryVertex> fallVertices;
-    std::vector<std::uint32_t> fallIndices;
     std::vector<RiverSample> samples;
+    // Each waterfall and its strip, in the order down the river.
     std::vector<RiverWaterfall> waterfalls;
+    std::vector<RiverFallMesh> fallMeshes;
 };
 
 [[nodiscard]] bool BuildRiverSurface(const RiverComponent& river, RiverSurface& surface);

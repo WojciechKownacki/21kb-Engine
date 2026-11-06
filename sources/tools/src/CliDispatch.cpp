@@ -254,7 +254,7 @@ R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - bru
                  export --terrain <file> --out <file.png|.raw|.r16> [--min <n> --max <n>]    (16 bit)
                  preview --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]
                  river add --project <dir> --name <Entity> --points "x,y,z[,width,depth,speed];..." [--index <n>] [--position x,y,z]
-                     [--bank-width 3] [--waterfall-slope 35] [--material </Game/..kbmat>] [--fall-material </Game/..kbmat>]
+                     [--bank-width 3] [--waterfall-slope 35] [--material </Game/..kbmat>] [--fall-material </Game/..kbmat>] [--mist-effect </Game/..kbvfx>]
                      (a River component: a spline with width, depth and current speed per point, drawn as flowing water; a steep
                      stretch becomes a waterfall. A new river needs 2 or more points; with an existing one --points inserts)
                  river move --name <Entity> --index <n> --to "x,y,z[,width,depth,speed]"    (3 numbers keep width, depth, speed)
