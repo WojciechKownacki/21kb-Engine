@@ -324,6 +324,8 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli keys` | generate release signing keys and print public keys |
 | `kb_cli pack` | sign, verify, inspect, recompress, split and patch asset packs |
 | `kb_cli release` | sign or verify the manifest of a finished release directory |
+| `kb_cli build` | cook a project, pack it and stage a runnable folder with the player and its module libraries (Windows) |
+| `kb_cli capture` | render a project or a built folder headless and write one frame as a PNG |
 | `kb_cli world` | convert a scene into a partitioned world or build its streaming cells |
 | `kb_cli navmesh` | bake a scene navigation mesh or describe a baked one |
 | `kb_cli physics-layers` | show or edit the layer collision matrix |
@@ -499,6 +501,20 @@ python sources/editor/tests/AuthoringMetricsTests.py --ctest ctest --build-root 
 Use the actual CMake build directory. The validator checks counts against the
 executed scenarios and injects a failed export to verify failure accounting.
 The scenarios cover map and sprite editing, input setup, UI, save and export.
+
+## Build and capture
+
+`kb_cli build --project . --out Build` runs the cooker, then stages a folder that starts on its own:
+`Game.kbpack`, `kb_game.exe`, the engine module libraries the project enables and, when it has
+C++ scripts, `RuntimeModules`. The output folder must be new or empty.
+It needs `kb_cooker` and `kb_game` beside `kb_cli`, builds Windows x64 only, and does not sign:
+use `pack sign` and `release sign` for a release, or `scripts/package_game.py` for the other targets.
+
+`kb_cli capture --out shot.png` (with `--project .` or `--build Build`) renders `--frames`
+frames (default 60) headless on a fixed 1/60 s step and writes the last one, so the same count
+gives the same picture. `--scene`, `--width` and `--height` choose the scene and the size. It
+needs `kb_game` beside `kb_cli` and a GPU; a built folder is rendered by the engine's own player,
+because a shipped player refuses development options.
 
 ## Good to know
 

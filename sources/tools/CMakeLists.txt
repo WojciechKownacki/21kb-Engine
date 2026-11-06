@@ -8,6 +8,7 @@ add_library(kb_cli_core STATIC
     src/CliLuaDebugCommand.cpp
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
+    src/CliBuildCommands.cpp
     src/CliLayoutCommands.cpp
     src/CliCommon.cpp
     src/CliUiReport.cpp
@@ -39,6 +40,8 @@ target_include_directories(kb_cli_core PUBLIC src/private)
 target_link_libraries(kb_cli_core PUBLIC kb_engine)
 # Workspace files use the editor's existing portable layout and settings code.
 target_include_directories(kb_cli_core PRIVATE ../editor/src/private ../editor/include)
+# build stages the engine module libraries a project enables, named by the contract the cooker validates against.
+target_include_directories(kb_cli_core PRIVATE ../game/src/private)
 target_sources(kb_cli_core PRIVATE
     ../editor/src/settings/EditorConfigurationStore.cpp
     ../editor/src/profiler/ProfilerSelection.cpp
@@ -230,6 +233,10 @@ if(BUILD_TESTING)
             "-DTEST_ROOT=${CMAKE_BINARY_DIR}/particle_profile_tests"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliParticleProfileTests.cmake")
         set_tests_properties(kb_cli_particle_profile PROPERTIES LABELS "tools;gpu" TIMEOUT 180)
+        add_test(NAME kb_cli_build_capture
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliBuildCaptureTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_build_capture PROPERTIES LABELS "tools;gpu" TIMEOUT 900)
         add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")

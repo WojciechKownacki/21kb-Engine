@@ -82,6 +82,9 @@ namespace kb::cli {
 [[nodiscard]] int RunPackSetKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackSetVerifyCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunReleaseCommand(const ArgumentList& arguments, CommandIo io);
+// Cook, stage and render the project with the engine's cooker and player (CliBuildCommands.cpp).
+[[nodiscard]] int RunBuildCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunCaptureCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunNavMeshCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPhysicsLayersCommand(const ArgumentList& arguments, CommandIo io);

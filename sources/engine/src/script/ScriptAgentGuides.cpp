@@ -129,6 +129,8 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
 
 A script is done when `validate` says OK and `kb_cli run --project . --frames 120` reports no
 script diagnostics.
+`kb_cli capture --project . --out shot.png` renders a frame headless to check what a scene looks like;
+`kb_cli build --project . --out Build` cooks a folder the game runs from.
 
 ## C++ scripts
 

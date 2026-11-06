@@ -534,6 +534,20 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                       --content-version <version> --release <number>
                       [--anti-rollback]
                  verify [--anchor <file>] <dir>
+  build        Cook a project, pack it and stage a folder that runs: Game.kbpack, the
+               player kb_game, the engine module libraries the project enables and the
+               project's own libraries (RuntimeModules). Windows x64 only; for other
+               targets and signed releases use scripts/package_game.py.
+                 --project <dir> --out <new folder> [--pack-compression-level <0-19>]
+                 [--cache <dir>] [--engine-root <dir>] [--shaderc <executable>]
+               Needs kb_cooker and kb_game beside kb_cli. Sign the result with pack sign
+               and release sign when it ships.
+  capture      Render a project or a build headless and write one frame as a PNG.
+                 (--project <dir> | --build <folder made by build>) --out <new file.png>
+                 [--scene </Game/Path.21kbscene>] [--frames <1-120000>]
+                 [--width <64-8192>] [--height <64-8192>]
+               The picture is frame --frames (default 60) of a fixed 1/60 s step, so the
+               same count gives the same picture. Needs kb_game beside kb_cli and a GPU.
   world        Convert a single-file scene into a partitioned world (one file
                per object), or build a world's streaming cells.
                  migrate --scene <file.21kbscene> --out <file.21kbworld>
@@ -649,7 +663,7 @@ std::size_t EditDistance(std::string_view a, std::string_view b) {
 // A misspelled option must fail, not be ignored: for these commands the options accepted are the
 // ones their usage block names, plus the global ones. The other commands check their own.
 constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "api", "validate", "scene-list",
-    "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab" };
+    "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture" };
 
 bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
     if (std::ranges::find(kUsageCheckedCommands, command) == std::end(kUsageCheckedCommands)) return false;
@@ -716,6 +730,8 @@ constexpr CliCommandDescriptor kCommands[]{
     {"pack", &RunPackCommand, CliCommandKind::Normal, true, ""},
     {"mod", &RunModCommand, CliCommandKind::Normal, true, ""},
     {"release", &RunReleaseCommand, CliCommandKind::Normal, true, ""},
+    {"build", &RunBuildCommand, CliCommandKind::Normal, true, ""},
+    {"capture", &RunCaptureCommand, CliCommandKind::Normal, true, ""},
     {"world", &RunWorldCommand, CliCommandKind::Normal, true, ""},
     {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, ""},
     {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, ""},

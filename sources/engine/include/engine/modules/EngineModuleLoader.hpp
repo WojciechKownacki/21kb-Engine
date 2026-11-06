@@ -81,10 +81,11 @@ public:
 
     [[nodiscard]] EngineModuleLoadResult Load(EngineModuleLoadDesc desc);
     [[nodiscard]] std::uint64_t NextReloadSerial() const noexcept { return reloadSerial_; }
+    // Where a module named relative to the running executable is found: beside it, in its parent folders and in the sibling folders of a build tree.
+    [[nodiscard]] static std::filesystem::path ResolveModulePath(const std::filesystem::path& modulePath);
 
 private:
     [[nodiscard]] static std::string NormalizeKey(std::string key, const std::filesystem::path& modulePath);
-    [[nodiscard]] static std::filesystem::path ResolveModulePath(const std::filesystem::path& modulePath);
     [[nodiscard]] std::filesystem::path ResolveShadowCopyPath(
         std::string_view namePrefix,
         const std::filesystem::path& modulePath,
