@@ -128,6 +128,7 @@ public:
     [[nodiscard]] bool VerifyUIGraphics();
     [[nodiscard]] bool VerifyUINavigationLinks();
     [[nodiscard]] bool VerifyUIClickHandler();
+    [[nodiscard]] bool VerifyInspectorShadowRows();
     [[nodiscard]] bool VerifyUIDropdownOptions();
     [[nodiscard]] bool VerifyUIWidgetFeatures();
     [[nodiscard]] bool VerifyPickerCloseButtons();

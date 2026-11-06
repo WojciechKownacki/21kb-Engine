@@ -3121,7 +3121,7 @@ void RunUIComponentAuthoringTest() {
         kb::scene::UIComponentPresetCatalog();
     const std::vector<const kb::editor::InspectorComponentTile*> widgetTiles =
         kb::editor::InspectorComponentCatalog::InCategory("User Widget");
-    kb::editor::tests::Require(componentCatalog.size() == 31U,
+    kb::editor::tests::Require(componentCatalog.size() == 32U,
         "User Widget component catalog should expose every individual component");
     kb::editor::tests::Require(
         widgetTiles.size() == componentCatalog.size() + presetCatalog.size(),
@@ -3299,7 +3299,7 @@ void RunUIComponentAuthoringTest() {
                 }
                 kb::editor::tests::Require(kb::scene::WriteUIComponentProperty(candidate, descriptor.type,
                         row.name, static_cast<std::int32_t>(row.choices.size())) != kb::scene::UIComponentPropertyWriteResult::Succeeded,
-                    "UI dropdown must expose every enum value");
+                    (std::string{"UI dropdown must expose every enum value: "} + std::string{descriptor.displayName} + "." + std::string{row.name}).c_str());
             }
         }
         if (descriptor.type != UIComponentType::RectTransform) {

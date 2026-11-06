@@ -34,6 +34,7 @@
     { "op": "write_file", "path": "Assets/Scripts/ClickAudit.lua", "content": "function QuitClicked(self, event)\n    Log(\"quit clicked\")\nend\n\nfunction Tick(self, dt)\nend\n" },
     { "op": "discover_assets" },
     { "op": "assert_ui_click_handler" },
+    { "op": "assert_inspector_shadow_rows" },
     { "op": "assert_no_errors" }
   ]
 }

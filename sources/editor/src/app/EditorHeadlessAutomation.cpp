@@ -1022,9 +1022,12 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
         return false;
     }
     const int rowIndex = static_cast<int>(std::distance(rows.begin(), row));
-    const bool openedAdvanced = component == kb::scene::UIComponentType::RectTransform &&
-        !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced);
-    if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
+    // The rare settings of a widget sit under a collapsed "Advanced" row: open it for the edit.
+    const InspectorDisclosureId advancedRow = component == kb::scene::UIComponentType::RectTransform
+        ? InspectorDisclosureId::UIRectAdvanced : InspectorDisclosureId::UISelectableAdvanced;
+    const bool openedAdvanced = (component == kb::scene::UIComponentType::RectTransform || row->advanced) &&
+        !context_.Inspector().IsDisclosureExpanded(advancedRow);
+    if (openedAdvanced) context_.Inspector().ToggleDisclosure(advancedRow);
 
     kb::scene::UIComponentSet current = kb::scene::CaptureSceneUIComponents(
         context_.Scene().Components().UI(), entity);
@@ -1113,7 +1116,7 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
         return false;
     }
     if (currentValue == value) {
-        if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
+        if (openedAdvanced) context_.Inspector().ToggleDisclosure(advancedRow);
         Trace("set_ui_component_property", true, "already-set");
         return true;
     }
@@ -1181,7 +1184,7 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
     const bool succeeded = kb::scene::ReadUIComponentProperty(
             current, component, property, applied) &&
         applied == value;
-    if (openedAdvanced) context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UIRectAdvanced);
+    if (openedAdvanced) context_.Inspector().ToggleDisclosure(advancedRow);
     Trace("set_ui_component_property", succeeded, property);
     return succeeded;
 }
@@ -1411,7 +1414,7 @@ bool EditorHeadlessAutomation::VerifyUI2DEditing() {
     context_.ClearHierarchySelection();
     const auto center = point(*original, {0.5F, 0.5F});
     if (!EditorUIRectInteraction::Begin(context_, width, height, center.x, center.y) ||
-        context_.SelectedEntity() != entity || !EditorUIRectInteraction::Update(context_, center.x + 20, center.y + 15))
+        context_.SelectedEntity() != entity || !EditorUIRectInteraction::Update(context_, center.x + 20, center.y + 15, false, false, false))
         return false;
     const auto moved = frameElement();
     if (!moved || !close(moved->corners[0], {original->corners[0].x + 20, original->corners[0].y + 15})) {
@@ -2096,6 +2099,12 @@ bool EditorHeadlessAutomation::VerifyUIWidgetFeatures() {
 bool EditorHeadlessAutomation::VerifyUIClickHandler() {
     const auto fail = [&](std::string_view reason) { Trace("ui_click_handler", false, reason); return false; };
     const auto selectable = kb::scene::UIComponentType::Selectable;
+    // The Selectable section is the last of a button: capture with the Inspector scrolled to its end.
+    const auto CaptureInspectorBottom = [&](std::string_view checkpoint) {
+        const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context_);
+        static_cast<void>(context_.Inspector().SetScrollOffset(maxScroll, maxScroll));
+        return CaptureInspector(checkpoint);
+    };
     const auto canvas = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
     const auto createNamed = [&](std::string_view name) {
         const auto entity = context_.CreateUIObject(kb::scene::UIComponentType::Button, canvas);
@@ -2133,7 +2142,7 @@ bool EditorHeadlessAutomation::VerifyUIClickHandler() {
     if (rows.empty() || !rows.front().onClick || rows.front().value != "(none)") return fail("on-click-row-missing");
     if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(selectable), InspectorPropertyId::UIAssetPicker, 0, InspectorHitKind::TextField))
         return fail("on-click-picker-button-not-found");
-    if (!CaptureInspector("ui-on-click-empty")) return false;
+    if (!CaptureInspectorBottom("ui-on-click-empty")) return false;
     const auto pick = [&]([[maybe_unused]] std::string_view widget, const std::vector<UIClickChoice>& choices, int row) {
         return EditorUIClickPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), choices,
             {.visible = false, .onOpened = [row](HWND picker) {
@@ -2168,7 +2177,7 @@ bool EditorHeadlessAutomation::VerifyUIClickHandler() {
         context_.Scene().Components().Behaviours().TryGet(byName("ClickAuditPlay")) == nullptr ||
         context_.Scene().Components().Behaviours().TryGet(byName("ClickAuditPlay"))->behaviourAssetId != scriptId.value)
         return fail("existing-function-not-stored: " + described("ClickAuditPlay"));
-    if (!CaptureInspector("ui-on-click-chosen")) return false;
+    if (!CaptureInspectorBottom("ui-on-click-chosen")) return false;
     if (!context_.UndoSceneCommand() || described("ClickAuditPlay") != "(none)" || context_.HasEntityScript(byName("ClickAuditPlay")))
         return fail("undo-did-not-clear-click-and-script");
     if (!context_.RedoSceneCommand() || described("ClickAuditPlay") != "ClickAudit.QuitClicked") return fail("redo-failed");
@@ -2209,15 +2218,61 @@ bool EditorHeadlessAutomation::VerifyUIClickHandler() {
     POINT disclosure{};
     if (!FindInspectorHit(context_, section, InspectorPropertyId::UISelectableAdvanced, -1, InspectorHitKind::Row, &disclosure))
         return fail("advanced-row-not-found");
-    if (!CaptureInspector("ui-selectable-advanced-collapsed")) return false;
+    if (!CaptureInspectorBottom("ui-selectable-advanced-collapsed")) return false;
     if (!EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, disclosure.x, disclosure.y, impl_->viewport) ||
         !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced))
         return fail("advanced-row-did-not-open");
     if (!FindInspectorHit(context_, section, InspectorUIComponentModel::Property(selectable), navigationIndex))
         return fail("advanced-row-hidden-while-open");
-    if (!CaptureInspector("ui-selectable-advanced-open")) return false;
+    if (!CaptureInspectorBottom("ui-selectable-advanced-open")) return false;
     context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UISelectableAdvanced);
     Trace("ui_click_handler", true, "picker-existing-new-clear-undo-advanced");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyInspectorShadowRows() {
+    const auto fail = [&](std::string_view reason) { Trace("inspector_shadow_rows", false, reason); return false; };
+    using P = InspectorPropertyId;
+    const auto click = [&](InspectorSectionId section, P property, InspectorHitKind kind) {
+        POINT at{};
+        if (!FindInspectorHit(context_, section, property, -1, kind, &at)) return false;
+        return EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, at.x, at.y, impl_->viewport);
+    };
+    const auto light = context_.CreateLightObject(kb::scene::LightKind::Directional);
+    if (!light.IsValid()) return fail("light-not-created");
+    context_.SelectEntity(light);
+    if (!click(InspectorSectionId::Light, P::LightAdvanced, InspectorHitKind::Row)) return fail("light-advanced-row-not-found");
+    for (const P property : { P::LightShadowBias, P::LightShadowNormalBias, P::LightShadowFilter, P::LightShadowQuality,
+             P::LightShadowCascadeCount, P::LightShadowCascadeDistribution })
+        if (!FindInspectorHit(context_, InspectorSectionId::Light, property))
+            return fail("light-row-not-found-" + std::to_string(static_cast<int>(property)));
+    const auto lightValue = [&]() { return *context_.Scene().Components().Lights().TryGet(context_.SelectedEntity()); };
+    if (!click(InspectorSectionId::Light, P::LightShadowFilter, InspectorHitKind::TextField) ||
+        lightValue().shadowFilter != kb::scene::LightShadowFilter::Hard) return fail("filter-did-not-cycle");
+    if (!click(InspectorSectionId::Light, P::LightShadowQuality, InspectorHitKind::TextField) ||
+        lightValue().shadowQuality != kb::scene::LightShadowQuality::Low) return fail("quality-did-not-cycle");
+    if (!click(InspectorSectionId::Light, P::LightShadowCascadeCount, InspectorHitKind::TextField) ||
+        lightValue().shadowCascadeCount != 1U) return fail("cascade-count-did-not-cycle");
+    if (!CaptureInspector("inspector-light-shadow-rows")) return false;
+
+    const auto cube = context_.CreateMenuObject("Cube");
+    if (!cube.IsValid()) return fail("cube-not-created");
+    context_.SelectEntity(cube);
+    for (const P property : { P::MeshRendererLodEnabled, P::MeshRendererLodBias, P::MeshRendererMobility })
+        if (!FindInspectorHit(context_, InspectorSectionId::MeshRenderer, property))
+            return fail("mesh-row-not-found-" + std::to_string(static_cast<int>(property)));
+    const auto mesh = [&]() { return *context_.Scene().Components().MeshRenderers().TryGet(context_.SelectedEntity()); };
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererLodEnabled, InspectorHitKind::BoolField) || mesh().lodEnabled)
+        return fail("lod-toggle-failed");
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererMobility, InspectorHitKind::TextField) ||
+        mesh().mobility != kb::scene::MeshMobility::Static) return fail("mobility-did-not-cycle");
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererLodBias, InspectorHitKind::TextField) ||
+        context_.Inspector().EditedProperty() != P::MeshRendererLodBias) return fail("lod-bias-edit-did-not-start");
+    context_.Inspector().BeginTextEdit(P::MeshRendererLodBias, "3");
+    if (!InspectorPanelInteraction::HandleKeyDown(nullptr, context_, VK_RETURN) || mesh().lodBias != 3)
+        return fail("lod-bias-not-committed");
+    if (!CaptureInspector("inspector-mesh-lod-rows")) return false;
+    Trace("inspector_shadow_rows", true, "light-advanced-and-mesh-lod-rows");
     return true;
 }
 
@@ -2422,6 +2477,10 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
             return false;
         };
         const auto colorRows = InspectorUIComponentModel::Properties(context_.Scene(), entity, descriptor.type);
+        // The colours under an "Advanced" row are reached by opening it, as a person would.
+        if (std::ranges::any_of(colorRows, [](const auto& row) { return row.color && row.advanced; }) &&
+            !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced))
+            context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UISelectableAdvanced);
         for (const auto& row : colorRows) {
             if (!row.color) continue;
             if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(descriptor.type),

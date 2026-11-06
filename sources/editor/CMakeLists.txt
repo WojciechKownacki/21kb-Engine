@@ -887,6 +887,8 @@ add_executable(kb_editor WIN32
     src/rendering/SceneViewportToolbarRenderer.cpp
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.cpp
     src/rendering/scene_viewport_toolbar/TerrainToolbarDrawer.cpp
+    src/rendering/scene_viewport_toolbar/TerrainToolbarLayout.cpp
+    src/private/rendering/scene_viewport_toolbar/TerrainToolbarMetrics.hpp
     src/rendering/scene_viewport_toolbar/TerrainToolbarLabels.cpp
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.cpp
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
@@ -1568,6 +1570,11 @@ if(BUILD_TESTING)
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp
+        src/rendering/scene_viewport_toolbar/TerrainToolbarLayout.cpp
+        src/scene/EditorTerrainService.cpp
+        src/rendering/gdi/GdiRect.cpp
+        src/rendering/gdi/GdiAlphaBlender.cpp
+        src/rendering/gdi/GdiTextPainter.cpp
         src/rendering/SvgGraphicsPathBuilder.cpp
         src/rendering/SvgPathCursor.cpp
         src/rendering/SvgPathFigureBuilder.cpp
@@ -1627,7 +1634,9 @@ if(BUILD_TESTING)
             kb_engine
             kb_renderer
             kb_21kb_particle_editor_core
+            kb_terrain_editor_core
             gdiplus
+            msimg32
             ole32
     )
 

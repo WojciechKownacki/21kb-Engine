@@ -379,6 +379,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightSourceRadius:
     case InspectorPropertyId::LightShadowStrength:
     case InspectorPropertyId::LightShadowDistance:
+    case InspectorPropertyId::LightShadowBias:
+    case InspectorPropertyId::LightShadowNormalBias:
+    case InspectorPropertyId::LightShadowCascadeDistribution:
         return true;
     default:
         return false;
@@ -500,6 +503,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightShadowDistance:
         value = light.shadowDistance;
         return true;
+    case InspectorPropertyId::LightShadowBias:
+        value = light.shadowBias;
+        return true;
+    case InspectorPropertyId::LightShadowNormalBias:
+        value = light.shadowNormalBias;
+        return true;
+    case InspectorPropertyId::LightShadowCascadeDistribution:
+        value = light.shadowCascadeDistribution;
+        return true;
     default:
         return false;
     }
@@ -549,6 +561,16 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         return true;
     case InspectorPropertyId::LightShadowDistance:
         light.shadowDistance = std::clamp(value, 0.0F, 5000.0F);
+        return true;
+    case InspectorPropertyId::LightShadowBias:
+        light.shadowBias = std::clamp(value, 0.0F, 16.0F);
+        return true;
+    case InspectorPropertyId::LightShadowNormalBias:
+        light.shadowNormalBias = std::clamp(value, 0.0F, 16.0F);
+        return true;
+    case InspectorPropertyId::LightShadowCascadeDistribution:
+        // 0 is the project's; otherwise at least 1.5, the smallest spread the shadow cascades accept.
+        light.shadowCascadeDistribution = value <= 0.0F ? 0.0F : std::clamp(value, 1.5F, 16.0F);
         return true;
     default:
         return false;
@@ -676,6 +698,22 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
+    if (hit.property == InspectorPropertyId::MeshRendererLodBias || hit.property == InspectorPropertyId::MeshRendererLodEnabled ||
+        hit.property == InspectorPropertyId::MeshRendererMobility) {
+        const kb::scene::MeshRendererComponent* current = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (current == nullptr) return true;
+        if (hit.property == InspectorPropertyId::MeshRendererLodBias) {
+            if (hit.kind == InspectorHitKind::TextField) sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(current->lodBias));
+            return true;
+        }
+        if (!sceneContext.BeginSceneEditTransaction("Edit Mesh Level of Detail")) return true;
+        kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (hit.property == InspectorPropertyId::MeshRendererLodEnabled) renderer->lodEnabled = !renderer->lodEnabled;
+        else renderer->mobility = renderer->mobility == kb::scene::MeshMobility::Static ? kb::scene::MeshMobility::Movable : kb::scene::MeshMobility::Static;
+        sceneContext.Scene().Components().MeshRenderers().MarkModified(entity);
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        return true;
+    }
     if (hit.kind == InspectorHitKind::BoolField &&
         (hit.property == InspectorPropertyId::MeshRendererCastsShadow ||
             hit.property == InspectorPropertyId::MeshRendererReceivesShadow)) {
@@ -1185,6 +1223,28 @@ template <typename Mutator>
         return MutateLightComponent(sceneContext, entity, "Edit Light Mobility", [](kb::scene::LightComponent& light) {
             light.mobility = light.mobility == kb::scene::LightMobility::Static
                 ? kb::scene::LightMobility::Movable : kb::scene::LightMobility::Static;
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightShadowFilter) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shadow Filter", [](kb::scene::LightComponent& light) {
+            light.shadowFilter = light.shadowFilter == kb::scene::LightShadowFilter::Pcss
+                ? kb::scene::LightShadowFilter::Default
+                : static_cast<kb::scene::LightShadowFilter>(static_cast<std::uint32_t>(light.shadowFilter) + 1U);
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightShadowQuality) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shadow Quality", [](kb::scene::LightComponent& light) {
+            light.shadowQuality = light.shadowQuality == kb::scene::LightShadowQuality::Ultra
+                ? kb::scene::LightShadowQuality::Default
+                : static_cast<kb::scene::LightShadowQuality>(static_cast<std::uint32_t>(light.shadowQuality) + 1U);
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightShadowCascadeCount) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shadow Cascades", [](kb::scene::LightComponent& light) {
+            light.shadowCascadeCount = light.shadowCascadeCount >= 4U ? 0U : light.shadowCascadeCount + 1U;
         });
     }
     if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::LightCastsShadow) {
@@ -4406,6 +4466,24 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 sceneContext,
                 entity,
                 inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::MeshRendererLodBias) {
+            const std::string text = std::string{ Trim(inspector.EditBuffer()) };
+            std::int32_t bias = 0;
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), bias);
+            constexpr auto kMax = static_cast<std::int32_t>(kb::scene::kMaxMeshRendererLodBias);
+            if (!text.empty() && parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && bias >= -kMax && bias <= kMax &&
+                sceneContext.Scene().Entities().IsAlive(entity) && sceneContext.BeginSceneEditTransaction("Edit Mesh LOD Bias")) {
+                if (auto* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity)) {
+                    renderer->lodBias = bias;
+                    sceneContext.Scene().Components().MeshRenderers().MarkModified(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                } else {
+                    sceneContext.CancelSceneEditTransaction();
+                }
+            }
             inspector.EndTextEdit();
             return true;
         }

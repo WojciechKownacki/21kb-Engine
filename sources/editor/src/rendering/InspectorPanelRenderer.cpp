@@ -2326,7 +2326,7 @@ void PaintCameraSection(
 }
 
 [[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light) noexcept {
-    int rows = 11;
+    int rows = 15;
     if (LightUsesRange(light.kind)) {
         ++rows;
     }
@@ -2337,12 +2337,17 @@ void PaintCameraSection(
         rows += 3;
     }
     if (light.kind == kb::scene::LightKind::Directional) {
-        ++rows;
+        rows += 3;
     }
     if (light.useColorTemperature) {
         ++rows;
     }
     return rows;
+}
+
+// The rows under the Light's "Advanced" row; the others are always shown.
+[[nodiscard]] int LightBasicRows(const kb::scene::LightComponent& light) noexcept {
+    return LightSectionRows(light) - 10 - (light.kind == kb::scene::LightKind::Directional ? 3 : 0) - (light.useColorTemperature ? 1 : 0);
 }
 
 void PaintLightSection(
@@ -2379,9 +2384,19 @@ void PaintLightSection(
         return;
     }
     section.Float(EditorText("inspector.light.shadowStrength", "Shadow Strength"), FormatFloat(light.shadowStrength, 2), InspectorPropertyId::LightShadowStrength);
+    section.Float(EditorText("inspector.light.shadowBias", "Shadow Bias"), FormatFloat(light.shadowBias, 2), InspectorPropertyId::LightShadowBias);
+    section.Float(EditorText("inspector.light.shadowNormalBias", "Shadow Normal Bias"), FormatFloat(light.shadowNormalBias, 2), InspectorPropertyId::LightShadowNormalBias);
+    section.Field(EditorText("inspector.light.shadowFilter", "Shadow Filter"), InspectorComponentLabelFormatter::LightShadowFilterName(light.shadowFilter), InspectorPropertyId::LightShadowFilter);
+    section.Field(EditorText("inspector.light.shadowQuality", "Shadow Quality"), InspectorComponentLabelFormatter::LightShadowQualityName(light.shadowQuality), InspectorPropertyId::LightShadowQuality);
     if (light.kind == kb::scene::LightKind::Directional) {
         section.Float(EditorText("inspector.light.sourceAngle", "Source Angle"), FormatFloat(light.sourceRadius, 4), InspectorPropertyId::LightSourceRadius);
         section.Float(EditorText("inspector.light.shadowDistance", "Shadow Distance"), FormatFloat(light.shadowDistance, 1), InspectorPropertyId::LightShadowDistance);
+        section.Field(EditorText("inspector.light.shadowCascades", "Shadow Cascades"),
+            light.shadowCascadeCount == 0U ? std::string{ EditorText("inspector.light.quality.default", "Project default") } : std::to_string(light.shadowCascadeCount),
+            InspectorPropertyId::LightShadowCascadeCount);
+        section.Float(EditorText("inspector.light.cascadeSpread", "Cascade Spread"),
+            light.shadowCascadeDistribution == 0.0F ? std::string{ EditorText("inspector.light.quality.default", "Project default") } : FormatFloat(light.shadowCascadeDistribution, 2),
+            InspectorPropertyId::LightShadowCascadeDistribution);
     } else {
         section.Float(EditorText("inspector.light.sourceRadius", "Source Radius"), FormatFloat(light.sourceRadius, 3), InspectorPropertyId::LightSourceRadius);
     }
@@ -2440,6 +2455,9 @@ void PaintMeshRendererSection(
     }
     section.Bool(EditorText("inspector.meshRenderer.castsShadow", "Casts Shadow"), renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow);
     section.Bool(EditorText("inspector.meshRenderer.receivesShadow", "Receives Shadow"), renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
+    section.Bool(EditorText("inspector.meshRenderer.lodEnabled", "Use Levels of Detail"), renderer.lodEnabled, InspectorPropertyId::MeshRendererLodEnabled);
+    section.Field(EditorText("inspector.meshRenderer.lodBias", "LOD Bias"), std::to_string(renderer.lodBias), InspectorPropertyId::MeshRendererLodBias);
+    section.Field(EditorText("inspector.meshRenderer.mobility", "Mobility"), InspectorComponentLabelFormatter::MeshMobilityName(renderer.mobility), InspectorPropertyId::MeshRendererMobility);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -3845,7 +3863,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
-        const int h = AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightSectionRows(*light) - 6 - (light->kind == kb::scene::LightKind::Directional ? 1 : 0) - (light->useColorTemperature ? 1 : 0), LightSectionRows(*light));
+        const int h = AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightBasicRows(*light), LightSectionRows(*light));
         if (sectionVisible(y, h)) {
             PaintLightSection(dc, content, y, theme, inspector, *light);
         } else {
@@ -4129,7 +4147,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
     const std::uint32_t slotCount = InspectorMeshRendererMaterialSlotModel::SlotRowCount(renderer, mesh);
-    const int fixedRows = 4 + 3 * static_cast<int>(slotCount);
+    const int fixedRows = 7 + 3 * static_cast<int>(slotCount);
     const int disclosureHeight = slotCount == 0U ? 0 : kDisclosureRowHeight + kDividerHeight;
     return kSectionHeaderHeight + kDividerHeight
         + fixedRows * (kFieldRowHeight + kDividerHeight)
@@ -4185,7 +4203,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             kSectionGap;
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
-        height += AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightSectionRows(*light) - 6 - (light->kind == kb::scene::LightKind::Directional ? 1 : 0) - (light->useColorTemperature ? 1 : 0), LightSectionRows(*light)) + kSectionGap;
+        height += AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightBasicRows(*light), LightSectionRows(*light)) + kSectionGap;
     }
     if (scene.Components().ParticleEffects().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::ParticleEffect, 3) + kSectionGap;
@@ -4921,14 +4939,16 @@ void AdvanceGroup(int& y) noexcept {
     using P = InspectorPropertyId;
     const std::array properties{P::LightKind, P::LightShape, P::LightColor, P::LightIntensity, P::LightRange,
         P::LightInnerCone, P::LightOuterCone, P::LightAreaWidth, P::LightAreaHeight, P::LightMobility,
-        P::LightCastsShadow, P::LightAdvanced, P::LightShadowStrength, P::LightSourceRadius,
-        P::LightShadowDistance, P::LightContactShadowLength, P::LightVolumetricScattering,
+        P::LightCastsShadow, P::LightAdvanced, P::LightShadowStrength, P::LightShadowBias, P::LightShadowNormalBias,
+        P::LightShadowFilter, P::LightShadowQuality, P::LightSourceRadius,
+        P::LightShadowDistance, P::LightShadowCascadeCount, P::LightShadowCascadeDistribution, P::LightContactShadowLength, P::LightVolumetricScattering,
         P::LightUseColorTemperature, P::LightColorTemperatureKelvin, P::LightLayerMask};
     for (auto property : properties) {
         if ((property == P::LightShape || property == P::LightAreaWidth || property == P::LightAreaHeight) && !LightUsesAreaSize(light.kind)) continue;
         if (property == P::LightRange && !LightUsesRange(light.kind)) continue;
         if ((property == P::LightInnerCone || property == P::LightOuterCone) && !LightUsesSpotCone(light.kind)) continue;
-        if (property == P::LightShadowDistance && light.kind != kb::scene::LightKind::Directional) continue;
+        if ((property == P::LightShadowDistance || property == P::LightShadowCascadeCount || property == P::LightShadowCascadeDistribution) &&
+            light.kind != kb::scene::LightKind::Directional) continue;
         if (property == P::LightColorTemperatureKelvin && !light.useColorTemperature) continue;
         if (property == P::LightAdvanced) {
             const RECT disclosure = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
@@ -4941,7 +4961,8 @@ void AdvanceGroup(int& y) noexcept {
         InspectorPanelRenderer::Hit hit{};
         if (property == P::LightColor) hit = HitColorRow(row, section, property, x, yPoint);
         else if (property == P::LightCastsShadow || property == P::LightUseColorTemperature) hit = HitBool(row, section, property, x, yPoint);
-        else if (property == P::LightKind || property == P::LightShape || property == P::LightMobility || property == P::LightLayerMask)
+        else if (property == P::LightKind || property == P::LightShape || property == P::LightMobility || property == P::LightLayerMask ||
+            property == P::LightShadowFilter || property == P::LightShadowQuality || property == P::LightShadowCascadeCount)
             hit = HitTextRow(row, section, property, x, yPoint);
         else hit = HitFloatRow(row, section, property, x, yPoint);
         if (hit.kind != InspectorHitKind::None) return hit;
@@ -6033,6 +6054,16 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererLodEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            for (const InspectorPropertyId property : { InspectorPropertyId::MeshRendererLodBias, InspectorPropertyId::MeshRendererMobility }) {
+                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, property, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
         }
         y += kSectionGap;
     }

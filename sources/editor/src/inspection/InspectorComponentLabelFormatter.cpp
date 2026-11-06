@@ -37,6 +37,31 @@ std::string_view InspectorComponentLabelFormatter::LightMobilityName(kb::scene::
         : EditorText("inspector.light.mobility.movable", "Movable");
 }
 
+std::string_view InspectorComponentLabelFormatter::LightShadowFilterName(kb::scene::LightShadowFilter filter) {
+    switch (filter) {
+    case kb::scene::LightShadowFilter::Hard: return EditorText("inspector.light.filter.hard", "Hard");
+    case kb::scene::LightShadowFilter::Pcf: return EditorText("inspector.light.filter.pcf", "PCF");
+    case kb::scene::LightShadowFilter::Pcss: return EditorText("inspector.light.filter.pcss", "PCSS");
+    default: return EditorText("inspector.light.filter.default", "Project default");
+    }
+}
+
+std::string_view InspectorComponentLabelFormatter::LightShadowQualityName(kb::scene::LightShadowQuality quality) {
+    switch (quality) {
+    case kb::scene::LightShadowQuality::Low: return EditorText("inspector.light.quality.low", "Low");
+    case kb::scene::LightShadowQuality::Medium: return EditorText("inspector.light.quality.medium", "Medium");
+    case kb::scene::LightShadowQuality::High: return EditorText("inspector.light.quality.high", "High");
+    case kb::scene::LightShadowQuality::Ultra: return EditorText("inspector.light.quality.ultra", "Ultra");
+    default: return EditorText("inspector.light.quality.default", "Project default");
+    }
+}
+
+std::string_view InspectorComponentLabelFormatter::MeshMobilityName(kb::scene::MeshMobility mobility) {
+    return mobility == kb::scene::MeshMobility::Static
+        ? EditorText("inspector.meshRenderer.mobility.static", "Static")
+        : EditorText("inspector.meshRenderer.mobility.movable", "Movable");
+}
+
 std::string_view InspectorComponentLabelFormatter::ProjectionName(kb::scene::CameraProjection projection) {
     switch (projection) {
     case kb::scene::CameraProjection::Perspective:

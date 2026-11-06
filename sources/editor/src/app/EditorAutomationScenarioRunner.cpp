@@ -1567,6 +1567,10 @@ ReadScriptValue(
         return {state.automation.VerifyUIClickHandler(),
             "Button On Click row: script function picker, new function, shared script target, clear, undo, collapsed Advanced settings"};
     }
+    if (*operation == "assert_inspector_shadow_rows") {
+        return {state.automation.VerifyInspectorShadowRows(),
+            "Light shadow bias, normal bias, filter, quality and cascade rows; Mesh Renderer LOD and mobility rows"};
+    }
     if (*operation == "preview_locale") {
         const auto path = StringMember(step, "catalog", error);
         const auto language = StringMember(step, "language", error);
