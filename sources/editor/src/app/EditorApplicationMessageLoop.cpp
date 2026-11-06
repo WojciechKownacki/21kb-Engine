@@ -50,6 +50,7 @@
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
+#include "scene/EditorTerrainJobs.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -1475,6 +1476,11 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         EditorTerrainViewportInteraction::TickActiveStroke(state.sceneContext, deltaSeconds);
     if (terrainStrokeChanged) {
         state.sceneViewport.RequestPresent();
+    }
+    // A background terrain job (a new world, an erosion): its progress on screen, and its result when it is done.
+    if (EditorTerrainJobs::Poll(state.sceneContext)) {
+        state.sceneViewport.RequestPresent();
+        if (state.window != nullptr) InvalidateRect(state.window, nullptr, FALSE);
     }
 
     bool navigationChanged = false;

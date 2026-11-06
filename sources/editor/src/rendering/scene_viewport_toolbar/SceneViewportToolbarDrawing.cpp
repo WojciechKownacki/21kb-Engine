@@ -107,6 +107,23 @@ void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKin
     HeroIconPainter::Draw(dc, chevronRect, HeroIconKind::ChevronDown, GdiDrawing::ToColorRef(theme.textDisabled), 1);
 }
 
+void SceneViewportToolbarDrawing::DrawChip(HDC dc, const RECT& rect, std::string_view label, const EditorTheme& theme, bool active) {
+    FillRound(dc, rect, active ? RGB(36, 91, 111) : RGB(29, 34, 41), active ? RGB(91, 190, 220) : RGB(59, 68, 80), 7);
+    GdiDrawing::DrawCenteredText(dc, rect, label, active ? RGB(239, 252, 255) : GdiDrawing::ToColorRef(theme.textSecondary));
+}
+
+void SceneViewportToolbarDrawing::DrawValueBox(HDC dc, const RECT& rect, std::string_view text, const EditorTheme& theme) {
+    FillRound(dc, rect, RGB(22, 26, 32), RGB(52, 62, 74), 6);
+    GdiDrawing::DrawCenteredText(dc, rect, text, GdiDrawing::ToColorRef(theme.textPrimary));
+}
+
+void SceneViewportToolbarDrawing::DrawStepper(
+    HDC dc, const RECT& minus, const RECT& value, const RECT& plus, std::string_view text, const EditorTheme& theme) {
+    DrawIconButton(dc, minus, HeroIconKind::Minus, theme, false);
+    DrawValueBox(dc, value, text, theme);
+    DrawIconButton(dc, plus, HeroIconKind::Plus, theme, false);
+}
+
 void SceneViewportToolbarDrawing::DrawDivider(HDC dc, const RECT& toolbar, int x, const EditorTheme& theme) {
     const int centerY = toolbar.top + ((toolbar.bottom - toolbar.top) / 2);
     StrokeLine(dc, x, centerY - 10, centerY + 10, GdiDrawing::ToColorRef(theme.borderPanel));

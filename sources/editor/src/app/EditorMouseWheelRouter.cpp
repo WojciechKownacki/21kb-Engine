@@ -239,14 +239,16 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
             terrainTool.editingEnabled &&
             EditorTerrainService::IsTerrainEntity(
                 sceneContext_.Scene(), sceneContext_.SelectedEntity()) &&
-            wheelDelta != 0 && (controlDown || shiftDown)) {
+            wheelDelta != 0 && !controlDown) {
+            // The wheel sizes the brush while a terrain tool is active; Shift + wheel sets its strength and
+            // Ctrl + wheel still moves the camera.
             const float scale = wheelDelta > 0 ? 1.1F : (1.0F / 1.1F);
-            if (controlDown) {
-                terrainTool.brush.radius = std::clamp(
-                    terrainTool.brush.radius * scale, 0.1F, 100'000.0F);
-            } else {
+            if (shiftDown) {
                 terrainTool.brush.strength = std::clamp(
                     terrainTool.brush.strength * scale, 0.0F, 100'000.0F);
+            } else {
+                terrainTool.brush.radius = std::clamp(
+                    terrainTool.brush.radius * scale, 0.1F, 100'000.0F);
             }
             return true;
         }

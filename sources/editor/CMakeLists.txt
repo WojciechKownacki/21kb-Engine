@@ -106,6 +106,8 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportCameraController.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoDragSolver.cpp
     src/app/scene_viewport/EditorTerrainViewportInteraction.cpp
+    src/app/scene_viewport/EditorTerrainFileDialog.cpp
+    src/app/scene_viewport/EditorTerrainToolbarPointer.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoHitTester.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoInteraction.cpp
     src/app/scene_viewport/gizmo/EditorSceneViewportGizmoAltDuplicate.cpp
@@ -394,6 +396,8 @@ add_executable(kb_editor WIN32
     src/private/app/scene_viewport/EditorSceneViewportCameraController.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoDragSolver.hpp
     src/private/app/scene_viewport/EditorTerrainViewportInteraction.hpp
+    src/private/app/scene_viewport/EditorTerrainFileDialog.hpp
+    src/private/app/scene_viewport/EditorTerrainToolbarPointer.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoHitTester.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoInteraction.hpp
     src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoAltDuplicate.hpp
@@ -606,6 +610,8 @@ add_executable(kb_editor WIN32
     src/private/rendering/ScriptEditorPanelRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.hpp
+    src/private/rendering/scene_viewport_toolbar/TerrainToolbarDrawer.hpp
+    src/private/rendering/scene_viewport_toolbar/TerrainToolbarLabels.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp
@@ -673,6 +679,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
     src/private/scene/EditorTerrainService.hpp
+    src/private/scene/EditorTerrainJobs.hpp
     src/private/scene/EditorMap2DService.hpp
     src/private/scene/EditorSceneObjectEditCommands.hpp
     src/private/scene/EditorSceneObjectEditTypes.hpp
@@ -879,6 +886,8 @@ add_executable(kb_editor WIN32
     src/rendering/ScriptEditorPanelRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.cpp
+    src/rendering/scene_viewport_toolbar/TerrainToolbarDrawer.cpp
+    src/rendering/scene_viewport_toolbar/TerrainToolbarLabels.cpp
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.cpp
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp
@@ -974,6 +983,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorMap2DService.cpp
     src/scene/EditorMap2DPreview.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
+    src/scene/EditorTerrainJobs.cpp
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
@@ -2121,6 +2131,13 @@ if(BUILD_TESTING)
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUserWidgetScenario.json"
             --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
             --selftest-task "SELFTEST-UI-UserWidget")
+    add_test(NAME kb_editor_terrain_simple_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessTerrainSimpleScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Terrain-Simple")
+    set_tests_properties(kb_editor_terrain_simple_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;terrain" TIMEOUT 300)
     set_tests_properties(kb_editor_user_widget_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
     add_test(NAME kb_editor_play_history_headless

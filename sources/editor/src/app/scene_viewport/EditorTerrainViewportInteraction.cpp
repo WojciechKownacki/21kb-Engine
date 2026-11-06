@@ -10,7 +10,10 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "TerrainAnalysis.hpp"
+#include "console/EditorConsoleState.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorTerrainJobs.hpp"
 #include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
@@ -244,6 +247,12 @@ void ConsiderTerrainPick(
     return brush;
 }
 
+// The operations that keep working while the button is held (smoothing, building up, noise); a ramp or a stamp is one press.
+[[nodiscard]] bool IsHeldBrush(kb::terrain_editor::TerrainBrushMode mode) noexcept {
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    return mode != Mode::Ramp && mode != Mode::Stamp && mode != Mode::CutHole && mode != Mode::FillHole;
+}
+
 [[nodiscard]] std::optional<ResolvedTerrainPointer> ResolveTerrainPointer(
     HWND sourceWindow,
     HWND mainWindow,
@@ -385,9 +394,40 @@ bool EditorTerrainViewportInteraction::Stamp(
     if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select) {
         return false;
     }
+    if (EditorTerrainJobs::Active() != EditorTerrainJobKind::None) {
+        // The running job works on a copy of the terrain and would overwrite a stroke made meanwhile.
+        if (beginStroke) sceneContext.Console().Warning("Terrain", "A terrain job is running; wait for it or cancel it before sculpting.");
+        return true;
+    }
     const kb::terrain_editor::TerrainBrushStamp stamp{
         .localX = pointer->local.x,
         .localZ = pointer->local.z };
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    const bool paint = tool.mode == EditorTerrainToolMode::Paint;
+    if (beginStroke && !paint && tool.brush.mode == Mode::Flatten && EditorKeyDown(VK_MENU)) {
+        // Alt picks the height under the cursor as the height to flatten to.
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(pointer->entity);
+        if (terrain == nullptr) return true;
+        tool.brush.targetHeight = kb::terrain_editor::SampleTerrainHeight(*terrain, stamp.localX, stamp.localZ);
+        tool.brush.sampleTargetHeight = false;
+        return true;
+    }
+    if (beginStroke && !paint) {
+        tool.strokeBrush = tool.brush;
+        if (tool.brush.mode == Mode::Ramp) {
+            // A ramp is laid between where the button went down and where it goes up (FinishStroke).
+            tool.rampDragging = true;
+            tool.strokeActive = true;
+            tool.lastStampX = stamp.localX;
+            tool.lastStampZ = stamp.localZ;
+            return true;
+        }
+        if (const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(pointer->entity)) {
+            kb::terrain_editor::BeginTerrainStroke(*terrain, tool.strokeBrush, stamp);
+        }
+    } else if (!beginStroke && !paint && (tool.rampDragging || tool.brush.mode == Mode::Stamp)) {
+        return true;
+    }
     kb::terrain_editor::TerrainBrushStamp segmentStart = stamp;
     if (!beginStroke) {
         const float dx = pointer->local.x - tool.lastStampX;
@@ -412,11 +452,12 @@ bool EditorTerrainViewportInteraction::Stamp(
                 .falloff = tool.brush.falloff,
                 .noiseSeed = tool.brush.noiseSeed,
                 .erase = EditorKeyDown(VK_CONTROL),
+                .autoLayer = tool.paintAuto,
             },
             segmentStart, stamp,
             beginStroke, &error)
         : sceneContext.ApplyTerrainBrushStamp(
-            pointer->entity, CtrlInvertedBrush(tool.brush, EditorKeyDown(VK_CONTROL)), stamp, beginStroke, &error);
+            pointer->entity, CtrlInvertedBrush(tool.strokeBrush, EditorKeyDown(VK_CONTROL)), stamp, beginStroke, &error);
     if (!applied) {
         sceneContext.Console().Warning("Terrain", error.empty() ? "Terrain brush stamp failed." : error);
         return true;
@@ -428,6 +469,33 @@ bool EditorTerrainViewportInteraction::Stamp(
     return true;
 }
 
+void EditorTerrainViewportInteraction::FinishStroke(EditorSceneContext& sceneContext) {
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    tool.strokeActive = false;
+    tool.heldSculptElapsedSeconds = 0.0F;
+    std::string error;
+    bool done = true;
+    if (tool.rampDragging) {
+        tool.rampDragging = false;
+        const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity, &error);
+        done = terrain != nullptr;
+        if (done) {
+            kb::terrain_editor::TerrainBrushSettings ramp = tool.brush;
+            ramp.rampEndX = tool.hoverLocalX;
+            ramp.rampEndZ = tool.hoverLocalZ;
+            const kb::terrain_editor::TerrainBrushStamp start{ .localX = tool.lastStampX, .localZ = tool.lastStampZ };
+            kb::terrain_editor::BeginTerrainStroke(*terrain, ramp, start);
+            done = sceneContext.ApplyTerrainBrushStamp(entity, CtrlInvertedBrush(ramp, EditorKeyDown(VK_CONTROL)), start, true, &error);
+        }
+    }
+    if (done) done = sceneContext.CommitTerrainBrushStroke(&error);
+    if (!done) {
+        sceneContext.CancelTerrainBrushStroke();
+        sceneContext.Console().Warning("Terrain", error.empty() ? "Terrain stroke could not be committed." : error);
+    }
+}
+
 bool EditorTerrainViewportInteraction::TickActiveStroke(
     EditorSceneContext& sceneContext,
     float deltaSeconds) {
@@ -437,17 +505,11 @@ bool EditorTerrainViewportInteraction::TickActiveStroke(
         return false;
     }
     if (!EditorAsyncKeyDown(VK_LBUTTON)) {
-        tool.strokeActive = false;
-        tool.heldSculptElapsedSeconds = 0.0F;
-        std::string error;
-        if (!sceneContext.CommitTerrainBrushStroke(&error)) {
-            sceneContext.Console().Warning(
-                "Terrain",
-                error.empty() ? "Terrain stroke could not be committed." : error);
-        }
+        FinishStroke(sceneContext);
         ReleaseCapture();
         return true;
     }
+    if (!IsHeldBrush(tool.brush.mode)) return false;
     if (!EditorTerrainStrokeTickPolicy::Advance(deltaSeconds, tool.heldSculptElapsedSeconds)) {
         return false;
     }
@@ -460,7 +522,7 @@ bool EditorTerrainViewportInteraction::TickActiveStroke(
     std::string error;
     const bool applied = sceneContext.ApplyTerrainBrushStamp(
         entity,
-        CtrlInvertedBrush(tool.brush, EditorAsyncKeyDown(VK_CONTROL)),
+        CtrlInvertedBrush(tool.strokeBrush, EditorAsyncKeyDown(VK_CONTROL)),
         kb::terrain_editor::TerrainBrushStamp{
             .localX = tool.lastStampX,
             .localZ = tool.lastStampZ,

@@ -25,6 +25,7 @@
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "TerrainAnalysis.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 
@@ -580,6 +581,63 @@ void AppendTerrainBrushRing(
         }
         from = to;
     }
+    if (tool.rampDragging) {
+        // The ramp being laid: from where the button went down to the cursor.
+        const auto onGround = [&](float x, float z) {
+            const kb::scene::Vec3 ground = TerrainPointToViewport(
+                transform, translation, kb::scene::Vec3{ x, TerrainHeightAt(*terrain, x, z) + 0.04F, z });
+            return std::array<float, 3U>{ ground.x, ground.y, ground.z };
+        };
+        lines.push_back(kb::render::PhysicsDebugLine{
+            .from = onGround(tool.lastStampX, tool.lastStampZ),
+            .to = onGround(tool.hoverLocalX, tool.hoverLocalZ),
+            .color = color,
+            .alpha = 1.0F,
+        });
+    }
+}
+
+// The slope overlay: a net of lines laid on the terrain, green where it is flat through yellow to red where it
+// is 45 degrees or steeper. At most 64 lines across, so a big terrain stays cheap to draw.
+void AppendTerrainSlopeOverlay(
+    const EditorSceneContext& sceneContext,
+    const kb::math::DVec3& origin,
+    std::vector<kb::render::PhysicsDebugLine>& lines) {
+    const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+    if (!EditorTerrainService::ToolState().slopeOverlay || !sceneContext.IsProjectPluginEnabled("Editor.Terrain") ||
+        !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), entity)) {
+        return;
+    }
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+    if (terrain == nullptr) return;
+    const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
+    const kb::scene::Vec3 translation = kb::math::RelativeTo(sceneContext.Scene().Transforms().WorldTranslation(entity, transform), origin);
+    const std::uint32_t strideX = std::max(1U, (terrain->width - 1U) / 64U);
+    const std::uint32_t strideZ = std::max(1U, (terrain->height - 1U) / 64U);
+    const std::uint32_t countX = (terrain->width - 1U) / strideX + 1U;
+    const std::uint32_t countZ = (terrain->height - 1U) / strideZ + 1U;
+    const float cellX = terrain->worldSizeX / static_cast<float>(terrain->width - 1U);
+    const float cellZ = terrain->worldSizeZ / static_cast<float>(terrain->height - 1U);
+    const auto vertex = [&](std::uint32_t column, std::uint32_t row) {
+        const float x = static_cast<float>(column * strideX) * cellX - terrain->worldSizeX * 0.5F;
+        const float z = static_cast<float>(row * strideZ) * cellZ - terrain->worldSizeZ * 0.5F;
+        const kb::scene::Vec3 point = TerrainPointToViewport(transform, translation, kb::scene::Vec3{ x, TerrainHeightAt(*terrain, x, z) + 0.05F, z });
+        return std::pair{ std::array<float, 3U>{ point.x, point.y, point.z }, kb::terrain_editor::SampleTerrainSlopeDegrees(*terrain, x, z) };
+    };
+    const auto color = [](float degrees) {
+        const float t = std::clamp(degrees / 45.0F, 0.0F, 1.0F);
+        return t < 0.5F ? std::array<float, 3U>{ 0.2F + 1.6F * t, 0.85F, 0.2F } : std::array<float, 3U>{ 1.0F, 0.85F - 1.3F * (t - 0.5F), 0.2F };
+    };
+    lines.reserve(lines.size() + static_cast<std::size_t>(countX) * countZ * 2U);
+    for (std::uint32_t row = 0U; row < countZ; ++row) {
+        for (std::uint32_t column = 0U; column < countX; ++column) {
+            const auto [from, slope] = vertex(column, row);
+            for (const auto [nextColumn, nextRow] : { std::pair{ column + 1U, row }, std::pair{ column, row + 1U } }) {
+                if (nextColumn >= countX || nextRow >= countZ) continue;
+                lines.push_back(kb::render::PhysicsDebugLine{ .from = from, .to = vertex(nextColumn, nextRow).first, .color = color(slope), .alpha = 1.0F });
+            }
+        }
+    }
 }
 
 // Outlines the open world's cells around the camera: loaded cells in green,
@@ -644,6 +702,7 @@ void AppendNavigationMesh(
     }
     for (const auto& line : EditorMap2DWindow::SceneBrushLines(sceneContext, origin)) lines.push_back({.from = {line.from.x,line.from.y,line.from.z}, .to = {line.to.x,line.to.y,line.to.z}, .color = {line.color.x,line.color.y,line.color.z}, .alpha = line.alpha});
     AppendTerrainBrushRing(sceneContext, origin, lines);
+    AppendTerrainSlopeOverlay(sceneContext, origin, lines);
     AppendWorldPartitionGrid(sceneContext, origin, lines);
     AppendNavigationMesh(sceneContext, origin, lines);
     return lines;

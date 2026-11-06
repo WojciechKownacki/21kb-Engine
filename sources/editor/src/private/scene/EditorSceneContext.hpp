@@ -444,6 +444,14 @@ public:
         const EditorTerrainConfiguration& configuration,
         std::string* error = nullptr);
 
+    // Replaces the whole terrain of `entity` as one Undo step (a generated world, an eroded one). Refused
+    // when the entity's terrain is not the asset `expectedAssetId` the result was made from.
+    [[nodiscard]] bool ReplaceTerrain(
+        kb::scene::SceneEntity entity,
+        kb::assets::AssetId expectedAssetId,
+        kb::assets::TerrainAsset edited,
+        std::string label,
+        std::string* error = nullptr);
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
     [[nodiscard]] bool IsHierarchyEntitySelected(kb::scene::SceneEntity entity) const noexcept;

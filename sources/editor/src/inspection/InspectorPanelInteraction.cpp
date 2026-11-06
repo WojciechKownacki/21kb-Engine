@@ -1133,7 +1133,7 @@ template <typename Mutator>
     case InspectorPropertyId::TerrainBrushRadius: candidate.radius = value; break;
     case InspectorPropertyId::TerrainBrushStrength: candidate.strength = value; break;
     case InspectorPropertyId::TerrainBrushFalloff: candidate.falloff = value; break;
-    case InspectorPropertyId::TerrainFlattenHeight: candidate.targetHeight = value; break;
+    case InspectorPropertyId::TerrainFlattenHeight: candidate.targetHeight = value; candidate.sampleTargetHeight = false; break;
     case InspectorPropertyId::TerrainTerraceStep: candidate.terraceStep = value; break;
     default: return false;
     }

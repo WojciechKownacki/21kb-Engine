@@ -10,6 +10,8 @@
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
+#include "rendering/scene_viewport_toolbar/TerrainToolbarDrawer.hpp"
+#include "rendering/scene_viewport_toolbar/TerrainToolbarLabels.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -23,71 +25,6 @@
 
 namespace kb::editor {
 namespace {
-
-[[nodiscard]] std::string_view TerrainBrushLabel(kb::terrain_editor::TerrainBrushMode mode) {
-    using Mode = kb::terrain_editor::TerrainBrushMode;
-    switch (mode) {
-    case Mode::Raise: return EditorText("terrainTool.brush.raise", "Raise / Mountain");
-    case Mode::Lower: return EditorText("terrainTool.brush.lower", "Lower / Valley");
-    case Mode::Smooth: return EditorText("terrainTool.brush.smooth", "Smooth");
-    case Mode::Flatten: return EditorText("terrainTool.brush.flatten", "Flatten");
-    case Mode::Noise: return EditorText("terrainTool.brush.noise", "Noise");
-    case Mode::Terrace: return EditorText("terrainTool.brush.terrace", "Terrace");
-    case Mode::CutHole: return EditorText("terrainTool.brush.cutHole", "Cut Hole");
-    case Mode::FillHole: return EditorText("terrainTool.brush.fillHole", "Fill Hole");
-    }
-    return EditorText("terrainTool.brush.raise", "Raise / Mountain");
-}
-
-[[nodiscard]] std::string_view TerrainBrushDescription(kb::terrain_editor::TerrainBrushMode mode) {
-    using Mode = kb::terrain_editor::TerrainBrushMode;
-    switch (mode) {
-    case Mode::Raise: return EditorText("terrainTool.brushHint.raise", "Build height");
-    case Mode::Lower: return EditorText("terrainTool.brushHint.lower", "Carve terrain");
-    case Mode::Smooth: return EditorText("terrainTool.brushHint.smooth", "Soften details");
-    case Mode::Flatten: return EditorText("terrainTool.brushHint.flatten", "Level to height");
-    case Mode::Noise: return EditorText("terrainTool.brushHint.noise", "Add texture");
-    case Mode::Terrace: return EditorText("terrainTool.brushHint.terrace", "Create steps");
-    case Mode::CutHole: return EditorText("terrainTool.brushHint.cutHole", "Remove surface");
-    case Mode::FillHole: return EditorText("terrainTool.brushHint.fillHole", "Restore surface");
-    }
-    return {};
-}
-
-[[nodiscard]] std::string_view TerrainBrushToolbarLabel(kb::terrain_editor::TerrainBrushMode mode) {
-    using Mode = kb::terrain_editor::TerrainBrushMode;
-    switch (mode) {
-    case Mode::Raise: return EditorText("terrainTool.brushShort.raise", "Raise");
-    case Mode::Lower: return EditorText("terrainTool.brushShort.lower", "Lower");
-    default: return TerrainBrushLabel(mode);
-    }
-}
-
-[[nodiscard]] std::string_view TerrainBrushShapeLabel(kb::terrain_editor::TerrainBrushShape shape) {
-    using Shape = kb::terrain_editor::TerrainBrushShape;
-    switch (shape) {
-    case Shape::SoftRound: return EditorText("terrainTool.shape.softRound", "Soft Round");
-    case Shape::HardRound: return EditorText("terrainTool.shape.hardRound", "Hard Round");
-    case Shape::LinearRound: return EditorText("terrainTool.shape.linearRound", "Linear");
-    case Shape::Bell: return EditorText("terrainTool.shape.bell", "Bell");
-    case Shape::Ring: return EditorText("terrainTool.shape.ring", "Ring");
-    case Shape::Speckle: return EditorText("terrainTool.shape.speckle", "Speckle");
-    }
-    return EditorText("terrainTool.shape.softRound", "Soft Round");
-}
-
-[[nodiscard]] std::string_view TerrainBrushShapeDescription(kb::terrain_editor::TerrainBrushShape shape) {
-    using Shape = kb::terrain_editor::TerrainBrushShape;
-    switch (shape) {
-    case Shape::SoftRound: return EditorText("terrainTool.shapeHint.softRound", "Smooth feathered edge");
-    case Shape::HardRound: return EditorText("terrainTool.shapeHint.hardRound", "Solid precise edge");
-    case Shape::LinearRound: return EditorText("terrainTool.shapeHint.linearRound", "Even radial fade");
-    case Shape::Bell: return EditorText("terrainTool.shapeHint.bell", "Natural dome");
-    case Shape::Ring: return EditorText("terrainTool.shapeHint.ring", "Circular band");
-    case Shape::Speckle: return EditorText("terrainTool.shapeHint.speckle", "Organic texture");
-    }
-    return {};
-}
 
 void DrawTextAt(HDC dc, RECT rect, const char* text, COLORREF color, UINT format) {
     SetTextColor(dc, color);
@@ -177,30 +114,6 @@ void DrawOperationGlyph(HDC dc, const RECT& rect, kb::terrain_editor::TerrainBru
     }
     SelectObject(dc, oldPen);
     DeleteObject(pen);
-}
-
-void DrawTerrainModeButton(
-    HDC dc,
-    const RECT& rect,
-    std::string_view label,
-    const EditorTheme& theme,
-    bool active) {
-    const COLORREF fill = active ? RGB(36, 91, 111) : RGB(29, 34, 41);
-    const COLORREF border = active ? RGB(91, 190, 220) : RGB(59, 68, 80);
-    SceneViewportToolbarDrawing::FillRound(dc, rect, fill, border, 7);
-    GdiDrawing::DrawCenteredText(
-        dc, rect, label,
-        active ? RGB(239, 252, 255) : GdiDrawing::ToColorRef(theme.textSecondary));
-}
-
-void DrawTerrainValue(
-    HDC dc,
-    const RECT& rect,
-    std::string_view text,
-    const EditorTheme& theme) {
-    SceneViewportToolbarDrawing::FillRound(
-        dc, rect, RGB(22, 26, 32), RGB(52, 62, 74), 6);
-    GdiDrawing::DrawCenteredText(dc, rect, text, GdiDrawing::ToColorRef(theme.textPrimary));
 }
 
 } // namespace
@@ -317,39 +230,46 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     SceneViewportToolbarDrawing::FillRound(
         dc, rects.panel, RGB(20, 24, 30), RGB(67, 78, 92), 9);
 
-    const EditorTerrainToolMode visibleMode = tool.editingEnabled
-        ? tool.mode
-        : EditorTerrainToolMode::Select;
-    DrawTerrainModeButton(dc, rects.selectButton, EditorText("terrainTool.select", "Select"), theme, visibleMode == EditorTerrainToolMode::Select);
-    DrawTerrainModeButton(dc, rects.sculptButton, EditorText("terrainTool.sculpt", "Sculpt"), theme, visibleMode == EditorTerrainToolMode::Sculpt);
-    DrawTerrainModeButton(dc, rects.holesButton, EditorText("terrainTool.holes", "Holes"), theme, visibleMode == EditorTerrainToolMode::Holes);
-    DrawTerrainModeButton(dc, rects.paintButton, EditorText("terrainTool.paint", "Paint"), theme, visibleMode == EditorTerrainToolMode::Paint);
-    const std::string paintLayerLabel = EditorLocalization::Format("terrainTool.paintLayer", "Layer {index}",
-        { { "index", std::to_string(static_cast<unsigned>(tool.selectedMaterialLayer) + 1U) } });
-    SceneViewportToolbarDrawing::DrawValueButton(
-        dc, rects.brushButton, HeroIconKind::AdjustmentsHorizontal,
-        visibleMode == EditorTerrainToolMode::Paint ? std::string_view{ paintLayerLabel } : TerrainBrushToolbarLabel(tool.brush.mode),
-        theme, tool.brushMenuOpen);
-    SceneViewportToolbarDrawing::DrawValueButton(
-        dc, rects.brushShapeButton, HeroIconKind::RectangleGroup,
-        TerrainBrushShapeLabel(tool.brush.shape), theme, tool.brushShapeMenuOpen);
+    const EditorTerrainTool active = EditorTerrainService::ActiveTool(tool);
+    using Drawing = SceneViewportToolbarDrawing;
+    Drawing::DrawChip(dc, rects.sculptButton, EditorText("terrainTool.sculpt", "Sculpt"), theme, active == EditorTerrainTool::Sculpt);
+    Drawing::DrawChip(dc, rects.smoothButton, EditorText("terrainTool.smooth", "Smooth"), theme, active == EditorTerrainTool::Smooth);
+    Drawing::DrawChip(dc, rects.paintButton, EditorText("terrainTool.paint", "Paint"), theme, active == EditorTerrainTool::Paint);
+    Drawing::DrawChip(dc, rects.rampButton, EditorText("terrainTool.ramp", "Ramp"), theme, active == EditorTerrainTool::Ramp);
+    Drawing::DrawChip(dc, rects.stampButton, EditorText("terrainTool.stamp", "Stamp"), theme, active == EditorTerrainTool::Stamp);
+    Drawing::DrawChip(dc, rects.worldButton, EditorText("terrainTool.newWorld", "New World"), theme, tool.drawer == EditorTerrainDrawer::NewWorld);
 
-    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.sizeMinusButton, HeroIconKind::Minus, theme, false);
-    std::array<char, 32U> sizeValue{};
-    std::snprintf(sizeValue.data(), sizeValue.size(), "%.2g", static_cast<double>(tool.brush.radius));
-    const std::string sizeText = EditorLocalization::Format("terrainTool.size", "Size {value}", { { "value", sizeValue.data() } });
-    DrawTerrainValue(dc, rects.sizeValue, sizeText, theme);
-    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.sizePlusButton, HeroIconKind::Plus, theme, false);
+    // What the active tool can vary: Flatten for Smooth, a layer or Auto for Paint, how a stamp blends.
+    std::string variant;
+    if (active == EditorTerrainTool::Smooth) {
+        variant = tool.brush.mode == kb::terrain_editor::TerrainBrushMode::Flatten && !tool.brush.sampleTargetHeight
+            ? EditorLocalization::Format("terrainTool.flattenAt", "Flatten at {value}", { { "value", TerrainToolbarLabels::FormatNumber(tool.brush.targetHeight) } })
+            : std::string{ TerrainToolbarLabels::BrushToolbarLabel(tool.brush.mode) };
+    } else if (active == EditorTerrainTool::Paint) {
+        variant = tool.paintAuto
+            ? std::string{ EditorText("terrainTool.paintAuto", "Auto") }
+            : EditorLocalization::Format("terrainTool.paintLayer", "Layer {index}",
+                { { "index", std::to_string(static_cast<unsigned>(tool.selectedMaterialLayer) + 1U) } });
+    } else if (active == EditorTerrainTool::Stamp) {
+        using Blend = kb::terrain_editor::TerrainStampBlend;
+        variant = tool.brush.stampBlend == Blend::Add ? std::string{ EditorText("terrainTool.blend.add", "Blend: Add") }
+            : tool.brush.stampBlend == Blend::Max ? std::string{ EditorText("terrainTool.blend.max", "Blend: Max") }
+                                                  : std::string{ EditorText("terrainTool.blend.min", "Blend: Min") };
+    }
+    if (!variant.empty()) Drawing::DrawValueButton(dc, rects.variantButton, HeroIconKind::AdjustmentsHorizontal, variant, theme);
 
-    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.strengthMinusButton, HeroIconKind::Minus, theme, false);
-    std::array<char, 32U> strengthValue{};
-    std::snprintf(strengthValue.data(), strengthValue.size(), "%.2g", static_cast<double>(tool.brush.strength));
-    const std::string strengthText = visibleMode == EditorTerrainToolMode::Paint
-        ? EditorLocalization::Format("terrainTool.opacity", "Opacity {value}", { { "value", strengthValue.data() } })
-        : EditorLocalization::Format("terrainTool.strength", "Strength {value}", { { "value", strengthValue.data() } });
-    DrawTerrainValue(dc, rects.strengthValue, strengthText, theme);
-    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.strengthPlusButton, HeroIconKind::Plus, theme, false);
+    Drawing::DrawStepper(dc, rects.size.minus, rects.size.value, rects.size.plus,
+        EditorLocalization::Format("terrainTool.size", "Size {value}", { { "value", TerrainToolbarLabels::FormatNumber(tool.brush.radius) } }), theme);
+    Drawing::DrawStepper(dc, rects.strength.minus, rects.strength.value, rects.strength.plus,
+        active == EditorTerrainTool::Paint
+            ? EditorLocalization::Format("terrainTool.opacity", "Opacity {value}", { { "value", TerrainToolbarLabels::FormatNumber(tool.brush.strength) } })
+            : EditorLocalization::Format("terrainTool.strength", "Strength {value}", { { "value", TerrainToolbarLabels::FormatNumber(tool.brush.strength) } }),
+        theme);
+    Drawing::DrawChip(dc, rects.slopeButton, EditorText("terrainTool.slope", "Slope"), theme, tool.slopeOverlay);
+    Drawing::DrawChip(dc, rects.advancedButton, EditorText("terrainTool.advanced", "Advanced"), theme, tool.drawer == EditorTerrainDrawer::Advanced);
 
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(selected);
+    TerrainToolbarDrawer::Paint(dc, rects, theme, tool, terrain != nullptr ? terrain->width : 0U);
 }
 
 void SceneViewportToolbarRenderer::PaintTerrainPopup(
@@ -412,12 +332,12 @@ void SceneViewportToolbarRenderer::PaintTerrainPopup(
         RECT name{preview.right + 8, card.top + (shapes ? 11 : 7), card.right - 7, card.top + (shapes ? 31 : 26)};
         RECT description{preview.right + 8, name.bottom, card.right - 7, card.bottom - 6};
         EditorDialogStyle::PaintText(dc, name,
-            shapes ? TerrainBrushShapeLabel(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
-                   : TerrainBrushLabel(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
+            shapes ? TerrainToolbarLabels::BrushShapeLabel(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
+                   : TerrainToolbarLabels::BrushLabel(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
             EditorDialogStyle::Color(theme.textPrimary), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
         EditorDialogStyle::PaintText(dc, description,
-            shapes ? TerrainBrushShapeDescription(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
-                   : TerrainBrushDescription(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
+            shapes ? TerrainToolbarLabels::BrushShapeDescription(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
+                   : TerrainToolbarLabels::BrushDescription(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
             EditorDialogStyle::Color(theme.textSecondary), 11);
     }
 }

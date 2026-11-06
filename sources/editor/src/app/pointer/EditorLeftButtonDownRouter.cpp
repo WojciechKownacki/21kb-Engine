@@ -35,6 +35,7 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
+#include "app/scene_viewport/EditorTerrainFileDialog.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
@@ -367,24 +368,6 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
         ClientToScreen(window, &point);
     }
     return point;
-}
-
-[[nodiscard]] std::optional<std::filesystem::path> ShowTerrainHeightmapDialog(HWND owner) {
-    std::array<wchar_t, 32768U> path{};
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = owner;
-    const std::wstring filter = EditorFileDialogFilter({
-        { EditorText("fileDialog.heightmapFilter", "Heightmaps (*.png;*.raw;*.r16)"), "*.png;*.raw;*.r16" },
-        { EditorText("fileDialog.allFiles", "All files (*.*)"), "*.*" },
-    });
-    const std::wstring title = ScriptEditorTextEncoding::Widen(EditorText("fileDialog.importHeightmapTitle", "Import Terrain Heightmap"));
-    dialog.lpstrFilter = filter.c_str();
-    dialog.lpstrFile = path.data();
-    dialog.nMaxFile = static_cast<DWORD>(path.size());
-    dialog.lpstrTitle = title.c_str();
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    return GetOpenFileNameW(&dialog) != FALSE ? std::optional<std::filesystem::path>{ path.data() } : std::nullopt;
 }
 
 [[nodiscard]] std::optional<std::array<float, 4U>> ShowGraphColorPicker(
@@ -1708,7 +1691,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
         if (EditorTerrainViewportInteraction::Stamp(
                 messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, true)) {
-            SetCapture(messageWindow);
+            if (EditorTerrainService::ToolState().strokeActive) SetCapture(messageWindow);
             sceneViewport_.RequestPresent();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
@@ -1985,7 +1968,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
-            if (const std::optional<std::filesystem::path> path = ShowTerrainHeightmapDialog(mainWindow_)) {
+            if (const std::optional<std::filesystem::path> path = EditorTerrainFileDialog::PickHeightImage(mainWindow_, EditorText("fileDialog.importHeightmapTitle", "Import Terrain Heightmap"))) {
                 std::string error;
                 if (sceneContext_.ImportTerrainHeightmap(
                         sceneContext_.SelectedEntity(), *path,

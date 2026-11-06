@@ -153,7 +153,9 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "scene/EditorMap2DService.hpp"
+#include "TerrainAnalysis.hpp"
 #include "TerrainOps.hpp"
+#include "scene/EditorTerrainJobs.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
@@ -3394,6 +3396,138 @@ ReadScriptValue(
                 : *modeText == "hidden" ? kb::scene::VisibilityMode::Hidden
                 : static_cast<kb::scene::VisibilityMode>(255U);
             if (!kb::scene::IsVisibilityModeValid(desired)) {
+    if (*operation == "terrain_tool") {
+        // tool: none sculpt smooth flatten paint ramp stamp holes; stamp takes `image` (a height image), paint
+        // `auto` (the layer by slope); radius and strength are optional; `cycle` clicks the variant button that many times
+        // (Smooth to Flatten, the next paint layer and then Auto, the next stamp blend).
+        const auto alias = StringMember(step, "entity", error);
+        const auto name = StringMember(step, "tool", error);
+        if (!alias || !name) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        using Tool = EditorTerrainTool;
+        constexpr std::pair<std::string_view, Tool> names[]{ { "none", Tool::None }, { "sculpt", Tool::Sculpt }, { "smooth", Tool::Smooth },
+            { "flatten", Tool::Smooth }, { "paint", Tool::Paint }, { "ramp", Tool::Ramp }, { "stamp", Tool::Stamp }, { "holes", Tool::Holes } };
+        const auto* const found = std::ranges::find(names, *name, &std::pair<std::string_view, Tool>::first);
+        if (found == std::end(names)) return { false, "unknown terrain tool '" + *name + "' (none sculpt smooth flatten paint ramp stamp holes)" };
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (const auto image = StringMember(step, "image", error, false)) {
+            if (!EditorTerrainService::LoadStampImage(tool, *image, &error)) return { false, error };
+        }
+        const auto automatic = BoolMember(step, "auto", error, false);
+        const auto radius = NumberMember(step, "radius", error, false);
+        const auto strength = NumberMember(step, "strength", error, false);
+        const auto cycle = UInt32Member(step, "cycle", error, false);
+        if (!error.empty()) return { false, error };
+        if (automatic) tool.paintAuto = *automatic;
+        if (radius) tool.brush.radius = static_cast<float>(*radius);
+        if (strength) tool.brush.strength = static_cast<float>(*strength);
+        if (EditorTerrainService::ActiveTool(tool) != found->second &&
+            !EditorTerrainService::SelectTool(tool, found->second, state.context.TerrainForEditing(entity, &error), &error)) {
+            return { false, error };
+        }
+        if (*name == "flatten") tool.brush.mode = kb::terrain_editor::TerrainBrushMode::Flatten;
+        const kb::assets::TerrainAsset* const terrain = state.context.TerrainForEditing(entity, &error);
+        for (std::uint32_t click = 0U; cycle && click < *cycle && terrain != nullptr; ++click) {
+            EditorTerrainService::CycleToolVariant(tool, terrain->materialLayers.size());
+        }
+        return { true, "terrain tool " + *name };
+    }
+
+    if (*operation == "terrain_drawer") {
+        const auto name = StringMember(step, "drawer", error);
+        if (!name) return { false, error };
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (*name == "none") tool.drawer = EditorTerrainDrawer::None;
+        else if (*name == "new_world") tool.drawer = EditorTerrainDrawer::NewWorld;
+        else if (*name == "advanced") tool.drawer = EditorTerrainDrawer::Advanced;
+        else return { false, "'drawer' is none, new_world or advanced" };
+        return { true, "terrain drawer " + *name };
+    }
+
+    if (*operation == "terrain_slope_overlay") {
+        const auto enabled = BoolMember(step, "enabled", error);
+        if (!enabled) return { false, error };
+        EditorTerrainService::ToolState().slopeOverlay = *enabled;
+        return { true, *enabled ? "slope overlay on" : "slope overlay off" };
+    }
+
+    if (*operation == "terrain_world_wizard" || *operation == "terrain_erode") {
+        // The wizard: preset (island mountains plains valley, or any terrain preset), optional character 0..1 and
+        // seed. The erosion: kind thermal or hydraulic. Both run as a background job; `wait` (default true) waits
+        // for it for at most `timeout` seconds and applies it as one Undo step.
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const bool wizard = *operation == "terrain_world_wizard";
+        const auto name = StringMember(step, wizard ? "preset" : "kind", error);
+        const auto character = NumberMember(step, "character", error, false);
+        const auto seed = UInt32Member(step, "seed", error, false);
+        const bool wait = BoolMember(step, "wait", error, false).value_or(true);
+        const double timeout = NumberMember(step, "timeout", error, false).value_or(300.0);
+        if (!name || !error.empty()) return { false, error };
+        if (!wizard && *name != "thermal" && *name != "hydraulic") return { false, "'kind' is thermal or hydraulic" };
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (character) tool.worldCharacter = static_cast<float>(*character);
+        if (seed) tool.brush.noiseSeed = *seed;
+        const auto preset = std::ranges::find(kEditorTerrainWorldPresets, *name);
+        if (preset != kEditorTerrainWorldPresets.end()) tool.worldPreset = static_cast<std::uint8_t>(preset - kEditorTerrainWorldPresets.begin());
+        const bool started = wizard
+            ? EditorTerrainJobs::StartWorld(state.context, entity, *name, tool.brush.noiseSeed, tool.worldCharacter, &error)
+            : EditorTerrainJobs::StartErosion(state.context, entity,
+                *name == "thermal" ? EditorTerrainJobKind::Thermal : EditorTerrainJobKind::Hydraulic, &error);
+        if (!started) return { false, error };
+        if (!wait) return { true, "terrain job started" };
+        const bool finished = EditorTerrainJobs::Finish(state.context, timeout, &error);
+        return { finished, finished ? "terrain job applied" : error };
+    }
+
+    if (*operation == "terrain_job") {
+        // action: wait (applies the running job) or cancel (stops it; the terrain stays as it was).
+        const auto action = StringMember(step, "action", error);
+        if (!action) return { false, error };
+        if (*action == "cancel") {
+            EditorTerrainJobs::Cancel();
+            const bool finished = EditorTerrainJobs::Finish(state.context, 0.0, &error);
+            return { !finished && error == "cancelled", finished ? "the job finished before it was cancelled" : error };
+        }
+        if (*action != "wait") return { false, "'action' is wait or cancel" };
+        const bool finished = EditorTerrainJobs::Finish(
+            state.context, NumberMember(step, "timeout", error, false).value_or(300.0), &error);
+        return { finished, finished ? "terrain job applied" : error };
+    }
+
+    if (*operation == "assert_terrain_relief") {
+        // The heights span at least `min` (and at most `max`) world units from lowest to highest.
+        const auto alias = StringMember(step, "entity", error);
+        const auto minimum = NumberMember(step, "min", error);
+        const auto maximum = NumberMember(step, "max", error, false);
+        if (!alias || !minimum || !error.empty()) return { false, error };
+        const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(state.context.Scene(), ResolveEntity(state, *alias), &error);
+        if (!terrain.has_value()) return { false, error };
+        const kb::terrain_editor::TerrainStats stats = kb::terrain_editor::ComputeTerrainStats(*terrain);
+        const double relief = static_cast<double>(stats.maxHeight) - static_cast<double>(stats.minHeight);
+        const bool matched = relief >= *minimum && (!maximum || relief <= *maximum);
+        return { matched, matched ? "terrain relief matched" : "terrain relief is " + std::to_string(relief) };
+    }
+
+    if (*operation == "assert_terrain_layer_weight") {
+        // The share (0..1) of material `layer` at local x, z lies between `min` and `max`.
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        const auto layer = UInt32Member(step, "layer", error);
+        const double minimum = NumberMember(step, "min", error, false).value_or(0.0);
+        const double maximum = NumberMember(step, "max", error, false).value_or(1.0);
+        if (!alias || !x || !z || !layer || !error.empty() || *layer >= kb::assets::TerrainAsset::MaximumMaterialLayers) {
+            return { false, error.empty() ? "'layer' is a layer index from 0 to 3" : error };
+        }
+        const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(state.context.Scene(), ResolveEntity(state, *alias), &error);
+        if (!terrain.has_value()) return { false, error };
+        const double weight = kb::terrain_editor::SampleTerrainSurface(*terrain, static_cast<float>(*x), static_cast<float>(*z)).layerWeights[*layer];
+        const bool matched = weight >= minimum && weight <= maximum;
+        return { matched, matched ? "terrain layer weight matched" : "terrain layer weight is " + std::to_string(weight) };
+    }
+
                 return { false, "unknown visibility mode" };
             }
             for (std::size_t attempts = 0U; attempts < 3U; ++attempts) {

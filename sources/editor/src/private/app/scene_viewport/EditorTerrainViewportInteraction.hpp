@@ -44,6 +44,8 @@ public:
         const EditorMetrics& metrics,
         EditorSceneContext& sceneContext,
         bool beginStroke);
+    // The button went up: lays down a ramp that was dragged, then commits the stroke as one Undo step.
+    static void FinishStroke(EditorSceneContext& sceneContext);
     [[nodiscard]] static bool TickActiveStroke(
         EditorSceneContext& sceneContext,
         float deltaSeconds);

@@ -147,6 +147,100 @@ EditorTerrainToolState& EditorTerrainService::ToolState() noexcept {
     return state;
 }
 
+EditorTerrainTool EditorTerrainService::ActiveTool(const EditorTerrainToolState& tool) noexcept {
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select) return EditorTerrainTool::None;
+    if (tool.mode == EditorTerrainToolMode::Paint) return EditorTerrainTool::Paint;
+    if (tool.mode == EditorTerrainToolMode::Holes) return EditorTerrainTool::Holes;
+    switch (tool.brush.mode) {
+    case Mode::Smooth:
+    case Mode::Flatten: return EditorTerrainTool::Smooth;
+    case Mode::Ramp: return EditorTerrainTool::Ramp;
+    case Mode::Stamp: return EditorTerrainTool::Stamp;
+    default: return EditorTerrainTool::Sculpt;
+    }
+}
+
+bool EditorTerrainService::SelectTool(
+    EditorTerrainToolState& tool, EditorTerrainTool selected, const kb::assets::TerrainAsset* terrain, std::string* error) {
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    if (error != nullptr) error->clear();
+    tool.brushMenuOpen = false;
+    tool.brushShapeMenuOpen = false;
+    if (selected == EditorTerrainTool::None || selected == ActiveTool(tool)) {
+        tool.mode = EditorTerrainToolMode::Select;
+        tool.editingEnabled = false;
+        tool.strokeActive = false;
+        tool.rampDragging = false;
+        tool.hoverVisible = false;
+        return true;
+    }
+    if (selected == EditorTerrainTool::Paint) {
+        if (terrain == nullptr || terrain->materialLayers.empty()) {
+            if (error != nullptr) *error = "Add a material layer in the Inspector before painting.";
+            return false;
+        }
+        tool.selectedMaterialLayer = std::min<std::uint8_t>(tool.selectedMaterialLayer, static_cast<std::uint8_t>(terrain->materialLayers.size() - 1U));
+        tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+    } else if (selected == EditorTerrainTool::Stamp && tool.brush.stampImage == nullptr) {
+        if (error != nullptr) *error = "Pick a height image for the stamp first.";
+        return false;
+    }
+    tool.drawer = tool.drawer == EditorTerrainDrawer::NewWorld ? EditorTerrainDrawer::None : tool.drawer;
+    tool.editingEnabled = true;
+    tool.brush.sampleTargetHeight = true;
+    switch (selected) {
+    case EditorTerrainTool::Paint: tool.mode = EditorTerrainToolMode::Paint; return true;
+    case EditorTerrainTool::Holes: tool.mode = EditorTerrainToolMode::Holes; tool.brush.mode = Mode::CutHole; return true;
+    case EditorTerrainTool::Smooth: tool.brush.mode = Mode::Smooth; break;
+    case EditorTerrainTool::Ramp: tool.brush.mode = Mode::Ramp; break;
+    case EditorTerrainTool::Stamp: tool.brush.mode = Mode::Stamp; break;
+    default: tool.brush.mode = Mode::Raise; break;
+    }
+    tool.mode = EditorTerrainToolMode::Sculpt;
+    return true;
+}
+
+void EditorTerrainService::CycleToolVariant(EditorTerrainToolState& tool, std::size_t layerCount) noexcept {
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    switch (ActiveTool(tool)) {
+    case EditorTerrainTool::Smooth:
+        tool.brush.mode = tool.brush.mode == Mode::Smooth ? Mode::Flatten : Mode::Smooth;
+        tool.brush.sampleTargetHeight = true;
+        break;
+    case EditorTerrainTool::Paint:
+        // Layer 1 .. layer N, then Auto, then layer 1 again.
+        if (tool.paintAuto) {
+            tool.paintAuto = false;
+            tool.selectedMaterialLayer = 0U;
+        } else if (static_cast<std::size_t>(tool.selectedMaterialLayer) + 1U >= layerCount) {
+            tool.paintAuto = true;
+        } else {
+            ++tool.selectedMaterialLayer;
+        }
+        break;
+    case EditorTerrainTool::Stamp:
+        tool.brush.stampBlend = static_cast<kb::terrain_editor::TerrainStampBlend>(
+            (static_cast<std::uint8_t>(tool.brush.stampBlend) + 1U) % 3U);
+        break;
+    default: break;
+    }
+}
+
+bool EditorTerrainService::LoadStampImage(EditorTerrainToolState& tool, const std::filesystem::path& path, std::string* error) {
+    std::string reason;
+    std::shared_ptr<const kb::terrain_editor::TerrainStampImage> image =
+        kb::terrain_editor::TerrainHeightmapImporter::LoadStampImage(path, &reason);
+    if (image == nullptr) {
+        if (error != nullptr) *error = reason;
+        return false;
+    }
+    tool.brush.stampImage = std::move(image);
+    tool.stampImageName = path.filename().string();
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 bool EditorTerrainService::IsTerrainEntity(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
     return TerrainMetadata(scene, entity) != nullptr;
 }

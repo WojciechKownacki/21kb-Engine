@@ -1652,6 +1652,35 @@ bool EditorSceneContext::ConfigureTerrain(
     return true;
 }
 
+bool EditorSceneContext::ReplaceTerrain(
+    kb::scene::SceneEntity entity,
+    kb::assets::AssetId expectedAssetId,
+    kb::assets::TerrainAsset edited,
+    std::string label,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    if (captured->assetId != expectedAssetId) {
+        if (error != nullptr) *error = "The entity's terrain is no longer the one the result was made from";
+        return false;
+    }
+    if (!kb::assets::IsTerrainAssetValid(edited, error)) return false;
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, std::move(label),
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "The terrain could not be saved";
+        return false;
+    }
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(
+        std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
     return hierarchySelection_.Primary();
 }
