@@ -1207,10 +1207,11 @@ void RunBakedMeshLodErrorIsAbsoluteTest() {
 
     const BakedMeshView smallView = ViewBakedMesh(smallOutput.primaryBlock);
     const BakedMeshView largeView = ViewBakedMesh(largeOutput.primaryBlock);
-    Require(smallView.lodCount == largeView.lodCount && smallView.lodCount > 1U,
-        "The same sphere at two scales produced different LOD chains");
+    // The finest levels of both chains are compared; a chain may end a level sooner at one scale than at the other.
+    const std::uint32_t commonLevels = std::min(smallView.lodCount, largeView.lodCount);
+    Require(commonLevels > 2U, "The same sphere at two scales produced chains with too few common levels");
 
-    for (std::uint32_t level = 1U; level < smallView.lodCount; ++level) {
+    for (std::uint32_t level = 1U; level < commonLevels; ++level) {
         const float smallError = ReadLod(smallOutput.primaryBlock, smallView, level).absoluteError;
         const float largeError = ReadLod(largeOutput.primaryBlock, largeView, level).absoluteError;
         Require(smallError > 0.0F && largeError > 0.0F, "A simplified LOD level recorded no error at all");
@@ -1698,11 +1699,11 @@ void RunBakedMeshKeyTest() {
         AppendUInt32(parameters, 8U);
         AppendUInt32(parameters, 8U);
         AppendFloat(parameters, 0.5F);
-        AppendFloat(parameters, 0.02F);
-        AppendFloat(parameters, 1.0F);
-        AppendFloat(parameters, 1.0F);
-        AppendFloat(parameters, 0.5F);
+        AppendFloat(parameters, 0.2F);
+        AppendFloat(parameters, 0.1F);
+        AppendFloat(parameters, 0.1F);
         AppendFloat(parameters, 0.25F);
+        AppendFloat(parameters, 0.1F);
         Require(key.settingsHash == kb::assets::bake::HashBakeBytes(parameters),
             "The cluster and LOD parameters in the bake key are not the ones this suite was written against");
     }

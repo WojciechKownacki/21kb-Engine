@@ -69,15 +69,17 @@ inline constexpr std::uint32_t kTargetClusterGroupSize = 8U;
 // Eight levels reach 1/128 of the triangles: a dense scan seen from far away covers a few pixels.
 inline constexpr std::uint32_t kMaxLodCount = 8U;
 inline constexpr float kLodTriangleRatio = 0.5F;
-inline constexpr float kLodErrorFractionOfScale = 0.02F;
+// How far one step may deviate. A level is drawn only where its recorded error projects under the pixel budget,
+// so a generous limit costs no quality up close; it lets a noisy scan keep halving instead of stopping at once.
+inline constexpr float kLodErrorFractionOfScale = 0.2F;
 
 // Relative priority of every non-position attribute in the simplifier's error metric. Omitting
 // any channel lets a collapse preserve the silhouette while erasing a tangent seam, lightmap
 // UV, vertex colour/alpha, normal or primary UV detail.
-inline constexpr float kSimplifyNormalWeight = 1.0F;
-inline constexpr float kSimplifyTangentWeight = 1.0F;
-inline constexpr float kSimplifyUvWeight = 0.5F;
-inline constexpr float kSimplifyColorWeight = 0.25F;
+inline constexpr float kSimplifyNormalWeight = 0.1F;
+inline constexpr float kSimplifyTangentWeight = 0.1F;
+inline constexpr float kSimplifyUvWeight = 0.25F;
+inline constexpr float kSimplifyColorWeight = 0.1F;
 
 enum class MeshBakeStatus : std::uint8_t {
     Success,
