@@ -54,6 +54,7 @@
 #include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
+#include "scene/StaticMeshEditorSession.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
@@ -308,6 +309,28 @@ void InvalidatePanelKind(EditorApplicationState& state, DockPanelKind kind) noex
 }
 
 void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
+// Shows the Static Mesh window an Open asked for, closes its session once its tab is gone, and advances it; true
+// while the window keeps changing.
+[[nodiscard]] bool TickStaticMeshEditor(EditorApplicationState& state, float deltaSeconds) {
+    StaticMeshEditorSession& session = StaticMeshEditorSession::Instance();
+    if (session.ConsumeOpenRequest()) {
+        static_cast<void>(state.dockModel.Commands().SetPanelTitle(DockPanelKind::StaticMeshEditor, session.Title()));
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::StaticMeshEditor, DockArea::Center));
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+    }
+    if (!session.IsOpen()) return false;
+    const std::vector<DockPanel>& panels = state.dockModel.Queries().Panels();
+    if (std::ranges::none_of(panels, [](const DockPanel& panel) { return panel.kind == DockPanelKind::StaticMeshEditor && panel.visible; })) {
+        session.Close();
+        return false;
+    }
+    if (!session.Tick(deltaSeconds)) return session.Building();
+    state.sceneViewport.RequestPresent();
+    InvalidatePanelKind(state, DockPanelKind::StaticMeshEditor);
+    return true;
+}
+
     InvalidatePanelKind(state, DockPanelKind::Inspector);
 }
 
@@ -1509,6 +1532,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         InvalidateRect(state.window,nullptr,FALSE);
     }
     if (auto* graph=state.sceneContext.GameplayGraphEditor(); graph && !graph->manualPreview && graph->Execute(std::min(deltaSeconds,0.25F))) {
+    const bool staticMeshEditorChanged = TickStaticMeshEditor(state, deltaSeconds);
         EditorWindowInvalidator::InvalidateDockPanel(state.window,state.dockModel,state.floatingWindows,state.metrics,DockPanelKind::GameplayGraphEditor);
     }
     if (state.sceneContext.ConsumeBlendSpace2DEditorOpenRequest()) {

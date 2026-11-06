@@ -4,6 +4,7 @@
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
+#include "rendering/EditorPreviewRenderCamera.hpp"
 #include "rendering/SkeletalMeshEditorBonePicker.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
@@ -14,7 +15,6 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneAssets.hpp"
-#include "kb/render/SceneDepthPolicy.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
@@ -22,8 +22,6 @@
 #include <cmath>
 #include <string>
 #include <vector>
-
-#include <bx/math.h>
 
 namespace kb::editor {
 namespace {
@@ -272,30 +270,6 @@ void PaintCommands(HDC dc, const SkeletalMeshEditorPanelLayout& layout, const Ed
         kb::editor::DrawTextUtf8(dc, commands[index].label.c_str(), -1, &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
-}
-
-[[nodiscard]] kb::render::SceneRenderCamera BuildPreviewCamera(
-    const EditorViewportCameraState& camera,
-    std::uint32_t width,
-    std::uint32_t height) noexcept {
-    const EditorViewportCameraAxes axes = camera.Axes();
-    kb::render::SceneRenderCamera output{};
-    bx::mtxLookAt(
-        output.view.data(),
-        bx::Vec3{ axes.position.x, axes.position.y, axes.position.z },
-        bx::Vec3{
-            axes.position.x + axes.forward.x,
-            axes.position.y + axes.forward.y,
-            axes.position.z + axes.forward.z,
-        },
-        bx::Vec3{ axes.up.x, axes.up.y, axes.up.z });
-    const float aspect = height == 0U ? 1.0F :
-        static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
-    kb::render::SceneDepthPolicy::MakePerspective(
-        output.projection.data(), camera.VerticalFovDegrees(), aspect,
-        camera.NearClip(), camera.FarClip(),
-        kb::render::SceneDepthPolicy::HomogeneousDepth());
-    return output;
 }
 
 void DrawAdvancedPreviewRow(HDC dc, int left, int right, int& y, std::string_view label, bool enabled) {
@@ -678,7 +652,7 @@ bool SkeletalMeshEditorPanelRenderer::PresentViewport(
     EditorSceneBgfxViewport::PresentSettings settings{};
     settings.renderWidth = renderWidth;
     settings.renderHeight = renderHeight;
-    settings.cameraOverride = BuildPreviewCamera(
+    settings.cameraOverride = BuildEditorPreviewRenderCamera(
         sceneContext.AnimationPreviewCamera(), renderWidth, renderHeight);
     settings.viewportKey = panel.id;
     settings.editorSceneOverlaysEnabled = true;

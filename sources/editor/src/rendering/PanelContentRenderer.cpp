@@ -32,6 +32,8 @@
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
+#include "rendering/StaticMeshEditorPanel.hpp"
+#include "rendering/StaticMeshEditorViewport.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
@@ -413,6 +415,13 @@ void PanelContentRenderer::Paint(
         BlendSpace2DEditorPanel::Paint(dc,sceneViewportHost,
             {visibleContent.left,visibleContent.top,visibleContent.right-visibleContent.left,visibleContent.bottom-visibleContent.top},
             panel,theme,sceneContext,sceneViewport);
+        break;
+    case DockPanelKind::StaticMeshEditor:
+        StaticMeshEditorPanel::Paint(dc, visibleContent, StaticMeshEditorSession::Instance());
+        if (sceneViewport != nullptr) {
+            static_cast<void>(StaticMeshEditorViewport::Present(
+                *sceneViewport, sceneViewportHost, visibleContent, panel, StaticMeshEditorSession::Instance()));
+        }
         break;
     case DockPanelKind::AnimatorEditor:
         AnimatorEditorPanelRenderer{}.Paint(

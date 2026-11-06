@@ -28,6 +28,7 @@ enum class EditorAssetBrowserDoubleClickResult {
     AnimatorEditorOpened,
     TimelineEditorOpened,
     BlendSpace2DEditorOpened,
+    StaticMeshEditorOpened,
     GameplayGraphEditorOpened,
     ParticleEditorOpened,
     PrefabEditorOpened,

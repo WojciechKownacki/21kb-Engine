@@ -39,6 +39,8 @@ enum class DockPanelKind : std::uint8_t {
     GameplayGraphEditor,
     // Requests to a command-line AI agent that works on the project with the engine's tools.
     Agent,
+    // The levels of detail, materials and statistics of a static mesh asset.
+    StaticMeshEditor,
 };
 
 enum class DockSplitAxis : std::uint8_t {

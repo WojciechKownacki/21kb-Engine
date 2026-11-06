@@ -22,6 +22,7 @@
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/StaticMeshEditorSession.hpp"
 #include "project/EditorProjectPaths.hpp"
 
 #include <filesystem>
@@ -186,6 +187,10 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
             ? EditorAssetBrowserDoubleClickResult::TimelineEditorOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }
+        if (StaticMeshEditorSession::CanOpen(*metadata)) {
+            return StaticMeshEditorSession::Instance().Open(sceneContext.Scene(), *metadata)
+                ? EditorAssetBrowserDoubleClickResult::StaticMeshEditorOpened : EditorAssetBrowserDoubleClickResult::None;
+        }
         if (metadata->type == kb::scene::kBlendSpace2DAssetType) {
             return sceneContext.OpenBlendSpace2DEditorAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::BlendSpace2DEditorOpened : EditorAssetBrowserDoubleClickResult::None;

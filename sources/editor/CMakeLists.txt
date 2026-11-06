@@ -129,6 +129,7 @@ add_executable(kb_editor WIN32
     src/app/EditorWindowPointerHandler.cpp
     src/app/EditorWindowToolbarPointerHandler.cpp
     src/app/EditorWindowInvalidator.cpp
+    src/app/StaticMeshEditorPointerController.cpp
     src/app/EditorWindowResizeInteraction.cpp
     src/app/EditorWindowResizeHandler.cpp
     src/app/EditorWindowMessageRouter.cpp
@@ -835,6 +836,9 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesAssetIconResolver.cpp
     src/rendering/ProjectFilesAssetTileFrameRenderer.cpp
     src/rendering/ProjectFilesAssetTileMetrics.cpp
+    src/rendering/EditorPreviewRenderCamera.cpp
+    src/rendering/StaticMeshEditorPanel.cpp
+    src/rendering/StaticMeshEditorViewport.cpp
     src/rendering/ProjectFilesAssetTileRenderer.cpp
     src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
     src/rendering/ProjectFilesAssetViewRenderer.cpp
@@ -926,6 +930,8 @@ add_executable(kb_editor WIN32
     src/scene/TimelineEditorModel.cpp
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
+    src/scene/EditorPreviewStudio.cpp
+    src/scene/StaticMeshEditorSession.cpp
     src/scene/EditorHierarchyMainContentResolver.cpp
     src/scene/EditorHierarchyExpansionState.cpp
     src/scene/EditorHierarchyObjectFactory.cpp
@@ -1525,11 +1531,16 @@ if(BUILD_TESTING)
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+          src/scene/EditorPreviewStudio.cpp
+          src/scene/StaticMeshEditorSession.cpp
+          src/rendering/GdiDrawing.cpp
+          src/rendering/StaticMeshEditorPanel.cpp
     src/scene/material/MaterialEditorState.cpp
     src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
+          tests/EditorStaticMeshTests.cpp
     src/scene/material_preview/EditorMaterialGraphCookService.cpp
     src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
         src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp

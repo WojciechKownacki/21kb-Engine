@@ -6,6 +6,9 @@ int main(int argumentCount, char** arguments) {
     if (argumentCount==2 && std::string_view{arguments[1]}=="gameplay-graph") {
         kb::editor::tests::RunEditorGameplayGraphTests();return 0;
     }
+    if (argumentCount==2 && std::string_view{arguments[1]}=="static-mesh") {
+        kb::editor::tests::RunEditorStaticMeshTests();return 0;
+    }
     if (argumentCount==2 && std::string_view{arguments[1]}=="blend-space-2d") {
         kb::editor::tests::RunEditorBlendSpace2DTests();return 0;
     }
@@ -57,6 +60,7 @@ int main(int argumentCount, char** arguments) {
     }
     kb::editor::tests::RunEditorTimelineTests();
     kb::editor::tests::RunEditorBlendSpace2DTests();
+    kb::editor::tests::RunEditorStaticMeshTests();
     kb::editor::tests::RunEditorGameplayGraphTests();
     kb::editor::tests::RunEditorCommandStackTests();
     kb::editor::tests::RunEditorPlayModeSceneSessionTests();
