@@ -186,7 +186,8 @@ namespace {
         before.currentSkinningPalette != after.currentSkinningPalette || before.visible != after.visible ||
         before.castsShadow != after.castsShadow || before.shadowOnly != after.shadowOnly || before.layer != after.layer ||
         before.morphDeformationEnabled != after.morphDeformationEnabled || before.lodBias != after.lodBias ||
-        before.lodEnabled != after.lodEnabled || before.detailSwitchEnabled != after.detailSwitchEnabled;
+        before.lodEnabled != after.lodEnabled || before.detailSwitchEnabled != after.detailSwitchEnabled ||
+        before.isStatic != after.isStatic;
 }
 
 } // namespace

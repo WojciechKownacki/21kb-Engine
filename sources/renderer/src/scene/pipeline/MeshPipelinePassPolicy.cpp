@@ -113,7 +113,7 @@ bool MeshPipelinePassPolicy::HasOwnMotion(
     std::uint64_t motionFrame) noexcept {
     return instance.currentSkinningPalette.IsValid() || instance.previousSkinningPalette.IsValid() ||
         (material != nullptr && material->graphProgram.active && material->graphProgram.drawsOwnMotionVectors) ||
-        SceneRenderPreviousModel(instance, motionFrame) != instance.model;
+        (!instance.isStatic && SceneRenderPreviousModel(instance, motionFrame) != instance.model);
 }
 
 bool MeshPipelinePassPolicy::UsesDisabledAlphaBlend(const RenderMaterialResource* material) noexcept {

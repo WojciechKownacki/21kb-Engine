@@ -2500,7 +2500,7 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
     lighting.clusterDimensions = { 4U, 3U, 2U };
     lighting.environmentMode = SceneRenderEnvironmentMode::ImageBased;
-    lighting.globalIllumination = SceneRenderGlobalIlluminationMode::ProbeGrid;
+    lighting.globalIllumination = SceneRenderGlobalIlluminationMode::VoxelGrid;
     lighting.ibl.reflectionProbeCount = 2U;
     lighting.ibl.reflectionProbes[0].shape = SceneRenderReflectionProbeShape::Box;
     lighting.ibl.reflectionProbes[0].parallaxCorrection = true;
@@ -2527,7 +2527,7 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     Require(stats.reflectionProbeCount == 2U, "SceneRenderer validation did not report reflection probes");
     Require(stats.localReflectionProbeCount == 1U, "SceneRenderer validation did not report local reflection probes");
     Require(stats.parallaxCorrectedProbeCount == 1U, "Only a probe with both per-probe and global parallax enabled should report correction");
-    Require(stats.globalIlluminationMode == static_cast<std::uint32_t>(SceneRenderGlobalIlluminationMode::ProbeGrid) + 1U, "SceneRenderer validation did not report GI mode");
+    Require(stats.globalIlluminationMode == static_cast<std::uint32_t>(SceneRenderGlobalIlluminationMode::VoxelGrid) + 1U, "SceneRenderer validation did not report GI mode");
     Require(stats.submittedAreaLightCount == 1U, "SceneRenderer validation did not report submitted area lights");
     Require(stats.submittedVolumetricLightCount == 1U, "SceneRenderer validation did not report volumetric lights");
     Require(stats.contactShadowLightCount == 1U, "SceneRenderer validation did not report contact shadow lights");
@@ -2684,6 +2684,22 @@ void RunDirectionalShadowCameraCoverageTest() {
             NearlyEqual(std::abs(cascaded.cascadeCameras[1].projection[0]), 4.0F / 50.0F) &&
             NearlyEqual(std::abs(cascaded.cascadeCameras[2].projection[0]), 1.0F / 50.0F),
         "Cascade extents must shrink by a quarter from the shadow distance down to the nearest cascade");
+    // The sun's own cascades, resolution, filter, bias and normal bias replace the project's, and the bias and the
+    // normal offset are counted in texels of each cascade.
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{ .entityId = 3U, .kind = RenderLightKind::Directional, .castsShadow = true,
+        .shadowBias = 0.5F, .shadowNormalBias = 3.0F, .shadowFilter = RenderLightShadowFilter::Hard,
+        .shadowQuality = RenderLightShadowQuality::Low, .shadowCascadeCount = 2U, .shadowCascadeDistribution = 2.0F }));
+    const auto own = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(own.valid && own.binding.cascadeCount == 2U && own.atlasSize == 2U * (config.shadowMapSize / 2U),
+        "A light's own cascade count and shadow quality must replace the project's");
+    Require(NearlyEqual(std::abs(own.cascadeCameras[0].projection[0]), 1.0F / 25.0F) && NearlyEqual(std::abs(own.cascadeCameras[1].projection[0]), 1.0F / 50.0F),
+        "A light's cascade distribution must set how much wider each cascade reaches than the finer one");
+    Require(own.binding.params[3] == 1.0F, "A light's own filter must replace the project's");
+    const float coarseTexel = 100.0F / static_cast<float>(config.shadowMapSize / 2U);
+    Require(NearlyEqual(own.binding.cascadeBias[5], 3.0F * coarseTexel) && NearlyEqual(own.binding.cascadeBias[1], 3.0F * 50.0F / static_cast<float>(config.shadowMapSize / 2U)) &&
+            own.binding.cascadeBias[4] > 0.0F && own.binding.cascadeBias[0] < own.binding.cascadeBias[4],
+        "The normal offset must be the light's normal bias in texels of each cascade, and the depth bias must grow with the texel");
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{ .entityId = 3U, .kind = RenderLightKind::Directional, .castsShadow = true }));
     config.shadowCascadeCount = 1U;
     const bgfx::Caps* caps = bgfx::getCaps();
     const float textureYScale = caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F;

@@ -92,6 +92,8 @@ struct MeshRenderProxyDesc {
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
     bool morphDeformationEnabled = false;
+    // kb::scene::MeshRendererComponent::mobility == Static.
+    bool isStatic = false;
 };
 
 struct CameraRenderProxyDesc {
@@ -142,6 +144,13 @@ struct LightRenderProxyDesc {
     // camera's cullingMask by SceneForwardLightSelector - see LightComponent.hpp's own doc
     // comment for the default-safety reasoning.
     std::uint32_t layer = 1U;
+    // kb::scene::LightComponent shadow settings; 0 / Default = the project's (SceneRenderLightingConfig).
+    float shadowBias = 0.0F;
+    float shadowNormalBias = 0.0F;
+    RenderLightShadowFilter shadowFilter = RenderLightShadowFilter::Default;
+    RenderLightShadowQuality shadowQuality = RenderLightShadowQuality::Default;
+    std::uint32_t shadowCascadeCount = 0U;
+    float shadowCascadeDistribution = 0.0F;
 };
 
 // This proxy never produces a draw. It is a renderer-derived representation

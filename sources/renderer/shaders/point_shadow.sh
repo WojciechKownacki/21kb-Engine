@@ -11,8 +11,8 @@ SAMPLER2D(s_pointShadowMap, 1);
 SAMPLER2D(s_pointShadowMap, 9);
 #endif
 uniform vec4 u_pointShadowLight[32]; // xyz = light position, w = packed light slot (< 0 = none)
-uniform vec4 u_pointShadowDepth[32]; // x = near plane, y = far plane, z = depth bias (m), w = source radius (m)
-uniform vec4 u_pointShadowStrength[8]; // the shadow strength of light s in component s % 4 of entry s / 4
+uniform vec4 u_pointShadowDepth[32]; // x = near plane, y = far plane, z = depth bias (texels), w = source radius (m)
+uniform vec4 u_pointShadowParams[32]; // x = shadow strength, y = normal bias (texels), z = filter (0 by source size, 1 hard, 2 PCF, 3 PCSS)
 uniform vec4 u_pointShadowSpot[32];  // xyz = spot axis, w = tan(half fov) (0 = cube light)
 uniform vec4 u_pointShadowAtlas;    // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
 uniform vec4 u_pointShadowInfo;     // x = light count, y = texture v scale (+-0.5), z = strength
@@ -44,8 +44,8 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
             continue;
         }
         vec3 d = worldPos - u_pointShadowLight[s].xyz;
-        // Normal offset of 1.5 shadow texels at this distance (normal bias): no acne at grazing angles.
-        d += normal * (length(d) * 3.0 * u_pointShadowAtlas.w / max(u_pointShadowAtlas.z, 1.0));
+        // Normal offset of the light's normal bias in shadow texels at this distance: no acne at grazing angles.
+        d += normal * (length(d) * 2.0 * u_pointShadowParams[s].y * u_pointShadowAtlas.w / max(u_pointShadowAtlas.z, 1.0));
         vec3 a = abs(d);
         vec3 dir;
         vec3 up;
@@ -90,16 +90,15 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
 #else
         vec2 tileOrigin = vec2(face * tile, float(s) * tile);
 #endif
-        float bias = u_pointShadowDepth[s].z + z * 0.012;
-        int entry = int(float(s) * 0.25);
-        vec4 strengths = u_pointShadowStrength[entry];
-        int lane = s - entry * 4;
-        float strength = u_pointShadowInfo.z * (lane == 0 ? strengths.x : (lane == 1 ? strengths.y : (lane == 2 ? strengths.z : strengths.w)));
+        // The depth bias in shadow texels at this distance, and a millimetre against rounding.
+        float bias = u_pointShadowDepth[s].z * (2.0 * z * tanHalf / tile) + 0.001;
+        float strength = u_pointShadowInfo.z * u_pointShadowParams[s].x;
+        float filterMode = u_pointShadowParams[s].z;
         float lit = 0.0;
         float sourceRadius = u_pointShadowDepth[s].w;
         // Pixels of this tile one metre across the light's view spans at the receiver.
         float pxPerMetre = 0.5 * tile / (z * tanHalf);
-        if (sourceRadius > 0.0) {
+        if (filterMode > 2.5 || (sourceRadius > 0.0 && filterMode < 1.5)) {
             // Soft shadows from the light's size (PCSS): the occluders' mean distance sets the penumbra.
             float turn = 6.2831853 * fract(52.9829189 * fract(dot(worldPos, vec3(0.0671, 0.0058, 0.0372))));
             float search = clamp(sourceRadius * pxPerMetre, 1.0, 12.0);
@@ -121,6 +120,8 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
                 lit += KbPointShadowTap(tilePx + vec2(cos(a), sin(a)) * (r * penumbra), tileOrigin, z, nearPlane, farPlane, bias);
             }
             lit = occluders > 0.0 ? lit * (9.0 / 12.0) : 0.0;
+        } else if (filterMode > 0.5 && filterMode < 1.5) {
+            lit = 9.0 * KbPointShadowTap(tilePx, tileOrigin, z, nearPlane, farPlane, bias);
         } else {
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {

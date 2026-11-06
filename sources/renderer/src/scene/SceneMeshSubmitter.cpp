@@ -34,10 +34,6 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
         return 1U;
     case SceneRenderShadowFilter::Pcf3x3:
         return 9U;
-    case SceneRenderShadowFilter::Evsm:
-        return 4U;
-    case SceneRenderShadowFilter::Msm:
-        return 4U;
     case SceneRenderShadowFilter::Pcss:
         return 16U;
     }

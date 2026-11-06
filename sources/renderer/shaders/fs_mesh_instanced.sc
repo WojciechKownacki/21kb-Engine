@@ -192,10 +192,10 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
 
 float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
-    float biasedDepth = shadowCoord.z + u_shadowParams.x;
+    float biasedDepth = shadowCoord.z;
     float texelSize = max(u_shadowParams.z, 0.000001);
     float selectedShadow = 0.0;
-    if (penumbraScale > 0.0 && u_shadowParams.w >= 2.0) {
+    if (penumbraScale > 0.0 && u_shadowParams.w >= 2.5) {
         // Soft shadows from the light's source angle (PCSS): the mean depth of
         // the occluders around the point sets the penumbra the filter covers.
         float turn = 6.2831853 * fract(52.9829189 * fract(dot(shadowCoord.xy, vec2(4211.0, 2203.0))));
@@ -226,7 +226,7 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
                 shadowSamples += biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
             }
         }
-        selectedShadow = u_shadowParams.w < 2.0 ? hardShadow : shadowSamples * 0.11111111;
+        selectedShadow = u_shadowParams.w < 1.5 ? hardShadow : shadowSamples * 0.11111111;
     }
     return mix(1.0, 1.0 - u_shadowParams.y, selectedShadow);
 }
@@ -259,7 +259,7 @@ void main()
     float shadowVisible = 1.0;
     if (u_shadowParams.w > 0.5 && v_shadowFlags.x > 0.5) {
         vec4 coarserCoord;
-        vec4 shadowCoord = KbResolveShadowCascade(v_worldPos, coarserCoord);
+        vec4 shadowCoord = KbResolveShadowCascade(v_worldPos, normal, coarserCoord);
         if (shadowCoord.w > 0.5) {
             shadowVisible = SampleShadowVisibility(shadowCoord.xyz, shadowCoord.w - 1.0);
             if (coarserCoord.w > 0.0) {

@@ -551,8 +551,8 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     bool castsShadow = renderer.castsShadow;
     bool receivesShadow = renderer.receivesShadow;
     std::uint32_t layer = renderer.layer & visibility.mask;
-    std::int32_t lodBias = 0;
-    bool lodEnabled = true;
+    std::int32_t lodBias = renderer.lodBias;
+    bool lodEnabled = renderer.lodEnabled;
     bool morphDeformationEnabled = false;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
@@ -631,6 +631,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .lodBias = lodBias,
         .lodEnabled = lodEnabled,
         .morphDeformationEnabled = morphDeformationEnabled,
+        .isStatic = renderer.mobility == kb::scene::MeshMobility::Static,
     }));
     static_cast<void>(transform);
 }
@@ -668,6 +669,12 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .shadowStrength = light.shadowStrength,
         .shadowDistance = light.shadowDistance,
         .layer = light.layerMask,
+        .shadowBias = light.shadowBias,
+        .shadowNormalBias = light.shadowNormalBias,
+        .shadowFilter = static_cast<RenderLightShadowFilter>(light.shadowFilter),
+        .shadowQuality = static_cast<RenderLightShadowQuality>(light.shadowQuality),
+        .shadowCascadeCount = light.shadowCascadeCount,
+        .shadowCascadeDistribution = light.shadowCascadeDistribution,
     }));
     static_cast<void>(transform);
 }

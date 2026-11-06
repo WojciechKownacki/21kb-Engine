@@ -46,9 +46,23 @@ enum class RenderLightKind : std::uint8_t {
 enum class SceneRenderShadowFilter : std::uint8_t {
     Hard,
     Pcf3x3,
-    Evsm,
-    Msm,
     Pcss,
+};
+
+// A light's own shadow filter and quality over the project's (kb::scene::LightShadowFilter / LightShadowQuality).
+enum class RenderLightShadowFilter : std::uint8_t {
+    Default,
+    Hard,
+    Pcf,
+    Pcss,
+};
+
+enum class RenderLightShadowQuality : std::uint8_t {
+    Default,
+    Low,
+    Medium,
+    High,
+    Ultra,
 };
 
 enum class SceneRenderEnvironmentMode : std::uint8_t {
@@ -127,9 +141,6 @@ enum class SceneRenderLightingPath : std::uint8_t {
 enum class SceneRenderGlobalIlluminationMode : std::uint8_t {
     Disabled,
     SsGi,
-    Ddgi,
-    ProbeGrid,
-    Lightmaps,
     // Bounce light traced through a coarse voxel copy of the scene (all mesh instances as boxes), so
     // objects outside the camera's view still light what is on screen.
     VoxelGrid,
@@ -208,6 +219,8 @@ struct SceneRenderMeshInstance {
     bool detailSwitchEnabled = false;
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
+    // The mesh never moves while the scene runs (MeshMobility::Static): it has no motion to draw.
+    bool isStatic = false;
 };
 
 // The model an instance was drawn with in the previous motion frame, as seen from `motionFrame`: what it
@@ -353,7 +366,10 @@ struct SceneRenderLightingConfig {
     std::uint32_t shadowAtlasSize = 2048U;
     // How far from the camera the sun's shadow reaches.
     float shadowDistance = 150.0F;
-    float shadowDepthBias = 0.002F;
+    // Shadow bias along the light and the lookup's offset along the surface normal, both in texels of the shadow map
+    // (a light's own values replace them): a texel is the same size on screen whatever the map and the cascade.
+    float shadowDepthBias = 1.5F;
+    float shadowNormalBias = 1.0F;
     float shadowStrength = 1.0F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;
     // Point, spot and area lights that get a shadow map (at most 32, the atlas rows), picked by their importance in the
@@ -396,12 +412,13 @@ struct ScenePointShadowBinding {
     std::uint32_t lightCount = 0U;
     std::array<std::uint64_t, kMaxLights> entityId{};
     std::array<float, 4U * kMaxLights> positionRange{}; // xyz = light position, w = far plane
-    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m), z = source radius (m)
-    // Each light's Shadow Strength (0..1); full strength unless the light sets its own.
-    std::array<float, kMaxLights> lightStrength = [] {
-        std::array<float, kMaxLights> strengths{};
-        strengths.fill(1.0F);
-        return strengths;
+    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (texels), z = source radius (m)
+    // Per light: x = Shadow Strength (0..1; full unless the light sets its own), y = normal bias (texels),
+    // z = filter (0 the light's source size decides, 1 hard, 2 PCF only, 3 PCSS).
+    std::array<float, 4U * kMaxLights> lightParams = [] {
+        std::array<float, 4U * kMaxLights> params{};
+        for (std::uint32_t light = 0U; light < kMaxLights; ++light) params[light * 4U] = 1.0F;
+        return params;
     }();
     std::array<float, 4U * kMaxLights> spot{};          // xyz = spot axis, w = tan(half fov); w = 0 for a cube light
     std::array<float, 4U> atlas{};                      // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
@@ -423,6 +440,8 @@ struct SceneRenderShadowMapBinding {
     std::array<float, 16U * kMaxCascades> cascadeViewProjection{};
     std::array<float, 4U * kMaxCascades> cascadeAtlas{ 0.0F, 0.0F, 1.0F, 0.0F };
     std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin, z = blend width (tile uv)
+    // Per cascade: x = depth bias (shadow depth units), y = normal offset (m); both follow the cascade's texel size.
+    std::array<float, 4U * kMaxCascades> cascadeBias{};
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;

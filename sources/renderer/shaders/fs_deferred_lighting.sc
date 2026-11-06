@@ -232,7 +232,7 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
 
 float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
-    float biasedDepth = shadowCoord.z + u_deferredShadowParams.x;
+    float biasedDepth = shadowCoord.z;
     float texelSize = max(u_deferredShadowParams.z, 0.000001);
     float selectedShadow = 0.0;
     if (penumbraScale > 0.0 && u_deferredShadowParams.w >= 2.0) {
@@ -305,7 +305,7 @@ vec3 LightInFog(vec3 p, vec3 rayDir)
             lightVector = normalize(-dirKind.xyz);
             if (lightIndex == 0 && u_deferredShadowParams.w > 0.5) {
                 vec4 coarser;
-                vec4 shadowCoord = KbResolveShadowCascade(p, coarser);
+                vec4 shadowCoord = KbResolveShadowCascade(p, vec3(0.0, 0.0, 0.0), coarser);
                 if (shadowCoord.w > 0.5) {
                     attenuation = SampleShadowVisibility(shadowCoord.xyz, 0.0);
                 }
@@ -418,7 +418,7 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
     float shadowVisible = 1.0;
     if (u_deferredShadowParams.w > 0.5) {
         vec4 coarserCoord;
-        vec4 shadowCoord = KbResolveShadowCascade(worldPos, coarserCoord);
+        vec4 shadowCoord = KbResolveShadowCascade(worldPos, normal, coarserCoord);
         if (shadowCoord.w > 0.5) {
             shadowVisible = SampleShadowVisibility(shadowCoord.xyz, shadowCoord.w - 1.0);
             if (coarserCoord.w > 0.0) {

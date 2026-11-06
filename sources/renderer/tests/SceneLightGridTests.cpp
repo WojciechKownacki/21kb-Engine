@@ -150,6 +150,26 @@ void PointShadowLightsAreChosenByImportance() {
     Require(PointShadowPassPlanner::Select(equals, &camera, ~0U, one).entityIds[0] == 10U &&
             PointShadowPassPlanner::Select(equals, &camera, ~0U, one, &held).entityIds[0] == 11U,
         "a light that holds a row must keep it against an equal newcomer");
+
+    // Bias, normal bias, filter and strength: the light's own values, else the project's.
+    LightRenderProxyDesc custom = ShadowLightAt(20U, 3.0F);
+    custom.shadowBias = 0.5F;
+    custom.shadowNormalBias = 2.0F;
+    custom.shadowFilter = RenderLightShadowFilter::Hard;
+    custom.shadowStrength = 0.4F;
+    RenderScene biased;
+    static_cast<void>(biased.UpsertLight(custom));
+    static_cast<void>(biased.UpsertLight(ShadowLightAt(21U, 4.0F)));
+    SceneRenderLightingConfig project;
+    project.shadowsEnabled = true;
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights> owners{};
+    const PointShadowSetup setup = PointShadowPassPlanner::Build(biased, project, &camera, ~0U, BGFX_INVALID_HANDLE, owners);
+    Require(setup.valid && setup.binding.depthParams[1] == 0.5F && setup.binding.lightParams[0] == 0.4F && setup.binding.lightParams[1] == 2.0F &&
+            setup.binding.lightParams[2] == 1.0F,
+        "a light's own bias, normal bias, strength and filter must reach its atlas row");
+    Require(setup.binding.depthParams[5] == project.shadowDepthBias && setup.binding.lightParams[4] == 1.0F &&
+            setup.binding.lightParams[5] == project.shadowNormalBias && setup.binding.lightParams[6] == 0.0F,
+        "a light without its own settings must take the project's bias and normal bias and filter by its source size");
 }
 
 // A light keeps its row of the atlas while the camera reorders the lights, a row freed by a light that left stays

@@ -216,14 +216,17 @@ PointShadowSetup PointShadowPassPlanner::Build(
         binding.positionRange[slot * 4U + 2U] = light.position[2];
         binding.positionRange[slot * 4U + 3U] = far;
         binding.depthParams[slot * 4U + 0U] = near;
-        binding.depthParams[slot * 4U + 1U] = std::max(lightingConfig.shadowDepthBias * 10.0F, 0.01F);
+        binding.depthParams[slot * 4U + 1U] = std::max(light.shadowBias > 0.0F ? light.shadowBias : lightingConfig.shadowDepthBias, 0.0F);
         // An area light's shadows soften with its size (its width and Height):
         // the radius of a disc of the same area.
         const bool area = light.kind == RenderLightKind::AreaRect || light.kind == RenderLightKind::AreaDisk ||
             light.kind == RenderLightKind::Tube;
         binding.depthParams[slot * 4U + 2U] = std::max(light.sourceRadius,
             area ? 0.5F * std::sqrt(std::max(light.areaWidth * light.areaHeight, 0.0F)) : 0.0F);
-        binding.lightStrength[slot] = std::clamp(light.shadowStrength, 0.0F, 1.0F);
+        binding.lightParams[slot * 4U + 0U] = std::clamp(light.shadowStrength, 0.0F, 1.0F);
+        binding.lightParams[slot * 4U + 1U] = std::max(light.shadowNormalBias > 0.0F ? light.shadowNormalBias : lightingConfig.shadowNormalBias, 0.0F);
+        binding.lightParams[slot * 4U + 2U] = static_cast<float>(light.shadowFilter == RenderLightShadowFilter::Hard ? 1
+            : light.shadowFilter == RenderLightShadowFilter::Pcf ? 2 : light.shadowFilter == RenderLightShadowFilter::Pcss ? 3 : 0);
         const bx::Vec3 eye{ light.position[0], light.position[1], light.position[2] };
         if (light.kind == RenderLightKind::Spot) {
             const auto axis = SceneLightShaderData::Pack(light).texels[0];

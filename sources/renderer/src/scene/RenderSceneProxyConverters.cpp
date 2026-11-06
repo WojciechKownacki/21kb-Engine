@@ -148,6 +148,7 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .detailSwitchEnabled = mesh.detailSwitchEnabled,
         .lodBias = mesh.lodBias,
         .lodEnabled = mesh.lodEnabled,
+        .isStatic = mesh.isStatic,
     };
 }
 

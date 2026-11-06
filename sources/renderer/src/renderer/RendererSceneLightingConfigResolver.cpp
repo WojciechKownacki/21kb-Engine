@@ -37,6 +37,7 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .shadowAtlasSize = requested.shadowAtlasSize != defaultConfig.shadowAtlasSize ? requested.shadowAtlasSize : fallback.shadowAtlasSize,
         .shadowDistance = requested.shadowDistance != defaultConfig.shadowDistance ? requested.shadowDistance : fallback.shadowDistance,
         .shadowDepthBias = requested.shadowDepthBias != defaultConfig.shadowDepthBias ? requested.shadowDepthBias : fallback.shadowDepthBias,
+        .shadowNormalBias = requested.shadowNormalBias != defaultConfig.shadowNormalBias ? requested.shadowNormalBias : fallback.shadowNormalBias,
         .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
         .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
         .pointShadowMaxLights = requested.pointShadowMaxLights != defaultConfig.pointShadowMaxLights ? requested.pointShadowMaxLights : fallback.pointShadowMaxLights,
@@ -104,10 +105,6 @@ std::uint32_t RendererSceneLightingConfigResolver::ShadowFilterSampleCount(Scene
         return 1U;
     case SceneRenderShadowFilter::Pcf3x3:
         return 9U;
-    case SceneRenderShadowFilter::Evsm:
-        return 4U;
-    case SceneRenderShadowFilter::Msm:
-        return 4U;
     case SceneRenderShadowFilter::Pcss:
         return 16U;
     }
