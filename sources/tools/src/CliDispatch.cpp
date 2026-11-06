@@ -439,6 +439,9 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
                  [--press <Key>@<frame>[+<frames>] ... (holds a key: --press Space@30, --press E@10+20)]
+                 [--click <widget path|x,y>@<frame> ... (clicks a widget or a point of the 1280x720 view,
+                  or --viewport: --click Menu/PlayButton@10; the pointer arrives the frame before,
+                  presses on the frame, lets go on the next; the run says what was under it and who answered)]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
                  [--workers <1..64>] [--ecs-history <1..256> with --report ecs]
                  [--ecs-parallelism systems|chunks|combined] [--deterministic]
@@ -457,9 +460,9 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                and 1920000 total PCM frames). --pcm-frames overrides audio frames
                per tick; the default follows the sample rate and --dt.
                --report ai shows the last AI rule, condition, action, target and state.
-                 [--click <widget path|x,y>@<frame> ... (clicks a widget or a point of the 1280x720 view,
-                  or --viewport: --click Menu/PlayButton@10; the pointer arrives the frame before,
-                  presses on the frame, lets go on the next; the run says what was under it and who answered)]
+               --report ui lists every laid-out widget (path, rectangle, text, event name), the scripts that answer
+               its events, the --click results and every widget event delivered with the frame and the number of
+               behaviours that answered (schema 21kb.ui-report/v1).
                --report world-memory states what the streamed worlds hold by kind (assets,
                instances, scripts, physics, graphics; each measured, estimated or
                unavailable) against what the streaming budget charged; see
@@ -478,9 +481,6 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                inspect, recompress, split and patch packs and pack sets.
                  sign --key <key file> [--content-key <file>] <pack.kbpack>
                  verify [--anchor <file> | --public-key <hex>
-               --report ui lists every laid-out widget (path, rectangle, text, event name), the scripts that answer
-               its events, the --click results and every widget event delivered with the frame and the number of
-               behaviours that answered (schema 21kb.ui-report/v1).
                         [--content-key <file>]] <pack.kbpack>
                  info <pack.kbpack>
                  compress [--level <0-19>] <input.kbpack> <output.kbpack>
