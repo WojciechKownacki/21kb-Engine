@@ -1,6 +1,7 @@
 #include "scene/EditorTerrainService.hpp"
 
 #include "TerrainHeightmapImporter.hpp"
+#include "TerrainLayerPainter.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
@@ -9,9 +10,12 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <memory>
@@ -46,6 +50,28 @@ namespace {
         error.clear();
     }
     return {};
+}
+
+// The ground a new terrain wears: grass on all of it, and rock to paint on cliffs (Auto painting gives steep
+// ground the last layer). The materials are shared by every new terrain: one that exists is used as it is.
+struct DefaultTerrainLayer {
+    std::string_view name;
+    std::array<float, 3U> color;
+    float roughness;
+};
+constexpr std::array<DefaultTerrainLayer, 2U> kDefaultTerrainLayers{ {
+    { "Terrain Grass", { 0.22F, 0.38F, 0.10F }, 0.95F },
+    { "Terrain Rock", { 0.38F, 0.36F, 0.33F }, 0.90F },
+} };
+
+[[nodiscard]] const kb::assets::AssetMetadata* FindAssetByPath(const kb::scene::Scene& scene, const std::filesystem::path& path) {
+    const auto found = std::ranges::find_if(scene.Assets().Manager().Registry().All(), [&path](const kb::assets::AssetMetadata& candidate) {
+        std::error_code leftError;
+        std::error_code rightError;
+        return std::filesystem::weakly_canonical(candidate.physicalPath, leftError) == std::filesystem::weakly_canonical(path, rightError) &&
+            !leftError && !rightError;
+    });
+    return found == scene.Assets().Manager().Registry().All().end() ? nullptr : &*found;
 }
 
 [[nodiscard]] const kb::assets::AssetMetadata* TerrainMetadata(
@@ -175,16 +201,33 @@ bool EditorTerrainService::Create(
         if (error != nullptr) *error = "A unique terrain asset path could not be allocated";
         return false;
     }
-    const kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset();
+    for (const DefaultTerrainLayer& layer : kDefaultTerrainLayers) {
+        const std::filesystem::path file = path.parent_path() / (std::string{ layer.name } + ".kbmat");
+        std::error_code existsError;
+        if (std::filesystem::exists(file, existsError)) continue;
+        kb::render::RenderMaterialAssetData material{};
+        material.desc.baseColor[0] = layer.color[0];
+        material.desc.baseColor[1] = layer.color[1];
+        material.desc.baseColor[2] = layer.color[2];
+        material.desc.roughnessFactor = layer.roughness;
+        if (!kb::render::RenderMaterialAssetWriter::Save(file, material)) {
+            if (error != nullptr) *error = "Default terrain material could not be written: " + file.generic_string();
+            return false;
+        }
+    }
+    static_cast<void>(scene.Assets().Discover());
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset();
+    for (const DefaultTerrainLayer& layer : kDefaultTerrainLayers) {
+        const kb::assets::AssetMetadata* material = FindAssetByPath(scene, path.parent_path() / (std::string{ layer.name } + ".kbmat"));
+        if (material == nullptr || !kb::terrain_editor::AddTerrainMaterialLayer(terrain, material->id.value)) {
+            if (error != nullptr) *error = "Default terrain material was saved but asset discovery did not register it: " + std::string{ layer.name };
+            return false;
+        }
+    }
     if (!kb::assets::TerrainAssetIO::Save(path, terrain, error)) return false;
     static_cast<void>(scene.Assets().Discover());
-    const auto metadata = std::ranges::find_if(scene.Assets().Manager().Registry().All(), [&path](const kb::assets::AssetMetadata& candidate) {
-        std::error_code leftError;
-        std::error_code rightError;
-        return std::filesystem::weakly_canonical(candidate.physicalPath, leftError) == std::filesystem::weakly_canonical(path, rightError) &&
-            !leftError && !rightError;
-    });
-    if (metadata == scene.Assets().Manager().Registry().All().end()) {
+    const kb::assets::AssetMetadata* metadata = FindAssetByPath(scene, path);
+    if (metadata == nullptr) {
         if (error != nullptr) *error = "Terrain asset was saved but asset discovery did not register it";
         return false;
     }
