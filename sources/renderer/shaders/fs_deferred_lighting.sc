@@ -125,6 +125,17 @@ void ReadSceneLight(int lightIndex, out vec4 dirKind, out vec4 positionRange, ou
     }
 }
 
+// Whether the light casts a shadow (the sign of areaRight.w, see SceneLightShaderData). Only such a light has a
+// row in the point-shadow atlas, so the others skip the search for it.
+bool SceneLightCastsShadow(int lightIndex)
+{
+    float flag = u_deferredLightAreaRight[lightIndex].w;
+    if (u_sceneLightGridDimensions.w > 0.5) {
+        flag = KbLightGridTexel(float(lightIndex) * 5.0 + 4.0).w;
+    }
+    return flag > 0.0;
+}
+
 // Screen-space contact shadow (Contact Shadow Length): 12 steps
 // toward the light over `contactLength` metres against the depth buffer; a surface just in front of
 // the step hides the light. Catches the small shadows a shadow map is too coarse for.
@@ -440,7 +451,11 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
             int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular,
                 shadingModel, customData0, customData1, modelColor, irisNormal, iris, layeredSubsurface);
-            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos, normal);
+            float pointShadow = 1.0;
+            if (dot(directLight, directLight) > 0.0 && SceneLightCastsShadow(lightIndex)) {
+                pointShadow = KbPointShadowFactor(lightIndex, worldPos, normal);
+            }
+            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * pointShadow;
         }
     }
 
