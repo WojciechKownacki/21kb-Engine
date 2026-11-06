@@ -245,12 +245,15 @@ TerrainLayerPaintResult ApplyTerrainLayerPaintSegment(
             if (influence <= 0.0F) continue;
             std::uint8_t* weights = terrain.layerWeights.data() +
                 (static_cast<std::size_t>(y) * terrain.layerWeightWidth + static_cast<std::uint32_t>(x)) * kChannels;
-            const std::uint32_t before = weights[settings.layerIndex];
+            const std::uint32_t layer = settings.autoLayer && !settings.erase
+                ? (SampleTerrainSlopeDegrees(terrain, worldX, worldZ) >= kTerrainAutoRockSlopeDegrees ? layerCount - 1U : 0U)
+                : settings.layerIndex;
+            const std::uint32_t before = weights[layer];
             const float target = settings.erase ? 0.0F : 255.0F;
             const std::uint32_t after = static_cast<std::uint32_t>(std::lround(
                 std::lerp(static_cast<float>(before), target, influence)));
             if (after == before) continue;
-            NormalizeAfterTargetChange(weights, layerCount, settings.layerIndex, after);
+            NormalizeAfterTargetChange(weights, layerCount, layer, after);
             MarkChanged(result, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
         }
     }

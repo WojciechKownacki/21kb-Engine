@@ -17,6 +17,7 @@ enum class TerrainGeneratorKind : std::uint8_t {
     Ridged,  // mountain ranges with sharp crests
     Island,  // land that falls to the sea at the edges
     Plateau, // flat-topped mesas with cliffs
+    Valley,  // a flat floor along z between walls that rise to the sides
 };
 
 // A whole heightmap from noise. Heights are baseHeight + amplitude x a 0..1 shape (fBm lies around
@@ -41,6 +42,9 @@ struct TerrainGeneratorSettings {
     // Plateau: the noise level above which mesas stand, and how soft their cliffs are.
     float plateauLevel = 0.55F;
     float plateauSoftness = 0.04F;
+    // Valley: the floor's half width as a share of the half size, and how wide the walls take to rise.
+    float valleyWidth = 0.15F;
+    float valleyWall = 0.7F;
     // Add to the existing heights instead of replacing them.
     bool additive = false;
 };

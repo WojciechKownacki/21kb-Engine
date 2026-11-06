@@ -716,27 +716,79 @@ void RunBackgroundTaskTest() {
 }
 
 void RunPresetTest() {
-    Require(kb::terrain_editor::IsTerrainPreset("mountains") && !kb::terrain_editor::IsTerrainPreset("moon") && kb::terrain_editor::TerrainPresets().size() == 5U, "presets are named");
+    Require(kb::terrain_editor::IsTerrainPreset("mountains") && !kb::terrain_editor::IsTerrainPreset("moon") && kb::terrain_editor::TerrainPresets().size() == 7U, "presets are named");
     kb::terrain_editor::TerrainTaskControl control;
     std::string error;
     kb::assets::TerrainAsset flat = kb::assets::MakeFlatTerrainAsset(129U, 256.0F, 256.0F);
     const kb::assets::TerrainAsset untouched = flat;
-    Require(kb::terrain_editor::ApplyTerrainPreset(flat, "flat", 1U, control, error) && flat.heights == untouched.heights, "the flat preset leaves the terrain flat");
-    Require(!kb::terrain_editor::ApplyTerrainPreset(flat, "moon", 1U, control, error) && error.find("hills") != std::string::npos, "an unknown preset lists the known ones");
-    for (const std::string_view name : { "hills", "mountains", "island", "plateau" }) {
+    Require(kb::terrain_editor::ApplyTerrainPreset(flat, "flat", 1U, 0.5F, control, error) && flat.heights == untouched.heights, "the flat preset leaves the terrain flat");
+    Require(!kb::terrain_editor::ApplyTerrainPreset(flat, "moon", 1U, 0.5F, control, error) && error.find("hills") != std::string::npos, "an unknown preset lists the known ones");
+    for (const std::string_view name : { "plains", "hills", "valley", "mountains", "island", "plateau" }) {
         kb::assets::TerrainAsset a = untouched;
         kb::assets::TerrainAsset b = untouched;
-        Require(kb::terrain_editor::ApplyTerrainPreset(a, name, 12U, control, error), error.c_str());
+        Require(kb::terrain_editor::ApplyTerrainPreset(a, name, 12U, 0.5F, control, error), error.c_str());
         control.maxWorkers = 1U;
-        Require(kb::terrain_editor::ApplyTerrainPreset(b, name, 12U, control, error), error.c_str());
+        Require(kb::terrain_editor::ApplyTerrainPreset(b, name, 12U, 0.5F, control, error), error.c_str());
         control.maxWorkers = 0U;
         Require(a.heights == b.heights && a.heights != untouched.heights, "a preset is the same world on one thread and on many");
         const kb::terrain_editor::TerrainStats stats = kb::terrain_editor::ComputeTerrainStats(a);
-        Require(stats.maxHeight - stats.minHeight > 10.0F && std::isfinite(stats.maxHeight), "a preset makes relief");
+        Require(stats.maxHeight - stats.minHeight > 5.0F && std::isfinite(stats.maxHeight), "a preset makes relief");
         kb::assets::TerrainAsset other = untouched;
-        Require(kb::terrain_editor::ApplyTerrainPreset(other, name, 13U, control, error) && other.heights != a.heights, "another seed is another world");
+        Require(kb::terrain_editor::ApplyTerrainPreset(other, name, 13U, 0.5F, control, error) && other.heights != a.heights, "another seed is another world");
         if (name == "mountains") RequireHash(kb::terrain_editor::HashTerrainHeights(a), 0x963DCA1A8C73E1B4ULL, "mountains preset");
     }
+    // A valley has a floor along z lower than its walls.
+    kb::assets::TerrainAsset valley = untouched;
+    valley.holes[100] = 1U;
+    Require(kb::terrain_editor::ApplyTerrainPreset(valley, "valley", 5U, 0.5F, control, error), error.c_str());
+    const auto columnMean = [&valley](std::uint32_t first, std::uint32_t last) {
+        double sum = 0.0;
+        for (std::uint32_t z = 0U; z < valley.height; ++z) for (std::uint32_t x = first; x < last; ++x) sum += valley.heights[static_cast<std::size_t>(z) * valley.width + x];
+        return sum / (static_cast<double>(valley.height) * (last - first));
+    };
+    Require(std::ranges::all_of(valley.holes, [](std::uint8_t hole) { return hole == 0U; }), "a new world has no holes");
+    Require(columnMean(0U, 20U) > columnMean(54U, 74U) + 20.0 && columnMean(109U, 129U) > columnMean(54U, 74U) + 20.0, "a valley is lower in the middle than at its sides");
+}
+
+void RunCharacterTest() {
+    kb::terrain_editor::TerrainTaskControl control;
+    std::string error;
+    const kb::assets::TerrainAsset flat = kb::assets::MakeFlatTerrainAsset(129U, 256.0F, 256.0F);
+    const auto relief = [&](float character) {
+        kb::assets::TerrainAsset world = flat;
+        Require(kb::terrain_editor::ApplyTerrainPreset(world, "mountains", 7U, character, control, error), error.c_str());
+        const kb::terrain_editor::TerrainStats stats = kb::terrain_editor::ComputeTerrainStats(world);
+        return stats.maxHeight - stats.minHeight;
+    };
+    const float gentle = relief(0.0F);
+    const float usual = relief(kb::terrain_editor::kTerrainDefaultCharacter);
+    const float dramatic = relief(1.0F);
+    Require(gentle < usual && usual < dramatic, "a more dramatic character gives more relief");
+    kb::assets::TerrainAsset usualWorld = flat;
+    Require(kb::terrain_editor::ApplyTerrainPreset(usualWorld, "mountains", 12U, kb::terrain_editor::kTerrainDefaultCharacter, control, error), error.c_str());
+    RequireHash(kb::terrain_editor::HashTerrainHeights(usualWorld), 0x963DCA1A8C73E1B4ULL, "the default character is the preset as it is");
+    kb::assets::TerrainAsset refused = flat;
+    for (const float bad : { -0.1F, 1.1F, std::nanf("") }) {
+        Require(!kb::terrain_editor::ApplyTerrainPreset(refused, "mountains", 7U, bad, control, error) && error.find("character") != std::string::npos &&
+                refused.heights == flat.heights, "a character outside 0..1 is refused and names itself");
+    }
+}
+
+void RunAutoPaintBrushTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    for (std::uint32_t z = 0U; z < 65U; ++z) {
+        for (std::uint32_t x = 40U; x < 65U; ++x) terrain.heights[static_cast<std::size_t>(z) * 65U + x] += static_cast<float>(x - 40U) * 3.0F;
+    }
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 11U) && kb::terrain_editor::AddTerrainMaterialLayer(terrain, 22U), "two layers");
+    kb::terrain_editor::TerrainOpSummary summary{};
+    std::string error;
+    // Auto needs no layer: the slope picks it. One stroke over gentle and steep ground.
+    Require(Op(terrain, Json(R"({"op":"paint","auto":true,"path":"-30,0;30,0","radius":4})"), summary, error), error.c_str());
+    const auto weightOf = [&terrain](float x, float z, std::size_t layer) { return kb::terrain_editor::SampleTerrainSurface(terrain, x, z).layerWeights[layer]; };
+    Require(weightOf(-10.0F, 0.0F, 0U) > 0.99F, "gentle ground keeps the first layer");
+    Require(weightOf(28.0F, 0.0F, 1U) > 0.99F, "ground steeper than the rock slope takes the last layer");
+    Require(weightOf(-10.0F, 20.0F, 1U) < 0.01F, "ground outside the stroke is untouched");
+    Require(!Op(terrain, Json(R"({"op":"paint","x":0,"z":0})"), summary, error) && error.find("auto") != std::string::npos, "painting without a layer or auto says what is needed");
 }
 
 } // namespace
@@ -759,4 +811,6 @@ void RunTerrainToolsTests() {
     RunErosionTest();
     RunBackgroundTaskTest();
     RunPresetTest();
+    RunCharacterTest();
+    RunAutoPaintBrushTest();
 }

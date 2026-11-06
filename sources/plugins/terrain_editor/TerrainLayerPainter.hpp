@@ -15,7 +15,13 @@ struct TerrainLayerPaintSettings {
     float falloff = 0.65F;
     std::uint32_t noiseSeed = 1U;
     bool erase = false;
+    // Choose the layer under every texel by its slope instead of using layerIndex (see kTerrainAutoRockSlopeDegrees).
+    bool autoLayer = false;
 };
+
+// Auto painting uses two layers: ground flatter than this takes the first layer, steeper ground
+// the last one (grass and rock). Layers between them are left to painting by hand.
+inline constexpr float kTerrainAutoRockSlopeDegrees = 35.0F;
 
 struct TerrainLayerPaintResult {
     std::uint32_t changedTexels = 0U;

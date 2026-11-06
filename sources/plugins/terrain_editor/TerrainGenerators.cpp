@@ -15,7 +15,8 @@ namespace {
 
 struct GeneratorName { std::string_view name; TerrainGeneratorKind kind; };
 constexpr GeneratorName kGeneratorNames[]{ { "fbm", TerrainGeneratorKind::Fbm }, { "ridged", TerrainGeneratorKind::Ridged },
-    { "island", TerrainGeneratorKind::Island }, { "plateau", TerrainGeneratorKind::Plateau } };
+    { "island", TerrainGeneratorKind::Island }, { "plateau", TerrainGeneratorKind::Plateau },
+    { "valley", TerrainGeneratorKind::Valley } };
 
 } // namespace
 
@@ -30,7 +31,7 @@ std::optional<TerrainGeneratorKind> ParseTerrainGeneratorKind(std::string_view t
 }
 
 bool IsTerrainGeneratorValid(const TerrainGeneratorSettings& settings) noexcept {
-    return static_cast<std::uint8_t>(settings.kind) <= static_cast<std::uint8_t>(TerrainGeneratorKind::Plateau) &&
+    return static_cast<std::uint8_t>(settings.kind) <= static_cast<std::uint8_t>(TerrainGeneratorKind::Valley) &&
         std::isfinite(settings.amplitude) && std::abs(settings.amplitude) <= 100'000.0F &&
         std::isfinite(settings.baseHeight) && std::abs(settings.baseHeight) <= 100'000.0F &&
         IsTerrainNoiseValid(TerrainNoiseSettings{ .kind = settings.noiseKind, .scale = settings.scale, .octaves = settings.octaves,
@@ -39,7 +40,9 @@ bool IsTerrainGeneratorValid(const TerrainGeneratorSettings& settings) noexcept 
         std::isfinite(settings.islandRadius) && settings.islandRadius > 0.0F && settings.islandRadius <= 2.0F &&
         std::isfinite(settings.islandFalloff) && settings.islandFalloff > 0.0F && settings.islandFalloff <= 2.0F &&
         std::isfinite(settings.plateauLevel) && settings.plateauLevel > 0.0F && settings.plateauLevel < 1.0F &&
-        std::isfinite(settings.plateauSoftness) && settings.plateauSoftness > 0.0F && settings.plateauSoftness <= 0.5F;
+        std::isfinite(settings.plateauSoftness) && settings.plateauSoftness > 0.0F && settings.plateauSoftness <= 0.5F &&
+        std::isfinite(settings.valleyWidth) && settings.valleyWidth >= 0.0F && settings.valleyWidth < 1.0F &&
+        std::isfinite(settings.valleyWall) && settings.valleyWall > 0.0F && settings.valleyWall <= 2.0F;
 }
 
 bool GenerateTerrain(
@@ -47,7 +50,7 @@ bool GenerateTerrain(
     if (!kb::assets::IsTerrainAssetValid(terrain, &error)) return false;
     if (!IsTerrainGeneratorValid(settings)) {
         error = "generator settings are out of range (scale >= 0.01, octaves 1..8, lacunarity 1..8, gain 0..1, warp >= 0, "
-                "island radius and falloff > 0, plateau level 0..1)";
+                "island radius and falloff > 0, plateau level 0..1, valley width 0..1 and wall > 0)";
         return false;
     }
     const TerrainNoiseSettings noise{ .kind = settings.noiseKind, .scale = settings.scale, .octaves = settings.octaves,
@@ -95,6 +98,13 @@ bool GenerateTerrain(
                     const float raw = 0.5F + 0.5F * SampleTerrainNoise(noise, sampleX, sampleZ);
                     const float mesa = SmoothStep((raw - (settings.plateauLevel - settings.plateauSoftness)) / (2.0F * settings.plateauSoftness));
                     shape = std::lerp(0.35F * raw, 1.0F + 0.05F * (raw - settings.plateauLevel), mesa);
+                    break;
+                }
+                case TerrainGeneratorKind::Valley: {
+                    // The warped x makes the floor wind; the walls rise from its edge to the side of the terrain.
+                    const float raw = 0.5F + 0.5F * SampleTerrainNoise(noise, sampleX, sampleZ);
+                    const float wall = SmoothStep((std::abs(sampleX) / halfX - settings.valleyWidth) / settings.valleyWall);
+                    shape = std::lerp(0.12F * raw, 0.35F + 0.65F * raw, wall);
                     break;
                 }
                 }

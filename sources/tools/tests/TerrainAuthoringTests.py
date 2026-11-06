@@ -178,10 +178,17 @@ def main():
     assert height_hash(world) == height_hash(world_again) != flat
     expect_hash("mountains preset", height_hash(world), GOLDEN_MOUNTAINS)
     terrain("new", "--terrain", assets / "Terrains" / "Bad.kbterrain", "--preset", "moon", expected=1)
-    for preset in ("hills", "island", "plateau"):
+    for preset in ("plains", "hills", "valley", "island", "plateau"):
         made = assets / "Terrains" / f"Preset_{preset}.kbterrain"
         terrain("new", "--terrain", made, "--preset", preset, "--seed", "3", "--resolution", "65", "--size", "256")
         assert "heightHash" in terrain("info", "--terrain", made)
+    # The character of a world: the same seed, another character, another world; outside 0..1 is refused.
+    mild = assets / "Terrains" / "Mild.kbterrain"
+    dramatic = assets / "Terrains" / "Dramatic.kbterrain"
+    terrain("new", "--terrain", mild, "--preset", "mountains", "--seed", "7", "--size", "512", "--resolution", "129", "--character", "0.1")
+    terrain("new", "--terrain", dramatic, "--preset", "mountains", "--seed", "7", "--size", "512", "--resolution", "129", "--character", "0.9")
+    assert len({height_hash(mild), height_hash(dramatic), height_hash(world)}) == 3
+    terrain("new", "--terrain", assets / "Terrains" / "BadCharacter.kbterrain", "--preset", "mountains", "--character", "1.5", expected=1)
     drawn = terrain("info", "--terrain", world)
     assert float(value(drawn, "height").split()[3]) > 20, drawn
     terrain("generate", "--terrain", world, "--kind", "ridged", "--seed", "11", "--amplitude", "80", "--scale", "200", "--warp", "20")

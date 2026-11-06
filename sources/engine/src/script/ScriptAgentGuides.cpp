@@ -271,7 +271,7 @@ Editor's own brushes, generators and erosion, so the editor opens what you made.
 are world units from the terrain's centre (`terrain info` prints the extent); heights are world units.
 
 ```
-# A whole world in one command: mountains, cut by rivers (also hills, island, plateau).
+# A whole world in one command: mountains, cut by rivers (also plains, hills, valley, island, plateau; `--character 0..1` is gentle to dramatic).
 kb_cli terrain new --project . --name World --size 1024 --resolution 513 --preset mountains --seed 7
 # Or a flat terrain, shaped by hand.
 kb_cli terrain new --project . --name Hills --size 256 --resolution 257
@@ -293,7 +293,7 @@ kb_cli terrain info --project . --terrain /Game/Terrains/Hills.kbterrain
   does not depend on how many points describe it. `--invert yes` is the editor's Ctrl, `--symmetry
   x|z|xz` mirrors the stroke across the centre planes, `flatten --height sample` flattens to the
   height under the start, `stamp --image height.png` presses a greyscale picture into the ground.
-- `generate` makes heights from noise (`fbm`, `ridged`, `island`, `plateau`; same seed, same ground,
+- `generate` makes heights from noise (`fbm`, `ridged`, `island`, `plateau`, `valley`; same seed, same ground,
   on any number of cores), `--add yes` layers it over what is there. `erode` runs water (`hydraulic`:
   channels and fans) or slumping (`thermal`: slopes settle to a talus angle). They run on every
   core; `--threads <n>` caps that and `--max-seconds <n>` stops a long run and saves nothing.

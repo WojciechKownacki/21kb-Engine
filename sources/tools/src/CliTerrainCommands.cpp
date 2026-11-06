@@ -47,7 +47,8 @@ constexpr std::string_view kUsage =
     "  --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path (a path outside a project\n"
     "  needs no --project). Positions x,z are in world units from the terrain's centre (see info).\n"
     "  new        [--name <Entity> [--scene <path>] [--position x,y,z]] [--terrain <file>] [--resolution 129]\n"
-    "             [--size 128|256x128] [--chunk-quads 32] [--lod-count 4] [--preset flat|hills|mountains|island|plateau] [--seed 1]\n"
+    "             [--size 128|256x128] [--chunk-quads 32] [--lod-count 4] [--preset flat|plains|hills|valley|mountains|island|plateau] [--seed 1]\n"
+    "             [--character 0..1 (gentle to dramatic, default 0.5)]\n"
     "             (flat unless a preset makes a whole world: generated, then eroded; resolution is 2^n+1, 17..2049;\n"
     "             --name also places it in the scene; the generating options below apply to a preset too)\n"
     "  info       --terrain <file>              (size, heights, slopes, layers, height hash)\n"
@@ -71,9 +72,10 @@ constexpr std::string_view kUsage =
     "             [--falloff 0.65] [--shape soft-round] [--erase yes]\n"
     "             | --terrain <file> --layer <n> --auto slope=35..90,height=-5..40 [--slope-blend 3] [--height-blend 1]\n"
     "             [--opacity 1]   (by the ground's slope in degrees and height)\n"
-    "  generate   --terrain <file> [--kind fbm|ridged|island|plateau] [--seed 1] [--amplitude 24] [--base 0] [--scale <world units>]\n"
+    "  generate   --terrain <file> [--kind fbm|ridged|island|plateau|valley] [--seed 1] [--amplitude 24] [--base 0] [--scale <world units>]\n"
     "             [--octaves 6] [--lacunarity 2] [--gain 0.5] [--noise-kind gradient|value] [--warp 0] [--add yes (instead of replace)]\n"
     "             [--island-radius 0.65] [--island-falloff 0.3] [--plateau-level 0.55] [--plateau-softness 0.04]\n"
+    "             [--valley-width 0.15] [--valley-wall 0.7]\n"
     "             (heights from noise, on every core, the same seed gives the same ground; --threads <n> --max-seconds <n>)\n"
     "  erode      --terrain <file> [--mode hydraulic|thermal] [--iterations 150] (hydraulic: [--rain 0.0015] [--evaporation 0.03]\n"
     "             [--strength 0.4]; thermal: [--talus 35] [--strength 0.5]) [--threads <n>] [--max-seconds <n>]\n"
@@ -240,7 +242,7 @@ template <typename... Lists>
 }
 
 [[nodiscard]] int TerrainNew(const ArgumentList& arguments, CommandIo io) {
-    constexpr std::string_view allowed[]{ "name", "terrain", "scene", "position", "resolution", "size", "chunk-quads", "lod-count", "preset", "seed", "threads", "max-seconds" };
+    constexpr std::string_view allowed[]{ "name", "terrain", "scene", "position", "resolution", "size", "chunk-quads", "lod-count", "preset", "seed", "character", "threads", "max-seconds" };
     if (!CheckOptions(arguments, io, allowed)) return 1;
     const std::optional<std::string> name = arguments.Option("--name");
     if (!name.has_value() && !arguments.Option("--terrain").has_value()) {
@@ -282,7 +284,8 @@ template <typename... Lists>
     }
     const std::string preset = arguments.Option("--preset").value_or("flat");
     std::uint32_t seed = 1U;
-    if (!ReadWhole(arguments, "seed", seed, io)) return 1;
+    float character = kb::terrain_editor::kTerrainDefaultCharacter;
+    if (!ReadWhole(arguments, "seed", seed, io) || !ReadFloat(arguments, "character", character, io)) return 1;
     if (!kb::terrain_editor::IsTerrainPreset(preset)) {
         io.err << "error: unknown preset '" << preset << "'; the presets are";
         for (const kb::terrain_editor::TerrainPresetInfo& info : kb::terrain_editor::TerrainPresets()) io.err << ' ' << info.name;
@@ -310,9 +313,9 @@ template <typename... Lists>
         return 1;
     }
     if (preset != "flat") {
-        std::optional<kb::assets::TerrainAsset> made = RunJob(std::move(terrain), [preset, seed](
+        std::optional<kb::assets::TerrainAsset> made = RunJob(std::move(terrain), [preset, seed, character](
             kb::assets::TerrainAsset& target, TerrainTaskControl& control, std::string& failure) {
-            return kb::terrain_editor::ApplyTerrainPreset(target, preset, seed, control, failure);
+            return kb::terrain_editor::ApplyTerrainPreset(target, preset, seed, character, control, failure);
         }, arguments, io);
         if (!made.has_value()) return 1;
         terrain = std::move(*made);
@@ -648,7 +651,7 @@ constexpr OptionKey kPaintOptions[]{ { "layer", "layer" }, { "x", "x" }, { "z", 
 
 [[nodiscard]] int TerrainGenerate(const ArgumentList& arguments, CommandIo io) {
     constexpr std::string_view allowed[]{ "terrain", "kind", "seed", "amplitude", "base", "scale", "octaves", "lacunarity", "gain", "noise-kind",
-        "warp", "add", "island-radius", "island-falloff", "plateau-level", "plateau-softness", "threads", "max-seconds" };
+        "warp", "add", "island-radius", "island-falloff", "plateau-level", "plateau-softness", "valley-width", "valley-wall", "threads", "max-seconds" };
     if (!CheckOptions(arguments, io, allowed)) return 1;
     std::optional<Session> session = OpenTerrain(arguments, io);
     if (!session.has_value()) return 1;
@@ -658,7 +661,7 @@ constexpr OptionKey kPaintOptions[]{ { "layer", "layer" }, { "x", "x" }, { "z", 
     if (const auto kind = arguments.Option("--kind")) {
         const auto parsed = kb::terrain_editor::ParseTerrainGeneratorKind(*kind);
         if (!parsed.has_value()) {
-            io.err << "error: --kind is fbm, ridged, island or plateau\n";
+            io.err << "error: --kind is fbm, ridged, island, plateau or valley\n";
             return 1;
         }
         settings.kind = *parsed;
@@ -677,7 +680,8 @@ constexpr OptionKey kPaintOptions[]{ { "layer", "layer" }, { "x", "x" }, { "z", 
         !ReadFloat(arguments, "scale", settings.scale, io) || !ReadFloat(arguments, "lacunarity", settings.lacunarity, io) ||
         !ReadFloat(arguments, "gain", settings.gain, io) || !ReadFloat(arguments, "warp", settings.warp, io) ||
         !ReadFloat(arguments, "island-radius", settings.islandRadius, io) || !ReadFloat(arguments, "island-falloff", settings.islandFalloff, io) ||
-        !ReadFloat(arguments, "plateau-level", settings.plateauLevel, io) || !ReadFloat(arguments, "plateau-softness", settings.plateauSoftness, io)) {
+        !ReadFloat(arguments, "plateau-level", settings.plateauLevel, io) || !ReadFloat(arguments, "plateau-softness", settings.plateauSoftness, io) ||
+        !ReadFloat(arguments, "valley-width", settings.valleyWidth, io) || !ReadFloat(arguments, "valley-wall", settings.valleyWall, io)) {
         return 1;
     }
     settings.octaves = static_cast<std::uint8_t>(std::min(octaves, 255U));

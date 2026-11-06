@@ -203,7 +203,7 @@ private:
 constexpr std::string_view kBrushKeys[]{ "op", "mode", "shape", "x", "z", "path", "radius", "strength", "falloff", "height", "step",
     "softness", "seed", "spacing", "invert", "symmetry", "noiseKind", "noiseScale", "noiseOctaves", "to", "toHeight", "image",
     "rotation", "blend" };
-constexpr std::string_view kPaintKeys[]{ "op", "layer", "x", "z", "path", "radius", "opacity", "falloff", "shape", "erase", "seed" };
+constexpr std::string_view kPaintKeys[]{ "op", "layer", "x", "z", "path", "radius", "opacity", "falloff", "shape", "erase", "seed", "auto" };
 constexpr std::string_view kAutoPaintKeys[]{ "op", "layer", "slope", "height", "slopeBlend", "heightBlend", "opacity" };
 
 // A stamp image by path: as written, or under the context's base directory when that is where it is.
@@ -348,14 +348,15 @@ void ReadBrushSettings(Reader& reader, TerrainOpContext& context, TerrainBrushSe
 }
 
 void ReadLayerPaintSettings(Reader& reader, TerrainLayerPaintSettings& settings) {
+    if (const std::optional<bool> automatic = reader.Flag("auto")) settings.autoLayer = *automatic;
     if (const auto layer = reader.Number("layer")) {
         if (*layer < 0.0 || *layer >= static_cast<double>(kb::assets::TerrainAsset::MaximumMaterialLayers) || *layer != std::floor(*layer)) {
             reader.Fail("layer", "must be a layer index from 0 to 3");
         } else {
             settings.layerIndex = static_cast<std::uint32_t>(*layer);
         }
-    } else if (!reader.Failed()) {
-        reader.Fail("layer", "is required: the index of the layer to paint");
+    } else if (!reader.Failed() && !settings.autoLayer) {
+        reader.Fail("layer", "is required: the index of the layer to paint (or \"auto\": true)");
     }
     if (const auto value = reader.Number("radius")) settings.radius = static_cast<float>(*value);
     if (const auto value = reader.Number("opacity")) settings.opacity = static_cast<float>(*value);
