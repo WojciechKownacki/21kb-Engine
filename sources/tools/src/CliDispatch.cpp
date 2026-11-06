@@ -204,6 +204,18 @@ R"(  rig2d new/show/set/build --project <dir> [--name <Name> | --rig <path>] [--
   vector2d-new --project <dir> --name <Name> [--kind Polygon|Line] [--points <JSON array>]
   vector2d-set/show --project <dir> --shape <path> [--points <JSON array>] [--width <number>]
 )"
+R"(  mesh-lod     Levels of detail of an imported model: how many levels, how many triangles each keeps and how
+               much deviation it may add. Stored in the model asset, so the editor, the cooker and a game
+               drawing the source build the same levels; a reimport keeps them.
+                 show --project <dir> --mesh <model>    (settings; per level triangles, share, error, size drawn from)
+                 generate --project <dir> --mesh <model> [--levels 1..8] [--keep 50] [--error 20] [--min-triangles 1024]
+                 add --project <dir> --mesh <model> --triangles <percent> [--error <percent>]
+                 remove --project <dir> --mesh <model> [--level <n>]
+                 set --project <dir> --mesh <model> (--level <n> [--triangles <percent>] [--error <percent>] |
+                     [--mode auto|manual] [--min-triangles <n>])
+               (percents are of the finest level's triangles and of the mesh's extent; every level keeps fewer
+               triangles than the one above; --levels 1 or a mesh under --min-triangles has no chain)
+)"
 R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - brushes, material layers,
                heightmap import, generators and erosion - on a file, so an agent can shape ground without
                the editor. x, z are world units from the terrain's centre (terrain info prints the extent).
@@ -716,6 +728,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vector2d-set", &RunVectorShapeSetCommand, CliCommandKind::Normal, true, {}},
     {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}},
     {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}},
+    {"mesh-lod", &RunMeshLodCommand, CliCommandKind::Normal, true, {}},
     {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
     {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
@@ -735,6 +748,7 @@ constexpr CliCommandDescriptor kCommands[]{
 #else
     {"map2d", nullptr, CliCommandKind::Normal, false, {}},
     {"terrain", nullptr, CliCommandKind::Normal, false, {}},
+    {"mesh-lod", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
     {"material-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-set", nullptr, CliCommandKind::Normal, false, {}},

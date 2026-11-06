@@ -3968,6 +3968,63 @@ void RunImportSettingsCommandTests() {
     Require(badFlag.exitCode != 0 && Contains(badFlag.output, "yes or no"), "import must refuse --import-materials maybe: " + badFlag.output);
 }
 
+// mesh-lod stores how a model's levels of detail are built in the model asset: generate (automatic levels), add, set and
+// remove (manual levels), show; every change is validated, survives a reimport and is what the baker builds.
+void RunMeshLodCommandTests() {
+    const std::string project = NewAuthoringProject("mesh_lod_project");
+    const std::filesystem::path source = TestRoot() / "External" / "Ball.obj";
+    std::string obj;
+    constexpr int kSegments = 48;
+    constexpr int kRings = 32;
+    for (int ring = 0; ring <= kRings; ++ring) {
+        const double theta = 3.14159265358979 * ring / kRings;
+        for (int segment = 0; segment < kSegments; ++segment) {
+            const double phi = 6.28318530717959 * segment / kSegments;
+            obj += "v " + std::to_string(std::sin(theta) * std::cos(phi)) + " " + std::to_string(std::cos(theta)) + " " +
+                std::to_string(std::sin(theta) * std::sin(phi)) + "\n";
+        }
+    }
+    for (int ring = 0; ring < kRings; ++ring) {
+        for (int segment = 0; segment < kSegments; ++segment) {
+            const int a = ring * kSegments + segment + 1;
+            const int b = ring * kSegments + (segment + 1) % kSegments + 1;
+            obj += "f " + std::to_string(a) + " " + std::to_string(a + kSegments) + " " + std::to_string(b) + "\n";
+            obj += "f " + std::to_string(b) + " " + std::to_string(a + kSegments) + " " + std::to_string(b + kSegments) + "\n";
+        }
+    }
+    WriteTextFile(source, obj);
+    Require(Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models", source.string() }).exitCode == 0, "mesh-lod test import failed");
+    const std::vector<std::string> mesh{ "--project", project, "--mesh", "/Game/Models/Ball.21kb" };
+    const auto lod = [&](std::vector<std::string> tail) {
+        std::vector<std::string> arguments{ tail.front() };
+        arguments.insert(arguments.end(), mesh.begin(), mesh.end());
+        arguments.insert(arguments.end(), tail.begin() + 1, tail.end());
+        return Run(&kb::cli::RunMeshLodCommand, arguments);
+    };
+    const CommandRun shown = lod({ "show" });
+    Require(shown.exitCode == 0 && Contains(shown.output, "LOD0") && Contains(shown.output, "LOD2") && Contains(shown.output, "automatic levels"),
+        "show must list the default chain: " + shown.output);
+    const CommandRun three = lod({ "generate", "--levels", "3", "--keep", "40" });
+    Require(three.exitCode == 0 && Contains(three.output, "LOD2") && !Contains(three.output, "LOD3") && Contains(three.output, "each keeps 40%"),
+        "generate --levels 3 --keep 40 must build three levels: " + three.output);
+    const CommandRun added = lod({ "add", "--triangles", "2" });
+    Require(added.exitCode == 0 && Contains(added.output, "manual levels") && Contains(added.output, "LOD3") && !Contains(added.output, "LOD4"),
+        "add must append a fourth level in manual mode: " + added.output);
+    const CommandRun set = lod({ "set", "--level", "1", "--triangles", "70" });
+    Require(set.exitCode == 0 && Contains(set.output, "LOD1"), "set --level 1 --triangles 70 failed: " + set.output);
+    const CommandRun notFalling = lod({ "set", "--level", "2", "--triangles", "90" });
+    Require(notFalling.exitCode != 0 && Contains(notFalling.output, "not valid"), "a level that keeps more than the one above must be refused: " + notFalling.output);
+    const CommandRun removed = lod({ "remove", "--level", "1" });
+    Require(removed.exitCode == 0 && Contains(removed.output, "LOD2") && !Contains(removed.output, "LOD3"), "remove --level 1 must leave three levels: " + removed.output);
+    Require(lod({ "set", "--level", "9", "--triangles", "10" }).exitCode != 0, "a level beyond the chain must be refused");
+    Require(lod({ "generate", "--levels", "9" }).exitCode != 0, "nine levels must be refused");
+    const CommandRun off = lod({ "generate", "--levels", "1" });
+    Require(off.exitCode == 0 && Contains(off.output, "no chain") && !Contains(off.output, "LOD1"), "one level must turn the chain off: " + off.output);
+    const CommandRun plain = lod({ "generate", "--levels", "4", "--min-triangles", "100000" });
+    Require(plain.exitCode == 0 && Contains(plain.output, "under the triangle threshold"), "a mesh under --min-triangles has no chain: " + plain.output);
+    Require(Run(&kb::cli::RunMeshLodCommand, { "show", "--project", project, "--mesh", "/Game/Models/None.21kb" }).exitCode != 0, "an unknown mesh must be refused");
+}
+
 // material-set takes the built-in texture slots by a texture path of the project; material-graph
 // builds Unreal's VectorParameter Color -> Base Color, ScalarParameter Roughness and Metallic
 // graph; material-instance-new/set/show override those parameters and a Mesh Renderer takes the
@@ -5714,6 +5771,7 @@ int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     RunPostProcessCommandTests();
     RunImportSettingsCommandTests();
+    RunMeshLodCommandTests();
     RunMaterialAuthoringCommandTests();
     RunMaterialGraphUtilityNodeCommandTests();
     RunMap2DCameraCliTests();
