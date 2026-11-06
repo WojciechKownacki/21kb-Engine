@@ -2684,11 +2684,23 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
     }
 }
 
+// The first row of a component's "Advanced" group that is shown, or -1: the group follows the other rows
+// under one disclosure row, collapsed until it is opened.
+[[nodiscard]] int FirstAdvancedUIRow(const std::vector<InspectorUIPropertyRow>& rows) noexcept {
+    for (std::size_t index = 0; index < rows.size(); ++index)
+        if (rows[index].advanced && rows[index].fieldCount != 0) return static_cast<int>(index);
+    return -1;
+}
+
 [[nodiscard]] int UIComponentSectionHeight(const InspectorPanelState& state,
     kb::scene::UIComponentType component, const std::vector<InspectorUIPropertyRow>& rows) noexcept {
-    const int propertyCount = static_cast<int>(std::count_if(rows.begin(), rows.end(),
-        [](const auto& row) { return row.fieldCount != 0; }));
     const auto section = InspectorUIComponentModel::Section(component);
+    const bool advancedOpen = state.IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced);
+    const int propertyCount = static_cast<int>(std::count_if(rows.begin(), rows.end(),
+        [advancedOpen](const auto& row) { return row.fieldCount != 0 && (!row.advanced || advancedOpen); }));
+    if (!state.IsCollapsed(section) && FirstAdvancedUIRow(rows) >= 0 && component != kb::scene::UIComponentType::RectTransform &&
+        component != kb::scene::UIComponentType::Dropdown)
+        return SectionHeight(state, section, propertyCount) + kDisclosureRowHeight + kDividerHeight;
     if (component == kb::scene::UIComponentType::Dropdown && !state.IsCollapsed(section))
         return kSectionHeaderHeight + kDividerHeight + DropdownInspectorLayout({0, 0, 1, 1}, 0, rows).height;
     if (component != kb::scene::UIComponentType::RectTransform || state.IsCollapsed(section))
@@ -2895,9 +2907,13 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
             } else if (component == kb::scene::UIComponentType::Dropdown) {
                 if (!inspector.IsCollapsed(sectionId))
                     PaintUIDropdownBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight), theme, sceneContext, rows);
-            } else for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+            } else for (int index = 0, firstAdvanced = FirstAdvancedUIRow(rows); index < static_cast<int>(rows.size()); ++index) {
                 const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
                 if (row.fieldCount == 0) continue;
+                const bool advancedOpen = inspector.IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced);
+                if (index == firstAdvanced)
+                    section.Disclosure(EditorText("inspector.uiAdvanced", "Advanced"), InspectorPropertyId::UISelectableAdvanced, advancedOpen);
+                if (row.advanced && !advancedOpen) continue;
                 const InspectorPropertyId editableProperty =
                     row.writable ? propertyId : InspectorPropertyId::None;
                 if (row.fieldCount > 1) {
@@ -2910,6 +2926,8 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                     const auto choice = static_cast<std::size_t>(std::stoul(row.value));
                     section.Tag(row.label, choice < row.choices.size() ? std::string_view{ row.choices[choice] } : EditorText("inspector.invalid", "Invalid"),
                         editableProperty, index);
+                } else if (row.onClick) {
+                    section.AssetField(row.label, row.value, editableProperty, InspectorPropertyId::UIAssetPicker, index);
                 } else if (row.type == kb::scene::UIComponentPropertyType::Bool) {
                     section.Bool(row.label, row.boolValue, editableProperty, index);
                 } else if (row.type == kb::scene::UIComponentPropertyType::Asset) {
@@ -4400,9 +4418,16 @@ void AdvanceRow(int& y) noexcept;
                 y += layout.height + kSectionGap;
                 continue;
             }
-            for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+            for (int index = 0, firstAdvanced = FirstAdvancedUIRow(rows); index < static_cast<int>(rows.size()); ++index) {
                 const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
                 if (row.fieldCount == 0) continue;
+                if (index == firstAdvanced) {
+                    const RECT disclosure = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
+                    if (Contains(disclosure, x, yPoint))
+                        return MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::UISelectableAdvanced, disclosure);
+                    y += kDisclosureRowHeight + kDividerHeight;
+                }
+                if (row.advanced && !state.IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced)) continue;
                 if (row.fieldCount > 1) {
                     const RECT bounds = RowRect(content, y);
                     for (int lane = 0; lane < (row.color ? 1 : row.fieldCount); ++lane) {
@@ -4423,7 +4448,7 @@ void AdvanceRow(int& y) noexcept;
                         const RECT box = ValueRectForRow(RowRect(content, y));
                         if (Contains(box, x, yPoint)) hit = MakeHit(InspectorHitKind::ChoiceField, section, property, box);
                     } else hit = row.type == kb::scene::UIComponentPropertyType::Asset ||
-                            row.type == kb::scene::UIComponentPropertyType::Entity
+                            row.type == kb::scene::UIComponentPropertyType::Entity || row.onClick
                         ? HitAssetFieldRow(RowRect(content, y), section, property,
                             InspectorPropertyId::UIAssetPicker, x, yPoint)
                         : row.type == kb::scene::UIComponentPropertyType::Bool

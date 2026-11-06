@@ -14,6 +14,8 @@ enum class EditorViewportProfileKind : std::uint8_t {
     Pc1080p,
     Pc1440p,
     PhoneLandscape,
+    PhonePortrait,
+    Tablet,
     Custom,
 };
 

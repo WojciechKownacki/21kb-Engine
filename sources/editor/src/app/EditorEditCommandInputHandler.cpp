@@ -30,6 +30,12 @@ namespace {
         return EditorEditCommand::Redo;
     case 'D':
         return EditorEditCommand::Duplicate;
+    case 'C':
+        return EditorEditCommand::Copy;
+    case 'X':
+        return EditorEditCommand::Cut;
+    case 'V':
+        return EditorEditCommand::Paste;
     case 'S':
         return EditorEditCommand::Save;
     default:

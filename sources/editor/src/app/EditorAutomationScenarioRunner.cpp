@@ -1563,6 +1563,10 @@ ReadScriptValue(
         return {state.automation.VerifyUINavigationLinks(),
             "Selectable navigation links: hierarchy picker, names, clear, invalid and deleted targets, undo"};
     }
+    if (*operation == "assert_ui_click_handler") {
+        return {state.automation.VerifyUIClickHandler(),
+            "Button On Click row: script function picker, new function, shared script target, clear, undo, collapsed Advanced settings"};
+    }
     if (*operation == "preview_locale") {
         const auto path = StringMember(step, "catalog", error);
         const auto language = StringMember(step, "language", error);
@@ -2872,6 +2876,48 @@ ReadScriptValue(
         return { true, *resultAlias };
     }
 
+    if (*operation == "create_ui_screen") {
+        // A whole screen template (Main Menu, Pause, HUD, Settings) as the Create > UI Screen menu builds it.
+        const auto alias = StringMember(step, "id", error);
+        const auto screen = StringMember(step, "screen", error);
+        const auto parentAlias = StringMember(step, "parent", error, false);
+        if (!alias || !screen) return { false, error };
+        if (state.entities.contains(*alias)) return { false, "entity alias already exists" };
+        const kb::scene::UIScreenTemplateDescriptor* descriptor = kb::scene::FindUIScreenTemplate(*screen);
+        if (descriptor == nullptr) return { false, "unknown UI screen template" };
+        kb::scene::SceneEntity parent{};
+        if (parentAlias.has_value()) {
+            parent = ResolveEntity(state, *parentAlias);
+            if (!parent.IsValid()) return { false, "parent alias could not be resolved" };
+        }
+        const kb::scene::SceneEntity entity = state.context.CreateUIScreen(descriptor->id, parent);
+        if (!entity.IsValid()) return { false, "UI screen creation failed" };
+        state.entities.emplace(*alias, EntityAlias{ .entity = entity, .name = state.context.Scene().Entities().Name(entity) });
+        return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
+    if (*operation == "copy_entity" || *operation == "cut_entity") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) return { false, "entity alias is not alive" };
+        state.context.SelectEntity(entity);
+        return { *operation == "copy_entity" ? state.context.CopySelectedHierarchyEntities()
+                                             : state.context.CutSelectedHierarchyEntities(), *alias };
+    }
+
+    if (*operation == "paste_entity") {
+        const auto alias = StringMember(step, "id", error);
+        if (!alias) return { false, error };
+        if (state.entities.contains(*alias)) return { false, "entity alias already exists" };
+        if (!state.context.PasteHierarchyEntities()) return { false, "entity paste failed" };
+        const kb::scene::SceneEntity entity = state.context.SelectedEntity();
+        if (!state.context.Scene().Entities().IsAlive(entity)) return { false, "pasted entity was not selected" };
+        state.entities.emplace(*alias, EntityAlias{ .entity = entity, .name = state.context.Scene().Entities().Name(entity),
+            .parentName = state.context.Scene().Entities().Name(state.context.Scene().Hierarchy().Parent(entity)) });
+        return { true, *alias };
+    }
+
     if (*operation == "delete_entity") {
         const auto alias = StringMember(step, "entity", error);
         if (!alias) return { false, error };
@@ -3350,52 +3396,6 @@ ReadScriptValue(
         return { matched, matched ? "configuration matched" : "terrain configuration mismatch" };
     }
 
-    if (*operation == "set_animator_root_motion_owner" ||
-        *operation == "assert_animator_root_motion_owner") {
-        const auto alias = StringMember(step, "entity", error);
-        const auto owner = StringMember(step, "owner", error);
-        if (!alias || !owner) return { false, error };
-        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
-        const auto expected = [&]() -> std::optional<kb::scene::AnimatorRootMotionOwner> {
-            if (*owner == "none") return kb::scene::AnimatorRootMotionOwner::None;
-            if (*owner == "animator") return kb::scene::AnimatorRootMotionOwner::Animator;
-            if (*owner == "character_controller") return kb::scene::AnimatorRootMotionOwner::CharacterController;
-            if (*owner == "rigidbody") return kb::scene::AnimatorRootMotionOwner::Rigidbody;
-            return std::nullopt;
-        }();
-        if (!expected) return { false, "unknown animator root-motion owner" };
-        kb::scene::Animator* animator = state.context.Scene().Components().Animators().TryGet(entity);
-        if (animator == nullptr) return { false, "entity has no Animator component" };
-        if (*operation == "set_animator_root_motion_owner") {
-            for (std::size_t attempts = 0U; animator->rootMotionOwner != *expected && attempts < 4U; ++attempts) {
-                if (!state.context.CycleAnimatorRootMotionOwner(entity)) {
-                    return { false, "editor rejected incompatible root-motion owner" };
-                }
-                animator = state.context.Scene().Components().Animators().TryGet(entity);
-                if (animator == nullptr) return { false, "Animator component disappeared" };
-            }
-        }
-        const bool matched = animator->rootMotionOwner == *expected;
-        return { matched, matched ? *owner : "root-motion owner mismatch" };
-    }
-
-    if (*operation == "set_visibility_mode" ||
-        *operation == "assert_resolved_visibility") {
-        const auto alias = StringMember(step, "entity", error);
-        if (!alias) return { false, error };
-        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
-        if (!state.context.Scene().Entities().IsAlive(entity)) {
-            return { false, "entity alias is not alive" };
-        }
-
-        if (*operation == "set_visibility_mode") {
-            const auto modeText = StringMember(step, "mode", error);
-            if (!modeText) return { false, error };
-            const auto desired = *modeText == "inherit" ? kb::scene::VisibilityMode::Inherit
-                : *modeText == "visible" ? kb::scene::VisibilityMode::Visible
-                : *modeText == "hidden" ? kb::scene::VisibilityMode::Hidden
-                : static_cast<kb::scene::VisibilityMode>(255U);
-            if (!kb::scene::IsVisibilityModeValid(desired)) {
     if (*operation == "terrain_tool") {
         // tool: none sculpt smooth flatten paint ramp stamp holes; stamp takes `image` (a height image), paint
         // `auto` (the layer by slope); radius and strength are optional; `cycle` clicks the variant button that many times
@@ -3528,6 +3528,52 @@ ReadScriptValue(
         return { matched, matched ? "terrain layer weight matched" : "terrain layer weight is " + std::to_string(weight) };
     }
 
+    if (*operation == "set_animator_root_motion_owner" ||
+        *operation == "assert_animator_root_motion_owner") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto owner = StringMember(step, "owner", error);
+        if (!alias || !owner) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const auto expected = [&]() -> std::optional<kb::scene::AnimatorRootMotionOwner> {
+            if (*owner == "none") return kb::scene::AnimatorRootMotionOwner::None;
+            if (*owner == "animator") return kb::scene::AnimatorRootMotionOwner::Animator;
+            if (*owner == "character_controller") return kb::scene::AnimatorRootMotionOwner::CharacterController;
+            if (*owner == "rigidbody") return kb::scene::AnimatorRootMotionOwner::Rigidbody;
+            return std::nullopt;
+        }();
+        if (!expected) return { false, "unknown animator root-motion owner" };
+        kb::scene::Animator* animator = state.context.Scene().Components().Animators().TryGet(entity);
+        if (animator == nullptr) return { false, "entity has no Animator component" };
+        if (*operation == "set_animator_root_motion_owner") {
+            for (std::size_t attempts = 0U; animator->rootMotionOwner != *expected && attempts < 4U; ++attempts) {
+                if (!state.context.CycleAnimatorRootMotionOwner(entity)) {
+                    return { false, "editor rejected incompatible root-motion owner" };
+                }
+                animator = state.context.Scene().Components().Animators().TryGet(entity);
+                if (animator == nullptr) return { false, "Animator component disappeared" };
+            }
+        }
+        const bool matched = animator->rootMotionOwner == *expected;
+        return { matched, matched ? *owner : "root-motion owner mismatch" };
+    }
+
+    if (*operation == "set_visibility_mode" ||
+        *operation == "assert_resolved_visibility") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+
+        if (*operation == "set_visibility_mode") {
+            const auto modeText = StringMember(step, "mode", error);
+            if (!modeText) return { false, error };
+            const auto desired = *modeText == "inherit" ? kb::scene::VisibilityMode::Inherit
+                : *modeText == "visible" ? kb::scene::VisibilityMode::Visible
+                : *modeText == "hidden" ? kb::scene::VisibilityMode::Hidden
+                : static_cast<kb::scene::VisibilityMode>(255U);
+            if (!kb::scene::IsVisibilityModeValid(desired)) {
                 return { false, "unknown visibility mode" };
             }
             for (std::size_t attempts = 0U; attempts < 3U; ++attempts) {

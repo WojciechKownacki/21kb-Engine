@@ -40,6 +40,22 @@ constexpr EditorViewportProfile kProfiles[] = {
         .devicePreview = true,
     },
     EditorViewportProfile{
+        .kind = EditorViewportProfileKind::PhonePortrait,
+        .label = "Phone P",
+        .width = 390,
+        .height = 844,
+        .safeArea = EditorViewportSafeArea{ .left = 0, .top = 47, .right = 0, .bottom = 34 },
+        .devicePreview = true,
+    },
+    EditorViewportProfile{
+        .kind = EditorViewportProfileKind::Tablet,
+        .label = "Tablet",
+        .width = 1194,
+        .height = 834,
+        .safeArea = EditorViewportSafeArea{ .left = 0, .top = 24, .right = 0, .bottom = 20 },
+        .devicePreview = true,
+    },
+    EditorViewportProfile{
         .kind = EditorViewportProfileKind::Custom,
         .label = "Custom",
         .width = 1280,
@@ -65,6 +81,10 @@ constexpr EditorViewportProfile kProfiles[] = {
     case EditorViewportProfileKind::Pc1440p:
         return EditorViewportProfileKind::PhoneLandscape;
     case EditorViewportProfileKind::PhoneLandscape:
+        return EditorViewportProfileKind::PhonePortrait;
+    case EditorViewportProfileKind::PhonePortrait:
+        return EditorViewportProfileKind::Tablet;
+    case EditorViewportProfileKind::Tablet:
         return EditorViewportProfileKind::Custom;
     case EditorViewportProfileKind::Custom:
         return EditorViewportProfileKind::Free;

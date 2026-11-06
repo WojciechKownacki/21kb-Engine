@@ -129,9 +129,9 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
+    src/app/StaticMeshEditorPointerController.cpp
     src/app/EditorWindowToolbarPointerHandler.cpp
     src/app/EditorWindowInvalidator.cpp
-    src/app/StaticMeshEditorPointerController.cpp
     src/app/EditorWindowResizeInteraction.cpp
     src/app/EditorWindowResizeHandler.cpp
     src/app/EditorWindowMessageRouter.cpp
@@ -836,6 +836,9 @@ add_executable(kb_editor WIN32
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/TimelineEditorPanel.cpp
     src/rendering/BlendSpace2DEditorPanel.cpp
+    src/rendering/EditorPreviewRenderCamera.cpp
+    src/rendering/StaticMeshEditorPanel.cpp
+    src/rendering/StaticMeshEditorViewport.cpp
     src/rendering/GameplayGraphEditorPanel.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
@@ -843,9 +846,6 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesAssetIconResolver.cpp
     src/rendering/ProjectFilesAssetTileFrameRenderer.cpp
     src/rendering/ProjectFilesAssetTileMetrics.cpp
-    src/rendering/EditorPreviewRenderCamera.cpp
-    src/rendering/StaticMeshEditorPanel.cpp
-    src/rendering/StaticMeshEditorViewport.cpp
     src/rendering/ProjectFilesAssetTileRenderer.cpp
     src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
     src/rendering/ProjectFilesAssetViewRenderer.cpp
@@ -930,6 +930,8 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorPanelTextBuilder.cpp
     src/inspection/InspectorRigidbodyTextBuilder.cpp
     src/scene/EditorAnimationPreviewScene.cpp
+    src/scene/EditorPreviewStudio.cpp
+    src/scene/StaticMeshEditorSession.cpp
     src/scene/EditorTimelinePreviewSession.cpp
     src/scene/EditorBlendSpace2DPreviewSession.cpp
     src/scene/EditorSceneContextBlendSpace2D.cpp
@@ -939,8 +941,6 @@ add_executable(kb_editor WIN32
     src/scene/TimelineEditorModel.cpp
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
-    src/scene/EditorPreviewStudio.cpp
-    src/scene/StaticMeshEditorSession.cpp
     src/scene/EditorHierarchyMainContentResolver.cpp
     src/scene/EditorHierarchyExpansionState.cpp
     src/scene/EditorHierarchyObjectFactory.cpp
@@ -964,6 +964,9 @@ add_executable(kb_editor WIN32
     src/scene/ui/EditorUIThemeAssets.cpp
     src/private/scene/ui/EditorUIThemeAssets.hpp
     src/scene/ui/EditorSceneContextUITheme.cpp
+    src/scene/ui/EditorSceneContextUIEvents.cpp
+    src/inspection/ui/InspectorUIClickHandler.cpp
+    src/private/inspection/ui/InspectorUIClickHandler.hpp
     src/inspection/ui/InspectorUIThemeModel.cpp
     src/private/inspection/ui/InspectorUIThemeModel.hpp
     src/scene/EditorSceneBuildGame.cpp
@@ -980,10 +983,10 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorTerrainService.cpp
+    src/scene/EditorTerrainJobs.cpp
     src/scene/EditorMap2DService.cpp
     src/scene/EditorMap2DPreview.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
-    src/scene/EditorTerrainJobs.cpp
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
@@ -1528,11 +1531,16 @@ if(BUILD_TESTING)
           src/scene/EditorViewportCameraState.cpp
           src/scene/EditorViewportPreviewState.cpp
           src/scene/EditorAnimationPreviewScene.cpp
+          src/scene/EditorPreviewStudio.cpp
+          src/scene/StaticMeshEditorSession.cpp
+          src/rendering/GdiDrawing.cpp
+          src/rendering/StaticMeshEditorPanel.cpp
           src/scene/EditorTimelinePreviewSession.cpp
           src/scene/EditorBlendSpace2DPreviewSession.cpp
           src/scene/TimelineEditorModel.cpp
           tests/EditorTimelineTests.cpp
           tests/EditorBlendSpace2DTests.cpp
+          tests/EditorStaticMeshTests.cpp
           src/scene/GameplayGraphEditorState.cpp
           tests/EditorGameplayGraphTests.cpp
           src/app/scene_viewport/EditorSceneViewportMath.cpp
@@ -1541,16 +1549,11 @@ if(BUILD_TESTING)
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
-          src/scene/EditorPreviewStudio.cpp
-          src/scene/StaticMeshEditorSession.cpp
-          src/rendering/GdiDrawing.cpp
-          src/rendering/StaticMeshEditorPanel.cpp
     src/scene/material/MaterialEditorState.cpp
     src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
-          tests/EditorStaticMeshTests.cpp
     src/scene/material_preview/EditorMaterialGraphCookService.cpp
     src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
         src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
@@ -1593,6 +1596,7 @@ if(BUILD_TESTING)
         src/inspection/InspectorPhysicsModel.cpp
         src/inspection/ui/InspectorUIComponentModel.cpp
         src/inspection/ui/InspectorUIThemeModel.cpp
+        src/inspection/ui/InspectorUIClickHandler.cpp
         src/scene/ui/EditorUIThemeAssets.cpp
         src/inspection/InspectorAddComponentBrowserModel.cpp
         src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
@@ -1639,6 +1643,7 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
     add_test(NAME kb_editor_timeline_tests COMMAND $<TARGET_FILE:kb_editor_tests> timeline)
+    add_test(NAME kb_editor_static_mesh_tests COMMAND $<TARGET_FILE:kb_editor_tests> static-mesh)
     add_test(NAME kb_editor_gameplay_graph_tests COMMAND $<TARGET_FILE:kb_editor_tests> gameplay-graph)
     set_tests_properties(kb_editor_gameplay_graph_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;gameplay;graph" TIMEOUT 60)
     set_tests_properties(kb_editor_timeline_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;timeline" TIMEOUT 60)
@@ -2126,11 +2131,6 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Animator-Workflow")
     set_tests_properties(kb_editor_animator_workflow_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;animation" TIMEOUT 180)
-    add_test(NAME kb_editor_user_widget_headless
-        COMMAND $<TARGET_FILE:kb_editor>
-            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUserWidgetScenario.json"
-            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
-            --selftest-task "SELFTEST-UI-UserWidget")
     add_test(NAME kb_editor_terrain_simple_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessTerrainSimpleScenario.json"
@@ -2138,6 +2138,11 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Terrain-Simple")
     set_tests_properties(kb_editor_terrain_simple_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;terrain" TIMEOUT 300)
+    add_test(NAME kb_editor_user_widget_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUserWidgetScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-UserWidget")
     set_tests_properties(kb_editor_user_widget_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
     add_test(NAME kb_editor_play_history_headless
@@ -2182,6 +2187,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-UI-Anchors")
     set_tests_properties(kb_editor_ui_anchors_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_ui_editing_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIEditingScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-UI-Editing")
+    set_tests_properties(kb_editor_ui_editing_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui" TIMEOUT 180)
     add_test(NAME kb_editor_world_partition_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorldPartitionScenario.json"

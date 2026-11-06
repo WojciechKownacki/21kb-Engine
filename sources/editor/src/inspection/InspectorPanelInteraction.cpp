@@ -3194,6 +3194,8 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         return InspectorDisclosureId::UIAnchorPresets;
     case InspectorPropertyId::UIRectAdvanced:
         return InspectorDisclosureId::UIRectAdvanced;
+    case InspectorPropertyId::UISelectableAdvanced:
+        return InspectorDisclosureId::UISelectableAdvanced;
     default:
         return std::nullopt;
     }
@@ -3649,7 +3651,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, *component);
         if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) return true;
         const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(hit.index)];
-        if (!row.writable) return true;
+        if (!row.writable || row.onClick) return true;
         if (hit.kind == InspectorHitKind::BoolField) {
             static_cast<void>(sceneContext.SetUIComponentProperty(
                 entity, *component, row.name,

@@ -280,6 +280,19 @@ void RunProfileCycleAndResolutionTest() {
     kb::editor::tests::Require(phone.kind == kb::editor::EditorViewportProfileKind::PhoneLandscape, "Viewport profile cycle should skip the removed phone portrait profile");
     kb::editor::tests::Require(phone.devicePreview, "Phone landscape should remain a device preview profile");
     kb::editor::tests::Require(phone.safeArea.left > 0U && phone.safeArea.right > 0U, "Phone landscape should expose safe area insets");
+
+    state.CycleProfile();
+    const kb::editor::EditorViewportProfile portrait = state.Profile();
+    kb::editor::tests::Require(portrait.kind == kb::editor::EditorViewportProfileKind::PhonePortrait && portrait.height > portrait.width,
+        "Viewport profile cycle should offer a phone held upright after the landscape phone");
+    kb::editor::tests::Require(portrait.devicePreview && portrait.safeArea.top > 0U && portrait.safeArea.bottom > 0U,
+        "Phone portrait should expose top and bottom safe area insets");
+    state.CycleProfile();
+    const kb::editor::EditorViewportProfile tablet = state.Profile();
+    kb::editor::tests::Require(tablet.kind == kb::editor::EditorViewportProfileKind::Tablet && tablet.width > tablet.height && tablet.devicePreview,
+        "Viewport profile cycle should offer a tablet after the portrait phone");
+    state.CycleProfile();
+    kb::editor::tests::Require(state.ProfileKind() == kb::editor::EditorViewportProfileKind::Custom, "Custom should follow the tablet profile");
 }
 
 void RunAnimationPreviewContextTracksSharedBindingTest() {

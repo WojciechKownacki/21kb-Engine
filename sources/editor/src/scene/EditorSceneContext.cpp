@@ -2293,6 +2293,49 @@ bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
     return duplicated;
 }
 
+bool EditorSceneContext::CopySelectedHierarchyEntities() {
+    const std::vector<kb::scene::SceneEntity> copying = TopLevelSelectedEntities(*scene_, hierarchySelection_.SelectedEntities());
+    if (copying.empty() || !AnyAlive(*scene_, copying)) {
+        console_.Warning("Hierarchy", "No hierarchy entity was copied.");
+        return false;
+    }
+    std::vector<EditorSceneObjectPrefabPayload> payloads = EditorSceneObjectPayloadBuilder::Capture(
+        *this, std::span<const kb::scene::SceneEntity>{ copying.data(), copying.size() });
+    if (payloads.empty()) {
+        console_.Warning("Hierarchy", "No hierarchy entity was copied.");
+        return false;
+    }
+    // The snapshot is pasted as new objects; it must not remap links to the originals.
+    for (EditorSceneObjectPrefabPayload& payload : payloads) payload.capturedEntities.clear();
+    hierarchyClipboard_ = std::move(payloads);
+    console_.Info("Hierarchy", "Selected hierarchy entity copied.");
+    return true;
+}
+
+bool EditorSceneContext::CutSelectedHierarchyEntities() {
+    return CopySelectedHierarchyEntities() && DeleteSelectedHierarchyEntity();
+}
+
+bool EditorSceneContext::PasteHierarchyEntities() {
+    if (hierarchyClipboard_.empty()) {
+        console_.Warning("Hierarchy", "Nothing to paste: copy or cut a hierarchy entity first.");
+        return false;
+    }
+    std::vector<EditorSceneObjectPrefabPayload> payloads = hierarchyClipboard_;
+    for (EditorSceneObjectPrefabPayload& payload : payloads)
+        if (payload.parent.IsValid() && !scene_->Entities().IsAlive(payload.parent)) payload.parent = {};
+    auto command = std::make_unique<EditorScenePrefabSpawnCommand>(*this, "Paste Entity", std::move(payloads));
+    EditorScenePrefabSpawnCommand* paste = command.get();
+    if (!commandStack_.Execute(std::move(command))) {
+        console_.Warning("Hierarchy", "No hierarchy entity was pasted.");
+        return false;
+    }
+    SelectHierarchyEntities(paste->CreatedEntities());
+    MarkSceneDocumentDirty();
+    console_.Info("Hierarchy", "Hierarchy entity pasted.");
+    return true;
+}
+
 bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::span<const kb::scene::SceneEntity> entities) {
     const std::vector<EditorSceneObjectPrefabPayload> payloads = EditorSceneObjectPayloadBuilder::Capture(*this, entities);
     if (payloads.empty() || !AnyAlive(*scene_, entities)) {
@@ -2578,6 +2621,26 @@ kb::scene::SceneEntity EditorSceneContext::CreateUIObject(kb::scene::UIComponent
             scene_->Components().UI().Set(created, rect);
         }
         for (auto ancestor = scene_->Hierarchy().Parent(created); ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor))
+            hierarchyExpansion_.SetExpanded(ancestor, true);
+        SelectEntity(created);
+        return true;
+    });
+    return succeeded ? created : kb::scene::SceneEntity{};
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateUIScreen(kb::scene::UIScreenTemplate screen, kb::scene::SceneEntity parent) {
+    const auto catalog = kb::scene::UIScreenTemplateCatalog();
+    const auto descriptor = std::ranges::find(catalog, screen, &kb::scene::UIScreenTemplateDescriptor::id);
+    if (descriptor == catalog.end() || (parent.IsValid() && !scene_->Entities().IsAlive(parent))) return {};
+    kb::scene::SceneEntity created{};
+    const bool succeeded = ExecuteSceneCommand("Create " + std::string{descriptor->name}, [this, descriptor, screen, parent, &created]() {
+        std::vector<kb::scene::SceneEntity> parts;
+        created = kb::scene::CreateUIScreen(*scene_, screen, parent.IsValid() ? scene_->Entities().Object(parent) : kb::scene::SceneObject{},
+            descriptor->name, &parts);
+        if (!created.IsValid()) return false;
+        for (const kb::scene::SceneEntity part : parts)
+            if (!CompleteUIComponentDependencies(part)) return false;
+        for (auto ancestor = created; ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor))
             hierarchyExpansion_.SetExpanded(ancestor, true);
         SelectEntity(created);
         return true;

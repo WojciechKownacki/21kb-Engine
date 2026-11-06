@@ -5,7 +5,10 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <optional>
+#include <span>
 
 namespace kb::editor {
 namespace {
@@ -23,6 +26,45 @@ Vec2 RotateScale(Vec2 v, const kb::scene::UIRectTransform& r) {
     const float angle = kb::math::ToRadians(kb::math::Degrees{r.rotationDegrees}).Value();
     const float c = std::cos(angle), s = std::sin(angle);
     return {c * v.x * r.scale.x - s * v.y * r.scale.y, s * v.x * r.scale.x + c * v.y * r.scale.y};
+}
+constexpr float kSnapPixels = 6.0F;
+
+// The lines a widget offers to a dragged one: its edges and its centre.
+void AddLines(std::vector<float>& lines, float low, float size) {
+    lines.push_back(low);
+    lines.push_back(low + size * 0.5F);
+    lines.push_back(low + size);
+}
+
+[[nodiscard]] bool AxisAligned(const SceneUIFrameElement& e) {
+    return std::abs(e.corners[0].y - e.corners[1].y) < 0.01F && std::abs(e.corners[0].x - e.corners[3].x) < 0.01F;
+}
+
+[[nodiscard]] bool IsWithin(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, kb::scene::SceneEntity ancestor) {
+    for (auto at = entity; at.IsValid(); at = scene.Hierarchy().Parent(at))
+        if (at == ancestor) return true;
+    return false;
+}
+
+// The offset that brings the nearest of `edges` onto the nearest of `lines`, if one is within `distance`.
+[[nodiscard]] std::optional<float> NearestOffset(std::span<const float> edges, const std::vector<float>& lines, float distance) {
+    std::optional<float> best;
+    for (const float edge : edges)
+        for (const float line : lines) {
+            const float offset = line - edge;
+            if (std::abs(offset) <= distance && (!best || std::abs(offset) < std::abs(*best))) best = offset;
+        }
+    return best;
+}
+
+// The lines that the edges, once moved by `offset`, lie on.
+[[nodiscard]] std::vector<float> LinesTouched(std::span<const float> edges, const std::vector<float>& lines, float offset) {
+    std::vector<float> touched;
+    for (const float edge : edges)
+        for (const float line : lines)
+            if (std::abs(line - (edge + offset)) < 0.01F && std::ranges::none_of(touched, [line](float t) { return std::abs(t - line) < 0.01F; }))
+                touched.push_back(line);
+    return touched;
 }
 } // namespace
 std::vector<SceneUIFrameElement> EditorUIRectInteraction::Overlays(const EditorSceneContext& context, float width,
@@ -49,6 +91,20 @@ std::vector<SceneUIFrameElement> EditorUIRectInteraction::Overlays(const EditorS
         result.push_back(outline);
         if (!selected || canvas)
             continue;
+        if (const auto& drag = context.UIRectDrag(); drag && drag->entity == e.entity) {
+            const auto guide = [&](kb::math::Rect line) {
+                SceneUIFrameElement element;
+                element.rect = line;
+                element.corners = {{{line.x, line.y}, {line.x + line.width, line.y},
+                                    {line.x + line.width, line.y + line.height}, {line.x, line.y + line.height}}};
+                element.clipRect = {0, 0, width, height};
+                element.border = kb::scene::UIBorder{};
+                element.border->backgroundColor = {1.0F, 0.2F, 0.75F, 1};
+                result.push_back(element);
+            };
+            for (const float x : drag->guideX) guide({x - stroke * 0.5F, 0.0F, stroke, drag->extent.y});
+            for (const float y : drag->guideY) guide({0.0F, y - stroke * 0.5F, drag->extent.x, stroke});
+        }
         for (const Vec2 uv : kHandles) {
             const Vec2 p = Point(e, uv);
             SceneUIFrameElement handle;
@@ -136,16 +192,50 @@ bool EditorUIRectInteraction::Begin(EditorSceneContext& context, float width, fl
         context.Console().Warning("UI", "Cannot resize a UI object with a collapsed transform.");
         return true;
     }
+    drag.grabbed = found->rect;
+    drag.snapDistance = kSnapPixels / zoom;
+    drag.extent = {width, height};
+    if (AxisAligned(*found)) {
+        for (const auto& other : frame.elements) {
+            if (IsWithin(context.Scene(), other.entity, entity) || other.rect.width <= 0 || other.rect.height <= 0 ||
+                other.effectiveOpacity <= 0 || !AxisAligned(other))
+                continue;
+            AddLines(drag.snapX, other.rect.x, other.rect.width);
+            AddLines(drag.snapY, other.rect.y, other.rect.height);
+        }
+    }
     context.UIRectDrag() = drag;
     return true;
 }
 bool EditorUIRectInteraction::Update(EditorSceneContext& context, float x, float y, bool preserveAspect,
-                                     bool fromCenter) {
+                                     bool fromCenter, bool snap) {
     if (!context.UIRectDrag())
         return false;
     auto& drag = *context.UIRectDrag();
     const float det = drag.basisX.x * drag.basisY.y - drag.basisX.y * drag.basisY.x;
-    const float dx = x - drag.pointerStart.x, dy = y - drag.pointerStart.y;
+    float dx = x - drag.pointerStart.x, dy = y - drag.pointerStart.y;
+    drag.guideX.clear();
+    drag.guideY.clear();
+    if (snap && !preserveAspect && !fromCenter && !drag.snapX.empty()) {
+        // The edges the pointer is moving: all three lines of a moved widget, the grabbed edge of a resized one.
+        const auto& r = drag.grabbed;
+        const Vec2 uv = drag.handle < 0 ? Vec2{0.5F, 0.5F} : kHandles[static_cast<std::size_t>(drag.handle)];
+        const std::array<float, 3> xs{r.x, r.x + r.width * 0.5F, r.x + r.width};
+        const std::array<float, 3> ys{r.y, r.y + r.height * 0.5F, r.y + r.height};
+        const std::span<const float> xe = drag.handle < 0 ? std::span<const float>{xs}
+            : uv.x == 0.5F ? std::span<const float>{} : std::span<const float>{xs.data() + (uv.x == 0 ? 0 : 2), 1};
+        const std::span<const float> ye = drag.handle < 0 ? std::span<const float>{ys}
+            : uv.y == 0.5F ? std::span<const float>{} : std::span<const float>{ys.data() + (uv.y == 0 ? 0 : 2), 1};
+        const auto shifted = [](std::span<const float> edges, float by) {
+            std::vector<float> moved(edges.begin(), edges.end());
+            for (float& edge : moved) edge += by;
+            return moved;
+        };
+        if (const auto offset = NearestOffset(shifted(xe, dx), drag.snapX, drag.snapDistance)) dx += *offset;
+        if (const auto offset = NearestOffset(shifted(ye, dy), drag.snapY, drag.snapDistance)) dy += *offset;
+        drag.guideX = LinesTouched(xe, drag.snapX, dx);
+        drag.guideY = LinesTouched(ye, drag.snapY, dy);
+    }
     if (!drag.changed) {
         if (std::abs(dx) < 0.01F && std::abs(dy) < 0.01F)
             return true;

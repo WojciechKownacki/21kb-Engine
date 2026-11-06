@@ -127,6 +127,7 @@ public:
     [[nodiscard]] bool VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only = {});
     [[nodiscard]] bool VerifyUIGraphics();
     [[nodiscard]] bool VerifyUINavigationLinks();
+    [[nodiscard]] bool VerifyUIClickHandler();
     [[nodiscard]] bool VerifyUIDropdownOptions();
     [[nodiscard]] bool VerifyUIWidgetFeatures();
     [[nodiscard]] bool VerifyPickerCloseButtons();

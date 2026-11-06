@@ -53,6 +53,7 @@
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/InspectorSceneColor.hpp"
+#include "inspection/ui/InspectorUIClickHandler.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "inspection/ui/InspectorUIThemeModel.hpp"
 #include "scene/ui/EditorUIThemeAssets.hpp"
@@ -1903,6 +1904,14 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
                 if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
                     const auto& row = rows[static_cast<std::size_t>(hit.index)];
+                    if (row.onClick) {
+                        const auto picked = EditorUIClickPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                            InspectorUIClickHandler::Choices(sceneContext_.Scene(), entity));
+                        if (picked.accepted && sceneContext_.SetUIClickHandler(entity, picked.choice ? &*picked.choice : nullptr))
+                            sceneViewport_.RequestPresent();
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
                     const auto* descriptor = kb::scene::FindUIComponentProperty(*component, row.name);
                     if (descriptor != nullptr && descriptor->assetKind) {
                         const auto result = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),

@@ -94,7 +94,7 @@ bool EditorSceneViewportObjectInteraction::UpdateGizmoDragOrHover(
         if (!leftButtonDown) return EditorUIRectInteraction::End(sceneContext);
         const auto origin = sceneContext.UIRectDrag()->viewportOrigin;
         return EditorUIRectInteraction::Update(sceneContext, (static_cast<float>(x)-origin.x)*sceneContext.UIRectDrag()->pointerScale, (static_cast<float>(y)-origin.y)*sceneContext.UIRectDrag()->pointerScale,
-            EditorKeyDown(VK_SHIFT), EditorKeyDown(VK_MENU));
+            EditorKeyDown(VK_SHIFT), EditorKeyDown(VK_MENU), !EditorKeyDown(VK_CONTROL));
     }
     return EditorSceneViewportGizmoInteraction::UpdateDragOrHover(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, leftButtonDown);
 }
@@ -120,7 +120,7 @@ bool EditorSceneViewportObjectInteraction::EndGizmoDrag(
     if (sceneContext.UIRectDrag()) {
         const auto origin = sceneContext.UIRectDrag()->viewportOrigin;
         static_cast<void>(EditorUIRectInteraction::Update(sceneContext, (static_cast<float>(x)-origin.x)*sceneContext.UIRectDrag()->pointerScale, (static_cast<float>(y)-origin.y)*sceneContext.UIRectDrag()->pointerScale,
-            EditorKeyDown(VK_SHIFT), EditorKeyDown(VK_MENU)));
+            EditorKeyDown(VK_SHIFT), EditorKeyDown(VK_MENU), !EditorKeyDown(VK_CONTROL)));
         return EditorUIRectInteraction::End(sceneContext);
     }
     return EditorSceneViewportGizmoInteraction::EndDrag(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);

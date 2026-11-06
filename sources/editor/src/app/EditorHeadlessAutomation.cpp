@@ -22,6 +22,7 @@
 #include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/ui/InspectorUIClickHandler.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
@@ -1417,6 +1418,30 @@ bool EditorHeadlessAutomation::VerifyUI2DEditing() {
         Trace("ui_2d", false, "move-geometry-failed");
         return false;
     }
+    // A few pixels short of the canvas edge the widget snaps onto it and the viewport draws a guide there;
+    // with snapping off it stays where the pointer put it.
+    {
+        kb::scene::SceneUIFrame frame;
+        if (!kb::scene::SceneUIQueries{context_.Scene()}.BuildFrame(width, height, frame)) return false;
+        const auto canvasFrame = std::ranges::find(frame.elements, original->canvas, &kb::scene::SceneUIFrameElement::entity);
+        if (canvasFrame == frame.elements.end()) return false;
+        const float toEdge = canvasFrame->rect.x - original->rect.x + 3.0F;
+        if (!EditorUIRectInteraction::Update(context_, center.x + toEdge, center.y + 15, false, false, false) ||
+            std::abs(frameElement()->rect.x - (canvasFrame->rect.x + 3.0F)) > 0.1F ||
+            !EditorUIRectInteraction::Update(context_, center.x + toEdge, center.y + 15) ||
+            std::abs(frameElement()->rect.x - canvasFrame->rect.x) > 0.1F || context_.UIRectDrag()->guideX.empty()) {
+            Trace("ui_2d", false, "edge-snap-or-guide-failed");
+            return false;
+        }
+        const auto guided = EditorUIRectInteraction::Overlays(context_, width, height);
+        if (!std::ranges::any_of(guided, [&](const auto& e) {
+                return e.border && e.border->backgroundColor.r > 0.9F && e.border->backgroundColor.g < 0.3F &&
+                       std::abs(e.rect.x - canvasFrame->rect.x) < 1.0F && e.rect.height >= height;
+            })) {
+            Trace("ui_2d", false, "snap-guide-not-drawn");
+            return false;
+        }
+    }
     if (!EditorUIRectInteraction::End(context_, true))
         return false;
     const auto restored = frameElement();
@@ -1607,7 +1632,7 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
         }
         return std::nullopt;
     };
-    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu(context_);
     if (!menu) return fail("menu-allocation-failed");
     const HMENU create = findSubmenu(menu, "Create");
     std::vector<std::pair<const kb::scene::SceneCreateItem*, UINT>> commands;
@@ -1675,7 +1700,7 @@ bool EditorHeadlessAutomation::VerifyUICreationMenu() {
         }
         return nullptr;
     };
-    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu(context_);
     if (!menu) return fail("menu-allocation-failed");
     const auto create = findSubmenu(menu, "Create");
     const auto widgets = create ? findSubmenu(create, "User Interface") : nullptr;
@@ -2065,6 +2090,134 @@ bool EditorHeadlessAutomation::VerifyUIWidgetFeatures() {
     if (!captured) return false;
     if (insets.left <= 0.0F || insets.bottom <= 0.0F) return fail("phone-safe-area-not-applied");
     Trace("ui_widget_features", true, "fill-rows-sprite-swap-rows-group-picker-slider-hierarchy-safe-area");
+    return true;
+}
+
+bool EditorHeadlessAutomation::VerifyUIClickHandler() {
+    const auto fail = [&](std::string_view reason) { Trace("ui_click_handler", false, reason); return false; };
+    const auto selectable = kb::scene::UIComponentType::Selectable;
+    const auto canvas = context_.CreateUIObject(kb::scene::UIComponentType::Canvas);
+    const auto createNamed = [&](std::string_view name) {
+        const auto entity = context_.CreateUIObject(kb::scene::UIComponentType::Button, canvas);
+        if (entity.IsValid()) context_.Scene().Entities().SetName(entity, name);
+        return entity;
+    };
+    if (!canvas.IsValid() || !createNamed("ClickAuditPlay").IsValid() || !createNamed("ClickAuditQuit").IsValid())
+        return fail("create-failed");
+    // Undo restores the scene from a snapshot with new entity handles, so objects are looked up by name.
+    const auto byName = [&](std::string_view name) {
+        const auto& scene = context_.Scene();
+        std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+        while (!pending.empty()) {
+            const auto entity = pending.back();
+            pending.pop_back();
+            if (scene.Entities().Name(entity) == name) return entity;
+            for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index)
+                pending.push_back(scene.Hierarchy().ChildAt(entity, index));
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const kb::assets::AssetMetadata* script = context_.Scene().Assets().Manager().Registry().FindByPath("/Game/Scripts/ClickAudit.lua");
+    if (script == nullptr) return fail("script-asset-missing");
+    const kb::assets::AssetId scriptId = script->id;
+    const std::filesystem::path scriptFile = script->physicalPath;
+    const auto described = [&](std::string_view widget) { return InspectorUIClickHandler::Describe(context_.Scene(), byName(widget)); };
+    const auto selectableOf = [&](std::string_view widget) {
+        const auto* value = context_.Scene().Components().UI().TryGet<kb::scene::UISelectable>(byName(widget));
+        return value != nullptr ? *value : kb::scene::UISelectable{};
+    };
+
+    // The row opens the list of script functions; the list picker accepts the row that is clicked, row 0 being Clear.
+    context_.SelectEntity(byName("ClickAuditPlay"));
+    const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), byName("ClickAuditPlay"), selectable);
+    if (rows.empty() || !rows.front().onClick || rows.front().value != "(none)") return fail("on-click-row-missing");
+    if (!FindInspectorHit(context_, InspectorUIComponentModel::Section(selectable), InspectorPropertyId::UIAssetPicker, 0, InspectorHitKind::TextField))
+        return fail("on-click-picker-button-not-found");
+    if (!CaptureInspector("ui-on-click-empty")) return false;
+    const auto pick = [&]([[maybe_unused]] std::string_view widget, const std::vector<UIClickChoice>& choices, int row) {
+        return EditorUIClickPickerDialog::Show(impl_->window, MakeEditorDarkTheme(), choices,
+            {.visible = false, .onOpened = [row](HWND picker) {
+                const int y = EditorDialogStyle::HeaderHeight + 8 + row * EditorDialogStyle::ListRowHeight +
+                    EditorDialogStyle::ListRowHeight / 2;
+                SendMessageW(picker, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(EditorDialogStyle::Padding + 40, y));
+                PostMessageW(picker, WM_CLOSE, 0, 0);
+            }});
+    };
+    const auto chooseFunction = [&](std::string_view widget, std::string_view function, bool created) -> bool {
+        const auto choices = InspectorUIClickHandler::Choices(context_.Scene(), byName(widget));
+        const auto found = std::ranges::find_if(choices, [&](const UIClickChoice& choice) {
+            return choice.script == scriptId && choice.function == function && choice.createFunction == created;
+        });
+        if (found == choices.end()) return false;
+        const auto picked = pick(widget, choices, static_cast<int>(found - choices.begin()) + 1);
+        return picked.accepted && picked.choice && picked.choice->function == function &&
+            context_.SetUIClickHandler(byName(widget), &*picked.choice);
+    };
+    {
+        const auto choices = InspectorUIClickHandler::Choices(context_.Scene(), byName("ClickAuditPlay"));
+        const bool listsHooks = std::ranges::any_of(choices, [](const UIClickChoice& choice) {
+            return choice.function == "Tick" || choice.function.starts_with("OnUI");
+        });
+        if (choices.size() != 2U || listsHooks) return fail("choices-are-not-the-click-functions");
+    }
+
+    // An existing function: the widget gets the script, its event name and no separate target.
+    if (!chooseFunction("ClickAuditPlay", "QuitClicked", false)) return fail("existing-function-not-picked");
+    if (described("ClickAuditPlay") != "ClickAudit.QuitClicked" || selectableOf("ClickAuditPlay").eventTarget != 0U ||
+        UIEventName(selectableOf("ClickAuditPlay")) != "QuitClicked" ||
+        context_.Scene().Components().Behaviours().TryGet(byName("ClickAuditPlay")) == nullptr ||
+        context_.Scene().Components().Behaviours().TryGet(byName("ClickAuditPlay"))->behaviourAssetId != scriptId.value)
+        return fail("existing-function-not-stored: " + described("ClickAuditPlay"));
+    if (!CaptureInspector("ui-on-click-chosen")) return false;
+    if (!context_.UndoSceneCommand() || described("ClickAuditPlay") != "(none)" || context_.HasEntityScript(byName("ClickAuditPlay")))
+        return fail("undo-did-not-clear-click-and-script");
+    if (!context_.RedoSceneCommand() || described("ClickAuditPlay") != "ClickAudit.QuitClicked") return fail("redo-failed");
+
+    // A second button sends its click to the object that already runs the script.
+    if (!chooseFunction("ClickAuditQuit", "QuitClicked", false)) return fail("second-button-not-wired");
+    if (selectableOf("ClickAuditQuit").eventTarget != byName("ClickAuditPlay").Id() || described("ClickAuditQuit") != "ClickAudit.QuitClicked" ||
+        context_.HasEntityScript(byName("ClickAuditQuit")))
+        return fail("second-button-target-wrong: " + described("ClickAuditQuit"));
+
+    // A new function is appended to the script and is the one that answers.
+    if (!chooseFunction("ClickAuditQuit", "ClickAuditQuitClicked", true)) return fail("new-function-not-picked");
+    std::ifstream source(scriptFile, std::ios::binary);
+    const std::string text{std::istreambuf_iterator<char>(source), std::istreambuf_iterator<char>()};
+    if (text.find("function ClickAuditQuitClicked(self, event)") == std::string::npos ||
+        described("ClickAuditQuit") != "ClickAudit.ClickAuditQuitClicked")
+        return fail("new-function-not-added: " + described("ClickAuditQuit"));
+
+    // Clear empties the row.
+    const auto choices = InspectorUIClickHandler::Choices(context_.Scene(), byName("ClickAuditQuit"));
+    const auto cleared = pick("ClickAuditQuit", choices, 0);
+    if (!cleared.accepted || cleared.choice || !context_.SetUIClickHandler(byName("ClickAuditQuit"), nullptr) ||
+        described("ClickAuditQuit") != "(none)")
+        return fail("clear-failed");
+
+    // The rare Selectable settings sit under a collapsed Advanced row.
+    context_.SelectEntity(byName("ClickAuditPlay"));
+    const auto section = InspectorUIComponentModel::Section(selectable);
+    const auto all = InspectorUIComponentModel::Properties(context_.Scene(), byName("ClickAuditPlay"), selectable);
+    const auto navigation = std::ranges::find(all, std::string_view{"navigationMode"}, &InspectorUIPropertyRow::name);
+    const auto interactable = std::ranges::find(all, std::string_view{"interactable"}, &InspectorUIPropertyRow::name);
+    if (navigation == all.end() || !navigation->advanced || interactable == all.end() || interactable->advanced)
+        return fail("advanced-rows-not-split");
+    const int navigationIndex = static_cast<int>(navigation - all.begin());
+    if (context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced)) return fail("advanced-not-collapsed-by-default");
+    if (FindInspectorHit(context_, section, InspectorUIComponentModel::Property(selectable), navigationIndex))
+        return fail("advanced-row-visible-while-collapsed");
+    POINT disclosure{};
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UISelectableAdvanced, -1, InspectorHitKind::Row, &disclosure))
+        return fail("advanced-row-not-found");
+    if (!CaptureInspector("ui-selectable-advanced-collapsed")) return false;
+    if (!EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, disclosure.x, disclosure.y, impl_->viewport) ||
+        !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced))
+        return fail("advanced-row-did-not-open");
+    if (!FindInspectorHit(context_, section, InspectorUIComponentModel::Property(selectable), navigationIndex))
+        return fail("advanced-row-hidden-while-open");
+    if (!CaptureInspector("ui-selectable-advanced-open")) return false;
+    context_.Inspector().ToggleDisclosure(InspectorDisclosureId::UISelectableAdvanced);
+    Trace("ui_click_handler", true, "picker-existing-new-clear-undo-advanced");
     return true;
 }
 

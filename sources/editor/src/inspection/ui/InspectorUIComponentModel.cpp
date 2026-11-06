@@ -1,5 +1,6 @@
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "localization/EditorLocalization.hpp"
+#include "inspection/ui/InspectorUIClickHandler.hpp"
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -402,8 +403,22 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
     }
 
     std::vector<InspectorUIPropertyRow> output;
-    for (const kb::scene::UIComponentPropertyDescriptor& property :
-        kb::scene::UIComponentPropertyCatalog(component)) {
+    const auto catalogSpan = kb::scene::UIComponentPropertyCatalog(component);
+    std::vector<kb::scene::UIComponentPropertyDescriptor> catalog(catalogSpan.begin(), catalogSpan.end());
+    // What a widget author sets first, then the rare settings.
+    std::ranges::stable_partition(catalog, [component](const kb::scene::UIComponentPropertyDescriptor& property) {
+        return !IsAdvancedProperty(component, property.name);
+    });
+    if (component == kb::scene::UIComponentType::Selectable) {
+        output.push_back(InspectorUIPropertyRow{
+            .name = "onClick",
+            .label = std::string{ EditorText("uiProperty.onClick", "On Click") },
+            .type = kb::scene::UIComponentPropertyType::String,
+            .value = InspectorUIClickHandler::Describe(scene, entity),
+            .onClick = true,
+        });
+    }
+    for (const kb::scene::UIComponentPropertyDescriptor& property : catalog) {
         kb::scene::UIComponentPropertyValue value;
         if (!kb::scene::ReadUIComponentProperty(values, component, property.name, value)) continue;
         output.push_back(InspectorUIPropertyRow{
@@ -414,6 +429,7 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
             .boolValue = std::holds_alternative<bool>(value) && std::get<bool>(value),
             .writable = property.writable,
             .choices = Choices(component, property.name),
+            .advanced = IsAdvancedProperty(component, property.name),
         });
     }
     // Keep canonical indices for editing and automation; only the leading field
@@ -509,6 +525,13 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
         break;
     }
     return output;
+}
+
+bool InspectorUIComponentModel::IsAdvancedProperty(kb::scene::UIComponentType component, std::string_view name) noexcept {
+    if (component != kb::scene::UIComponentType::Selectable) return false;
+    return name == "raycastTarget" || name.starts_with("navigation") || name == "eventName" || name == "eventTarget" ||
+        name == "colorFadeSeconds" || name == "targetGraphic" || name.starts_with("selectedColor") ||
+        name.starts_with("raycastPadding") || name == "draggable";
 }
 
 std::string_view InspectorUIComponentModel::DisplayName(kb::scene::UIComponentType component) {

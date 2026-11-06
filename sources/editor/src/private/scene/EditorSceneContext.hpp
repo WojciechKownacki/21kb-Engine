@@ -5,6 +5,7 @@
 
 #include "engine/assets/Map2DAsset.hpp"
 #include "engine/scene/SceneTemplates.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "engine/assets/AssetImportTypes.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/TerrainAsset.hpp"
@@ -443,7 +444,6 @@ public:
         kb::scene::SceneEntity entity,
         const EditorTerrainConfiguration& configuration,
         std::string* error = nullptr);
-
     // Replaces the whole terrain of `entity` as one Undo step (a generated world, an eroded one). Refused
     // when the entity's terrain is not the asset `expectedAssetId` the result was made from.
     [[nodiscard]] bool ReplaceTerrain(
@@ -452,6 +452,7 @@ public:
         kb::assets::TerrainAsset edited,
         std::string label,
         std::string* error = nullptr);
+
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
     [[nodiscard]] bool IsHierarchyEntitySelected(kb::scene::SceneEntity entity) const noexcept;
@@ -560,6 +561,14 @@ public:
     [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
     [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
+    // The Hierarchy clipboard: Copy keeps a snapshot of the selected objects (with their children), Cut also
+    // deletes them, Paste creates the snapshot again under the object's original parent, or at the root
+    // when that parent is gone. Each is one undo step.
+    [[nodiscard]] bool CopySelectedHierarchyEntities();
+    [[nodiscard]] bool CutSelectedHierarchyEntities();
+    [[nodiscard]] bool PasteHierarchyEntities();
+    [[nodiscard]] bool CanPasteHierarchyEntities() const noexcept { return !hierarchyClipboard_.empty(); }
+    [[nodiscard]] bool HasHierarchySelection() const noexcept { return !hierarchySelection_.SelectedEntities().empty(); }
     [[nodiscard]] bool SelectPrefabSourceAsset(kb::scene::SceneEntity entity);
     // The Inspector asks for a selected instance's overrides on every paint, size and hit test; they
     // change only with the scene, so they are worked out once per scene revision.
@@ -594,6 +603,8 @@ public:
         kb::scene::SceneEntity targetCell);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
     [[nodiscard]] kb::scene::SceneEntity CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent = {});
+    // A whole screen (Main Menu, Pause, HUD, Settings) as one hierarchy, with its fonts and Canvas, in one undo step.
+    [[nodiscard]] kb::scene::SceneEntity CreateUIScreen(kb::scene::UIScreenTemplate screen, kb::scene::SceneEntity parent = {});
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
     // An entry of the hierarchy Create menu (kb::scene::SceneCreateMenu), under parent when valid.
     [[nodiscard]] kb::scene::SceneEntity CreateMenuObject(std::string_view id, kb::scene::SceneEntity parent = {});
@@ -1423,6 +1434,10 @@ public:
     // out option `index`; Move puts option `index` at position `target`.
     [[nodiscard]] bool EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index,
         std::uint32_t target = 0U);
+    // The "On Click" row of a widget: the Lua function that runs on click (null clears it). Writes the event name
+    // and event target of its Selectable, gives the widget the script when nothing else runs it, and adds the
+    // function to the script when the choice is a new one.
+    [[nodiscard]] bool SetUIClickHandler(kb::scene::SceneEntity widget, const struct UIClickChoice* choice);
     [[nodiscard]] bool SetUIComponentProperty(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
         std::string_view property, const kb::scene::UIComponentPropertyValue& value);
@@ -1432,6 +1447,7 @@ public:
     [[nodiscard]] bool SetUIAnchorPreset(kb::scene::SceneEntity entity, int preset,
         bool alignPosition = false, bool alignPivot = false);
     std::optional<EditorUIRectDragState>& UIRectDrag() noexcept { return uiRectDrag_; }
+    const std::optional<EditorUIRectDragState>& UIRectDrag() const noexcept { return uiRectDrag_; }
     void SetUIAuthoringViewportSize(float width, float height) const noexcept {
         if (width > 0.0F && height > 0.0F) uiAuthoringViewportSize_ = {width, height};
     }
@@ -1679,6 +1695,7 @@ private:
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
     EditorHierarchyExpansionState hierarchyExpansion_;
+    std::vector<EditorSceneObjectPrefabPayload> hierarchyClipboard_;
     EditorHierarchySearchState hierarchySearch_;
     mutable std::vector<EditorHierarchyRow> hierarchyRowsCache_;
     mutable bool hierarchyRowsDirty_ = true;

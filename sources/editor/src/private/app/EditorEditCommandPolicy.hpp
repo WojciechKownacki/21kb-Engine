@@ -8,6 +8,9 @@ enum class EditorEditCommand {
     Undo,
     Redo,
     Duplicate,
+    Copy,
+    Cut,
+    Paste,
     Save,
 };
 
