@@ -534,6 +534,9 @@ struct SceneRenderSubmitStats {
     std::uint32_t shadowCasterCount = 0;
     std::uint32_t submittedShadowCasterCount = 0;
     std::uint32_t submittedShadowDrawCallCount = 0;
+    // Triangles of the submitted draws (instances times the triangles of the drawn level), all passes and the shadow passes.
+    std::uint64_t submittedTriangleCount = 0;
+    std::uint64_t submittedShadowTriangleCount = 0;
     std::uint32_t shadowMapSize = 0;
     std::uint32_t shadowFilterSampleCount = 0;
     std::uint64_t shadowLightEntityId = 0;
@@ -772,6 +775,8 @@ struct SceneRenderDiagnostics {
     lhs.shadowCasterCount += rhs.shadowCasterCount;
     lhs.submittedShadowCasterCount += rhs.submittedShadowCasterCount;
     lhs.submittedShadowDrawCallCount += rhs.submittedShadowDrawCallCount;
+    lhs.submittedTriangleCount += rhs.submittedTriangleCount;
+    lhs.submittedShadowTriangleCount += rhs.submittedShadowTriangleCount;
     lhs.shadowMapSize = rhs.shadowMapSize != 0U ? rhs.shadowMapSize : lhs.shadowMapSize;
     lhs.shadowFilterSampleCount = rhs.shadowFilterSampleCount != 0U ? rhs.shadowFilterSampleCount : lhs.shadowFilterSampleCount;
     lhs.shadowLightEntityId = rhs.shadowLightEntityId != 0U ? rhs.shadowLightEntityId : lhs.shadowLightEntityId;

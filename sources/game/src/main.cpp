@@ -833,6 +833,8 @@ int RunGame(const GameOptions& options) {
             auto rendering = JsonValue::MakeObject();
             rendering.Set("scene_sync_ms", JsonValue::MakeNumber(renderer.LastSceneSynchronizationMilliseconds()));
             rendering.Set("draw_count", JsonValue::MakeNumber(renderStats.submittedDrawCallCount));
+            rendering.Set("triangles", JsonValue::MakeNumber(static_cast<double>(renderStats.submittedTriangleCount)));
+            rendering.Set("shadow_triangles", JsonValue::MakeNumber(static_cast<double>(renderStats.submittedShadowTriangleCount)));
             rendering.Set("gi_triangle_meshes", JsonValue::MakeNumber(renderStats.giGeometryMeshCount));
             rendering.Set("gi_box_meshes", JsonValue::MakeNumber(renderStats.giBoundingBoxMeshCount));
             rendering.Set("shadow_lights_selected", JsonValue::MakeNumber(renderStats.selectedShadowLightCount));

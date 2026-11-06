@@ -449,6 +449,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
 
         desc.stats.submittedMeshCount += submittedInstances;
         ++desc.stats.submittedDrawCallCount;
+        const std::uint64_t submittedTriangles = static_cast<std::uint64_t>(command.indexCount / 3U) * submittedInstances;
+        desc.stats.submittedTriangleCount += submittedTriangles;
+        if (desc.pass == MeshPassType::ShadowDepth) desc.stats.submittedShadowTriangleCount += submittedTriangles;
         if (desc.pass == MeshPassType::GBuffer && command.materialResource != nullptr) {
             const bool compactGraph = resolution.graphProgram && resolution.key.pass == "GBufferCompact";
             if ((command.materialResource->graphProgram.writesShadingModelColor && resolution.graphProgram && !compactGraph) ||
