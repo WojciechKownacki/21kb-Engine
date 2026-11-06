@@ -170,7 +170,7 @@ struct LivePrefabComponentReaders {
 
 [[nodiscard]] bool Equals(const MeshRendererComponent& lhs, const MeshRendererComponent& rhs) noexcept {
     return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
-        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow;
+        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
 }
 
 [[nodiscard]] bool Equals(const LightComponent& lhs, const LightComponent& rhs) noexcept {
@@ -179,7 +179,9 @@ struct LivePrefabComponentReaders {
         && lhs.areaHeight == rhs.areaHeight && lhs.contactShadowLength == rhs.contactShadowLength && lhs.volumetricScattering == rhs.volumetricScattering
         && lhs.castsShadow == rhs.castsShadow
         && lhs.sourceRadius == rhs.sourceRadius && lhs.shadowStrength == rhs.shadowStrength
-        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility;
+        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility && lhs.shadowBias == rhs.shadowBias && lhs.shadowNormalBias == rhs.shadowNormalBias
+        && lhs.shadowFilter == rhs.shadowFilter && lhs.shadowQuality == rhs.shadowQuality
+        && lhs.shadowCascadeCount == rhs.shadowCascadeCount && lhs.shadowCascadeDistribution == rhs.shadowCascadeDistribution;
 }
 
 [[nodiscard]] bool Equals(const InputComponent& lhs, const InputComponent& rhs) noexcept {
@@ -354,6 +356,9 @@ void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, Sce
         }
         ScenePrefabHashBuilder::Mix(hash, meshRenderer->castsShadow ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, meshRenderer->receivesShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(meshRenderer->lodBias));
+        ScenePrefabHashBuilder::Mix(hash, meshRenderer->lodEnabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(meshRenderer->mobility));
     }
 
     const LightComponent* light = components.Lights().TryGet(entity);
@@ -374,6 +379,12 @@ void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, Sce
         ScenePrefabHashBuilder::MixFloat(hash, light->shadowStrength);
         ScenePrefabHashBuilder::MixFloat(hash, light->shadowDistance);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(light->mobility));
+        ScenePrefabHashBuilder::MixFloat(hash, light->shadowBias);
+        ScenePrefabHashBuilder::MixFloat(hash, light->shadowNormalBias);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(light->shadowFilter));
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(light->shadowQuality));
+        ScenePrefabHashBuilder::Mix(hash, light->shadowCascadeCount);
+        ScenePrefabHashBuilder::MixFloat(hash, light->shadowCascadeDistribution);
     }
 
     const InputComponent* input = components.Inputs().TryGet(entity);

@@ -24,7 +24,9 @@ namespace {
         && lhs.colorTemperatureKelvin == rhs.colorTemperatureKelvin
         && lhs.layerMask == rhs.layerMask
         && lhs.sourceRadius == rhs.sourceRadius && lhs.shadowStrength == rhs.shadowStrength
-        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility;
+        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility && lhs.shadowBias == rhs.shadowBias && lhs.shadowNormalBias == rhs.shadowNormalBias
+        && lhs.shadowFilter == rhs.shadowFilter && lhs.shadowQuality == rhs.shadowQuality
+        && lhs.shadowCascadeCount == rhs.shadowCascadeCount && lhs.shadowCascadeDistribution == rhs.shadowCascadeDistribution;
 }
 
 } // namespace
@@ -61,6 +63,12 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowStrength", ScenePrefabOverrideValueFormatter::ToString(actual->shadowStrength), ScenePrefabOverrideFlag::Light);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowDistance", ScenePrefabOverrideValueFormatter::ToString(actual->shadowDistance), ScenePrefabOverrideFlag::Light);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowBias", ScenePrefabOverrideValueFormatter::ToString(actual->shadowBias), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowNormalBias", ScenePrefabOverrideValueFormatter::ToString(actual->shadowNormalBias), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowFilter", std::to_string(static_cast<int>(actual->shadowFilter)), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowQuality", std::to_string(static_cast<int>(actual->shadowQuality)), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowCascadeCount", std::to_string(actual->shadowCascadeCount), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowCascadeDistribution", ScenePrefabOverrideValueFormatter::ToString(actual->shadowCascadeDistribution), ScenePrefabOverrideFlag::Light);
         return;
     }
     if (actual->kind != expected->kind) {
@@ -116,6 +124,24 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
     }
     if (actual->mobility != expected->mobility) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowBias != expected->shadowBias) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowBias", ScenePrefabOverrideValueFormatter::ToString(actual->shadowBias), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowNormalBias != expected->shadowNormalBias) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowNormalBias", ScenePrefabOverrideValueFormatter::ToString(actual->shadowNormalBias), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowFilter != expected->shadowFilter) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowFilter", std::to_string(static_cast<int>(actual->shadowFilter)), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowQuality != expected->shadowQuality) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowQuality", std::to_string(static_cast<int>(actual->shadowQuality)), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowCascadeCount != expected->shadowCascadeCount) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowCascadeCount", std::to_string(actual->shadowCascadeCount), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowCascadeDistribution != expected->shadowCascadeDistribution) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowCascadeDistribution", ScenePrefabOverrideValueFormatter::ToString(actual->shadowCascadeDistribution), ScenePrefabOverrideFlag::Light);
     }
 }
 

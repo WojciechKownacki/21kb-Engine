@@ -16,6 +16,23 @@ template <typename T>
     return iterator != fields.end() && ScenePrefabAssetFieldParser::ParseNumber(iterator->second, output);
 }
 
+[[nodiscard]] bool ParseOptionalLod(const ScenePrefabAssetFieldMap& fields, MeshRendererComponent& meshRenderer) {
+    const auto parse = [&fields](std::string_view key, auto& output) {
+        const auto iterator = fields.find(std::string{ key });
+        return iterator == fields.end() || ScenePrefabAssetFieldParser::ParseNumber(iterator->second, output);
+    };
+    int lodEnabled = meshRenderer.lodEnabled ? 1 : 0;
+    std::uint32_t mobility = static_cast<std::uint32_t>(meshRenderer.mobility);
+    if (!parse("meshRenderer.lodBias", meshRenderer.lodBias) || !parse("meshRenderer.lodEnabled", lodEnabled) ||
+        (lodEnabled != 0 && lodEnabled != 1) || !parse("meshRenderer.mobility", mobility) ||
+        mobility > static_cast<std::uint32_t>(MeshMobility::Static)) {
+        return false;
+    }
+    meshRenderer.lodEnabled = lodEnabled != 0;
+    meshRenderer.mobility = static_cast<MeshMobility>(mobility);
+    return IsMeshRendererComponentValid(meshRenderer);
+}
+
 [[nodiscard]] bool ParseAssetId(const ScenePrefabAssetFieldMap& fields, std::string_view key, std::uint64_t& output) {
     std::size_t value = 0;
     if (!ParseField(fields, key, value)) {
@@ -66,7 +83,8 @@ bool ScenePrefabAssetMeshRendererParser::Parse(const ScenePrefabAssetFieldMap& f
         || !ParseOptionalMaterialSlotOverrides(fields, meshRenderer)
         || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.castsShadow", castsShadow)
         || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.receivesShadow", receivesShadow)
-        || !ParseField(fields, "meshRenderer.layer", meshRenderer.layer)) {
+        || !ParseField(fields, "meshRenderer.layer", meshRenderer.layer)
+        || !ParseOptionalLod(fields, meshRenderer)) {
         return false;
     }
 

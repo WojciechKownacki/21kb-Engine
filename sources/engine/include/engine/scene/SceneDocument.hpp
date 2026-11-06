@@ -62,6 +62,9 @@ struct SceneDocument {
     //      AIBrain persists the AI preset and its rules.
     // v60: a behaviour persists the exposed script variables set on it that differ from the script defaults;
     //      older files load without overrides.
+    // v61: a Mesh Renderer persists its LOD bias, LOD switch and mobility; a Light persists its shadow bias,
+    //      normal bias, filter, quality and (directional) cascade count and distribution. Older files load
+    //      the defaults.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
@@ -75,7 +78,8 @@ struct SceneDocument {
     static constexpr std::uint32_t UITextFontRenderModeFileVersion = 58U;
     static constexpr std::uint32_t UIThemeBindingFileVersion = 59U;
     static constexpr std::uint32_t BehaviourVariableOverridesFileVersion = 60U;
-    static constexpr std::uint32_t CurrentFileVersion = 60U;
+    static constexpr std::uint32_t MeshLodAndShadowQualityFileVersion = 61U;
+    static constexpr std::uint32_t CurrentFileVersion = 61U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

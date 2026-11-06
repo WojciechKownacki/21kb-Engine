@@ -54,6 +54,9 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "meshRenderer.castsShadow=" << (components.meshRenderer->castsShadow ? 1 : 0) << '\n';
         output << "meshRenderer.receivesShadow=" << (components.meshRenderer->receivesShadow ? 1 : 0) << '\n';
         output << "meshRenderer.layer=" << components.meshRenderer->layer << '\n';
+        output << "meshRenderer.lodBias=" << components.meshRenderer->lodBias << '\n';
+        output << "meshRenderer.lodEnabled=" << (components.meshRenderer->lodEnabled ? 1 : 0) << '\n';
+        output << "meshRenderer.mobility=" << static_cast<int>(components.meshRenderer->mobility) << '\n';
     }
 
     output << "light=" << (components.light.has_value() ? 1 : 0) << '\n';
@@ -76,6 +79,12 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "light.shadowStrength=" << components.light->shadowStrength << '\n';
         output << "light.shadowDistance=" << components.light->shadowDistance << '\n';
         output << "light.mobility=" << static_cast<int>(components.light->mobility) << '\n';
+        output << "light.shadowBias=" << components.light->shadowBias << '\n';
+        output << "light.shadowNormalBias=" << components.light->shadowNormalBias << '\n';
+        output << "light.shadowFilter=" << static_cast<int>(components.light->shadowFilter) << '\n';
+        output << "light.shadowQuality=" << static_cast<int>(components.light->shadowQuality) << '\n';
+        output << "light.shadowCascadeCount=" << components.light->shadowCascadeCount << '\n';
+        output << "light.shadowCascadeDistribution=" << components.light->shadowCascadeDistribution << '\n';
     }
 
     output << "input=" << (components.input.has_value() ? 1 : 0) << '\n';

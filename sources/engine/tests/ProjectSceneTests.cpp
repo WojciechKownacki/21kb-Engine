@@ -587,6 +587,9 @@ void RunSceneDocumentRoundTripTest() {
         .materialAssetId = 42,
         .castsShadow = false,
         .layer = 0x00000010U,
+        .lodBias = 2,
+        .lodEnabled = false,
+        .mobility = kb::scene::MeshMobility::Static,
     });
     source.Components().Lights().Set(child, kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Directional,
@@ -594,6 +597,12 @@ void RunSceneDocumentRoundTripTest() {
         .useColorTemperature = true,
         .colorTemperatureKelvin = 4200.0F,
         .layerMask = 0x00000006U,
+        .shadowBias = 0.75F,
+        .shadowNormalBias = 2.0F,
+        .shadowFilter = kb::scene::LightShadowFilter::Pcss,
+        .shadowQuality = kb::scene::LightShadowQuality::High,
+        .shadowCascadeCount = 3U,
+        .shadowCascadeDistribution = 3.0F,
     });
     source.Components().Cameras().Set(secondRoot, kb::scene::CameraComponent{
         .orthographicHeight = 16.0F,
@@ -705,6 +714,8 @@ void RunSceneDocumentRoundTripTest() {
     const kb::scene::AudioListenerComponent* audioListener = target.Components().AudioListeners().TryGet(roots[1]);
     const kb::scene::BehaviourComponent* behaviour = target.Components().Behaviours().TryGet(restoredChildren[0]);
     Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 41 && !meshRenderer->castsShadow && meshRenderer->layer == 0x00000010U, "Scene document mesh renderer did not roundtrip");
+    Require(meshRenderer->lodBias == 2 && !meshRenderer->lodEnabled && meshRenderer->mobility == kb::scene::MeshMobility::Static,
+        "Scene document mesh renderer did not roundtrip its LOD bias, LOD switch and mobility");
     std::uint32_t iteratedMeshRenderers = 0U;
     target.Components().Visitors().ForEachMeshRenderer(
         [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::MeshRendererComponent& renderer, void* context) {
@@ -718,6 +729,9 @@ void RunSceneDocumentRoundTripTest() {
     Require(light != nullptr && light->kind == kb::scene::LightKind::Directional && NearlyEqual(light->intensity, 3.0F), "Scene document light did not roundtrip");
     Require(light->useColorTemperature && NearlyEqual(light->colorTemperatureKelvin, 4200.0F) && light->layerMask == 0x00000006U,
         "Scene document light did not roundtrip useColorTemperature/colorTemperatureKelvin/layerMask");
+    Require(NearlyEqual(light->shadowBias, 0.75F) && NearlyEqual(light->shadowNormalBias, 2.0F) && light->shadowFilter == kb::scene::LightShadowFilter::Pcss &&
+            light->shadowQuality == kb::scene::LightShadowQuality::High && light->shadowCascadeCount == 3U && NearlyEqual(light->shadowCascadeDistribution, 3.0F),
+        "Scene document light did not roundtrip its shadow bias, normal bias, filter, quality and cascades");
     std::uint32_t iteratedLights = 0U;
     target.Components().Visitors().ForEachLight(
         [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::LightComponent& light, void* context) {

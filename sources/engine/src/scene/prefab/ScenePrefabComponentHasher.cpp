@@ -31,6 +31,9 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         }
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->castsShadow ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->receivesShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.meshRenderer->lodBias));
+        ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->lodEnabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.meshRenderer->mobility));
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.light.has_value() ? 1U : 0U);
@@ -50,6 +53,12 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowStrength);
         ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowDistance);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.light->mobility));
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowBias);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowNormalBias);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.light->shadowFilter));
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.light->shadowQuality));
+        ScenePrefabHashBuilder::Mix(hash, components.light->shadowCascadeCount);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowCascadeDistribution);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.input.has_value() ? 1U : 0U);

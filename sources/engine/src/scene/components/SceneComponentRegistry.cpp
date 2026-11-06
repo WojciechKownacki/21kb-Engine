@@ -667,6 +667,12 @@ void RegisterLightReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(LightComponent, shadowStrength, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(LightComponent, shadowDistance, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(LightComponent, mobility, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowBias, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, shadowNormalBias, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, shadowFilter, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowQuality, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowCascadeCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(LightComponent, shadowCascadeDistribution, kb::ecs::ComponentFieldType::Float32),
     }));
 }
 

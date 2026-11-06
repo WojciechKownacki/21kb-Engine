@@ -173,7 +173,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & MeshRendererBit) != 0U) {
         MeshRendererComponent meshRenderer;
-        if (!SceneAssetRenderComponentCodec::ReadMeshRenderer(input, meshRenderer)) {
+        if (!SceneAssetRenderComponentCodec::ReadMeshRenderer(input, fileVersion, meshRenderer)) {
             return false;
         }
         output.meshRenderer = meshRenderer;

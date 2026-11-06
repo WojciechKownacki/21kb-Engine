@@ -233,6 +233,20 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "meshRenderer.layer") {
         return ParseNumber(property.value, Ensure(node.components.meshRenderer).layer);
     }
+    if (property.propertyPath == "meshRenderer.lodBias") {
+        return ParseNumber(property.value, Ensure(node.components.meshRenderer).lodBias) && IsMeshRendererComponentValid(*node.components.meshRenderer);
+    }
+    if (property.propertyPath == "meshRenderer.lodEnabled") {
+        return ParseBool(property.value, Ensure(node.components.meshRenderer).lodEnabled);
+    }
+    if (property.propertyPath == "meshRenderer.mobility") {
+        std::uint32_t mobility = 0U;
+        if (!ParseNumber(property.value, mobility) || mobility > static_cast<std::uint32_t>(MeshMobility::Static)) {
+            return false;
+        }
+        Ensure(node.components.meshRenderer).mobility = static_cast<MeshMobility>(mobility);
+        return true;
+    }
     if (property.propertyPath == "light") {
         return ApplyComponentPresence(property.value, node.components.light);
     }
@@ -291,6 +305,34 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "light.shadowDistance") {
         return ParseNumber(property.value, Ensure(node.components.light).shadowDistance);
+    }
+    if (property.propertyPath == "light.shadowBias") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowBias);
+    }
+    if (property.propertyPath == "light.shadowNormalBias") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowNormalBias);
+    }
+    if (property.propertyPath == "light.shadowCascadeCount") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowCascadeCount);
+    }
+    if (property.propertyPath == "light.shadowCascadeDistribution") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowCascadeDistribution);
+    }
+    if (property.propertyPath == "light.shadowFilter") {
+        std::uint32_t filter = 0U;
+        if (!ParseNumber(property.value, filter) || filter > static_cast<std::uint32_t>(LightShadowFilter::Pcss)) {
+            return false;
+        }
+        Ensure(node.components.light).shadowFilter = static_cast<LightShadowFilter>(filter);
+        return true;
+    }
+    if (property.propertyPath == "light.shadowQuality") {
+        std::uint32_t quality = 0U;
+        if (!ParseNumber(property.value, quality) || quality > static_cast<std::uint32_t>(LightShadowQuality::Ultra)) {
+            return false;
+        }
+        Ensure(node.components.light).shadowQuality = static_cast<LightShadowQuality>(quality);
+        return true;
     }
     if (property.propertyPath == "light.mobility") {
         std::uint32_t mobility = 0U;
