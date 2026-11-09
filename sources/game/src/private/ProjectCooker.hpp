@@ -17,6 +17,8 @@ struct ProjectCookRequest {
     // Windows-only destination for custom project DLL snapshots. The package orchestrator
     // places this directory below the sealed runtime root after a successful cook.
     std::filesystem::path runtimeModulesOutputDirectory;
+    // Non-Windows destination listing the project C++ modules the target host must link.
+    std::filesystem::path nativeLinkManifestPath;
     std::filesystem::path reusePackPath;
     // zstd level for the pack's blocks, 1..19; 0 stores every block as baked.
     int packCompressionLevel = 0;

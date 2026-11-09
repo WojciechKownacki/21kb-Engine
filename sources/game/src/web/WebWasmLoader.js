@@ -30,6 +30,7 @@ Module['instantiateWasm'] ??= function(imports, receiveInstance) {
     }
 
     (async () => {
+        if (Module['kbPrepareGraphics'] && !await Module['kbPrepareGraphics']()) return;
         let result;
         try {
             if (Module['wasmBinary']) {

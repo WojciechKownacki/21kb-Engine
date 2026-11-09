@@ -1,4 +1,6 @@
 #include "script/lua/PucLuaStateUtilities.hpp"
+#include "script/lua/PucLuaMemoryArena.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
 
 extern "C" {
 #include <lauxlib.h>
@@ -10,23 +12,22 @@ namespace kb::script {
 
 void* PucLuaMemoryBudget::Allocate(void* userData, void* block, std::size_t oldSize, std::size_t newSize) noexcept {
     auto& budget = *static_cast<PucLuaMemoryBudget*>(userData);
-    // With no block, oldSize names the kind of object being created, not a size.
-    const std::size_t previous = block == nullptr ? 0U : oldSize;
-    if (newSize == 0U) {
-        std::free(block);
-        budget.usedBytes -= previous;
-        return nullptr;
-    }
-    if (newSize > previous && budget.limitBytes != 0U && budget.protectedDepth != 0U &&
-        newSize - previous > budget.limitBytes - (budget.usedBytes < budget.limitBytes ? budget.usedBytes : budget.limitBytes)) {
-        budget.limitReached = true;
-        return nullptr;
-    }
-    void* const resized = std::realloc(block, newSize);
-    if (resized != nullptr) {
-        budget.usedBytes = budget.usedBytes - previous + newSize;
-    }
-    return resized;
+    static_cast<void>(oldSize); // The arena owns logical sizes and retained capacities.
+    try {
+        if (!budget.arena) budget.arena = std::make_shared<PucLuaMemoryArena>();
+        void* resized = budget.arena->Resize(block, newSize, budget.limitBytes,
+            budget.protectedDepth != 0U, budget.limitReached);
+        budget.usedBytes = budget.arena->LiveBytes();
+        return resized;
+    } catch (const std::bad_alloc&) { return nullptr; }
+}
+
+PucLuaExecutionContextScope::PucLuaExecutionContextScope(lua_State* state, ScriptExecutionContext& context) noexcept
+    : slot_(PucLuaRuntimeApi::ContextSlot(state)) {
+    if (slot_ != nullptr) { previous_ = slot_->activeContext; slot_->activeContext = &context; }
+}
+PucLuaExecutionContextScope::~PucLuaExecutionContextScope() {
+    if (slot_ != nullptr) slot_->activeContext = previous_;
 }
 
 PucLuaMemoryLimitScope::PucLuaMemoryLimitScope(lua_State* state) noexcept {

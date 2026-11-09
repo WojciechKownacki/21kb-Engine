@@ -29,7 +29,8 @@ class RendererClaimTests(unittest.TestCase):
         return lines
 
     def test_capability_report_is_parsed(self) -> None:
-        self.assertIn("gpuDrivenIndirectSubmitSupported", self.unsupported)
+        self.assertEqual({"missing"}, _hard_coded_unsupported(
+            "report.missing = false; report.available = true; report.dynamic = condition;"))
 
     def test_indirect_and_meshlet_submit_are_only_described_as_missing(self) -> None:
         for capability, pattern in (

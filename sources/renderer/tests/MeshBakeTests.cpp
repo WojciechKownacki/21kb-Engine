@@ -734,6 +734,7 @@ enum class SecondaryDetail : std::uint8_t { Tangent, Uv1, Color };
     material.desc.translucencyBlend = RenderMaterialTranslucencyBlend::AlphaHoldout;
     material.desc.doubleSided = true;
     material.desc.writesDepth = false;
+    material.desc.pointSampling = true;
     std::array<std::uint64_t*, 13U> assetIds{
         &material.desc.albedoTextureAssetId,
         &material.desc.normalTextureAssetId,
@@ -1162,6 +1163,92 @@ void RunBakedMeshLodChainTest() {
         "The LOD levels do not cover the whole section and cluster tables");
 }
 
+void RunRuntimeLodMeshTest() {
+    // A mesh drawn straight from its source gets the chain the cooker bakes, and each level a coverage
+    // below which the next level's error stays under the pixel budget: falling, ending at zero.
+    const RenderMeshAssetData source = MakeSphere(48U, 32U, 1.0F);
+    const MeshBakeOutput baked = BakeInto(source, kb::assets::bake::WindowsX64BakeTargetProfile());
+    RenderMeshAssetData runtime{};
+    Require(baked.status == MeshBakeStatus::Success && bake::BuildRuntimeLodMesh(source, runtime) == MeshBakeStatus::Success,
+        "A sphere did not build its runtime levels of detail");
+    const BakedMeshView view = ViewBakedMesh(baked.primaryBlock);
+    Require(runtime.lods.size() == view.lodCount && runtime.lods.size() > 2U, "The runtime chain is not the cooker's chain");
+    const float budget = 2.0F * bake::kRuntimeLodMaxScreenErrorPixels * runtime.bounds.radius / bake::kRuntimeLodReferenceViewportHeight;
+    for (std::uint32_t level = 0U; level < runtime.lods.size(); ++level) {
+        const float coverage = runtime.lods[level].minScreenCoverage;
+        if (level + 1U == runtime.lods.size()) {
+            Require(coverage == 0.0F, "The last level must draw at any coverage below the others");
+            break;
+        }
+        const float nextError = ReadLod(baked.primaryBlock, view, level + 1U).absoluteError;
+        Require(coverage > 0.0F && coverage <= 1.0F && std::fabs(coverage - std::min(budget / nextError, 1.0F)) < 1.0e-5F,
+            "A level's coverage is not the one where the next level's error reaches the pixel budget");
+        if (level > 0U) Require(coverage <= runtime.lods[level - 1U].minScreenCoverage, "The level coverages do not fall");
+    }
+    RenderMeshAssetData dense{};
+    Require(bake::BuildRuntimeLodMesh(MakeSphere(96U, 64U, 1.0F), dense) == MeshBakeStatus::Success && dense.lods.size() > 4U,
+        "A dense mesh must get levels coarse enough for instances far away");
+    RenderMeshAssetData untouched{};
+    Require(bake::BuildRuntimeLodMesh(RenderMeshAssetData{}, untouched) == MeshBakeStatus::EmptySource && untouched.lods.empty(),
+        "A mesh without geometry must be refused and leave the output alone");
+}
+
+void RunMeshLodSettingsTest() {
+    // The levels follow the asset's own settings, in the cooker and in a game that draws the source alike.
+    const auto profile = kb::assets::bake::WindowsX64BakeTargetProfile();
+    const RenderMeshAssetData defaults = MakeSphere(64U, 48U, 1.0F);
+    const MeshBakeOutput defaultBake = BakeInto(defaults, profile);
+    Require(defaultBake.status == MeshBakeStatus::Success && defaultBake.lodCount > 4U, "A dense sphere did not bake its default chain");
+
+    RenderMeshAssetData three = defaults;
+    three.lod.levelCount = 3U;
+    const MeshBakeOutput threeBake = BakeInto(three, profile);
+    Require(threeBake.status == MeshBakeStatus::Success && threeBake.lodCount == 3U, "Three levels were asked for and the chain has another count");
+    Require(!(kb::render::bake::MakeMeshBakeKey(three, profile).Digest() == kb::render::bake::MakeMeshBakeKey(defaults, profile).Digest()),
+        "Levels of detail with other settings share one bake key");
+
+    RenderMeshAssetData manual = defaults;
+    manual.lod.manual = true;
+    manual.lod.levelCount = 3U;
+    manual.lod.levels[0] = { .trianglePercent = 30.0F, .errorPercent = 50.0F };
+    manual.lod.levels[1] = { .trianglePercent = 5.0F, .errorPercent = 50.0F };
+    const MeshBakeOutput manualBake = BakeInto(manual, profile);
+    Require(manualBake.status == MeshBakeStatus::Success && manualBake.lodCount == 3U, "A manual chain did not bake");
+    const BakedMeshView manualView = ViewBakedMesh(manualBake.primaryBlock);
+    const float finest = static_cast<float>(ReadLod(manualBake.primaryBlock, manualView, 0U).indexCount);
+    const float second = static_cast<float>(ReadLod(manualBake.primaryBlock, manualView, 1U).indexCount) / finest;
+    const float third = static_cast<float>(ReadLod(manualBake.primaryBlock, manualView, 2U).indexCount) / finest;
+    Require(std::fabs(second - 0.30F) < 0.04F && std::fabs(third - 0.05F) < 0.03F,
+        "The manual levels do not keep the share of triangles they were given");
+
+    RenderMeshAssetData small = defaults;
+    small.lod.minTriangles = 1'000'000U;
+    Require(BakeInto(small, profile).lodCount == 1U, "A mesh under the triangle threshold was given a chain");
+
+    RenderMeshAssetData invalid = defaults;
+    invalid.lod.keepPercent = 120.0F;
+    Require(BakeInto(invalid, profile).status != MeshBakeStatus::Success, "Settings that are not valid were baked");
+
+    RenderMeshAssetData runtime{};
+    Require(bake::BuildRuntimeLodMesh(three, runtime) == MeshBakeStatus::Success && runtime.lods.size() == 3U,
+        "A source mesh does not get the levels its settings ask for");
+
+    // A mesh read from the package gets the same screen coverage as the one built from the source.
+    RenderMeshAssetData packaged{};
+    Require(bake::ReadBakedMesh(threeBake.primaryBlock, threeBake.chunks, packaged), "The three-level bake did not read back");
+    bake::BakedMeshLayout layout{};
+    Require(bake::ReadBakedMeshLayout(threeBake.primaryBlock, layout), "The three-level layout did not read back");
+    std::vector<float> errors;
+    for (const bake::BakedMeshLodLayout& level : layout.lods) errors.push_back(level.error);
+    Require(packaged.lods[0].minScreenCoverage == 0.0F, "A packaged mesh carries a screen coverage before the loader derives it");
+    bake::AssignLodScreenCoverage(packaged, errors, layout.bounds.radius);
+    for (std::size_t level = 0U; level < 3U; ++level) {
+        Require(packaged.lods[level].minScreenCoverage == runtime.lods[level].minScreenCoverage,
+            "A packaged mesh chooses its levels by another coverage than a source mesh");
+    }
+    Require(packaged.lods[0].minScreenCoverage > 0.0F && packaged.lods[2].minScreenCoverage == 0.0F, "The packaged coverages do not fall to zero");
+}
+
 void RunBakedMeshLodErrorIsAbsoluteTest() {
     // The same sphere at two sizes. An error measured against the mesh's extents would come out
     // the same for both; an absolute error is in the units the positions are in, so it has to
@@ -1176,10 +1263,11 @@ void RunBakedMeshLodErrorIsAbsoluteTest() {
 
     const BakedMeshView smallView = ViewBakedMesh(smallOutput.primaryBlock);
     const BakedMeshView largeView = ViewBakedMesh(largeOutput.primaryBlock);
-    Require(smallView.lodCount == largeView.lodCount && smallView.lodCount > 1U,
-        "The same sphere at two scales produced different LOD chains");
+    // The finest levels of both chains are compared; a chain may end a level sooner at one scale than at the other.
+    const std::uint32_t commonLevels = std::min(smallView.lodCount, largeView.lodCount);
+    Require(commonLevels > 2U, "The same sphere at two scales produced chains with too few common levels");
 
-    for (std::uint32_t level = 1U; level < smallView.lodCount; ++level) {
+    for (std::uint32_t level = 1U; level < commonLevels; ++level) {
         const float smallError = ReadLod(smallOutput.primaryBlock, smallView, level).absoluteError;
         const float largeError = ReadLod(largeOutput.primaryBlock, largeView, level).absoluteError;
         Require(smallError > 0.0F && largeError > 0.0F, "A simplified LOD level recorded no error at all");
@@ -1215,10 +1303,10 @@ void RunBakedMeshSimplificationKeepsAttributesTest() {
     const BakedMeshView tangentView = ViewBakedMesh(texturedTangent.primaryBlock);
     const BakedMeshView uv1View = ViewBakedMesh(texturedUv1.primaryBlock);
     const BakedMeshView colorView = ViewBakedMesh(texturedColor.primaryBlock);
-    Require(plainView.lodCount > 1U && uvView.lodCount == plainView.lodCount &&
-            normalView.lodCount == plainView.lodCount && tangentView.lodCount == plainView.lodCount &&
-            uv1View.lodCount == plainView.lodCount && colorView.lodCount == plainView.lodCount,
-        "Sheets of one shape produced different LOD chains, so their errors are not comparable");
+    // Detail stops a chain sooner, so only the first level, which all of them have, is compared.
+    Require(plainView.lodCount > 1U && uvView.lodCount > 1U && normalView.lodCount > 1U && tangentView.lodCount > 1U &&
+            uv1View.lodCount > 1U && colorView.lodCount > 1U,
+        "A sheet of one shape produced no first level of detail, so its error cannot be compared");
 
     const LodRecord plainLod = ReadLod(plain.primaryBlock, plainView, 1U);
     const LodRecord uvLod = ReadLod(texturedUv.primaryBlock, uvView, 1U);
@@ -1333,6 +1421,7 @@ void RunBakedMeshMaterialMetadataTest() {
             actual.desc.translucencyBlend == expected.desc.translucencyBlend &&
             actual.desc.doubleSided == expected.desc.doubleSided &&
             actual.desc.writesDepth == expected.desc.writesDepth &&
+            actual.desc.pointSampling == expected.desc.pointSampling &&
             MaterialTexturePaths(actual) == MaterialTexturePaths(expected),
         "An embedded material changed while passing through the baked mesh format");
 
@@ -1664,13 +1753,24 @@ void RunBakedMeshKeyTest() {
         AppendFloat(parameters, 0.25F);
         AppendFloat(parameters, 2.0F);
         AppendUInt32(parameters, 8U);
-        AppendUInt32(parameters, 4U);
-        AppendFloat(parameters, 0.5F);
-        AppendFloat(parameters, 0.02F);
-        AppendFloat(parameters, 1.0F);
-        AppendFloat(parameters, 1.0F);
-        AppendFloat(parameters, 0.5F);
+        AppendUInt32(parameters, 8U);
+        AppendFloat(parameters, 0.1F);
+        AppendFloat(parameters, 0.1F);
         AppendFloat(parameters, 0.25F);
+        AppendFloat(parameters, 0.1F);
+        // The asset's own settings (AssetMeshLodSettings, here the defaults): automatic, eight levels, each
+        // keeping half of the one above and adding up to a fifth of the extent, from 1024 triangles.
+        AppendUInt32(parameters, 0U);
+        AppendUInt32(parameters, 8U);
+        AppendFloat(parameters, 50.0F);
+        AppendFloat(parameters, 20.0F);
+        AppendUInt32(parameters, 1024U);
+        float share = 100.0F;
+        for (std::uint32_t level = 1U; level < 8U; ++level) {
+            share *= 0.5F;
+            AppendFloat(parameters, share);
+            AppendFloat(parameters, 20.0F);
+        }
         Require(key.settingsHash == kb::assets::bake::HashBakeBytes(parameters),
             "The cluster and LOD parameters in the bake key are not the ones this suite was written against");
     }
@@ -2840,6 +2940,8 @@ void RunMeshBakeTests() {
     RunBakedMeshClusterLimitsTest();
     RunBakedMeshClusterBoundsAndConeTest();
     RunBakedMeshLodChainTest();
+    RunRuntimeLodMeshTest();
+    RunMeshLodSettingsTest();
     RunBakedMeshLodErrorIsAbsoluteTest();
     RunBakedMeshSimplificationKeepsAttributesTest();
     RunBakedMeshMaterialSeamTest();

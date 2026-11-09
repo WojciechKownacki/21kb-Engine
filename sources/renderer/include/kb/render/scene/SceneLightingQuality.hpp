@@ -3,20 +3,29 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 namespace kb::render {
 
-// The shadow and global illumination detail a project pins for one device class. Auto changes nothing: the
-// lighting config keeps what the engine and the scene chose. Every other level overwrites the settings that
-// decide what shadows and bounce light cost, from the cheapest (Low) to the most detailed (Ultra), with
-// smaller maps, fewer cascades and a coarser voxel grid on phones and tablets.
+// The shadow and global illumination detail a project pins for one device class. Auto leaves a computer's
+// lighting config as the engine and the scene chose it, and picks Medium on a phone or tablet, so a handheld
+// never starts at desktop detail. Every other level overwrites the settings that decide what shadows and
+// bounce light cost, from the cheapest (Low) to the most detailed (Ultra), with smaller maps, fewer cascades
+// and a coarser voxel grid on phones and tablets. A handheld also draws no cube shadows of point and area
+// lights (six passes each, and there is no one-pass cube shadow) and at most four lights' shadows.
 inline void ApplyProjectLightingQuality(
     SceneRenderLightingConfig& config,
     project::ProjectQualityLevel shadows,
     project::ProjectQualityLevel globalIllumination,
     bool mobile) noexcept {
     using Level = project::ProjectQualityLevel;
+    if (mobile) {
+        if (shadows == Level::Auto) shadows = Level::Medium;
+        if (globalIllumination == Level::Auto) globalIllumination = Level::Medium;
+        config.pointShadowCubeEnabled = false;
+        config.pointShadowMaxLights = std::min(config.pointShadowMaxLights, 4U);
+    }
     struct ShadowPreset {
         std::uint32_t mapSize;
         std::uint32_t cascades;

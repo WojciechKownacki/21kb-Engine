@@ -1,0 +1,42 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "DebuggerWorkflow",
+      "template": "Empty",
+      "startup": true
+    },
+    {
+      "op": "create_entity",
+      "id": "probe",
+      "name": "Probe"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Logic/DebugProbe.lua",
+      "content": "local function Add(value)\n local increment = 2\n return value + increment\nend\nfunction Tick(self, dt)\n local counter = 40\n local result = Add(counter)\n if result ~= 42 then error(\"debug execution changed\") end\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "attach_script",
+      "entity": "probe",
+      "asset": "/Game/Logic/DebugProbe.lua"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/DebuggerWorkflow.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "serve_lua_debugger"
+    },
+    {
+      "op": "stop"
+    }
+  ]
+}

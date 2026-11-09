@@ -36,8 +36,11 @@ void main()
         color.a *= edge;
     }
     if (u_particleDepthParams.w > 0.5) {
-        vec2 screenUv = v_shadowPos.xy / max(abs(v_shadowPos.w), 0.000001) * 0.5 + 0.5;
+        // Sample the depth pixel covered by this fragment, including the backend viewport orientation.
+        vec2 screenUv = gl_FragCoord.xy * u_viewTexel.xy;
         float sceneDeviceDepth = texture2D(s_particleSceneDepth, screenUv).x;
+        // Depth textures are always 0..1; the projection may use -1..1 clip depth.
+        sceneDeviceDepth = mix(sceneDeviceDepth, sceneDeviceDepth * 2.0 - 1.0, u_particleFeatureParams.w);
         sceneDepth = abs(u_particleDepthParams.y /
             max(abs(sceneDeviceDepth - u_particleDepthParams.x), 0.000001));
         float fade = clamp((sceneDepth - v_shadowFlags.x) / u_particleDepthParams.z, 0.0, 1.0);

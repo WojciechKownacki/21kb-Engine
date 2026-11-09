@@ -3,6 +3,7 @@
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 
 #include <fstream>
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -12,7 +13,8 @@ namespace {
 [[nodiscard]] bool ReadLooseSourceBytes(
     const std::filesystem::path& path,
     std::vector<std::uint8_t>& out,
-    std::string& error) {
+    std::string& error, const AssetLoadRequest& request) {
+    if (request.IsCancellationRequested()) { error = "Asset load cancelled"; return false; }
     std::error_code sizeError;
     const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
     if (sizeError || size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())) {
@@ -24,14 +26,21 @@ namespace {
         error = "Asset source could not be opened";
         return false;
     }
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size), 0U);
-    if (!bytes.empty()) {
-        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(static_cast<std::size_t>(size));
+    constexpr std::size_t chunkSize = 256U * 1024U;
+    for (std::size_t offset = 0; offset < static_cast<std::size_t>(size);) {
+        if (request.IsCancellationRequested()) { error = "Asset load cancelled"; return false; }
+        const auto count = std::min(chunkSize, static_cast<std::size_t>(size) - offset);
+        bytes.resize(offset + count);
+        input.read(reinterpret_cast<char*>(bytes.data() + offset), static_cast<std::streamsize>(count));
+        if (input.gcount() != static_cast<std::streamsize>(count) || input.bad()) {
+            error = "Asset source could not be read completely";
+            return false;
+        }
+        offset += count;
     }
-    if ((!bytes.empty() && input.gcount() != static_cast<std::streamsize>(bytes.size())) || input.bad()) {
-        error = "Asset source could not be read completely";
-        return false;
-    }
+    if (request.IsCancellationRequested()) { error = "Asset load cancelled"; return false; }
     out = std::move(bytes);
     return true;
 }
@@ -61,6 +70,7 @@ bool AssetLoadRequest::ReadSourceBytes(
     std::vector<std::uint8_t>& out,
     std::string& error) const {
     error.clear();
+    if (IsCancellationRequested()) { error = "Asset load cancelled"; return false; }
     if (sourceBytes.has_value()) {
         out.assign(sourceBytes->begin(), sourceBytes->end());
         return true;
@@ -68,7 +78,7 @@ bool AssetLoadRequest::ReadSourceBytes(
     if (runtimePack != nullptr) {
         return ReadPackagedSourceBytes(runtimePack, metadata.id, out, error);
     }
-    return ReadLooseSourceBytes(resolvedPath, out, error);
+    return ReadLooseSourceBytes(resolvedPath, out, error, *this);
 }
 
 bool AssetLoadRequest::ReadDependencySourceBytes(
@@ -76,10 +86,11 @@ bool AssetLoadRequest::ReadDependencySourceBytes(
     std::vector<std::uint8_t>& out,
     std::string& error) const {
     error.clear();
+    if (IsCancellationRequested()) { error = "Asset load cancelled"; return false; }
     if (runtimePack != nullptr) {
         return ReadPackagedSourceBytes(runtimePack, dependency.id, out, error);
     }
-    return ReadLooseSourceBytes(dependency.physicalPath, out, error);
+    return ReadLooseSourceBytes(dependency.physicalPath, out, error, *this);
 }
 
 bool AssetLoadRequest::ReadPackagedPayload(
@@ -88,6 +99,7 @@ bool AssetLoadRequest::ReadPackagedPayload(
     bake::RuntimeAssetPayload& out,
     std::string& error) const {
     error.clear();
+    if (IsCancellationRequested()) { error = "Asset load cancelled"; return false; }
     if (runtimePack == nullptr) {
         error = "Asset load request is not backed by a runtime package";
         return false;
@@ -108,6 +120,7 @@ bool AssetLoadRequest::ReadPackagedPayloadBlocks(
     bake::RuntimeAssetPayload& out,
     std::string& error) const {
     error.clear();
+    if (IsCancellationRequested()) { error = "Asset load cancelled"; return false; }
     if (runtimePack == nullptr) {
         error = "Asset load request is not backed by a runtime package";
         return false;

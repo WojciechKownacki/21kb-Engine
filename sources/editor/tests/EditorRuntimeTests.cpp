@@ -3,6 +3,21 @@
 #include <string_view>
 
 int main(int argumentCount, char** arguments) {
+    if (argumentCount==2 && std::string_view{arguments[1]}=="gameplay-graph") {
+        kb::editor::tests::RunEditorGameplayGraphTests();return 0;
+    }
+    if (argumentCount==2 && std::string_view{arguments[1]}=="static-mesh") {
+        kb::editor::tests::RunEditorStaticMeshTests();return 0;
+    }
+    if (argumentCount==2 && std::string_view{arguments[1]}=="blend-space-2d") {
+        kb::editor::tests::RunEditorBlendSpace2DTests();return 0;
+    }
+    if (argumentCount == 2 && std::string_view{arguments[1]} == "timeline") {
+        kb::editor::tests::RunEditorTimelineTests(); return 0;
+    }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "docking") {
+        kb::editor::tests::RunEditorDockingTests(); return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "asset-browser") {
         kb::editor::tests::RunEditorAssetBrowserTests();
         return 0;
@@ -34,10 +49,23 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorSceneAudioInspectorTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "profiler") {
+        kb::editor::tests::RunEditorProfilerTests();
+        kb::editor::tests::RunEditorProfilerPanelTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "inspector") {
         kb::editor::tests::RunEditorInspectorTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "viewport-preview") {
+        kb::editor::tests::RunEditorViewportPreviewTests();
+        return 0;
+    }
+    kb::editor::tests::RunEditorTimelineTests();
+    kb::editor::tests::RunEditorBlendSpace2DTests();
+    kb::editor::tests::RunEditorStaticMeshTests();
+    kb::editor::tests::RunEditorGameplayGraphTests();
     kb::editor::tests::RunEditorCommandStackTests();
     kb::editor::tests::RunEditorPlayModeSceneSessionTests();
     kb::editor::tests::RunEditorHierarchyTests();
@@ -51,6 +79,8 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorDockingTests();
     kb::editor::tests::RunEditorProjectTests();
     kb::editor::tests::RunEditorSettingsTests();
+    kb::editor::tests::RunEditorProfilerTests();
+    kb::editor::tests::RunEditorProfilerPanelTests();
     kb::editor::tests::RunEditorLocalizationTests();
     kb::editor::tests::RunEditorInspectorTests();
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();

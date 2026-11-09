@@ -21,7 +21,9 @@ public final class ControllerInstrumentation extends Instrumentation {
     private static native boolean surfaceState(int phase);
     private static native boolean safeAreaMatches(int left, int top, int right, int bottom);
     private static native void requestIme(boolean shown);
+    private static native void requestMultilineIme();
     private static native int[] imeState();
+    private static native int[] imeSelection();
     private static native int imeDismissalCount();
     private ControllerActivity activity;
     private boolean touchOnly;
@@ -175,6 +177,16 @@ public final class ControllerInstrumentation extends Instrumentation {
         runOnMainSync(() -> touch(MotionEvent.ACTION_CANCEL, new int[]{23}, 90, 100));
         awaitTouches(new int[]{23}, new int[]{3}, 90, 100);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
+        runOnMainSync(() -> {
+            holdMotion(true);
+            try {
+                touch(MotionEvent.ACTION_DOWN, new int[]{7}, 20, 30);
+                touch(MotionEvent.ACTION_UP, new int[]{7}, 25, 35);
+            } finally { holdMotion(false); }
+        });
+        awaitTouches(new int[]{7}, new int[]{0}, 20, 30);
+        consumeTouchFrame(); awaitTouches(new int[]{7}, new int[]{2}, 25, 35);
+        consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
         runOnMainSync(() -> touch(MotionEvent.ACTION_DOWN, new int[]{7}, 30, 40));
         awaitTouches(new int[]{7}, new int[]{0}, 30, 40);
         setFocused(false); awaitTouches(new int[]{7}, new int[]{3}, 30, 40);
@@ -208,6 +220,8 @@ public final class ControllerInstrumentation extends Instrumentation {
         final float restoredX = size[0] * 0.25f, restoredY = size[1] * 0.75f;
         runOnMainSync(() -> touch(MotionEvent.ACTION_DOWN, new int[]{23}, restoredX, restoredY));
         awaitTouches(new int[]{23}, new int[]{0}, new float[]{restoredX, restoredY}, size[0], size[1]);
+        consumeTouchFrame();
+        awaitTouches(new int[]{23}, new int[]{1}, restoredX, restoredY);
         runOnMainSync(() -> touch(MotionEvent.ACTION_UP, new int[]{23}, restoredX, restoredY));
         awaitTouches(new int[]{23}, new int[]{2}, restoredX, restoredY);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
@@ -242,11 +256,32 @@ public final class ControllerInstrumentation extends Instrumentation {
     }
 
     private void verifyIme() {
+        long focusDeadline = SystemClock.uptimeMillis() + 10000;
+        boolean[] focused = {false};
+        do {
+            runOnMainSync(() -> focused[0] = activity.hasWindowFocus());
+            if (focused[0]) break;
+            SystemClock.sleep(20);
+        } while (SystemClock.uptimeMillis() < focusDeadline);
+        if (!focused[0]) throw new AssertionError("IME activity must own window focus before requesting the keyboard");
         requestIme(true);
         awaitKeyboard(true);
         runOnMainSync(() -> imeGeometry = activity.imeGeometry());
         verifySafeArea();
         awaitText("Start 😀 ", 0);
+        runOnMainSync(() -> activity.textConnection().setSelection(8, 6));
+        long selectionDeadline = SystemClock.uptimeMillis() + 10000;
+        boolean selectionMatched = false;
+        do {
+            int[] selection = imeSelection();
+            if (selection != null && selection.length == 2 && selection[0] == 7 && selection[1] == 6) {
+                selectionMatched = true;
+                break;
+            }
+            SystemClock.sleep(20);
+        } while (SystemClock.uptimeMillis() < selectionDeadline);
+        if (!selectionMatched) throw new AssertionError("Native selection must preserve reverse UTF-16 emoji endpoints: " +
+            java.util.Arrays.toString(imeSelection()));
         runOnMainSync(() -> {
             if (activity.textConnection() == null) throw new AssertionError("Active InputConnection missing");
             activity.textConnection().setSelection(0, "Start 😀 ".length());
@@ -292,6 +327,20 @@ public final class ControllerInstrumentation extends Instrumentation {
             activity.textConnection().commitText("", 1);
         });
         awaitText("", 1);
+        requestMultilineIme();
+        long modeDeadline = SystemClock.uptimeMillis() + 10000;
+        boolean[] multiline = {false};
+        do {
+            runOnMainSync(() -> multiline[0] =
+                (activity.getImeEditorInfo().inputType & android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 &&
+                (activity.getImeEditorInfo().imeOptions & android.view.inputmethod.EditorInfo.IME_MASK_ACTION) ==
+                    android.view.inputmethod.EditorInfo.IME_ACTION_NONE);
+            if (multiline[0]) break;
+            SystemClock.sleep(20);
+        } while (SystemClock.uptimeMillis() < modeDeadline);
+        if (!multiline[0]) throw new AssertionError("Multiline field must configure the actual IME editor");
+        runOnMainSync(() -> activity.textConnection().commitText("Line 1\ne\u0301 😀", 1));
+        awaitText("Line 1\ne\u0301 😀", 1);
         requestIme(false);
         awaitKeyboard(false);
     }

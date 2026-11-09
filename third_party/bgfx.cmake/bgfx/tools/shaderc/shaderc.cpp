@@ -272,6 +272,7 @@ namespace bgfx
 		, disasm(false)
 		, raw(false)
 		, preprocessOnly(false)
+		, sourceLocations(false)
 		, depends(false)
 		, debugInformation(false)
 		, avoidFlowControl(false)
@@ -702,10 +703,11 @@ namespace bgfx
 
 	struct Preprocessor : public shaderc::PreprocessorCallbackI
 	{
-		Preprocessor(const char* _filePath, bool _essl, bx::WriterI* _messageWriter)
+		Preprocessor(const char* _filePath, bool _essl, bool _sourceLocations, bx::WriterI* _messageWriter)
 			: m_filePath(_filePath)
 			, m_messageWriter(_messageWriter)
 			, m_hadError(false)
+			, m_sourceLocations(_sourceLocations)
 		{
 			if (!_essl)
 			{
@@ -790,6 +792,7 @@ namespace bgfx
 
 			bx::DefaultAllocator allocator;
 			shaderc::Preprocessor pp(*this, &allocator);
+			pp.setEmitLineDirectives(m_sourceLocations);
 
 			for (uint32_t ii = 0, num = uint32_t(m_defines.size() ); ii < num; ++ii)
 			{
@@ -947,6 +950,7 @@ namespace bgfx
 		stl::vector<bx::FilePath> m_includeDirs;
 		bx::WriterI* m_messageWriter;
 		bool m_hadError;
+		bool m_sourceLocations;
 	};
 
 	typedef std::vector<std::string> InOut;
@@ -1044,6 +1048,7 @@ namespace bgfx
 		                                                        "  osx\n"
 		                                                        "  windows"                                                                       },
 		{ 'p',  "profile",                 1, "<profile>",      "Shader model. Defaults to GLSL. See shader profiles below."                      },
+		{ '\0', "source-locations",        0, NULL,             "Emit source locations for compiler diagnostics."                                  },
 		{ '\0', "preprocess",              0, NULL,             "Only pre-process."                                                               },
 		{ '\0', "keepcomments",            0, NULL,             "Do not discard comments."                                                        },
 		{ '\0', "define",                  1, "<defines>",      "Add defines to preprocessor. (Semicolon-separated)"                              },
@@ -1198,7 +1203,7 @@ namespace bgfx
 			}
 		}
 
-		Preprocessor preprocessor(_options.inputFilePath.c_str(), 0 != esslVersion, _messageWriter);
+		Preprocessor preprocessor(_options.inputFilePath.c_str(), 0 != esslVersion, _options.sourceLocations, _messageWriter);
 
 		for (size_t ii = 0; ii < _options.includeDirs.size(); ++ii)
 		{
@@ -2646,6 +2651,7 @@ namespace bgfx
 
 		options.depends = cmdLine.hasArg("depends");
 		options.preprocessOnly = cmdLine.hasArg("preprocess");
+		options.sourceLocations = cmdLine.hasArg("source-locations");
 		const char* includeDir = cmdLine.findOption('i');
 
 		BX_TRACE("depends: %d", options.depends);

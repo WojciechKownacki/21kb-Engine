@@ -17,8 +17,7 @@ SceneParticleRenderSynchronizer::SceneParticleRenderSynchronizer() {
 
 SceneParticleRenderSynchronizer::~SceneParticleRenderSynchronizer() { Clear(); }
 
-void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) {
-    kb::scene::Scene& mutableScene = const_cast<kb::scene::Scene&>(scene);
+bool SceneParticleRenderSynchronizer::Prepare(kb::scene::Scene& scene) noexcept {
     const kb::particles::ParticleRenderCapabilities capabilities{
         .capabilityEpoch = capabilityEpoch_,
         .outputs = kb::particles::ParticleRenderOutputCapability::Billboard |
@@ -42,12 +41,21 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
                 kb::particles::ParticleGpuVisualAvailability::Ready
             ? kb::scene::kParticleEffectMaxGpuResourceBytes : 0U,
     };
-    if (!kb::particles::ParticlePlayback::PublishRenderCapabilities(
-            mutableScene, consumerId_, capabilities).Succeeded()) {
-        throw std::logic_error{"21kb Particle System renderer capability consumer conflict"};
-    }
-    TrackedScene& tracked = scenes_[scene.Id()];
-    tracked.scene = &mutableScene;
+    try {
+        auto [tracked, inserted] = scenes_.try_emplace(scene.Id());
+        if (!kb::particles::ParticlePlayback::PublishRenderCapabilities(scene, consumerId_, capabilities).Succeeded()) {
+            if (inserted) scenes_.erase(tracked);
+            return false;
+        }
+        tracked->second.scene = &scene;
+        return true;
+    } catch (...) { return false; }
+}
+
+void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) {
+    kb::scene::Scene& mutableScene = const_cast<kb::scene::Scene&>(scene);
+    if (!Prepare(mutableScene)) throw std::logic_error{"21kb Particle System renderer capability consumer conflict"};
+    TrackedScene& tracked = scenes_.at(scene.Id());
     // Particles simulate around the render origin, so they stay precise where the camera is (docs/large_worlds.md).
     kb::particles::ParticlePlayback::SetSimulationOrigin(mutableScene, renderScene.RenderOrigin());
     std::shared_ptr<const kb::particles::ParticleRenderSnapshot> snapshot =

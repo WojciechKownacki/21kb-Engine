@@ -96,6 +96,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::Submit(std::span<const Pend
 }
 
 bool EditorSceneBgfxViewport::PendingPaintSubmitter::BuildPendingSubmissions(std::span<const PendingPresentBatch> batches) {
+    viewport_.lastTextOverlayMilliseconds_ = 0.0;
     for (const PendingPresentBatch& batch : batches) {
         HostSurface* surface = nullptr;
         if (!PrepareHostSurfaceBatch(batch, surface)) {
@@ -136,14 +137,18 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
         viewport_.SetFailureDetail("Viewport text overlay settings were missing from its present batch.");
         return false;
     }
-    if (overlaySettings->viewportTextLabels.empty()) {
+    if (overlaySettings->viewportTextLabels.empty() && overlaySettings->viewportOverlayShapes.empty()) {
         surface->textOverlay.Hide();
-    } else if (!surface->textOverlay.Ensure(
-                   viewport_.instance_, surface->clipWindow,
-                   RectWidth(surface->rect), RectHeight(surface->rect)) ||
-        !surface->textOverlay.Update(overlaySettings->viewportTextLabels)) {
-        viewport_.SetFailureDetail("Viewport text overlay could not rasterize or present its labels.");
-        return false;
+    } else {
+        // The overlay is the numbers over the scene: when it cannot be drawn the scene still is.
+        const auto overlayStart = std::chrono::steady_clock::now();
+        const bool drawn = surface->textOverlay.Ensure(
+                               viewport_.instance_, surface->clipWindow,
+                               RectWidth(surface->rect), RectHeight(surface->rect)) &&
+            surface->textOverlay.Update(overlaySettings->viewportTextLabels, overlaySettings->viewportOverlayShapes);
+        viewport_.lastTextOverlayMilliseconds_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - overlayStart).count();
+        if (!drawn) surface->textOverlay.Hide();
+        viewport_.NoteTextOverlayResult(drawn);
     }
     surface->presentedInCurrentPaint = true;
     return true;
@@ -226,6 +231,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     viewport_.ReportGpuParticleRejection();
     const double endMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - endStart).count();
+    viewport_.lastEndFrameMilliseconds_ = endMs;
     if (endMs >= kSlowStageMs) {
         std::ostringstream detail;
         detail << frameDetail();

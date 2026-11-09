@@ -43,6 +43,11 @@ struct AnimatorInstanceSkeletonView {
     std::uint64_t hierarchySolveCount = 0U;
 };
 
+struct AnimatorPhysicsBonePose {
+    SkeletonBoneId boneId = 0;
+    AnimatorIkTarget target{};
+};
+
 struct AnimatorAttachmentTransform {
     LocalTransform componentSpace;
     WorldTransform worldSpace;
@@ -79,6 +84,8 @@ public:
     // (both work as sockets).
     [[nodiscard]] std::vector<std::string> SocketNames(SceneEntity entity) const;
     [[nodiscard]] SocketAttachmentStatus SocketAttachment(SceneEntity attachedEntity) const;
+    // Samples a named curve from the current blend trees, transition and weighted layers.
+    [[nodiscard]] std::optional<float> Curve(SceneEntity entity, std::string_view name) const;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
     [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
 
@@ -127,11 +134,16 @@ public:
     [[nodiscard]] bool SetFloat(SceneEntity entity, std::string_view name, float value) noexcept;
     [[nodiscard]] bool SetTrigger(SceneEntity entity, std::string_view name) noexcept;
     [[nodiscard]] bool ResetTrigger(SceneEntity entity, std::string_view name) noexcept;
+    // Transient physics authority applied after animation/rig rules, before skin matrices.
+    [[nodiscard]] bool SetPhysicsPose(SceneEntity entity, std::span<const AnimatorPhysicsBonePose> bones) noexcept;
+    [[nodiscard]] bool ClearPhysicsPose(SceneEntity entity) noexcept;
     [[nodiscard]] bool SetIkTarget(
         SceneEntity entity, std::string_view name,
         const AnimatorIkTarget& target) noexcept;
     [[nodiscard]] bool ClearIkTarget(
         SceneEntity entity, std::string_view name) noexcept;
+    // Samples a named curve from the current blend trees, transition and weighted layers.
+    [[nodiscard]] std::optional<float> Curve(SceneEntity entity, std::string_view name) const;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
     [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
     // Joins the in-flight asynchronous debug snapshot build, so the next

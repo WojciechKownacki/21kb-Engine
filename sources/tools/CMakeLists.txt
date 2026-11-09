@@ -1,11 +1,17 @@
 add_library(kb_cli_core STATIC
     src/CliAnimatorCommands.cpp
+    src/CliBlendSpace2DCommands.cpp
+    src/CliVisualGraphCommands.cpp
     src/CliSkeletonCommands.cpp
     src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp
+    src/CliLuaDebugCommand.cpp
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
+    src/CliBuildCommands.cpp
+    src/CliLayoutCommands.cpp
     src/CliCommon.cpp
+    src/CliUiReport.cpp
     src/CliDispatch.cpp
     src/CliEntityCommands.cpp
     src/CliImportCommand.cpp
@@ -13,6 +19,7 @@ add_library(kb_cli_core STATIC
     src/CliNavMeshCommands.cpp
     src/CliModCommands.cpp
     src/CliPackSetCommands.cpp
+    src/CliInputCommands.cpp
     src/CliPlayerPreset.cpp
     src/CliPhysicsCommands.cpp
     src/CliQualityCommands.cpp
@@ -31,6 +38,21 @@ add_library(kb_cli_core STATIC
 target_include_directories(kb_cli_core PUBLIC src/private)
 
 target_link_libraries(kb_cli_core PUBLIC kb_engine)
+# Workspace files use the editor's existing portable layout and settings code.
+target_include_directories(kb_cli_core PRIVATE ../editor/src/private ../editor/include)
+# build stages the engine module libraries a project enables, named by the contract the cooker validates against.
+target_include_directories(kb_cli_core PRIVATE ../game/src/private)
+target_sources(kb_cli_core PRIVATE
+    ../editor/src/settings/EditorConfigurationStore.cpp
+    ../editor/src/profiler/ProfilerSelection.cpp
+    ../editor/src/settings/EditorPanelSessionText.cpp
+    ../editor/src/settings/EditorLayoutLibrary.cpp
+    ../editor/src/docking/DefaultDockWorkspace.cpp
+    ../editor/src/docking/DockLayoutSerializer.cpp
+    ../editor/src/docking/DockNodeFactory.cpp
+    ../editor/src/docking/DockGeometry.cpp
+    ../editor/src/localization/EditorLocalization.cpp)
+
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
 # Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.
 if(KB_BUILD_RENDERER)
@@ -38,19 +60,27 @@ if(KB_BUILD_RENDERER)
     target_compile_definitions(kb_cli_core PUBLIC KB_CLI_WORLD_HLOD=1 KB_CLI_RENDERER=1)
     target_sources(kb_cli_core PRIVATE
         src/CliMaterialCommands.cpp
+        src/CliMeshLodCommands.cpp
         src/CliMaterialGraphCommands.cpp
         src/CliPostProcessCommands.cpp
+        src/CliParticleProcessCommands.cpp
+        src/CliRenderEffectCommands.cpp
         src/CliParticleCommands.cpp
         src/CliParticleProfileCommand.cpp
         src/CliMap2DCommands.cpp
+        src/CliTerrainCommands.cpp
+        src/CliVectorShapeCommands.cpp
+        src/CliCsgCommands.cpp
+        src/CliRig2DCommands.cpp
         src/private/CliMaterialShared.hpp)
-    target_link_libraries(kb_cli_core PUBLIC kb_world2d_core)
+    target_link_libraries(kb_cli_core PUBLIC kb_world2d_core kb_terrain_editor_core)
 endif()
 
 kb_apply_quality_gates(kb_cli_core)
 
 add_executable(kb_cli
     src/main.cpp
+    src/CliCommandSupervisor.cpp
 )
 
 if(WIN32)
@@ -63,6 +93,14 @@ if(WIN32)
 endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+# A new UI Text gets this font (engine/scene/SceneUIDependencies finds it beside the executable).
+add_custom_target(kb_cli_stage_ui_font
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli>/Content/EditorShell/Fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/sources/editor/content/EditorShell/Fonts/DejaVuSans.ttf"
+        "$<TARGET_FILE_DIR:kb_cli>/Content/EditorShell/Fonts/DejaVuSans.ttf"
+    VERBATIM)
+add_dependencies(kb_cli kb_cli_stage_ui_font)
 if(KB_BUILD_RENDERER)
     add_custom_target(kb_cli_stage_particle_content
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -111,11 +149,40 @@ add_custom_command(TARGET kb_cli POST_BUILD
 )
 
 if(BUILD_TESTING)
+    find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME kb_cli_determinism_workflow
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/DeterminismWorkflowTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_determinism_workflow PROPERTIES LABELS "tools;deterministic;replay" TIMEOUT 120)
+        add_test(NAME kb_cli_scene_attach_variables
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/SceneAttachVariablesTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_scene_attach_variables PROPERTIES LABELS "tools;scripting;scene" TIMEOUT 120)
+    endif()
+    if(WIN32)
+        find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+        add_test(NAME kb_cli_command_limits
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliCommandLimitsTests.py
+                --cli $<TARGET_FILE:kb_cli> --test-root ${CMAKE_BINARY_DIR}/cli-command-limits)
+        set_tests_properties(kb_cli_command_limits PROPERTIES LABELS "tools;process" TIMEOUT 90)
+        add_test(NAME kb_cli_plugin_copy_reuse
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliPluginCopyReuseTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_plugin_copy_reuse PROPERTIES LABELS "tools;process" TIMEOUT 120)
+    endif()
     add_executable(kb_cli_tests
         tests/KbCliTests.cpp
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
+    add_custom_target(kb_cli_tests_stage_ui_font
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli_tests>/Content/EditorShell/Fonts"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/sources/editor/content/EditorShell/Fonts/DejaVuSans.ttf"
+            "$<TARGET_FILE_DIR:kb_cli_tests>/Content/EditorShell/Fonts/DejaVuSans.ttf"
+        VERBATIM)
+    add_dependencies(kb_cli_tests kb_cli_tests_stage_ui_font)
     if(KB_BUILD_RENDERER)
         target_include_directories(kb_cli_tests PRIVATE "${PROJECT_SOURCE_DIR}/sources/renderer/tests")
         add_custom_target(kb_cli_tests_stage_particle_content
@@ -152,6 +219,13 @@ if(BUILD_TESTING)
                 "--test-root" "${CMAKE_BINARY_DIR}/blender_bridge_tests")
             set_tests_properties(kb_blender_bridge PROPERTIES LABELS "tools;import;blender" TIMEOUT 300)
         endif()
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME kb_cli_terrain_authoring COMMAND "${Python3_EXECUTABLE}" -I
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/TerrainAuthoringTests.py"
+                "--cli" "$<TARGET_FILE:kb_cli>"
+                "--test-root" "${CMAKE_BINARY_DIR}/terrain_authoring_tests")
+            set_tests_properties(kb_cli_terrain_authoring PROPERTIES LABELS "tools;terrain;authoring" TIMEOUT 180)
+        endif()
     endif()
     if(WIN32 AND KB_BUILD_RENDERER AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
         add_test(NAME kb_cli_particle_profile COMMAND ${CMAKE_COMMAND}
@@ -159,6 +233,10 @@ if(BUILD_TESTING)
             "-DTEST_ROOT=${CMAKE_BINARY_DIR}/particle_profile_tests"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliParticleProfileTests.cmake")
         set_tests_properties(kb_cli_particle_profile PROPERTIES LABELS "tools;gpu" TIMEOUT 180)
+        add_test(NAME kb_cli_build_capture
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliBuildCaptureTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_build_capture PROPERTIES LABELS "tools;gpu" TIMEOUT 900)
         add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")
@@ -192,6 +270,7 @@ if(BUILD_TESTING)
             "-DFLECS_LIBRARY=$<TARGET_FILE:flecs_static>"
             "-DPHYSICS_PLUGIN=$<TARGET_FILE:kb_physics_jolt_plugin>"
             "-DAUDIO_PLUGIN=$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "-DAUDIO_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:kb_audio_miniaudio_plugin>,|>"
             "-DLIGHTING_PLUGIN=$<TARGET_FILE:kb_basic_lighting_plugin>"
             "-DPARTICLES_PLUGIN=$<TARGET_FILE:kb_21kb_particle_plugin>"
             "-DAI_PLUGIN=$<TARGET_FILE:kb_ai_plugin>"
@@ -201,6 +280,10 @@ if(BUILD_TESTING)
             "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
             "-Dzstd_LIBRARY=$<TARGET_FILE:kb_zstd>"
             "-Drecast_LIBRARY=$<TARGET_FILE:kb_recast>"
+            "-Dui_text_shaping_LIBRARY=$<TARGET_FILE:kb_ui_text_shaping>"
+            "-Dharfbuzz_LIBRARY=$<TARGET_FILE:kb_harfbuzz>"
+            "-Dcsg_geometry_LIBRARY=$<TARGET_FILE:manifold>"
+            "-Dsheenbidi_LIBRARY=$<TARGET_FILE:kb_sheenbidi>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkLayout.cmake")
         set_tests_properties(kb_native_sdk_layout PROPERTIES
             CONFIGURATIONS "Release;RelWithDebInfo" LABELS "tools;native-sdk" TIMEOUT 240)

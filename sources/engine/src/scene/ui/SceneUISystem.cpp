@@ -8,7 +8,7 @@
 
 namespace kb::scene {
 
-void SceneUISystem::OnUpdate(SceneSystemContext& context) {
+void SceneUISystem::OnFrameStart(SceneSystemContext& context) {
     Scene& scene = context.GetScene();
     if (scene.UI().UpdateFromInput(context.DeltaSeconds())) {
         return;

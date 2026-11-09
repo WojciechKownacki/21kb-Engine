@@ -55,8 +55,8 @@ void RemapInstance(SceneHistoryPrefabInstanceState& state, std::span<const Scene
 
 [[nodiscard]] std::size_t StateBytes(const SceneHistoryObjectState& state) noexcept {
     std::size_t bytes = state.node.name.capacity() + state.node.nestedPrefabGuid.capacity();
-    bytes += state.behaviourVariableOverrides.capacity() * sizeof(BehaviourVariableOverride);
-    for (const BehaviourVariableOverride& variable : state.behaviourVariableOverrides) {
+    bytes += state.node.components.behaviourVariableOverrides.capacity() * sizeof(BehaviourVariableOverride);
+    for (const BehaviourVariableOverride& variable : state.node.components.behaviourVariableOverrides) {
         bytes += variable.name.capacity();
     }
     return bytes;

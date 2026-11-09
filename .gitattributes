@@ -1,3 +1,6 @@
 sources/engine/tests/fixtures/CanonicalParticleEffectV2.kbvfx text eol=lf
 # Unified diffs retain context markers before indentation and blank lines.
 third_party/bgfx-patches/*.patch text eol=lf -whitespace
+# Preserve upstream Unicode bytes so source hash checks also work on Windows.
+third_party/unicode/*.txt -text -whitespace
+third_party/unicode/LICENSE -text

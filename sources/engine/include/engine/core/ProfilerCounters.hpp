@@ -24,6 +24,9 @@ struct ProfilerTimelineEvent {
     std::uint64_t timestampNanoseconds = 0U;
     std::uint64_t durationNanoseconds = 0U;
     std::uint32_t depth = 0U;
+    // Time spent waiting for something else (a vsync, another thread), not working: a profiler does
+    // not count it as work that could be made smaller.
+    bool waiting = false;
 };
 
 // Debug helper for counting scopes, allocations, named counters and timeline regions.
@@ -98,6 +101,24 @@ public:
         counters_.push_back({ std::string{ name }, value });
     }
 
+    // A region measured elsewhere (a system of the scheduler), placed at `depth` in the timeline.
+    void RecordRegion(std::string_view name, std::uint64_t startNanoseconds, std::uint64_t durationNanoseconds, std::uint32_t depth,
+        bool waiting = false) {
+        if (active_) Record(name, startNanoseconds, durationNanoseconds, depth, waiting);
+    }
+
+    // Forgets the regions of the frame that is over, so the next one starts with an empty timeline.
+    void ResetTimeline() noexcept {
+        timeline_.clear();
+        droppedTimeline_ = 0U;
+        timelineEvents = 0U;
+    }
+
+    [[nodiscard]] static std::uint64_t NowNanoseconds() noexcept {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
     void Timeline(std::string_view name) {
         if (!active_) return;
         Record(name, NowNanoseconds(), 0U, openRegions_);
@@ -117,15 +138,10 @@ public:
     std::uint64_t allocations = 0U;
 
 private:
-    [[nodiscard]] static std::uint64_t NowNanoseconds() noexcept {
-        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
-    }
-
-    void Record(std::string_view name, std::uint64_t start, std::uint64_t duration, std::uint32_t depth) {
+    void Record(std::string_view name, std::uint64_t start, std::uint64_t duration, std::uint32_t depth, bool waiting = false) {
         ++timelineEvents;
         if (timeline_.size() >= MaxTimelineEvents()) { ++droppedTimeline_; return; }
-        timeline_.push_back({ std::string{ name }, start, duration, depth });
+        timeline_.push_back({ std::string{ name }, start, duration, depth, waiting });
     }
 
     bool active_ = Enabled();

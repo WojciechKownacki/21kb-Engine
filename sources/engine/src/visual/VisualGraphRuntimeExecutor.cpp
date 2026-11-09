@@ -1,4 +1,5 @@
 #include "engine/visual/VisualGraphRuntimeExecutor.hpp"
+#include "engine/visual/VisualGraphLiteral.hpp"
 
 #include <cstdint>
 #include <ranges>
@@ -218,7 +219,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
         if (nodeId == 0U) {
             return result;
         }
-        if (debugger_ != nullptr && debugger_->ShouldPause(assetId, continuationEventNodeId, nodeId)) {
+        if (debugger_ != nullptr && debugger_->ShouldPause(assetId, continuationEventNodeId, nodeId, followExecution)) {
             context.Suspend(continuationEventNodeId, nodeId);
             result.suspended = true;
             return result;
@@ -293,8 +294,11 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
             if (instruction->opcode == VisualGraphIrOpcode::EmitEvent) {
                 context.EmitEvent(instruction->symbol, CollectEventArguments(*instruction, context), CollectEventTarget(*instruction, context));
             } else if (instruction->opcode == VisualGraphIrOpcode::CallNative) {
+                const auto previousErrorCount = context.RuntimeErrors().size();
                 const VisualGraphRuntimeBinding* binding = FindBinding(*instruction);
                 if (binding == nullptr && TryExecuteBuiltInInstruction(*instruction, context)) {
+                    for (std::size_t i = previousErrorCount; i < context.RuntimeErrors().size(); ++i)
+                        AddRuntimeError(nodeResult, instruction->sourceNodeId, context.RuntimeErrors()[i]);
                 } else if (binding == nullptr) {
                     AddRuntimeError(nodeResult, instruction->sourceNodeId, "visual graph runtime missing binding for node " + std::to_string(instruction->sourceNodeId) + " " + instruction->symbol);
                 } else {
@@ -338,8 +342,11 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
                     }
                 }
             } else if (instruction->opcode != VisualGraphIrOpcode::Branch && instruction->opcode != VisualGraphIrOpcode::Sequence && instruction->opcode != VisualGraphIrOpcode::Wait) {
+                const auto previousErrorCount = context.RuntimeErrors().size();
                 const VisualGraphRuntimeBinding* binding = FindBinding(*instruction);
                 if (binding == nullptr && TryExecuteBuiltInInstruction(*instruction, context)) {
+                    for (std::size_t i = previousErrorCount; i < context.RuntimeErrors().size(); ++i)
+                        AddRuntimeError(nodeResult, instruction->sourceNodeId, context.RuntimeErrors()[i]);
                 } else if (binding == nullptr) {
                     AddRuntimeError(nodeResult, instruction->sourceNodeId, "visual graph runtime missing binding for node " + std::to_string(instruction->sourceNodeId) + " " + instruction->symbol);
                 } else {
@@ -456,10 +463,25 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
 }
 
 const VisualGraphRuntimeBinding* VisualGraphRuntimeExecutor::FindBinding(const VisualGraphIrInstruction& instruction) const noexcept {
+    if (instruction.opcode == VisualGraphIrOpcode::GetProperty &&
+        (VisualGraphLiteral::IsSymbol(instruction.symbol) || instruction.symbol == "Self")) return nullptr;
     return bindings_.Find(instruction.opcode, instruction.symbol);
 }
 
 bool VisualGraphRuntimeExecutor::TryExecuteBuiltInInstruction(const VisualGraphIrInstruction& instruction, VisualGraphRuntimeExecutionContext& context) {
+    if (instruction.opcode == VisualGraphIrOpcode::GetProperty && VisualGraphLiteral::IsSymbol(instruction.symbol)) {
+        if (instruction.outputs.size() != 1 || instruction.outputs.front().name != "value") {
+            context.ReportError("Literal requires one typed value output"); return true;
+        }
+        const auto value = VisualGraphLiteral::Read(instruction.outputs.front().type, instruction.symbol);
+        if (!value) { context.ReportError("Invalid typed Literal value"); return true; }
+        context.Store(instruction.sourceNodeId, "value", *value);
+        return true;
+    }
+    if (instruction.opcode == VisualGraphIrOpcode::GetProperty && instruction.symbol == "Self") {
+        context.Store(instruction.sourceNodeId, "value", VisualGraphRuntimeValue{context.ReadUInt64(0U, "self"), VisualGraphValueType::Entity});
+        return true;
+    }
     if (instruction.opcode == VisualGraphIrOpcode::GetProperty && instruction.symbol == "DeltaSeconds") {
         const float deltaSeconds = context.ReadFloat(0U, "deltaSeconds");
         for (const VisualGraphIrOutput& output : instruction.outputs) {

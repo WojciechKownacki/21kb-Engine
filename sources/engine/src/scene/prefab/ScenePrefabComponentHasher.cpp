@@ -2,6 +2,7 @@
 
 #include "scene/prefab/ScenePrefabHashBuilder.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/script/ScriptValue.hpp"
 
 #include <cstdint>
 #include <string_view>
@@ -30,6 +31,9 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         }
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->castsShadow ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->receivesShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.meshRenderer->lodBias));
+        ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->lodEnabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.meshRenderer->mobility));
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.light.has_value() ? 1U : 0U);
@@ -49,6 +53,12 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowStrength);
         ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowDistance);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.light->mobility));
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowBias);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowNormalBias);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.light->shadowFilter));
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.light->shadowQuality));
+        ScenePrefabHashBuilder::Mix(hash, components.light->shadowCascadeCount);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowCascadeDistribution);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.input.has_value() ? 1U : 0U);
@@ -225,6 +235,17 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.behaviour->tickGroup));
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(components.behaviour->executionOrder)));
     }
+    // The overrides are a set, so their entry hashes are added: the order they were authored in does not matter.
+    std::uint64_t overridesHash = 0U;
+    for (const BehaviourVariableOverride& entry : components.behaviourVariableOverrides) {
+        std::uint64_t entryHash = 0U;
+        ScenePrefabHashBuilder::MixString(entryHash, entry.name);
+        ScenePrefabHashBuilder::Mix(entryHash, static_cast<std::uint64_t>(entry.value.Type()));
+        ScenePrefabHashBuilder::MixString(entryHash, kb::script::FormatValueText(entry.value));
+        overridesHash += entryHash;
+    }
+    ScenePrefabHashBuilder::Mix(hash, components.behaviourVariableOverrides.size());
+    ScenePrefabHashBuilder::Mix(hash, overridesHash);
 
     ScenePrefabHashBuilder::Mix(hash, components.audioSource.has_value() ? 1U : 0U);
     if (components.audioSource.has_value()) {

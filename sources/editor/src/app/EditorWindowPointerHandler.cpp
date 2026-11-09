@@ -11,6 +11,7 @@
 #include "app/pointer/EditorMouseMoveRouter.hpp"
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
 #include "app/pointer/EditorSetCursorRouter.hpp"
+#include "app/StaticMeshEditorPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/EditorWindowInvalidator.hpp"
@@ -89,6 +90,8 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
         sceneViewport_.RequestPresent();
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleLeftButtonDown(messageWindow, x, y)) return 0;
     if (sceneContext_.Inspector().IsAddComponentBrowserOpen()) {
         bool addComponentButtonClicked = false;
         const std::optional<RECT> inspectorContent =
@@ -132,6 +135,8 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LP
         sceneViewport_.RequestPresent();
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleRightButtonDown(messageWindow, x, y)) return 0;
     EditorRightButtonDownRouter rightButtonDown(mainWindow_, dockModel_, floatingWindows_, sceneContext_, sceneViewport_, pointerDrag_, metrics_);
     rightButtonDown.Handle(messageWindow, x, y);
     return 0;
@@ -146,6 +151,8 @@ LRESULT EditorWindowPointerHandler::HandleMiddleButtonDown(HWND messageWindow, L
         sceneViewport_.RequestPresent();
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleMiddleButtonDown(messageWindow, x, y)) return 0;
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandleMiddleButtonDown(messageWindow, x, y)) {
         return 0;
@@ -177,6 +184,8 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
         sceneViewport_.RequestPresent();
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleMouseMove(messageWindow, x, y)) return 0;
     const bool leftButtonDown = (wparam & MK_LBUTTON) != 0;
     const bool rightButtonDown = (wparam & MK_RBUTTON) != 0;
     EditorMouseMoveRouter mouseMove(
@@ -205,6 +214,8 @@ LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM 
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleMouseWheel(messageWindow, point.x, point.y, GET_WHEEL_DELTA_WPARAM(wparam))) return 0;
     EditorMouseWheelRouter mouseWheel(
         messageWindow,
         mainWindow_,
@@ -229,6 +240,8 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
         sceneViewport_.RequestPresent();
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleButtonUp(messageWindow)) return 0;
     if (EditorTerrainService::ToolState().strokeActive) {
         EditorTerrainService::ToolState().strokeActive = false;
         EditorTerrainService::ToolState().heldSculptElapsedSeconds = 0.0F;
@@ -272,6 +285,8 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow, LPAR
         sceneViewport_.RequestPresent();
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleButtonUp(messageWindow)) return 0;
     if (sceneContext_.IsMaterialGraphPanning()) {
         const int x = GET_X_LPARAM(lparam);
         const int y = GET_Y_LPARAM(lparam);
@@ -310,6 +325,8 @@ LRESULT EditorWindowPointerHandler::HandleMiddleButtonUp(HWND messageWindow) {
         sceneViewport_.RequestPresent();
         return 0;
     }
+    StaticMeshEditorPointerController staticMesh(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (staticMesh.HandleButtonUp(messageWindow)) return 0;
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandleButtonUp(messageWindow)) {
         return 0;

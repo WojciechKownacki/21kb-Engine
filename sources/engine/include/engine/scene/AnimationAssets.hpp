@@ -112,8 +112,8 @@ struct AnimatorParameterDefinition {
 struct AnimatorControllerState {
     std::uint64_t id = 0U;
     std::string name;
-    // Exactly one motion source is authored: a clipReference, or a 1D blend
-    // tree driven by a Float parameter.
+    // Exactly one source: a clip, a 1D tree, or a BlendSpace2D asset. A 2D
+    // state binds blendParameter and blendParameterY to Float parameters.
     std::string clipReference;
     std::string blendParameter;
     struct BlendChild {
@@ -121,6 +121,8 @@ struct AnimatorControllerState {
         std::string clipReference;
     };
     std::vector<BlendChild> blendChildren;
+    std::string blendSpaceReference;
+    std::string blendParameterY;
 };
 
 enum class AnimatorConditionMode : std::uint8_t {

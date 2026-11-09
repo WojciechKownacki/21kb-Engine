@@ -219,7 +219,8 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
 #endif
         static_cast<void>(assets.DiscoverMountedAssets());
         if (item.status == kb::assets::AssetImportItemStatus::Failed || item.status == kb::assets::AssetImportItemStatus::Missing || !item.error.empty()) {
-            io.err << "error: " << Utf8Text(source) << ": " << item.error << '\n';
+            io.err << "error: " << Utf8Text(source) << ": " << item.error
+                   << " Fix: " << kb::assets::AssetImportRecoveryAdvice(item) << '\n';
             PrintChanges(item, io);
             return 1;
         }
@@ -296,7 +297,10 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
                 io.out << "backup " << item.backupId << " (undo: kb_cli import --project " << *project << " --undo " << item.backupId << ')' << '\n';
             }
         } else {
-            io.err << "error: " << Utf8Text(item.sourcePath) << ": " << item.error << '\n';
+            io.err << "error: " << Utf8Text(item.sourcePath) << ": " << item.error
+                   << " Fix: " << kb::assets::AssetImportRecoveryAdvice(item)
+                   << " Retry: kb_cli import --project \"" << *project << "\" --destination \""
+                   << folder.generic_string() << "\" \"" << Utf8Text(item.sourcePath) << "\"\n";
             PrintChanges(item, io);
         }
     }

@@ -19,6 +19,7 @@ void RunScenePrefabTests();
 void RunProjectSceneTests();
 void RunLargeNonAdditiveSceneTransitionBenchmark();
 void RunScriptRuntimeTests();
+void RunScriptCollectionsTests();
 void RunScriptSaveTests();
 void RunScriptApiCatalogTests();
 void RunVisualGraphTests();
@@ -30,8 +31,10 @@ void RunAnimationRuntimeTests();
 void RunSkeletonAssetTests();
 void RunSkeletalMeshAssetTests();
 void RunTimelineRuntimeTests();
+void RunBlendSpace2DRuntimeTests();
 void RunLocalizationTests();
 void RunUITextLineBreakingTests();
+void RunUIThemeTests();
 void RunCrashReportConsentTests();
 void RunNavigationRuntimeTests();
 void RunNavigationMeshTests();
@@ -40,5 +43,6 @@ void RunPortalVisibilityTests();
 void RunMotionSkeletonRuleTests();
 void RunWorldPartitionTests();
 void RunLargeWorldTests();
+void RunSceneBehaviourVariableTests();
 
 } // namespace kb::tests

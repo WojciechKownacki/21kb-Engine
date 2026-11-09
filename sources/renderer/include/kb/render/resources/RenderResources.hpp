@@ -272,6 +272,7 @@ struct RenderMeshProxyGeometry {
 };
 
 struct RenderMeshResource {
+    std::uint64_t estimatedGpuBytes = 0U;
     bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle dynamicVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
@@ -333,6 +334,9 @@ struct RenderMaterialDesc {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
+    bool bakedLightmap = false;
+    bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;
@@ -481,6 +485,9 @@ struct RenderMaterialResource {
     RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
     bool writesDepth = true;
+    // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
+    bool bakedLightmap = false;
+    bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;
@@ -525,6 +532,7 @@ struct RenderTextureDesc {
 };
 
 struct RenderTextureResource {
+    std::uint64_t estimatedGpuBytes = 0U;
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
     std::uint16_t width = 0;
     std::uint16_t height = 0;

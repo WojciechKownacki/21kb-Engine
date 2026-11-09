@@ -12,6 +12,13 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#if defined(_WIN32) && defined(KB_ECS_GRAPH_MODULE_PATH)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#undef AddJob
+#endif
 
 namespace {
 
@@ -878,11 +885,180 @@ void RunJobGraphResolvesDependencyWavesTest() {
     kb::tests::Require(threw, "JobGraph ReadyBatches did not throw on a cycle");
 }
 
+void RunWorkerGraphNestedExecutionTest() {
+    for (const auto workers : {1U, 2U, 4U}) {
+        kb::ecs::WorkerPool pool{{.workerCount = workers}};
+        kb::ecs::JobGraph graph;
+        for (int index = 0; index < 4; ++index) static_cast<void>(graph.AddJob());
+        graph.AddDependency(0, 1); graph.AddDependency(0, 2);
+        graph.AddDependency(1, 3); graph.AddDependency(2, 3);
+        struct State {
+            kb::ecs::WorkerPool* pool;
+            std::atomic<unsigned> completed{0U};
+            std::atomic<unsigned> total{0U};
+        } state{&pool};
+        const kb::ecs::WorkerPoolJob jobs[]{
+            {[](kb::ecs::WorkerContext, void* context) {
+                static_cast<State*>(context)->completed.store(1U);
+            }, &state},
+            {[](kb::ecs::WorkerContext, void* context) {
+                auto& value = *static_cast<State*>(context);
+                kb::tests::Require((value.completed.load() & 1U) != 0U, "graph root dependency violated");
+                value.pool->ParallelForChunks(67U, 3U, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                    value.pool->ParallelForChunks(chunk.count, 1U, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& inner) {
+                        value.total.fetch_add(static_cast<unsigned>(chunk.begin + inner.begin + 1U));
+                    });
+                });
+                value.completed.fetch_or(2U);
+            }, &state},
+            {[](kb::ecs::WorkerContext, void* context) {
+                auto& value = *static_cast<State*>(context);
+                const kb::ecs::WorkerPoolBatch batches[]{{.count = 11U}, {.count = 17U}};
+                value.pool->RunBatches(batches, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolBatch& batch) {
+                    value.total.fetch_add(static_cast<unsigned>(batch.count));
+                });
+                value.completed.fetch_or(4U);
+            }, &state},
+            {[](kb::ecs::WorkerContext, void* context) {
+                auto& value = *static_cast<State*>(context);
+                kb::tests::Require(value.completed.load() == 7U, "graph fan-in ran before its producers");
+                kb::tests::Require(value.total.load() == 67U * 68U / 2U + 28U, "nested graph differs from serial result");
+            }, &state},
+        };
+        const auto result = pool.RunGraph(graph, jobs);
+        kb::tests::Require(result.completedJobs == 4U && result.cancelledJobs == 0U && result.nestedJobs == 92U,
+            "graph runtime did not report nested work");
+        std::stop_source cancellation;
+        cancellation.request_stop();
+        const auto cancelled = pool.RunGraph(graph, jobs, cancellation.get_token());
+        kb::tests::Require(cancelled.completedJobs == 0U && cancelled.cancelledJobs == 4U, "cancelled graph executed jobs");
+    }
+}
+
+void RunWorkerGraphReleasesSuccessorsWithoutWaveBarrierTest() {
+    kb::ecs::WorkerPool pool{{.workerCount = 2U}};
+    kb::ecs::JobGraph graph;
+    for (int index = 0; index < 3; ++index) static_cast<void>(graph.AddJob());
+    graph.AddDependency(0, 2);
+    std::atomic<bool> successor{false};
+    const kb::ecs::WorkerPoolJob jobs[]{
+        {[](kb::ecs::WorkerContext, void*) {}, nullptr},
+        {[](kb::ecs::WorkerContext, void* context) {
+            auto& finished = *static_cast<std::atomic<bool>*>(context);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            while (!finished.load() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+            kb::tests::Require(finished.load(), "graph retained a whole-wave barrier");
+        }, &successor},
+        {[](kb::ecs::WorkerContext, void* context) { static_cast<std::atomic<bool>*>(context)->store(true); }, &successor},
+    };
+    kb::tests::Require(pool.RunGraph(graph, jobs).completedJobs == 3U, "graph did not complete uneven jobs");
+}
+
+void RunWorkerGraphFailureAndMidflightCancellationTest() {
+    kb::ecs::WorkerPool pool{{.workerCount = 1U}};
+    kb::ecs::JobGraph graph;
+    static_cast<void>(graph.AddJob()); static_cast<void>(graph.AddJob()); graph.AddDependency(0, 1);
+    unsigned dependent = 0;
+    kb::ecs::WorkerPoolJob jobs[]{
+        {[](kb::ecs::WorkerContext, void* context) {
+            auto& worker = *static_cast<kb::ecs::WorkerPool*>(context);
+            const kb::ecs::WorkerPoolJob nested[]{
+                {[](kb::ecs::WorkerContext, void*) { throw std::runtime_error("nested graph failure"); }, nullptr}};
+            worker.Run(nested);
+        }, &pool},
+        {[](kb::ecs::WorkerContext, void* context) { ++*static_cast<unsigned*>(context); }, &dependent},
+    };
+    bool threw = false;
+    try { static_cast<void>(pool.RunGraph(graph, jobs)); }
+    catch (const std::runtime_error& error) { threw = std::string_view{error.what()} == "nested graph failure"; }
+    kb::tests::Require(threw && dependent == 0U, "graph did not propagate nested failure or cancelled dependent ran");
+    std::stop_source stop;
+    jobs[0] = {[](kb::ecs::WorkerContext, void* context) { static_cast<std::stop_source*>(context)->request_stop(); }, &stop};
+    const auto result = pool.RunGraph(graph, jobs, stop.get_token());
+    kb::tests::Require(result.completedJobs == 1U && result.cancelledJobs == 1U && dependent == 0U,
+        "midflight cancellation failed or worker pool could not be reused");
+}
+
+void RunWorkerGraphRejectsNestedSubmitTest() {
+    kb::ecs::WorkerPool pool{kb::ecs::WorkerPoolConfig{.workerCount = 1}};
+    kb::ecs::JobGraph graph;
+    static_cast<void>(graph.AddJob());
+    kb::ecs::WorkerPoolJob job{[](kb::ecs::WorkerContext, void* context) {
+        auto& owner = *static_cast<kb::ecs::WorkerPool*>(context);
+        static_cast<void>(owner.Submit({}));
+    }, &pool};
+    bool rejected = false;
+    try { static_cast<void>(pool.RunGraph(graph, std::span{&job, 1U})); }
+    catch (const std::logic_error&) { rejected = true; }
+    kb::tests::Require(rejected, "nested asynchronous submission should fail without deadlocking");
+}
+
+void RunWorkerGraphRejectsDispatchFromBusyWorkerTest() {
+    kb::ecs::WorkerPool pool{{.workerCount = 1}};
+    const kb::ecs::WorkerPoolJob job{[](kb::ecs::WorkerContext, void* context) {
+        auto& owner = *static_cast<kb::ecs::WorkerPool*>(context);
+        static_cast<void>(owner.RunGraph(kb::ecs::JobGraph{}, {}));
+    }, &pool};
+    bool rejected = false;
+    try { pool.Run(std::span{&job, 1U}); }
+    catch (const std::logic_error&) { rejected = true; }
+    kb::tests::Require(rejected, "graph dispatch on a busy worker must fail without blocking the pool");
+}
+
+void RunWorkerGraphNestedWorkerLimitTest() {
+    kb::ecs::WorkerPool pool{{.workerCount = 4}};
+    kb::ecs::JobGraph graph;
+    static_cast<void>(graph.AddJob());
+    kb::ecs::WorkerPoolJob job{[](kb::ecs::WorkerContext, void* context) {
+        auto& owner = *static_cast<kb::ecs::WorkerPool*>(context);
+        const kb::ecs::WorkerPoolChunk chunks[]{{.index = 0, .count = 1, .workerCountLimit = 1},
+            {.index = 1, .count = 1}, {.index = 2, .count = 1}};
+        owner.ParallelForChunks(chunks, [](kb::ecs::WorkerContext worker, const kb::ecs::WorkerPoolChunk&) {
+            kb::tests::Require(worker.workerIndex == 0 && worker.workerCount == 1, "nested dispatch ignored its shared worker limit");
+        });
+    }, &pool};
+    static_cast<void>(pool.RunGraph(graph, std::span{&job, 1U}));
+}
+
+#if defined(_WIN32) && defined(KB_ECS_GRAPH_MODULE_PATH)
+void RunWorkerGraphDynamicModuleTest() {
+    HMODULE module = LoadLibraryA(KB_ECS_GRAPH_MODULE_PATH);
+    kb::tests::Require(module != nullptr, "could not load graph module fixture");
+    using Callback = void (*)(kb::ecs::WorkerPool*, std::atomic<int>*);
+    auto callback = reinterpret_cast<Callback>(GetProcAddress(module, "GraphModuleRunChunks"));
+    using RejectionCallback = bool (*)(kb::ecs::WorkerPool*);
+    auto rejection = reinterpret_cast<RejectionCallback>(GetProcAddress(module, "GraphModuleRejectNestedCalls"));
+    kb::tests::Require(callback != nullptr, "graph module callback missing");
+    kb::tests::Require(rejection != nullptr, "graph module rejection callback missing");
+    kb::ecs::WorkerPool pool{{.workerCount = 1}};
+    kb::ecs::JobGraph graph;
+    static_cast<void>(graph.AddJob());
+    std::atomic<int> count{0};
+    struct Context { Callback callback; RejectionCallback rejection; kb::ecs::WorkerPool* pool; std::atomic<int>* count; } context{callback, rejection, &pool, &count};
+    const kb::ecs::WorkerPoolJob job{[](kb::ecs::WorkerContext, void* value) {
+        const auto& c = *static_cast<Context*>(value); c.callback(c.pool, c.count);
+        kb::tests::Require(c.rejection(c.pool), "dynamic module nested asynchronous or graph call was not rejected");
+    }, &context};
+    static_cast<void>(pool.RunGraph(graph, std::span{&job, 1U}));
+    kb::tests::Require(count == 20, "dynamic module nested chunks did not finish");
+    FreeLibrary(module);
+}
+#endif
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsWorkerPoolTests() {
+    RunWorkerGraphRejectsDispatchFromBusyWorkerTest();
+#if defined(_WIN32) && defined(KB_ECS_GRAPH_MODULE_PATH)
+    RunWorkerGraphDynamicModuleTest();
+#endif
+    RunWorkerGraphNestedWorkerLimitTest();
+    RunWorkerGraphRejectsNestedSubmitTest();
+    RunWorkerGraphNestedExecutionTest();
+    RunWorkerGraphReleasesSuccessorsWithoutWaveBarrierTest();
+    RunWorkerGraphFailureAndMidflightCancellationTest();
     RunWorkerPoolDefaultConstructionTest();
     RunJobGraphResolvesDependencyWavesTest();
     RunWorkerPoolExecutesConcurrentJobsTest();

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 import unittest
 from pathlib import Path
 
@@ -26,6 +27,25 @@ def _cli_commands() -> set[str]:
 
 class DocumentedClaimsTests(unittest.TestCase):
     """What the public documents say about the tools has to match what the tools offer."""
+
+    def test_feature_catalog_links_current_commands_and_evidence(self) -> None:
+        catalog = json.loads((ROOT / 'docs/feature_catalog.json').read_text(encoding='utf-8'))
+        self.assertEqual('21kb.feature-catalog/v1', catalog['schema'])
+        for entry in catalog['entries']:
+            self.assertFalse(set(entry['commands']) - _cli_commands(), entry['feature'])
+            self.assertIn(entry['status'], {'tutorial-covered', 'separate-test', 'not-covered-by-tutorial'})
+            self.assertTrue(entry['scope'])
+            self.assertTrue((ROOT / entry['evidence']).is_file(), entry['feature'])
+
+    def test_tutorial_recipe_uses_current_cli_and_standard_export(self) -> None:
+        recipe = json.loads((ROOT / 'docs/tutorials/first_scene.json').read_text(encoding='utf-8'))
+        self.assertEqual('Windows.x64', recipe['platform'])
+        commands = [step[1] for step in recipe['steps'] if step[0] == '{CLI}']
+        self.assertFalse(set(commands) - _cli_commands())
+        self.assertEqual('new', commands[0])
+        self.assertIn('Empty', recipe['steps'][0])
+        self.assertEqual('{ENGINE}/scripts/package_game.py', recipe['steps'][-1][1])
+        self.assertTrue((ROOT / 'scripts/run_first_scene_tutorial.py').is_file())
 
     def test_usage_text_is_parsed(self) -> None:
         commands = _cli_commands()

@@ -15,7 +15,7 @@ enum class UIComponentType : std::uint8_t {
     HorizontalLayout, VerticalLayout, GridLayout, WrapLayout, OverlayLayout,
     LayoutElement, ContentSizeFitter, AspectRatioFitter,
     Sprite, Image, RawImage, Text, Border, Mask, Shadow, Outline, BackgroundBlur,
-    Selectable, Button, Toggle, Slider, Scrollbar, ScrollView, InputField, Dropdown, ProgressBar, WidgetSwitcher,
+    Selectable, Button, Toggle, Slider, Scrollbar, ScrollView, InputField, Dropdown, ProgressBar, WidgetSwitcher, Accessibility,
 };
 
 struct UIComponentDescriptor {
@@ -60,6 +60,7 @@ KB_UI_COMPONENT_TYPE(UIInputField, InputField);
 KB_UI_COMPONENT_TYPE(UIDropdown, Dropdown);
 KB_UI_COMPONENT_TYPE(UIProgressBar, ProgressBar);
 KB_UI_COMPONENT_TYPE(UIWidgetSwitcher, WidgetSwitcher);
+KB_UI_COMPONENT_TYPE(UIAccessibility, Accessibility);
 #undef KB_UI_COMPONENT_TYPE
 
 template <typename T>

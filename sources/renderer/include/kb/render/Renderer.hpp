@@ -44,6 +44,7 @@
 #include <vector>
 
 namespace kb::render {
+class RenderEffectHost;
 
 class BgfxContext;
 class EcsRenderSceneSynchronizer;
@@ -68,6 +69,7 @@ class WorkerPool;
 }
 
 namespace kb::render {
+class RenderEffectHost;
 
 class Renderer {
 public:
@@ -75,6 +77,7 @@ public:
     static constexpr std::uint64_t kRuntimeAssetDiscoveryIntervalFrames = 30ULL;
 
     struct RuntimeSceneResourceStats {
+        RenderResourceMemoryStats memory{};
         std::uint32_t cachedMeshCount = 0;
         std::uint32_t cachedMaterialCount = 0;
         std::uint32_t cachedTextureCount = 0;
@@ -216,6 +219,9 @@ public:
     void PrimeExposureAdaptation(float luminance) noexcept;
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     [[nodiscard]] double LastSceneSynchronizationMilliseconds() const noexcept;
+    // Optional delayed GPU passing-sample coverage for mesh passes only.
+    void SetMeshCoverageEnabled(bool enabled) noexcept;
+    [[nodiscard]] SceneMeshCoverageMetric LastMeshCoverage() const noexcept;
     [[nodiscard]] double LastSceneVisibilityBuildMilliseconds() const noexcept;
     [[nodiscard]] double LastSceneVisibilitySortMilliseconds() const noexcept;
     [[nodiscard]] double LastSceneVisibilityPublishMilliseconds() const noexcept;
@@ -242,8 +248,9 @@ public:
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
     void SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;
     [[nodiscard]] SceneRenderLightingConfig DefaultSceneLightingConfig() const noexcept;
-    // Compute visibility is diagnostic until draw submission consumes its output.
+    // Optional GPU compaction drives indexed indirect and bounded meshlet draws.
     void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
+    [[nodiscard]] RenderEffectHost& RenderEffects();
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
     // Cook graph materials on demand into the graph shader cache (an unpackaged project run, as
@@ -387,6 +394,7 @@ private:
     std::string graphShaderCacheRoot_;
     std::optional<RenderMaterialGraphShaderToolchain> graphShaderCookToolchain_;
     std::shared_ptr<const ShaderBinaryProvider> shaderBinaryProvider_;
+    std::unique_ptr<RenderEffectHost> renderEffects_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = false;
     std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;

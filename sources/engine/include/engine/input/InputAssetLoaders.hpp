@@ -4,6 +4,14 @@
 
 namespace kb::input {
 
+class InputRecordingAssetLoader final : public kb::assets::IAssetLoader {
+public:
+    std::string_view Type() const noexcept override;
+    std::type_index PayloadType() const noexcept override;
+    std::vector<std::string> Extensions() const override;
+    kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest&) override;
+};
+
 class InputActionAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override;

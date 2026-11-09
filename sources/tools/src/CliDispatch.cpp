@@ -3,7 +3,9 @@
 
 #include "engine/core/JsonValue.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -14,9 +16,13 @@
 #include <vector>
 
 namespace kb::cli {
+#if KB_CLI_RENDERER
+int RunCsgCommand(const ArgumentList&, CommandIo);
+int RunRig2DCommand(const ArgumentList&, CommandIo);
+#endif
 namespace {
 
-constexpr std::array<std::string_view, 3U> kUsageParts{
+constexpr std::array<std::string_view, 4U> kUsageParts{
 R"(kb_cli — 21kb Engine headless tooling for developers and AI coding agents
 
 Usage: kb_cli <command> [options]
@@ -27,15 +33,21 @@ Commands:
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
                a template: Basic (camera, sun, sky, floor; default) or Empty.
                  --parent <dir> --name <Name> [--template Basic|Empty]
+  layout       Save, restore or reset the editor workspace for the next session.
+                 list|save|restore|reset --project <dir> [--name <name>]
   scene-new    Create a scene from a template, as File > New Scene does.
                  --project <dir> --name <Name> [--folder Assets/Scenes]
                  [--template Basic|Empty] [--default yes|no]
                (--default yes makes it the scene the game starts in)
+  scene-duplicate Copy a scene under a new name, with an identity of its own, as File >
+               Save Scene As does. The scene is --scene, or the one the game starts in.
+                 --project <dir> --name <Name> [--scene <path>] [--folder Assets/Scenes]
   script-new   Create a script, as the editor's Create menu does: Lua (one .lua
                file) or C++ (a .native asset, with its source and CMake project in
                Source/NativeScripts/<Name>). Existing files are never overwritten.
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts]
+  scene-lightmap Bake static diffuse lighting and ray shadows into a UV0 texture.
   material-new Create a material, as the editor's Create > Material does, with
                its values set at once. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/Materials]
@@ -121,6 +133,17 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                      [--remove-effect <Id> ...] [--move-effect Id=index ...]
                      [--set-effect Id.parameter=value ...]  (indexes start at 0)
                new/set accept --dry-run; new/set/show accept --json.
+  blend-space  Author a 2D animation blend asset; every edit is validated and atomic.
+  graph        Author gameplay nodes, typed values and connections; validate and save atomically.
+                 new|show --project <dir> --space /Game/Animation/Motion.kbblend2d
+                 add --project <dir> --space <path> --at x,y --clip <path>
+                 set --project <dir> --space <path> --index <0..255> [--at x,y] [--clip <path>]
+                 remove --project <dir> --space <path> --index <0..255>
+                 sample --project <dir> --space <path> --at x,y
+                 assign --project <dir> --space <path> --controller <path> --state <Name>
+                     --x-param <FloatParameter> --y-param <FloatParameter> [--layer <Name>]
+               assign replaces the named state's motion and creates missing Float axes.
+               Outputs versioned JSON with sample indices, triangles and query weights.
   animator     Build an Animator Controller, the state machine that picks a character's
                animation; every change is validated and saved at once.
                  new --project <dir> --name <Name> --clip <clip> [--clip ...]
@@ -177,11 +200,66 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                e.g. a goblin pack: entity add --name Goblin --create Capsule; ai make --entity Goblin
                --preset Melee --health 60 --ability1 /Game/Abilities/Slash.kbability
 )"
+R"(  rig2d new/show/set/build --project <dir> [--name <Name> | --rig <path>] [--data <source object>]
+  vector2d-new --project <dir> --name <Name> [--kind Polygon|Line] [--points <JSON array>]
+  vector2d-set/show --project <dir> --shape <path> [--points <JSON array>] [--width <number>]
+)"
+R"(  mesh-lod     Levels of detail of an imported model: how many levels, how many triangles each keeps and how
+               much deviation it may add. Stored in the model asset, so the editor, the cooker and a game
+               drawing the source build the same levels; a reimport keeps them.
+                 show --project <dir> --mesh <model>    (settings; per level triangles, share, error, size drawn from)
+                 generate --project <dir> --mesh <model> [--levels 1..8] [--keep 50] [--error 20] [--min-triangles 1024]
+                 add --project <dir> --mesh <model> --triangles <percent> [--error <percent>]
+                 remove --project <dir> --mesh <model> [--level <n>]
+                 set --project <dir> --mesh <model> (--level <n> [--triangles <percent>] [--error <percent>] |
+                     [--mode auto|manual] [--min-triangles <n>])
+               (percents are of the finest level's triangles and of the mesh's extent; every level keeps fewer
+               triangles than the one above; --levels 1 or a mesh under --min-triangles has no chain)
+)"
+R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - brushes, material layers,
+               heightmap import, generators and erosion - on a file, so an agent can shape ground without
+               the editor. x, z are world units from the terrain's centre (terrain info prints the extent).
+               Strokes, paths and batches are saved at once; a stroke that changes nothing is an error.
+                 new --project <dir> (--name <Entity> [--scene <path>] [--position x,y,z] | --terrain <file>)
+                     [--resolution 129] [--size 128|256x128] [--chunk-quads 32] [--lod-count 4]
+                     [--preset flat|hills|mountains|island|plateau] [--seed 1] [--threads <n>] [--max-seconds <n>]
+                     (flat unless a preset makes a whole world, generated and eroded; resolution 2^n+1, 17..2049)
+                 info --terrain <file>    (size, heights, slopes, layers, heightHash)
+                 sample --terrain <file> --x <n> --z <n>    (height, normal, slope, layer weights)
+                 brush --terrain <file> [--mode raise|lower|smooth|flatten|noise|terrace|cut-hole|fill-hole|ramp|stamp]
+                     [--shape soft-round|hard-round|linear-round|bell|ring|speckle]
+                     (--x <n> --z <n> | --path "x,z;x,z") [--radius 8] [--strength 1] [--falloff 0.65]
+                     [--invert yes (Ctrl: raise lowers, ...)] [--symmetry x|z|xz (mirrored across x=0 and/or z=0)]
+                     [--spacing <n>] (strength is per stamp; a path stamps every --spacing, default a quarter radius)
+                     flatten: [--height <n>|sample]   terrace: [--step 2] [--softness 0..1]   noise: [--seed <n>]
+                     [--noise-kind gradient|value] [--noise-scale 16] [--noise-octaves 3]
+                     ramp: --x/--z the start, --to x,z the end, [--height <n> --to-height <n>] (none: the terrain's own),
+                     --radius the half width, --falloff the flat share of the strip
+                     stamp: --image <heightmap.png> [--rotation 0] [--blend add|max|min] [--height <base for max/min>]
+                     (strength = height of white; the image covers a square of side 2 x radius)
+                 apply --terrain <file> --ops <ops.json | inline JSON>    (a batch: [{"op":"brush","mode":"raise","x":0,"z":0}, ...])
+                 layer list|add|set|remove --terrain <file> [--material </Game/....kbmat> | --material-id <n>] [--index <n>]   (up to 4)
+                 paint --terrain <file> --layer <n> (--x <n> --z <n> | --path "x,z;x,z") [--radius 8] [--opacity 1] [--falloff 0.65]
+                     [--shape soft-round] [--erase yes] | --layer <n> --auto slope=35..90,height=-5..40
+                     [--slope-blend 3] [--height-blend 1] [--opacity 1]    (by slope in degrees and height)
+                 generate --terrain <file> [--kind fbm|ridged|island|plateau] [--seed 1] [--amplitude 24] [--base 0]
+                     [--scale <world units>] [--octaves 6] [--lacunarity 2] [--gain 0.5] [--noise-kind gradient|value] [--warp 0]
+                     [--island-radius 0.65] [--island-falloff 0.3] [--plateau-level 0.55] [--plateau-softness 0.04] [--add yes]
+                     (heights from noise on every core; the same seed gives the same ground)
+                 erode --terrain <file> [--mode hydraulic|thermal] [--iterations 150]
+                     hydraulic: [--rain 0.0015] [--evaporation 0.03] [--strength 0.4]   thermal: [--talus 35] [--strength 0.5]
+                 (generate, erode and presets run in the background of the command: [--threads <n>] caps the cores,
+                 [--max-seconds <n>] stops them and saves nothing)
+                 import --terrain <file> --source <heightmap.png|.raw|.r16> [--min -32] [--max 32] [--size 512[x256]] [--flip yes] [--replace]
+                 export --terrain <file> --out <file.png|.raw|.r16> [--min <n> --max <n>]    (16 bit)
+                 preview --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]
+                 --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path; --project is needed for /Game paths.
+)"
 R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
                Map component and Map Editor window do - grounds with automatic borders (Remere's Map
                Editor style), sprites as items or grounds, floors -50..50, a Map Camera for Play.
                  new --project <dir> --name <Entity> [--scene <path>] [--size 64x64]
-                     [--orientation flat|wall] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
+                     [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
                  ground new --project <dir> --name Grass --texture "/Game/2D Map Sprites/terrain.png"
                      [--cell-size 32] [--z 30] [--tiles 25] [--island 16] [--hole 19]
                      [--border n=<cell>,cse=<cell>,...]   (island: top-left sprite of a 3x3 island,
@@ -197,11 +275,12 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  erase --project <dir> --map <path> --at x,y[,floor] [--to x,y] [--items]
                  block|unblock --project <dir> --map <path> --at x,y[,floor] [--to x,y]
                  borderize --project <dir> --map <path> [--floor n]
-                 set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]
-                     [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds]
+                 set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view WxH]
+                     [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds] [--camera-zoom n]
                      [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera, see docs/world_2d_camera.md)
                  view --project <dir> --entity <Name>   (update the Map Camera and painted collision)
                  info --project <dir> --map <path>
+                 schema --project <dir> --map <path> --name <field> --type bool|int|float|string --default <value> [--rename-from <field>]
                  path --project <dir> --map <path> --from x,y --to x,y [--floor n] [--clearance 0..8]
                      [--diagonal none|safe|free] [--cost-property <name>] [--max-visited 1..1048576]
                      [--timeout-ms <milliseconds>] (default 25 ms; JSON; exits 0 found, 2 no path, 3 budget)
@@ -210,10 +289,14 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
                  --project <dir> --effect /Game/<path>.kbvfx
+  particle-process-cook  Compile a particle simulation: --source <file.particle.sc> --output <file.kbpsim> [--profile all]
+  render-effect-run  Run a native compute effect in a hidden renderer: --manifest <effect.kbfx> [--frames 8] (Windows)
+  render-effect-export  Export a native compute effect and compiled shader variants: --manifest <effect.kbfx> --output <directory>
   renderer-info  Print the graphics backend a hidden bgfx host selects as JSON: capabilities, limits,
                  formats and the reason for every quality fallback (Windows).
                  [--backend auto|d3d11|d3d12|vulkan|opengl] [--allow-fallback]
                  Exits 1 when an explicit backend is not the one selected, unless --allow-fallback.
+  debug        Control a local Lua debugger endpoint (connect, breakpoints, step_into/over/out, continue, stack, locals, evaluate, disconnect).
   vfx-profile  Profile an isolated effect with a hidden bgfx GPU host (Windows).
                  --project <dir> --effect /Game/<path>.kbvfx
                  [--backend d3d11|d3d12|vulkan|opengl] [--warmup 60] [--frames 180]
@@ -247,20 +330,28 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
   script-build Build the project's C++ scripts (or one), as Play and the cooker
                do. Exits 1 when a build fails.
                  --project <dir> [--script <path>]
-  entity       Add or remove a scene entity (the project's startup scene unless --scene).
+  entity       Add, remove or show a scene entity (the project's startup scene unless --scene).
                  add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
                      [--create <Item>] [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
+                     [--color #RRGGBB (a new material named after it) | --material /Game/<path>.kbmat]
+                     [--body Static|Dynamic|Kinematic (adds a Rigidbody)]
+                     [--look-at x,y,z|<Entity> (turns forward, +Z, toward it; for cameras and lights)]
+                     [--body2d Static|Kinematic|Dynamic (2D physics: a Body 2D and a Collider 2D that follows --scale)]
+                     [--count <n> [--offset x,y,z] (n entities Name1..Name<n>, each offset further; default 0,1,0)]
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
-                 --name then defaults to the item. --create 'Platformer Player' or 'Top Down Player'
-                 makes a ready-made 2D player named Player: a CharacterController, a copy of
-                 Platformer2DPlayer.lua or TopDown2DPlayer.lua in Assets/Scripts (never overwritten;
-                 speed, jumpSpeed, coyoteTime, jumpBuffer are its @expose lines), default Move and
-                 Jump input when the project has no input context, and every map of the scene
-                 following the player; --physics 2d makes it a Character Controller 2D on the
-                 2D physics with Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua;
+                 --name then defaults to the item. UI widgets (Canvas, Text, Button, Slider, ...) and the screens
+                 'Main Menu', 'Pause', 'HUD' and 'Settings' go under a Canvas with the bundled font; a screen's
+                 buttons carry event names (PlayClicked, ResumeClicked, BackClicked, ...) for a script to answer.
+                 --create 'Platformer Player', 'Top Down Player' or 'Platformer Navigator'
+                 makes a 2D player named Player with Sprite2D, CharacterController2D, a following
+                 orthographic camera and Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua.
+                 Existing scripts and input contexts are preserved; a new project gets Move/Jump
+                 bindings. --physics 3d selects the legacy CharacterController and scripts.
                  see docs/world_2d_presets.md)
+                 set --project <dir> [--scene <path>] --name <Name> [--position x,y,z]
+                     [--rotation x,y,z] [--scale x,y,z] [--look-at x,y,z|<Entity>] [--parent <Name>|none]
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
                         [--occurrence <n>]
@@ -270,6 +361,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                         at the socket - or bone - every frame after animation; the offset is in
                         the socket's space, --scale is the object's own size)
                  detach --project <dir> [--scene <path>] --name <Object>
+                 show --project <dir> [--scene <path>] --name <Object>
+                     (its parent, children, transform and every component value, assets as paths)
                  (--name, --parent and --entity take a name or a path: Parent/Child;
                  names are unique among siblings, --occurrence picks one of several
                  same-named entities made elsewhere)
@@ -278,9 +371,17 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                      --type <Component> [--set name=value ...]
                  (vectors at once: --set localPosition=0,2,-8; Transform rotation in
                  degrees: --set rotation=35,30,0)
-  schema       List components and their properties.
-  api          Generate the script API contract (Lua stubs, Markdown, JSON).
+  schema       List the components, one component's properties, or everything.
+                 [--component <Name> | --all]
+  api          Generate the script API contract (Lua stubs, reference pages, JSON),
+               or print one page of it: a group, function or component by --topic,
+               the index with --topic index, or topics matching --search text.
                  --project <dir> | --out <dir> | --print markdown|json|lua
+                 | --topic <name> | --search <text>
+  guide        Print a short how-to for one kind of task (objects and materials,
+               physics, scripts, characters, combat and AI, 2D maps, checking your
+               work); without --topic, the list of guides.
+                 [--topic <name>]
   api-check    Compare the current API surface against a committed baseline
                and fail on breaking changes (CI compatibility gate).
                  --baseline <path> [--project <dir>] [--update-baseline]
@@ -315,22 +416,51 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  [--set field=value ...]
                (fields: scale, rotation, importMaterialSlots, importTextures,
                importMaterials, combineMeshes, importSkeletalMesh)
-  validate     Validate Lua behaviour scripts (syntax + sandbox load).
-                 [--project <dir>] <file.lua> [more files...]
-  scene-list   List nodes, components, and behaviours of a scene file.
+)",
+R"(  validate     Validate Lua behaviour scripts (syntax + sandbox load) and the UI of scenes: a widget
+               outside a Canvas, a Text without a font, an event name or Button nothing answers (WARN lines).
+                 [--project <dir>] <file.lua|scene.21kbscene> [more files...]
+                 --project <dir>   (no files: every scene of the project)
+  scene-list   List nodes, components, behaviours and world positions (@ x,y,z) of a scene.
                  [--project <dir>] --scene <path>
   scene-attach Attach a behaviour asset to a scene node and save the scene.
                  --project <dir> --scene <path> --node <name> --script <path>
-                 [--tick-group <group>] [--execution-order <n>] [--disabled]
+                 [--tick-group <group>] [--execution-order <n>] [--disabled] [--replace]
+                 [--set <variable>=<value> ...]
+               (an entity runs one behaviour; --replace swaps a different one out; --set gives this node its
+               own value for an exposed variable of the Lua script, stored in the scene and in prefabs made
+               from it; a value equal to the script default stores nothing, an unknown variable lists the
+               ones the script exposes)
+  input-action Create an input action and bind keys in the project's input context
+               (made and set when the project has none), as the Input Actions window.
+                 new --project <dir> --name <Name> [--type Bool|Float|Axis2D|Axis3D]
+                     --key <Key> [--key <Key> ...]
+                 list --project <dir>
+               (keys: A..Z, Space, Enter, LeftShift, ArrowUp, MouseLeft, GamepadFaceBottom, ...;
+               an axis key names its direction: --key W=+y --key S=-y --key D=+x --key A=-x;
+               scripts read Input.Pressed("Fire"), Input.Value(...) or Input.Vector2("Move"))
+  prefab       Save an entity as a prefab, or place one in a scene.
+                 new --project <dir> [--scene <path>] --from-entity <Name> [--name <Prefab>]
+                     [--folder Assets/Prefabs]
+                 place --project <dir> [--scene <path>] --prefab /Game/<path>.kbprefab
+                     [--name <Name>] [--parent <Name>] [--position x,y,z] [--rotation x,y,z]
+                     [--scale x,y,z] [--look-at x,y,z|<Entity>]
+               (scripts spawn copies with World.InstantiatePrefab)
 )",
 R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on errors,
                124 on playback timeout, or 130 on cancellation.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
-                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai] [--pcm-frames <n>]
+                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai|determinism|ui] [--pcm-frames <n>]
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
+                 [--press <Key>@<frame>[+<frames>] ... (holds a key: --press Space@30, --press E@10+20)]
+                 [--click <widget path|x,y>@<frame> ... (clicks a widget or a point of the 1280x720 view,
+                  or --viewport: --click Menu/PlayButton@10; the pointer arrives the frame before,
+                  presses on the frame, lets go on the next; the run says what was under it and who answered)]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
+                 [--workers <1..64>] [--ecs-history <1..256> with --report ecs]
+                 [--ecs-parallelism systems|chunks|combined] [--deterministic]
                Replay uses recorded per-tick durations and controller slots; --frames
                may select a prefix. --dt and audio probes cannot override replay timing.
                Recording captures input before each completed tick, including a partial
@@ -338,11 +468,17 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                Playback limits are cooperative between ticks and during paced waits;
                startup, an executing callback, and shutdown are not forcibly interrupted.
                Create the cancellation file to stop; the command does not remove it.
+               --deterministic orders ECS/scene dispatch and makes fixed ticks independent
+               of CPU duration; --report determinism exposes the active policy and scope.
+               Content queries, RNG ownership and backend tolerances remain caller contracts.
                Reports are versioned JSON on stdout; logs go to stderr.
                Audio probes use explicit offline PCM rendering (up to 600 ticks
                and 1920000 total PCM frames). --pcm-frames overrides audio frames
                per tick; the default follows the sample rate and --dt.
                --report ai shows the last AI rule, condition, action, target and state.
+               --report ui lists every laid-out widget (path, rectangle, text, event name), the scripts that answer
+               its events, the --click results and every widget event delivered with the frame and the number of
+               behaviours that answered (schema 21kb.ui-report/v1).
                --report world-memory states what the streamed worlds hold by kind (assets,
                instances, scripts, physics, graphics; each measured, estimated or
                unavailable) against what the streaming budget charged; see
@@ -398,6 +534,20 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                       --content-version <version> --release <number>
                       [--anti-rollback]
                  verify [--anchor <file>] <dir>
+  build        Cook a project, pack it and stage a folder that runs: Game.kbpack, the
+               player kb_game, the engine module libraries the project enables and the
+               project's own libraries (RuntimeModules). Windows x64 only; for other
+               targets and signed releases use scripts/package_game.py.
+                 --project <dir> --out <new folder> [--pack-compression-level <0-19>]
+                 [--cache <dir>] [--engine-root <dir>] [--shaderc <executable>]
+               Needs kb_cooker and kb_game beside kb_cli. Sign the result with pack sign
+               and release sign when it ships.
+  capture      Render a project or a build headless and write one frame as a PNG.
+                 (--project <dir> | --build <folder made by build>) --out <new file.png>
+                 [--scene </Game/Path.21kbscene>] [--frames <1-120000>]
+                 [--width <64-8192>] [--height <64-8192>]
+               The picture is frame --frames (default 60) of a fixed 1/60 s step, so the
+               same count gives the same picture. Needs kb_game beside kb_cli and a GPU.
   world        Convert a single-file scene into a partitioned world (one file
                per object), or build a world's streaming cells.
                  migrate --scene <file.21kbscene> --out <file.21kbworld>
@@ -439,10 +589,20 @@ Global options:
                run --report, api --print json, batch) keeps it unchanged. mcp ignores --json.
                Native compiler logs go to process stderr and never precede the JSON object.
   --dry-run    Only for the commands that name it (audio-mixer new/set).
+  --command-timeout-ms <1..86400000>  Bound the entire command on Windows.
+  --command-cancel-file <path>       Stop when this caller-owned file exists.
+               Put these options before the command (optionally after --json).
+               The supervisor stops its command and descendants, including external
+               build tools. Text output streams; interrupted JSON is one result
+               with reason timeout|cancelled|supervisor-error. JSON capture is
+               limited to 16 MiB. Interruption does not roll back completed writes.
+               Example: kb_cli --json --command-timeout-ms 30000 script-build --project .
 
 Exit codes: normally 0 on success and 1 on failure (bad arguments, an unknown
 command, a failed check or build, or inaccessible files). Commands may document
 additional codes; run returns 124 on timeout and 130 on cancellation.
+Command supervision returns 124 on timeout, 130 on cancellation and 125 on a
+supervisor error; otherwise it preserves the child command's exit code.
 help, --help, -h and no command at all print this text and exit 0.
 
 Scene paths may be physical (relative to the project root) or virtual
@@ -454,9 +614,81 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-constexpr std::array<std::string_view, 15> kFlagNames{
+// `help <command>`: only that command's lines of the usage text (its row and the indented
+// lines under it), so asking about one command does not print all of them.
+std::string CommandUsageBlock(std::string_view command) {
+    std::string usage;
+    for (const auto part : kUsageParts) usage += part;
+    std::istringstream lines{ usage };
+    std::string block;
+    bool inside = false;
+    for (std::string line; std::getline(lines, line);) {
+        const bool commandRow = line.size() > 2U && line[0] == ' ' && line[1] == ' ' && line[2] != ' ';
+        if (commandRow) {
+            if (inside) break;
+            const std::string_view name = std::string_view{ line }.substr(2U, line.find(' ', 2U) - 2U);
+            inside = name == command;
+        } else if (inside && line.find_first_not_of(' ') == std::string::npos) {
+            break;
+        }
+        if (inside) block += line + '\n';
+    }
+    return block;
+}
+
+void PrintCommandUsage(std::ostream& output, std::string_view command) {
+    const std::string block = CommandUsageBlock(command);
+    if (block.empty()) {
+        output << "kb_cli has no command '" << command << "'; kb_cli commands lists them\n";
+        return;
+    }
+    output << block;
+}
+
+std::size_t EditDistance(std::string_view a, std::string_view b) {
+    std::vector<std::size_t> row(b.size() + 1U);
+    for (std::size_t j = 0; j <= b.size(); ++j) row[j] = j;
+    for (std::size_t i = 1; i <= a.size(); ++i) {
+        std::size_t diagonal = row[0];
+        row[0] = i;
+        for (std::size_t j = 1; j <= b.size(); ++j) {
+            const std::size_t above = row[j];
+            row[j] = std::min({ row[j] + 1U, row[j - 1U] + 1U, diagonal + (a[i - 1U] == b[j - 1U] ? 0U : 1U) });
+            diagonal = above;
+        }
+    }
+    return row[b.size()];
+}
+
+// A misspelled option must fail, not be ignored: for these commands the options accepted are the
+// ones their usage block names, plus the global ones. The other commands check their own.
+constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "api", "validate", "scene-list",
+    "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture" };
+
+bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
+    if (std::ranges::find(kUsageCheckedCommands, command) == std::end(kUsageCheckedCommands)) return false;
+    const std::string block = CommandUsageBlock(command);
+    if (block.empty()) return false;
+    std::vector<std::string> known{ "--json", "--dry-run", "--project", "--help", "--command-timeout-ms", "--command-cancel-file" };
+    for (std::size_t at = block.find("--"); at != std::string::npos; at = block.find("--", at + 2U)) {
+        std::size_t end = at + 2U;
+        while (end < block.size() && (std::isalnum(static_cast<unsigned char>(block[end])) != 0 || block[end] == '-')) ++end;
+        if (end > at + 2U) known.emplace_back(block.substr(at, end - at));
+    }
+    const std::vector<std::string_view> allowed{ known.begin(), known.end() };
+    const std::vector<std::string> unknown = arguments.UnknownOptions(allowed);
+    if (unknown.empty()) return false;
+    const std::string& wrong = unknown.front();
+    const auto closest = std::ranges::min_element(known, {}, [&](const std::string& name) { return EditDistance(name, wrong); });
+    err << "error: " << command << " has no option '" << wrong << '\'';
+    if (EditDistance(*closest, wrong) <= 2U) err << "; did you mean " << *closest << '?';
+    err << " (kb_cli help " << command << " lists its options)\n";
+    return true;
+}
+
+constexpr std::array<std::string_view, 17> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
-    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime" };
+    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all" };
 
 #if KB_CLI_RENDERER
 constexpr bool kRendererAvailable = true;
@@ -465,11 +697,15 @@ constexpr bool kRendererAvailable = false;
 #endif
 
 constexpr CliCommandDescriptor kCommands[]{
+    {"debug", &RunLuaDebugCommand, CliCommandKind::Normal, true, ""},
     {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, ""},
+    {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space"},
+    {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph"},
     {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, ""},
     {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, ""},
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
     {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference"},
+    {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
     {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
@@ -482,7 +718,11 @@ constexpr CliCommandDescriptor kCommands[]{
     {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script"},
     {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list"},
     {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach"},
+    {"input-action", &RunInputActionCommand, CliCommandKind::Normal, true, {}},
+    {"prefab", &RunPrefabCommand, CliCommandKind::Normal, true, {}},
+    {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}},
     {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
+    {"scene-duplicate", &RunSceneDuplicateCommand, CliCommandKind::Normal, true, ""},
     {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
     {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, ""},
     {"run", &RunRunCommand, CliCommandKind::Normal, true, "run_scene"},
@@ -490,12 +730,22 @@ constexpr CliCommandDescriptor kCommands[]{
     {"pack", &RunPackCommand, CliCommandKind::Normal, true, ""},
     {"mod", &RunModCommand, CliCommandKind::Normal, true, ""},
     {"release", &RunReleaseCommand, CliCommandKind::Normal, true, ""},
+    {"build", &RunBuildCommand, CliCommandKind::Normal, true, ""},
+    {"capture", &RunCaptureCommand, CliCommandKind::Normal, true, ""},
     {"world", &RunWorldCommand, CliCommandKind::Normal, true, ""},
     {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, ""},
     {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, ""},
     {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, ""},
 #if KB_CLI_RENDERER
+    {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}},
+    {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}},
+    {"vector2d-new", &RunVectorShapeNewCommand, CliCommandKind::Normal, true, {}},
+    {"vector2d-show", &RunVectorShapeShowCommand, CliCommandKind::Normal, true, {}},
+    {"vector2d-set", &RunVectorShapeSetCommand, CliCommandKind::Normal, true, {}},
     {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}},
+    {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}},
+    {"mesh-lod", &RunMeshLodCommand, CliCommandKind::Normal, true, {}},
+    {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
     {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
     {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}},
@@ -506,10 +756,16 @@ constexpr CliCommandDescriptor kCommands[]{
     {"post-process-new", &RunPostProcessNewCommand, CliCommandKind::Normal, true, {}},
     {"post-process-set", &RunPostProcessSetCommand, CliCommandKind::Normal, true, {}},
     {"scene-post-process", &RunScenePostProcessCommand, CliCommandKind::Normal, true, {}},
+    {"particle-process-cook", &RunParticleProcessCookCommand, CliCommandKind::Normal, true, {}},
+    {"render-effect-run", &RunRenderEffectRunCommand, CliCommandKind::Normal, true, {}},
+    {"render-effect-export", &RunRenderEffectExportCommand, CliCommandKind::Normal, true, {}},
     {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}},
     {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}},
 #else
     {"map2d", nullptr, CliCommandKind::Normal, false, {}},
+    {"terrain", nullptr, CliCommandKind::Normal, false, {}},
+    {"mesh-lod", nullptr, CliCommandKind::Normal, false, {}},
+    {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
     {"material-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-set", nullptr, CliCommandKind::Normal, false, {}},
     {"material-show", nullptr, CliCommandKind::Normal, false, {}},
@@ -520,6 +776,9 @@ constexpr CliCommandDescriptor kCommands[]{
     {"post-process-new", nullptr, CliCommandKind::Normal, false, {}},
     {"post-process-set", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-post-process", nullptr, CliCommandKind::Normal, false, {}},
+    {"particle-process-cook", nullptr, CliCommandKind::Normal, false, {}},
+    {"render-effect-run", nullptr, CliCommandKind::Normal, false, {}},
+    {"render-effect-export", nullptr, CliCommandKind::Normal, false, {}},
     {"renderer-info", nullptr, CliCommandKind::Normal, false, {}},
     {"vfx-profile", nullptr, CliCommandKind::Normal, false, {}},
 #endif
@@ -559,7 +818,10 @@ std::optional<int> RunNamedCommand(
             return RunCli(words, in, target);
         });
     case CliCommandKind::Mcp: return RunMcpCommand(arguments, in, io);
-    case CliCommandKind::Help: PrintUsage(io.out); return 0;
+    case CliCommandKind::Help:
+        if (!arguments.Positionals().empty()) PrintCommandUsage(io.out, arguments.Positionals().front());
+        else PrintUsage(io.out);
+        return 0;
     case CliCommandKind::Catalog: {
         using kb::core::JsonValue;
         auto result = JsonValue::MakeObject();
@@ -707,14 +969,13 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
             }
             return 1;
         }
+        if (RejectUnknownOptions(command, arguments, target.err)) return 1;
         if (const std::optional<int> code = RunNamedCommand(command, arguments, in, target)) {
             return *code;
         }
-        target.err << "error: unknown command '" << command << "'\n";
-        if (!json) {
-            target.err << '\n';
-            PrintUsage(target.err);
-        }
+        // One line, not the whole usage text: an agent that guessed a name reads it on every mistake.
+        target.err << "error: unknown command '" << command << "'; kb_cli commands lists them, kb_cli help <command> shows one\n";
+        static_cast<void>(json);
         return 1;
     };
 

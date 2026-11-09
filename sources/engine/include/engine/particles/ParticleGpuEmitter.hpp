@@ -61,6 +61,7 @@ struct ParticleGpuEmitterParams {
     std::array<std::array<float, 4U>, kParticleGpuCurveSamples> color{};
     std::array<float, kParticleGpuCurveSamples> size{};
     std::uint64_t textureAtlasAssetId = 0U;
+    std::uint64_t customProcessAssetId = 0U;
     std::uint32_t flipbookColumns = 1U;
     std::uint32_t flipbookRows = 1U;
     std::uint32_t flipbookStartFrame = 0U;
@@ -118,7 +119,7 @@ struct ParticleGpuEmitterParams {
         return false;
     }
     // Collisions and the fields make the motion depend on its history: the stateful kernel integrates it.
-    [[nodiscard]] constexpr bool NeedsState() const noexcept { return HasCollision() || HasForces(); }
+    [[nodiscard]] constexpr bool NeedsState() const noexcept { return HasCollision() || HasForces() || customProcessAssetId != 0U; }
 };
 
 struct ParticleGpuEmitterKey {

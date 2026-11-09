@@ -1,6 +1,8 @@
 #include "scene/prefab/ScenePrefabOverridePropertyReporter.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "scene/prefab/ScenePrefabComponentOverrideReporter.hpp"
 #include "scene/prefab/ScenePrefabObjectOverrideReporter.hpp"
 #include "scene/prefab/ScenePrefabTransformOverrideReporter.hpp"
@@ -53,6 +55,9 @@ void ScenePrefabOverridePropertyReporter::AppendChangedProperties(
     const SceneEntity entity = object.Entity();
     ScenePrefabTransformOverrideReporter::Append(scene, node, nodeIndex, object, report);
     ScenePrefabComponentOverrideReporter::Append(scene.Components(), entity, node.components, report, nodeIndex, object);
+    if (scene.Components().Behaviours().TryGet(entity) != nullptr) {
+        ScenePrefabComponentOverrideReporter::AppendBehaviourVariables(scene.Entities().BehaviourVariableOverrides(entity), node.components, report, nodeIndex, object);
+    }
     for (std::size_t propertyIndex = firstProperty; propertyIndex < report.properties.size(); ++propertyIndex) {
         report.properties[propertyIndex].nodeId = node.stableId;
     }

@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneAssetCopy.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "kb/render/resources/RenderMeshImportArtifacts.hpp"
@@ -36,7 +37,9 @@ namespace {
 [[nodiscard]] const kb::assets::AssetMetadata* FirstExternalDependent(
     const kb::assets::AssetManager& manager,
     kb::assets::AssetId target,
-    const std::unordered_set<std::uint64_t>& sameOperationAssets = {}) {
+    const std::unordered_set<std::uint64_t>& sameOperationAssets = {},
+    bool relocation = false) {
+    const auto* targetMetadata = manager.Registry().Find(target);
     if (!target.IsValid()) {
         return nullptr;
     }
@@ -46,6 +49,8 @@ namespace {
         }
         for (const kb::assets::AssetId dependency : metadata.dependencies) {
             if (dependency == target) {
+                if (relocation && targetMetadata != nullptr && targetMetadata->type == "ScenePrefab" &&
+                    (metadata.type == "Scene" || metadata.type == "ScenePrefab")) continue;
                 return &metadata;
             }
         }
@@ -58,7 +63,7 @@ namespace {
     kb::assets::AssetId target,
     std::string_view operation,
     const std::unordered_set<std::uint64_t>& sameOperationAssets = {}) {
-    if (const kb::assets::AssetMetadata* dependent = FirstExternalDependent(manager, target, sameOperationAssets); dependent != nullptr) {
+    if (const kb::assets::AssetMetadata* dependent = FirstExternalDependent(manager, target, sameOperationAssets, operation == "moved" || operation == "renamed"); dependent != nullptr) {
         const kb::assets::AssetMetadata* targetMetadata = manager.Registry().Find(target);
         const std::string name = targetMetadata != nullptr ? targetMetadata->virtualPath.generic_string() : kb::assets::ToString(target);
         manager.SetError(
@@ -81,6 +86,23 @@ namespace {
         }
     }
     return assets;
+}
+
+void RelocateLoadedPrefabs(kb::scene::Scene& scene, const std::filesystem::path& previous,
+    const std::filesystem::path& current, const std::vector<std::filesystem::path>& sources) {
+    for (const auto& source : sources) {
+        scene.Prefabs().RelocateSource(source, current / source.lexically_relative(previous));
+    }
+}
+
+[[nodiscard]] std::vector<std::filesystem::path> PrefabSourcesUnder(
+    const kb::assets::AssetManager& manager, const std::filesystem::path& folder) {
+    std::vector<std::filesystem::path> result;
+    for (const auto id : AssetsUnder(manager, folder)) {
+        const auto* metadata = manager.Registry().Find(id);
+        if (metadata != nullptr && metadata->type == "ScenePrefab") result.push_back(metadata->physicalPath);
+    }
+    return result;
 }
 
 // Removing both ends of a reference is safe. Relocation changes paths even when
@@ -211,10 +233,15 @@ bool EditorSceneAssetBrowserCommands::CommitTextEdit(kb::scene::Scene& scene, Ed
     case EditorAssetTextEditMode::RenameAsset: {
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetBrowser.TextEditTargetAsset());
         if (metadata != nullptr) {
+            const auto previousPhysicalPath = metadata->physicalPath;
             const std::filesystem::path renamedVirtualPath = metadata->virtualPath.parent_path() / (value + metadata->virtualPath.extension().string());
             committed = LeavesProtectedScenes(manager, protectedScenes, metadata->physicalPath, "rename") &&
                 CanMutateDependencyTarget(manager, metadata->id, "renamed") && manager.RenameAsset(metadata->id, value);
             if (committed) {
+                if (const auto destination = manager.Mounts().Resolve(renamedVirtualPath)) {
+                    scene.Prefabs().RelocateSource(previousPhysicalPath, *destination);
+                }
+                RefreshAssets(scene);
                 if (const kb::assets::AssetMetadata* renamed = manager.Registry().FindByPath(renamedVirtualPath); renamed != nullptr) {
                     static_cast<void>(assetBrowser.SelectAsset(renamed->id, manager));
                 }
@@ -226,9 +253,12 @@ bool EditorSceneAssetBrowserCommands::CommitTextEdit(kb::scene::Scene& scene, Ed
         const std::filesystem::path oldFolder = assetBrowser.TextEditTargetFolder();
         const std::filesystem::path renamedFolder = oldFolder.parent_path() / value;
         const bool renamedOpenFolder = SameVirtualPath(oldFolder, assetBrowser.SelectedFolder());
+        const auto previousPhysical = FolderFile(manager, oldFolder);
+        const auto prefabSources = PrefabSourcesUnder(manager, oldFolder);
         committed = LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, oldFolder), "rename") &&
             CanMutateFolderContents(manager, oldFolder, "renamed") && manager.RenameFolder(oldFolder, value);
         if (committed) {
+            RelocateLoadedPrefabs(scene, previousPhysical, FolderFile(manager, renamedFolder), prefabSources);
             if (renamedOpenFolder) {
                 static_cast<void>(assetBrowser.SelectFolder(renamedFolder, manager));
             } else {
@@ -355,17 +385,20 @@ bool EditorSceneAssetBrowserCommands::MoveAssetToFolder(
     const std::filesystem::path& destinationVirtualFolder,
     const EditorProtectedScenes& protectedScenes) {
     kb::assets::AssetManager& manager = AssetManager(scene);
-    // An asset is known by its path, so moving one that something uses would leave that user pointing
-    // at nothing - refused like a rename.
+    // Scene and prefab links use GUIDs; other references still require their original path.
     if (!LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, id), "move") ||
         !CanMutateDependencyTarget(manager, id, "moved")) {
         return false;
     }
+    const auto previousPhysicalPath = AssetFile(manager, id);
     const kb::assets::AssetMoveResult moved = manager.MoveAssetIntoFolder(id, destinationVirtualFolder);
     if (!moved.succeeded) {
         return false;
     }
 
+    if (const auto destination = manager.Mounts().Resolve(moved.virtualPath)) {
+        scene.Prefabs().RelocateSource(previousPhysicalPath, *destination);
+    }
     RefreshAssets(scene);
     if (const kb::assets::AssetMetadata* movedMetadata = manager.Registry().FindByPath(moved.virtualPath); movedMetadata != nullptr) {
         static_cast<void>(assetBrowser.SelectAsset(movedMetadata->id, manager));
@@ -385,6 +418,8 @@ bool EditorSceneAssetBrowserCommands::MoveFolderToFolder(
         return false;
     }
     const bool movedOpenFolder = SameVirtualPath(assetBrowser.SelectedFolder(), sourceVirtualFolder);
+    const auto previousPhysical = FolderFile(manager, sourceVirtualFolder);
+    const auto prefabSources = PrefabSourcesUnder(manager, sourceVirtualFolder);
     const kb::assets::AssetMoveResult moved = manager.MoveFolderIntoFolder(sourceVirtualFolder, destinationVirtualFolder);
     if (!moved.succeeded) {
         return false;
@@ -392,6 +427,7 @@ bool EditorSceneAssetBrowserCommands::MoveFolderToFolder(
 
     RefreshAssets(scene);
     if (!moved.virtualPath.empty()) {
+        RelocateLoadedPrefabs(scene, previousPhysical, FolderFile(manager, moved.virtualPath), prefabSources);
         if (movedOpenFolder) {
             static_cast<void>(assetBrowser.SelectFolder(moved.virtualPath, manager));
         } else {

@@ -5,6 +5,7 @@
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -144,6 +145,8 @@ struct ScenePrefabNodeComponents {
     std::optional<ParticleEffectComponent> particleEffect;
     std::optional<ScenePrefabLensEchoComponent> lensEcho;
     std::optional<BehaviourComponent> behaviour;
+    // Per-instance exposed script variables that differ from the script defaults; they belong to `behaviour`.
+    std::vector<BehaviourVariableOverride> behaviourVariableOverrides;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;
     std::optional<Animator> animator;

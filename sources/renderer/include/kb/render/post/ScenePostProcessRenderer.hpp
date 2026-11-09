@@ -21,6 +21,8 @@ struct SceneTemporalReprojectionDesc {
     std::array<float, 4> historyJitterParams{};
     // x: reproject depthless background against the editor grid plane, y: plane world height.
     std::array<float, 4> backgroundPlaneParams{};
+    // Camera view-space z as a plane in render-space coordinates.
+    std::array<float, 4> viewDepthPlane{0.0F, 0.0F, 1.0F, 0.0F};
     bool historyValid = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
@@ -69,6 +71,8 @@ private:
     bgfx::UniformHandle inverseViewProjectionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle previousViewProjectionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle temporalParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle dofParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle dofViewDepthPlaneUniform_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout fullscreenLayout_{};
     bgfx::VertexBufferHandle fullscreenVertexBuffer_ = BGFX_INVALID_HANDLE;
 };

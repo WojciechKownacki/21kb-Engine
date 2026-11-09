@@ -151,6 +151,8 @@ def main() -> None:
             raise RuntimeError("The APK did not acknowledge touch-only scope")
         if args.ime_only and "INSTRUMENTATION_RESULT: scope=ime-only" not in text:
             raise RuntimeError("The APK did not acknowledge IME-only scope")
+        if "haptics-verified=1" not in text:
+            raise RuntimeError("Android haptics provider assertions were not acknowledged")
         report.update(result="PASS", evidence="instrumentation.log", checks=[
             "real GameActivity key/motion queue and Paddleboat consumption",
             "two OS device IDs with independent six-axis values and buttons",
@@ -166,6 +168,8 @@ def main() -> None:
                 "composition remains uncommitted, repeated identical commits are retained",
                 "editor action submits once and OS Back reaches native cancellation once",
                 "keyboard reopens, selection replacement and deletion preserve surrounding text",
+                "selection-only updates preserve reversed UTF-16 emoji endpoints",
+                "multiline IME configuration preserves line breaks, combining marks and supplementary characters",
                 "paste beyond 64 scalars and deletion to an empty snapshot"]
     except Exception as error:
         report["error"] = str(error)

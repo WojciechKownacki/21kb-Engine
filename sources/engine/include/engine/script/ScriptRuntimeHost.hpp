@@ -56,10 +56,13 @@ struct ScriptRuntimeHostOptions {
     bool installSceneSystem = false;
 };
 
-class ScriptRuntimeHost final {
+class ScriptRuntimeHost final : public kb::core::IRuntimeStateProvider {
 public:
     explicit ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostOptions options = {});
     ~ScriptRuntimeHost();
+    [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override;
+    [[nodiscard]] bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const override;
+    [[nodiscard]] bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) override;
 
     ScriptRuntimeHost(const ScriptRuntimeHost&) = delete;
     ScriptRuntimeHost& operator=(const ScriptRuntimeHost&) = delete;
@@ -76,12 +79,17 @@ public:
     // scene system is destroyed.
     [[nodiscard]] const ScriptRuntimeExecutionResult* InstalledSceneSystemLastResult() const noexcept;
     [[nodiscard]] const ScriptRuntimeAssetPrepareResult* InstalledSceneSystemLastPrepareResult() const noexcept;
+    // The widget events the installed scene system delivered since the last call, and who answered them.
+    [[nodiscard]] std::vector<ScriptUIDispatch> TakeInstalledSceneSystemUIDispatches();
     // LIB-028: the kb::library startup report (one entry per catalog
     // module: installed/disabled, version, reason) produced by the real
     // EngineLibraryModule::Install() call this host made while
     // constructing — not recomputed/guessed, the actual outcome.
     [[nodiscard]] const std::vector<kb::library::EngineLibraryModuleReportEntry>& LibraryStartupReport() const noexcept;
 
+    [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& endpoint, std::string& error);
+    void PollLuaDebugger();
+    void StopLuaDebugger() noexcept;
     [[nodiscard]] bool InstallSceneSystem();
     // Drives the installed script scene system's shutdown lifecycle NOW — fires
     // Deactivated + Destroyed on every tracked behaviour and clears tracking,
@@ -129,8 +137,6 @@ private:
     void AddDiagnostic(std::string message);
 
     std::shared_ptr<ScriptRuntimeHostState> state_;
-    kb::scene::SceneSystemHandle sceneSystemHandle_{};
-    bool sceneSystemInstalled_ = false;
     std::vector<std::string> diagnostics_;
     std::vector<kb::library::EngineLibraryModuleReportEntry> libraryStartupReport_;
 };

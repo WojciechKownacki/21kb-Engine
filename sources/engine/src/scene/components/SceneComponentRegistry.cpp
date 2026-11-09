@@ -101,6 +101,9 @@ void RegisterUIReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(UIRectTransform, scale, kb::ecs::ComponentFieldType::Vec2Float32),
         KB_ECS_FIELD(UIRectTransform, rotationDegrees, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(UIRectTransform, zOrder, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(UIRectTransform, themeAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIRectTransform, themeVariant, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIRectTransform, themeOverrides, kb::ecs::ComponentFieldType::Bytes),
     }));
     static_cast<void>(world.RegisterComponentReflection<UICanvas>(UICanvas::StableId, {
         KB_ECS_FIELD(UICanvas, sortingOrder, kb::ecs::ComponentFieldType::Int32),
@@ -203,6 +206,9 @@ void RegisterUIReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(UIText, wrapMode, kb::ecs::ComponentFieldType::Bytes),
         KB_ECS_FIELD(UIText, lineSpacing, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(UIText, richText, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(UIText, fontVariations, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, fallbackFontAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(UIText, fontRenderMode, kb::ecs::ComponentFieldType::Bytes),
     }));
     static_cast<void>(world.RegisterComponentReflection<UIBorder>(UIBorder::StableId, {
         KB_ECS_FIELD(UIBorder, backgroundColor, kb::ecs::ComponentFieldType::Vec4Float32),
@@ -661,6 +667,12 @@ void RegisterLightReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(LightComponent, shadowStrength, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(LightComponent, shadowDistance, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(LightComponent, mobility, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowBias, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, shadowNormalBias, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, shadowFilter, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowQuality, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, shadowCascadeCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(LightComponent, shadowCascadeDistribution, kb::ecs::ComponentFieldType::Float32),
     }));
 }
 

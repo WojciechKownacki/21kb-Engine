@@ -3,6 +3,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/audio/AudioSettings.hpp"
 
@@ -17,6 +18,9 @@ public:
     [[nodiscard]] static std::string_view LightKindName(kb::scene::LightKind kind);
     [[nodiscard]] static std::string_view LightShapeName(kb::scene::LightKind kind);
     [[nodiscard]] static std::string_view LightMobilityName(kb::scene::LightMobility mobility);
+    [[nodiscard]] static std::string_view LightShadowFilterName(kb::scene::LightShadowFilter filter);
+    [[nodiscard]] static std::string_view LightShadowQualityName(kb::scene::LightShadowQuality quality);
+    [[nodiscard]] static std::string_view MeshMobilityName(kb::scene::MeshMobility mobility);
     [[nodiscard]] static std::string_view ProjectionName(kb::scene::CameraProjection projection);
     [[nodiscard]] static std::string_view CameraClearModeName(kb::scene::CameraClearMode clearMode);
     [[nodiscard]] static std::string_view RigidbodyBodyTypeName(kb::scene::RigidbodyBodyType bodyType);

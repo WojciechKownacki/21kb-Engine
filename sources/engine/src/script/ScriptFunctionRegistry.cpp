@@ -2,6 +2,7 @@
 
 #include "engine/library/EngineLibraryTextEncoding.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <ranges>
@@ -73,7 +74,9 @@ bool ScriptFunctionRegistry::Register(ScriptFunctionDesc function) {
     }
     if (functions_.size() == functions_.capacity()) {
         const std::size_t previousCapacity = functions_.capacity();
-        const std::size_t requestedCapacity = previousCapacity == 0U ? 1U : previousCapacity * 2U;
+        // Bound each growth charged to the registering module. Doubling a large
+        // shared registry can exceed a small module's budget on its first entry.
+        const std::size_t requestedCapacity = previousCapacity + std::max<std::size_t>(1U, std::min<std::size_t>(previousCapacity, 64U));
         const std::size_t allocationBytes = (requestedCapacity - previousCapacity) * sizeof(ScriptFunctionDesc);
         if (registrationAllocationTelemetry_ != nullptr &&
             !registrationAllocationTelemetry_->Reserve(allocationBytes)) {

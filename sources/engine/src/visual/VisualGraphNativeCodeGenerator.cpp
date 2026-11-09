@@ -1,4 +1,5 @@
 #include "engine/visual/VisualGraphNativeCodeGenerator.hpp"
+#include "engine/visual/VisualGraphLiteral.hpp"
 
 #include <cctype>
 #include <ranges>
@@ -494,6 +495,30 @@ void WriteInstructionOperation(
     }
     stream << "\n";
 
+    if (instruction.opcode == VisualGraphIrOpcode::GetProperty &&
+        (VisualGraphLiteral::IsSymbol(instruction.symbol) || instruction.symbol == "Self")) {
+        if (instruction.outputs.size() != 1 || instruction.outputs.front().name != "value") {
+            AddCodegenError(errors, diagnostics, instruction.sourceNodeId, "built-in value producer requires one typed value output"); return;
+        }
+        const auto type = instruction.outputs.front().type;
+        std::string expression;
+        if (instruction.symbol == "Self" && type == VisualGraphValueType::Entity) expression = "context.ReadEntity(0U, \"self\")";
+        else if (const auto value = VisualGraphLiteral::Read(type, instruction.symbol)) {
+            expression = VisualGraphLiteral::Display(*value);
+            if (type == VisualGraphValueType::String || type == VisualGraphValueType::Name || type == VisualGraphValueType::Guid)
+                expression = CppStringLiteral(expression);
+            else if (type == VisualGraphValueType::Int64)
+                expression = expression == "-9223372036854775808" ? "(-9223372036854775807LL - 1LL)" : expression + "LL";
+            else if (type == VisualGraphValueType::UInt32 || type == VisualGraphValueType::Hash) expression += "ULL";
+            else if (type == VisualGraphValueType::Float || type == VisualGraphValueType::Double) {
+                if (expression.find_first_of(".eE") == std::string::npos) expression += ".0";
+                if (type == VisualGraphValueType::Float) expression += "F";
+            }
+        }
+        if (expression.empty()) { AddCodegenError(errors, diagnostics, instruction.sourceNodeId, "invalid typed literal"); return; }
+        stream << "    context." << StoreFunctionFor(type) << "(" << instruction.sourceNodeId << "U, \"value\", " << expression << ");\n";
+        return;
+    }
     if (bindings != nullptr) {
         if (const VisualGraphNativeBinding* binding = bindings->Find(instruction.opcode, instruction.symbol); binding != nullptr) {
             const std::size_t errorCount = errors.size();

@@ -6,9 +6,12 @@
 #include "engine/math/ColorSpace.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #if KB_CLI_RENDERER
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #if KB_CLI_RENDERER
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -79,6 +82,18 @@ const std::vector<std::string>& ArgumentList::Errors() const noexcept {
     return errors_;
 }
 
+ArgumentList ArgumentList::WithOption(std::string_view name, std::string value) const {
+    ArgumentList copy = WithoutOption(name);
+    copy.options_.emplace_back(std::string{ name }, std::move(value));
+    return copy;
+}
+
+ArgumentList ArgumentList::WithoutOption(std::string_view name) const {
+    ArgumentList copy = *this;
+    std::erase_if(copy.options_, [name](const auto& option) { return option.first == name; });
+    return copy;
+}
+
 std::vector<std::string> ArgumentList::UnknownOptions(std::span<const std::string_view> allowed) const {
     std::vector<std::string> unknown;
     const auto check = [&](const std::string& name) {
@@ -104,6 +119,8 @@ bool MountProjectAssets(
         return false;
     }
 #if KB_CLI_RENDERER
+    // Tilemap asset IDs and collision sources must match the editor and packaged runtime.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()));
     // Materials are typed by the renderer's loader, as in the editor and the game; without it
     // a .kbmat is an unknown file and MeshRenderer material= cannot reference it.
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
@@ -205,6 +222,65 @@ std::optional<std::array<float, 4>> ParseColorText(std::string_view text, const 
     }
     if (count + 1U != 3U && count + 1U != channels) return std::nullopt;
     return color;
+}
+
+std::string FormatCliNumber(double value) {
+    if (!std::isfinite(value)) return std::to_string(value);
+    value = std::round(value * 10000.0) / 10000.0;
+    if (value == 0.0) value = 0.0; // -0 prints as 0
+    char buffer[64];
+    const auto [end, code] = std::to_chars(buffer, buffer + sizeof(buffer), value);
+    return code == std::errc{} ? std::string{ buffer, end } : std::to_string(value);
+}
+
+std::optional<kb::math::Vec3> ParseVec3(std::string_view text) {
+    std::array<float, 3> values{};
+    for (std::size_t index = 0U; index < values.size(); ++index) {
+        const std::size_t comma = text.find(',');
+        const std::string_view part = text.substr(0, comma);
+        const auto [end, code] = std::from_chars(part.data(), part.data() + part.size(), values[index]);
+        if (code != std::errc{} || end != part.data() + part.size() || !std::isfinite(values[index])) return std::nullopt;
+        if ((comma == std::string_view::npos) != (index + 1U == values.size())) return std::nullopt;
+        text = comma == std::string_view::npos ? std::string_view{} : text.substr(comma + 1U);
+    }
+    return kb::math::Vec3{ values[0], values[1], values[2] };
+}
+
+void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::vector<kb::scene::SceneEntity>& out) {
+    out.push_back(entity);
+    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
+        CollectEntities(scene, child, out);
+    }
+}
+
+std::vector<kb::scene::SceneEntity> AllEntities(const kb::scene::Scene& scene) {
+    std::vector<kb::scene::SceneEntity> all;
+    for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
+        CollectEntities(scene, root, all);
+    }
+    return all;
+}
+
+std::string EntityPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    std::string path{ scene.Entities().Name(entity) };
+    for (kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity); parent.IsValid();
+         parent = scene.Hierarchy().Parent(parent)) {
+        path = std::string{ scene.Entities().Name(parent) } + "/" + path;
+    }
+    return path;
+}
+
+std::vector<kb::scene::SceneEntity> MatchEntities(const kb::scene::Scene& scene, std::string_view name) {
+    std::vector<kb::scene::SceneEntity> byName;
+    std::vector<kb::scene::SceneEntity> byPath;
+    for (const kb::scene::SceneEntity entity : AllEntities(scene)) {
+        if (scene.Entities().Name(entity) == name) {
+            byName.push_back(entity);
+        } else if (name.find('/') != std::string_view::npos && EntityPath(scene, entity) == name) {
+            byPath.push_back(entity);
+        }
+    }
+    return byName.empty() ? byPath : byName;
 }
 
 } // namespace kb::cli

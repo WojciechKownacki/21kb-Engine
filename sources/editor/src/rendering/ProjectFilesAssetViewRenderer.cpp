@@ -18,14 +18,15 @@ void ProjectFilesAssetViewRenderer::Paint(
     kb::assets::AssetManager& manager,
     EditorMeshThumbnailService& meshThumbnails,
     const std::vector<EditorAssetFolderRow>& folders,
-    const std::vector<EditorAssetItemRow>& assets) {
+    const std::vector<EditorAssetItemRow>& assets,
+    const EditorAssetUsers& users) {
     using Draw = ProjectFilesPanelDrawing;
 
     GdiDrawing::DrawSharpFrame(dc, layout.assetView, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.strip), 8), Draw::Color(theme.borderPanel));
     if (state.ViewMode() == EditorAssetViewMode::Tiles) {
         ProjectFilesAssetTileRenderer::Paint(dc, layout, theme, state, manager, meshThumbnails, folders, assets);
     } else {
-        ProjectFilesAssetListRenderer::Paint(dc, layout, theme, state, folders, assets);
+        ProjectFilesAssetListRenderer::Paint(dc, layout, theme, state, folders, assets, users);
     }
 }
 

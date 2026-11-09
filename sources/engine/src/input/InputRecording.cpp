@@ -3,6 +3,7 @@
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cmath>
 
@@ -14,6 +15,7 @@ namespace {
 namespace io = kb::scene::SceneAssetBinaryIO;
 
 [[nodiscard]] bool ValidFrame(const InputFrameSnapshot& frame) {
+    if (!IsInputSensorFrameValid(frame.sensors)) return false;
     if (!std::isfinite(frame.deltaSeconds) || frame.deltaSeconds < 0.0F ||
         !std::isfinite(frame.pointerX) || !std::isfinite(frame.pointerY) ||
         frame.digitalDown.size() > InputAssetFormat::MaxRecordingKeysPerFrame ||
@@ -76,7 +78,13 @@ void WriteTouchPoint(std::vector<std::uint8_t>& output, const InputTouchPoint& p
     return true;
 }
 
-void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& frame) {
+void WriteSensor(std::vector<std::uint8_t>& output,const InputSensorSample& sample) {
+    io::WriteUInt8(output,static_cast<std::uint8_t>(sample.status));for(float value:sample.value)io::WriteFloat(output,value);io::WriteUInt64(output,sample.sampleTimeNanoseconds);io::WriteUInt32(output,sample.nativeError);
+}
+bool ReadSensor(io::ByteReader& reader,InputSensorSample& sample) {
+    std::uint8_t status=0;if(!reader.ReadUInt8(status)||status>static_cast<std::uint8_t>(InputSensorStatus::Stale))return false;sample.status=static_cast<InputSensorStatus>(status);for(float& value:sample.value)if(!reader.ReadFloat(value))return false;return reader.ReadUInt64(sample.sampleTimeNanoseconds)&&reader.ReadUInt32(sample.nativeError);
+}
+void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& frame,std::uint32_t version) {
     io::WriteFloat(output, frame.deltaSeconds);
 
     io::WriteUInt32(output, static_cast<std::uint32_t>(frame.digitalDown.size()));
@@ -110,6 +118,7 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
     }
     io::WriteUInt32(output, frame.pointerViewportWidth);
     io::WriteUInt32(output, frame.pointerViewportHeight);
+    if(version>=InputAssetFormat::RecordingBinaryVersion){io::WriteUInt8(output,static_cast<std::uint8_t>(frame.sensors.source));io::WriteBool(output,frame.sensors.replayed);WriteSensor(output,frame.sensors.accelerometer);WriteSensor(output,frame.sensors.gyroscope);}
 }
 
 [[nodiscard]] bool ReadFrame(
@@ -154,7 +163,7 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
     }
     frame.touchPoints.resize(touchCount);
     for (InputTouchPoint& point : frame.touchPoints) {
-        if (!ReadTouchPoint(reader, point, version >= InputAssetFormat::RecordingBinaryVersion)) {
+        if (!ReadTouchPoint(reader, point, version >= InputAssetFormat::RecordingCancellationBinaryVersion)) {
             return false;
         }
     }
@@ -183,8 +192,9 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
         }
         codePoint = static_cast<char32_t>(raw);
     }
-    return reader.ReadUInt32(frame.pointerViewportWidth) &&
-        reader.ReadUInt32(frame.pointerViewportHeight);
+    if(!reader.ReadUInt32(frame.pointerViewportWidth)||!reader.ReadUInt32(frame.pointerViewportHeight))return false;
+    if(version<InputAssetFormat::RecordingBinaryVersion)return true;
+    std::uint8_t source=0;if(!reader.ReadUInt8(source)||source>static_cast<std::uint8_t>(InputSensorSource::Replay)||!reader.ReadBool(frame.sensors.replayed)||!ReadSensor(reader,frame.sensors.accelerometer)||!ReadSensor(reader,frame.sensors.gyroscope))return false;frame.sensors.source=static_cast<InputSensorSource>(source);return IsInputSensorFrameValid(frame.sensors);
 }
 
 } // namespace
@@ -192,6 +202,7 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
 InputFrameSnapshot CaptureInputFrame(const InputDeviceState& device, float deltaSeconds) {
     InputFrameSnapshot frame;
     frame.deltaSeconds = deltaSeconds;
+    frame.sensors = device.Sensors();
 
     for (std::uint32_t raw = 0U; raw < static_cast<std::uint32_t>(InputKey::Count); ++raw) {
         const auto key = static_cast<InputKey>(raw);
@@ -229,6 +240,7 @@ InputFrameSnapshot CaptureInputFrame(const InputDeviceState& device, float delta
 
 void ApplyInputFrame(InputDeviceState& device, const InputFrameSnapshot& frame) {
     device.Reset();
+    auto sensors=frame.sensors;sensors.replayed=true;static_cast<void>(device.SetSensors(sensors));
     for (const InputRecordedDigitalKey& entry : frame.digitalDown) {
         device.SetKeyDown(entry.key, true, entry.gamepadIndex);
     }
@@ -260,10 +272,13 @@ std::vector<std::uint8_t> EncodeInputRecording(const InputRecording& recording) 
         if (!ValidFrame(frame)) return {};
     std::vector<std::uint8_t> output;
     io::WriteRaw(output, InputAssetFormat::RecordingMagic.data(), InputAssetFormat::RecordingMagic.size());
-    io::WriteUInt32(output, InputAssetFormat::RecordingBinaryVersion);
+    // Sensor-free captures retain the established v5 payload byte-for-byte.
+    const bool hasSensors=std::any_of(recording.begin(),recording.end(),[](const auto& frame){return frame.sensors!=InputSensorFrame{};});
+    const auto version=hasSensors?InputAssetFormat::RecordingBinaryVersion:InputAssetFormat::RecordingCancellationBinaryVersion;
+    io::WriteUInt32(output, version);
     io::WriteUInt32(output, static_cast<std::uint32_t>(recording.size()));
     for (const InputFrameSnapshot& frame : recording) {
-        WriteFrame(output, frame);
+        WriteFrame(output, frame,version);
     }
     return output;
 }
@@ -277,6 +292,7 @@ InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::u
     if (!reader.ReadUInt32(version) ||
         (version != InputAssetFormat::BinaryVersion &&
             version != InputAssetFormat::RecordingTextInputBinaryVersion &&
+            version != InputAssetFormat::RecordingCancellationBinaryVersion &&
             version != InputAssetFormat::RecordingBinaryVersion)) {
         return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Unsupported input recording version"};
     }

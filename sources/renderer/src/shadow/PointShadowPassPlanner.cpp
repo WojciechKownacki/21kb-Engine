@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <span>
 #include <utility>
 
 namespace kb::render {
@@ -33,6 +34,14 @@ constexpr std::array<FaceBasis, ScenePointShadowBinding::kFaceCount> kFaces{{
         light.intensity > 0.0F && light.range > 0.0F && std::isfinite(light.range);
 }
 
+[[nodiscard]] bool UsesCubeShadow(const LightRenderProxyDesc& light) noexcept {
+    return light.kind != RenderLightKind::Spot;
+}
+
+// Reach under this share of the distance covers too few pixels to justify a shadow pass.
+constexpr float kMinimumReachShare = 0.03F;
+constexpr float kIncumbentBonus = 1.25F;
+
 [[nodiscard]] float DistanceSquared(const std::array<float, 3>& a, const std::array<float, 3>& b) noexcept {
     const float dx = a[0] - b[0];
     const float dy = a[1] - b[1];
@@ -50,43 +59,87 @@ constexpr std::uint32_t kHalfQualityLights = 8U;
          : lightCount > kFullQualityLights ? kHalfQualityLights : kFullQualityLights;
 }
 
+// Gives each selected light a row of the atlas: a light that had one keeps it, a new light takes the lowest free
+// one, and a row whose light left is freed. Returns the row of each selected light and, through `rowCount`, the
+// highest row in use + 1.
+[[nodiscard]] std::array<std::uint32_t, ScenePointShadowBinding::kMaxLights> AssignRows(
+    const PointShadowLightSelection& selection,
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights>& owners,
+    std::uint32_t& rowCount) noexcept {
+    constexpr std::uint32_t kNoRow = ScenePointShadowBinding::kMaxLights;
+    const std::span<const std::uint64_t> selected{ selection.entityIds.data(), selection.count };
+    for (std::uint64_t& owner : owners) {
+        if (owner != 0U && std::ranges::find(selected, owner) == selected.end()) owner = 0U;
+    }
+    std::array<std::uint32_t, ScenePointShadowBinding::kMaxLights> rows{};
+    for (std::uint32_t index = 0U; index < selection.count; ++index) {
+        const auto found = std::ranges::find(owners, selection.entityIds[index]);
+        rows[index] = found == owners.end() ? kNoRow : static_cast<std::uint32_t>(found - owners.begin());
+    }
+    for (std::uint32_t index = 0U; index < selection.count; ++index) {
+        if (rows[index] != kNoRow) continue;
+        const auto freeRow = std::ranges::find(owners, 0U);
+        rows[index] = static_cast<std::uint32_t>(freeRow - owners.begin());
+        *freeRow = selection.entityIds[index];
+    }
+    rowCount = 0U;
+    for (std::uint32_t index = 0U; index < selection.count; ++index) rowCount = std::max(rowCount, rows[index] + 1U);
+    return rows;
+}
+
 } // namespace
 
 PointShadowLightSelection PointShadowPassPlanner::Select(
     const RenderScene& renderScene,
     const std::array<float, 3>* cameraPosition,
-    std::uint32_t cameraCullingMask) noexcept {
+    std::uint32_t cameraCullingMask,
+    const SceneRenderLightingConfig& config,
+    const std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights>* incumbents) noexcept {
     struct Candidate {
+        float importance = 0.0F;
         float distanceSquared = 0.0F;
         std::uint64_t entityId = 0U;
         const LightRenderProxyDesc* light = nullptr;
     };
     std::array<Candidate, ScenePointShadowBinding::kMaxLights> best{};
+    const std::uint32_t capacity = std::min(config.pointShadowMaxLights, ScenePointShadowBinding::kMaxLights);
     std::uint32_t count = 0U;
     std::uint32_t eligible = 0U;
     const std::array<float, 3> origin{};
     const std::array<float, 3>& reference = cameraPosition != nullptr ? *cameraPosition : origin;
     for (const auto& [entityId, proxy] : renderScene.LightProxies()) {
         const LightRenderProxyDesc& light = proxy.desc;
-        if (!CastsPointShadow(light) || (light.layer & cameraCullingMask) == 0U) {
+        if (!CastsPointShadow(light) || (light.layer & cameraCullingMask) == 0U ||
+            (!config.pointShadowCubeEnabled && UsesCubeShadow(light))) {
+            continue;
+        }
+        const float distanceSquared = DistanceSquared(light.position, reference);
+        const float reach = light.range;
+        if (reach * reach < kMinimumReachShare * kMinimumReachShare * distanceSquared) {
             continue;
         }
         ++eligible;
-        const Candidate candidate{ DistanceSquared(light.position, reference), entityId, &light };
-        const auto closer = [](const Candidate& lhs, const Candidate& rhs) noexcept {
+        // Inside a quarter of its reach a light fills the view; beyond, its share falls with the distance.
+        const float distance = std::max(std::sqrt(distanceSquared), 0.25F * reach);
+        const float coverage = reach / distance;
+        const float radiance = std::max({ light.color[0], light.color[1], light.color[2] }) * light.intensity;
+        const bool held = incumbents != nullptr && std::ranges::find(*incumbents, entityId) != incumbents->end();
+        const Candidate candidate{ radiance * coverage * coverage * (held ? kIncumbentBonus : 1.0F), distanceSquared, entityId, &light };
+        const auto better = [](const Candidate& lhs, const Candidate& rhs) noexcept {
+            if (lhs.importance != rhs.importance) return lhs.importance > rhs.importance;
             return lhs.distanceSquared != rhs.distanceSquared ? lhs.distanceSquared < rhs.distanceSquared
                                                               : lhs.entityId < rhs.entityId;
         };
         std::uint32_t position = count;
-        if (count < ScenePointShadowBinding::kMaxLights) {
+        if (count < capacity) {
             ++count;
-        } else if (closer(candidate, best[count - 1U])) {
+        } else if (count != 0U && better(candidate, best[count - 1U])) {
             position = count - 1U;
         } else {
             continue;
         }
         best[position] = candidate;
-        while (position > 0U && closer(best[position], best[position - 1U])) {
+        while (position > 0U && better(best[position], best[position - 1U])) {
             std::swap(best[position], best[position - 1U]);
             --position;
         }
@@ -114,26 +167,36 @@ PointShadowSetup PointShadowPassPlanner::Build(
     const SceneRenderLightingConfig& lightingConfig,
     const std::array<float, 3>* cameraPosition,
     std::uint32_t cameraCullingMask,
-    bgfx::TextureHandle depthTexture) noexcept {
+    bgfx::TextureHandle depthTexture,
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights>& rowOwners) noexcept {
     PointShadowSetup setup{};
     if (!lightingConfig.shadowsEnabled) {
         return setup;
     }
-    const PointShadowLightSelection selection = Select(renderScene, cameraPosition, cameraCullingMask);
+    const PointShadowLightSelection selection = Select(renderScene, cameraPosition, cameraCullingMask, lightingConfig, &rowOwners);
     setup.droppedLights = selection.droppedCount;
     if (selection.count == 0U) {
+        rowOwners.fill(0U);
         return setup;
     }
 
+    std::uint32_t rowCount = 0U;
+    auto rows = AssignRows(selection, rowOwners, rowCount);
+    if (TileSizeFor(lightingConfig, rowCount) != TileSizeFor(lightingConfig, selection.count)) {
+        // Rows left empty by lights that went away would force smaller tiles than these lights need.
+        rowOwners.fill(0U);
+        rows = AssignRows(selection, rowOwners, rowCount);
+    }
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
-    setup.tileSize = TileSizeFor(lightingConfig, selection.count);
+    setup.tileSize = TileSizeFor(lightingConfig, rowCount);
     setup.atlasWidth = setup.tileSize * ScenePointShadowBinding::kFaceCount;
-    setup.atlasHeight = setup.tileSize * AtlasRows(selection.count);
-    setup.lightCount = selection.count;
+    setup.atlasHeight = setup.tileSize * AtlasRows(rowCount);
+    setup.lightCount = rowCount;
+    setup.selectedLights = selection.count;
 
     ScenePointShadowBinding& binding = setup.binding;
     binding.depthTexture = depthTexture;
-    binding.lightCount = selection.count;
+    binding.lightCount = rowCount;
     binding.strength = std::clamp(lightingConfig.shadowStrength, 0.0F, 1.0F);
     const float tanHalfFov = std::tan(bx::toRad(kFaceFovDegrees * 0.5F));
     binding.atlas = {
@@ -142,25 +205,28 @@ PointShadowSetup PointShadowPassPlanner::Build(
         static_cast<float>(setup.tileSize),
         tanHalfFov,
     };
-    for (std::uint32_t slot = 0U; slot < selection.count; ++slot) {
-        const LightRenderProxyDesc& light = *selection.lights[slot];
+    for (std::uint32_t index = 0U; index < selection.count; ++index) {
+        const std::uint32_t slot = rows[index];
+        const LightRenderProxyDesc& light = *selection.lights[index];
         const float far = std::max(light.range, 0.1F);
         const float near = std::clamp(far * 0.002F, 0.02F, 0.25F);
-        binding.entityId[slot] = selection.entityIds[slot];
+        binding.entityId[slot] = selection.entityIds[index];
         binding.positionRange[slot * 4U + 0U] = light.position[0];
         binding.positionRange[slot * 4U + 1U] = light.position[1];
         binding.positionRange[slot * 4U + 2U] = light.position[2];
         binding.positionRange[slot * 4U + 3U] = far;
         binding.depthParams[slot * 4U + 0U] = near;
-        binding.depthParams[slot * 4U + 1U] = std::max(lightingConfig.shadowDepthBias * 10.0F, 0.01F);
+        binding.depthParams[slot * 4U + 1U] = std::max(light.shadowBias > 0.0F ? light.shadowBias : lightingConfig.shadowDepthBias, 0.0F);
         // An area light's shadows soften with its size (its width and Height):
         // the radius of a disc of the same area.
         const bool area = light.kind == RenderLightKind::AreaRect || light.kind == RenderLightKind::AreaDisk ||
             light.kind == RenderLightKind::Tube;
         binding.depthParams[slot * 4U + 2U] = std::max(light.sourceRadius,
             area ? 0.5F * std::sqrt(std::max(light.areaWidth * light.areaHeight, 0.0F)) : 0.0F);
-        binding.lightStrength[slot] = std::clamp(light.shadowStrength, 0.0F, 1.0F);
-        setup.staticLight[slot] = light.staticMobility;
+        binding.lightParams[slot * 4U + 0U] = std::clamp(light.shadowStrength, 0.0F, 1.0F);
+        binding.lightParams[slot * 4U + 1U] = std::max(light.shadowNormalBias > 0.0F ? light.shadowNormalBias : lightingConfig.shadowNormalBias, 0.0F);
+        binding.lightParams[slot * 4U + 2U] = static_cast<float>(light.shadowFilter == RenderLightShadowFilter::Hard ? 1
+            : light.shadowFilter == RenderLightShadowFilter::Pcf ? 2 : light.shadowFilter == RenderLightShadowFilter::Pcss ? 3 : 0);
         const bx::Vec3 eye{ light.position[0], light.position[1], light.position[2] };
         if (light.kind == RenderLightKind::Spot) {
             const auto axis = SceneLightShaderData::Pack(light).texels[0];

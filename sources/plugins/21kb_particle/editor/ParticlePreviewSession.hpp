@@ -73,6 +73,8 @@ private:
     float orbitPitchDegrees_ = 12.0F;
     float cameraDistance_ = 5.0F;
     bool orbitDragging_ = false;
+    bool requiresGpu_ = false;
+    bool deferredRestart_ = false;
     int orbitLastX_ = 0;
     int orbitLastY_ = 0;
 };

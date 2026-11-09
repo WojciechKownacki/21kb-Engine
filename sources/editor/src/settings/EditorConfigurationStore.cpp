@@ -52,6 +52,8 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
     result.configuration.saving.autosaveIntervalMinutes =
         static_cast<std::uint32_t>(std::clamp<std::int64_t>(minutes, 1, 120));
 
+    result.configuration.profiler = ProfilerSelection::Read(document);
+
     // One key per panel, named by its id, so a panel this build does not know about
     // is simply not restored rather than dropped from the file.
     for (const auto& [key, value] : document.SectionEntries(kPanels)) {
@@ -92,6 +94,7 @@ bool EditorConfigurationStore::Save(
     document.SetBool(kSaving, "Autosave", configuration.saving.autosaveEnabled);
     document.SetInt(kSaving, "AutosaveIntervalMinutes",
         static_cast<std::int64_t>(std::clamp<std::uint32_t>(configuration.saving.autosaveIntervalMinutes, 1U, 120U)));
+    configuration.profiler.Write(document);
     for (const EditorPanelSession& session : configuration.panels) {
         if (session.panelId == 0U) {
             continue;

@@ -1,4 +1,6 @@
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "scene/SceneIblConfigResolver.hpp"
+#include "scene/submit/SceneMeshCoverageProbe.hpp"
 
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/Scene.hpp"
@@ -45,7 +47,7 @@ namespace {
         .editorPreviewKeyLightDirection = requested.editorPreviewKeyLightDirection != defaultConfig.editorPreviewKeyLightDirection ? requested.editorPreviewKeyLightDirection : fallback.editorPreviewKeyLightDirection,
         .editorPreviewKeyLightColor = requested.editorPreviewKeyLightColor != defaultConfig.editorPreviewKeyLightColor ? requested.editorPreviewKeyLightColor : fallback.editorPreviewKeyLightColor,
         .editorPreviewKeyLightIntensity = requested.editorPreviewKeyLightIntensity != defaultConfig.editorPreviewKeyLightIntensity ? requested.editorPreviewKeyLightIntensity : fallback.editorPreviewKeyLightIntensity,
-        .ibl = requested.ibl.HasEnvironment() || requested.ibl.reflectionProbeCount != 0U ? requested.ibl : fallback.ibl,
+        .ibl = ResolveSceneIblConfig(requested.ibl, fallback.ibl),
         .globalIllumination = requested.globalIllumination != defaultConfig.globalIllumination ? requested.globalIllumination : fallback.globalIllumination,
         .giIntensity = requested.giIntensity != defaultConfig.giIntensity ? requested.giIntensity : fallback.giIntensity,
         .giRange = requested.giRange != defaultConfig.giRange ? requested.giRange : fallback.giRange,
@@ -62,14 +64,18 @@ namespace {
         .shadowAtlasSize = requested.shadowAtlasSize != defaultConfig.shadowAtlasSize ? requested.shadowAtlasSize : fallback.shadowAtlasSize,
         .shadowDistance = requested.shadowDistance != defaultConfig.shadowDistance ? requested.shadowDistance : fallback.shadowDistance,
         .shadowDepthBias = requested.shadowDepthBias != defaultConfig.shadowDepthBias ? requested.shadowDepthBias : fallback.shadowDepthBias,
+        .shadowNormalBias = requested.shadowNormalBias != defaultConfig.shadowNormalBias ? requested.shadowNormalBias : fallback.shadowNormalBias,
         .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
         .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
+        .pointShadowMaxLights = requested.pointShadowMaxLights != defaultConfig.pointShadowMaxLights ? requested.pointShadowMaxLights : fallback.pointShadowMaxLights,
+        .pointShadowCubeEnabled = requested.pointShadowCubeEnabled != defaultConfig.pointShadowCubeEnabled ? requested.pointShadowCubeEnabled : fallback.pointShadowCubeEnabled,
         .shadowCascadeBlend = requested.shadowCascadeBlend != defaultConfig.shadowCascadeBlend ? requested.shadowCascadeBlend : fallback.shadowCascadeBlend,
         .shadowsEnabled = requested.shadowsEnabled != defaultConfig.shadowsEnabled ? requested.shadowsEnabled : fallback.shadowsEnabled,
         .stableShadowCascades = requested.stableShadowCascades != defaultConfig.stableShadowCascades ? requested.stableShadowCascades : fallback.stableShadowCascades,
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .fogProfile = requested.fogProfile != defaultConfig.fogProfile ? requested.fogProfile : fallback.fogProfile,
         .fogEnabled = requested.fogEnabled != defaultConfig.fogEnabled ? requested.fogEnabled : fallback.fogEnabled,
         .fogDensity = requested.fogDensity != defaultConfig.fogDensity ? requested.fogDensity : fallback.fogDensity,
         .fogHeightFalloff = requested.fogHeightFalloff != defaultConfig.fogHeightFalloff ? requested.fogHeightFalloff : fallback.fogHeightFalloff,
@@ -109,6 +115,22 @@ namespace {
 
 SceneRenderer::SceneRenderer() = default;
 
+void SceneRenderer::SetMeshCoverageEnabled(bool enabled) noexcept {
+    if (meshCoverage_) meshCoverage_->SetEnabled(enabled);
+}
+
+void SceneRenderer::BeginMeshCoverageFrame(std::uint64_t frame) {
+    if (meshCoverage_) meshCoverage_->BeginFrame(frame);
+}
+
+void SceneRenderer::EndMeshCoverageFrame() {
+    if (meshCoverage_) meshCoverage_->EndFrame();
+}
+
+SceneMeshCoverageMetric SceneRenderer::LastMeshCoverage() const noexcept {
+    return meshCoverage_ ? meshCoverage_->Last() : SceneMeshCoverageMetric{};
+}
+
 SceneRenderer::~SceneRenderer() {
     Shutdown();
 }
@@ -134,12 +156,19 @@ bool SceneRenderer::Initialize(std::uint64_t particleBufferBudgetBytes) {
         meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
     meshSubmitter_->SetSkinningPaletteAllocator(&skinningPalettes_);
+    meshCoverage_ = std::make_unique<SceneMeshCoverageProbe>();
+    meshSubmitter_->SetCoverageProbe(meshCoverage_.get());
+    particleRenderer_->SetCoverageProbe(meshCoverage_.get());
 
     initialized_ = true;
     return true;
 }
 
 void SceneRenderer::Shutdown() {
+    if (meshCoverage_ != nullptr) {
+        meshCoverage_->Shutdown();
+        meshCoverage_.reset();
+    }
     if (particleRenderer_ != nullptr) {
         particleRenderer_->Shutdown();
         particleRenderer_.reset();
@@ -208,6 +237,7 @@ void SceneRenderer::SubmitMeshPass(
     std::span<const std::uint64_t> selectedEntityIds,
     const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride,
     bool terrainLayersOnly) const {
+    if (meshCoverage_) meshCoverage_->BeginPass(pass, viewportWidth, viewportHeight, viewId);
     lastSubmitStats_ = SceneRenderSubmitStats{};
     lastDiagnostics_.Clear();
     const SceneRenderDrawBudget effectiveDrawBudget = ResolveDrawBudget(drawBudget, defaultDrawBudget_);

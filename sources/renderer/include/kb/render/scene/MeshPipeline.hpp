@@ -63,6 +63,8 @@ struct MeshDrawCommand {
     // `instances` then holds one placeholder that only identifies the source.
     bgfx::DynamicVertexBufferHandle gpuInstanceBuffer = BGFX_INVALID_HANDLE;
     std::uint32_t gpuInstanceCount = 0U;
+    bool gpuFrustumCull = false;
+    bool gpuMeshletDraw = false;
     // Nonzero only for a successfully validated, retained instance list.
     std::uint64_t instanceRevision = 0U;
     std::uint64_t sourceBatchId = 0U;
@@ -92,6 +94,10 @@ struct MeshPipelineBuildDesc {
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
     bool terrainLayersOnly = false;
     SceneMeshBatchCommandCache* batchCommandCache = nullptr;
+    // The motion frame (RenderScene::MotionFrame) a MotionVectors pass is built for: only instances with
+    // motion of their own are drawn, the rest keep the camera motion the full-screen pass derives from depth.
+    // 0 draws every instance.
+    std::uint64_t motionFrame = 0U;
 };
 
 struct MeshCommandLookupKey {

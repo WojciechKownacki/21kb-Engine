@@ -19,6 +19,8 @@ class Scene;
 
 namespace kb::render {
 
+class SceneMeshCoverageProbe;
+
 struct ParticleGpuSubmitResult {
     bool succeeded = false;
     std::uint32_t drawCalls = 0U;
@@ -33,6 +35,7 @@ enum class ParticleVolumetricQuality : std::uint8_t { Low, High };
 
 class ParticleGpuRenderer final {
 public:
+    void SetCoverageProbe(SceneMeshCoverageProbe* probe) noexcept { coverageProbe_ = probe; stripRenderer_.SetCoverageProbe(probe); }
     [[nodiscard]] bool Initialize(std::uint64_t particleBufferBudgetBytes = 0U);
     void Shutdown() noexcept;
     void Warmup(std::uint32_t particleCapacity);
@@ -110,6 +113,7 @@ public:
     [[nodiscard]] const ParticleRenderBatchBuildResult& LastBuild() const noexcept;
 
 private:
+    SceneMeshCoverageProbe* coverageProbe_ = nullptr;
     ParticleRenderBatcher batcher_;
     ParticleStripRenderer stripRenderer_;
     ParticleGpuVisualSimulation visualSimulation_;

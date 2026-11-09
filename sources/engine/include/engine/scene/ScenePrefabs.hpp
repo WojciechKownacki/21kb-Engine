@@ -109,6 +109,8 @@ public:
     [[nodiscard]] std::filesystem::path SourcePath(ScenePrefabHandle handle) const;
     // The prefab already loaded from the asset file at `path`, without loading it.
     [[nodiscard]] ScenePrefabHandle FindLoaded(const std::filesystem::path& path) const;
+    // Update a loaded prefab after its file was successfully relocated.
+    void RelocateSource(const std::filesystem::path& previous, const std::filesystem::path& current);
     // Whether `prefab` is `used`, a variant of it, or contains it as a nested prefab, at any depth.
     [[nodiscard]] bool UsesPrefab(ScenePrefabHandle prefab, ScenePrefabHandle used) const;
     [[nodiscard]] ScenePrefabAssetType AssetType(ScenePrefabHandle handle) const noexcept;

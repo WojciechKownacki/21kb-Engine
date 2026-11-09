@@ -751,12 +751,8 @@ struct RandomStreamIntRangeResult {
 // be empty).
 [[nodiscard]] RandomStreamIntRangeResult NextIntRange(RandomStream stream, std::int32_t min, std::int32_t max) noexcept;
 
-// Fisher-Yates shuffle, in place. Native-only (a template over an
-// arbitrary C++ type, `std::span` never crosses the script boundary) —
-// LIB-051's "shuffle" requirement is met here for native callers; a
-// script-facing Math.Shuffle needs a script-visible collection type
-// (Array<T>, LIB-058, not implemented yet) to shuffle, so that surface is
-// intentionally deferred rather than faked with a 0-or-1-element stand-in.
+// Fisher-Yates shuffle, in place, for native callers. This std::span template
+// is independent of the collection API and has no script Math.Shuffle binding.
 template <typename T>
 [[nodiscard]] RandomStream Shuffle(std::span<T> items, RandomStream stream) noexcept {
     for (std::size_t i = items.size(); i > 1U; --i) {
@@ -967,14 +963,8 @@ struct Gradient {
 // own buffer, the same way SceneAssetBinaryIO's own helpers are meant to
 // be reused generically.
 //
-// A full standalone IAssetLoader-registered "load a .curve file" asset
-// type is intentionally NOT implemented here: nothing in the engine
-// consumes a top-level Curve/Gradient asset yet (no particle system,
-// animation curve field, etc. exists to reference one) — building that
-// loader/registration chain now would be speculative infrastructure with
-// zero real callers, which this codebase's own rules forbid. Deterministic
-// evaluation and a real byte-level round-trip are what LIB-053 asks for;
-// wiring a specific consumer's IAssetLoader is that future consumer's job.
+// These codecs operate on embedded values; they do not register standalone
+// Curve or Gradient assets with IAssetLoader.
 [[nodiscard]] std::vector<std::uint8_t> Serialize(const Curve& curve);
 [[nodiscard]] bool Deserialize(std::span<const std::uint8_t> bytes, Curve& outCurve);
 

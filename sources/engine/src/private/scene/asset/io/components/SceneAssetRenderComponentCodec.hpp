@@ -13,7 +13,7 @@ class SceneAssetRenderComponentCodec final {
 public:
     SceneAssetRenderComponentCodec() = delete;
 
-    [[nodiscard]] static bool ReadMeshRenderer(SceneAssetBinaryIO::ByteReader& input, MeshRendererComponent& output);
+    [[nodiscard]] static bool ReadMeshRenderer(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, MeshRendererComponent& output);
     static void WriteMeshRenderer(std::vector<std::uint8_t>& output, const MeshRendererComponent& meshRenderer);
 
     [[nodiscard]] static bool ReadLight(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, LightComponent& output);

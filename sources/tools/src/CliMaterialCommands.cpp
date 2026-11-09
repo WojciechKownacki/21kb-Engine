@@ -11,6 +11,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -196,6 +198,25 @@ std::string ApplyBuiltinField(
     const auto field = std::find_if(kFields.begin(), kFields.end(),
         [&](const MaterialField& candidate) { return Normalized(candidate.name) == wanted; });
     if (field == kFields.end()) {
+        const auto& schema = kb::render::GetBuiltInPbrMaterialTypeSchema();
+        const auto parameter = std::find_if(schema.parameters.begin(), schema.parameters.end(), [&](const auto& candidate) {
+            return Normalized(candidate.name) == wanted && candidate.runtimeSupport == kb::render::RenderMaterialFeatureSupport::Supported;
+        });
+        if (parameter != schema.parameters.end()) {
+            if (text.find_first_of("\r\n#") != std::string_view::npos) return "Material values must occupy one line.";
+            kb::render::RenderMaterialAssetData candidate;
+            candidate.desc = desc;
+            std::ostringstream serialized;
+            kb::render::RenderMaterialAssetWriter::Write(serialized, candidate);
+            std::string value{text};
+            std::replace(value.begin(), value.end(), ',', ' ');
+            serialized << '\n' << parameter->name << ' ' << value << '\n';
+            std::istringstream input{serialized.str()};
+            const auto parsed = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+            if (!parsed.Succeeded() || !parsed.asset) return parsed.ErrorMessage();
+            desc = parsed.asset->desc;
+            return {};
+        }
         known = false;
         return "the material has no field '" + std::string{ name } + "'; fields: " + BuiltinFieldList();
     }

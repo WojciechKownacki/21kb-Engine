@@ -43,6 +43,21 @@ using kb::particle_editor::ParticleEditorResult;
     std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
     std::optional<std::string> text = kb::scene::ParticleEffectAssetIO::Serialize(asset, diagnostics);
     if (!text.has_value()) return "the effect could not be serialized";
+    // Changing output kind replaces its variant payload. Remove the old variant before
+    // applying explicit fields, so --set order does not discard newly authored values.
+    for (const std::string& spec : specs) {
+        const auto [key, value] = material::SplitSet(spec);
+        if (!key.starts_with("effect.emitter[") || !key.ends_with("].output.type")) continue;
+        const auto typeLine = text->find('\n' + key + ' ');
+        if (typeLine == std::string::npos) continue;
+        const auto start = typeLine + key.size() + 2U;
+        if (text->substr(start, text->find('\n', start) - start) == value) continue;
+        const auto payloadPrefix = '\n' + key.substr(0U, key.size() - 4U) + "payload.";
+        for (auto at = text->find(payloadPrefix); at != std::string::npos; at = text->find(payloadPrefix)) {
+            const auto end = text->find('\n', at + 1U);
+            text->erase(at, end == std::string::npos ? std::string::npos : end - at);
+        }
+    }
     for (const std::string& spec : specs) {
         const auto [key, value] = material::SplitSet(spec);
         if (key.empty()) return "--set takes key=value, got '" + spec + "'";

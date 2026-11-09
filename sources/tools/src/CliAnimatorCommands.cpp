@@ -15,6 +15,7 @@
 #include <charconv>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,9 +39,10 @@ using kb::scene::AnimatorParameterType;
 using kb::scene::AnimatorTransitionCondition;
 
 constexpr std::string_view kUsage =
-    "usage: kb_cli animator <new|show|check|param|state|transition|locomotion> --project <dir> ...\n"
+    "usage: kb_cli animator <new|show|check|retarget|param|state|transition|locomotion> --project <dir> ...\n"
     "  new         --name <Name> --clip <clip> [--clip ...] [--folder Assets/Animation]\n"
     "  show|check  --controller <path> [--character <.kbskeletalmesh>]  (check: can that character play every clip?)\n"
+    "  retarget    --clip <clip> --character <skeleton or mesh> --name <Name> [--profile <file>] [--save-profile <file>]\n"
     "  param       add|remove --controller <path> --name <Name> [--type float|int|bool|trigger] [--default <value>]\n"
     "  state       add|remove|default --controller <path> --name <State> [--clip <clip> | --blend <FloatParameter>\n"
     "              --child <threshold>=<clip> ...] [--layer <Layer>]\n"
@@ -363,6 +365,78 @@ void PrintController(const Session& session, std::ostream& out) {
     const int saved = Save(session, "created", io);
     if (saved == 0) PrintController(session, io.out);
     return saved;
+}
+
+[[nodiscard]] int Retarget(const ArgumentList& arguments, CommandIo io) {
+    Session session;
+    if (!OpenProject(session, arguments, io)) return 1;
+    const auto clipPath = arguments.Option("--clip");
+    const auto targetPath = arguments.Option("--character");
+    const auto name = arguments.Option("--name");
+    if (!clipPath || !targetPath || !name || !kb::assets::AssetFileNameError(*name).empty()) {
+        io.err << "error: animator retarget requires --clip <clip> --character <skeleton or mesh> --name <Name>\n";
+        return 1;
+    }
+    auto& registry = session.scene.Assets().Manager().Registry();
+    const auto* clipMetadata = FindAssetByFlexiblePath(registry, kb::assets::Utf8Path(*clipPath));
+    const auto* targetMetadata = FindAssetByFlexiblePath(registry, kb::assets::Utf8Path(*targetPath));
+    if (targetMetadata && targetMetadata->type == kb::scene::kSkeletalMeshAssetType) {
+        const auto binding = kb::scene::SkeletalMeshAssetIO::LoadBinding(targetMetadata->physicalPath);
+        targetMetadata = binding ? registry.Find(kb::assets::AssetId{binding->skeletonAssetId}) : nullptr;
+    }
+    if (!clipMetadata || clipMetadata->type != kb::scene::kAnimationClipAssetType ||
+        !targetMetadata || targetMetadata->type != kb::scene::kSkeletonAssetType) {
+        io.err << "error: source clip or target skeleton is missing\n";
+        return 1;
+    }
+    const auto clip = kb::scene::AnimationAssetIO::LoadClip(clipMetadata->physicalPath);
+    const auto target = kb::scene::SkeletonAssetIO::Load(targetMetadata->physicalPath);
+    const auto* sourceMetadata = clip ? registry.Find(kb::assets::AssetId{clip->targetSkeletonAssetId}) : nullptr;
+    const auto source = sourceMetadata && sourceMetadata->type == kb::scene::kSkeletonAssetType
+        ? kb::scene::SkeletonAssetIO::Load(sourceMetadata->physicalPath) : std::nullopt;
+    if (!clip || !source || !target) {
+        io.err << "error: clip and both valid skeletons are required\n";
+        return 1;
+    }
+    auto profile = kb::scene::MakeAnimationRetargetProfile(*source, *target);
+    if (const auto path = arguments.Option("--profile")) {
+        const auto file = kb::assets::Utf8Path(*path);
+        std::error_code fileError;
+        const auto size = std::filesystem::file_size(file, fileError);
+        if (fileError || size > 1024U * 1024U) {
+            io.err << "error: retarget profile is unavailable or oversized\n";
+            return 1;
+        }
+        std::ifstream input(file, std::ios::binary);
+        const std::string text{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        const auto parsed = kb::scene::ParseAnimationRetargetProfile(text);
+        if (!parsed) { io.err << "error: malformed retarget profile\n"; return 1; }
+        profile = *parsed;
+    }
+    kb::scene::AnimationRetargetReport report;
+    std::string error;
+    const auto result = kb::scene::RetargetAnimationClip(*clip, *source, *target, targetMetadata->id.value,
+        kb::scene::SkeletonCompatibilitySignature(*target), profile, &report, &error);
+    if (!result) { io.err << "error: " << error << '\n'; return 1; }
+    const auto folder = kb::assets::ResolveProjectAssetFolder(session.projectRoot,
+        arguments.Option("--folder").value_or("Assets/Animation"));
+    if (!folder.error.empty()) { io.err << "error: " << folder.error << '\n'; return 1; }
+    const auto output = folder.folder / kb::assets::Utf8Path(*name + ".kbanim");
+    if (std::filesystem::exists(output)) { io.err << "error: output clip already exists\n"; return 1; }
+    std::error_code directoryError;
+    std::filesystem::create_directories(folder.folder, directoryError);
+    if (directoryError || !kb::scene::AnimationAssetIO::SaveClip(output, *result)) {
+        io.err << "error: cannot save retargeted clip: " << error << '\n'; return 1;
+    }
+    if (const auto path = arguments.Option("--save-profile")) {
+        std::ofstream profileOutput(kb::assets::Utf8Path(*path), std::ios::binary);
+        profileOutput << kb::scene::SerializeAnimationRetargetProfile(profile);
+        profileOutput.close();
+        if (!profileOutput) { io.err << "error: clip saved but profile could not be saved\n"; return 1; }
+    }
+    io.out << folder.virtualPath << '/' << *name << ".kbanim: mapped " << report.mappedBones << '/' << report.targetBones
+        << ", travel x" << report.translationScale << '\n';
+    return 0;
 }
 
 [[nodiscard]] int Check(const ArgumentList& arguments, CommandIo io) {
@@ -718,6 +792,7 @@ int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string command = positionals.empty() ? std::string{} : positionals.front();
     if (command == "new") return New(arguments, io);
     if (command == "check") return Check(arguments, io);
+    if (command == "retarget") return Retarget(arguments, io);
     if (command == "param") return Param(arguments, io);
     if (command == "state") return State(arguments, io);
     if (command == "transition") return Transition(arguments, io);

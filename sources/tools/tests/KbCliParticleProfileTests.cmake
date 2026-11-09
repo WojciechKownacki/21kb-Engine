@@ -126,6 +126,21 @@ string(JSON succeeded GET "${report}" succeeded)
 if(succeeded)
     message(FATAL_ERROR "Failed strict GPU profile reported success")
 endif()
+cli(vfx-set --project "${project}" --effect /Game/Particles/Probe.kbvfx
+    --set effect.emitter[0].maxParticles=2 --set effect.emitter[0].spawn.rate.key[0].value=600)
+cli(vfx-profile --project "${project}" --effect /Game/Particles/Probe.kbvfx --warmup 0 --frames 8 --samples 8)
+string(JSON live GET "${last_output}" emitters 0 cpu_render_record_count)
+string(JSON capacity GET "${last_output}" emitters 0 rejected_by_capacity)
+string(JSON spawn GET "${last_output}" emitters 0 rejected_by_spawn_budget)
+string(JSON events GET "${last_output}" emitters 0 rejected_by_event_budget)
+string(JSON dropped GET "${last_output}" emitters 0 dropped_particle_count)
+string(JSON ceiling GET "${last_output}" configured_cpu_particle_limit)
+string(JSON basis GET "${last_output}" configured_limit_basis)
+if(NOT live EQUAL 2 OR NOT capacity EQUAL 10 OR NOT dropped EQUAL 10 OR NOT spawn EQUAL 0 OR NOT events EQUAL 0
+    OR NOT ceiling EQUAL 262144 OR NOT basis STREQUAL "capacity ceiling, not measured throughput")
+    message(FATAL_ERROR "CPU capacity overflow telemetry or configured-limit meaning is incorrect: ${last_output}")
+endif()
+file(WRITE "${project}/overflow-report.json" "${last_output}")
 foreach(invalid IN ITEMS "--frames;0" "--frames;-1" "--frames;36001" "--samples;0" "--samples;4097"
     "--warmup;bad" "--backend;noop" "--unknown;1" "--quiet" "--frames;1;--frames;2" "--gpu-buffer-budget;-1" "--gpu-buffer-budget;18446744073709551615")
     execute_process(COMMAND "${CLI}" vfx-profile --project "${project}" --effect /Game/Particles/Probe.kbvfx ${invalid}

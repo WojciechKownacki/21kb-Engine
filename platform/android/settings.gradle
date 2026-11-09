@@ -16,3 +16,17 @@ dependencyResolutionManagement {
 
 rootProject.name = "21kb-Android"
 include(":app")
+
+def assetDelivery = providers.gradleProperty("kbAssetDelivery").orElse("false").get()
+if (!(assetDelivery in ["true", "false"])) {
+    throw new GradleException("kbAssetDelivery must be true or false")
+}
+if (assetDelivery == "true") {
+    include(":runtimeassets")
+    // The asset-pack plugin reads src/main/assets relative to its project.
+    // Keep the generated payload beneath build rather than in source control.
+    def generatedModule = file("build/generated/runtimeassets")
+    generatedModule.mkdirs()
+    project(":runtimeassets").projectDir = generatedModule
+    project(":runtimeassets").buildFileName = "../../../runtimeassets/build.gradle"
+}

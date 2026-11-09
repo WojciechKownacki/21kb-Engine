@@ -15,6 +15,7 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--plugin", type=Path, action="append", required=True)
     parser.add_argument("--runtime-dll", type=Path, action="append", default=[])
+    parser.add_argument("--editor", type=Path)
     args = parser.parse_args()
     assert os.name == "nt", "This package test requires the Windows host"
     ctypes.windll.kernel32.SetErrorMode(1 | 2 | 0x8000)
@@ -23,10 +24,10 @@ def main():
     project, package = root / "Sample", root / "Package"
     history = []
 
-    def run(executable, *tail, expected=0, cwd=root, input_text=None):
+    def run(executable, *tail, expected=0, cwd=root, input_text=None, env=None):
         result = subprocess.run([str(executable), *map(str, tail)], cwd=cwd,
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
-            creationflags=subprocess.CREATE_NO_WINDOW, input=input_text)
+            creationflags=subprocess.CREATE_NO_WINDOW, input=input_text, env=env)
         history.append(dict(command=list(map(str, [executable, *tail])), exitCode=result.returncode,
             stdout=result.stdout, stderr=result.stderr))
         (root / "commands.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
@@ -40,18 +41,34 @@ def main():
     run(args.cli, "entity", "add", "--project", project, "--create", "Camera", "--name", "MainCamera")
     run(args.cli, "entity", "add", "--project", project, "--name", "NativeHost")
     run(args.cli, "script-new", "--project", project, "--name", "NativeProbe", "--language", "cpp")
+    guide = run(args.cli, "api", "--project", project, "--topic", "NativeAuthoring")
+    assert 'context->GetScene().Transforms()' in guide and 'Transform.SetPosition' in guide
+    source = project / "Source/NativeScripts/NativeProbe/NativeProbe.cpp"
+    text = source.read_text(encoding="utf-8")
+    text = text.replace('#include <array>', '#include "engine/scene/SceneTransforms.hpp"\n#include <array>')
+    text = text.replace('        const std::array arguments{',
+        '        auto transform = context->GetScene().Transforms().Get(context->Self());\n'
+        '        transform.localPosition.x = 3.0F;\n'
+        '        context->GetScene().Transforms().Set(context->Self(), transform);\n'
+        '        const std::array arguments{')
+    assert 'transform.localPosition.x = 3.0F;' in text
+    source.write_text(text, encoding="utf-8")
     # An unavailable real compiler exercises CMake's toolchain diagnostics through
     # the generated CLI build command, without removing any installed compiler.
-    cmake = project / "Source/NativeScripts/NativeProbe/CMakeLists.txt"
+    # A failed toolchain configure persists its compiler in CMakeCache.txt.
+    # Keep this deliberate failure separate from the positive authoring project.
+    failed_project = root / "CompilerFailure"
+    run(args.cli, "new", "--parent", root, "--name", "CompilerFailure", "--template", "Empty")
+    run(args.cli, "script-new", "--project", failed_project, "--name", "MissingProbe", "--language", "cpp")
+    cmake = failed_project / "Source/NativeScripts/MissingProbe/CMakeLists.txt"
     original_cmake = cmake.read_text(encoding="utf-8")
-    cmake.write_text(original_cmake.replace("project(NativeProbe LANGUAGES CXX)",
+    cmake.write_text(original_cmake.replace("project(MissingProbe LANGUAGES CXX)",
         'set(CMAKE_CXX_COMPILER "kb_missing_cpp_compiler" CACHE FILEPATH "" FORCE)\n'
-        'project(NativeProbe LANGUAGES CXX)'), encoding="utf-8")
-    diagnostic = run(args.cli, "script-build", "--json", "--project", project,
-        "--script", "/Game/Scripts/NativeProbe.native", expected=1)
+        'project(MissingProbe LANGUAGES CXX)'), encoding="utf-8")
+    diagnostic = run(args.cli, "script-build", "--json", "--project", failed_project,
+        "--script", "/Game/Scripts/MissingProbe.native", expected=1)
     assert "kb_missing_cpp_compiler" in diagnostic and "install the C++ compiler, CMake" in diagnostic
     assert "retry script-build" in diagnostic
-    cmake.write_text(original_cmake, encoding="utf-8")
     run(args.cli, "script-build", "--json", "--project", project, "--script", "/Game/Scripts/NativeProbe.native")
     run(args.cli, "scene-attach", "--project", project, "--scene", "/Game/Scenes/Main.21kbscene",
         "--node", "NativeHost", "--script", "/Game/Scripts/NativeProbe.native")
@@ -63,7 +80,46 @@ def main():
     response = json.loads(history[-1]["stdout"])
     assert response["id"] == 1 and not response["result"].get("isError", False)
     assert "NativeProbe ready" in json.dumps(response)
-    source = project / "Source/NativeScripts/NativeProbe/NativeProbe.cpp"
+    if args.editor:
+        run(args.cli, "entity", "add", "--project", project, "--name", "LuaHost")
+        run(args.cli, "script-new", "--project", project, "--name", "LuaProbe", "--language", "lua")
+        (project / "Assets/Scripts/LuaProbe.lua").write_text(
+            'function Ready(self)\n Transform.SetPosition(self.entity, 11, 0, 0)\n Log("LuaProbe ready")\nend\n', encoding="utf-8")
+        run(args.cli, "scene-attach", "--project", project, "--scene", "/Game/Scenes/Main.21kbscene",
+            "--node", "LuaHost", "--script", "/Game/Scripts/LuaProbe.lua")
+        environment = os.environ.copy()
+        environment['LOCALAPPDATA'] = str(root / 'IDE Local')
+        visual_studio = root / 'IDE Visual Studio'
+        # Discovery uses real candidate files; only the final process launch is intercepted.
+        for exe in [Path(environment['LOCALAPPDATA']) / 'Programs/Microsoft VS Code/Code.exe',
+                    visual_studio / 'Common7/IDE/devenv.exe']:
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_bytes(b'controlled launcher fixture')
+        def editor_workflow(value):
+            steps = [dict(op='open_scene', path='Assets/Scenes/Main.21kbscene')]
+            for editor in ['VSCode', 'VisualStudio']:
+                for asset, workspace, filename in [('/Game/Scripts/NativeProbe.native', 'Source/NativeScripts/NativeProbe',
+                            'Source/NativeScripts/NativeProbe/NativeProbe.cpp'),
+                        ('/Game/Scripts/LuaProbe.lua', '.', 'Assets/Scripts/LuaProbe.lua')]:
+                    steps.append(dict(op='verify_external_code_activation', asset=asset, editor=editor,
+                        workspace=workspace, source=filename, visual_studio_installation=str(visual_studio.resolve())))
+            steps += [dict(op='bind_entity', id='native', name='NativeHost'), dict(op='bind_entity', id='lua', name='LuaHost'),
+                dict(op='play'), dict(op='step', frames=3),
+                dict(op='assert_property', entity='native', component='Transform', property='localPosition.x', value=value),
+                dict(op='assert_property', entity='lua', component='Transform', property='localPosition.x', value=11),
+                dict(op='assert_console', contains='NativeProbe ready'), dict(op='assert_console', contains='LuaProbe ready'),
+                dict(op='stop'), dict(op='assert_no_errors')]
+            scenario = root / f'Authoring{value}.json'
+            editor_source = root / f'EditorSource{value}'
+            shutil.copytree(project, editor_source, ignore=shutil.ignore_patterns('Saved'))
+            scenario.write_text(json.dumps(dict(schema='21kb.editor-automation/v1',
+                initial_project=str(next(editor_source.glob('*.21kbproject')).resolve()), steps=steps), indent=2), encoding='utf-8')
+            run(args.editor, '--selftest-scenario', scenario, '--selftest-root', root / f'Editor{value}',
+                '--selftest-task', 'Authoring', env=environment)
+        editor_workflow(3)
+        source.write_text(source.read_text(encoding='utf-8').replace('= 3.0F;', '= 7.0F;'), encoding='utf-8')
+        run(args.cli, "script-build", "--json", "--project", project, "--script", "/Game/Scripts/NativeProbe.native")
+        editor_workflow(7)
     current_source = source.read_text(encoding="utf-8")
     guard = "api->version == kb::script::kNativeScriptPluginApiVersion"
     assert guard in current_source, "Generated modules must check the SDK ABI before registering"
@@ -91,7 +147,8 @@ def main():
     assert not (package / "Source").exists() and not (package / "Assets").exists()
     report = dict(result="PASS", packagedFrames=3, externalModule=True,
         missingCompilerDiagnostic=True, compiledAbiMismatch=True, sourceUnavailable=True,
-        compilerJsonOutput=True, compilerMcpOutput=True)
+        compilerJsonOutput=True, compilerMcpOutput=True, editorAuthoring=bool(args.editor),
+        editorLaunch='controlled' if args.editor else 'not exercised')
     (root / "result.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(dict(**report, artifacts=str(root))))
     return 0

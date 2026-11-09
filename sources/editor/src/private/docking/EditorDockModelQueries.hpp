@@ -12,12 +12,17 @@ namespace kb::editor {
 
 class EditorDockModelQueries {
 public:
-    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId) noexcept;
+    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId, bool drawerCollapsed) noexcept;
+
+    // The drawer is the leaf holding Project Files (with the Console beside it by default); 0
+    // when Project Files is floating or closed.
+    [[nodiscard]] static std::uint32_t DrawerLeafId(const DockPanelCollection& panels, const DockNode* root) noexcept;
+    [[nodiscard]] bool DrawerCollapsed() const noexcept;
 
     [[nodiscard]] const std::vector<DockPanel>& Panels() const noexcept;
     [[nodiscard]] std::vector<DockPanel> PanelsInArea(DockArea area) const;
     [[nodiscard]] const DockPanel* FindPanel(std::uint32_t panelId) const noexcept;
-    [[nodiscard]] DockLayout BuildLayout(int clientWidth, int clientHeight, int menuHeight, int toolbarHeight, int tabStripHeight, int tabMinWidth, int tabWidth, int splitterSize) const;
+    [[nodiscard]] DockLayout BuildLayout(int clientWidth, int clientHeight, int menuHeight, int statusBarHeight, int tabStripHeight, int tabMinWidth, int tabWidth, int splitterSize) const;
     [[nodiscard]] DockHit HitTest(const DockLayout& layout, int x, int y) const;
     [[nodiscard]] std::optional<DockDropPreview> ResolveDropPreview(const DockLayout& layout, int x, int y) const;
     [[nodiscard]] std::uint32_t PanelCountInLeaf(std::uint32_t leafId) const noexcept;
@@ -26,6 +31,7 @@ private:
     const DockPanelCollection& panels_;
     const DockNode* root_ = nullptr;
     std::uint32_t maximizedLeafId_ = 0;
+    bool drawerCollapsed_ = false;
 };
 
 } // namespace kb::editor

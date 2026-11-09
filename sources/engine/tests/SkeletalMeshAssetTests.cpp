@@ -1,4 +1,7 @@
 #include "TestSupport.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/bake/BakeTargetProfile.hpp"
+#include <iostream>
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -228,6 +231,46 @@ void RunSkeletalFbxImportStopsAtMemoryCeilingTest(const std::filesystem::path& r
 } // namespace
 
 namespace kb::tests {
+void WriteImportGoldenFixture(const char* directory) {
+    WriteExtendedSkeletalGltfFixture(std::filesystem::path{directory});
+}
+
+void VerifyImportGoldenPackage(const char* filename) {
+    using namespace kb::scene;
+    auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
+    Require(pack->Mount(filename, kb::assets::bake::WindowsX64BakeTargetProfile()) ==
+            kb::assets::bake::RuntimeAssetPackStatus::Success, "Golden import package did not mount");
+    Scene scene;
+    auto& manager = scene.Assets().Manager();
+    Require(manager.MountRuntimePack(pack), "Golden package manifest did not register");
+    const auto meshes = manager.Registry().ByType(kSkeletalMeshAssetType);
+    const auto skeletons = manager.Registry().ByType(kSkeletonAssetType);
+    const auto clips = manager.Registry().ByType(kAnimationClipAssetType);
+    Require(meshes.size() == 1U && skeletons.size() == 1U && clips.size() == 1U,
+        "Cook did not retain the imported mesh, skeleton and animation");
+    const auto mesh = manager.Load<SkeletalMeshAsset>(meshes.front().id);
+    const auto skeleton = manager.Load<SkeletonAsset>(skeletons.front().id);
+    const auto clip = manager.Load<AnimationClip>(clips.front().id);
+    Require(mesh.IsLoaded() && skeleton.IsLoaded() && clip.IsLoaded(), "Packaged import payloads did not load");
+    Require(mesh->skeletonAssetId == skeletons.front().id.value && skeleton->bones.size() == 2U &&
+            skeleton->bones[1].parentIndex == 0 && mesh->lods.size() == 1U, "Cook changed skeleton hierarchy or binding");
+    const auto& lod = mesh->lods.front();
+    Require(lod.vertices.size() == 3U && lod.indices.size() == 3U && lod.indices[1] == 2U &&
+            NearlyEqual(lod.vertices[1].position.x, -1.0F) && NearlyEqual(lod.vertices[2].position.z, 2.0F) &&
+            lod.vertices[1].jointIndices[0] == 1U && NearlyEqual(lod.vertices[1].jointWeights[0], 1.0F),
+        "Cook changed imported axes, metre units, winding or skin weights");
+    Require(!lod.sections.empty() && lod.sections[0].materialAssetId != 0U &&
+            manager.Registry().Find(kb::assets::AssetId{lod.sections[0].materialAssetId}) != nullptr,
+        "Cook dropped the imported material reference");
+    Require(mesh->morphTargets.size() == 1U && mesh->morphTargets[0].name == "Smile" &&
+            NearlyEqual(mesh->morphTargets[0].deltas[0].positionDelta.z, 0.25F), "Cook changed the imported morph target");
+    Require(NearlyEqual(clip->durationSeconds, 1.0F) && clip->skeletalTracks.size() == 1U &&
+            NearlyEqual(clip->skeletalTracks[0].keyframes[1].transform.position.z, 2.0F) &&
+            clip->morphTracks.size() == 1U && NearlyEqual(clip->morphTracks[0].keyframes[1].weight, 1.0F),
+        "Cook changed skeletal animation or morph weights");
+    std::cout << "import_package_golden axes=PASS units=PASS material=PASS skeleton=PASS morph=PASS animation=PASS\n";
+}
+
 
 // A glTF document with its buffer written beside it: each added array becomes one accessor.
 class GltfFixtureWriter final {
@@ -578,6 +621,14 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset accepted an unsupported schema version without a diagnostic");
     kb::scene::SkeletalMeshAsset invalid=mesh; invalid.lods[0].vertices[0].jointWeights={0,0,0,0};
     Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,"SkeletalMeshAsset accepted zero skin weights");
+    for (const float weight : {-0.5F, 2.0F, std::numeric_limits<float>::infinity(),
+             std::numeric_limits<float>::quiet_NaN()}) {
+        invalid = mesh;
+        invalid.lods[0].vertices[0].jointWeights[0] = weight;
+        const auto validation = kb::scene::ValidateSkeletalMeshAsset(invalid);
+        Require(!validation.valid && !validation.error.empty(),
+            "Invalid skeletal weight must fail with a diagnostic");
+    }
     invalid = mesh;
     invalid.conservativeBounds.extents = { 0.25F, 0.25F, 0.25F };
     Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,
@@ -994,6 +1045,8 @@ void RunSkeletalMeshAssetTests() {
     Require(!scene.Prefabs().CaptureRegistered(persistedGeometryObject, "InvalidExternalPoseSource").IsValid(),
         "Deformed Geometry prefab serialization accepted a non-persistent external pose source");
     mesh.skeletonAssetId = skeletonId.value;
+    // This binding fixture has no material asset; the earlier IO round trip tests nonzero slots.
+    for (auto& bindingLod : mesh.lods) for (auto& section : bindingLod.sections) section.materialAssetId = 0U;
     Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
         "SkeletalMeshAsset could not store the canonical Skeleton id");
     Require(scene.Assets().Discover() == 2U,

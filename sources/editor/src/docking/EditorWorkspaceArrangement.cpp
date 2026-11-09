@@ -28,6 +28,8 @@ EditorLayoutPreset EditorWorkspaceArrangement::Capture(EditorDockModel& dockMode
 bool EditorWorkspaceArrangement::Apply(EditorDockModel& dockModel, const EditorLayoutPreset& preset) {
     const bool treeAccepted =
         preset.tree.empty() || dockModel.Commands().RestoreWorkspace(preset.tree);
+    if (!treeAccepted) return false;
+    if (preset.tree.empty()) dockModel.Commands().ResetWorkspace();
     for (const EditorPanelSession& session : preset.panels) {
         if (session.panelId == kParticleEditorPanelId) {
             continue;
@@ -40,10 +42,17 @@ bool EditorWorkspaceArrangement::Apply(EditorDockModel& dockModel, const EditorL
             if (panel->visible) {
                 static_cast<void>(dockModel.Commands().ClosePanel(session.panelId));
             }
+            if (auto* restored = dockModel.panels_.Find(session.panelId)) {
+                restored->area = session.area;
+                restored->floatingRect = session.floatingRect;
+            }
             continue;
         }
-        if (session.area == DockArea::Floating && panel->area != DockArea::Floating) {
+        if (session.area == DockArea::Floating) {
             dockModel.Commands().UndockPanel(session.panelId, session.floatingRect);
+        } else if (auto* restored = dockModel.panels_.Find(session.panelId)) {
+            restored->area = session.area;
+            restored->floatingRect = session.floatingRect;
         }
     }
     return treeAccepted;

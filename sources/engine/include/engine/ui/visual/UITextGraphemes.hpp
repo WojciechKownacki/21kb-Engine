@@ -6,17 +6,13 @@
 
 namespace kb::scene {
 
-// Grapheme clusters of UTF-8 text: what a player sees as one character, and so what one Backspace erases, one
-// arrow key steps over and one unit of a character limit counts. A cluster is a base character with its
-// combining marks, variation selectors, emoji modifiers and joiners; an emoji joined by U+200D to the next
-// pictograph; a pair of regional indicators (a flag); a Hangul syllable written as its jamo; or a CR LF pair.
-// This follows the rules of Unicode Standard Annex 29 for these cases (not the full tables of every script):
-// text outside them breaks between code points. Invalid UTF-8 is read as single bytes and never crashes.
+// Unicode 17.0.0 extended grapheme clusters (UAX #29), used by editing, selection and character limits.
+// Invalid UTF-8 bytes each form an independent cluster.
 //
 // Offsets are byte offsets into `utf8`. An offset inside a cluster (or inside a code point) is treated as
 // belonging to that cluster.
 
-// Marks that never start a cluster: combining marks, variation selectors, joiners, emoji modifiers, tags.
+// Extend, ZWJ and SpacingMark properties. At the start of text these can form their own cluster.
 [[nodiscard]] bool IsUITextGraphemeExtender(std::uint32_t codepoint) noexcept;
 
 // The end of the cluster that contains `offset` (the next boundary after it); utf8.size() at the end.

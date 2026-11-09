@@ -64,3 +64,12 @@ Existing mechanisms worth retaining: UI presets, Canvas scaling and device previ
 Validation targets: `kb_editor`, `kb_renderer_tests`; targeted renderer CTest `kb_renderer_editor_ui_view`; CTest `kb_editor_ui_component_catalog_headless`, `kb_editor_headless_automation_scenario`, `kb_editor_user_widget_headless`, `kb_editor_ui_anchors_headless`, `kb_editor_particle_authoring_headless`. Reports and screenshots are emitted under `build/SelfTest/<task>/automation/`; generated files are not committed.
 
 Verification outcome: all six targeted CTests passed in their latest relevant runs. The catalog recorded 31 component cases, 199 changed/restored properties, 12 graphics cases and 55 GPU captures. Restoring the old thumbnail implementation deliberately produced `FAIL: Image-AuditPNG: thumbnail aspect ratio or alpha incorrect`; the fixed implementation was restored and rebuilt.
+
+
+## Scripts and CLI checks (2026-11-06)
+
+The audit above covers authoring in the editor; this part covers what an agent working through `kb_cli` gets.
+
+- `kb_cli validate <scene>`, `run` and the cook name UI mistakes that load fine but never work: a widget outside a Canvas (`ui-no-canvas`), a Text without a font (`ui-text-no-font`), a Selectable event name no script answers (`ui-event-no-handler`) and a Button nothing reacts to (`ui-button-no-reaction`). The checks read the saved scene and the project's Lua scripts (`engine/script/UISceneValidation`); scripts that are not Lua are not judged. Covered by `kb_cli_tests ui-validation`.
+- Agent documentation: `api --topic UIEvents` lists the widget callbacks (OnUIClicked and the others) with their `event.args`; `api --topic Text` shows the Text component beside the Text functions; the guide `menus-and-buttons` holds the button-to-script recipe.
+- Not covered: events reach only the script on the clicked object (no bubbling to parents); a script subscribing through `Events.Subscribe` is matched by the event name written in quotes, so a name built at run time is not seen.

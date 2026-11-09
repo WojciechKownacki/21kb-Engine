@@ -61,6 +61,7 @@ public:
 
     // Development hot-reload path: detach currently attached scenes, unload active
     // modules, reload dynamic project plugins, then load and attach again.
+    // Replacement binaries are checked first; rejection preserves the live modules.
     void Reload(kb::ecs::World& world, std::span<kb::scene::Scene*> attachedScenes);
 
     [[nodiscard]] bool IsActive(std::string_view name) const noexcept;
@@ -77,6 +78,11 @@ public:
 private:
     [[nodiscard]] bool IsEnabledByProject(const EngineModuleMetadata& metadata) const;
     void LoadProjectPluginModules();
+    void CollectProjectPluginModules(
+        std::vector<std::unique_ptr<IEngineModule>>& output,
+        std::vector<std::string>& diagnostics,
+        std::vector<std::string>& warnings);
+    void LoadPreparedModules(kb::ecs::World& world);
     void ClearProjectPluginModules() noexcept;
 
     kb::project::ProjectDescriptor project_;

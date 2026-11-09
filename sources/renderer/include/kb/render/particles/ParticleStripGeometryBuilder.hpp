@@ -87,6 +87,8 @@ private:
     std::vector<std::uint16_t> indexScratch_;
     std::vector<ParticleStripDraw> drawScratch_;
     std::uint64_t trailHistoryRevision_ = 0U;
+    std::uint64_t trailHistorySceneId_ = 0U;
+    std::uint64_t trailHistoryBackendEpoch_ = 0U;
 };
 
 } // namespace kb::render

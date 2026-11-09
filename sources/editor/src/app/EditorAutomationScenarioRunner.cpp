@@ -1,4 +1,17 @@
+#include "extensions/EditorExtensionHost.hpp"
+#include "docking/EditorDockModel.hpp"
+#include "engine/assets/AssetFileName.hpp"
+#include "authoring/EditorAuthoringHost.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
+#include "inspection/InspectorGenericComponentModel.hpp"
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
+#include "rendering/BuildGamePanelModel.hpp"
+#include "packaging/EditorProjectPackageService.hpp"
 #include "engine/assets/AssetImportPreset.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -12,10 +25,22 @@
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "app/EditorAssetBrowserDoubleClickHandler.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetBrowserLayout.hpp"
+#include "assets/EditorAssetBrowserHitTester.hpp"
+#include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
+#include "rendering/EditorSettingsPanelRenderer.hpp"
+#include "engine/scene/SceneLocalization.hpp"
 #include "docking/EditorDockModel.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
+#include "app/EditorWorkspaceSession.hpp"
+#include "settings/EditorPanelSessionText.hpp"
 #include "Sprite2DRuntime.hpp"
 #include "Map2DView.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionController.hpp"
+#include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
 #ifdef DrawText
 #undef DrawText
 #endif
@@ -25,11 +50,21 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "engine/scene/SceneTemplates.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "agent/EditorAgentPanelState.hpp"
+#include "app/agent/EditorAgentPanelController.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/core/JsonValue.hpp"
+#include "scene/TimelineEditorModel.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "scene/BlendSpace2DEditorState.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -39,7 +74,7 @@
 #include "engine/core/EngineLog.hpp"
 #include "engine/core/EngineAssertions.hpp"
 #include "engine/core/DebugDraw.hpp"
-#include "engine/core/ProfilerCounters.hpp"
+#include "app/EditorProfilerAutomation.hpp"
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/library/EngineLibraryManifest.hpp"
@@ -118,6 +153,9 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "scene/EditorMap2DService.hpp"
+#include "TerrainAnalysis.hpp"
+#include "TerrainOps.hpp"
+#include "scene/EditorTerrainJobs.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
@@ -170,6 +208,7 @@ struct StepOutcome {
 struct EntityAlias {
     kb::scene::SceneEntity entity{};
     std::string name;
+    std::string parentName;
 };
 
 struct ScenarioState {
@@ -179,8 +218,9 @@ struct ScenarioState {
         std::filesystem::path fixtures)
         : context(sceneContext)
         , automation(sceneContext, artifacts / "automation")
-        , fixtureRoot(std::move(fixtures)) {}
+        , fixtureRoot(std::move(fixtures)) {extensions=std::make_unique<EditorExtensionHost>(context,dock);}
 
+    EditorPythonRuntime python;
     EditorSceneContext& context;
     EditorHeadlessAutomation automation;
     EditorPlayModeState playMode;
@@ -191,7 +231,8 @@ struct ScenarioState {
     std::unordered_map<std::string, std::uint32_t> materialNodes;
     // The dock workspace the workspace_* steps arrange, and the layouts saved by name.
     EditorDockModel dock;
-    std::unordered_map<std::string, std::string> savedWorkspaces;
+    std::unique_ptr<EditorExtensionHost> extensions;
+    std::unordered_map<std::string, EditorLayoutPreset> savedWorkspaces;
 };
 
 class ScopedProjectFile final {
@@ -432,7 +473,8 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     }
     if (state.context.Scene().Entities().IsAlive(found->second.entity) &&
         state.context.Scene().Entities().Name(found->second.entity) ==
-            found->second.name) {
+            found->second.name && (found->second.parentName.empty() || state.context.Scene().Entities().Name(
+                state.context.Scene().Hierarchy().Parent(found->second.entity)) == found->second.parentName)) {
         return found->second.entity;
     }
 
@@ -442,6 +484,8 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
             found->second.name) {
             continue;
         }
+        if (!found->second.parentName.empty() && state.context.Scene().Entities().Name(
+                state.context.Scene().Hierarchy().Parent(row.entity)) != found->second.parentName) continue;
         if (resolved.IsValid()) {
             return {};
         }
@@ -1227,6 +1271,20 @@ ReadScriptValue(
     return true;
 }
 
+[[nodiscard]] std::string WorkspaceFingerprint(const EditorLayoutPreset& preset) {
+    std::vector<std::string> panels;
+    for (const auto& panel : preset.panels) {
+        std::string text;
+        if (EditorPanelSessionText::Format(panel, EditorProjectPaths::ProjectRoot(), text)) {
+            panels.push_back(std::to_string(panel.panelId) + " " + text);
+        }
+    }
+    std::ranges::sort(panels);
+    std::string result = preset.tree;
+    for (const auto& panel : panels) result += "\n" + panel;
+    return result;
+}
+
 [[nodiscard]] std::optional<StepOutcome> ExecuteWorkspaceStep(
     ScenarioState& state, const JsonValue& step, std::string_view operation) {
     std::string error;
@@ -1250,46 +1308,29 @@ ReadScriptValue(
     }
     if (operation == "workspace_save") {
         const auto slot = StringMember(step, "slot", error);
-        const auto file = StringMember(step, "file", error, false);
-        if (!slot) return StepOutcome{ false, error };
-        error.clear();
-        const std::string text = state.dock.Commands().SerializeWorkspace();
-        state.savedWorkspaces[*slot] = text;
-        if (file) {
-            const auto resolved = ResolveProjectPath(*file, error);
-            if (!resolved) return StepOutcome{ false, error };
-            std::error_code fileError;
-            std::filesystem::create_directories(resolved->parent_path(), fileError);
-            std::ofstream output(*resolved, std::ios::binary | std::ios::trunc);
-            output << text << '\n';
-            if (!output.good()) return StepOutcome{ false, "the layout file could not be written" };
-        }
-        return StepOutcome{ !text.empty(), "saved '" + *slot + "' (" + std::to_string(text.size()) + " bytes)" };
+        if (!slot) return StepOutcome{false, error};
+        const auto preset = EditorWorkspaceArrangement::Capture(state.dock);
+        const auto root = EditorProjectPaths::ProjectRoot();
+        if (!EditorLayoutLibrary::Save(root, *slot, preset, error)) return StepOutcome{false, error};
+        state.savedWorkspaces[*slot] = preset;
+        EditorWorkspaceSession::SaveAs(state.dock, state.context, *slot);
+        return StepOutcome{true, "saved full layout " + *slot};
     }
     if (operation == "workspace_reset") {
         state.dock.Commands().ResetWorkspace();
-        return StepOutcome{ true, "default workspace restored" };
+        return StepOutcome{true, "default workspace restored"};
+    }
+    if (operation == "workspace_restore_current") {
+        const auto root = EditorProjectPaths::ProjectRoot();
+        const auto loaded = EditorConfigurationStore::Load(EditorConfigurationStore::FilePath(root), root);
+        return StepOutcome{loaded.Succeeded() && EditorWorkspaceArrangement::Apply(state.dock,
+            {.tree = loaded.configuration.layout, .panels = loaded.configuration.panels}), "current project workspace"};
     }
     if (operation == "workspace_restore") {
-        const auto slot = StringMember(step, "slot", error, false);
-        const auto file = StringMember(step, "file", error, false);
-        if (!error.empty()) return StepOutcome{ false, error };
-        std::string text;
-        if (slot) {
-            const auto saved = state.savedWorkspaces.find(*slot);
-            if (saved == state.savedWorkspaces.end()) return StepOutcome{ false, "no saved layout named '" + *slot + "'" };
-            text = saved->second;
-        } else if (file) {
-            const auto resolved = ResolveProjectPath(*file, error);
-            if (!resolved) return StepOutcome{ false, error };
-            text = ReadText(*resolved, error);
-            if (!error.empty()) return StepOutcome{ false, error };
-            while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
-        } else {
-            return StepOutcome{ false, "restore needs 'slot' or 'file'" };
-        }
-        const bool restored = state.dock.Commands().RestoreWorkspace(text);
-        return StepOutcome{ restored, restored ? "layout restored" : "the layout text was refused" };
+        const auto slot = StringMember(step, "slot", error);
+        if (!slot) return StepOutcome{false, error};
+        const auto preset = EditorLayoutLibrary::Load(EditorProjectPaths::ProjectRoot(), *slot);
+        return StepOutcome{preset && EditorWorkspaceArrangement::Apply(state.dock, *preset), "restored full layout " + *slot};
     }
     if (operation == "assert_workspace") {
         std::vector<std::string> visible;
@@ -1318,16 +1359,16 @@ ReadScriptValue(
                 return StepOutcome{ false, "'" + title + "' should be floating" };
             }
         }
-        const std::string current = state.dock.Commands().SerializeWorkspace();
+        const std::string current = WorkspaceFingerprint(EditorWorkspaceArrangement::Capture(state.dock));
         if (sameAs) {
             const auto saved = state.savedWorkspaces.find(*sameAs);
-            if (saved == state.savedWorkspaces.end() || saved->second != current) {
+            if (saved == state.savedWorkspaces.end() || WorkspaceFingerprint(saved->second) != current) {
                 return StepOutcome{ false, "the layout differs from '" + *sameAs + "'" };
             }
         }
         if (differsFrom) {
             const auto saved = state.savedWorkspaces.find(*differsFrom);
-            if (saved == state.savedWorkspaces.end() || saved->second == current) {
+            if (saved == state.savedWorkspaces.end() || WorkspaceFingerprint(saved->second) == current) {
                 return StepOutcome{ false, "the layout should differ from '" + *differsFrom + "'" };
             }
         }
@@ -1336,7 +1377,7 @@ ReadScriptValue(
             // A resize or a change of screen must not lose a panel: each visible docked panel has a frame in the layout.
             const EditorMetrics metrics{};
             const DockLayout layout = state.dock.Queries().BuildLayout(
-                static_cast<int>(*fitsWidth), static_cast<int>(*fitsHeight), metrics.menuHeight, metrics.toolbarHeight,
+                static_cast<int>(*fitsWidth), static_cast<int>(*fitsHeight), metrics.menuHeight, metrics.statusBarHeight,
                 metrics.tabStripHeight, metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
             for (const DockPanel& panel : state.dock.Queries().Panels()) {
                 if (!panel.visible || panel.area == DockArea::Floating) continue;
@@ -1378,6 +1419,54 @@ ReadScriptValue(
         return *postProcess;
     }
 
+    if (*operation == "extension_load_project") {
+        const bool ok=state.extensions->LoadProject(error);return {ok,ok?"project extensions loaded":error};
+    }
+    if (*operation == "assert_extension_module_unmapped") {
+        const auto name=StringMember(step,"module",error);if(!name) return {false,error};
+        const auto wide=kb::assets::Utf8Path(*name).wstring();return {GetModuleHandleW(wide.c_str())==nullptr,"extension DLL is unmapped"};
+    }
+
+    if (*operation == "extension_install") {
+        const auto path=StringMember(step,"path",error);if(!path) return {false,error};
+        const bool ok=state.extensions->Install(kb::assets::Utf8Path(*path),error);
+        const auto expected=StringMember(step,"expect_error",error,false);if(expected) return {!ok&&error.find(*expected)!=std::string::npos,error};
+        return {ok,ok?"extension installed":error};
+    }
+    if (*operation == "extension_unload"||*operation == "extension_invoke"||*operation == "extension_click") {
+        const auto id=StringMember(step,"id",error);if(!id) return {false,error};bool ok=false;
+        if(*operation=="extension_unload") ok=state.extensions->Uninstall(*id,error);
+        else if(*operation=="extension_invoke") ok=state.extensions->Invoke(*id,error);
+        else {
+            const auto panel=state.extensions->PanelId(*id);const RECT bounds{0,0,900,700};const auto button=EditorExtensionHost::ButtonRect(bounds);
+            ok=state.extensions->PointerDown(bounds,panel,(button.left+button.right)/2,(button.top+button.bottom)/2,error);
+        }
+        const auto expected=StringMember(step,"expect_error",error,false);if(expected) return {!ok&&error.find(*expected)!=std::string::npos,error};
+        return {ok,ok?"extension operation completed":error};
+    }
+    if (*operation == "assert_extensions") {
+        const auto modules=NumberMember(step,"modules",error),actions=NumberMember(step,"actions",error),panels=NumberMember(step,"panels",error);
+        if(!modules||!actions||!panels) return {false,error};
+        const bool ok=state.extensions->ModuleCount()==*modules&&state.extensions->ActionCount()==*actions&&state.extensions->PanelCount()==*panels;
+        return {ok,"extension owner counts"};
+    }
+    if (*operation == "assert_extension_panel") {
+        const auto id=StringMember(step,"id",error),text=StringMember(step,"contains",error);if(!id||!text) return {false,error};
+        return {state.extensions->PanelText(*id).find(*text)!=std::string::npos,"extension panel text"};
+    }
+    if (*operation == "assert_extension_workspace") {
+        const auto saved=state.dock.Commands().SerializeWorkspace();const auto count=state.extensions->PanelCount();
+        const bool restored=state.dock.Commands().RestoreWorkspace(saved);state.dock.Commands().ResetWorkspace();
+        std::size_t registered=0;for(auto& panel:state.dock.Queries().Panels()) if(panel.kind==DockPanelKind::Generic) ++registered;
+        return {restored&&registered==count,"ephemeral extension panels survive workspace restore/reset"};
+    }
+
+    if (*operation == "python_script") {
+        const auto path=StringMember(step,"path",error);if(!path) return {false,error};
+        EditorAuthoringHost host{state.context};const bool ok=state.python.ExecuteFile(host,kb::assets::Utf8Path(*path),error);
+        return {ok,ok?"embedded Python authoring completed":error};
+    }
+
     if (*operation == "sprite2d_image") {
         // Chooses the picture of a Sprite 2D from a project asset, as one undoable change that also records the picture's size.
         const auto alias = StringMember(step, "entity", error);
@@ -1392,6 +1481,33 @@ ReadScriptValue(
         const kb::scene::Sprite2DComponent* sprite = state.context.Scene().Components().Sprites2D().TryGet(entity);
         return { changed && sprite != nullptr && sprite->imageAssetId == metadata->id.value,
             sprite == nullptr ? "no sprite" : std::to_string(sprite->imageWidth) + "x" + std::to_string(sprite->imageHeight) + " px" };
+    }
+    if (*operation == "assert_scene_ray_pick") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!alias || !x || !y || !z) return {false, error};
+        const EditorSceneViewportRay ray{{static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(*z)}, {0, 0, 1}};
+        const auto hit = EditorSceneViewportMeshPicker::PickNearest(state.context.Scene(), ray);
+        state.context.ClearHierarchySelection();
+        if (hit.IsValid()) EditorSceneViewportSelectionController::ApplyClick(state.context, hit.entity, EditorSceneViewportSelectionMode::Replace);
+        const bool matched = state.context.SelectedEntity() == ResolveEntity(state, *alias);
+        return {matched, matched ? "ray selects the rendered owner" : "ray selected a different object"};
+    }
+    if (*operation == "assert_sprite_visibility") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expected = BoolMember(step, "visible", error);
+        if (!alias || !expected) return { false, error };
+        const auto owner = ResolveEntity(state, *alias);
+        for (const auto child : state.context.Scene().Hierarchy().ChildEntities(owner)) {
+            const auto* renderer = std::as_const(state.context.Scene()).Components().MeshRenderers().TryGet(child);
+            if (!renderer || !renderer->transient) continue;
+            const auto bounds = kb::scene::SceneRenderFeedback::WorldBounds(state.context.Scene(), child);
+            const bool visible = kb::scene::SceneRenderFeedback::IsVisible(state.context.Scene(), child);
+            return { bounds.IsValid() && visible == *expected, "renderer sprite bounds and frustum visibility" };
+        }
+        return { false, "sprite render proxy missing" };
     }
     if (*operation == "pick_generated_visual") {
         // A click in the Scene View lands on the generated picture of a sprite; it must select the sprite's object, as it does for
@@ -1446,6 +1562,22 @@ ReadScriptValue(
     if (*operation == "assert_ui_navigation_links") {
         return {state.automation.VerifyUINavigationLinks(),
             "Selectable navigation links: hierarchy picker, names, clear, invalid and deleted targets, undo"};
+    }
+    if (*operation == "assert_ui_click_handler") {
+        return {state.automation.VerifyUIClickHandler(),
+            "Button On Click row: script function picker, new function, shared script target, clear, undo, collapsed Advanced settings"};
+    }
+    if (*operation == "assert_inspector_shadow_rows") {
+        return {state.automation.VerifyInspectorShadowRows(),
+            "Light shadow bias, normal bias, filter, quality and cascade rows; Mesh Renderer LOD and mobility rows"};
+    }
+    if (*operation == "preview_locale") {
+        const auto path = StringMember(step, "catalog", error);
+        const auto language = StringMember(step, "language", error);
+        if (!path || !language) return {false, error};
+        const auto* catalog = state.context.Scene().Assets().Manager().Registry().FindByPath(*path);
+        const bool applied = catalog && EditorAssetBrowserDoubleClickHandler::PreviewLocalization(state.context, catalog->id, *language);
+        return {applied, applied ? "Editor locale preview applied" : "Editor locale preview rejected"};
     }
     if (*operation == "assert_ui_catalog") {
         const auto component = StringMember(step, "component", error, false);
@@ -1921,15 +2053,9 @@ ReadScriptValue(
                                                            : "debug draw contract rejected" };
     }
 
-    if (*operation == "assert_profiler") {
-        kb::core::ProfilerCounters profiler;
-        { auto scope = profiler.BeginScope("tick"); profiler.Counter("entities", 42U); profiler.Allocation(); }
-        const bool valid = kb::core::ProfilerCounters::Enabled() && profiler.scopes == 1U &&
-            profiler.timelineEvents == 1U && profiler.allocations == 1U &&
-            profiler.Counters().size() == 1U && profiler.Counters().front().value == 42U &&
-            profiler.TimelineEvents().size() == 1U;
-        return { valid, valid ? "debug-only profiler scopes, counters, timeline and allocations"
-                              : "profiler contract rejected" };
+    // The profiler's steps, including the debug-only counters contract.
+    if (const auto profiler = EditorProfilerAutomation::Run(*operation, step, state.context, state.automation, state.dock)) {
+        return { profiler->first, profiler->second };
     }
 
     if (*operation == "assert_console_command") {
@@ -2487,6 +2613,43 @@ ReadScriptValue(
         return { unloaded, *asset };
     }
 
+    if (*operation == "build_game") {
+        const auto output = StringMember(step, "output", error);
+        const auto buildRoot = StringMember(step, "build_root", error);
+        const auto builder = StringMember(step, "builder", error);
+        if (!output || !buildRoot || !builder) return {false, error};
+        const auto targets = kb::packaging::PackagingTargets();
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            if (targets[i].target == kb::packaging::PackagingTarget::WindowsX64)
+                static_cast<void>(state.context.SetBuildGameSelectedTarget(static_cast<int>(i)));
+        }
+        static_cast<void>(state.context.SetBuildGameSelectedProfile(0));
+        const auto edit = [&](BuildGameField field, std::string_view value) {
+            return state.context.BeginBuildGameTextEdit(field) && state.context.SelectAllBuildGameText() &&
+                state.context.InsertBuildGameText(value) && state.context.CommitBuildGameTextEdit();
+        };
+        if (!edit(BuildGameField::ProductName, "Sample") || !edit(BuildGameField::Publisher, "Sample") ||
+            !edit(BuildGameField::Version, "1.0.0") || !edit(BuildGameField::ExecutableName, "Sample") ||
+            !edit(BuildGameField::BuilderExecutable, *builder) ||
+            !state.context.SetBuildGameBuildRoot(std::filesystem::path{*buildRoot}) ||
+            !state.context.SetBuildGameOutputDirectory(std::filesystem::path{*output})) return {false, "Build Game field rejected"};
+        if (state.context.BuildGameSettings().For(state.context.BuildGameTarget()).launchAfterBuild)
+            static_cast<void>(state.context.ToggleBuildGameLaunchAfterBuild());
+        if (!state.context.StartBuildGamePackage(EditorDirtySceneResolution::Save)) return {false, "Build Game rejected"};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(8);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto snapshot = state.context.BuildGamePackageSnapshot();
+            if (snapshot.state != EditorPackageJobState::Running) {
+                std::string detail = snapshot.status;
+                for (const auto& diagnostic : snapshot.diagnostics) detail += "\n" + diagnostic.message;
+                return {snapshot.state == EditorPackageJobState::Succeeded, detail};
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        state.context.CancelBuildGamePackage();
+        return {false, "Build Game timed out"};
+    }
+
     if (*operation == "import_asset") {
         const auto source = StringMember(step, "source", error);
         const auto destination =
@@ -2712,8 +2875,51 @@ ReadScriptValue(
             *resultAlias,
             EntityAlias{
                 .entity = entity,
-                .name = state.context.Scene().Entities().Name(entity) });
+                .name = state.context.Scene().Entities().Name(entity),
+                .parentName = state.context.Scene().Entities().Name(state.context.Scene().Hierarchy().Parent(entity)) });
         return { true, *resultAlias };
+    }
+
+    if (*operation == "create_ui_screen") {
+        // A whole screen template (Main Menu, Pause, HUD, Settings) as the Create > UI Screen menu builds it.
+        const auto alias = StringMember(step, "id", error);
+        const auto screen = StringMember(step, "screen", error);
+        const auto parentAlias = StringMember(step, "parent", error, false);
+        if (!alias || !screen) return { false, error };
+        if (state.entities.contains(*alias)) return { false, "entity alias already exists" };
+        const kb::scene::UIScreenTemplateDescriptor* descriptor = kb::scene::FindUIScreenTemplate(*screen);
+        if (descriptor == nullptr) return { false, "unknown UI screen template" };
+        kb::scene::SceneEntity parent{};
+        if (parentAlias.has_value()) {
+            parent = ResolveEntity(state, *parentAlias);
+            if (!parent.IsValid()) return { false, "parent alias could not be resolved" };
+        }
+        const kb::scene::SceneEntity entity = state.context.CreateUIScreen(descriptor->id, parent);
+        if (!entity.IsValid()) return { false, "UI screen creation failed" };
+        state.entities.emplace(*alias, EntityAlias{ .entity = entity, .name = state.context.Scene().Entities().Name(entity) });
+        return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
+    if (*operation == "copy_entity" || *operation == "cut_entity") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) return { false, "entity alias is not alive" };
+        state.context.SelectEntity(entity);
+        return { *operation == "copy_entity" ? state.context.CopySelectedHierarchyEntities()
+                                             : state.context.CutSelectedHierarchyEntities(), *alias };
+    }
+
+    if (*operation == "paste_entity") {
+        const auto alias = StringMember(step, "id", error);
+        if (!alias) return { false, error };
+        if (state.entities.contains(*alias)) return { false, "entity alias already exists" };
+        if (!state.context.PasteHierarchyEntities()) return { false, "entity paste failed" };
+        const kb::scene::SceneEntity entity = state.context.SelectedEntity();
+        if (!state.context.Scene().Entities().IsAlive(entity)) return { false, "pasted entity was not selected" };
+        state.entities.emplace(*alias, EntityAlias{ .entity = entity, .name = state.context.Scene().Entities().Name(entity),
+            .parentName = state.context.Scene().Entities().Name(state.context.Scene().Hierarchy().Parent(entity)) });
+        return { true, *alias };
     }
 
     if (*operation == "delete_entity") {
@@ -2766,6 +2972,43 @@ ReadScriptValue(
         return {
             state.context.ReparentEntity(child, parent),
             *childAlias + " -> " + *parentAlias };
+    }
+
+    if (*operation == "prefab_open") {
+        const auto path = StringMember(step, "path", error);
+        const auto alias = StringMember(step, "id", error);
+        if (!path || !alias) return {false, error};
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved || !state.context.OpenPrefabEditMode(*resolved)) return {false, "prefab edit could not be opened: " + error};
+        const auto entity = state.context.SelectedEntity();
+        state.entities.insert_or_assign(*alias, EntityAlias{entity, state.context.Scene().Entities().Name(entity)});
+        return {true, *path};
+    }
+    if (*operation == "prefab_save") return {state.context.SavePrefabEditMode(), "save prefab edit"};
+    if (*operation == "prefab_close") return {state.context.ClosePrefabEditMode(), "close prefab edit"};
+    if (*operation == "prefab_apply" || *operation == "prefab_revert" || *operation == "assert_prefab_link") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (*operation == "prefab_apply") return {state.context.ApplyPrefabInstance(entity), *alias};
+        if (*operation == "prefab_revert") return {state.context.RevertPrefabInstance(entity), *alias};
+        return {state.context.Scene().Prefabs().SourcePrefab(entity).IsValid(), *alias};
+    }
+    if (*operation == "bind_entity") {
+        const auto alias = StringMember(step, "id", error);
+        const auto name = StringMember(step, "name", error);
+        if (!alias || !name) return {false, error};
+        kb::scene::SceneEntity found{};
+        for (const auto& row : state.context.HierarchyRows()) {
+            if (state.context.Scene().Entities().Name(row.entity) != *name) continue;
+            if (found.IsValid()) return {false, "entity name is ambiguous"};
+            found = row.entity;
+        }
+        // "exists": false asserts that no entity has the name.
+        if (!BoolMember(step, "exists", error, false).value_or(true)) return {!found.IsValid(), found.IsValid() ? "present" : "absent"};
+        if (!found.IsValid()) return {false, "entity name not found"};
+        state.entities.insert_or_assign(*alias, EntityAlias{found, *name});
+        return {true, *name};
     }
 
     if (*operation == "create_prefab") {
@@ -2835,7 +3078,8 @@ ReadScriptValue(
             *resultAlias,
             EntityAlias{
                 .entity = entity,
-                .name = state.context.Scene().Entities().Name(entity) });
+                .name = state.context.Scene().Entities().Name(entity),
+                .parentName = state.context.Scene().Entities().Name(state.context.Scene().Hierarchy().Parent(entity)) });
         return { true, *resultAlias };
     }
 
@@ -2908,6 +3152,41 @@ ReadScriptValue(
             *asset + " on " + *alias };
     }
 
+    if (*operation == "component_inspector_field") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto component = StringMember(step, "component", error);
+        const auto property = StringMember(step, "property", error);
+        const auto text = StringMember(step, "text", error, false);
+        if (!alias || !component || !property) return { false, error };
+        state.context.SelectEntity(ResolveEntity(state, *alias));
+        if (*component == "Light" && *property == "intensity" && text) {
+            if (!state.automation.InspectorClickRow(InspectorPropertyId::LightIntensity, -1, InspectorHitKind::FloatField, InspectorSectionId::Light))
+                return {false, "light intensity field is not visible"};
+            for (int erase = 0; erase < 64; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+            for (const unsigned char character : *text) if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return {false, "inspector typing failed"};
+            return {state.automation.InspectorKey(VK_RETURN), "Light.intensity"};
+        }
+        const auto sections = InspectorGenericComponentModel::Sections();
+        const auto fields = kb::script::ScriptSceneComponentApi::ComponentProperties(*component);
+        for (std::size_t section = 0; section < sections.size(); ++section) {
+            if (sections[section].component != *component) continue;
+            for (std::size_t field = 0; field < fields.size(); ++field) {
+                if (fields[field].name != *property) continue;
+                const auto kind = fields[field].type == kb::script::ScriptValueType::Bool ? InspectorHitKind::BoolField : InspectorHitKind::TextField;
+                const int index = static_cast<int>(section) * InspectorGenericComponentModel::kFieldsPerSection + static_cast<int>(field);
+                if (!state.automation.InspectorClickRow(InspectorPropertyId::GenericComponentField, index, kind, sections[section].id))
+                    return { false, "component inspector field is not visible" };
+                if (text) {
+                    for (int erase = 0; erase < 64; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+                    for (const unsigned char character : *text) if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return { false, "inspector typing failed" };
+                    if (!state.automation.InspectorKey(VK_RETURN)) return { false, "inspector commit failed" };
+                }
+                return { true, *component + "." + *property };
+            }
+        }
+        return { false, "unknown component inspector field" };
+    }
+
     if (*operation == "set_entity_position") {
         const auto alias = StringMember(step, "entity", error);
         const auto x = NumberMember(step, "x", error);
@@ -2945,9 +3224,10 @@ ReadScriptValue(
         if (!state.context.Scene().Entities().IsAlive(entity)) {
             return { false, "entity alias is not alive" };
         }
-        if (*component == "World2DMap" || *component == "MeshRenderer") {
+        if (*component == "World2DMap" || *component == "MeshRenderer" || *component == "AudioSource") {
             state.context.SelectEntity(entity);
-            const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap : InspectorSectionId::MeshRenderer;
+            const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap :
+                *component == "AudioSource" ? InspectorSectionId::AudioSource : InspectorSectionId::MeshRenderer;
             const bool clicked = state.automation.InspectorClickRow(InspectorPropertyId::ComponentRemove, -1,
                 InspectorHitKind::ComponentMenuButton, section);
             return { clicked && !HasAuthoredComponent(state.context.Scene(), entity, *component), *component };
@@ -2982,6 +3262,8 @@ ReadScriptValue(
     }
 
     if (*operation == "terrain_stamp") {
+        // The brush options are the ones of terrain operations (mode, shape, radius, strength, falloff,
+        // height, step, softness, seed, invert, symmetry, noise*, to, toHeight, image, rotation, blend).
         const auto alias = StringMember(step, "entity", error);
         const auto x = NumberMember(step, "x", error);
         const auto z = NumberMember(step, "z", error);
@@ -2990,13 +3272,9 @@ ReadScriptValue(
         if (!EditorTerrainService::IsTerrainEntity(state.context.Scene(), entity)) {
             return { false, "entity does not have a Terrain Editor component" };
         }
+        kb::terrain_editor::TerrainOpContext opContext{};
         kb::terrain_editor::TerrainBrushSettings settings{};
-        settings.radius = static_cast<float>(
-            NumberMember(step, "radius", error, false).value_or(settings.radius));
-        settings.strength = static_cast<float>(
-            NumberMember(step, "strength", error, false).value_or(settings.strength));
-        settings.falloff = static_cast<float>(
-            NumberMember(step, "falloff", error, false).value_or(settings.falloff));
+        if (!kb::terrain_editor::ParseTerrainBrushSettings(step, opContext, settings, error)) return { false, error };
         const kb::terrain_editor::TerrainBrushStamp stamp{
             .localX = static_cast<float>(*x),
             .localZ = static_cast<float>(*z),
@@ -3006,6 +3284,9 @@ ReadScriptValue(
         if (!kb::terrain_editor::IsTerrainBrushSettingsValid(settings)) {
             return { false, "terrain brush settings are invalid" };
         }
+        const kb::assets::TerrainAsset* terrain = state.context.TerrainForEditing(entity, &error);
+        if (terrain == nullptr) return { false, error };
+        kb::terrain_editor::BeginTerrainStroke(*terrain, settings, stamp);
         if (!state.context.ApplyTerrainBrushStamp(entity, settings, stamp, true, &error)) {
             return { false, error };
         }
@@ -3013,6 +3294,31 @@ ReadScriptValue(
             return { false, error };
         }
         return { true, "terrain stroke committed" };
+    }
+
+    if (*operation == "terrain_paint") {
+        // layer, x, z (and to_x, to_z for a stroke between two points), radius, opacity, falloff, shape, erase, seed.
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!alias || !x || !z) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!EditorTerrainService::IsTerrainEntity(state.context.Scene(), entity)) {
+            return { false, "entity does not have a Terrain Editor component" };
+        }
+        kb::terrain_editor::TerrainLayerPaintSettings settings{};
+        if (!kb::terrain_editor::ParseTerrainLayerPaintSettings(step, settings, error)) return { false, error };
+        const kb::terrain_editor::TerrainBrushStamp start{ .localX = static_cast<float>(*x), .localZ = static_cast<float>(*z) };
+        const auto toX = NumberMember(step, "to_x", error, false);
+        const auto toZ = NumberMember(step, "to_z", error, false);
+        if (!error.empty()) return { false, error };
+        const bool applied = toX && toZ
+            ? state.context.ApplyTerrainLayerPaintSegment(entity, settings, start,
+                kb::terrain_editor::TerrainBrushStamp{ .localX = static_cast<float>(*toX), .localZ = static_cast<float>(*toZ) }, true, &error)
+            : state.context.ApplyTerrainLayerPaintStamp(entity, settings, start, true, &error);
+        if (!applied) return { false, error };
+        if (!state.context.CommitTerrainBrushStroke(&error)) return { false, error };
+        return { true, "terrain paint committed" };
     }
 
     if (*operation == "assert_terrain_height") {
@@ -3092,6 +3398,138 @@ ReadScriptValue(
             std::abs(static_cast<double>(terrain->worldSizeX) - worldSizeX.value()) <= tolerance &&
             std::abs(static_cast<double>(terrain->worldSizeZ) - worldSizeZ.value()) <= tolerance;
         return { matched, matched ? "configuration matched" : "terrain configuration mismatch" };
+    }
+
+    if (*operation == "terrain_tool") {
+        // tool: none sculpt smooth flatten paint ramp stamp holes; stamp takes `image` (a height image), paint
+        // `auto` (the layer by slope); radius and strength are optional; `cycle` clicks the variant button that many times
+        // (Smooth to Flatten, the next paint layer and then Auto, the next stamp blend).
+        const auto alias = StringMember(step, "entity", error);
+        const auto name = StringMember(step, "tool", error);
+        if (!alias || !name) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        using Tool = EditorTerrainTool;
+        constexpr std::pair<std::string_view, Tool> names[]{ { "none", Tool::None }, { "sculpt", Tool::Sculpt }, { "smooth", Tool::Smooth },
+            { "flatten", Tool::Smooth }, { "paint", Tool::Paint }, { "ramp", Tool::Ramp }, { "stamp", Tool::Stamp }, { "holes", Tool::Holes } };
+        const auto* const found = std::ranges::find(names, *name, &std::pair<std::string_view, Tool>::first);
+        if (found == std::end(names)) return { false, "unknown terrain tool '" + *name + "' (none sculpt smooth flatten paint ramp stamp holes)" };
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (const auto image = StringMember(step, "image", error, false)) {
+            if (!EditorTerrainService::LoadStampImage(tool, *image, &error)) return { false, error };
+        }
+        const auto automatic = BoolMember(step, "auto", error, false);
+        const auto radius = NumberMember(step, "radius", error, false);
+        const auto strength = NumberMember(step, "strength", error, false);
+        const auto cycle = UInt32Member(step, "cycle", error, false);
+        if (!error.empty()) return { false, error };
+        if (automatic) tool.paintAuto = *automatic;
+        if (radius) tool.brush.radius = static_cast<float>(*radius);
+        if (strength) tool.brush.strength = static_cast<float>(*strength);
+        if (EditorTerrainService::ActiveTool(tool) != found->second &&
+            !EditorTerrainService::SelectTool(tool, found->second, state.context.TerrainForEditing(entity, &error), &error)) {
+            return { false, error };
+        }
+        if (*name == "flatten") tool.brush.mode = kb::terrain_editor::TerrainBrushMode::Flatten;
+        const kb::assets::TerrainAsset* const terrain = state.context.TerrainForEditing(entity, &error);
+        for (std::uint32_t click = 0U; cycle && click < *cycle && terrain != nullptr; ++click) {
+            EditorTerrainService::CycleToolVariant(tool, terrain->materialLayers.size());
+        }
+        return { true, "terrain tool " + *name };
+    }
+
+    if (*operation == "terrain_drawer") {
+        const auto name = StringMember(step, "drawer", error);
+        if (!name) return { false, error };
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (*name == "none") tool.drawer = EditorTerrainDrawer::None;
+        else if (*name == "new_world") tool.drawer = EditorTerrainDrawer::NewWorld;
+        else if (*name == "advanced") tool.drawer = EditorTerrainDrawer::Advanced;
+        else return { false, "'drawer' is none, new_world or advanced" };
+        return { true, "terrain drawer " + *name };
+    }
+
+    if (*operation == "terrain_slope_overlay") {
+        const auto enabled = BoolMember(step, "enabled", error);
+        if (!enabled) return { false, error };
+        EditorTerrainService::ToolState().slopeOverlay = *enabled;
+        return { true, *enabled ? "slope overlay on" : "slope overlay off" };
+    }
+
+    if (*operation == "terrain_world_wizard" || *operation == "terrain_erode") {
+        // The wizard: preset (island mountains plains valley, or any terrain preset), optional character 0..1 and
+        // seed. The erosion: kind thermal or hydraulic. Both run as a background job; `wait` (default true) waits
+        // for it for at most `timeout` seconds and applies it as one Undo step.
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const bool wizard = *operation == "terrain_world_wizard";
+        const auto name = StringMember(step, wizard ? "preset" : "kind", error);
+        const auto character = NumberMember(step, "character", error, false);
+        const auto seed = UInt32Member(step, "seed", error, false);
+        const bool wait = BoolMember(step, "wait", error, false).value_or(true);
+        const double timeout = NumberMember(step, "timeout", error, false).value_or(300.0);
+        if (!name || !error.empty()) return { false, error };
+        if (!wizard && *name != "thermal" && *name != "hydraulic") return { false, "'kind' is thermal or hydraulic" };
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (character) tool.worldCharacter = static_cast<float>(*character);
+        if (seed) tool.brush.noiseSeed = *seed;
+        const auto preset = std::ranges::find(kEditorTerrainWorldPresets, *name);
+        if (preset != kEditorTerrainWorldPresets.end()) tool.worldPreset = static_cast<std::uint8_t>(preset - kEditorTerrainWorldPresets.begin());
+        const bool started = wizard
+            ? EditorTerrainJobs::StartWorld(state.context, entity, *name, tool.brush.noiseSeed, tool.worldCharacter, &error)
+            : EditorTerrainJobs::StartErosion(state.context, entity,
+                *name == "thermal" ? EditorTerrainJobKind::Thermal : EditorTerrainJobKind::Hydraulic, &error);
+        if (!started) return { false, error };
+        if (!wait) return { true, "terrain job started" };
+        const bool finished = EditorTerrainJobs::Finish(state.context, timeout, &error);
+        return { finished, finished ? "terrain job applied" : error };
+    }
+
+    if (*operation == "terrain_job") {
+        // action: wait (applies the running job) or cancel (stops it; the terrain stays as it was).
+        const auto action = StringMember(step, "action", error);
+        if (!action) return { false, error };
+        if (*action == "cancel") {
+            EditorTerrainJobs::Cancel();
+            const bool finished = EditorTerrainJobs::Finish(state.context, 0.0, &error);
+            return { !finished && error == "cancelled", finished ? "the job finished before it was cancelled" : error };
+        }
+        if (*action != "wait") return { false, "'action' is wait or cancel" };
+        const bool finished = EditorTerrainJobs::Finish(
+            state.context, NumberMember(step, "timeout", error, false).value_or(300.0), &error);
+        return { finished, finished ? "terrain job applied" : error };
+    }
+
+    if (*operation == "assert_terrain_relief") {
+        // The heights span at least `min` (and at most `max`) world units from lowest to highest.
+        const auto alias = StringMember(step, "entity", error);
+        const auto minimum = NumberMember(step, "min", error);
+        const auto maximum = NumberMember(step, "max", error, false);
+        if (!alias || !minimum || !error.empty()) return { false, error };
+        const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(state.context.Scene(), ResolveEntity(state, *alias), &error);
+        if (!terrain.has_value()) return { false, error };
+        const kb::terrain_editor::TerrainStats stats = kb::terrain_editor::ComputeTerrainStats(*terrain);
+        const double relief = static_cast<double>(stats.maxHeight) - static_cast<double>(stats.minHeight);
+        const bool matched = relief >= *minimum && (!maximum || relief <= *maximum);
+        return { matched, matched ? "terrain relief matched" : "terrain relief is " + std::to_string(relief) };
+    }
+
+    if (*operation == "assert_terrain_layer_weight") {
+        // The share (0..1) of material `layer` at local x, z lies between `min` and `max`.
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        const auto layer = UInt32Member(step, "layer", error);
+        const double minimum = NumberMember(step, "min", error, false).value_or(0.0);
+        const double maximum = NumberMember(step, "max", error, false).value_or(1.0);
+        if (!alias || !x || !z || !layer || !error.empty() || *layer >= kb::assets::TerrainAsset::MaximumMaterialLayers) {
+            return { false, error.empty() ? "'layer' is a layer index from 0 to 3" : error };
+        }
+        const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(state.context.Scene(), ResolveEntity(state, *alias), &error);
+        if (!terrain.has_value()) return { false, error };
+        const double weight = kb::terrain_editor::SampleTerrainSurface(*terrain, static_cast<float>(*x), static_cast<float>(*z)).layerWeights[*layer];
+        const bool matched = weight >= minimum && weight <= maximum;
+        return { matched, matched ? "terrain layer weight matched" : "terrain layer weight is " + std::to_string(weight) };
     }
 
     if (*operation == "set_animator_root_motion_owner" ||
@@ -3175,9 +3613,42 @@ ReadScriptValue(
         return { changed || visibility.mask == *mask, changed ? "visibility mask changed" : "visibility mask already set" };
     }
 
+    if (*operation == "theme_field") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto component = StringMember(step, "component", error);
+        const auto property = StringMember(step, "property", error);
+        const auto text = StringMember(step, "text", error);
+        const auto variant = StringMember(step, "variant", error, false).value_or("");
+        if (!asset || !component || !property || !text) return {false, error};
+        const auto id = ResolveAsset(state, *asset);
+        const auto theme = state.context.ReadUITheme(id);
+        const auto* descriptor = kb::scene::FindUIComponentDescriptor(*component);
+        if (!theme || !descriptor || !state.context.AssetBrowser().SelectAsset(id, state.context.Scene().Assets().Manager()))
+            return {false, "Theme or component unavailable"};
+        auto& inspector = state.context.Inspector();
+        inspector.themeAssetId = id.value;
+        inspector.themeVariant = variant;
+        const auto rows = InspectorUIThemeModel::Rows(*theme, variant);
+        const kb::scene::UIThemePropertyKey key{descriptor->type, *property};
+        const auto row = std::ranges::find(rows, key, &InspectorUIThemeRow::key);
+        if (row == rows.end() || !state.automation.InspectorClickRow(InspectorPropertyId::UIThemeField,
+            static_cast<int>(row - rows.begin()), InspectorHitKind::TextField, InspectorSectionId::UITheme))
+            return {false, "Theme field not reachable in Inspector"};
+        for (int erase = 0; erase < 1024; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+        for (const unsigned char character : *text)
+            if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return {false, "Theme field typing failed"};
+        if (!state.automation.InspectorKey(VK_RETURN)) return {false, "Theme field commit failed"};
+        const auto edited = state.context.ReadUITheme(id);
+        if (!edited) return {false, "Edited theme unreadable"};
+        const auto changedRows = InspectorUIThemeModel::Rows(*edited, variant);
+        const auto changed = std::ranges::find(changedRows, key, &InspectorUIThemeRow::key);
+        const auto expected = InspectorUIComponentModel::Parse(row->type, *text);
+        const auto actual = changed != changedRows.end() ? InspectorUIComponentModel::Parse(row->type, changed->value) : std::nullopt;
+        return {expected && actual && *expected == *actual, "Theme field persisted through Inspector"};
+    }
     if (*operation == "set_property" ||
         *operation == "set_property_rejected" ||
-        *operation == "assert_property") {
+        *operation == "assert_property" || *operation == "assert_resolved_ui_property") {
         const auto alias = StringMember(step, "entity", error);
         const auto component =
             StringMember(step, "component", error);
@@ -3214,9 +3685,20 @@ ReadScriptValue(
                     expectedRejection ? *component + "." + *property + " rejected"
                                       : *component + "." + *property };
             }
-            const kb::scene::UIComponentSet values =
+            kb::scene::UIComponentSet values =
                 kb::scene::CaptureSceneUIComponents(
                     state.context.Scene().Components().UI(), entity);
+            if (*operation == "assert_resolved_ui_property") {
+                if (!state.context.Scene().UI().Update(640, 480, {}, 0.016F)) return {false, "UI frame failed"};
+                const auto& frame = state.context.Scene().UI().Frame();
+                const auto found = std::ranges::find(frame.elements, entity, &kb::scene::SceneUIFrameElement::entity);
+                if (found == frame.elements.end()) return {false, "UI frame element absent"};
+                values.text = found->text;
+                values.border = found->border;
+                values.image = found->image;
+                values.outline = found->outline;
+                values.shadow = found->shadow;
+            }
             kb::scene::UIComponentPropertyValue actual;
             const double tolerance = NumberMember(
                 step, "tolerance", error, false).value_or(0.0001);
@@ -3652,8 +4134,14 @@ ReadScriptValue(
                 state.context.CreateMaterialTypeAsset(virtualFolder);
         } else if (*type == "particle_effect") {
             created = state.context.CreateParticleEffectAsset(virtualFolder);
+        } else if (*type == "blend_space_2d") {
+            created = state.context.CreateBlendSpace2DAsset(virtualFolder);
+        } else if (*type == "gameplay_graph") {
+            created = state.context.CreateGameplayGraphAsset(virtualFolder);
         } else if (*type == "post_process_profile") {
             created = state.context.CreatePostProcessProfileAsset(virtualFolder);
+        } else if (*type == "ui_theme") {
+            created = state.context.CreateUIThemeAsset(virtualFolder);
         } else if (*type == "import_preset") {
             created = state.context.CreateImportPresetAsset(virtualFolder);
         } else {
@@ -3678,6 +4166,16 @@ ReadScriptValue(
         }
         state.assets.emplace(*alias, createdId);
         return { true, *alias + '=' + std::to_string(createdId.value) };
+    }
+
+    if (*operation == "rename_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto name = StringMember(step, "name", error);
+        if (!asset || !name) return {false, error};
+        const auto id = ResolveAsset(state, *asset);
+        if (!id.IsValid() || !state.context.BeginAssetRename(id)) return {false, "asset rename did not begin"};
+        state.context.AssetBrowser().SetTextEditValue(*name);
+        return {state.context.CommitAssetTextEdit(), *name};
     }
 
     if (*operation == "copy_asset" ||
@@ -3735,6 +4233,10 @@ ReadScriptValue(
         if (*role == "mesh") {
             assigned =
                 state.context.SetMeshRendererMeshAsset(entity, id);
+        } else if (*role == "tilemap") {
+            assigned = kb::script::ScriptSceneComponentApi::SetProperty(state.context.Scene(), entity, "Tilemap", "mapAssetId",
+                kb::script::ScriptValue{id.value, kb::script::ScriptValueType::Hash}).succeeded;
+            if (assigned) { state.context.MarkSceneDocumentDirty(); state.context.MarkSceneRenderDirty(); }
         } else if (*role == "material") {
             assigned =
                 state.context.SetMeshRendererMaterialAsset(entity, id);
@@ -3919,6 +4421,11 @@ ReadScriptValue(
                 updated.has_value() ? getValue(*updated) : 0.0F);
         }
         return { succeeded, actual };
+    }
+
+    if (*operation == "focus_material_editor") {
+        state.context.FocusMaterialGraph(true);
+        return {state.context.IsMaterialGraphFocused(), "material editor keyboard focus"};
     }
 
     if (*operation == "save_material") {
@@ -4361,6 +4868,13 @@ ReadScriptValue(
         return { attached, attached ? *asset : "attach failed" };
     }
 
+    if (*operation == "add_animator_clip") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const auto* metadata = state.context.Scene().Assets().Manager().Registry().FindByPath(*asset);
+        const bool added = metadata != nullptr && state.context.AddAnimationClipToAnimatorEditor(metadata->id, 260, 80);
+        return { added && state.context.SaveAnimatorEditorAsset(), "add and save clip through animator graph authoring" };
+    }
     if (*operation == "set_animator_debug_target") {
         const auto target = StringMember(step, "target", error);
         if (!target) return { false, error };
@@ -4392,11 +4906,86 @@ ReadScriptValue(
             snapshot == nullptr ? nullptr : snapshot->Find(expected);
         const auto minimumLayers = NumberMember(step, "minimum_layers", error, false);
         const auto minimumBones = NumberMember(step, "minimum_bones", error, false);
+        const auto minimumTargets = NumberMember(step, "minimum_targets", error, false);
         if (!error.empty()) return { false, error };
         const bool valid = uiMatchesTarget && instance != nullptr &&
             (!minimumLayers.has_value() || instance->layers.size() >= static_cast<std::size_t>(*minimumLayers)) &&
-            (!minimumBones.has_value() || instance->bones.size() >= static_cast<std::size_t>(*minimumBones));
+            (!minimumBones.has_value() || instance->bones.size() >= static_cast<std::size_t>(*minimumBones)) &&
+            (!minimumTargets.has_value() || AnimatorEditorPanelRenderer::TargetMarkers(*instance).size() >= static_cast<std::size_t>(*minimumTargets) * 3U);
         return { valid, valid ? "immutable animator debug snapshot" : "animator debug snapshot mismatch" };
+    }
+
+    if (*operation == "verify_external_code_activation") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto editor = StringMember(step, "editor", error);
+        const auto workspaceText = StringMember(step, "workspace", error);
+        const auto sourceText = StringMember(step, "source", error);
+        if (!asset || !editor || !workspaceText || !sourceText) return {false, error};
+        const auto installation = StringMember(step, "visual_studio_installation", error, false);
+        if (!error.empty()) return {false, error};
+        std::array<wchar_t, 32768> previousInstallation{};
+        const DWORD priorSize = GetEnvironmentVariableW(L"VSINSTALLDIR", previousInstallation.data(),
+            static_cast<DWORD>(previousInstallation.size()));
+        struct RestoreInstallation {
+            std::wstring previous;
+            bool restore;
+            ~RestoreInstallation() { if (restore) SetEnvironmentVariableW(L"VSINSTALLDIR", previous.empty() ? nullptr : previous.c_str()); }
+        } restoreInstallation{std::wstring{previousInstallation.data()}, installation.has_value()};
+        if (priorSize >= previousInstallation.size() || (installation &&
+            !SetEnvironmentVariableW(L"VSINSTALLDIR", std::filesystem::path{*installation}.c_str())))
+            return {false, "Visual Studio discovery fixture could not be installed"};
+        const auto root = EditorProjectPaths::ProjectRoot();
+        const RECT content{0, 0, 1400, 800};
+        EditorSettingsPanelRenderer::SelectCategory(EditorSettingsCategory::General);
+        const RECT field = EditorSettingsPanelRenderer::CodeEditorField(content);
+        if (EditorSettingsPanelRenderer::HitTest(content, field.left + 4, field.top + 4).kind != EditorSettingsHitKind::CodeEditor ||
+            !EditorExternalCodeLauncher::SetPreference(root, *editor, error) ||
+            EditorExternalCodeLauncher::Preference(root, error) != *editor) return {false, error};
+        // Invalid selection must not damage the persisted preference.
+        if (EditorExternalCodeLauncher::SetPreference(root, "Unknown", error) ||
+            EditorExternalCodeLauncher::Preference(root, error) != *editor) return {false, "invalid editor preference was accepted"};
+        auto& manager = state.context.Scene().Assets().Manager();
+        const auto id = ResolveAsset(state, *asset);
+        const auto* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr) return {false, "script asset was not found"};
+        auto& browser = state.context.AssetBrowser();
+        if (!browser.SelectFolder(std::filesystem::path{metadata->virtualPath}.parent_path(), manager))
+            return {false, "script asset folder was not found"};
+        browser.ClearSearch();
+        browser.SetRecursive(false);
+        browser.SetViewMode(EditorAssetViewMode::Tiles);
+        const auto rows = browser.AssetRows(manager);
+        const auto row = std::ranges::find_if(rows, [&](const auto& item) { return item.metadata.id == id; });
+        if (row == rows.end()) return {false, "script asset is not visible"};
+        const auto layout = EditorAssetBrowserLayout::Build(content, browser.TreeWidth());
+        const auto tile = EditorAssetBrowserLayout::AssetTileRect(layout,
+            static_cast<int>(browser.ChildFolderRows(manager).size() + std::distance(rows.begin(), row)), browser.ThumbnailScale());
+        const int x = (tile.left + tile.right) / 2, y = (tile.top + tile.bottom) / 2;
+        const auto hit = EditorAssetBrowserHitTester::HitTest(content, x, y, browser, manager);
+        if (EditorAssetBrowserHitPayloadResolver::AssetIdAt(hit, browser, manager) != id)
+            return {false, "double-click did not hit the script asset"};
+        static thread_local std::filesystem::path launchedExecutable, launchedWorkspace;
+        static thread_local std::wstring launchedCommand;
+        launchedExecutable.clear(); launchedWorkspace.clear(); launchedCommand.clear();
+        const auto previous = EditorExternalCodeLauncher::ExchangeProcessLauncher(
+            [](const auto& executable, const auto& command, const auto& workspace, std::string&) {
+                launchedExecutable = executable; launchedCommand = command; launchedWorkspace = workspace;
+                return true;
+            });
+        struct RestoreLauncher {
+            EditorExternalCodeLauncher::ProcessLauncher previous;
+            ~RestoreLauncher() { EditorExternalCodeLauncher::ExchangeProcessLauncher(previous); }
+        } restore{previous};
+        const auto opened = EditorAssetBrowserDoubleClickHandler::HandleDoubleClick(nullptr, content, x, y, state.context);
+        const auto expectedWorkspace = std::filesystem::weakly_canonical(root / *workspaceText);
+        const auto expectedSource = std::filesystem::weakly_canonical(root / *sourceText);
+        const bool passed = opened == EditorAssetBrowserDoubleClickResult::ExternalScriptOpened &&
+            launchedWorkspace == expectedWorkspace &&
+            launchedExecutable.filename() == (*editor == "VisualStudio" ? "devenv.exe" : "Code.exe") &&
+            launchedCommand.find(L"\"" + expectedWorkspace.wstring() + L"\"") != std::wstring::npos &&
+            launchedCommand.find(L"\"" + expectedSource.wstring() + L"\"") != std::wstring::npos &&
+            launchedCommand.find(*editor == "VisualStudio" ? L" /Edit " : L" --goto ") != std::wstring::npos;
+        return {passed, passed ? "double-click resolved selected IDE, CMake workspace and source; launch intercepted" : "incorrect code editor launch request"};
     }
 
     if (*operation == "open_asset") {
@@ -4421,6 +5010,8 @@ ReadScriptValue(
             opened = state.context.OpenAnimatorEditorAsset(id);
         } else if (metadata->type == "Timeline") {
             opened = state.context.OpenAnimationAsset(id);
+        } else if (metadata->type == "BlendSpace2D") {
+            opened = state.context.OpenBlendSpace2DEditorAsset(id);
         } else if (
             metadata->type == "RenderMaterial" ||
             metadata->type == "RenderMaterialInstance" ||
@@ -4600,16 +5191,70 @@ ReadScriptValue(
         if (!path) return { false, error };
         const auto resolved = ResolveProjectPath(*path, error);
         if (!resolved) return { false, error };
-        return {
-            state.context.OpenScene(
-                *resolved, EditorDirtySceneResolution::Discard),
-            resolved->string() };
+        const auto started = std::chrono::steady_clock::now();
+        const bool opened = state.context.OpenScene(*resolved, EditorDirtySceneResolution::Discard);
+        const auto milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        state.automation.Trace("scene_transition_latency", opened, std::to_string(milliseconds));
+        return {opened, resolved->string()};
     }
 
     if (*operation == "reload_scene") {
         return {
             state.context.ReloadSceneFromProject(),
             "project scene reloaded" };
+    }
+
+    // What an agent or kb_cli does to the saved scene while the editor is open.
+    if (*operation == "external_add_entity") {
+        const auto name = StringMember(step, "name", error);
+        if (!name) return { false, error };
+        const std::filesystem::path path = state.context.CurrentScenePath();
+        kb::scene::Scene external{ state.context.Project() };
+        kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(path);
+        if (!loaded.succeeded || !kb::scene::SceneDocumentService::LoadIntoScene(external, loaded.document)) return { false, "scene file could not be read" };
+        static_cast<void>(external.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = std::string{ *name } }));
+        return { kb::scene::SceneDocumentService::Save(external, path, loaded.document.name), path.string() };
+    }
+
+    if (*operation == "reload_after_external_change") {
+        return { state.context.ReloadSceneAfterExternalChange(), "scene reloaded after an external change" };
+    }
+
+    // A request to an installed agent, as the agent bar sends it: open documents saved, the agent
+    // run to its answer, and the scene reloaded when it changed the project.
+    if (*operation == "agent_request") {
+        const auto agentName = StringMember(step, "agent", error);
+        const auto text = StringMember(step, "text", error);
+        if (!agentName || !text) return { false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        panel.Prepare();
+        int chosen = -1;
+        for (std::size_t index = 0; index < panel.Agents().size(); ++index) {
+            if (panel.Agents()[index].name == *agentName) chosen = static_cast<int>(index);
+        }
+        if (chosen < 0) return { false, "agent not installed: " + std::string{ *agentName } };
+        panel.SelectAgent(chosen);
+        panel.SetInput(std::string{ *text });
+        if (!state.context.CurrentScenePath().empty() && !state.context.SaveOpenDocuments()) return { false, "open documents could not be saved" };
+        if (!panel.Send(EditorAgentPanelController::Workspace())) return { false, "agent request was not sent" };
+        bool projectChanged = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes{ 15 };
+        while (panel.AnyRunning() && std::chrono::steady_clock::now() < deadline) {
+            bool changed = false;
+            static_cast<void>(panel.Pump(changed));
+            projectChanged = projectChanged || changed;
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        }
+        bool changed = false;
+        static_cast<void>(panel.Pump(changed));
+        projectChanged = projectChanged || changed;
+        if (panel.AnyRunning()) return { false, "agent did not finish in 15 minutes" };
+        const auto& entries = panel.Active().entries;
+        std::string last = entries.empty() ? std::string{} : entries.back().text.substr(0, 300);
+        if (panel.Active().sawError) return { false, "agent reported an error: " + last };
+        if (projectChanged && !state.context.ReloadSceneAfterExternalChange()) return { false, "scene was not reloaded" };
+        state.automation.Trace("agent_request", true, std::string{ projectChanged ? "changed " : "unchanged " } + last);
+        return { true, last };
     }
 
     if (*operation == "undo") {
@@ -4657,6 +5302,26 @@ ReadScriptValue(
             alias->second.name = state.context.Scene().Entities().Name(restored);
         }
         return { true, "redo" };
+    }
+
+    if (*operation == "serve_lua_debugger") {
+        const auto root = state.automation.ArtifactRoot().parent_path();
+        if (!state.context.StartLuaDebugger(root / "Debugger", error)) return {false, error};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{75};
+        bool interactionVerified = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (!state.context.TickPlayModeSceneSession(1.0F / 60.0F)) return {false, "debug runtime stopped"};
+            if (state.context.LuaDebuggerPaused() && !interactionVerified) {
+                if (!state.automation.VerifyDebuggerInteraction()) return {false, "paused editor interaction failed"};
+                interactionVerified = true;
+                std::ofstream(root / "debugger-gui-pass.txt") << "console tab and splitter responsive";
+            }
+            if (std::filesystem::exists(root / "debugger-done.txt")) {
+                return {interactionVerified && !state.context.LuaDebuggerPaused(), "CLI debug session and paused GUI interaction"};
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        }
+        return {false, "debug client deadline expired"};
     }
 
     if (*operation == "play") {
@@ -4849,8 +5514,11 @@ ReadScriptValue(
             std::floor(*width) != *width || std::floor(*height) != *height) {
             return {false, "runtime dimensions must be integers in [1, 8192]"};
         }
+        const auto localBlend = BoolMember(step, "local_probe_blending", error, false);
+        const auto parallax = BoolMember(step, "probe_parallax", error, false);
+        if ((step.Find("local_probe_blending") && !localBlend) || (step.Find("probe_parallax") && !parallax)) return {false, error};
         return {state.automation.ConfigureRuntimeRendering(
-            static_cast<std::uint32_t>(*width), static_cast<std::uint32_t>(*height), gpuDiagnostics.value_or(false)), "production Play viewport"};
+            static_cast<std::uint32_t>(*width), static_cast<std::uint32_t>(*height), gpuDiagnostics.value_or(false), localBlend.value_or(true), parallax.value_or(true)), "production Play viewport"};
     }
 
     if (*operation == "step") {
@@ -5019,6 +5687,10 @@ ReadScriptValue(
                 std::to_string(selectedMatches) + " project=" + std::to_string(projectMatches) + " saved=" + std::to_string(saved)};
     }
 
+    if (*operation == "verify_particle_controls") {
+        return {state.automation.VerifyParticleControls(), "particle controls, history, save/reload and preview"};
+    }
+
     if (*operation == "verify_particle_execution") {
         const auto* current = state.context.ParticleEditorWorkingAsset();
         if (current == nullptr || current->emitters.empty()) return {false, "particle document is not open"};
@@ -5137,6 +5809,10 @@ ReadScriptValue(
                 ", layout=" + saved.layout };
     }
 
+    if (*operation == "assert_workspace_controls") {
+        return {state.automation.VerifyWorkspaceControls(), "real toolbar, keyboard, display and DPI routing"};
+    }
+
     if (*operation == "assert_workspace_layout_persistence") {
         const auto workspace = state.automation.VerifyWorkspaceLayoutPersistence();
         return {
@@ -5212,6 +5888,230 @@ ReadScriptValue(
             virtualKey.has_value() &&
                 state.automation.InspectorKey(*virtualKey),
             *key };
+    }
+
+    if (operation->starts_with("graph_") || *operation=="assert_graph") {
+        auto* graph=state.context.GameplayGraphEditor();if (!graph) return {false,"Gameplay graph is not open"};
+        const auto node=UInt32Member(step,"node",error,false).value_or(0);
+        const auto accepted=BoolMember(step,"accepted",error,false).value_or(true);
+        bool changed=false;
+        if (*operation=="graph_add") {
+            const auto entry=StringMember(step,"entry",error);
+            const auto x=NumberMember(step,"x",error,false).value_or(32),y=NumberMember(step,"y",error,false).value_or(32);
+            const auto* found=entry?graph->catalog.Find(*entry):nullptr;
+            if (!found && entry) for (const auto& candidate:graph->catalog.Entries()) if (candidate.symbol==*entry) { found=&candidate;break; }
+            if (!found || !error.empty()) return {false,"Invalid graph catalog entry"};
+            graph->selected=graph->document.AddNode(*found,static_cast<float>(x),static_cast<float>(y),graph->error);changed=graph->selected!=0;
+        } else if (*operation=="graph_literal") {
+            const auto value=StringMember(step,"value",error);if (!value) return {false,error};
+            changed=graph->document.SetLiteral(node,*value,graph->error);
+        } else if (*operation=="graph_connect") {
+            const auto from=UInt32Member(step,"from",error),to=UInt32Member(step,"to",error);
+            const auto output=StringMember(step,"out",error),input=StringMember(step,"in",error);
+            if (!from || !to || !output || !input) return {false,error};
+            changed=graph->document.Connect(*from,*output,*to,*input,graph->error);
+        } else if (*operation=="graph_pointer") {
+            const auto phase=StringMember(step,"phase",error);if (!phase) return {false,error};
+            const DockRect bounds{0,0,1180,760};
+            const auto button=StringMember(step,"button",error,false),pin=StringMember(step,"pin",error,false);
+            auto point=button?GameplayGraphEditorPanel::ButtonPoint(bounds,*button):node?GameplayGraphEditorPanel::NodePoint(bounds,state.context,node,pin.value_or(""),BoolMember(step,"output",error,false).value_or(false)):std::nullopt;
+            if (!point) point=POINT{static_cast<LONG>(NumberMember(step,"x",error,false).value_or(0)),static_cast<LONG>(NumberMember(step,"y",error,false).value_or(0))};
+            point->x+=static_cast<LONG>(NumberMember(step,"dx",error,false).value_or(0));point->y+=static_cast<LONG>(NumberMember(step,"dy",error,false).value_or(0));
+            if (*phase=="down") changed=GameplayGraphEditorPanel::PointerDown(nullptr,bounds,point->x,point->y,state.context);
+            else if (*phase=="move") changed=GameplayGraphEditorPanel::PointerMove(bounds,point->x,point->y,state.context);
+            else if (*phase=="up") { GameplayGraphEditorPanel::PointerUp(nullptr,state.context);changed=true; }
+            return {error.empty() && changed==accepted,graph->error};
+        } else if (*operation=="graph_preview") {
+            const auto alias=StringMember(step,"entity",error);if (!alias) return {false,error};
+            const bool built=graph->BuildPreview(state.context.Scene(),state.context.Project(),ResolveEntity(state,*alias));
+            if (built) graph->manualPreview=true;
+            return {built==accepted,graph->error};
+        } else if (*operation=="graph_tick") {
+            const auto dt=NumberMember(step,"dt",error);if (!dt) return {false,error};
+            return {graph->Execute(static_cast<float>(*dt))==accepted,graph->error};
+        } else if (*operation=="assert_graph") {
+            const auto nodes=UInt32Member(step,"nodes",error,false),edges=UInt32Member(step,"edges",error,false),pausedNode=UInt32Member(step,"paused_node",error,false);
+            const auto dirty=BoolMember(step,"dirty",error,false),paused=BoolMember(step,"paused",error,false);
+            const auto value=StringMember(step,"value",error,false),pin=StringMember(step,"pin",error,false);
+            const auto position=NumberMember(step,"preview_x",error,false);
+            const auto source=StringMember(step,"source_entity",error,false);
+            const auto sourceX=NumberMember(step,"source_x",error,false),nodeX=NumberMember(step,"node_x",error,false),nodeY=NumberMember(step,"node_y",error,false);
+            bool valid=error.empty() && (!nodes || graph->document.Snapshot().graph.nodes.size()==*nodes) && (!edges || graph->document.Snapshot().graph.edges.size()==*edges) &&
+                (!dirty || graph->document.Dirty()==*dirty) && (!paused || graph->paused==*paused) && (!pausedNode || (graph->PauseLocation().valid && graph->PauseLocation().nodeId==*pausedNode));
+            if (value && pin) valid=valid && graph->PinValue(node,*pin,BoolMember(step,"output",error,false).value_or(true))==*value;
+            if (position) valid=valid && graph->PreviewScene() && std::abs(graph->PreviewScene()->Transforms().Get(graph->PreviewOwner()).localPosition.x-*position)<0.0001;
+            if (source && sourceX) { const auto* transform=state.context.Scene().Transforms().TryGet(ResolveEntity(state,*source));valid=valid && transform && std::abs(transform->localPosition.x-*sourceX)<0.0001; }
+            if (nodeX || nodeY) {
+                const auto point=std::ranges::find(graph->document.Snapshot().positions,node,&kb::visual::VisualGraphNodePosition::nodeId);
+                valid=valid && point!=graph->document.Snapshot().positions.end() && (!nodeX || std::abs(point->x-*nodeX)<0.0001) && (!nodeY || std::abs(point->y-*nodeY)<0.0001);
+            }
+            return {valid,"Gameplay graph document/runtime assertion"};
+        } else return {false,"Unknown gameplay graph operation"};
+        if (changed) graph->Edited();
+        return {changed==accepted,graph->error};
+    }
+    if (*operation == "capture_timeline_preview") {
+        const auto checkpoint = StringMember(step,"checkpoint",error);
+        return {checkpoint && state.automation.CaptureTimelinePreview(*checkpoint), "Timeline GPU preview"};
+    }
+    if (*operation == "capture_blend_space_preview") {
+        const auto checkpoint=StringMember(step,"checkpoint",error);
+        return {checkpoint && state.automation.CaptureBlendSpace2DPreview(*checkpoint),"BlendSpace2D GPU preview"};
+    }
+    if (*operation == "blend_space_edit" || *operation == "blend_space_add" || *operation == "blend_space_remove") {
+        const auto index=UInt32Member(step,"index",error,false).value_or(0);
+        const auto x=NumberMember(step,"x",error,false),y=NumberMember(step,"y",error,false);
+        const auto clip=StringMember(step,"clip",error,false);
+        const auto accepted=BoolMember(step,"accepted",error,false).value_or(true);
+        if (!error.empty()) return {false,error};
+        const bool changed=state.context.EditBlendSpace2DAsset([&](auto& asset) {
+            if (*operation=="blend_space_add") {
+                if (!x || !y || !clip) return false;
+                asset.samples.push_back({static_cast<float>(*x),static_cast<float>(*y),*clip});return true;
+            }
+            if (index>=asset.samples.size()) return false;
+            if (*operation=="blend_space_remove") { asset.samples.erase(asset.samples.begin()+index);return true; }
+            if (x) asset.samples[index].x=static_cast<float>(*x);
+            if (y) asset.samples[index].y=static_cast<float>(*y);
+            if (clip) asset.samples[index].clipReference=*clip;
+            return x || y || clip;
+        });
+        return {changed==accepted,"BlendSpace2D validated sample edit"};
+    }
+    if (*operation == "blend_space_owner") {
+        const auto entity=StringMember(step,"entity",error);
+        return {entity && state.context.SetBlendSpace2DPreviewOwner(ResolveEntity(state,*entity)),"BlendSpace2D preview owner"};
+    }
+    if (*operation == "blend_space_query") {
+        const auto x=NumberMember(step,"x",error),y=NumberMember(step,"y",error);
+        return {x && y && state.context.SetBlendSpace2DPreviewCoordinates(static_cast<float>(*x),static_cast<float>(*y)),"BlendSpace2D preview coordinates"};
+    }
+    if (*operation == "blend_space_seek" || *operation == "blend_space_tick") {
+        const auto time=NumberMember(step,"time",error);
+        if (!time || *time<0) return {false,"Invalid blend preview time"};
+        return {*operation=="blend_space_seek"?state.context.SeekBlendSpace2DPreview(static_cast<float>(*time)):
+            state.context.TickBlendSpace2DPreview(static_cast<float>(*time)),*operation};
+    }
+    if (*operation == "blend_space_pointer") {
+        const auto phase=StringMember(step,"phase",error);
+        const auto x=UInt32Member(step,"x",error,false).value_or(0),y=UInt32Member(step,"y",error,false).value_or(0);
+        if (!phase || !error.empty()) return {false,error};
+        bool changed=false;
+        if (*phase=="down") changed=BlendSpace2DEditorPanel::PointerDown(nullptr,{0,0,1100,720},static_cast<int>(x),static_cast<int>(y),state.context);
+        else if (*phase=="move") changed=BlendSpace2DEditorPanel::PointerMove({0,0,1100,720},static_cast<int>(x),static_cast<int>(y),state.context);
+        else if (*phase=="up") changed=BlendSpace2DEditorPanel::PointerUp(nullptr,state.context);
+        return {changed,"BlendSpace2D panel pointer "+*phase};
+    }
+    if (*operation == "assert_blend_space") {
+        const auto* document=state.context.BlendSpace2DEditor();if (!document || !document->document.WorkingCopy()) return {false,"BlendSpace2D document is not open"};
+        const auto count=UInt32Member(step,"samples",error,false),index=UInt32Member(step,"index",error,false);
+        const auto x=NumberMember(step,"x",error,false),y=NumberMember(step,"y",error,false),phase=NumberMember(step,"phase",error,false);
+        const auto px=NumberMember(step,"position_x",error,false),py=NumberMember(step,"position_y",error,false),sourceX=NumberMember(step,"source_position_x",error,false);
+        const auto dirty=BoolMember(step,"dirty",error,false),playing=BoolMember(step,"playing",error,false);
+        const auto events=UInt32Member(step,"events",error,false),eventId=UInt32Member(step,"event_id",error,false);
+        bool valid=error.empty() && (!count || document->document.WorkingCopy()->samples.size()==*count) &&
+            (!dirty || document->document.Dirty()==*dirty) && (!playing || document->preview.Playing()==*playing) &&
+            (!phase || std::abs(document->phase-*phase)<0.0001);
+        if (index) {
+            if (*index>=document->document.WorkingCopy()->samples.size()) valid=false;
+            else { const auto& sample=document->document.WorkingCopy()->samples[*index];valid=valid && (!x || std::abs(sample.x-*x)<0.0001) && (!y || std::abs(sample.y-*y)<0.0001); }
+        }
+        if (px || py) {
+            const auto* scene=document->preview.Scene();valid=valid && scene;
+            if (scene) { const auto position=scene->Transforms().Get(document->preview.Owner()).localPosition;
+                valid=valid && (!px || std::abs(position.x-*px)<0.0001) && (!py || std::abs(position.y-*py)<0.0001); }
+        }
+        if (sourceX) { const auto* transform=state.context.Scene().Transforms().TryGet(document->owner);valid=valid && transform && std::abs(transform->localPosition.x-*sourceX)<0.0001; }
+        if (events || eventId) {
+            auto* scene=const_cast<kb::scene::Scene*>(document->preview.Scene());
+            if (!scene) valid=false;
+            else { const auto records=scene->Animators().DrainEvents();valid=valid && (!events || records.size()==*events) &&
+                (!eventId || (!records.empty() && records.back().eventId==*eventId)); }
+        }
+        return {valid,"BlendSpace2D document and isolated runtime"};
+    }
+    if (*operation == "timeline_edit") {
+        const auto label = StringMember(step, "label", error);
+        const auto text = StringMember(step, "text", error);
+        const auto occurrence = UInt32Member(step, "occurrence", error, false).value_or(0);
+        const auto* asset = state.context.TimelineEditorDocument().WorkingCopy();
+        if (!label || !text || !asset || !error.empty()) return {false, "invalid Timeline edit"};
+        std::size_t found = 0;
+        for (const auto& row : TimelineEditorModel::Rows(*asset)) if (row.label == *label && row.edit) {
+            if (found++ != occurrence) continue;
+            const bool result = state.context.EditTimelineAsset([&](auto& candidate) { return row.edit(candidate, *text); });
+            const bool expected = BoolMember(step, "accepted", error, false).value_or(true);
+            return {error.empty() && result == expected, "Timeline row " + *label};
+        }
+        return {false, "Timeline row was not found"};
+    }
+    if (*operation == "timeline_add") {
+        const auto kind = StringMember(step, "kind", error);
+        const auto binding = StringMember(step, "binding", error);
+        const auto reference = StringMember(step, "reference", error, false).value_or("");
+        if (!kind || !binding || !error.empty()) return {false, error};
+        const std::array<std::string_view,8> names{"binding","transform","property","audio","event","sequence","animation","marker"};
+        const auto entry = std::find(names.begin(), names.end(), *kind);
+        if (entry == names.end()) return {false, "unknown Timeline track kind"};
+        std::optional<kb::scene::TimelineAsset> child;
+        if (*kind == "sequence") {
+            const auto id = ResolveAsset(state, reference);
+            const auto handle = state.context.Scene().Assets().Manager().Load<kb::scene::TimelineAsset>(id);
+            if (handle.IsLoaded()) child = *handle;
+        }
+        const bool added = state.context.EditTimelineAsset([&](auto& asset) {
+            return TimelineEditorModel::Add(asset,static_cast<TimelineEditorTrackKind>(entry-names.begin()),*binding,reference,
+                state.context.Scene().Runtime().EcsWorld(), child ? &*child : nullptr);
+        });
+        return {added, "Timeline " + *kind};
+    }
+    if (*operation == "timeline_owner") {
+        const auto alias = StringMember(step, "entity", error);
+        return {alias && state.context.SetTimelineEditorPreviewOwner(ResolveEntity(state, *alias)), "Timeline preview owner"};
+    }
+    if (*operation == "timeline_seek" || *operation == "timeline_tick") {
+        const auto time = NumberMember(step, "time", error);
+        if (!time || *time < 0) return {false, "invalid Timeline time"};
+        return {*operation == "timeline_seek" ? state.context.SeekTimelineEditorPreview(static_cast<float>(*time)) :
+            state.context.TickTimelineEditorPreview(static_cast<float>(*time)), *operation};
+    }
+    if (*operation == "timeline_pointer") {
+        const auto x = UInt32Member(step,"x",error), y = UInt32Member(step,"y",error);
+        if (!x || !y) return {false,error};
+        return {TimelineEditorPanel::Pointer(nullptr,{0,0,1100,720},static_cast<int>(*x),static_cast<int>(*y),state.context), "Timeline panel pointer"};
+    }
+    if (*operation == "assert_timeline") {
+        const auto time = NumberMember(step,"time",error,false);
+        const auto position = NumberMember(step,"position_x",error,false);
+        const auto sourcePosition = NumberMember(step,"source_position_x",error,false);
+        const auto dirty = BoolMember(step,"dirty",error,false);
+        const auto playing = BoolMember(step,"playing",error,false);
+        const auto count = NumberMember(step,"events",error,false);
+        const auto last = StringMember(step,"last",error,false);
+        const auto& preview = state.context.TimelineEditorPreview();
+        bool valid = error.empty() && (!time || std::abs(preview.Time()-*time) < 0.0001) &&
+            (!dirty || state.context.TimelineEditorDocument().Dirty() == *dirty) && (!playing || preview.Playing() == *playing);
+        if (position) valid = valid && preview.Scene() && std::abs(preview.Scene()->Transforms().Get(preview.Owner()).localPosition.x-*position) < 0.0001;
+        if (sourcePosition) valid = valid && std::abs(state.context.Scene().Transforms().Get(state.context.SelectedEntity()).localPosition.x-*sourcePosition) < 0.0001;
+        if (count || last) {
+            const auto* scripts = preview.Scripts();
+            const auto counted = scripts ? scripts->SharedState().Get("count") : std::nullopt;
+            const auto named = scripts ? scripts->SharedState().Get("last") : std::nullopt;
+            valid = valid && (!count || (counted && counted->AsInt() == static_cast<std::int64_t>(*count))) &&
+                (!last || (named && named->AsString() == *last));
+        }
+        return {valid,"Timeline authored document and isolated runtime"};
+    }
+
+    if (*operation == "audio_mixer_pointer") {
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto width = UInt32Member(step, "width", error);
+        const auto height = UInt32Member(step, "height", error);
+        if (!x || !y || !width || !height || *width < 240U || *width > 3840U || *height < 270U || *height > 2160U
+            || *x < 0 || *y < 0 || *x >= *width || *y >= *height) return {false, "invalid mixer panel pointer geometry"};
+        return {state.context.AudioMixerPanelPointer({0, 0, static_cast<int>(*width), static_cast<int>(*height)},
+            static_cast<int>(*x), static_cast<int>(*y)), "audio mixer panel pointer"};
     }
 
     if (*operation == "capture") {
@@ -5420,8 +6320,12 @@ ReadScriptValue(
                    << " play camera " << (state.context.PlayCameraEntity() == child.Entity() ? "yes" : "no");
             const bool direction = !orientation ? (forwardY < -0.99F || forwardZ > 0.99F) :
                 *orientation == "flat" ? forwardY < -0.99F : forwardZ > 0.99F;
+            const auto expectedHeight = NumberMember(step, "height", error, false);
+            const auto expectedX = NumberMember(step, "x", error, false);
+            const bool framing = error.empty() && (!expectedHeight || (lens && std::abs(lens->orthographicHeight - *expectedHeight) < 0.001)) &&
+                (!expectedX || std::abs(position.x - *expectedX) < 0.001);
             const bool ok = lens != nullptr && lens->primary && lens->projection == kb::scene::CameraProjection::Orthographic && direction &&
-                (!state.context.HasPlayModeSceneSession() || state.context.PlayCameraEntity() == child.Entity());
+                framing && (!state.context.HasPlayModeSceneSession() || state.context.PlayCameraEntity() == child.Entity());
             return { ok, report.str() };
         }
         return { false, "the map has no Map Camera" };
@@ -5958,6 +6862,21 @@ int EditorAutomationScenarioRunner::Run(
 
     const std::filesystem::path absoluteArtifacts =
         std::filesystem::absolute(artifactRoot);
+    std::filesystem::path sourceProject;
+    if (const auto* initial = root.Find("initial_project"); initial != nullptr) {
+        if (initial->GetKind() != JsonValue::Kind::String || !initialPlugins.empty()) {
+            WriteFailureArtifact(absoluteArtifacts, "initial_project must be a path and cannot override initial_plugins");
+            return 1;
+        }
+        sourceProject = std::filesystem::weakly_canonical(std::filesystem::absolute(
+            scenarioPath.parent_path() / std::filesystem::path{ initial->AsString() }));
+        const auto artifacts = std::filesystem::weakly_canonical(absoluteArtifacts);
+        if (!std::filesystem::is_regular_file(sourceProject) || sourceProject.extension() != ".21kbproject" ||
+            IsInside(sourceProject.parent_path(), artifacts) || IsInside(artifacts, sourceProject)) {
+            WriteFailureArtifact(absoluteArtifacts, "initial_project must name a separate project descriptor");
+            return 1;
+        }
+    }
     std::error_code artifactError;
     std::filesystem::remove_all(
         absoluteArtifacts, artifactError);
@@ -5975,8 +6894,17 @@ int EditorAutomationScenarioRunner::Run(
         if (!copy.good()) return 1;
     }
 
-    const std::filesystem::path projectFile =
+    std::filesystem::path projectFile =
         absoluteArtifacts / "workspace" / "Project.21kbproject";
+    if (!sourceProject.empty()) {
+        std::filesystem::copy(sourceProject.parent_path(), absoluteArtifacts / "workspace",
+            std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, artifactError);
+        if (artifactError) {
+            WriteFailureArtifact(absoluteArtifacts, "initial project copy failed: " + artifactError.message());
+            return 1;
+        }
+        projectFile = absoluteArtifacts / "workspace" / sourceProject.filename();
+    }
     const ScopedProjectFile projectScope{projectFile};
     if (!initialPlugins.empty()) {
         kb::project::ProjectDescriptor descriptor;

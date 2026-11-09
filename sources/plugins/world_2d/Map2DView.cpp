@@ -136,7 +136,7 @@ bool SetUpMap2DView(
         scene.Components().Grids().Set(parent, { .cellSize = map.tileSize, .floorHeight = map.floorHeight,
             .wall = map.orientation == kb::assets::Map2DOrientation::Wall });
     }
-    const float height = static_cast<float>(map.height) * map.tileSize;
+    const float height = static_cast<float>(kb::assets::Map2DProjectedSize(map)[1]);
     const float distance = static_cast<float>(kb::assets::Map2DAsset::MaximumFloor + 1) * map.floorHeight +
         kb::render::RenderMap2DMeshBuilder::kMaximumSortingOrder * kb::render::RenderMap2DMeshBuilder::kSortingOrderLift + 10.0F;
     kb::scene::TransformComponent transform{};
@@ -165,7 +165,7 @@ bool SetUpMap2DView(
     }
     kb::scene::CameraComponent lens{};
     lens.projection = kb::scene::CameraProjection::Orthographic;
-    lens.orthographicHeight = static_cast<float>(map.viewHeight) * map.tileSize;
+    lens.orthographicHeight = static_cast<float>(map.viewHeight * kb::assets::Map2DCellHeight(map));
     lens.nearClip = 0.1F;
     lens.farClip = distance * 2.0F + 100.0F;
     lens.primary = true;

@@ -38,6 +38,12 @@ namespace {
         return "Redo";
     case EditorEditCommand::Duplicate:
         return "Duplicate";
+    case EditorEditCommand::Copy:
+        return "Copy";
+    case EditorEditCommand::Cut:
+        return "Cut";
+    case EditorEditCommand::Paste:
+        return "Paste";
     case EditorEditCommand::Save:
         return "Save";
     }
@@ -67,6 +73,12 @@ void WarnIfGestureRefused(EditorSceneContext& sceneContext, EditorEditCommand co
         return sceneContext.RedoSceneCommand();
     case EditorEditCommand::Duplicate:
         return sceneContext.DuplicateSelectedHierarchyEntities();
+    case EditorEditCommand::Copy:
+        return sceneContext.CopySelectedHierarchyEntities();
+    case EditorEditCommand::Cut:
+        return sceneContext.CutSelectedHierarchyEntities();
+    case EditorEditCommand::Paste:
+        return sceneContext.PasteHierarchyEntities();
     case EditorEditCommand::Save:
         return sceneContext.SaveOpenDocuments();
     }

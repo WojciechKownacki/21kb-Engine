@@ -1,0 +1,125 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "LocalePreview",
+      "template": "Empty"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Localization/Preview.kbloc",
+      "content": "schema 2\nfallback \"en\"\nlanguage \"en\"\ntext \"preview.title\" \"Hello preview\"\nlanguage \"pl\"\ntext \"preview.title\" \"Podglad jezyka\"\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "create_entity",
+      "id": "canvas",
+      "name": "Canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "canvas",
+      "component": "kb21.ui.canvas"
+    },
+    {
+      "op": "create_entity",
+      "id": "label",
+      "name": "Label"
+    },
+    {
+      "op": "reparent_entity",
+      "entity": "label",
+      "parent": "canvas"
+    },
+    {
+      "op": "add_component",
+      "entity": "label",
+      "component": "kb21.ui.text"
+    },
+    {
+      "op": "set_property",
+      "entity": "label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.x",
+      "value": 50.0
+    },
+    {
+      "op": "set_property",
+      "entity": "label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMin.y",
+      "value": 50.0
+    },
+    {
+      "op": "set_property",
+      "entity": "label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.x",
+      "value": 600.0
+    },
+    {
+      "op": "set_property",
+      "entity": "label",
+      "component": "kb21.ui.rect-transform",
+      "property": "offsetMax.y",
+      "value": 160.0
+    },
+    {
+      "op": "set_property",
+      "entity": "label",
+      "component": "kb21.ui.text",
+      "property": "fontSize",
+      "value": 48.0
+    },
+    {
+      "op": "set_property",
+      "entity": "label",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Authored source"
+    },
+    {
+      "op": "set_property",
+      "entity": "label",
+      "component": "kb21.ui.text",
+      "property": "localizationKey",
+      "value": "preview.title"
+    },
+    {
+      "op": "preview_locale",
+      "catalog": "/Game/Localization/Preview.kbloc",
+      "language": "en"
+    },
+    {
+      "op": "capture_scene_viewport",
+      "checkpoint": "locale-en"
+    },
+    {
+      "op": "preview_locale",
+      "catalog": "/Game/Localization/Preview.kbloc",
+      "language": "pl"
+    },
+    {
+      "op": "capture_scene_viewport",
+      "checkpoint": "locale-pl"
+    },
+    {
+      "op": "assert_capture_difference",
+      "before": "locale-en",
+      "after": "locale-pl"
+    },
+    {
+      "op": "assert_property",
+      "entity": "label",
+      "component": "kb21.ui.text",
+      "property": "content",
+      "value": "Authored source"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

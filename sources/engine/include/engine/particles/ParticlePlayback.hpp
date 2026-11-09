@@ -18,6 +18,9 @@ class ParticlePlayback final {
 public:
     ParticlePlayback() = delete;
 
+    static void SetEmitterProfilingEnabled(kb::scene::Scene& scene, bool enabled) noexcept;
+    [[nodiscard]] static bool EmitterProfilingEnabled(const kb::scene::Scene& scene) noexcept;
+
     [[nodiscard]] static ParticleRuntimeResult RegisterBackend(kb::scene::Scene& scene, IParticleSimulationBackend& backend) noexcept;
     [[nodiscard]] static ParticleRuntimeResult UnregisterBackend(kb::scene::Scene& scene, IParticleSimulationBackend& backend) noexcept;
     [[nodiscard]] static bool HasBackend(const kb::scene::Scene& scene) noexcept;

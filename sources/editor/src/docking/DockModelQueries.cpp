@@ -11,12 +11,13 @@ DockLayout DockModelQueries::BuildLayout(
     int clientWidth,
     int clientHeight,
     int menuHeight,
-    int toolbarHeight,
+    int statusBarHeight,
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
-    int splitterSize) {
-    return DockLayoutBuilder{}.Build(root, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize);
+    int splitterSize,
+    std::uint32_t collapsedLeafId) {
+    return DockLayoutBuilder{}.Build(root, clientWidth, clientHeight, menuHeight, statusBarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize, collapsedLeafId);
 }
 
 DockHit DockModelQueries::HitTest(const DockLayout& layout, int x, int y) {

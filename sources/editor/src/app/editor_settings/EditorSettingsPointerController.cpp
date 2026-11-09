@@ -7,6 +7,8 @@
 #include "localization/EditorLocalization.hpp"
 #include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
+#include "project/EditorProjectPaths.hpp"
 
 #include <array>
 #include <string>
@@ -88,6 +90,31 @@ bool EditorSettingsPointerController::HandlePointerDown(
     if (hit.kind == EditorSettingsHitKind::Language) {
         return ChooseLanguage(owner, EditorSettingsPanelRenderer::LanguageField(content), sceneContext_, dockModel_,
             floatingWindows_);
+    }
+    if (hit.kind == EditorSettingsHitKind::CodeEditor) {
+        const HMENU menu = CreatePopupMenu();
+        if (menu == nullptr) return false;
+        constexpr std::array<const char*, 3> values{ "Auto", "VSCode", "VisualStudio" };
+        constexpr std::array<const wchar_t*, 3> labels{ L"Automatic", L"VS Code", L"Visual Studio" };
+        std::string error;
+        const auto root = EditorProjectPaths::ProjectRoot();
+        const auto current = EditorExternalCodeLauncher::Preference(root, error);
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            AppendMenuW(menu, MF_STRING | (current == values[index] ? MF_CHECKED : 0U), index + 1U, labels[index]);
+        }
+        const RECT field = EditorSettingsPanelRenderer::CodeEditorField(content);
+        POINT anchor{ field.left, field.bottom };
+        ClientToScreen(owner, &anchor);
+        const UINT chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN,
+            anchor.x, anchor.y, 0, owner, nullptr);
+        DestroyMenu(menu);
+        if (chosen == 0U || chosen > values.size()) return false;
+        if (!EditorExternalCodeLauncher::SetPreference(root, values[chosen - 1U], error)) {
+            sceneContext_.Console().Error("Editor", error);
+            return false;
+        }
+        InvalidateRect(owner, &content, FALSE);
+        return true;
     }
     if (hit.kind != EditorSettingsHitKind::Toggle &&
         hit.kind != EditorSettingsHitKind::Choice) {

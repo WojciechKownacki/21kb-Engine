@@ -1,5 +1,10 @@
 #pragma once
 
+namespace kb::editor::tests { void RunEditorTimelineTests(); }
+namespace kb::editor::tests { void RunEditorBlendSpace2DTests(); }
+namespace kb::editor::tests { void RunEditorStaticMeshTests(); }
+namespace kb::editor::tests { void RunEditorGameplayGraphTests(); }
+
 namespace kb::editor::tests {
 void RunEditorAudioMixerRuntimeTests();
 
@@ -15,6 +20,8 @@ void RunEditorMaterialGraphCookServiceTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();
 void RunEditorSettingsTests();
+void RunEditorProfilerTests();
+void RunEditorProfilerPanelTests();
 void RunEditorLocalizationTests();
 void RunEditorInspectorTests();
 void RunEditorMaterialAssetAuthoringTests();

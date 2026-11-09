@@ -10,6 +10,8 @@ function OnUIClicked(self, event)
     elseif action == "Menu.Play" then
         self.launch = true
         self.progress = 0
+        local footer = CallFunction("World.FindByName", {name="footer"})
+        assert(CallFunction("World.SetPropertyString", {entity=footer, component="Text", property="content", value="LAUNCHING"}))
         Log("Menu launch confirmed")
     end
 end

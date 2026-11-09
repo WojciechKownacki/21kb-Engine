@@ -1,7 +1,6 @@
 #include "engine/ui/visual/UITextGraphemes.hpp"
 
 #include <algorithm>
-#include <array>
 #include <iterator>
 
 namespace kb::scene {
@@ -54,95 +53,87 @@ struct Decoded {
     return { value, length, true };
 }
 
-struct Range {
+enum class Grapheme : std::uint8_t {
+    Other, CR, LF, Control, Extend, ZWJ, Regional_Indicator, Prepend, SpacingMark, L, V, T, LV, LVT
+};
+enum class Indic : std::uint8_t { None, Consonant, Extend, Linker };
+
+template <typename T> struct PropertyRange {
     std::uint32_t first;
     std::uint32_t last;
+    T value;
 };
 
-template <std::size_t N>
-[[nodiscard]] bool InRanges(const Range (&ranges)[N], std::uint32_t codepoint) noexcept {
-    const Range* const end = ranges + N;
-    const Range* const found = std::upper_bound(ranges, end, codepoint,
-        [](std::uint32_t value, const Range& range) { return value < range.first; });
-    return found != ranges && codepoint <= std::prev(found)->last;
+#include "UITextGraphemeData.inc"
+
+template <typename T, std::size_t N>
+[[nodiscard]] T Property(const PropertyRange<T> (&ranges)[N], std::uint32_t codepoint, T fallback) noexcept {
+    const auto found = std::upper_bound(ranges, ranges + N, codepoint,
+        [](std::uint32_t value, const PropertyRange<T>& range) { return value < range.first; });
+    return found != ranges && codepoint <= std::prev(found)->last ? std::prev(found)->value : fallback;
 }
 
-// Combining marks (Mn, Me, Mc) of the scripts people type most, plus the joiners and emoji modifiers. Sorted.
-constexpr Range kExtenders[] = {
-    { 0x0300U, 0x036FU }, { 0x0483U, 0x0489U }, { 0x0591U, 0x05BDU }, { 0x05BFU, 0x05BFU }, { 0x05C1U, 0x05C2U },
-    { 0x05C4U, 0x05C5U }, { 0x05C7U, 0x05C7U }, { 0x0610U, 0x061AU }, { 0x064BU, 0x065FU }, { 0x0670U, 0x0670U },
-    { 0x06D6U, 0x06DCU }, { 0x06DFU, 0x06E4U }, { 0x06E7U, 0x06E8U }, { 0x06EAU, 0x06EDU }, { 0x0711U, 0x0711U },
-    { 0x0730U, 0x074AU }, { 0x0900U, 0x0903U }, { 0x093AU, 0x093CU }, { 0x093EU, 0x094FU }, { 0x0951U, 0x0957U },
-    { 0x0962U, 0x0963U }, { 0x0981U, 0x0983U }, { 0x09BCU, 0x09BCU }, { 0x09BEU, 0x09CDU }, { 0x0A01U, 0x0A03U },
-    { 0x0A3CU, 0x0A51U }, { 0x0B01U, 0x0B03U }, { 0x0B3CU, 0x0B57U }, { 0x0E31U, 0x0E31U }, { 0x0E34U, 0x0E3AU },
-    { 0x0E47U, 0x0E4EU }, { 0x0EB1U, 0x0EB1U }, { 0x0EB4U, 0x0EBCU }, { 0x0EC8U, 0x0ECDU }, { 0x0F18U, 0x0F19U },
-    { 0x0F35U, 0x0F35U }, { 0x0F37U, 0x0F37U }, { 0x0F39U, 0x0F39U }, { 0x0F71U, 0x0F84U }, { 0x1AB0U, 0x1AFFU },
-    { 0x1DC0U, 0x1DFFU }, { 0x200CU, 0x200DU }, { 0x20D0U, 0x20FFU }, { 0x302AU, 0x302FU }, { 0x3099U, 0x309AU },
-    { 0xFE00U, 0xFE0FU }, { 0xFE20U, 0xFE2FU }, { 0xFF9EU, 0xFF9FU }, { 0x1D165U, 0x1D169U }, { 0x1D16DU, 0x1D172U },
-    { 0x1D17BU, 0x1D182U }, { 0x1F3FBU, 0x1F3FFU }, { 0xE0020U, 0xE007FU }, { 0xE0100U, 0xE01EFU },
-};
-
-constexpr Range kPictographic[] = {
-    { 0x00A9U, 0x00A9U }, { 0x00AEU, 0x00AEU }, { 0x203CU, 0x203CU }, { 0x2049U, 0x2049U }, { 0x2122U, 0x2122U },
-    { 0x2139U, 0x2139U }, { 0x2194U, 0x21AAU }, { 0x231AU, 0x23FFU }, { 0x24C2U, 0x24C2U }, { 0x25AAU, 0x25FEU },
-    { 0x2600U, 0x27BFU }, { 0x2934U, 0x2935U }, { 0x2B05U, 0x2B55U }, { 0x3030U, 0x3030U }, { 0x303DU, 0x303DU },
-    { 0x3297U, 0x3297U }, { 0x3299U, 0x3299U }, { 0x1F000U, 0x1FAFFU },
-};
-
-[[nodiscard]] bool IsPictographic(std::uint32_t codepoint) noexcept {
-    return InRanges(kPictographic, codepoint);
+[[nodiscard]] bool IsControl(Grapheme value) noexcept {
+    return value == Grapheme::Control || value == Grapheme::CR || value == Grapheme::LF;
 }
 
-[[nodiscard]] bool IsRegionalIndicator(std::uint32_t codepoint) noexcept {
-    return codepoint >= 0x1F1E6U && codepoint <= 0x1F1FFU;
-}
+// State for UAX #29 extended grapheme rules GB9c, GB11 and GB12/13.
+struct ClusterState {
+    Grapheme previous = Grapheme::Other;
+    std::size_t regionalRun = 0U;
+    bool pictographicWithExtenders = false;
+    bool joinedPictographic = false;
+    bool indicConsonant = false;
+    bool indicLinker = false;
 
-[[nodiscard]] bool IsControl(std::uint32_t codepoint) noexcept {
-    return codepoint < 0x20U || (codepoint >= 0x7FU && codepoint < 0xA0U) || codepoint == 0x2028U || codepoint == 0x2029U;
-}
-
-enum class Hangul : std::uint8_t { None, Leading, Vowel, Trailing, SyllableLV, SyllableLVT };
-
-[[nodiscard]] Hangul HangulClass(std::uint32_t codepoint) noexcept {
-    if ((codepoint >= 0x1100U && codepoint <= 0x115FU) || (codepoint >= 0xA960U && codepoint <= 0xA97CU)) return Hangul::Leading;
-    if ((codepoint >= 0x1160U && codepoint <= 0x11A7U) || (codepoint >= 0xD7B0U && codepoint <= 0xD7C6U)) return Hangul::Vowel;
-    if ((codepoint >= 0x11A8U && codepoint <= 0x11FFU) || (codepoint >= 0xD7CBU && codepoint <= 0xD7FBU)) return Hangul::Trailing;
-    if (codepoint >= 0xAC00U && codepoint <= 0xD7A3U) {
-        return (codepoint - 0xAC00U) % 28U == 0U ? Hangul::SyllableLV : Hangul::SyllableLVT;
+    void Consume(std::uint32_t codepoint, Grapheme value, Indic indic) noexcept {
+        regionalRun = value == Grapheme::Regional_Indicator ? regionalRun + 1U : 0U;
+        joinedPictographic = value == Grapheme::ZWJ && pictographicWithExtenders;
+        pictographicWithExtenders = Property(kPictographicRanges, codepoint, false) ||
+            (value == Grapheme::Extend && pictographicWithExtenders);
+        if (indic == Indic::Consonant) {
+            indicConsonant = true;
+            indicLinker = false;
+        } else if (indic == Indic::Linker && indicConsonant) {
+            indicLinker = true;
+        } else if (indic != Indic::Extend) {
+            indicConsonant = false;
+            indicLinker = false;
+        }
+        previous = value;
     }
-    return Hangul::None;
-}
 
-// Whether the cluster that ends with `previous` continues with `next`. `regionalRun` is the number of regional
-// indicators that end the cluster so far.
-[[nodiscard]] bool Continues(std::uint32_t previous, std::uint32_t next, std::size_t regionalRun) noexcept {
-    if (previous == 0x0DU && next == 0x0AU) return true;
-    if (IsControl(previous) || IsControl(next)) return false;
-    if (IsUITextGraphemeExtender(next)) return true;
-    if (previous == 0x200DU && IsPictographic(next)) return true;
-    if (IsRegionalIndicator(previous) && IsRegionalIndicator(next)) return regionalRun % 2U == 1U;
-    const Hangul before = HangulClass(previous);
-    const Hangul after = HangulClass(next);
-    if (before == Hangul::Leading) {
-        return after == Hangul::Leading || after == Hangul::Vowel || after == Hangul::SyllableLV || after == Hangul::SyllableLVT;
+    [[nodiscard]] bool Continues(std::uint32_t codepoint, Grapheme next, Indic indic) const noexcept {
+        if (previous == Grapheme::CR && next == Grapheme::LF) return true;
+        if (IsControl(previous) || IsControl(next)) return false;
+        if (previous == Grapheme::L && (next == Grapheme::L || next == Grapheme::V ||
+                next == Grapheme::LV || next == Grapheme::LVT)) return true;
+        if ((previous == Grapheme::LV || previous == Grapheme::V) &&
+                (next == Grapheme::V || next == Grapheme::T)) return true;
+        if ((previous == Grapheme::LVT || previous == Grapheme::T) && next == Grapheme::T) return true;
+        if (next == Grapheme::Extend || next == Grapheme::ZWJ || next == Grapheme::SpacingMark) return true;
+        if (previous == Grapheme::Prepend) return true;
+        if (indic == Indic::Consonant && indicConsonant && indicLinker) return true;
+        if (joinedPictographic && Property(kPictographicRanges, codepoint, false)) return true;
+        return previous == Grapheme::Regional_Indicator && next == Grapheme::Regional_Indicator && regionalRun % 2U == 1U;
     }
-    if (before == Hangul::Vowel || before == Hangul::SyllableLV) return after == Hangul::Vowel || after == Hangul::Trailing;
-    if (before == Hangul::Trailing || before == Hangul::SyllableLVT) return after == Hangul::Trailing;
-    return false;
-}
+};
 
-// The end of the cluster that starts at `start`, which must be a boundary.
+// The caller supplies a boundary. Malformed UTF-8 bytes always form independent clusters.
 [[nodiscard]] std::size_t ClusterEnd(std::string_view utf8, std::size_t start) noexcept {
-    Decoded current = Decode(utf8, start);
-    std::size_t end = start + current.size;
-    std::size_t regionalRun = IsRegionalIndicator(current.codepoint) ? 1U : 0U;
+    const Decoded first = Decode(utf8, start);
+    std::size_t end = start + first.size;
+    if (!first.valid) return end;
+    ClusterState state;
+    state.Consume(first.codepoint, Property(kGraphemeRanges, first.codepoint, Grapheme::Other),
+        Property(kIndicRanges, first.codepoint, Indic::None));
     while (end < utf8.size()) {
         const Decoded next = Decode(utf8, end);
-        if (!current.valid || !next.valid || !Continues(current.codepoint, next.codepoint, regionalRun)) {
-            break;
-        }
-        regionalRun = IsRegionalIndicator(next.codepoint) ? regionalRun + 1U : 0U;
-        current = next;
+        if (!next.valid) break;
+        const auto property = Property(kGraphemeRanges, next.codepoint, Grapheme::Other);
+        const auto indic = Property(kIndicRanges, next.codepoint, Indic::None);
+        if (!state.Continues(next.codepoint, property, indic)) break;
+        state.Consume(next.codepoint, property, indic);
         end += next.size;
     }
     return end;
@@ -151,7 +142,8 @@ enum class Hangul : std::uint8_t { None, Leading, Vowel, Trailing, SyllableLV, S
 } // namespace
 
 bool IsUITextGraphemeExtender(std::uint32_t codepoint) noexcept {
-    return InRanges(kExtenders, codepoint);
+    const auto value = Property(kGraphemeRanges, codepoint, Grapheme::Other);
+    return value == Grapheme::Extend || value == Grapheme::ZWJ || value == Grapheme::SpacingMark;
 }
 
 std::size_t SnapToUITextGraphemeBoundary(std::string_view utf8, std::size_t offset) noexcept {

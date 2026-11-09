@@ -67,6 +67,9 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <psapi.h>
+#include "engine/scene/SceneTransforms.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -210,6 +213,8 @@ void RunPackagedRuntimeModuleContractTests() {
         "WebGL.wasm32",
         "WebGPU.wasm32",
     };
+    supported.plugins.push_back({ .name = "Input", .enabled = true });
+    supported.plugins.push_back({ .name = "Script", .enabled = true });
     for (const std::string_view target : kMonolithicTargets) {
         Require(
             !kb::game::FirstUnsupportedPackagedRuntimeModule(target, supported).has_value(),
@@ -261,6 +266,34 @@ void RunPackagedRuntimeModuleContractTests() {
     Require(
         !std::filesystem::exists(outputPack),
         "Android cooker wrote a package after rejecting an unsupported module");
+
+    for (const std::string_view target : { "Windows.x64", "Android.ASTC.arm64", "WebGL.wasm32" }) {
+        for (const bool enabled : { false, true }) {
+            auto duplicate = supported;
+            duplicate.plugins.push_back(duplicate.plugins.front());
+            duplicate.plugins.back().enabled = enabled;
+            const std::string validation =
+                kb::game::ValidatePackagedRuntimeModuleReferences(duplicate);
+            Require(Mentions(validation, "duplicate") && Mentions(validation, "Physics.Jolt"),
+                "Conflicting or repeated module references were not identified");
+            Require(kb::project::ProjectManager::SaveProject(
+                        projectRoot / "Project.21kbproject", duplicate),
+                "Duplicate module fixture could not be written");
+            const auto rejectedCook = kb::game::CookProject(
+                kb::game::ProjectCookRequest{
+                    .projectPath = projectRoot,
+                    .targetProfileId = std::string{ target },
+                    .outputPackPath = outputPack,
+                }, diagnostics);
+            Require(!rejectedCook.succeeded && Mentions(rejectedCook.error, "duplicate") &&
+                    Mentions(rejectedCook.error, "Physics.Jolt") &&
+                    !std::filesystem::exists(outputPack),
+                "Cooker must reject duplicate module references before writing a package");
+        }
+    }
+    supported.plugins.front().name.clear();
+    Require(Mentions(kb::game::ValidatePackagedRuntimeModuleReferences(supported), "empty name"),
+        "Unnamed module references must be rejected before provider construction");
 }
 
 // -------------------------------------------------------------------------
@@ -382,6 +415,8 @@ void RunTextureReuseCookTests() {
     const auto cold = cook();
     Require(cold.first.succeeded && cold.first.textureArtifactCount > 0U &&
         Mentions(cold.second, "cooking texture:"), "Cold texture cook failed");
+    Require(Mentions(cold.second, "WARN /Game/Scenes/Main.21kbscene:Image: [ui-no-canvas]"),
+        "The cook must name a widget outside a Canvas");
     const auto original = fixture.root / "Original.kbpack";
     std::filesystem::copy_file(request.outputPackPath, original);
     request.reusePackPath = request.outputPackPath;
@@ -651,6 +686,81 @@ void RunNativeBehaviourPackagingTests() {
     const auto rejected = kb::game::CookProject(request, diagnostics);
     Require(!rejected.succeeded && Mentions(rejected.error, "native behaviour DLL"),
         "Native package accepted a missing DLL after authoring content was removed");
+}
+
+// A target that cannot load a library links the project's C++ into its host: the cooker lists the
+// sources and the packaged descriptor names the linked module instead of a DLL or authoring paths.
+void RunLinkedNativePackagingTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "linked_native_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    const auto descriptorPath = fixture.root / "Assets" / "Player.native";
+    WriteTextFile(descriptorPath,
+        "name = Player\nsymbol = Tests.LinkedNative\nmodule = ../Binaries/native.dll\n"
+        "source = ../Source/Player/Player.cpp\nentry = kb_register_native_scripts\n"
+        "build = cmake -E echo windows-only\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "Player.cpp", "int PlayerValue() { return 1; }\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "Helpers" / "Helper.cc", "int HelperValue() { return 2; }\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "Player.hpp", "#pragma once\n");
+    WriteTextFile(fixture.root / "Source" / "Player" / "CMakeLists.txt", "project(Player)\n");
+    kb::assets::AssetId nativeId;
+    {
+        kb::scene::Scene authored{kb::scene::SceneMode::PrefabPrivate};
+        Require(authored.Assets().MountProject(fixture.root), "Linked native fixture mount failed");
+        static_cast<void>(authored.Assets().Discover());
+        const auto* asset = authored.Assets().Manager().Registry().FindByPath("/Game/Player.native");
+        Require(asset != nullptr, "Linked native fixture descriptor was not discovered");
+        nativeId = asset->id;
+        const auto entity = authored.Entities().CreateEntity();
+        authored.Components().Behaviours().Set(entity, {
+            .behaviourAssetId = nativeId.value, .backend = kb::scene::BehaviourBackend::Native,
+        });
+        Require(kb::scene::SceneDocumentService::Save(authored,
+            fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"), "Linked native fixture scene save failed");
+    }
+    const auto sealedRoot = TestRoot() / "linked_native_package";
+    std::error_code removeError;
+    std::filesystem::remove_all(sealedRoot, removeError);
+    const auto manifestPath = sealedRoot / "native-link.json";
+    std::ostringstream diagnostics;
+    kb::game::ProjectCookRequest request{
+        .projectPath = fixture.root,
+        .targetProfileId = "Android.ASTC.arm64",
+        .outputPackPath = sealedRoot / "Game.kbpack",
+    };
+    const auto withoutManifest = kb::game::CookProject(request, diagnostics);
+    Require(!withoutManifest.succeeded && Mentions(withoutManifest.error, "native link manifest"),
+        "A host target cooked project C++ without saying where its sources go");
+    request.nativeLinkManifestPath = manifestPath;
+    const auto cooked = kb::game::CookProject(request, diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+    std::ifstream manifestInput{manifestPath, std::ios::binary};
+    const std::string manifest{std::istreambuf_iterator<char>{manifestInput}, std::istreambuf_iterator<char>{}};
+    const std::string key = "module_" + std::to_string(nativeId.value);
+    Require(Mentions(manifest, "\"key\":\"" + key + "\"") && Mentions(manifest, "\"entry\":\"kb_register_native_scripts\"") &&
+            Mentions(manifest, "Source/Player/Player.cpp") && Mentions(manifest, "Source/Player/Helpers/Helper.cc") &&
+            !Mentions(manifest, "Player.hpp") && !Mentions(manifest, "CMakeLists"),
+        "The native link manifest did not list exactly the module's C++ sources");
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(request.outputPackPath, bake::AndroidAstcArm64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "Linked native package could not be mounted");
+    {
+        kb::scene::Scene runtime{kb::scene::SceneMode::PrefabPrivate};
+        Require(runtime.Assets().Manager().MountRuntimePack(pack), "Linked native runtime registry mount failed");
+        const auto descriptor = runtime.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(nativeId);
+        Require(descriptor.IsLoaded() && descriptor->linkedModule == key && descriptor->modulePath.empty() &&
+                descriptor->sourcePath.empty() && !descriptor->build.enabled,
+            "Linked native package kept authoring paths or lost its linked module key");
+    }
+    pack->Unmount();
+    WriteTextFile(descriptorPath, "name = Player\nsymbol = Tests.LinkedNative\nmodule = ../Binaries/native.dll\n");
+    const auto prebuiltOnly = kb::game::CookProject(request, diagnostics);
+    Require(!prebuiltOnly.succeeded && Mentions(prebuiltOnly.error, "needs C++ source"),
+        "A host target accepted a Windows library it cannot load");
 }
 
 // A mod is mounted beside a game whose player requires its release key: the game's packs keep that
@@ -1254,6 +1364,8 @@ void RunWindowsRuntimeModulePackagingTests() {
             .binaryPath = "authoring-path-must-not-ship.dll",
             .enabled = true,
         },
+        kb::project::ProjectPluginReference{ .name = "Input", .enabled = true },
+        kb::project::ProjectPluginReference{ .name = "Script", .enabled = false },
     };
     Require(kb::project::ProjectManager::SaveProject(
                 fixture.root / "Project.21kbproject", descriptor),
@@ -1290,11 +1402,13 @@ void RunWindowsRuntimeModulePackagingTests() {
     Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) ==
             bake::RuntimeAssetPackStatus::Success,
         "Windows runtime-module package did not mount");
-    Require(pack->Manifest().descriptor.plugins.size() == 2U &&
+    Require(pack->Manifest().descriptor.plugins.size() == 4U &&
             pack->Manifest().descriptor.plugins[0].binaryPath ==
                 "RuntimeModules/Binaries/custom.dll" &&
             pack->Manifest().descriptor.plugins[1].binaryPath ==
-                "kb_physics_jolt_plugin.dll",
+                "kb_physics_jolt_plugin.dll" &&
+            pack->Manifest().descriptor.plugins[2].binaryPath.empty() &&
+            pack->Manifest().descriptor.plugins[3].binaryPath.empty(),
         "Cooked manifest did not contain sealed custom and canonical built-in DLL paths");
 
     std::ostringstream runtimeError;
@@ -1533,6 +1647,94 @@ void RunWorldBuildAgreementTest() {
 // A partitioned world placed in the default map ships as its built cells: the cooker builds
 // the world from its object files, follows world -> cell index -> cells and HLOD proxies,
 // and the packaged runtime streams the cells without any loose file.
+// The package is the only asset source. Measure process RAM while actual mesh payloads
+// and navigation cells repeatedly enter and leave the resident set.
+void VerifyPackagedWorldTraversal(kb::scene::Scene& scene, kb::scene::SceneEntity owner,
+    kb::world::WorldPartitionRuntime& world, std::uint64_t source) {
+    using MeshHandle = kb::assets::AssetHandle<kb::render::RenderMeshAssetData>;
+    auto& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "Register packaged mesh loader");
+    const auto privateBytes = [] {
+        PROCESS_MEMORY_COUNTERS_EX counters{};
+        Require(GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)) != 0,
+            "Read process memory during packaged traversal");
+        return static_cast<std::uint64_t>(counters.PrivateUsage);
+    };
+    const auto initialBytes = privateBytes();
+    auto peakBytes = initialBytes;
+    std::uint64_t warmBytes = 0U;
+    std::size_t emptyEntities = 0U, emptyAssets = 0U, decodedFrames = 0U;
+    std::vector<double> times;
+    std::vector<MeshHandle> meshes;
+    const auto tick = [&] {
+        const auto start = Clock::now();
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        struct Visit { kb::scene::Scene* scene; std::vector<MeshHandle> next; } visit{&scene, {}};
+        scene.Transforms().ForEach([](kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, void* context) {
+            auto& visit = *static_cast<Visit*>(context);
+            const auto* renderer = visit.scene->Components().MeshRenderers().TryGet(entity);
+            if (renderer == nullptr || renderer->meshAssetId == 0U) return;
+            auto& assets = visit.scene->Assets().Manager();
+            auto handle = assets.Load<kb::render::RenderMeshAssetData>(kb::assets::AssetId{renderer->meshAssetId});
+            Require(handle.IsLoaded() && (!handle->vertices.empty() || !handle->tangentVertices.empty()),
+                "Decode resident mesh from package without loose sources");
+            Require(assets.SetUnloadPolicy(handle.Id(), kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced), "Release decoded meshes with their consumers");
+            visit.next.push_back(std::move(handle));
+        }, &visit);
+        meshes = std::move(visit.next);
+        static_cast<void>(manager.PruneUnreferenced());
+        decodedFrames += !meshes.empty() ? 1U : 0U;
+        times.push_back(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+        peakBytes = (std::max)(peakBytes, privateBytes());
+        Require(world.Stats().failedUnits == 0U, "Packaged traversal must not fail a cell load");
+        static_cast<void>(world.DrainEvents());
+    };
+    const auto settle = [&] {
+        const auto deadline = Clock::now() + std::chrono::seconds{30};
+        int quiet = 0;
+        while (quiet < 3) {
+            Require(Clock::now() < deadline, "Packaged traversal must settle");
+            tick();
+            const auto stats = world.Stats();
+            quiet = stats.loadingUnits == 0U && stats.unloadingUnits == 0U && stats.requestsThisFrame == 0U ? quiet + 1 : 0;
+            std::this_thread::yield();
+        }
+    };
+    const auto move = [&](double x) {
+        Require(world.UpdateSource(source, {.position = {x, 0.0, 10.0}, .loadRadius = 30.0, .unloadRadius = 40.0}), "Update packaged source");
+    };
+    for (unsigned round = 0U; round < 40U; ++round) {
+        for (unsigned jump = 0U; jump < 6U; ++jump) { move(jump % 2U ? 138.0 : 10.0); tick(); }
+        for (int cell = 0; cell < 3; ++cell) {
+            move(cell * 64.0 + 10.0);
+            world.SetDataLayerActive("night", round % 2U == 0U);
+            settle();
+            Require(world.CellState(owner, {cell, 0}) == kb::world::WorldCellState::Loaded, "Visit each packaged cell");
+            Require(!world.IsHlodVisible(owner, {cell, 0}), "Loaded packaged cell replaces its proxy");
+        }
+        world.SetDataLayerActive("night", false);
+        move(5000.0);
+        settle();
+        Require(world.LoadedCells(owner).empty() && world.Stats().visibleHlods == 0U && meshes.empty(), "Unload packaged cells and mesh consumers");
+        if (round == 7U) {
+            warmBytes = privateBytes(); emptyEntities = scene.Entities().Count(); emptyAssets = manager.LoadedCount();
+        } else if (round > 7U) {
+            Require(scene.Entities().Count() == emptyEntities && manager.LoadedCount() == emptyAssets,
+                "Packaged trips must not accumulate entities or loaded assets");
+            Require(privateBytes() <= warmBytes + 4U * 1024U * 1024U, "Warm packaged traversal retains at most 4 MiB of process growth");
+        }
+    }
+    move(10.0); settle();
+    Require(world.CellState(owner, {0, 0}) == kb::world::WorldCellState::Loaded && decodedFrames > 100U, "Return to the starting cell with decoded geometry");
+    std::ranges::sort(times);
+    const auto p99 = times[times.size() * 99U / 100U];
+    Require(peakBytes <= initialBytes + 16U * 1024U * 1024U && p99 < 50.0 && times.back() < 500.0,
+        "Packaged traversal exceeds its process-memory or update-latency envelope");
+    std::printf("packaged_world_traversal rounds=40 teleports=240 frames=%zu decoded_frames=%zu private_start=%llu private_peak=%llu private_end=%llu p99_ms=%.3f max_ms=%.3f\n",
+        times.size(), decodedFrames, static_cast<unsigned long long>(initialBytes), static_cast<unsigned long long>(peakBytes),
+        static_cast<unsigned long long>(privateBytes()), p99, times.back());
+}
+
 void RunPartitionedWorldCookTest() {
     namespace bake = kb::assets::bake;
     const PartitionedWorldFixture placed = BuildPartitionedWorldFixture("partitioned_world");
@@ -1547,6 +1749,8 @@ void RunPartitionedWorldCookTest() {
     Require(Mentions(diagnostics.str(), "built 1 partitioned world(s): 4 cells, 3 HLOD proxies, 3 navigation meshes"),
         "The cooker did not build the partitioned world before collecting assets");
 
+    const auto hiddenAssets = fixture.root / "Assets.hidden";
+    std::filesystem::rename(fixture.root / "Assets", hiddenAssets);
     auto pack = std::make_shared<bake::RuntimeAssetPack>();
     Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
         "Partitioned world package could not be mounted");
@@ -1566,7 +1770,7 @@ void RunPartitionedWorldCookTest() {
         runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
             .assetId = worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
         kb::world::WorldPartitionRuntime world{ runtime };
-        static_cast<void>(world.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }));
+        const auto source = world.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 });
         const auto deadline = Clock::now() + std::chrono::seconds{ 30 };
         while (world.CellState(owner.Entity(), { 0, 0 }) != kb::world::WorldCellState::Loaded && Clock::now() < deadline) {
             static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
@@ -1586,8 +1790,10 @@ void RunPartitionedWorldCookTest() {
             "The packaged world did not stream the navigation tiles of its first cell");
         const kb::scene::NavPathResult path = runtime.Navigation().FindPath(kb::math::DVec3{ 3.0, 0.0, 4.0 }, kb::math::DVec3{ 50.0, 0.0, 4.0 });
         Require(path.status == kb::scene::NavPathStatus::Complete, "Agents cannot find a path over the packaged navigation tiles");
+        VerifyPackagedWorldTraversal(runtime, owner.Entity(), world, source);
     }
     pack->Unmount();
+    std::filesystem::rename(hiddenAssets, fixture.root / "Assets");
 
     // A world region's cells and proxies, and a data layer's cells, split into chunk packs of
     // their own; the set streams them from there.
@@ -1822,7 +2028,7 @@ void RunSceneMetaCookValidationTests() {
 void RunAuthoritativeMaterialGraphCookTest() {
     namespace bake = kb::assets::bake;
 
-    Require(kb::render::kRenderMaterialGraphShaderWrapperVersion == 9ULL,
+    Require(kb::render::kRenderMaterialGraphShaderWrapperVersion == 11ULL,
         "Material graph shader cache version was not advanced for WGSL artifacts");
     Require(kb::render::RenderMaterialGraphShaderBackendName(
                 kb::render::RenderMaterialGraphShaderBackend::Wgsl) == "wgsl" &&
@@ -2515,6 +2721,7 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "--native-behaviours") {
         RunNativeBehaviourPackagingTests();
+        RunLinkedNativePackagingTests();
         std::fputs("kb_game_core native-behaviour package tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
@@ -2527,6 +2734,7 @@ int main(int argc, char** argv) {
     RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();
     RunNativeBehaviourPackagingTests();
+    RunLinkedNativePackagingTests();
     RunSceneMetaCookValidationTests();
     RunAuthoritativeMaterialGraphCookTest();
     RunNarrowingTests();

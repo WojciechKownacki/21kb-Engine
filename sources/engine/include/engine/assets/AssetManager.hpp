@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -87,6 +88,10 @@ public:
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 
     [[nodiscard]] bool RegisterLoader(std::unique_ptr<IAssetLoader> loader);
+    // Called by stable host code; dynamic modules use EngineModuleContext::RegisterAssetLoader
+    // so the wrapper and shared ownership control blocks also belong to the host.
+    [[nodiscard]] bool RegisterLoader(std::unique_ptr<IAssetLoader> loader, std::shared_ptr<void> libraryLifetime);
+    [[nodiscard]] bool UnregisterLoader(std::string_view type);
     [[nodiscard]] bool RegisterAsset(AssetMetadata metadata);
     // File-less derived resources owned by a runtime system. They cannot overwrite authored
     // assets, including immutable package entries. The owner releases them when it detaches.
@@ -158,7 +163,8 @@ public:
         ++asyncLoadGenerations_[id.value];
         asyncLoads_.erase(id.value);
         asyncLoadErrors_.erase(id.value);
-        std::shared_ptr<void> erased = std::move(payload);
+        std::shared_ptr<void> erased = loader->RetainPayload(std::move(payload));
+        TrackAssetMemory(erased, std::nullopt);
         cache_[id.value] = CachedAsset{
             .retained = erased,
             .weak = erased,
@@ -239,6 +245,13 @@ public:
         std::uint32_t peakSimultaneousLoads = 0U;
     };
     [[nodiscard]] AsyncLoadConcurrencyStats AsyncLoadConcurrency() const noexcept;
+    struct AsyncLoadLifecycleStats {
+        std::uint64_t cancelledBeforeLoad = 0U;
+        std::uint64_t cancelledDuringLoad = 0U;
+        std::uint64_t discardedResults = 0U;
+        std::uint64_t publishedLoads = 0U;
+    };
+    [[nodiscard]] AsyncLoadLifecycleStats AsyncLoadLifecycle() const noexcept;
     void PumpAsyncLoads();
     [[nodiscard]] AsyncAssetLoadStatus AsyncLoadStatus(AssetId id) const noexcept;
     [[nodiscard]] std::string AsyncLoadError(AssetId id) const;
@@ -250,6 +263,14 @@ public:
     [[nodiscard]] std::uint64_t LoadGeneration(AssetId id) const noexcept;
     [[nodiscard]] bool IsLoaded(AssetId id) const noexcept;
     [[nodiscard]] std::size_t LoadedCount() const noexcept;
+    struct AssetMemoryStats {
+        std::uint64_t payloadBytes = 0U;
+        std::size_t measuredPayloads = 0U;
+        std::size_t unmeasuredPayloads = 0U;
+    };
+    // Published payloads still held by the cache or external handles, including after Unload().
+    // Pending decoder work is excluded. Unknown payload sizes are counted explicitly.
+    [[nodiscard]] AssetMemoryStats MemoryUsage();
 
     // LIB-158: the number of live strong holders (AssetHandle<T>/AssetRef<T>)
     // of a cached asset's payload — 0 if the asset is not cached or its
@@ -318,6 +339,10 @@ private:
     friend class AssetDiscoveryService;
     friend class AssetRuntimeLoadService;
 
+    void TrackAssetMemory(const std::shared_ptr<void>& payload, std::optional<std::uint64_t> bytes);
+    std::map<std::weak_ptr<void>, std::optional<std::uint64_t>, std::owner_less<std::weak_ptr<void>>> memoryAllocations_;
+    std::uint32_t memoryPublications_ = 0U;
+
     struct CachedAsset {
         // Strong reference the cache itself holds — present only under
         // AssetUnloadPolicy::Retain. Null under ReleaseWhenUnreferenced, so
@@ -337,10 +362,14 @@ private:
 
     struct AsyncPreparedAsset {
         AssetLoadResult result;
+        bool discarded = false;
         std::string typeName;
     };
 
     struct AsyncPreparedState {
+        std::shared_ptr<AssetLoadCancellation> cancellation = std::make_shared<AssetLoadCancellation>();
+        std::atomic_bool started{false};
+        std::atomic_bool accounted{false};
         std::mutex mutex;
         std::optional<AsyncPreparedAsset> prepared;
     };
@@ -394,6 +423,10 @@ private:
     std::vector<std::unique_ptr<IAssetLoader>> loaders_;
     std::unordered_map<std::uint64_t, CachedAsset> cache_;
     mutable std::mutex loaderExecutionMutex_;
+    std::atomic_uint64_t cancelledBeforeLoad_{0U};
+    std::atomic_uint64_t cancelledDuringLoad_{0U};
+    std::atomic_uint64_t discardedResults_{0U};
+    std::atomic_uint64_t publishedLoads_{0U};
     std::unordered_map<std::uint64_t, AsyncLoadRecord> asyncLoads_;
     std::unordered_map<std::uint64_t, std::string> asyncLoadErrors_;
     std::unordered_map<std::uint64_t, std::uint64_t> asyncLoadGenerations_;

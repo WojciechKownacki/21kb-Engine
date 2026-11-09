@@ -1,7 +1,9 @@
 #include "private/ui/ScreenUIRenderer.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/ui/DynamicImageAsset.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/scene/Scene.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "renderer/RendererDebugLog.hpp"
@@ -56,7 +58,7 @@ bool ScreenUIRenderer::Initialize() {
 }
 
 void ScreenUIRenderer::Shutdown(RenderResourceRegistry& resources) noexcept {
-    fontAtlas_.Shutdown(resources);
+    ReleaseAllScenes(resources);
     backgroundBlur_.Shutdown();
     composite_.Shutdown();
     imageBindings_.clear();
@@ -82,13 +84,14 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
         return false;
     }
     if (desc.frame->elements.empty()) {
+        if (desc.scene != nullptr) desc.scene->UI().PublishTextLayouts({});
         return true;
     }
     resolvedTextures_.clear();
     imageBindings_.clear();
     lastTextFailure_ = {};
     ResolveImages(desc);
-    const ScreenUIFontPreparation fonts = fontAtlas_.Prepare(desc.sceneId, *desc.assets, *desc.resources, *desc.frame);
+    const ScreenUIFontPreparation fonts = fontAtlas_.Prepare(desc.sceneId, *desc.assets, *desc.resources, *desc.frame, composite_.SupportsDistanceField());
     if (fonts.failureReason != nullptr) {
         lastTextFailure_ = TextFailure{.entityId = fonts.failedEntity, .reason = fonts.failureReason};
     }
@@ -96,6 +99,41 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
     // still streaming in, or one bad markup string, used to erase every rectangle, image and
     // border in the scene's UI.
     ResolveFonts(desc, fonts.runs);
+    if (desc.scene != nullptr) {
+        std::vector<kb::scene::SceneUITextLayout> layouts;
+        for (const auto& run : drawableRuns_) {
+            const auto element = std::ranges::find_if(desc.frame->elements, [&](const auto& candidate) {
+                return candidate.entity.Id() == run.entity && candidate.text &&
+                    (candidate.inputField || !run.links.empty());
+            });
+            if (element == desc.frame->elements.end()) continue;
+            kb::scene::SceneUITextLayout layout{element->entity, std::string{kb::scene::UITextContent(*element->text)}, {}};
+            if (element->inputField) for (const auto& caret : run.carets) {
+                layout.carets.push_back({caret.sourceOffset, caret.x, caret.top, caret.bottom, caret.leading});
+            }
+            const auto mapPoint = [&](float x, float y) {
+                const float u = (x - element->rect.x) / element->rect.width;
+                const float v = (y - element->rect.y) / element->rect.height;
+                const auto& a = element->corners;
+                return kb::math::Vec2{(a[0].x + (a[1].x - a[0].x) * u) * (1.0F - v) +
+                                          (a[3].x + (a[2].x - a[3].x) * u) * v,
+                                      (a[0].y + (a[1].y - a[0].y) * u) * (1.0F - v) +
+                                          (a[3].y + (a[2].y - a[3].y) * u) * v};
+            };
+            for (const auto& glyph : run.glyphs) {
+                if (glyph.link == 0U || glyph.link > run.links.size()) continue;
+                const float left = glyph.cellClip ? std::max(glyph.advanceLeft, glyph.cellLeft) : glyph.advanceLeft;
+                const float right = glyph.cellClip ? std::min(glyph.advanceRight, glyph.cellRight) : glyph.advanceRight;
+                if (left >= right) continue;
+                layout.links.push_back({{mapPoint(left, glyph.lineTop),
+                                          mapPoint(right, glyph.lineTop),
+                                          mapPoint(right, glyph.lineBottom),
+                                          mapPoint(left, glyph.lineBottom)}, run.links[glyph.link - 1U], glyph.link});
+            }
+            layouts.push_back(std::move(layout));
+        }
+        desc.scene->UI().PublishTextLayouts(std::move(layouts));
+    }
     if (lastTextFailure_.reason != nullptr) {
         WriteRendererDebugLog("screen_ui", "Submit dropped unpreparable text and kept the rest of the UI");
     }
@@ -131,9 +169,12 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
 
 void ScreenUIRenderer::ReleaseScene(std::uint64_t sceneId, RenderResourceRegistry& resources) noexcept {
     fontAtlas_.ReleaseScene(sceneId, resources);
+    std::erase_if(dynamicTextures_,[&](const auto& t){if(t.sceneId!=sceneId)return false;if(bgfx::isValid(t.texture))bgfx::destroy(t.texture);return true;});
 }
 
 void ScreenUIRenderer::ReleaseAllScenes(RenderResourceRegistry& resources) noexcept {
+    for(const auto& t:dynamicTextures_)if(bgfx::isValid(t.texture))bgfx::destroy(t.texture);
+    dynamicTextures_.clear();
     fontAtlas_.Shutdown(resources);
     imageBindings_.clear();
     resolvedTextures_.clear();
@@ -148,6 +189,11 @@ bool ScreenUIRenderer::IsInitialized() const noexcept {
 }
 
 void ScreenUIRenderer::ResolveImages(const ScreenUISubmitDesc& desc) {
+    std::erase_if(dynamicTextures_,[&](const auto& texture){
+        if(texture.sceneId!=desc.sceneId)return false;
+        const bool live=std::ranges::any_of(desc.frame->elements,[&](const auto& e){return (e.rawImage&&e.rawImage->imageAssetId==texture.assetId)||(e.image&&e.image->imageAssetId==texture.assetId);});
+        if(!live&&bgfx::isValid(texture.texture))bgfx::destroy(texture.texture);return !live;
+    });
     for (const kb::scene::SceneUIFrameElement& element : desc.frame->elements) {
         ForEachImageAsset(element, [&](std::uint64_t assetId, RenderTextureColorSpace colorSpace,
                                        ScreenUITextureSource source) {
@@ -155,6 +201,23 @@ void ScreenUIRenderer::ResolveImages(const ScreenUISubmitDesc& desc) {
                     return image.assetId == assetId && image.source == source;
                 }) != imageBindings_.end()) {
                 return;
+            }
+            const auto* metadata=desc.assets->Registry().Find(kb::assets::AssetId{assetId});
+            if(metadata&&metadata->type=="DynamicImage") {
+                const auto image=desc.assets->AcquireLoaded<kb::scene::DynamicImageAsset>(metadata->id);
+                if(!image.IsLoaded()||image->width==0||image->height==0||image->width>1920||image->height>1080||image->rgba.size()!=static_cast<std::size_t>(image->width)*image->height*4)return;
+                auto found=std::ranges::find_if(dynamicTextures_,[&](const auto& t){return t.sceneId==desc.sceneId&&t.assetId==assetId;});
+                if(found==dynamicTextures_.end()){dynamicTextures_.push_back({.sceneId=desc.sceneId,.assetId=assetId});found=dynamicTextures_.end()-1;}
+                if(found->width!=image->width||found->height!=image->height){
+                    if(bgfx::isValid(found->texture))bgfx::destroy(found->texture);
+                    found->width=static_cast<std::uint16_t>(image->width);found->height=static_cast<std::uint16_t>(image->height);found->revision=0;
+                    // The UI composite consumes display-encoded image samples directly.
+                    found->texture=bgfx::createTexture2D(found->width,found->height,false,1,bgfx::TextureFormat::RGBA8,BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP);
+                }
+                if(!bgfx::isValid(found->texture))return;
+                if(found->revision!=image->revision){bgfx::updateTexture2D(found->texture,0,0,0,0,found->width,found->height,bgfx::copy(image->rgba.data(),static_cast<std::uint32_t>(image->rgba.size())));found->revision=image->revision;}
+                imageBindings_.push_back({.assetId=assetId,.source=source,.width=found->width,.height=found->height});
+                AppendResolvedTexture({.key={.source=source,.assetId=assetId},.texture=found->texture,.width=found->width,.height=found->height});return;
             }
             const RenderTextureHandle handle = desc.resourceMap->ResolveTexture(assetId, colorSpace);
             const RenderTextureResource* texture = desc.resources->FindTexture(handle);
@@ -182,25 +245,23 @@ void ScreenUIRenderer::ResolveFonts(const ScreenUISubmitDesc& desc, std::span<co
     drawableRuns_.clear();
     drawableRuns_.reserve(textRuns.size());
     for (const ScreenUITextRun& run : textRuns) {
-        const ScreenUITextureKey key{.source = ScreenUITextureSource::FontAtlas,
-                                     .assetId = run.fontAssetId,
-                                     .pixelSize = run.pixelSize};
-        if (std::ranges::find(resolvedTextures_, key, &ScreenUIResolvedTexture::key) != resolvedTextures_.end()) {
-            drawableRuns_.push_back(run);
-            continue;
-        }
-        const bgfx::TextureHandle texture =
-            fontAtlas_.Resolve(desc.sceneId, run.fontAssetId, run.pixelSize, *desc.resources);
-        if (!bgfx::isValid(texture)) {
+        const auto resolve = [&](std::uint64_t assetId, const std::string& variations, std::uint16_t width, std::uint16_t height) {
+            const ScreenUITextureKey key{.source = ScreenUITextureSource::FontAtlas,
+                                         .assetId = assetId, .pixelSize = run.pixelSize, .fontVariations = variations,
+                                         .distanceField = run.distanceField};
+            if (std::ranges::find(resolvedTextures_, key, &ScreenUIResolvedTexture::key) != resolvedTextures_.end()) return true;
+            const bgfx::TextureHandle texture = fontAtlas_.Resolve(desc.sceneId, assetId, run.pixelSize, variations, run.distanceField, *desc.resources);
+            if (!bgfx::isValid(texture)) return false;
+            AppendResolvedTexture(ScreenUIResolvedTexture{.key = key, .texture = texture, .width = width, .height = height});
+            return true;
+        };
+        if (!resolve(run.fontAssetId, run.fontVariations, run.atlasWidth, run.atlasHeight) ||
+            (run.fallbackFontAssetId != 0U && !resolve(run.fallbackFontAssetId, {}, run.fallbackAtlasWidth, run.fallbackAtlasHeight))) {
             if (lastTextFailure_.reason == nullptr) {
                 lastTextFailure_ = TextFailure{.entityId = run.entity, .reason = "Font atlas texture is unavailable"};
             }
             continue;
         }
-        AppendResolvedTexture(ScreenUIResolvedTexture{.key = key,
-                                                       .texture = texture,
-                                                       .width = run.atlasWidth,
-                                                       .height = run.atlasHeight});
         drawableRuns_.push_back(run);
     }
 }

@@ -515,8 +515,9 @@ void RuntimeLoadableSourceMustDecodeSemantically() {
     std::filesystem::remove_all(root, error);
 }
 
-void VertexDomainGraphMustContainCompleteVertexShaderMatrix() {
-    const asset_bake::BakeTargetProfile profile = asset_bake::WindowsX64BakeTargetProfile();
+void GraphMustContainRequiredShaderMatrix(bool compact = false) {
+    const asset_bake::BakeTargetProfile profile = compact
+        ? asset_bake::WebGlWasm32BakeTargetProfile() : asset_bake::WindowsX64BakeTargetProfile();
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() / "21kb_runtime_pack_graph_shader_validation";
     const std::filesystem::path packPath = root / "missing-vertex.kbpack";
@@ -552,6 +553,13 @@ void VertexDomainGraphMustContainCompleteVertexShaderMatrix() {
     };
     wpo.id = MakeRenderMaterialGraphLinkId(wpo);
     graph.links.push_back(wpo);
+    if (compact) {
+        graph.shadingModel = "subsurface";
+        auto& color = graph.links.back();
+        color.toPin = "subsurfaceColor";
+        color.toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput,color.toPin,false);
+        color.id = MakeRenderMaterialGraphLinkId(color);
+    }
 
     RenderMaterialAssetData material{};
     material.graphSourceAssetId = graphId.value;
@@ -643,9 +651,9 @@ void VertexDomainGraphMustContainCompleteVertexShaderMatrix() {
     const RuntimeAssetPackValidationResult validation =
         ValidateRuntimeAssetPack(pack, profile);
     Require(!validation.Succeeded() &&
-            validation.error.find("missing a required vertex shader") != std::string::npos &&
+            validation.error.find(compact ? "GBufferCompact/essl" : "missing a required vertex shader") != std::string::npos &&
             validation.error.find(materialPath) != std::string::npos,
-        "Runtime pack validation accepted a vertex-domain material without vertex shaders");
+        "Runtime pack validation accepted a graph without its required vertex or compact fragment shader");
     pack->Unmount();
     std::filesystem::remove_all(root, error);
 }
@@ -774,7 +782,8 @@ void RunRuntimeAssetPackValidationTests() {
     PackagedTerrainPreservesGeometryAndLayers();
     RuntimeLoadableSourceMustDecodeSemantically();
     RuntimeAudioSourceMustBeDecodeReady();
-    VertexDomainGraphMustContainCompleteVertexShaderMatrix();
+    GraphMustContainRequiredShaderMatrix();
+    GraphMustContainRequiredShaderMatrix(true);
     StreamedTextureMipsAreValidatedAsOneChain();
 }
 

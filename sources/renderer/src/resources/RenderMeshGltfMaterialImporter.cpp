@@ -123,6 +123,8 @@ namespace {
         &material.normal_texture,
         &material.occlusion_texture,
         &material.emissive_texture,
+        &material.clearcoat.clearcoat_texture,
+        &material.clearcoat.clearcoat_roughness_texture,
     };
     for (const cgltf_texture_view* view : views) {
         if (view != nullptr && IsRepresentableMaterialUvTransform(*view)) {
@@ -162,6 +164,12 @@ void ApplyMaterialUvTransform(RenderMaterialDesc& desc, const cgltf_material& ma
     embedded.desc.normalScale = material->normal_texture.texture == nullptr ? 1.0F : material->normal_texture.scale;
     embedded.desc.occlusionStrength = material->occlusion_texture.texture == nullptr ? 1.0F : material->occlusion_texture.scale;
     embedded.desc.emissiveStrength = material->has_emissive_strength ? material->emissive_strength.emissive_strength : 1.0F;
+    if (material->has_clearcoat) {
+        embedded.desc.clearcoatFactor = material->clearcoat.clearcoat_factor;
+        embedded.desc.clearcoatRoughnessFactor = material->clearcoat.clearcoat_roughness_factor;
+        embedded.clearcoatTexturePath = TextureUriOf(material->clearcoat.clearcoat_texture);
+        embedded.clearcoatRoughnessTexturePath = TextureUriOf(material->clearcoat.clearcoat_roughness_texture);
+    }
     embedded.desc.alphaCutoff = material->alpha_cutoff;
     embedded.desc.alphaMode = AlphaModeOf(material->alpha_mode);
     embedded.desc.doubleSided = material->double_sided;

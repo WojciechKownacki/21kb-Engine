@@ -1,15 +1,18 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAssetCopy.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneTemplates.hpp"
+#include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
@@ -17,7 +20,11 @@
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #endif
 
+#include <algorithm>
 #include <optional>
+#include <span>
+#include <sstream>
+#include <vector>
 #include <string>
 
 namespace kb::cli {
@@ -74,6 +81,88 @@ namespace {
         return kb::scene::BehaviourTickGroup::Presentation;
     }
     return std::nullopt;
+}
+
+// Applies the --set name=value assignments to the exposed variables of the script a behaviour runs. Only a value that
+// differs from the script's default is stored, as the editor does; a name the script does not expose, or a value its
+// type does not accept, fails with the variables that are available.
+[[nodiscard]] bool ApplyVariableAssignments(kb::scene::Scene& scene, const kb::assets::AssetMetadata& script,
+    std::span<const std::string> assignments, std::vector<kb::scene::BehaviourVariableOverride>& overrides, std::ostream& out,
+    std::ostream& err) {
+    const std::string path = script.virtualPath.generic_string();
+    kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset;
+    if (script.type == kb::script::ScriptAssetTypes::LuaScript) {
+        asset = scene.Assets().Manager().Load<kb::script::LuaScriptAsset>(script.id);
+    }
+    if (!asset.IsLoaded()) {
+        err << "error: --set needs a Lua script with exposed variables; " << path << " (type " << script.type << ") has none\n";
+        return false;
+    }
+    const kb::script::LuaScriptAsset& exposed = *asset.Get();
+    const auto available = [&exposed]() {
+        std::string text;
+        for (const kb::script::ScriptApiPin& pin : exposed.exposedVariables) {
+            text += (text.empty() ? " " : ", ") + pin.name + " (" + kb::script::ToString(pin.type) + ")";
+        }
+        return text.empty() ? std::string{ " none" } : text;
+    };
+    for (const std::string& assignment : assignments) {
+        const std::size_t separator = assignment.find('=');
+        if (separator == std::string::npos || separator == 0U) {
+            err << "error: --set expects name=value, got '" << assignment << "'\n";
+            return false;
+        }
+        const std::string name = assignment.substr(0U, separator);
+        const auto pin = std::ranges::find(exposed.exposedVariables, name, &kb::script::ScriptApiPin::name);
+        if (pin == exposed.exposedVariables.end()) {
+            err << "error: " << path << " exposes no variable '" << name << "'; available:" << available() << '\n';
+            return false;
+        }
+        const std::size_t index = static_cast<std::size_t>(pin - exposed.exposedVariables.begin());
+        std::optional<kb::script::ScriptValue> value = kb::script::TryParseValueText(std::string_view{ assignment }.substr(separator + 1U), pin->type);
+        if (!value.has_value()) {
+            err << "error: '" << assignment.substr(separator + 1U) << "' is not a valid " << kb::script::ToString(pin->type)
+                << " for variable '" << name << "'\n";
+            return false;
+        }
+        std::erase_if(overrides, [&name](const kb::scene::BehaviourVariableOverride& entry) { return entry.name == name; });
+        const bool isDefault = index < exposed.exposedVariableDefaults.size() && *value == exposed.exposedVariableDefaults[index];
+        out << "  " << name << " = " << kb::script::FormatValueText(*value) << (isDefault ? " (script default, no override stored)" : "") << '\n';
+        if (!isDefault) {
+            overrides.push_back(kb::scene::BehaviourVariableOverride{ .name = name, .value = std::move(*value) });
+        }
+    }
+    return true;
+}
+
+// Each node's world position from its own and its parents' local transforms, composed as the scene
+// does: parent position + parent rotation * (parent scale * local position).
+[[nodiscard]] std::vector<kb::math::Vec3> NodeWorldPositions(std::span<const kb::scene::ScenePrefabNodeDesc> nodes) {
+    struct Pose {
+        kb::math::Vec3 position{};
+        kb::math::Quat rotation{};
+        kb::math::Vec3 scale{ 1.0F, 1.0F, 1.0F };
+    };
+    std::vector<std::optional<Pose>> poses(nodes.size());
+    const auto resolve = [&](const auto& self, std::size_t index, std::size_t depth) -> Pose {
+        if (poses[index].has_value()) return *poses[index];
+        const kb::scene::TransformComponent& local = nodes[index].transform;
+        Pose pose{ local.localPosition, local.localRotation, local.localScale };
+        const std::uint32_t parent = nodes[index].parentNode;
+        if (parent != kb::scene::ScenePrefabNodeDesc::NoParent && parent < nodes.size() && depth < nodes.size()) {
+            const Pose up = self(self, parent, depth + 1U);
+            const kb::math::Vec3 scaled{ up.scale.x * pose.position.x, up.scale.y * pose.position.y, up.scale.z * pose.position.z };
+            pose.position = up.position + kb::math::Rotate(up.rotation, scaled);
+            pose.rotation = up.rotation * pose.rotation;
+            pose.scale = kb::math::Vec3{ up.scale.x * pose.scale.x, up.scale.y * pose.scale.y, up.scale.z * pose.scale.z };
+        }
+        poses[index] = pose;
+        return pose;
+    };
+    std::vector<kb::math::Vec3> positions;
+    positions.reserve(nodes.size());
+    for (std::size_t index = 0U; index < nodes.size(); ++index) positions.push_back(resolve(resolve, index, 0U).position);
+    return positions;
 }
 
 [[nodiscard]] std::string ComponentSummary(const kb::scene::ScenePrefabNodeDesc& node) {
@@ -179,6 +268,7 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
 
     io.out << "scene: " << loaded.document.name << " (" << loaded.document.worldPrefab.NodeCount() << " nodes)\n";
     const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
+    const std::vector<kb::math::Vec3> world = NodeWorldPositions(nodes);
     for (std::size_t index = 0U; index < nodes.size(); ++index) {
         const kb::scene::ScenePrefabNodeDesc& node = nodes[index];
         io.out << "  [" << index << "] " << node.name;
@@ -205,8 +295,13 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
                    << ", order " << behaviour.executionOrder
                    << (behaviour.enabled ? "" : ", disabled")
                    << ")";
+            for (std::size_t variable = 0U; variable < node.components.behaviourVariableOverrides.size(); ++variable) {
+                const kb::scene::BehaviourVariableOverride& entry = node.components.behaviourVariableOverrides[variable];
+                io.out << (variable == 0U ? " variables: " : ", ") << entry.name << '=' << kb::script::FormatValueText(entry.value);
+            }
         }
-        io.out << '\n';
+        io.out << " @ " << FormatCliNumber(world[index].x) << ',' << FormatCliNumber(world[index].y) << ','
+               << FormatCliNumber(world[index].z) << '\n';
     }
     return 0;
 }
@@ -288,6 +383,24 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
+    // An entity runs one behaviour: replacing another one silently would drop its logic.
+    if (const auto& current = target->components.behaviour;
+        current.has_value() && current->behaviourAssetId != component->behaviourAssetId && !arguments.Flag("--replace")) {
+        const kb::assets::AssetMetadata* running = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ current->behaviourAssetId });
+        io.err << "error: '" << *nodeName << "' already runs "
+               << (running != nullptr ? running->virtualPath.generic_string() : std::string{ "a behaviour" })
+               << "; an entity runs one behaviour - put both in one script, attach it to a child entity, or pass --replace\n";
+        return 1;
+    }
+    // Overrides belong to the script they were set for: another script starts without any.
+    if (!target->components.behaviour.has_value() || target->components.behaviour->behaviourAssetId != component->behaviourAssetId) {
+        target->components.behaviourVariableOverrides.clear();
+    }
+    std::ostringstream assigned;
+    if (const std::vector<std::string> assignments = arguments.Options("--set");
+        !assignments.empty() && !ApplyVariableAssignments(scene, *metadata, assignments, target->components.behaviourVariableOverrides, assigned, io.err)) {
+        return 1;
+    }
     target->components.behaviour = *component;
 
     if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {
@@ -297,7 +410,8 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 
     io.out << "attached " << metadata->virtualPath.generic_string()
            << " (" << BackendName(component->backend) << ") to node '" << *nodeName
-           << "' in " << resolved.path.generic_string() << '\n';
+           << "' in " << resolved.path.generic_string() << '\n'
+           << assigned.str();
     return 0;
 }
 
@@ -417,6 +531,66 @@ int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
         }
         io.out << "Startup scene: " << target.virtualPath << '\n';
     }
+    return 0;
+}
+
+// File > Save Scene As without the editor: a copy of a scene under a new name, with an identity of its own.
+int RunSceneDuplicateCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!project.has_value() || !name.has_value()) {
+        io.err << "error: scene-duplicate requires --project <dir> --name <Name> [--scene <path>] [--folder Assets/Scenes]\n";
+        return 1;
+    }
+    kb::scene::Scene scene;
+    std::string error;
+    if (!MountProjectAssets(scene, kb::assets::Utf8Path(*project), error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const SceneFileResolution source = ResolveSceneFile(arguments, &scene);
+    if (!source.succeeded) {
+        io.err << "error: " << source.error << '\n';
+        return 1;
+    }
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(*project, error);
+    if (projectFile.empty()) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const kb::scene::NewScenePath target = kb::scene::SceneTemplates::ResolveNewScene(
+        projectFile.parent_path(), arguments.Option("--folder").value_or("Assets/Scenes"), *name);
+    if (!target.error.empty()) {
+        io.err << "error: " << target.error << '\n';
+        return 1;
+    }
+    std::error_code fileError;
+    std::filesystem::path targetMeta = target.file;
+    targetMeta.replace_extension(".meta");
+    // Whatever fails after the file is copied takes the copy and its .meta away again.
+    const auto fail = [&](const std::string& reason) {
+        std::filesystem::remove(target.file, fileError);
+        std::filesystem::remove(targetMeta, fileError);
+        io.err << "error: " << reason << '\n';
+        return 1;
+    };
+    std::filesystem::copy_file(source.path, target.file, std::filesystem::copy_options::none, fileError);
+    if (fileError) {
+        io.err << "error: the scene could not be copied: " << fileError.message() << '\n';
+        return 1;
+    }
+    if (!kb::scene::ReidentifyCopiedSceneAssets(target.file, error)) {
+        return fail(error);
+    }
+    kb::scene::SceneDocumentLoadResult copy = kb::scene::SceneDocumentService::Load(target.file);
+    if (!copy.succeeded) {
+        return fail("the copy could not be read: " + copy.error);
+    }
+    copy.document.name = *name;
+    if (!kb::scene::SceneDocumentService::Save(copy.document, target.file)) {
+        return fail("the copy could not be named");
+    }
+    io.out << "Scene copied: " << target.virtualPath << " (from " << source.path.generic_string() << ").\n";
     return 0;
 }
 

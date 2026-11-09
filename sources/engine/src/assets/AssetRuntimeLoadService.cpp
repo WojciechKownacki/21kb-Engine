@@ -9,6 +9,7 @@
 namespace kb::assets {
 
 std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
+    AssetManager& manager,
     AssetId id,
     std::type_index expectedType,
     const AssetRegistry& registry,
@@ -69,17 +70,15 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         .resolvedPath = resolvedPath,
         .runtimePack = runtimePack,
     };
-    if (const std::optional<std::string> diagnostic = loader->ValidateRuntimeDependencies(request, registry);
-        diagnostic.has_value()) {
-        errorMessage = "Asset dependency validation failed: " + *diagnostic;
-        return {};
-    }
-
     AssetLoadResult result;
     {
         std::unique_lock lock{ loaderExecutionMutex, std::defer_lock };
         if (!loader->AllowsConcurrentLoad()) {
             lock.lock();
+        }
+        if (const auto diagnostic = loader->ValidateRuntimeDependencies(request, registry)) {
+            errorMessage = "Asset dependency validation failed: " + *diagnostic;
+            return {};
         }
         result = loader->Load(request);
     }
@@ -88,6 +87,7 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         return {};
     }
 
+    manager.TrackAssetMemory(result.asset, result.residentBytes);
     cache[id.value] = AssetManager::CachedAsset{
         .retained = policy == AssetUnloadPolicy::Retain ? result.asset : std::shared_ptr<void>{},
         .weak = result.asset,

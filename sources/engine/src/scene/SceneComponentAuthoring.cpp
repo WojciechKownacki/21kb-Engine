@@ -169,9 +169,6 @@ std::string_view SceneComponentAuthoring::CanonicalName(std::string_view id) noe
     if (id == "Audio Source") return "AudioSource";
     if (id == "Audio Listener") return "AudioListener";
     if (id == "3D Radiance Emitter") return "Light";
-    if (id == "Kreska przestrzenna") return "Line Renderer";
-    if (id == "Wst\xC4\x99" "ga historii") return "Trail Renderer";
-    if (id == "Echo soczewki") return "Lens Flare";
     return id;
 }
 

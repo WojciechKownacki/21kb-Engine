@@ -33,6 +33,9 @@ bool SceneTimelines::Exists(std::uint64_t instance) const noexcept {
 bool SceneTimelines::Play(std::uint64_t instance) noexcept {
     return SceneTimelineService::Play(scene_, instance);
 }
+bool SceneTimelines::SetPlayback(std::uint64_t instance, float rate, bool loop) noexcept {
+    return SceneTimelineService::SetPlayback(scene_, instance, rate, loop);
+}
 bool SceneTimelines::Pause(std::uint64_t instance) noexcept {
     return SceneTimelineService::Pause(scene_, instance);
 }

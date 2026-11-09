@@ -77,6 +77,14 @@ void SetError(std::string* output, std::string value) { if (output != nullptr) *
     return image;
 }
 
+[[nodiscard]] std::optional<HeightImage> DecodeHeightImage(const std::filesystem::path& path, std::string* error) {
+    const std::vector<std::uint8_t> bytes = ReadFile(path);
+    if (bytes.empty()) { SetError(error, "Heightmap file could not be read"); return std::nullopt; }
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    return extension == ".png" ? DecodePng(bytes, error) : DecodeRaw(bytes, error);
+}
+
 [[nodiscard]] std::uint32_t ClosestTerrainResolution(std::uint32_t source) noexcept {
     std::uint32_t best = kb::assets::TerrainAsset::MinimumResolution;
     std::uint32_t bestDistance = UINT32_MAX;
@@ -112,11 +120,7 @@ std::optional<kb::assets::TerrainAsset> TerrainHeightmapImporter::Import(
         SetError(error, "Heightmap range is invalid");
         return std::nullopt;
     }
-    const std::vector<std::uint8_t> bytes = ReadFile(path);
-    if (bytes.empty()) { SetError(error, "Heightmap file could not be read"); return std::nullopt; }
-    std::string extension = path.extension().string();
-    std::ranges::transform(extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-    std::optional<HeightImage> image = extension == ".png" ? DecodePng(bytes, error) : DecodeRaw(bytes, error);
+    std::optional<HeightImage> image = DecodeHeightImage(path, error);
     if (!image.has_value()) return std::nullopt;
     const std::uint32_t width = ClosestTerrainResolution(image->width);
     const std::uint32_t height = ClosestTerrainResolution(image->height);
@@ -135,6 +139,17 @@ std::optional<kb::assets::TerrainAsset> TerrainHeightmapImporter::Import(
     }
     if (!kb::assets::IsTerrainAssetValid(terrain, error)) return std::nullopt;
     return terrain;
+}
+
+std::shared_ptr<const TerrainStampImage> TerrainHeightmapImporter::LoadStampImage(
+    const std::filesystem::path& path, std::string* error) {
+    std::optional<HeightImage> image = DecodeHeightImage(path, error);
+    if (!image.has_value()) return nullptr;
+    auto stamp = std::make_shared<TerrainStampImage>();
+    stamp->width = image->width;
+    stamp->height = image->height;
+    stamp->samples = std::move(image->samples);
+    return stamp;
 }
 
 } // namespace kb::terrain_editor

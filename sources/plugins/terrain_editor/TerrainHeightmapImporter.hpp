@@ -1,8 +1,10 @@
 #pragma once
 
+#include "TerrainBrush.hpp"
 #include "engine/assets/TerrainAsset.hpp"
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -20,6 +22,10 @@ public:
     [[nodiscard]] static std::optional<kb::assets::TerrainAsset> Import(
         const std::filesystem::path& path,
         const TerrainHeightmapImportSettings& settings = {},
+        std::string* error = nullptr);
+    // A greyscale image (a PNG of any depth, or a square RAW) as the height image of a Stamp brush.
+    [[nodiscard]] static std::shared_ptr<const TerrainStampImage> LoadStampImage(
+        const std::filesystem::path& path,
         std::string* error = nullptr);
 };
 

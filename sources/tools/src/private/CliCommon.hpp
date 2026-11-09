@@ -1,5 +1,8 @@
 #pragma once
 
+#include "engine/math/EngineMath.hpp"
+#include "engine/scene/SceneEntity.hpp"
+
 #include <array>
 #include <filesystem>
 #include <optional>
@@ -38,6 +41,9 @@ public:
     [[nodiscard]] const std::vector<std::string>& Positionals() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Errors() const noexcept;
     [[nodiscard]] std::vector<std::string> UnknownOptions(std::span<const std::string_view> allowed) const;
+    // A copy with an option set to one value (added when missing), or with every value of it removed.
+    [[nodiscard]] ArgumentList WithOption(std::string_view name, std::string value) const;
+    [[nodiscard]] ArgumentList WithoutOption(std::string_view name) const;
 
 private:
     std::vector<std::pair<std::string, std::string>> options_;
@@ -73,6 +79,20 @@ private:
 // A colour as a person writes it: "#RRGGBB" (or "#RRGGBBAA" when `channels` is 4) is sRGB, as
 // every colour picker shows it, and comes back linear; "r,g,b[,a]" are linear values in 0..1.
 [[nodiscard]] std::optional<std::array<float, 4>> ParseColorText(std::string_view text, std::size_t channels);
+// A number as kb_cli prints it: at most four decimals, no trailing zeros and no "-0", so it can be
+// pasted back into --set or --position (1, 0.5, -2.25).
+[[nodiscard]] std::string FormatCliNumber(double value);
+// "x,y,z" as three finite numbers; nullopt for anything else.
+[[nodiscard]] std::optional<kb::math::Vec3> ParseVec3(std::string_view text);
+
+// Appends `entity` and everything below it, parents before children.
+void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::vector<kb::scene::SceneEntity>& out);
+// Every entity of the scene, parents before children.
+[[nodiscard]] std::vector<kb::scene::SceneEntity> AllEntities(const kb::scene::Scene& scene);
+// "Parent/Child/Name", like Unity's Transform.Find path.
+[[nodiscard]] std::string EntityPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+// The entities `name` addresses, in hierarchy order: by name, or by path ("Parent/Name").
+[[nodiscard]] std::vector<kb::scene::SceneEntity> MatchEntities(const kb::scene::Scene& scene, std::string_view name);
 
 // Finds an asset by virtual path ("/Game/...") or by physical file path.
 [[nodiscard]] const kb::assets::AssetMetadata* FindAssetByFlexiblePath(

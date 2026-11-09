@@ -17,14 +17,49 @@ namespace {
 
 using Draw = ProjectFilesPanelDrawing;
 
+// The "Used by" column takes the right end of a row wide enough to keep the path readable.
+constexpr int kUsedByWidth = 220;
+constexpr int kUsedByMinimumRowWidth = 900;
+
+[[nodiscard]] bool ShowsUsedBy(const RECT& row) noexcept {
+    return row.right - row.left >= kUsedByMinimumRowWidth;
+}
+
+[[nodiscard]] RECT PathRect(const RECT& row) noexcept {
+    return RECT{ row.left + 420, row.top, ShowsUsedBy(row) ? row.right - kUsedByWidth - 10 : row.right, row.bottom };
+}
+
+[[nodiscard]] RECT UsedByRect(const RECT& row) noexcept {
+    return RECT{ row.right - kUsedByWidth, row.top, row.right - 8, row.bottom };
+}
+
+// The first two objects by name and how many more, so the column stays one line.
+[[nodiscard]] std::string UsedByText(const EditorAssetUsers& users, std::uint64_t assetId) {
+    const auto found = users.find(assetId);
+    if (found == users.end() || found->second.empty()) {
+        return {};
+    }
+    const std::vector<std::string>& names = found->second;
+    std::string text = names[0];
+    if (names.size() > 1U) {
+        text += ", " + names[1];
+    }
+    if (names.size() > 2U) {
+        text += " +" + std::to_string(names.size() - 2U);
+    }
+    return text;
+}
+
 void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme) {
     const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
     RECT header{ viewport.left, viewport.top, viewport.right, viewport.top + EditorAssetBrowserLayout::AssetHeaderHeight };
     Draw::DrawLabel(dc, header, EditorText("projectFiles.list.name", "Name"), Draw::Color(theme.textSecondary));
     RECT type{ header.left + 270, header.top, header.left + 410, header.bottom };
     Draw::DrawLabel(dc, type, EditorText("projectFiles.list.type", "Type"), Draw::Color(theme.textSecondary));
-    RECT path{ header.left + 420, header.top, header.right, header.bottom };
-    Draw::DrawLabel(dc, path, EditorText("projectFiles.list.path", "Path"), Draw::Color(theme.textSecondary));
+    Draw::DrawLabel(dc, PathRect(header), EditorText("projectFiles.list.path", "Path"), Draw::Color(theme.textSecondary));
+    if (ShowsUsedBy(header)) {
+        Draw::DrawLabel(dc, UsedByRect(header), EditorText("projectFiles.list.usedBy", "Used by"), Draw::Color(theme.textSecondary));
+    }
     RECT line{ viewport.left, header.bottom, viewport.right, header.bottom + 1 };
     Draw::DrawHairline(dc, line, Draw::Color(theme.borderPanel));
 }
@@ -46,11 +81,11 @@ void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAsset
     }
     RECT type{ row.left + 270, row.top, row.left + 410, row.bottom };
     Draw::DrawLabel(dc, type, EditorText("projectFiles.list.folder", "Folder"), Draw::Color(theme.textSecondary));
-    RECT path{ row.left + 420, row.top, row.right, row.bottom };
-    Draw::DrawLabel(dc, path, kb::assets::NormalizeAssetPath(folder.virtualPath).c_str(), Draw::Color(theme.textDisabled));
+    Draw::DrawLabel(dc, PathRect(row), kb::assets::NormalizeAssetPath(folder.virtualPath).c_str(), Draw::Color(theme.textDisabled));
 }
 
-void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state) {
+void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state,
+    const EditorAssetUsers& users) {
     if (asset.selected) {
         GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 18 : 10));
         if (state.IsSelectionFocused()) {
@@ -72,8 +107,12 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
     } else {
         Draw::DrawLabel(dc, type, asset.metadata.type.c_str(), Draw::Color(theme.textSecondary));
     }
-    RECT path{ row.left + 420, row.top, row.right, row.bottom };
-    Draw::DrawLabel(dc, path, kb::assets::NormalizeAssetPath(asset.metadata.virtualPath).c_str(), Draw::Color(theme.textDisabled));
+    Draw::DrawLabel(dc, PathRect(row), kb::assets::NormalizeAssetPath(asset.metadata.virtualPath).c_str(), Draw::Color(theme.textDisabled));
+    if (ShowsUsedBy(row)) {
+        const std::string usedBy = UsedByText(users, asset.metadata.id.value);
+        Draw::DrawLabel(dc, UsedByRect(row), usedBy.empty() ? "-" : usedBy.c_str(),
+            Draw::Color(usedBy.empty() ? theme.textDisabled : theme.textSecondary));
+    }
 }
 
 [[nodiscard]] int TotalRowCount(const EditorAssetBrowserState& state, const std::vector<EditorAssetFolderRow>& folders, const std::vector<EditorAssetItemRow>& assets) noexcept {
@@ -103,7 +142,8 @@ void ProjectFilesAssetListRenderer::Paint(
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
     const std::vector<EditorAssetFolderRow>& folders,
-    const std::vector<EditorAssetItemRow>& assets) {
+    const std::vector<EditorAssetItemRow>& assets,
+    const EditorAssetUsers& users) {
     DrawListHeader(dc, layout, theme);
     const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
     const int totalRows = TotalRowCount(state, folders, assets);
@@ -134,7 +174,7 @@ void ProjectFilesAssetListRenderer::Paint(
             --relative;
         }
         if (relative >= 0 && relative < static_cast<int>(assets.size())) {
-            DrawAssetRow(dc, row, theme, assets[static_cast<std::size_t>(relative)], state);
+            DrawAssetRow(dc, row, theme, assets[static_cast<std::size_t>(relative)], state, users);
         }
     }
     RestoreDC(dc, -1);

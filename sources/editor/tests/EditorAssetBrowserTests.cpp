@@ -462,6 +462,25 @@ void RunCopiedPrefabIdentityTest() {
     kb::editor::tests::Require(scene.Prefabs().Guid(base) == originalGuid && manager.ValidateCompatibility(
         manager.Registry().FindByPath("/Game/Group/Parent.kbprefab")->id).compatible,
         "Copying must leave the original dependency graph valid");
+    const auto loadedCopy = scene.Prefabs().Load(content / "Destination/Group/Base.kbprefab");
+    kb::editor::tests::Require(loadedCopy.IsValid(), "Copied base must load in the editing scene");
+    kb::editor::tests::Require(browser.BeginRenameFolder("/Game/Destination/Group", manager), "Copied folder rename did not begin");
+    browser.SetTextEditValue("Renamed");
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::CommitTextEdit(scene, browser),
+        "GUID-linked scene and prefab graph must allow folder rename");
+    kb::editor::tests::Require(scene.Prefabs().FindLoaded(content / "Destination/Renamed/Base.kbprefab") == loadedCopy &&
+        !scene.Prefabs().FindLoaded(content / "Destination/Group/Base.kbprefab").IsValid(),
+        "Folder rename must update the loaded prefab source without changing its handle");
+    std::filesystem::create_directories(content / "Moved");
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::MoveFolderToFolder(
+        scene, browser, "/Game/Destination/Renamed", "/Game/Moved"), "GUID-linked folder move failed");
+    kb::editor::tests::Require(scene.Prefabs().FindLoaded(content / "Moved/Renamed/Base.kbprefab") == loadedCopy,
+        "Folder move must update the loaded prefab source");
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::DeleteFolder(scene, browser, "/Game/Group"),
+        "Original prefab graph must be removable after an independent copy");
+    const auto* movedParent = manager.Registry().FindByPath("/Game/Moved/Renamed/Parent.kbprefab");
+    kb::editor::tests::Require(movedParent != nullptr && manager.ValidateCompatibility(movedParent->id).compatible,
+        "Copied graph dependencies must survive rename, move and removal of the original graph");
     WriteTextFile(content / "Bad/Broken.kbprefab", "invalid prefab\n");
     static_cast<void>(scene.Assets().Discover());
     kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CopyFolderToFolder(

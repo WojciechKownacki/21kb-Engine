@@ -2,6 +2,7 @@
 #include "TestSuites.hpp"
 
 #include "project/ProjectDescriptorIntegrity.hpp"
+#include "scene/asset/io/SceneAssetIntegrity.hpp"
 #include "project/ProjectDescriptorMetaWriter.hpp"
 #include "engine/config/IniDocument.hpp"
 #include "engine/platform/FileSystemPath.hpp"
@@ -11,6 +12,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/SceneAssetUsers.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -246,6 +248,40 @@ public:
 private:
     SceneDocumentSystemProbe& probe_;
 };
+
+// The integrity of a scene file is read in blocks: sizes around a block, and a file of several, give the same
+// FNV-1a and CRC-32 as a byte-by-byte reference.
+void RunSceneAssetIntegrityBlockReadTest() {
+    const std::filesystem::path file = std::filesystem::temp_directory_path() / "21kb_scene_integrity_block_test.bin";
+    for (const std::size_t size : { std::size_t{ 0U }, std::size_t{ 1U }, std::size_t{ 65535U }, std::size_t{ 65536U },
+             std::size_t{ 65537U }, std::size_t{ 200003U } }) {
+        std::string bytes(size, '\0');
+        for (std::size_t index = 0U; index < size; ++index) {
+            bytes[index] = static_cast<char>((index * 131U + index / 251U) & 0xFFU);
+        }
+        {
+            std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        }
+        std::uint64_t fnv = 14695981039346656037ULL;
+        std::uint32_t crc = 0xFFFFFFFFU;
+        for (const char value : bytes) {
+            const auto byte = static_cast<unsigned char>(value);
+            fnv = (fnv ^ byte) * 1099511628211ULL;
+            crc ^= byte;
+            for (int bit = 0; bit < 8; ++bit) {
+                crc = (crc & 1U) != 0U ? (0xEDB88320U ^ (crc >> 1U)) : (crc >> 1U);
+            }
+        }
+        crc ^= 0xFFFFFFFFU;
+        const kb::scene::SceneAssetIntegrity integrity = kb::scene::SceneAssetIntegrityService::ComputeFile(file);
+        kb::tests::Require(integrity.byteSize == size && integrity.contentChecksumCrc32 == crc &&
+                integrity.contentHashFnv1a64 == (fnv == 0U ? 1099511628211ULL : fnv),
+            "a scene file's integrity read in blocks differs from the byte-by-byte one");
+    }
+    std::error_code error;
+    std::filesystem::remove(file, error);
+}
 
 void RunIniDocumentRoundTripTest() {
     CleanTempRoot();
@@ -515,6 +551,29 @@ void RunProjectDescriptorRejectsChecksumMismatchTest() {
     Require(!kb::project::ProjectManager::LoadProject(projectFile).succeeded, "Project descriptor accepted mismatched integrity metadata");
 }
 
+void RunSceneAssetUsersTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity crate = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Crate" });
+    const kb::scene::SceneEntity barrel = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Barrel" });
+    scene.Components().MeshRenderers().Set(crate, kb::scene::MeshRendererComponent{ .meshAssetId = 41, .materialAssetId = 42 });
+    scene.Components().MeshRenderers().Set(barrel, kb::scene::MeshRendererComponent{ .meshAssetId = 43, .materialAssetId = 42 });
+    const std::vector<kb::scene::SceneAssetUser> users =
+        kb::scene::CollectSceneAssetUsers(kb::scene::SceneDocumentService::Capture(scene, "Users"));
+    const auto usersOf = [&users](std::uint64_t assetId) {
+        std::vector<std::string> names;
+        for (const kb::scene::SceneAssetUser& user : users) {
+            if (user.assetId == assetId) {
+                names.push_back(user.objectName);
+            }
+        }
+        return names;
+    };
+    Require(usersOf(42) == std::vector<std::string>{ "Crate", "Barrel" }, "A material shared by two objects should list both as its users");
+    Require(usersOf(41) == std::vector<std::string>{ "Crate" } && usersOf(43) == std::vector<std::string>{ "Barrel" },
+        "Each mesh should list only the object that renders it");
+    Require(usersOf(0).empty(), "An empty asset slot should not count as a use");
+}
+
 void RunSceneDocumentRoundTripTest() {
     CleanTempRoot();
     const std::filesystem::path sceneFile = TempRoot() / "Scenes" / "RoundTrip.21kbscene";
@@ -528,6 +587,9 @@ void RunSceneDocumentRoundTripTest() {
         .materialAssetId = 42,
         .castsShadow = false,
         .layer = 0x00000010U,
+        .lodBias = 2,
+        .lodEnabled = false,
+        .mobility = kb::scene::MeshMobility::Static,
     });
     source.Components().Lights().Set(child, kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Directional,
@@ -535,6 +597,12 @@ void RunSceneDocumentRoundTripTest() {
         .useColorTemperature = true,
         .colorTemperatureKelvin = 4200.0F,
         .layerMask = 0x00000006U,
+        .shadowBias = 0.75F,
+        .shadowNormalBias = 2.0F,
+        .shadowFilter = kb::scene::LightShadowFilter::Pcss,
+        .shadowQuality = kb::scene::LightShadowQuality::High,
+        .shadowCascadeCount = 3U,
+        .shadowCascadeDistribution = 3.0F,
     });
     source.Components().Cameras().Set(secondRoot, kb::scene::CameraComponent{
         .orthographicHeight = 16.0F,
@@ -646,6 +714,8 @@ void RunSceneDocumentRoundTripTest() {
     const kb::scene::AudioListenerComponent* audioListener = target.Components().AudioListeners().TryGet(roots[1]);
     const kb::scene::BehaviourComponent* behaviour = target.Components().Behaviours().TryGet(restoredChildren[0]);
     Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 41 && !meshRenderer->castsShadow && meshRenderer->layer == 0x00000010U, "Scene document mesh renderer did not roundtrip");
+    Require(meshRenderer->lodBias == 2 && !meshRenderer->lodEnabled && meshRenderer->mobility == kb::scene::MeshMobility::Static,
+        "Scene document mesh renderer did not roundtrip its LOD bias, LOD switch and mobility");
     std::uint32_t iteratedMeshRenderers = 0U;
     target.Components().Visitors().ForEachMeshRenderer(
         [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::MeshRendererComponent& renderer, void* context) {
@@ -659,6 +729,9 @@ void RunSceneDocumentRoundTripTest() {
     Require(light != nullptr && light->kind == kb::scene::LightKind::Directional && NearlyEqual(light->intensity, 3.0F), "Scene document light did not roundtrip");
     Require(light->useColorTemperature && NearlyEqual(light->colorTemperatureKelvin, 4200.0F) && light->layerMask == 0x00000006U,
         "Scene document light did not roundtrip useColorTemperature/colorTemperatureKelvin/layerMask");
+    Require(NearlyEqual(light->shadowBias, 0.75F) && NearlyEqual(light->shadowNormalBias, 2.0F) && light->shadowFilter == kb::scene::LightShadowFilter::Pcss &&
+            light->shadowQuality == kb::scene::LightShadowQuality::High && light->shadowCascadeCount == 3U && NearlyEqual(light->shadowCascadeDistribution, 3.0F),
+        "Scene document light did not roundtrip its shadow bias, normal bias, filter, quality and cascades");
     std::uint32_t iteratedLights = 0U;
     target.Components().Visitors().ForEachLight(
         [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::LightComponent& light, void* context) {
@@ -1819,6 +1892,7 @@ void RunLargeNonAdditiveSceneTransitionBenchmark() {
 }
 
 void RunProjectSceneTests() {
+    RunSceneAssetIntegrityBlockReadTest();
     RunSingleRootNonAdditiveSceneOwnershipTest();
     RunMultiRootSceneUnloadOwnershipTest();
     RunLargeNonAdditiveSceneRootOwnershipTest();
@@ -1829,6 +1903,7 @@ void RunProjectSceneTests() {
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
+    RunSceneAssetUsersTest();
     RunProjectPathBudgetTest();
     RunSceneDocumentRoundTripTest();
     RunSceneRadianceEmitterReflectionSerializationTest();

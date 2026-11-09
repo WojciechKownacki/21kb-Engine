@@ -3449,7 +3449,7 @@ void RunMcpCommandTests() {
     input += '\n';
     input += R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"Assets/Scenes/Main.21kbscene","frames":2}}})";
     input += '\n';
-    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"format":"json"}}})";
+    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"topic":"Input"}}})";
     input += '\n';
 
     std::istringstream in{ input };
@@ -3968,6 +3968,63 @@ void RunImportSettingsCommandTests() {
     Require(badFlag.exitCode != 0 && Contains(badFlag.output, "yes or no"), "import must refuse --import-materials maybe: " + badFlag.output);
 }
 
+// mesh-lod stores how a model's levels of detail are built in the model asset: generate (automatic levels), add, set and
+// remove (manual levels), show; every change is validated, survives a reimport and is what the baker builds.
+void RunMeshLodCommandTests() {
+    const std::string project = NewAuthoringProject("mesh_lod_project");
+    const std::filesystem::path source = TestRoot() / "External" / "Ball.obj";
+    std::string obj;
+    constexpr int kSegments = 48;
+    constexpr int kRings = 32;
+    for (int ring = 0; ring <= kRings; ++ring) {
+        const double theta = 3.14159265358979 * ring / kRings;
+        for (int segment = 0; segment < kSegments; ++segment) {
+            const double phi = 6.28318530717959 * segment / kSegments;
+            obj += "v " + std::to_string(std::sin(theta) * std::cos(phi)) + " " + std::to_string(std::cos(theta)) + " " +
+                std::to_string(std::sin(theta) * std::sin(phi)) + "\n";
+        }
+    }
+    for (int ring = 0; ring < kRings; ++ring) {
+        for (int segment = 0; segment < kSegments; ++segment) {
+            const int a = ring * kSegments + segment + 1;
+            const int b = ring * kSegments + (segment + 1) % kSegments + 1;
+            obj += "f " + std::to_string(a) + " " + std::to_string(a + kSegments) + " " + std::to_string(b) + "\n";
+            obj += "f " + std::to_string(b) + " " + std::to_string(a + kSegments) + " " + std::to_string(b + kSegments) + "\n";
+        }
+    }
+    WriteTextFile(source, obj);
+    Require(Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models", source.string() }).exitCode == 0, "mesh-lod test import failed");
+    const std::vector<std::string> mesh{ "--project", project, "--mesh", "/Game/Models/Ball.21kb" };
+    const auto lod = [&](std::vector<std::string> tail) {
+        std::vector<std::string> arguments{ tail.front() };
+        arguments.insert(arguments.end(), mesh.begin(), mesh.end());
+        arguments.insert(arguments.end(), tail.begin() + 1, tail.end());
+        return Run(&kb::cli::RunMeshLodCommand, arguments);
+    };
+    const CommandRun shown = lod({ "show" });
+    Require(shown.exitCode == 0 && Contains(shown.output, "LOD0") && Contains(shown.output, "LOD2") && Contains(shown.output, "automatic levels"),
+        "show must list the default chain: " + shown.output);
+    const CommandRun three = lod({ "generate", "--levels", "3", "--keep", "40" });
+    Require(three.exitCode == 0 && Contains(three.output, "LOD2") && !Contains(three.output, "LOD3") && Contains(three.output, "each keeps 40%"),
+        "generate --levels 3 --keep 40 must build three levels: " + three.output);
+    const CommandRun added = lod({ "add", "--triangles", "2" });
+    Require(added.exitCode == 0 && Contains(added.output, "manual levels") && Contains(added.output, "LOD3") && !Contains(added.output, "LOD4"),
+        "add must append a fourth level in manual mode: " + added.output);
+    const CommandRun set = lod({ "set", "--level", "1", "--triangles", "70" });
+    Require(set.exitCode == 0 && Contains(set.output, "LOD1"), "set --level 1 --triangles 70 failed: " + set.output);
+    const CommandRun notFalling = lod({ "set", "--level", "2", "--triangles", "90" });
+    Require(notFalling.exitCode != 0 && Contains(notFalling.output, "not valid"), "a level that keeps more than the one above must be refused: " + notFalling.output);
+    const CommandRun removed = lod({ "remove", "--level", "1" });
+    Require(removed.exitCode == 0 && Contains(removed.output, "LOD2") && !Contains(removed.output, "LOD3"), "remove --level 1 must leave three levels: " + removed.output);
+    Require(lod({ "set", "--level", "9", "--triangles", "10" }).exitCode != 0, "a level beyond the chain must be refused");
+    Require(lod({ "generate", "--levels", "9" }).exitCode != 0, "nine levels must be refused");
+    const CommandRun off = lod({ "generate", "--levels", "1" });
+    Require(off.exitCode == 0 && Contains(off.output, "no chain") && !Contains(off.output, "LOD1"), "one level must turn the chain off: " + off.output);
+    const CommandRun plain = lod({ "generate", "--levels", "4", "--min-triangles", "100000" });
+    Require(plain.exitCode == 0 && Contains(plain.output, "under the triangle threshold"), "a mesh under --min-triangles has no chain: " + plain.output);
+    Require(Run(&kb::cli::RunMeshLodCommand, { "show", "--project", project, "--mesh", "/Game/Models/None.21kb" }).exitCode != 0, "an unknown mesh must be refused");
+}
+
 // material-set takes the built-in texture slots by a texture path of the project; material-graph
 // builds Unreal's VectorParameter Color -> Base Color, ScalarParameter Roughness and Metallic
 // graph; material-instance-new/set/show override those parameters and a Mesh Renderer takes the
@@ -4162,6 +4219,261 @@ struct CliRun {
     return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
 }
 
+// validate and run name UI mistakes that load fine: a widget outside a Canvas, a Text without a font, an event
+// name nothing answers, a Button nothing reacts to.
+void RunUiValidationCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const std::string scene = "Assets/Scenes/Ui.21kbscene";
+    const auto cli = [&](const std::vector<std::string>& words, std::string_view what) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        Require(exitCode == 0, std::string{ what } + ": " + out.str() + err.str());
+    };
+    const auto add = [&](const std::string& name, const std::string& parent,
+                         const std::vector<std::pair<std::string, std::string>>& components) {
+        std::vector<std::string> entity{ "entity", "add", "--project", root, "--scene", scene, "--name", name };
+        if (!parent.empty()) {
+            entity.push_back("--parent");
+            entity.push_back(parent);
+        }
+        cli(entity, "entity add " + name);
+        for (const auto& [type, set] : components) {
+            std::vector<std::string> component{ "component", "add", "--project", root, "--scene", scene, "--entity",
+                parent.empty() ? name : parent + "/" + name, "--type", type };
+            if (!set.empty()) {
+                component.push_back("--set");
+                component.push_back(set);
+            }
+            cli(component, "component add " + type);
+        }
+    };
+    cli({ "scene-new", "--project", root, "--name", "Ui", "--template", "Empty" }, "scene-new");
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Menu.lua", "function OnUIClicked(self, event)\n    Log(event.args.action)\nend\n");
+    add("Menu", "", { { "Canvas", "" } });
+    add("Answered", "Menu", { { "Button", "" }, { "Selectable", "eventName=Menu.Play" } });
+    cli({ "scene-attach", "--project", root, "--scene", scene, "--node", "Answered", "--script", "/Game/Logic/Menu.lua" },
+        "scene-attach");
+    add("Unanswered", "Menu", { { "Button", "" }, { "Selectable", "eventName=Menu.Quit" } });
+    add("Dead", "Menu", { { "Button", "" } });
+    add("Label", "Menu", { { "Text", "content=Play" } });
+    add("Orphan", "", { { "Button", "" } });
+
+    const CliRun checked = RunCliProgram({ "validate", "--project", root, scene });
+    const std::string report = checked.out + checked.err;
+    Require(checked.exitCode == 0 && Contains(checked.out, "OK   " + scene + " (5 warnings)"),
+        "validate must report the five UI mistakes as warnings and still pass: " + report);
+    Require(Contains(report, ":Menu/Unanswered: [ui-event-no-handler] event name \"Menu.Quit\""),
+        "validate must name the event nothing answers: " + report);
+    Require(Contains(report, ":Menu/Dead: [ui-button-no-reaction]"), "validate must name the Button that does nothing: " + report);
+    Require(Contains(report, ":Menu/Label: [ui-text-no-font]"), "validate must name the Text without a font: " + report);
+    Require(Contains(report, ":Orphan: [ui-no-canvas]") && Contains(report, ":Orphan: [ui-button-no-reaction]"),
+        "validate must name the widget outside a Canvas: " + report);
+    Require(!Contains(report, "Menu/Answered"), "a Button a script answers must not be reported: " + report);
+    const CliRun everyScene = RunCliProgram({ "validate", "--project", root });
+    Require(everyScene.exitCode == 0 && Contains(everyScene.out, "/Game/Scenes/Main.21kbscene:Player: [ui-no-canvas]") &&
+            Contains(everyScene.out, "/Game/Scenes/Ui.21kbscene:Menu/Dead:"),
+        "validate without files must check every scene of the project: " + everyScene.out + everyScene.err);
+
+    const CliRun ran = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "1" });
+    Require(ran.exitCode == 0 && Contains(ran.err, "[ui-no-canvas]") && Contains(ran.err, "[ui-button-no-reaction]"),
+        "run must print the same warnings before it plays: " + ran.err);
+
+    // The agent documentation: the Text topic shows the Text component beside the Text functions, the UI
+    // callbacks have a topic, and the button-to-script recipe is a guide.
+    const CliRun text = RunCliProgram({ "api", "--topic", "Text" });
+    Require(text.exitCode == 0 && Contains(text.out, "# Text functions") && Contains(text.out, "# Text component") &&
+            Contains(text.out, "`fontAssetId`"),
+        "api --topic Text must show the Text component with its font: " + text.out);
+    const CliRun events = RunCliProgram({ "api", "--topic", "OnUIClicked" });
+    Require(events.exitCode == 0 && Contains(events.out, "function OnUIClicked(self, event)") && Contains(events.out, "`pointerX`") &&
+            Contains(events.out, "`action`"),
+        "api --topic OnUIClicked must list the UI callbacks and their arguments: " + events.out);
+    const CliRun recipe = RunCliProgram({ "guide", "--topic", "menus-and-buttons" });
+    Require(recipe.exitCode == 0 && Contains(recipe.out, "OnUIClicked") && Contains(recipe.out, "ui-no-canvas"),
+        "guide menus-and-buttons must hold the button to script recipe: " + recipe.out);
+}
+
+// entity add --create of a UI widget gives it a Canvas and a font, as the editor's Create menu does, and
+// component set takes another object by its path.
+void RunUiDependencyCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const std::string scene = "Assets/Scenes/Menu2.21kbscene";
+    const auto cli = [&](const std::vector<std::string>& words) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+    };
+    const auto must = [&](const std::vector<std::string>& words) {
+        const CliRun run = cli(words);
+        Require(run.exitCode == 0, run.out + run.err);
+    };
+    must({ "scene-new", "--project", root, "--name", "Menu2", "--template", "Empty" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Button", "--name", "Play" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Text", "--name", "Hint", "--parent", "Canvas" });
+
+    kb::scene::Scene loaded;
+    const kb::scene::SceneDocumentLoadResult document =
+        kb::scene::SceneDocumentService::Load(TestRoot() / "Assets" / "Scenes" / "Menu2.21kbscene");
+    Require(document.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(loaded, document.document), "the UI scene must load");
+    const auto roots = loaded.Hierarchy().RootEntities();
+    Require(roots.size() == 1U && loaded.Entities().Name(roots.front()) == "Canvas" &&
+            loaded.Components().UI().Has<kb::scene::UICanvas>(roots.front()) && loaded.Hierarchy().ChildEntities(roots.front()).size() == 2U,
+        "a widget made without a parent must land under one new Canvas, and the next one under the same Canvas");
+    std::uint64_t font = 0U;
+    for (const kb::scene::SceneEntity child : loaded.Hierarchy().ChildEntities(roots.front())) {
+        const kb::scene::UIText* text = loaded.Components().UI().TryGet<kb::scene::UIText>(child);
+        Require(text != nullptr && text->fontAssetId != 0U && (font == 0U || font == text->fontAssetId),
+            "every Text a widget brings must have the one bundled font");
+        font = text->fontAssetId;
+    }
+    std::size_t fontFiles = 0U;
+    for (const auto& entry : std::filesystem::directory_iterator(TestRoot() / "Assets" / "UI" / "Fonts")) {
+        fontFiles += entry.path().extension() != ".meta" ? 1U : 0U;
+    }
+    Require(fontFiles == 1U, "the bundled font must be imported once, not for every widget");
+    const CliRun checked = cli({ "validate", "--project", root, scene });
+    Require(Contains(checked.out, "(1 warning)") && Contains(checked.out, ":Canvas/Play: [ui-button-no-reaction]") &&
+            !Contains(checked.out, "[ui-no-canvas]") && !Contains(checked.out, "[ui-text-no-font]"),
+        "a widget made by entity add must pass the Canvas and font checks: " + checked.out + checked.err);
+
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable",
+        "--set", "eventTarget=Canvas/Hint" });
+    const CliRun shown = cli({ "entity", "show", "--project", root, "--scene", scene, "--name", "Canvas/Play" });
+    Require(Contains(shown.out, "eventTarget=Canvas/Hint"), "an object reference must be set by its path and shown by it: " + shown.out);
+    const CliRun missing = cli({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable",
+        "--set", "eventTarget=Nowhere" });
+    Require(missing.exitCode != 0 && Contains(missing.err, "no entity named 'Nowhere'"), "a path that names nothing must be refused: " + missing.err);
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable", "--set", "eventTarget=none" });
+    Require(Contains(cli({ "entity", "show", "--project", root, "--scene", scene, "--name", "Canvas/Play" }).out, "eventTarget=none"),
+        "none must clear an object reference");
+}
+
+// The screen templates (Main Menu, Pause, HUD, Settings) come under one Canvas with the bundled font, their buttons
+// carry event names, and a script answers a click on them.
+void RunUiScreenCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const auto cli = [&](const std::vector<std::string>& words) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+    };
+    const auto must = [&](const std::vector<std::string>& words) {
+        const CliRun run = cli(words);
+        Require(run.exitCode == 0, run.out + run.err);
+    };
+    const std::string all = "Assets/Scenes/Screens.21kbscene";
+    must({ "scene-new", "--project", root, "--name", "Screens", "--template", "Empty" });
+    bool first = true;
+    for (const char* screen : { "Main Menu", "Pause", "HUD", "Settings" }) {
+        std::vector<std::string> add{ "entity", "add", "--project", root, "--scene", all, "--create", screen };
+        if (!first) {
+            add.push_back("--parent");
+            add.push_back("Canvas");
+        }
+        must(add);
+        first = false;
+    }
+    // Four screens under the one Canvas the first one made; every Text has the font; the events nothing answers are named.
+    const CliRun checked = cli({ "validate", "--project", root, all });
+    Require(checked.exitCode == 0 && Contains(checked.out, "(7 warnings)") && !Contains(checked.out, "[ui-no-canvas]") &&
+            !Contains(checked.out, "[ui-text-no-font]") && Contains(checked.out, ":Canvas/Main Menu/Play: [ui-event-no-handler] event name \"PlayClicked\"") &&
+            Contains(checked.out, ":Canvas/Settings/Panel/Back: [ui-event-no-handler]"),
+        "the screens must come complete and name only the events a script has to answer: " + checked.out + checked.err);
+    const CliRun hud = cli({ "run", "--project", root, "--scene", all, "--frames", "2", "--report", "ui" });
+    JsonValue hudReport;
+    std::string hudError;
+    Require(JsonValue::Parse(hud.out, hudReport, hudError), "the UI report must parse: " + hud.out.substr(0U, 300U));
+    double scoreY = 1.0e9, scoreX = 0.0;
+    bool health = false;
+    for (std::size_t index = 0U; index < hudReport.Find("widgets")->Size(); ++index) {
+        const JsonValue* widget = hudReport.Find("widgets")->At(index);
+        const std::string& path = widget->Find("path")->AsString();
+        health = health || path == "Canvas/HUD/Health/Fill";
+        if (path == "Canvas/HUD/Score") {
+            scoreY = widget->Find("rect")->Find("y")->AsNumber();
+            scoreX = widget->Find("rect")->Find("x")->AsNumber();
+        }
+    }
+    Require(health && scoreY < 100.0 && scoreX > 1000.0, "the HUD must lay out a health bar and a score in the top right corner");
+
+    // A menu alone: a script answers the Play button.
+    must({ "scene-new", "--project", root, "--name", "Title", "--template", "Empty" });
+    const std::string title = "Assets/Scenes/Title.21kbscene";
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Title.lua", "function PlayClicked(self, event)\n    Log('title-play')\nend\n");
+    must({ "entity", "add", "--project", root, "--scene", title, "--create", "Main Menu" });
+    must({ "scene-attach", "--project", root, "--scene", title, "--node", "Play", "--script", "/Game/Logic/Title.lua" });
+    const CliRun played = cli({ "run", "--project", root, "--scene", title, "--frames", "6", "--click", "Canvas/Main Menu/Play@3" });
+    Require(played.exitCode == 0 && Contains(played.out, "[log] title-play") && Contains(played.out, "PlayClicked -> Canvas/Main Menu/Play answered by 1"),
+        "a click on the template's Play button must reach the script: " + played.out + played.err);
+}
+
+// run --click drives a menu without a recording, and --report ui says what is on screen and who answered.
+void RunUiClickCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const std::string scene = "Assets/Scenes/Click.21kbscene";
+    const auto must = [&](const std::vector<std::string>& words) {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        Require(exitCode == 0, out.str() + err.str());
+    };
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Click.lua",
+        "function PlayClicked(self, event)\n    Log('play-clicked ' .. event.args.action)\nend\n");
+    must({ "scene-new", "--project", root, "--name", "Click", "--template", "Empty" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Button", "--name", "Play" });
+    must({ "entity", "add", "--project", root, "--scene", scene, "--create", "Button", "--name", "Quit", "--parent", "Canvas" });
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Quit", "--type", "Rect Transform",
+        "--set", "offsetMin=0,100", "--set", "offsetMax=160,132" });
+    must({ "component", "set", "--project", root, "--scene", scene, "--entity", "Canvas/Play", "--type", "Selectable",
+        "--set", "eventName=PlayClicked" });
+    must({ "scene-attach", "--project", root, "--scene", scene, "--node", "Play", "--script", "/Game/Logic/Click.lua" });
+
+    const CliRun played = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Play@3" });
+    Require(played.exitCode == 0 && Contains(played.out, "[log] play-clicked PlayClicked") &&
+            Contains(played.out, "click Canvas/Play at frame 3:") && Contains(played.out, "under it Canvas/Play") &&
+            Contains(played.out, "PlayClicked -> Canvas/Play answered by 1"),
+        "a click on a widget must reach its script and be reported: " + played.out + played.err);
+    const CliRun quit = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Quit@3" });
+    Require(quit.exitCode == 0 && Contains(quit.out, "OnUIClicked -> Canvas/Quit unanswered") && !Contains(quit.out, "play-clicked"),
+        "a click on a widget no script answers must say so: " + quit.out + quit.err);
+    const CliRun missing = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Nowhere@3" });
+    Require(missing.exitCode == 1 && Contains(missing.err, "names no object of the scene"), "a click target that is not there must fail: " + missing.err);
+    const CliRun late = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Play@9" });
+    Require(late.exitCode == 1 && Contains(late.err, "after the last"), "a click past the last frame must fail: " + late.err);
+
+    const CliRun report = RunCliProgram({ "run", "--project", root, "--scene", scene, "--frames", "6", "--click", "Canvas/Play@3", "--report", "ui" });
+    JsonValue json;
+    std::string parseError;
+    Require(report.exitCode == 0 && JsonValue::Parse(report.out, json, parseError) && json.Find("schema")->AsString() == "21kb.ui-report/v1",
+        "--report ui must print the report: " + report.out + report.err);
+    bool playAnswered = false;
+    for (std::size_t index = 0U; index < json.Find("widgets")->Size(); ++index) {
+        const JsonValue* widget = json.Find("widgets")->At(index);
+        if (widget->Find("path")->AsString() != "Canvas/Play") continue;
+        const JsonValue* answers = widget->Find("answers");
+        playAnswered = widget->Find("rect")->Find("width")->AsNumber() > 0.0 && answers != nullptr && answers->Size() == 1U &&
+            answers->At(0U)->Find("event")->AsString() == "PlayClicked" && answers->At(0U)->Find("script")->AsString() == "/Game/Logic/Click.lua";
+    }
+    Require(playAnswered, "the report must give the widget's rectangle and the script function that answers its event: " + report.out);
+    bool delivered = false;
+    for (std::size_t index = 0U; index < json.Find("events")->Size(); ++index) {
+        const JsonValue* event = json.Find("events")->At(index);
+        delivered = delivered || (event->Find("name")->AsString() == "PlayClicked" && event->Find("answered")->AsNumber() == 1.0);
+    }
+    Require(delivered && json.Find("clicks")->Size() == 1U, "the report must list the delivered events and the clicks: " + report.out);
+}
+
 void RunInputRecordingCliTests() {
     PrepareProject();
     const auto root = TestRoot();
@@ -4314,6 +4626,91 @@ end
     }
 }
 
+// Every registered function is Group.Name(...) in Lua, Rotate takes degrees, a bad argument is a
+// script error rather than a crash, and validate names a function that does not exist.
+void RunLuaFunctionTableTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua", R"(
+function Tick(self, dt)
+    Transform.Rotate(self.entity, 0, 30, 0)
+    local r = Transform.Rotation(self.entity)
+    Log(string.format('rotation %.1f %.1f %.1f', r.x, r.y, r.z))
+    Log('clamp ' .. tostring(Math.Clamp(5, 0, 1)))
+    Log('bad argument ' .. tostring(pcall(Transform.SetPosition, self.entity)))
+end
+)");
+    Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "the Lua table fixture must attach");
+    const CliRun ran = RunCliProgram({"run", "--project", root, "--frames", "1"});
+    Require(ran.exitCode == 0 && Contains(ran.out + ran.err, "rotation 0.0 30.0 0.0") && Contains(ran.out + ran.err, "clamp 1") &&
+            Contains(ran.out + ran.err, "bad argument false"),
+        "Lua must reach every registered function, turn by degrees and survive a bad argument: " + ran.out + ran.err);
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Typo.lua", "function Tick(self, dt)\n    Transform.rotate(self.entity, 0, 1, 0)\nend\n");
+    const CliRun checked = RunCliProgram({"validate", "--project", root, "Assets/Logic/Typo.lua"});
+    Require(checked.exitCode == 1 && Contains(checked.err, "Typo.lua:2: Transform.rotate does not exist; did you mean Transform.Rotate?"),
+        "validate must name a function that does not exist: " + checked.out + checked.err);
+}
+
+// input-action makes an action and binds keys in the project's context; prefab saves an entity
+// and places copies that keep its behaviour.
+void RunInputActionAndPrefabTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const CliRun fire = RunCliProgram({"input-action", "new", "--project", root, "--name", "Fire", "--key", "Space", "--key", "MouseLeft"});
+    Require(fire.exitCode == 0 && Contains(fire.out, "Fire (Bool): Space, MouseLeft"), "input-action new must bind the keys: " + fire.out + fire.err);
+    const CliRun move = RunCliProgram({"input-action", "new", "--project", root, "--name", "Move", "--type", "Axis2D",
+        "--key", "W=+y", "--key", "S=-y", "--key", "D=+x", "--key", "A=-x"});
+    Require(move.exitCode == 0 && Contains(move.out, "W=+y, S=-y, D=+x, A=-x"), "an axis action must bind keys with directions: " + move.out + move.err);
+    Require(RunCliProgram({"input-action", "new", "--project", root, "--name", "Bad", "--key", "Spcae"}).exitCode == 1,
+        "an unknown key must be refused");
+    const CliRun listed = RunCliProgram({"input-action", "list", "--project", root});
+    Require(Contains(listed.out, "Fire (Bool): Space, MouseLeft") && Contains(listed.out, "Move (Axis2D)"), "input-action list must show the bindings: " + listed.out);
+
+    Require(RunCliProgram({"entity", "add", "--project", root, "--create", "Cube", "--name", "Crate"}).exitCode == 0, "adding the crate failed");
+    const CliRun saved = RunCliProgram({"prefab", "new", "--project", root, "--from-entity", "Crate"});
+    Require(saved.exitCode == 0 && std::filesystem::exists(TestRoot() / "Assets" / "Prefabs" / "Crate.kbprefab"),
+        "prefab new must write the prefab: " + saved.out + saved.err);
+    const CliRun placed = RunCliProgram({"prefab", "place", "--project", root, "--prefab", "/Game/Prefabs/Crate.kbprefab", "--name", "Crate2", "--position", "3,0,0"});
+    Require(placed.exitCode == 0, "prefab place failed: " + placed.out + placed.err);
+    const CliRun listedScene = RunCliProgram({"scene-list", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene"});
+    Require(Contains(listedScene.out, "Crate2 components: MeshRenderer") && Contains(listedScene.out, "@ 3,0,0"),
+        "the placed prefab must be in the scene where it was put: " + listedScene.out);
+}
+
+// The shortcuts agents use: many entities at once, 2D physics in one command with named types,
+// a key held during a run, and where scripted objects moved.
+void RunSceneShortcutTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const CliRun stack = RunCliProgram({"entity", "add", "--project", root, "--create", "Cube", "--name", "Crate", "--position", "0,0.5,0",
+        "--count", "3", "--offset", "0,1,0"});
+    Require(stack.exitCode == 0 && Contains(stack.out, "added 3 entities Crate1..Crate3"), "--count must add a stack: " + stack.out + stack.err);
+    const CliRun third = RunCliProgram({"entity", "show", "--project", root, "--name", "Crate3"});
+    Require(Contains(third.out, "localPosition=0,2.5,0"), "--offset must place each one further: " + third.out);
+
+    // A new project has the 2D plugin on.
+    const std::filesystem::path parent = TestRoot().parent_path();
+    std::filesystem::remove_all(parent / "Shortcuts2D");
+    Require(RunCliProgram({"new", "--parent", parent.string(), "--name", "Shortcuts2D"}).exitCode == 0, "the 2D project must be created");
+    const std::string project2D = (parent / "Shortcuts2D").string();
+    const CliRun platform = RunCliProgram({"entity", "add", "--project", project2D, "--create", "Cube", "--name", "Ledge", "--scale", "4,1,1", "--body2d", "Static"});
+    Require(platform.exitCode == 0 && Contains(platform.out, "Static Body 2D and a Box Collider 2D"), "--body2d must add 2D physics: " + platform.out + platform.err);
+    Require(RunCliProgram({"component", "set", "--project", project2D, "--entity", "Ledge", "--type", "Collider2D", "--set", "shape=Circle"}).exitCode == 0,
+        "a 2D collider shape must be settable by name");
+    std::filesystem::remove_all(parent / "Shortcuts2D");
+
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua",
+        "function Tick(self, dt)\n    if Input.Pressed(\"Jump\") then Log(\"jumped\") end\n    Transform.Translate(self.entity, 1 * dt, 0, 0)\nend\n");
+    Require(RunCliProgram({"input-action", "new", "--project", root, "--name", "Jump", "--key", "Space"}).exitCode == 0, "the Jump action must be made");
+    Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene", "--node", "Player",
+        "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "the script must attach");
+    const CliRun pressed = RunCliProgram({"run", "--project", root, "--frames", "10", "--press", "Space@5"});
+    Require(pressed.exitCode == 0 && Contains(pressed.out + pressed.err, "jumped") && Contains(pressed.out, "moved: Player"),
+        "--press must reach the script and run must report where a scripted object moved: " + pressed.out + pressed.err);
+    Require(RunCliProgram({"run", "--project", root, "--frames", "5", "--press", "Spcae@2"}).exitCode == 1, "an unknown key in --press must be refused");
+}
+
 void RunPlaybackStopTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -4321,6 +4718,12 @@ void RunPlaybackStopTests() {
         "function Destroyed(self, dt) Log('playback shutdown complete') end\n");
     Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "stop fixture must attach its shutdown observer");
+    // A second, different behaviour must not silently replace the first.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Other.lua", "function Tick(self, dt) end\n");
+    const CliRun replaced = RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Other.lua"});
+    Require(replaced.exitCode == 1 && Contains(replaced.err, "already runs /Game/Logic/Player.lua") && Contains(replaced.err, "--replace"),
+        "attaching a different behaviour must refuse to drop the current one: " + replaced.err);
     const auto verifyStopped = [](const CliRun& result, int code, std::string_view reason) {
         JsonValue report;
         std::string error;
@@ -4393,11 +4796,18 @@ void RunCliJsonTests() {
     const std::string boundaries = "\xE0\xA0\x80\xED\x9F\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF";
     Require(kb::cli::ToValidUtf8(boundaries) == boundaries, "Valid Unicode boundary scalars must remain unchanged");
 
-    // Without --json nothing changes: text, the error on stderr, the usage after it, exit code 1.
+    // Without --json: one line on stderr that says where the commands are, not the whole usage
+    // text (an agent reads it on every wrong guess), and exit code 1.
     const CliRun unknownText = RunCliProgram({ "no-such-command" });
     Require(unknownText.exitCode == 1 && unknownText.out.empty() &&
-            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "Exit codes:"),
-        "an unknown command must print the error and the usage on stderr and exit 1");
+            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "kb_cli commands") &&
+            !Contains(unknownText.err, "Exit codes:"),
+        "an unknown command must print one short error on stderr and exit 1");
+
+    // A misspelled option fails before anything is written and names the closest option.
+    const CliRun misspelled = RunCliProgram({ "entity", "add", "--project", root, "--naem", "Box" });
+    Require(misspelled.exitCode == 1 && Contains(misspelled.err, "entity has no option '--naem'; did you mean --name?"),
+        "a misspelled entity option must be refused with the closest option");
 
     // An unknown command with --json: one object, the exit code in the process and in the object.
     const CliRun unknown = RunCliProgram({ "--json", "no-such-command" });
@@ -4408,7 +4818,7 @@ void RunCliJsonTests() {
     Require(unknownResult.Find("command")->AsString() == "no-such-command" && unknownResult.Find("output")->AsString().empty(),
         "the result must name the command");
     Require(unknownResult.Find("errors")->Size() == 1U &&
-            unknownResult.Find("errors")->At(0U)->AsString() == "unknown command 'no-such-command'",
+            unknownResult.Find("errors")->At(0U)->AsString().starts_with("unknown command 'no-such-command'"),
         "the result must list the error without the 'error: ' prefix and without the usage");
 
     // A command that succeeds: ok, exit code 0, its text in "output".
@@ -4494,10 +4904,13 @@ void RunCommandCatalogTests() {
     };
     const auto listed = mcp(R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})");
     const auto* descriptors = listed.Find("result")->Find("tools");
-    Require(descriptors->Size() == tools.size() && tools.size() >= 11U, "MCP must discover all registered authoring tools");
-    for (std::size_t index = 0U; index < descriptors->Size(); ++index)
-        Require(std::ranges::find(tools, descriptors->At(index)->Find("name")->AsString()) != tools.end(),
+    // Plus kb_cli, which runs any catalog command for the bound project rather than adding one.
+    Require(descriptors->Size() == tools.size() + 1U && tools.size() >= 11U, "MCP must discover all registered authoring tools and the command runner");
+    for (std::size_t index = 0U; index < descriptors->Size(); ++index) {
+        const std::string& name = descriptors->At(index)->Find("name")->AsString();
+        Require(name == "kb_cli" || std::ranges::find(tools, name) != tools.end(),
             "MCP discovery must not invent operations outside the CLI catalog");
+    }
     const auto call = [&](std::string_view name, std::string_view arguments, bool succeeds = true) {
         const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
             std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
@@ -4515,6 +4928,38 @@ void RunCommandCatalogTests() {
     call("entity_edit", R"({"action":"add","name":"Outside","scene":"../Outside.21kbscene"})", false);
     call("script_create", R"({"name":"Outside","language":"lua","folder":"../Outside"})", false);
     call("scene_create", R"({"name":"Outside","project":"../Other"})", false);
+    // The command runner reaches catalog commands without tools of their own, with the bound
+    // project filled in over any --project an agent passes, and refuses to nest the server.
+    call("kb_cli", R"({"args":["scene-new","--name","RunnerScene","--template","Empty"]})");
+    call("kb_cli", R"({"args":["entity","add","--project","../Elsewhere","--scene","/Game/Scenes/RunnerScene.21kbscene","--name","Runner"]})");
+    call("kb_cli", R"({"args":["mcp"]})", false);
+    call("kb_cli", R"({"args":["no-such-command"]})", false);
+    call("kb_cli", R"({"args":[]})", false);
+    // Reference and guides come a page at a time: never the whole API in one answer.
+    const auto page = [&](std::string_view name, std::string_view arguments) {
+        const auto response = mcp("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" +
+            std::string{name} + "\",\"arguments\":" + std::string{arguments} + "}}");
+        Require(response.Find("result") && !response.Find("result")->Find("isError")->AsBool(), "Reference tool failed: " + response.Dump());
+        return response.Find("result")->Find("content")->At(0)->Find("text")->AsString();
+    };
+    const std::string index = page("api_reference", "{}");
+    Require(Contains(index, "# 21kb Engine script API") && index.size() < 24U * 1024U, "api_reference without a topic must return the small index");
+    Require(Contains(page("api_reference", R"({"topic":"Physics.Raycast"})"), "# Physics.Raycast"), "api_reference must return one function page");
+    Require(Contains(page("api_reference", R"({"search":"raycast"})"), "Physics.Raycast"), "api_reference must find topics by text");
+    Require(Contains(page("guide", R"({"topic":"objects-and-materials"})"), "material-new"), "guide must return one how-to");
+    // Reading the scene back: what component_edit wrote, without opening the scene file.
+    const std::string shown = page("entity_edit", R"({"action":"show","name":"Probe","scene":"/Game/Scenes/McpScene.21kbscene"})");
+    Require(Contains(shown, "localPosition=3,4,5") && Contains(shown, "localScale=2,2,2"),
+        "entity_edit show must read back what component_edit wrote: " + shown);
+    // A coloured shape with physics in one call, and run reporting where it went.
+    Require(Contains(page("entity_edit", R"({"action":"add","name":"Ball","create":"Sphere","scene":"/Game/Scenes/RunnerScene.21kbscene","position":"0,5,0","color":"#E03C31"})"),
+                "with material /Game/Materials/Ball.kbmat"),
+        "entity_edit add must make a coloured shape in one call");
+    const std::string ball = page("entity_edit", R"({"action":"show","name":"Ball","scene":"/Game/Scenes/RunnerScene.21kbscene"})");
+    Require(Contains(ball, "material=/Game/Materials/Ball.kbmat"), "the one-call ball must carry its material: " + ball);
+    Require(Contains(page("scene_list", R"({"scene":"/Game/Scenes/RunnerScene.21kbscene"})"), "Ball components: MeshRenderer") &&
+            Contains(page("scene_list", R"({"scene":"/Game/Scenes/RunnerScene.21kbscene"})"), "@ 0,5,0"),
+        "scene_list must print each node's position");
     Require(RunCliProgram({"scene-new", "--project", root, "--name", "CliScene", "--template", "Empty"}).exitCode == 0 &&
         RunCliProgram({"entity", "add", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--name", "Probe", "--position", "1,2,3"}).exitCode == 0 &&
         RunCliProgram({"component", "set", "--project", root, "--scene", "/Game/Scenes/CliScene.21kbscene", "--entity", "Probe", "--type", "Transform",
@@ -4685,6 +5130,165 @@ void RunBatchCommandTests() {
         Require(refused.exitCode == 1 && Contains(refused.out, "symbolic links") && Fingerprint(projectPath) == original,
             "a linked project tree must be refused before any transaction writes files");
     }
+}
+
+// Many entity and component operations of one batch edit the scene in memory and write it once; any other
+// command sees the files as they are, and a failure leaves the scene file as it was.
+void RunBatchSceneSessionTests() {
+    const std::filesystem::path parent = TestRoot() / "batch_scene_session";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path projectPath = parent / "Scena";
+    const std::string project = projectPath.string();
+    constexpr int kObjects = 200;
+    constexpr int kBarrierAfter = 100;
+
+    // The Light of an object is added through the other spelling of the same scene, as the scene of the project.
+    std::string operations;
+    for (int index = 1; index <= kObjects; ++index) {
+        const std::string name = "Obj" + std::to_string(index);
+        operations += "entity add --name " + name + " --position " + std::to_string(index) + ",0,0\n";
+        operations += "component add --scene /Game/Scenes/Main.21kbscene --entity " + name + " --type Light --set intensity=2\n";
+        if (index == kBarrierAfter) operations += "scene-list --scene Assets/Scenes/Main.21kbscene\n";
+    }
+    const std::filesystem::path file = parent / "many.txt";
+    WriteTextFile(file, operations);
+
+    const auto started = std::chrono::steady_clock::now();
+    const CliRun applied = RunCliProgram({ "batch", "--project", project, "--file", file.string(), "--json" });
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    JsonValue result;
+    std::string parseError;
+    Require(applied.exitCode == 0 && JsonValue::Parse(applied.out, result, parseError) && result.Find("applied")->AsBool(),
+        "a long batch of scene edits must apply: " + applied.out.substr(0U, 600U) + applied.err);
+    // Opening the scene for every operation took about a quarter of a second each: 400 operations ran for over a minute.
+    Require(elapsed < std::chrono::seconds{ 10 }, "400 scene edits of one batch must not reopen the scene for each one");
+
+    // The command that is not an edit saw the scene as written by the operations before it, and no later one.
+    const std::string& listing = result.Find("operations")->At(static_cast<std::size_t>(kBarrierAfter) * 2U)->Find("output")->AsString();
+    Require(Contains(listing, "Obj" + std::to_string(kBarrierAfter)) && !Contains(listing, "Obj" + std::to_string(kBarrierAfter + 1)),
+        "a command that is not an edit must see the scene as the operations before it left it: " + listing);
+
+    const CliRun last = RunCliProgram({ "entity", "show", "--project", project, "--name", "Obj" + std::to_string(kObjects) });
+    Require(last.exitCode == 0 && Contains(last.out, "Light:") && Contains(last.out, "worldPosition=" + std::to_string(kObjects) + ",0,0"),
+        "the batch must have written the last object with its Light: " + last.out + last.err);
+    const CliRun first = RunCliProgram({ "entity", "show", "--project", project, "--name", "Obj1" });
+    Require(first.exitCode == 0 && Contains(first.out, "Light:"), "the batch must have written the first object with its Light: " + first.out);
+
+    // An operation that fails late leaves the scene file, and everything else, as it was.
+    const auto before = Fingerprint(projectPath);
+    constexpr int kFailing = 150;
+    std::string failing;
+    for (int index = 1; index < kFailing; ++index) {
+        failing += "entity add --name Extra" + std::to_string(index) + " --position 0," + std::to_string(index) + ",0\n";
+    }
+    failing += "component add --entity Missing --type Light\n";
+    failing += "entity add --name Unreached\n";
+    const std::filesystem::path failingFile = parent / "failing.txt";
+    WriteTextFile(failingFile, failing);
+    const CliRun failed = RunCliProgram({ "batch", "--project", project, "--file", failingFile.string() });
+    Require(failed.exitCode == 1 && Contains(failed.out, "rolled back: operation " + std::to_string(kFailing) + " failed"),
+        "the failing operation must fail the batch: " + failed.out + failed.err);
+    Require(Fingerprint(projectPath) == before, "a batch that fails after 149 scene edits must leave every file as it was");
+
+    // The transaction's own cost stays small beside the project it covers: finding what an operation changed does not
+    // read the unchanged files one byte at a time.
+    constexpr std::size_t kBigFileBytes = 30U * 1024U * 1024U;
+    const std::string bigBytes(kBigFileBytes, 'k');
+    for (int index = 0; index < 4; ++index) {
+        WriteTextFile(projectPath / "Assets" / "Data" / ("big" + std::to_string(index) + ".bin"), bigBytes);
+    }
+    const std::filesystem::path cheap = parent / "cheap.txt";
+    WriteTextFile(cheap, "entity show --name Obj1\n");
+    const auto bigStarted = std::chrono::steady_clock::now();
+    const CliRun cheapRun = RunCliProgram({ "batch", "--project", project, "--file", cheap.string() });
+    const auto bigElapsed = std::chrono::steady_clock::now() - bigStarted;
+    Require(cheapRun.exitCode == 0 && Contains(cheapRun.out, "0 file(s) changed"), "a batch that changes nothing must apply: " + cheapRun.out + cheapRun.err);
+    Require(bigElapsed < std::chrono::seconds{ 1 }, "a batch must not read 120 MB of unchanged files byte by byte");
+    std::filesystem::remove_all(projectPath / "Assets" / "Data", error);
+
+    // A batch sent to the MCP server works on the project the server is bound to.
+    const std::filesystem::path mcpFile = parent / "mcp.txt";
+    WriteTextFile(mcpFile, "entity add --name ByMcp\ncomponent add --entity ByMcp --type Light\n");
+    std::string mcpInput = R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kb_cli","arguments":{"args":["batch","--file",")";
+    for (const char character : mcpFile.generic_string()) mcpInput += character;
+    mcpInput += "\"]}}}\n";
+    std::istringstream mcpIn{ mcpInput };
+    std::ostringstream mcpOut;
+    std::ostringstream mcpErr;
+    const std::vector<std::string> mcpArguments{ "--project", project };
+    const kb::cli::ArgumentList mcpList{ mcpArguments, kFlagNames };
+    Require(kb::cli::RunMcpCommand(mcpList, mcpIn, kb::cli::CommandIo{ .out = mcpOut, .err = mcpErr }) == 0 &&
+            Contains(mcpOut.str(), "applied: 2 operation(s)") && Contains(mcpOut.str(), "\"isError\":false"),
+        "a batch sent over MCP must run on the bound project: " + mcpOut.str() + mcpErr.str());
+
+#if KB_CLI_RENDERER
+    // --color makes a material before it edits the scene: the scene kept open from the first object must see the second one's.
+    const std::filesystem::path colored = parent / "colored.txt";
+    WriteTextFile(colored, "entity add --name Red --create Cube --color #FF0000\n"
+        "entity add --name Blue --create Cube --color #0000FF\n"
+        "entity add --name Green --create Cube --color #00FF00\n");
+    const CliRun paint = RunCliProgram({ "batch", "--project", project, "--file", colored.string() });
+    Require(paint.exitCode == 0, "--color in a batch must find the material it made: " + paint.out + paint.err);
+    for (const char* name : { "Red", "Blue", "Green" }) {
+        const CliRun shown = RunCliProgram({ "entity", "show", "--project", project, "--name", name });
+        Require(shown.exitCode == 0 && Contains(shown.out, std::string{ "/Game/Materials/" } + name + ".kbmat"),
+            std::string{ "the batch must give " } + name + " its own material: " + shown.out + shown.err);
+    }
+#endif
+}
+
+// scene-duplicate: a scene copied under a new name keeps its content, gets an identity of its own, and can be edited
+// at once; the original is not touched.
+void RunSceneDuplicateCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "scene_duplicate";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path projectPath = parent / "Scena";
+    const std::string project = projectPath.string();
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Alpha", "--position", "1,2,3" }).exitCode == 0 &&
+            RunCliProgram({ "component", "add", "--project", project, "--entity", "Alpha", "--type", "Light" }).exitCode == 0,
+        "the scene to copy could not be prepared");
+    const std::filesystem::path original = projectPath / "Assets" / "Scenes" / "Main.21kbscene";
+    const auto originalBefore = Fingerprint(projectPath / "Assets" / "Scenes");
+
+    const CliRun copied = RunCliProgram({ "scene-duplicate", "--project", project, "--name", "Copy" });
+    Require(copied.exitCode == 0 && Contains(copied.out, "/Game/Scenes/Copy.21kbscene"),
+        "scene-duplicate must copy the startup scene: " + copied.out + copied.err);
+    const std::filesystem::path copy = projectPath / "Assets" / "Scenes" / "Copy.21kbscene";
+    Require(std::filesystem::is_regular_file(copy) && std::filesystem::is_regular_file(projectPath / "Assets" / "Scenes" / "Copy.meta"),
+        "the copy must be a scene with its own .meta");
+    const auto copiedScene = kb::scene::SceneDocumentService::Load(copy);
+    const auto originalScene = kb::scene::SceneDocumentService::Load(original);
+    Require(copiedScene.succeeded && originalScene.succeeded && copiedScene.document.name == "Copy" &&
+            copiedScene.document.guid != originalScene.document.guid && !copiedScene.document.guid.empty(),
+        "the copy must be named and identified as a scene of its own: " + copiedScene.error);
+    const CliRun listed = RunCliProgram({ "scene-list", "--project", project, "--scene", "/Game/Scenes/Copy.21kbscene" });
+    Require(listed.exitCode == 0 && Contains(listed.out, "Alpha") && Contains(listed.out, "Light"),
+        "the copy must hold what the original held: " + listed.out + listed.err);
+
+    // Editing the copy works at once and leaves the original alone.
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--scene", "/Game/Scenes/Copy.21kbscene", "--name", "Beta" }).exitCode == 0,
+        "the copy must be editable");
+    const CliRun originalListed = RunCliProgram({ "scene-list", "--project", project, "--scene", "/Game/Scenes/Main.21kbscene" });
+    Require(originalListed.exitCode == 0 && Contains(originalListed.out, "Alpha") && !Contains(originalListed.out, "Beta"),
+        "editing the copy must not change the original: " + originalListed.out);
+    Require(Fingerprint(projectPath / "Assets" / "Scenes").at("Main.21kbscene") == originalBefore.at("Main.21kbscene") &&
+            Fingerprint(projectPath / "Assets" / "Scenes").at("Main.meta") == originalBefore.at("Main.meta"),
+        "scene-duplicate must not touch the original files");
+
+    // A name that is taken, and one that is not a file name, are refused and leave nothing behind.
+    const auto before = Fingerprint(projectPath);
+    Require(RunCliProgram({ "scene-duplicate", "--project", project, "--name", "Copy" }).exitCode == 1 &&
+            RunCliProgram({ "scene-duplicate", "--project", project, "--name", "Bad/Name" }).exitCode == 1 &&
+            RunCliProgram({ "scene-duplicate", "--project", project, "--scene", "/Game/Scenes/Missing.21kbscene", "--name", "Other" }).exitCode == 1 &&
+            RunCliProgram({ "scene-duplicate", "--project", project }).exitCode == 1,
+        "scene-duplicate must refuse a taken name, a bad name, a missing scene and no name");
+    Require(Fingerprint(projectPath) == before, "a refused scene-duplicate must leave every file as it was");
 }
 
 #if KB_CLI_RENDERER
@@ -4879,6 +5483,13 @@ void RunWorldMemoryCliTests() {
     const CliRun placed = RunCliProgram({ "component", "set", "--project", project, "--entity", "Holder", "--type", "ContentInstance", "--set", "assetId=" + worldId, "--set", "kind=3" });
     Require(placed.exitCode == 0, "placing the world failed: " + placed.out + placed.err);
     Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Streamer", "--position", "100,0,50" }).exitCode == 0, "adding the streamer failed");
+    // --look-at turns forward (+Z) toward a point or an entity: no angles worked out by hand.
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Eye", "--look-at", "0,-10,10" }).exitCode == 0, "adding an aimed entity failed");
+    const CliRun pitched = RunCliProgram({ "entity", "show", "--project", project, "--name", "Eye" });
+    Require(Contains(pitched.out, "rotation=45,0,0"), "--look-at below and ahead must pitch down 45 degrees: " + pitched.out);
+    const CliRun aimed = RunCliProgram({ "entity", "set", "--project", project, "--name", "Eye", "--look-at", "Streamer" });
+    Require(aimed.exitCode == 0 && Contains(aimed.out, "rotation=0,63.4349,0"), "--look-at an entity must turn toward it: " + aimed.out + aimed.err);
+    Require(RunCliProgram({ "entity", "remove", "--project", project, "--name", "Eye" }).exitCode == 0, "removing the aimed entity failed");
     Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Streamer", "--type", "StreamFocus" }).exitCode == 0, "adding the stream focus failed");
     Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Streamer", "--type", "StreamFocus", "--set", "outerRadius=300.0", "--set", "innerRadius=250.0" }).exitCode == 0, "setting the stream focus failed");
 
@@ -4904,11 +5515,26 @@ void RunWorldMemoryCliTests() {
         return nullptr;
     };
     Require(kind("instances") != nullptr && kind("instances")->Find("source")->AsString() == "measured" && kind("instances")->Find("bytes")->AsNumber() > 0.0, "the instances are measured");
-    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "estimated", "the assets are estimated from file sizes");
+    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "measured", "the published world index payload is measured");
+    const auto* assets = kind("assets_cpu");
+    Require(assets->Find("known_payload_bytes") != nullptr && assets->Find("known_payload_bytes")->GetKind() == kb::core::JsonValue::Kind::Number &&
+            assets->Find("known_payload_bytes")->AsNumber() > 0.0 &&
+            assets->Find("known_payload_bytes")->AsNumber() == assets->Find("bytes")->AsNumber() &&
+            assets->Find("unmeasured_payloads") != nullptr && assets->Find("unmeasured_payloads")->AsNumber(-1.0) == 0.0 &&
+            assets->Find("baseline_unmeasured_payloads") != nullptr && assets->Find("baseline_unmeasured_payloads")->GetKind() == kb::core::JsonValue::Kind::Number,
+        "complete published payload coverage must report its decoded bytes and zero unknown payloads");
     Require(kind("scripts") != nullptr && kind("scripts")->Find("source")->AsString() == "measured", "the script heap is measured");
-    Require(kind("physics")->Find("source")->AsString() == "unavailable" && kind("physics")->Find("bytes")->IsNull() &&
-            kind("gpu")->Find("source")->AsString() == "unavailable" && memory->Find("has_unavailable_kinds")->AsBool(),
-        "kinds this host cannot read are unavailable, not zero");
+    Require(kind("physics")->Find("source")->AsString() == "measured" &&
+            kind("physics")->Find("bytes")->GetKind() == kb::core::JsonValue::Kind::Number &&
+            kind("gpu")->Find("source")->AsString() == "unavailable" && kind("gpu")->Find("bytes")->IsNull() &&
+            memory->Find("has_unavailable_kinds")->AsBool(),
+        "physics allocator bytes are measured while the graphics-free host reports GPU unavailable: " + ran.out);
+    Require(!memory->Find("has_estimated_kinds")->AsBool() &&
+            memory->Find("estimated_bytes")->AsNumber() == 0.0 &&
+            memory->Find("measured_bytes")->AsNumber() == kind("instances")->Find("bytes")->AsNumber() +
+                kind("scripts")->Find("bytes")->AsNumber() + assets->Find("bytes")->AsNumber() +
+                kind("physics")->Find("bytes")->AsNumber(),
+        "measured published payload bytes are included once in measured totals");
     Require(memory->Find("samples")->AsNumber() >= 1.0 && memory->Find("minimum_error_ratio")->AsNumber() > 0.0 &&
             memory->Find("minimum_error_ratio")->AsNumber() <= memory->Find("maximum_error_ratio")->AsNumber(), "the error ratio was sampled");
     const CliRun refused = RunCliProgram({ "run", "--project", project, "--report", "bogus" });
@@ -4970,8 +5596,8 @@ void RunPlayerPresetCliTests() {
 
     const CliRun added = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--position", "2,3,0" });
     Require(added.exitCode == 0, "the Platformer Player preset failed: " + added.out + added.err);
-    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DPlayer.lua";
-    Require(std::filesystem::exists(script) && Contains(read(script), "@expose coyoteTime") && Contains(read(script), "@expose jumpBuffer"),
+    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua";
+    Require(std::filesystem::exists(script) && Contains(read(script), "@expose jumpSpeed") && Contains(read(script), "@expose jumpBuffer"),
         "the preset must write the platformer script, with its tunables");
     for (const char* file : { "Move.21kbinputaction", "Jump.21kbinputaction", "PlayerInput.21kbinputcontext" }) {
         Require(std::filesystem::exists(root / "Assets" / "Input" / file), std::string{ "the preset must write the input asset " } + file);
@@ -4979,9 +5605,9 @@ void RunPlayerPresetCliTests() {
     Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.inputMappingContext ==
                 "/Game/Input/PlayerInput.21kbinputcontext", "the project's input context must be the preset's");
     const CliRun listed = RunCliProgram({ "scene-list", "--project", project });
-    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController"),
-        "the scene must hold a Player with a CharacterController: " + listed.out);
-    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DPlayer.lua" });
+    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController2D"),
+        "the scene must hold a Player with a CharacterController2D: " + listed.out);
+    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DBox2DPlayer.lua" });
     Require(behaviours.exitCode == 0, "the preset script must validate: " + behaviours.out + behaviours.err);
     const CliRun info = RunCliProgram({ "map2d", "info", "--project", project, "--map", "/Game/Maps/World.kbmap2d" });
     Require(Contains(info.out, "follows Player") && Contains(info.out, "kept inside the map"), "the map camera must follow the Player: " + info.out);
@@ -4999,11 +5625,16 @@ void RunPlayerPresetCliTests() {
     const CliRun again = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player" });
     Require(again.exitCode == 1 && Contains(again.err, "already exists"), "a second entity named Player must be refused: " + again.err);
     const CliRun topDown = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--name", "Walker" });
-    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DPlayer.lua"),
+    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DBox2DPlayer.lua"),
         "the top-down preset works and notes that the map is a platformer map: " + topDown.out + topDown.err);
-    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
+    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DBox2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
 
-    // The same players on the 2D physics.
+    const CliRun legacy = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "3d", "--name", "LegacyPlayer" });
+    const std::string legacyScript = read(root / "Assets" / "Scripts" / "Platformer2DPlayer.lua");
+    Require(legacy.exitCode == 0 && Contains(legacyScript, "@expose coyoteTime") && Contains(legacyScript, "@expose jumpBuffer"),
+        "the explicit 3D physics preset must preserve its script and tunables: " + legacy.out + legacy.err);
+
+    // Explicit 2D selection uses the same native presets as the default.
     const CliRun box2d = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "2d", "--name", "Hero2D" });
     Require(box2d.exitCode == 0 && Contains(box2d.out, "Platformer2DBox2DPlayer.lua"), "the 2D physics preset failed: " + box2d.out + box2d.err);
     Require(Contains(read(root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua"), "Physics2D.MoveCharacter"), "the preset must write the 2D physics script");
@@ -5086,6 +5717,21 @@ int main(int argc, char** argv) {
         RunBatchCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "scene-duplicate") {
+        RunSceneDuplicateCommandTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "batch-scenes") {
+        RunBatchSceneSessionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "ui-validation") {
+        RunUiValidationCliTests();
+        RunUiDependencyCliTests();
+        RunUiClickCliTests();
+        RunUiScreenCliTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
         RunInputRecordingCliTests();
         return EXIT_SUCCESS;
@@ -5106,11 +5752,17 @@ int main(int argc, char** argv) {
 #endif
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "world-memory") {
+        RunWorldMemoryCliTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) return EXIT_FAILURE;
     RunAudioMixerCommandTests();
     RunCliJsonTests();
     RunCommandCatalogTests();
     RunBatchCommandTests();
+    RunBatchSceneSessionTests();
+    RunSceneDuplicateCommandTests();
     RunMiniJsonTests();
     RunArgumentListTests();
     RunFlexibleAssetPathTests();
@@ -5119,6 +5771,7 @@ int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     RunPostProcessCommandTests();
     RunImportSettingsCommandTests();
+    RunMeshLodCommandTests();
     RunMaterialAuthoringCommandTests();
     RunMaterialGraphUtilityNodeCommandTests();
     RunMap2DCameraCliTests();
@@ -5132,7 +5785,14 @@ int main(int argc, char** argv) {
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlaybackStopTests();
+    RunLuaFunctionTableTests();
+    RunInputActionAndPrefabTests();
+    RunSceneShortcutTests();
     RunInputRecordingCliTests();
+    RunUiValidationCliTests();
+    RunUiDependencyCliTests();
+    RunUiClickCliTests();
+    RunUiScreenCliTests();
     RunSafeAreaCliTests();
     RunNewerSceneMetadataCliTest();
     RunParticleReportCommandTests();

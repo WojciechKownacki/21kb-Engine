@@ -24,11 +24,11 @@ Requirements: CMake 3.27 or newer and a C++20 compiler. The configure step downl
 Monocypher and Recast (pinned in the root `CMakeLists.txt`), so it needs network access. The editor and the
 renderer build on Windows only (`KB_BUILD_EDITOR`, `KB_BUILD_RENDERER` default to `ON` there).
 
-Windows, as CI does it (any other generator works too):
+Windows:
 
 ```powershell
-cmake -S . -B build/dev -G "Visual Studio 18 2026" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
-cmake --build build/dev --config Release --target kb_cli kb_cli_tests --parallel 4
+cmake -S . -B build/dev -G "Visual Studio 17 2022" -DKB_BUILD_EDITOR=ON -DKB_BUILD_RENDERER=ON -DBUILD_TESTING=ON
+cmake --build build/dev --config Release --target kb_cli kb_cli_tests --parallel 2
 ```
 
 Build only the targets you changed; a full build of the editor is large. `kb_cli.exe` is written to
@@ -87,7 +87,27 @@ A provider module is a library that the engine loads through the module ABI
 (`sources/engine/include/engine/modules/`): `kEngineModuleAbiVersion` must match, and the library exports
 `kb_engine_module_abi_version`, `kb_engine_module_name`, `kb_create_engine_module` and
 `kb_destroy_engine_module`. The smallest complete examples are `sources/plugins/ai` (CMake and module) and
-`sources/plugins/world_2d` (module, runtime system, tests):
+`sources/plugins/world_2d` (module, runtime system, tests).
+
+Dynamic providers also place `KB_EXPORT_ENGINE_MODULE_BUILD_FINGERPRINT` from
+`EngineModuleExports.hpp` alongside their exports (inside the dynamic-only guard).
+The loader requires an exact ABI version and build fingerprint: compiler version,
+C++ runtime mode, standard-library ABI/debug settings, and interface type sizes and
+alignments. A mismatch reports the incompatible field and rejects the module before
+calling its name, factory or lifecycle. Rebuild the provider with the same engine SDK
+and toolchain; old providers without the fingerprint must also be rebuilt. The OS still
+maps the library before these checks, so this is a compatibility check, not a sandbox.
+Semantic interface changes still require incrementing `kEngineModuleAbiVersion`;
+the fingerprint does not replace versioning or promise cross-toolchain C++ compatibility.
+
+Initialization is transactional. If `OnLoad` or `OnEnable` throws, the host
+undoes every started step in reverse order, including the failing partial step.
+`OnUnload` and `OnDisable` must therefore handle partial initialization and remove
+the module's owned registrations and callbacks. Cleanup must not throw; if it does,
+the host reports the failure and continues cleaning the other modules. A corrected
+module can be loaded again on the same host.
+
+To add a provider:
 
 1. Make a folder `sources/plugins/<name>` with a `CMakeLists.txt` like the one in `sources/plugins/ai`: a
    `STATIC` library, or `SHARED` when `KB_BUILD_PROVIDER_MODULES_AS_DLL` is on (the default), linked to

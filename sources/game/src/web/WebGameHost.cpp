@@ -2,9 +2,12 @@
 #include "PackagedGameRuntime.hpp"
 #include "WebTouchInput.hpp"
 #include "WebGamepadInput.hpp"
+#include "WebGamepadHaptics.hpp"
 #include "WebDownloadProgress.hpp"
 #include "WebDownloadBuffer.hpp"
 #include "DigitalInputFrame.hpp"
+#include "WebTextClipboard.hpp"
+#include "kb/net/WebSocketTransport.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -35,9 +38,13 @@
 #include <memory>
 #include <span>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <utility>
 
+extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_web_selected_text(void* host);
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_replace_text(void* host, const char* text, std::size_t length);
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_commit_text(void* host, const char* text, std::size_t length);
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
     void* host, std::uint32_t codePoint) noexcept;
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_download_begin(void* host, double length);
@@ -170,15 +177,19 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
     const state = { control, active: false, composing: false, suppressedComposition: null };
     const append = (text) => {
         if (!state.active || !text) return;
-        for (const character of text) {
-            if (!_kb_web_append_committed_text(host, character.codePointAt(0))) break;
-        }
+        if (text.length > 4096 || lengthBytesUTF8(text) > 4096) return;
+        const pointer = stringToNewUTF8(text);
+        if (!pointer) return;
+        try { _kb_web_commit_text(host, pointer, lengthBytesUTF8(text)); }
+        finally { _free(pointer); }
     };
     control.addEventListener('compositionstart', () => {
+        if (!state.active) return;
         state.composing = true;
         state.suppressedComposition = null;
     });
     control.addEventListener('compositionend', (event) => {
+        if (!state.active || !state.composing) return;
         state.composing = false;
         state.suppressedComposition = event.data || "";
         append(state.suppressedComposition);
@@ -213,6 +224,8 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
         const text = typeof event.data === 'string' ? event.data : control.value;
         const compositionInput = event.inputType === 'insertCompositionText' ||
             event.inputType === 'insertFromComposition';
+        // A final event from a canceled editor must not commit into a newly focused field.
+        if (compositionInput && state.suppressedComposition === null) return;
         if (compositionInput && state.suppressedComposition !== null &&
             text === state.suppressedComposition) {
             state.suppressedComposition = null;
@@ -221,6 +234,37 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
             append(text);
         }
         control.value = "";
+    });
+    for (const kind of ['copy', 'cut']) {
+        control.addEventListener(kind, (event) => {
+            if (!state.active || !event.clipboardData) return;
+            // Prevent native textarea contents (including unfinished input) from leaking.
+            event.preventDefault();
+            if (state.composing) return;
+            const pointer = _kb_web_selected_text(host);
+            if (!pointer) return;
+            const text = UTF8ToString(pointer);
+            if (!text) return;
+            try {
+                event.clipboardData.setData('text/plain', text);
+                if (kind === 'cut') _kb_web_replace_text(host, 0, 0);
+            } catch (_) {
+                // A denied clipboard write must leave the selection untouched.
+            }
+        });
+    }
+    control.addEventListener('paste', (event) => {
+        if (!state.active || !event.clipboardData) return;
+        event.preventDefault();
+        if (state.composing) return;
+        const text = event.clipboardData.getData('text/plain');
+        if (!text || text.length > 16384) return;
+        const size = lengthBytesUTF8(text);
+        if (size > 16384) return;
+        const pointer = stringToNewUTF8(text);
+        if (!pointer) return;
+        try { _kb_web_replace_text(host, pointer, size); }
+        finally { _free(pointer); }
     });
     document.body.appendChild(control);
     Module['kbTextInput'] = state;
@@ -243,6 +287,10 @@ EM_JS(void, SetBrowserTextInputActive, (int active), {
 EM_JS(void, DestroyBrowserTextInput, (), {
     const state = Module['kbTextInput'];
     if (!state) return;
+    state.active = false;
+    state.composing = false;
+    state.suppressedComposition = null;
+    state.control.value = "";
     state.control.remove();
     delete Module['kbTextInput'];
 });
@@ -261,6 +309,14 @@ EM_JS(int, RecreateBrowserCanvas, (), {
 EM_JS(void, InitializeBrowserStorage, (), { Module['kbInitializeStorage'](); });
 EM_JS(int, BrowserStorageStartup, (), { return Module['kbUserStorage'].startup; });
 EM_JS(char*, BrowserStorageRoot, (), { return stringToNewUTF8(Module['kbUserStorage'].root); });
+EM_JS(char*, BrowserNetworkSettings, (), {
+    if (globalThis.kbNetwork === undefined) return 0;
+    try {
+        const value = JSON.stringify(globalThis.kbNetwork);
+        delete globalThis.kbNetwork;
+        return stringToNewUTF8(typeof value === 'string' && value.length <= 8192 ? value : '!');
+    } catch (error) { return stringToNewUTF8('!'); }
+});
 EM_JS(char*, BrowserStorageDiagnostic, (), { return stringToNewUTF8(Module['kbUserStorage'].diagnostic); });
 // clang-format on
 
@@ -295,7 +351,8 @@ void SetBrowserStartupError(const char* code) noexcept {
     EM_ASM({
         const error = UTF8ToString($0);
         document.documentElement.dataset.kbError = error;
-        location.hash = 'kb-error-' + encodeURIComponent(error);
+        if (!document.documentElement.dataset.kbFallback)
+            location.hash = 'kb-error-' + encodeURIComponent(error);
     }, code);
 }
 
@@ -498,9 +555,25 @@ private:
             Fail("runtime-init", diagnostics.str());
             return;
         }
+        if (char* settings = BrowserNetworkSettings()) {
+            kb::net::SceneClientOptions options;
+            std::string url;
+            const bool valid = kb::net::ParseWebSceneClientSettings(settings, options, url);
+            std::free(settings);
+            const auto endpoint = options.server;
+            if (!valid || !runtime_.ConfigureNetwork(std::move(options),
+                    [url = std::move(url), endpoint](std::string& error) {
+                        return kb::net::CreateBrowserWebSocketTransport(url, endpoint, error);
+                    })) {
+                Fail("network-init", "invalid runtime network settings");
+                return;
+            }
+        }
         EM_ASM({ location.hash = 'kb-runtime-ready'; });
+        if (auto* scene = runtime_.Scene()) kb::input::InputHaptics::RegisterBackend(*scene, haptics_);
 
         if (!InitializeRenderer()) {
+            EM_ASM({ Module['kbGraphicsFailure']?.('renderer-init', 'Browser renderer initialization failed'); });
             Fail("renderer-init", "required browser renderer could not be initialized");
             return;
         }
@@ -587,6 +660,7 @@ private:
             scene->Input().MutableDeviceState().SetPointerViewportExtent(
                 host->surface_.Width(), host->surface_.Height());
             kb::game::PollWebGamepads(scene->Input().MutableDeviceState());
+            host->haptics_.Update();
             host->digital_.Publish(scene->Input().MutableDeviceState());
         }
         host->touches_.SetViewport(host->surface_.Width(), host->surface_.Height());
@@ -695,6 +769,9 @@ private:
         if (scene == nullptr || event == nullptr || host->graphicsContextLost_) return EM_FALSE;
         const kb::input::InputKey key = WebKey(event->code);
         if (key == kb::input::InputKey::None) return EM_FALSE;
+        if (eventType == EMSCRIPTEN_EVENT_KEYDOWN && host->textInputActive_ &&
+            EM_ASM_INT({ return Module['kbTextInput']?.composing ? 1 : 0; }) != 0)
+            return EM_FALSE; // Candidate navigation belongs to the browser IME.
         static_cast<void>(host->digital_.Queue(scene->Input().MutableDeviceState(),
             key, eventType == EMSCRIPTEN_EVENT_KEYDOWN));
         return host->textInputActive_ && eventType == EMSCRIPTEN_EVENT_KEYDOWN
@@ -794,6 +871,7 @@ private:
     static void OnInputFocus(void* userData, bool focused) noexcept {
         auto* host = static_cast<WebGameHost*>(userData);
         if (host != nullptr && !focused) {
+            host->haptics_.StopAll();
             host->digital_.Clear();
             host->pointerNeedsBaseline_ = true;
             host->SetTextInputActive(false);
@@ -801,15 +879,51 @@ private:
     }
 
     void SetTextInputActive(bool active) noexcept {
-        if (textInputActive_ == active) return;
+        active = active && EM_ASM_INT({ return document.hasFocus() ? 1 : 0; }) != 0;
+        const auto* scene = runtime_.Scene();
+        const auto field = active && scene != nullptr ? scene->UI().Focused() : kb::scene::SceneEntity{};
+        if (textInputActive_ == active && textInputField_ == field) return;
+        // Cancel the old native composition before activating another field.
+        if (textInputActive_) SetBrowserTextInputActive(0);
+        if (active) {
+            // Retire the old event target so delayed native input cannot reach the new editor.
+            DestroyBrowserTextInput();
+            RegisterBrowserTextInput(this);
+        }
+        textInputField_ = field;
         textInputActive_ = active;
         SetBrowserTextInputActive(active ? 1 : 0);
+    }
+
+    [[nodiscard]] const char* SelectedText() {
+        auto* scene = runtime_.Scene();
+        if (!textInputActive_ || scene == nullptr || scene->UI().Focused() != textInputField_) return nullptr;
+        const auto selection = kb::game::ReadWebClipboardSelection(scene->UI(), textInputField_);
+        if (!selection) return nullptr;
+        clipboardText_ = *selection;
+        return clipboardText_.c_str();
+    }
+
+    [[nodiscard]] bool ReplaceText(const char* text, std::size_t length) {
+        auto* scene = runtime_.Scene();
+        if (!textInputActive_ || scene == nullptr || scene->UI().Focused() != textInputField_ ||
+            length > 16384U || (length != 0U && text == nullptr)) return false;
+        const std::string_view source{text == nullptr ? "" : text, length};
+        return kb::game::QueueWebClipboardText(scene->UI(), textInputField_, source);
     }
 
     [[nodiscard]] bool AppendCommittedText(char32_t codePoint) noexcept {
         kb::scene::Scene* scene = runtime_.Scene();
         return textInputActive_ && scene != nullptr &&
+            scene->UI().Focused() == textInputField_ &&
             scene->Input().MutableDeviceState().AddTextInput(codePoint);
+    }
+
+    [[nodiscard]] bool CommitText(const char* text, std::size_t length) {
+        auto* scene = runtime_.Scene();
+        return textInputActive_ && scene != nullptr && text != nullptr &&
+            scene->UI().Focused() == textInputField_ &&
+            kb::game::AppendWebCommittedText(scene->Input().MutableDeviceState(), {text, length});
     }
 
     void Fail(const char* code, std::string_view message) {
@@ -820,6 +934,8 @@ private:
 
     void Shutdown() noexcept {
         shuttingDown_ = true;
+        haptics_.StopAll();
+        if (auto* scene = runtime_.Scene()) kb::input::InputHaptics::UnregisterBackend(*scene, haptics_);
         downloadActive_ = false;
         CancelFetchWatchdog();
         CancelBrowserDownload();
@@ -848,6 +964,7 @@ private:
     kb::render::Renderer renderer_;
     kb::game::PackagedGameRuntime runtime_;
     kb::game::WebTouchInput touches_;
+    kb::game::WebGamepadHaptics haptics_;
     kb::game::DigitalInputFrame digital_;
     std::chrono::steady_clock::time_point previousTick_{};
     std::chrono::steady_clock::time_point storageStartupTime_{};
@@ -855,6 +972,8 @@ private:
     bool firstFrameReported_ = false;
     bool frameInProgress_ = false;
     bool textInputActive_ = false;
+    kb::scene::SceneEntity textInputField_;
+    std::string clipboardText_;
     bool pointerNeedsBaseline_ = true;
     bool graphicsContextLost_ = false;
     bool graphicsEventsRegistered_ = false;
@@ -866,6 +985,9 @@ private:
     std::uint32_t healthyGraphicsFrames_ = 0U;
 
     friend int ::kb_web_append_committed_text(void* host, std::uint32_t codePoint) noexcept;
+    friend int ::kb_web_commit_text(void* host, const char* text, std::size_t length);
+    friend const char* ::kb_web_selected_text(void* host);
+    friend int ::kb_web_replace_text(void* host, const char* text, std::size_t length);
     friend int ::kb_web_download_begin(void* host, double length);
     friend void* ::kb_web_download_append(void* host, std::size_t count);
     friend void ::kb_web_download_progress(void* host);
@@ -908,6 +1030,21 @@ extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
     return gameHost != nullptr && gameHost->AppendCommittedText(static_cast<char32_t>(codePoint))
         ? 1
         : 0;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_web_selected_text(void* host) {
+    auto* gameHost = static_cast<WebGameHost*>(host);
+    return gameHost == nullptr ? nullptr : gameHost->SelectedText();
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_commit_text(void* host, const char* text, std::size_t length) {
+    auto* gameHost = static_cast<WebGameHost*>(host);
+    return gameHost != nullptr && gameHost->CommitText(text, length) ? 1 : 0;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_replace_text(void* host, const char* text, std::size_t length) {
+    auto* gameHost = static_cast<WebGameHost*>(host);
+    return gameHost != nullptr && gameHost->ReplaceText(text, length) ? 1 : 0;
 }
 
 int main() {

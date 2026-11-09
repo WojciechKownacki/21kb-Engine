@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/ecs/ComponentId.hpp"
+#include "ecs/type/OwnedTypeName.hpp"
 
 #include <array>
 #include <atomic>
@@ -35,7 +36,7 @@ private:
     static constexpr std::size_t kFastSlots = 512U;
     static constexpr std::size_t kFastProbes = 8U;
 
-    std::unordered_map<std::type_index, ComponentId> componentIds_;
+    std::unordered_map<std::string, ComponentId, OwnedTypeNameHash, std::equal_to<>> componentIds_;
     mutable std::array<FastSlot, kFastSlots> fast_{};
 };
 

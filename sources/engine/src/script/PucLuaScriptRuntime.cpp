@@ -5,6 +5,7 @@
 #include "script/lua/PucLuaSandboxEnvironment.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
+#include "script/lua/PucLuaMemoryArena.hpp"
 
 extern "C" {
 #include <lauxlib.h>
@@ -60,7 +61,9 @@ int Panic(lua_State* state) {
 
 PucLuaScriptRuntime::PucLuaScriptRuntime()
     : memoryBudget_(std::make_unique<PucLuaMemoryBudget>(PucLuaMemoryBudget{ .limitBytes = ScriptExecutionBudgetSettings{}.luaMemoryBytes }))
+    , stateLifetime_(std::make_shared<PucLuaStateLifetime>())
     , state_(lua_newstate(&PucLuaMemoryBudget::Allocate, memoryBudget_.get())) {
+    stateLifetime_->state = state_;
     if (state_ != nullptr) {
         lua_atpanic(state_, &Panic);
         *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state_)) = this;
@@ -69,6 +72,7 @@ PucLuaScriptRuntime::PucLuaScriptRuntime()
 }
 
 PucLuaScriptRuntime::~PucLuaScriptRuntime() {
+    stateLifetime_->state = nullptr;
     if (state_ != nullptr) {
         lua_close(state_);
         state_ = nullptr;
@@ -481,6 +485,11 @@ PucLuaDebugPauseSnapshot PucLuaScriptRuntime::InspectDebugPause() const {
     return snapshot;
 }
 
+PucLuaDebugEvaluationResult PucLuaScriptRuntime::EvaluateDebugExpression(std::string_view expression, int frame) const {
+    if (!debugPause_) return {.error = "debugger is not paused"};
+    return PucLuaDebugHook::Evaluate(debugPause_->thread, expression, frame);
+}
+
 void PucLuaScriptRuntime::RecordDebugPause(PucLuaDebugPauseSnapshot snapshot) {
     lastDebugPause_ = std::move(snapshot);
 }
@@ -642,6 +651,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     std::string_view functionName,
     ScriptExecutionContext& context,
     const ScriptEvent* event) {
+    PucLuaExecutionContextScope activeContext{state_, context};
     ScriptBackendExecutionResult result{};
     const kb::assets::AssetId assetId{ behaviour.behaviourAssetId };
     const InstanceKey instanceKey{

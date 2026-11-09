@@ -2,13 +2,17 @@
 #include "engine/assets/Map2DNavigation.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneTilemapRuntime.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace kb::script {
+bool RegisterMap2DGeometryApi(ScriptRuntimeHost& host);
 namespace {
 using namespace kb::assets;
 using Args = std::span<const ScriptFunctionArgument>;
@@ -91,7 +95,7 @@ template <typename Value> ScriptFunctionCallResult SetProperty(const ScriptFunct
 ScriptFunctionCallResult NextStepDetailed(const ScriptFunctionCallContext& context, Args args) {
     const Cell cell(context, args); if (!cell.map) return Error("Tilemap entity or coordinates are invalid");
     Map2DPathOptions options;
-    options.floor = cell.floor; options.platformer = cell.map->orientation == Map2DOrientation::Wall;
+    options.floor = cell.floor; options.platformer = cell.map->orientation == Map2DOrientation::Wall && cell.map->topology==Map2DTopology::Rectangular;
     options.jumpHeight = static_cast<unsigned>(std::clamp(Arg(args, "jumpHeight").AsInt(3), 0, 16));
     options.jumpDistance = static_cast<unsigned>(std::clamp(Arg(args, "jumpDistance").AsInt(4), 0, 16));
     const int clearance = Arg(args, "clearance").AsInt(0);
@@ -108,6 +112,7 @@ ScriptFunctionCallResult NextStepDetailed(const ScriptFunctionCallContext& conte
     options.costProperty = Arg(args, "costProperty").AsString();
     const auto result = FindMap2DPathResult(*cell.map, {static_cast<int>(cell.x), static_cast<int>(cell.y)},
         {Arg(args, "targetX").AsInt(), Arg(args, "targetY").AsInt()}, options);
+    if(result.status==Map2DPathStatus::InvalidOptions) return Error("navigation options are not supported by this map topology");
     const auto& path = result.path;
     const auto next = path.empty() ? std::array<int, 2>{static_cast<int>(cell.x), static_cast<int>(cell.y)} : path[std::min<std::size_t>(1, path.size() - 1)];
     return {.executed = true, .outputs = {{"found", ScriptValue{!path.empty()}}, {"x", ScriptValue{next[0]}}, {"y", ScriptValue{next[1]}},
@@ -120,10 +125,76 @@ ScriptFunctionCallResult NextStep(const ScriptFunctionCallContext& context, Args
     if (result.executed) result.outputs.resize(4U);
     return result;
 }
+ScriptFunctionCallResult PlatformerWaypoint(const ScriptFunctionCallContext& context, Args args) {
+    if (!context.scene || !context.scene->Runtime().Tilemaps()) return Error("The tilemap runtime is not active");
+    const kb::scene::SceneEntity entity{Arg(args,"entity").AsUInt64()};
+    const kb::scene::SceneEntity character{Arg(args,"character").AsUInt64()};
+    const auto* map = context.scene->Runtime().Tilemaps()->Map(entity);
+    const auto* controller = std::as_const(*context.scene).Components().CharacterControllers2D().TryGet(character);
+    if (!map || map->orientation != Map2DOrientation::Wall || map->topology!=Map2DTopology::Rectangular || !controller || !controller->sideView)
+        return Error("Platformer navigation requires a wall tilemap and a side-view CharacterController2D");
+    const auto origin = context.scene->Transforms().WorldTranslation(entity);
+    const auto position = context.scene->Transforms().WorldTranslation(character);
+    const float size = map->tileSize;
+    const double cellX = std::floor((position.x-origin.x)/size + map->width*0.5);
+    const double cellY = std::floor(map->height-(position.y-origin.y-controller->height*0.5+0.01*size)/size);
+    const auto representable = [](double value) {
+        return std::isfinite(value) && value >= std::numeric_limits<int>::min() && value <= std::numeric_limits<int>::max();
+    };
+    if (!representable(cellX) || !representable(cellY)) return Error("Character position exceeds tile coordinate range");
+    const std::array<int,2> start{
+        static_cast<int>(cellX), static_cast<int>(cellY)};
+    const std::array<int,2> end{Arg(args,"targetX").AsInt(),Arg(args,"targetY").AsInt()};
+    Map2DPathOptions options;
+    options.platformer = true;
+    options.floor = Arg(args,"floor").AsInt();
+    options.jumpHeight = static_cast<unsigned>(std::clamp(Arg(args,"jumpHeight").AsInt(3),0,16));
+    options.jumpDistance = static_cast<unsigned>(std::clamp(Arg(args,"jumpDistance").AsInt(4),0,16));
+    const auto result = FindMap2DPathResult(*map,start,end,options);
+    const auto next = result.path.empty() ? start : result.path[std::min<std::size_t>(1,result.path.size()-1)];
+    const double x = origin.x + (next[0]+0.5-map->width*0.5)*size;
+    const double y = origin.y + (map->height-next[1]-1.0)*size + controller->height*0.5;
+    return {.executed=true,.outputs={{"found",ScriptValue{!result.path.empty()}},
+        {"x",ScriptValue{x}},{"y",ScriptValue{y}},
+        {"jump",ScriptValue{std::abs(next[0]-start[0])>1 || next[1]<start[1]}},
+        {"reached",ScriptValue{start==end && std::abs(position.x-x)<0.1*size}},
+        {"budgetExceeded",ScriptValue{result.status==Map2DPathStatus::BudgetExceeded}}}};
+}
+ScriptFunctionCallResult PrefabRegion(const ScriptFunctionCallContext& context, Args args) {
+    auto* runtime=context.scene ? context.scene->Runtime().Tilemaps() : nullptr;
+    if (!runtime || !runtime->SetPrefabRegion(kb::scene::SceneEntity{Arg(args,"entity").AsUInt64()},
+        Arg(args,"minX").AsInt(),Arg(args,"minY").AsInt(),Arg(args,"maxX").AsInt(),Arg(args,"maxY").AsInt(),
+        static_cast<std::uint32_t>(Arg(args,"budget").AsInt(256)))) return Error("Prefab region needs a live tilemap and a budget of 1..4096");
+    return {.executed=true,.outputs={{"applied",ScriptValue{true}}}};
+}
+ScriptFunctionCallResult PrefabCount(const ScriptFunctionCallContext& context, Args args) {
+    const auto* runtime=context.scene ? context.scene->Runtime().Tilemaps() : nullptr;
+    const kb::scene::SceneEntity entity{Arg(args,"entity").AsUInt64()};
+    if (!runtime || !runtime->Map(entity)) return Error("The tilemap runtime is not active");
+    return {.executed=true,.outputs={{"count",ScriptValue{static_cast<std::int64_t>(runtime->PrefabInstanceCount(entity))}}}};
+}
 }
 
 bool ScriptMap2DApi::Register(ScriptRuntimeHost& host) {
     using T = ScriptValueType;
+    ScriptFunctionDesc waypoint;
+    waypoint.signature.name = "Map2D.PlatformerWaypoint";
+    waypoint.signature.description = "Plan a live wall-map route from a 2D character's feet. Return the next world-space landing point, jump requirement and reached/unreachable state. Re-query after landing or map edits.";
+    waypoint.signature.inputs = {{"entity",T::Entity,true},{"character",T::Entity,true},{"targetX",T::Int,true},{"targetY",T::Int,true},
+        {"floor",T::Int,false},{"jumpHeight",T::Int,false},{"jumpDistance",T::Int,false}};
+    waypoint.signature.outputs = {{"found",T::Bool,true},{"x",T::Double,true},{"y",T::Double,true},{"jump",T::Bool,true},{"reached",T::Bool,true},{"budgetExceeded",T::Bool,true}};
+    waypoint.callback = &PlatformerWaypoint;
+    const bool waypointRegistered = host.RegisterFunction(std::move(waypoint));
+    ScriptFunctionDesc region;
+    region.signature.name="Map2D.SetPrefabRegion";
+    region.signature.description="Stream prefab instances inside an inclusive cell rectangle. An inverted rectangle unloads them all. At most budget (1..4096, default 256) instances are created or removed per frame; source cells and their data remain intact.";
+    region.signature.inputs={{"entity",T::Entity,true},{"minX",T::Int,true},{"minY",T::Int,true},{"maxX",T::Int,true},{"maxY",T::Int,true},{"budget",T::Int,false}};
+    region.signature.outputs={{"applied",T::Bool,true}};region.callback=&PrefabRegion;
+    bool lifecycleRegistered=host.RegisterFunction(std::move(region));
+    ScriptFunctionDesc count;
+    count.signature.name="Map2D.PrefabCount";count.signature.description="Count currently instantiated prefab cells for a live tilemap.";
+    count.signature.inputs={{"entity",T::Entity,true}};count.signature.outputs={{"count",T::Int64,true}};count.callback=&PrefabCount;
+    lifecycleRegistered=host.RegisterFunction(std::move(count)) && lifecycleRegistered;
     const std::vector<ScriptFunctionPin> cell{{"entity", T::Entity, true}, {"x", T::Int, true}, {"y", T::Int, true}, {"floor", T::Int, false}};
     const auto add = [&](std::string name, std::vector<ScriptFunctionPin> extra, std::vector<ScriptFunctionPin> out, ScriptFunctionCallback callback) {
         ScriptFunctionDesc desc; desc.signature.name = "Map2D." + name; desc.signature.inputs = cell;
@@ -138,7 +209,7 @@ bool ScriptMap2DApi::Register(ScriptRuntimeHost& host) {
         desc.signature.outputs = std::move(out); desc.callback = callback;
         return host.RegisterFunction(std::move(desc));
     };
-    bool ok = add("Get", {}, {{"present", T::Bool, true}, {"sprite", T::String, true}, {"blocked", T::Bool, true}}, &Get);
+    bool ok = add("Get", {}, {{"present", T::Bool, true}, {"sprite", T::String, true}, {"blocked", T::Bool, true}}, &Get) && waypointRegistered && lifecycleRegistered;
     ok = add("Set", {{"sprite", T::String, true}}, {{"applied", T::Bool, true}}, &Set) && ok;
     ok = add("Erase", {}, {{"applied", T::Bool, true}}, &Erase) && ok;
     ok = add("PaintGround", {{"brush", T::String, true}}, {{"applied", T::Bool, true}}, &Paint) && ok;
@@ -158,6 +229,17 @@ bool ScriptMap2DApi::Register(ScriptRuntimeHost& host) {
     property.operator()<std::int64_t>("Integer", T::Int64);
     property.operator()<double>("Number", T::Double);
     property.operator()<std::string>("Text", T::String);
-    return ok;
+    ScriptFunctionDesc pause;
+    pause.signature.name = "Map2D.SetAnimationPaused";
+    pause.signature.description = "Pause or resume this live tilemap animation clock without stopping simulation or changing its phase. Source reload resets the clock; a new play session starts unpaused.";
+    pause.signature.inputs = {{"entity", T::Entity, true}, {"paused", T::Bool, true}};
+    pause.signature.outputs = {{"applied", T::Bool, true}};
+    pause.callback = [](const ScriptFunctionCallContext& context, Args args) -> ScriptFunctionCallResult {
+        auto* runtime = context.scene ? context.scene->Runtime().Tilemaps() : nullptr;
+        if (!runtime || !runtime->SetAnimationPaused(kb::scene::SceneEntity{Arg(args, "entity").AsUInt64()}, Arg(args, "paused").AsBool()))
+            return Error("The tilemap has not been initialized");
+        return {.executed = true, .outputs = {{"applied", ScriptValue{true}}}};
+    };
+    return RegisterMap2DGeometryApi(host) && host.RegisterFunction(std::move(pause)) && ok;
 }
 } // namespace kb::script

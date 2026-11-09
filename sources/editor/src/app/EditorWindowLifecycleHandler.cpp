@@ -11,6 +11,10 @@
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
 
 #include <optional>
 #include <string>
@@ -128,6 +132,9 @@ EditorWindowLifecycleHandler::EditorWindowLifecycleHandler(HWND& mainWindow, boo
 LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     if (const std::uint32_t panelId = floatingWindows_.Queries().PanelId(messageWindow); panelId != 0) {
         const DockPanel* panel = dockModel_.Queries().FindPanel(panelId);
+        if (panel && panel->kind == DockPanelKind::TimelineEditor && !TimelineEditorPanel::ResolveClose(messageWindow, sceneContext_)) return 0;
+        if (panel && panel->kind == DockPanelKind::GameplayGraphEditor && !GameplayGraphEditorPanel::ResolveClose(messageWindow,sceneContext_)) return 0;
+        if (panel && panel->kind == DockPanelKind::BlendSpace2DEditor && !BlendSpace2DEditorPanel::ResolveClose(messageWindow,sceneContext_)) return 0;
         if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor &&
             !ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, false)) {
             return 0;
@@ -160,6 +167,9 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     }
 
     static_cast<void>(sceneContext_.RestorePlayModeSceneSession());
+    if (!TimelineEditorPanel::ResolveClose(messageWindow, sceneContext_)) return 0;
+    if (!GameplayGraphEditorPanel::ResolveClose(messageWindow,sceneContext_)) return 0;
+    if (!BlendSpace2DEditorPanel::ResolveClose(messageWindow,sceneContext_)) return 0;
     if (!ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, true)) {
         return 0;
     }

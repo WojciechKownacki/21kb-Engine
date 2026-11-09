@@ -30,9 +30,18 @@ namespace {
 using kb::script::ScriptValue;
 using kb::script::ScriptValueType;
 
-constexpr std::array<InspectorGenericComponentModel::Section, 2> kSections{ {
+constexpr std::array<InspectorGenericComponentModel::Section, 10> kSections{ {
     { "Combatant", InspectorSectionId::Combatant, HeroIconKind::Gamepad2, "Combatant" },
     { "AIBrain", InspectorSectionId::AIBrain, HeroIconKind::Gamepad2, "AI Brain" },
+    { "CharacterController2D", InspectorSectionId::CharacterController2D, HeroIconKind::RectangleGroup, "Character Controller 2D" },
+    { "Sprite2D", InspectorSectionId::Sprite2D, HeroIconKind::RectangleGroup, "Sprite 2D" },
+    { "Body2D", InspectorSectionId::Body2D, HeroIconKind::RectangleGroup, "Body 2D" },
+    { "Collider2D", InspectorSectionId::Collider2D, HeroIconKind::RectangleGroup, "Collider 2D" },
+    { "Grid", InspectorSectionId::Grid, HeroIconKind::RectangleGroup, "Grid" },
+    { "Tilemap", InspectorSectionId::Tilemap, HeroIconKind::RectangleGroup, "Tilemap" },
+    { "TilemapRenderer", InspectorSectionId::TilemapRenderer, HeroIconKind::RectangleGroup, "Tilemap Renderer" },
+    { "TilemapCollider", InspectorSectionId::TilemapCollider, HeroIconKind::RectangleGroup, "Tilemap Collider" },
+
 } };
 
 // An AI Brain shows its rules in use and one empty rule to fill, and a value only where the
@@ -94,6 +103,9 @@ constexpr std::array<InspectorGenericComponentModel::Section, 2> kSections{ {
 // The asset type an id field takes, so it can offer a menu of them instead of a number.
 [[nodiscard]] std::string_view AssetTypeOf(std::string_view component, std::string_view property) noexcept {
     if (component == "Combatant" && property.starts_with("ability")) return kb::gameplay::kAbilityAssetType;
+    if (component == "Sprite2D" && property == "imageAssetId") return "Texture";
+    if (component == "Sprite2D" && property == "materialAssetId") return "RenderMaterial";
+    if (component == "Tilemap" && property == "mapAssetId") return "RenderMesh";
     return {};
 }
 
@@ -150,7 +162,8 @@ struct Field {
 
 // The assets of the type the slot takes, by name, and None.
 [[nodiscard]] bool ChooseAsset(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const Field& field, std::string_view type) {
-    const std::vector<kb::assets::AssetMetadata> assets = sceneContext.Scene().Assets().Manager().Registry().ByType(type);
+    auto assets = sceneContext.Scene().Assets().Manager().Registry().ByType(type);
+    if (field.section->component == "Tilemap") std::erase_if(assets, [](const auto& asset) { return asset.virtualPath.extension() != ".kbmap2d"; });
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return false;
     constexpr UINT_PTR kNone = 1U;
@@ -161,7 +174,7 @@ struct Field {
     }
     if (assets.empty()) {
         kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0U,
-            std::string{ EditorText("inspector.generic.noAssets", "None in the project yet (kb_cli ability new)") }.c_str());
+            std::string{ EditorText("inspector.generic.noAssets", "No matching assets in the project yet") }.c_str());
     }
     POINT cursor{};
     GetCursorPos(&cursor);

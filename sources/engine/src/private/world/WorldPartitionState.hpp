@@ -64,8 +64,9 @@ struct WorldRuntimeInstance {
 struct WorldMemoryState {
     std::array<WorldMemoryProbe, kWorldMemoryKindCount> probes{};
     bool baselineTaken = false;
+    std::uint64_t baselineAssetPayloadBytes = 0U;
+    std::size_t baselineUnmeasuredAssetPayloads = 0U;
     std::array<std::optional<std::uint64_t>, kWorldMemoryKindCount> baseline{};
-    std::size_t sampledLoadedUnits = std::numeric_limits<std::size_t>::max();
     double minimumRatio = 0.0;
     double maximumRatio = 0.0;
     std::uint32_t samples = 0U;

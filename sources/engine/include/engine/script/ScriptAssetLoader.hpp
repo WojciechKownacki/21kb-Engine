@@ -25,6 +25,12 @@ public:
     [[nodiscard]] std::string_view Type() const noexcept override;
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
+    [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
+        const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string> ValidateDependencies(
+        const kb::assets::AssetMetadata& metadata, const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string> ValidateRuntimeDependencies(
+        const kb::assets::AssetLoadRequest& request, const kb::assets::AssetRegistry& registry) const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
 };
 

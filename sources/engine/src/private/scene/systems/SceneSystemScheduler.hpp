@@ -2,11 +2,13 @@
 
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemHandle.hpp"
+#include "engine/core/RuntimeState.hpp"
 
 #include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <utility>
 
 namespace kb::scene {
 
@@ -27,6 +29,19 @@ public:
     [[nodiscard]] bool Contains(SceneSystemHandle handle) const noexcept;
     [[nodiscard]] bool RequiresFixedStep() const noexcept;
     [[nodiscard]] std::size_t Size() const noexcept { return systems_.size(); }
+    using RuntimeStateBinding = std::pair<SceneSystemHandle, kb::core::IRuntimeStateProvider*>;
+    [[nodiscard]] bool CollectRuntimeStateProviders(std::vector<RuntimeStateBinding>& output, std::string& error) const;
+    class RuntimeStateOperation final {
+    public:
+        ~RuntimeStateOperation();
+        RuntimeStateOperation(const RuntimeStateOperation&) = delete;
+        RuntimeStateOperation& operator=(const RuntimeStateOperation&) = delete;
+    private:
+        friend class SceneSystemScheduler;
+        explicit RuntimeStateOperation(bool& active);
+        bool& active_;
+    };
+    [[nodiscard]] RuntimeStateOperation BeginRuntimeStateOperation();
     void BeginFrame(Scene& scene, float deltaSeconds);
     void EndUpdate(Scene& scene, float deltaSeconds);
     void Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase);

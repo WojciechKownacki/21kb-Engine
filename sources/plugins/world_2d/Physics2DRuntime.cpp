@@ -134,6 +134,8 @@ struct Physics2DRuntime::State {
         float velocityX = 0.0F;
         float velocityY = 0.0F;
         bool grounded = false;
+        b2BodyId support = b2_nullBodyId;
+        b2Vec2 supportPosition{};
         bool sideView = true;
     };
     struct MapRec {
@@ -583,6 +585,8 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         if (character.started && !(current == character.lastWritten)) {
             character.pose = current;
             character.velocityY = 0.0F;
+            character.grounded = false;
+            character.support = b2_nullBodyId;
         }
         character.started = true;
     }
@@ -597,6 +601,11 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         if (!character.sideView) character.velocityY = 0.0F;
         const float desiredX = character.moveX;
         const float desiredY = character.sideView ? character.velocityY : character.moveY;
+        b2Vec2 carry{};
+        if (character.grounded && b2Body_IsValid(character.support)) {
+            const auto now = b2Body_GetPosition(character.support);
+            carry = ToB2(now.x-character.supportPosition.x, now.y-character.supportPosition.y);
+        }
         b2Body_Disable(character.body);
         // A ledge of a map stops a character that stands on it or falls onto it, never one that is rising through it or that
         // stands beside it lower than its top.
@@ -623,13 +632,17 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
             std::vector<b2CollisionPlane> planes;
             bool walkable = false;
             float slopeCosine = 0.0F;
+            b2BodyId support = b2_nullBodyId;
         };
         const auto gather = [](b2ShapeId shape, const b2PlaneResult* result, void* context) {
             static_cast<void>(shape);
             auto* planes = static_cast<Planes*>(context);
             if (planes->planes.size() < 16U) {
                 planes->planes.push_back(b2CollisionPlane{ result->plane, FLT_MAX, 0.0F, true });
-                if (result->plane.normal.y >= planes->slopeCosine) planes->walkable = true;
+                if (result->plane.normal.y >= planes->slopeCosine) {
+                    planes->walkable = true;
+                    planes->support = b2Shape_GetBody(shape);
+                }
             }
             return true;
         };
@@ -652,7 +665,7 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         planes.slopeCosine = slopeCosine;
         Pose at = character.pose;
         const Pose before = at;
-        run(at, ToB2(at.x + desiredX * step, at.y + desiredY * step), character.sideView, planes);
+        run(at, ToB2(at.x + desiredX * step + carry.x, at.y + desiredY * step + carry.y), character.sideView, planes);
         // A ledge in the way: lift by the step height, move, and settle down again.
         const float wantedX = desiredX * step;
         if (character.sideView && std::abs(wantedX) > 0.0001F && value.stepHeight > 0.0F && std::abs(at.x - before.x) < std::abs(wantedX) * 0.5F && character.grounded) {
@@ -679,6 +692,8 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         static_cast<void>(feet);
         const bool wasGrounded = character.grounded;
         character.grounded = character.sideView && ground.walkable && character.velocityY <= 0.01F;
+        character.support = character.grounded ? ground.support : b2_nullBodyId;
+        if (b2Body_IsValid(character.support)) character.supportPosition = b2Body_GetPosition(character.support);
         if (character.grounded) character.velocityY = 0.0F;
         else if (character.sideView && !wasGrounded && !planes.planes.empty()) {
             // Hitting a ceiling stops the rise.
@@ -695,8 +710,9 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         written.x = at.x;
         written.y = at.y;
         WritePose(scene, entity, character.sideView, written);
-        character.lastWritten = ReadPose(scene, entity, character.sideView);
-        character.pose = character.lastWritten;
+        // Hierarchical transforms are composed later; remember the pose we actually wrote.
+        character.lastWritten = written;
+        character.pose = written;
         character.pose.angle = 0.0F;
     }
 
@@ -715,9 +731,9 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         Pose pose{ position.x, position.y, angle };
         if (body.hasComponent && body.applied.type != 0) {
             WritePose(scene, entity, body.sideView, pose);
-            body.lastWritten = ReadPose(scene, entity, body.sideView);
+            body.lastWritten = pose;
         } else {
-            body.lastWritten = ReadPose(scene, entity, body.sideView);
+            body.lastWritten = pose;
         }
     }
 

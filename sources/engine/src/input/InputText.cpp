@@ -110,6 +110,31 @@ Utf8DecodeResult DecodeModifiedUtf8(
     return result;
 }
 
+std::size_t EncodeUtf8(char32_t codePoint, std::span<char, 4U> output) noexcept {
+    if (!IsUnicodeScalar(codePoint))
+        return 0U;
+    if (codePoint <= 0x7FU) {
+        output[0] = static_cast<char>(codePoint);
+        return 1U;
+    }
+    if (codePoint <= 0x7FFU) {
+        output[0] = static_cast<char>(0xC0U | (codePoint >> 6U));
+        output[1] = static_cast<char>(0x80U | (codePoint & 0x3FU));
+        return 2U;
+    }
+    if (codePoint <= 0xFFFFU) {
+        output[0] = static_cast<char>(0xE0U | (codePoint >> 12U));
+        output[1] = static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU));
+        output[2] = static_cast<char>(0x80U | (codePoint & 0x3FU));
+        return 3U;
+    }
+    output[0] = static_cast<char>(0xF0U | (codePoint >> 18U));
+    output[1] = static_cast<char>(0x80U | ((codePoint >> 12U) & 0x3FU));
+    output[2] = static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU));
+    output[3] = static_cast<char>(0x80U | (codePoint & 0x3FU));
+    return 4U;
+}
+
 bool Utf16InputDecoder::Consume(char16_t codeUnit, char32_t& codePoint) noexcept {
     constexpr char16_t highFirst = 0xD800U;
     constexpr char16_t highLast = 0xDBFFU;

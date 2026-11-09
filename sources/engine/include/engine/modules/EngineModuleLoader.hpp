@@ -2,11 +2,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace kb::modules {
+struct EngineModuleLibraryLifetime;
 
 class EngineModuleLibrary final {
 public:
@@ -26,6 +28,8 @@ public:
     [[nodiscard]] void* FindSymbol(std::string_view name, std::vector<std::string>& errors, std::string_view diagnosticLabel = "engine module") const;
     void Reset() noexcept;
     void ReleaseWithoutUnload() noexcept;
+    // Keeps native code mapped until the last dependent resource is destroyed.
+    [[nodiscard]] std::shared_ptr<void> Retain();
 
 private:
     friend class EngineModuleLoader;
@@ -35,6 +39,7 @@ private:
     std::filesystem::path originalPath_;
     std::filesystem::path loadedPath_;
     void* handle_ = nullptr;
+    std::shared_ptr<EngineModuleLibraryLifetime> lifetime_;
 };
 
 struct EngineModuleLoadDesc {
@@ -76,21 +81,17 @@ public:
 
     [[nodiscard]] EngineModuleLoadResult Load(EngineModuleLoadDesc desc);
     [[nodiscard]] std::uint64_t NextReloadSerial() const noexcept { return reloadSerial_; }
+    // Where a module named relative to the running executable is found: beside it, in its parent folders and in the sibling folders of a build tree.
+    [[nodiscard]] static std::filesystem::path ResolveModulePath(const std::filesystem::path& modulePath);
 
 private:
     [[nodiscard]] static std::string NormalizeKey(std::string key, const std::filesystem::path& modulePath);
-    [[nodiscard]] static std::filesystem::path ResolveModulePath(const std::filesystem::path& modulePath);
     [[nodiscard]] std::filesystem::path ResolveShadowCopyPath(
-        std::string_view key,
+        std::string_view namePrefix,
         const std::filesystem::path& modulePath,
         const std::filesystem::path& shadowCopyDirectory,
         std::string_view shadowCopyDirectoryName,
         std::uint64_t& serial);
-    [[nodiscard]] static bool CopyForLoad(
-        const std::filesystem::path& source,
-        const std::filesystem::path& destination,
-        std::string_view diagnosticLabel,
-        std::vector<std::string>& errors);
     [[nodiscard]] static void* LoadNativeLibrary(
         const std::filesystem::path& path,
         std::string_view diagnosticLabel,

@@ -24,7 +24,7 @@ constexpr std::array<InspectorPostProcessProfileSection, 8> kSections{ {
     { InspectorSectionId::PostProcessFog },
 } };
 
-constexpr std::array<InspectorPostProcessProfileRow, 31> kRows{ {
+constexpr std::array<InspectorPostProcessProfileRow, 32> kRows{ {
     { InspectorSectionId::PostProcessTonemap, Kind::Bool, "tonemapEnabled" },
     { InspectorSectionId::PostProcessTonemap, Kind::Choice, "outputTransform.tonemap" },
     { InspectorSectionId::PostProcessExposure, Kind::Number, "outputTransform.exposureStops" },
@@ -56,6 +56,7 @@ constexpr std::array<InspectorPostProcessProfileRow, 31> kRows{ {
     { InspectorSectionId::PostProcessFog, Kind::Number, "fogColor.b" },
     { InspectorSectionId::PostProcessFog, Kind::Bool, "volumetricFogEnabled" },
     { InspectorSectionId::PostProcessFog, Kind::Number, "fogAnisotropy" },
+    { InspectorSectionId::PostProcessFog, Kind::Choice, "fogProfile" },
 } };
 
 // Every choice row's values, in the order a click steps through them: the file's value name and
@@ -64,6 +65,7 @@ struct Choice {
     std::string_view value;
 };
 
+constexpr std::array<Choice, 4> kFogProfiles{{ {"Automatic"}, {"Desktop"}, {"Mobile"}, {"Web"} }};
 constexpr std::array<Choice, 3> kToneCurves{ { { "Aces" }, { "AgxApprox" }, { "None" } } };
 constexpr std::array<Choice, 3> kMetering{ { { "HdrColor" }, { "SceneLighting" }, { "Manual" } } };
 constexpr std::array<Choice, 3> kAntiAliasing{ { { "Taa" }, { "Fxaa" }, { "Off" } } };
@@ -88,6 +90,7 @@ constexpr std::array<Choice, 3> kGlobalIllumination{ { { "Off" }, { "ScreenSpace
     if (field == "outputTransform.tonemap") return kToneCurves;
     if (field == "autoExposureMetering") return kMetering;
     if (field == "globalIllumination") return kGlobalIllumination;
+    if (field == "fogProfile") return kFogProfiles;
     return kAntiAliasing;
 }
 
@@ -248,6 +251,7 @@ std::string_view InspectorPostProcessProfileModel::RowLabel(int row) {
     case 28: return EditorText("inspector.postProcess.fogColorB", "Height Fog Color B");
     case 29: return EditorText("inspector.postProcess.volumetricFog", "Volumetric Fog");
     case 30: return EditorText("inspector.postProcess.fogAnisotropy", "Volumetric Fog Anisotropy");
+    case 31: return EditorText("inspector.postProcess.fogProfile", "Fog Profile");
     default: return {};
     }
 }

@@ -2,6 +2,8 @@
 
 #if defined(_WIN32)
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarMetrics.hpp"
+#include "rendering/scene_viewport_toolbar/TerrainToolbarDrawer.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 
@@ -74,6 +76,11 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
 
     int cursor = rects.toolbar.left + SceneViewportToolbarMetrics::PaddingX;
     rects.fpsCounter = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::FpsCounterWidth);
+    rects.realtimeButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::IconButtonWidth);
+    AddGroupGap(cursor);
+    rects.moveToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);
+    rects.rotateToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);
+    rects.scaleToolButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ToolButtonWidth);
     AddGroupGap(cursor);
     rects.renderProfileButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ProfileButtonWidth);
     AddGroupGap(cursor);
@@ -120,7 +127,7 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
         const TerrainViewportToolbarRects terrainTools = ResolveTerrainTools(content);
         rects.renderArea.top = std::min<LONG>(
             rects.renderArea.bottom,
-            terrainTools.panel.bottom + 8);
+            std::max(terrainTools.panel.bottom, terrainTools.drawer.bottom) + 8);
     }
     return rects;
 }
@@ -140,35 +147,38 @@ TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(cons
         cursor = value.right + gap;
         return value;
     };
-    rects.selectButton = button(48);
-    rects.sculptButton = button(50);
-    rects.holesButton = button(46);
-    rects.paintButton = button(46);
+    rects.sculptButton = button(58);
+    rects.smoothButton = button(60);
+    rects.paintButton = button(52);
+    rects.rampButton = button(52);
+    rects.stampButton = button(56);
+    rects.worldButton = button(88);
     cursor += 1;
-    rects.brushButton = button(95);
-    rects.brushShapeButton = button(110);
+    rects.variantButton = button(120);
     cursor += 1;
-    rects.sizeMinusButton = button(24);
-    rects.sizeValue = button(58);
-    rects.sizePlusButton = button(24);
+    rects.size = { button(24), button(70), button(24) };
     cursor += 1;
-    rects.strengthMinusButton = button(24);
-    rects.strengthValue = button(72);
-    rects.strengthPlusButton = button(24);
-    rects.panel = RECT{ panelLeft, top, rects.strengthPlusButton.right + 7, top + panelHeight };
+    rects.strength = { button(24), button(96), button(24) };
+    cursor += 1;
+    rects.slopeButton = button(56);
+    rects.advancedButton = button(98);
+    rects.panel = RECT{ panelLeft, top, rects.advancedButton.right + 7, top + panelHeight };
+
+    const EditorTerrainDrawer drawer = EditorTerrainService::ToolState().drawer;
+    const int menuTop = (drawer == EditorTerrainDrawer::None ? rects.panel.bottom : TerrainToolbarDrawer::Layout(rects, drawer)) + 5;
 
     constexpr int operationMenuWidth = 356;
     constexpr int operationHeaderHeight = 34;
     constexpr int operationItemHeight = 55;
     const int operationLeft = std::clamp(
-        static_cast<int>(rects.brushButton.left),
+        static_cast<int>(rects.operationButton.left),
         static_cast<int>(content.left + 8),
         std::max(static_cast<int>(content.left + 8), static_cast<int>(content.right - operationMenuWidth - 8)));
     rects.brushMenu = RECT{
         operationLeft,
-        rects.panel.bottom + 5,
+        menuTop,
         operationLeft + operationMenuWidth,
-        rects.panel.bottom + 5 + operationHeaderHeight + operationItemHeight * 4 + 8,
+        menuTop + operationHeaderHeight + operationItemHeight * 4 + 8,
     };
     for (std::size_t index = 0U; index < rects.brushItems.size(); ++index) {
         const int column = static_cast<int>(index % 2U);
@@ -190,9 +200,9 @@ TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(cons
         std::max(static_cast<int>(content.left + 8), static_cast<int>(content.right - shapeMenuWidth - 8)));
     rects.brushShapeMenu = RECT{
         shapeLeft,
-        rects.panel.bottom + 5,
+        menuTop,
         shapeLeft + shapeMenuWidth,
-        rects.panel.bottom + 5 + shapeHeaderHeight + shapeItemHeight * 3 + 8,
+        menuTop + shapeHeaderHeight + shapeItemHeight * 3 + 8,
     };
     for (std::size_t index = 0U; index < rects.brushShapeItems.size(); ++index) {
         const int column = static_cast<int>(index % 2U);

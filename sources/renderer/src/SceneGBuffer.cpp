@@ -282,7 +282,8 @@ bgfx::FrameBufferHandle SceneGBuffer::FrameBuffer() const noexcept {
 }
 
 bool SceneGBuffer::EnsureCustomData() {
-    if (!IsValid()) {
+    const bgfx::Caps* caps = bgfx::getCaps();
+    if (caps == nullptr || caps->limits.maxFBAttachments < 5U || !IsValid()) {
         return false;
     }
     if (bgfx::isValid(customDataFrameBuffer_)) {

@@ -63,6 +63,31 @@ and a wrong password cost the same and answer the same. It keeps accounts in mem
 database; a game with real players puts its own account system behind the same token format. The cryptography is the engine's one door
 (`engine/security/Crypto.hpp`, Monocypher); nothing here implements a primitive.
 
+## Dedicated server
+
+Pass `--auth-provider-key provider.pub` to require provider tokens in
+`kb_dedicated_server`. The file contains the Ed25519 public key as 64 hex digits.
+The existing `--keys` file supplies transport session keys; signing secrets stay
+with the provider. Without the provider-key option, existing key-authenticated
+transport sessions keep their previous behavior.
+
+With token authorization enabled, replication and `OnNetConnected` wait for a
+valid token with `kScopePlay`. Commands pass through the gate before RPC and
+replication validation. Expiry, revocation and transport disconnect remove the
+peer from replication and notify scripts. Status JSON includes an `authorization`
+object with accepted/refused logins, refused commands and removed sessions.
+
+Use `--auth-revocations revocations.bin` to load a signed snapshot at startup and
+reload it once per second. Snapshots are limited to 1 MiB. An invalid initial
+snapshot prevents startup; an invalid replacement retains the last valid list
+and reports an error. Publish replacements atomically. Fetching these files from
+an external provider remains the deployment's responsibility.
+
+Clients set `ClientConfig::authorizationRequired`, call `Client::Authenticate`
+after the transport connects, and wait for `kAuthMessageAccepted` with the required
+scope before starting replication. `Client::Send` then frames application commands
+for the gate. Server replies retain their existing message formats.
+
 ## Limits
 
 - Revocation reaches a server when the server loads the new list; the delay is how often the game fetches it.

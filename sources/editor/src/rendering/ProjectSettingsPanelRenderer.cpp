@@ -3,13 +3,22 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
+#include "rendering/HeroIconKind.hpp"
+#include "rendering/HeroIconPainter.hpp"
+#include "rendering/EditorSettingsPanelRenderer.hpp"
+#include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
+#include <array>
+#include <cctype>
 #include <filesystem>
 #include <algorithm>
+#include <optional>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -44,6 +53,12 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.physics", "Physics");
     case ProjectSettingsCategory::Lighting:
         return EditorText("projectSettings.category.lighting", "Lighting");
+    case ProjectSettingsCategory::EditorGeneral:
+        return EditorText("projectSettings.category.editorGeneral", "General");
+    case ProjectSettingsCategory::EditorSaving:
+        return EditorText("projectSettings.category.editorSaving", "Saving");
+    case ProjectSettingsCategory::Plugins:
+        return EditorText("projectSettings.category.plugins", "Installed plugins");
     case ProjectSettingsCategory::Count:
     default:
         return {};
@@ -78,41 +93,63 @@ void DrawTooltipText(HDC dc, RECT rect, std::string_view text, COLORREF color, i
     return std::filesystem::path{ virtualPath }.stem().string();
 }
 
-void DrawCategorySidebar(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, int selectedCategory) {
+void DrawCategorySidebar(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, int selectedCategory,
+    const EditorHierarchySearchState& search) {
     GdiDrawing::FillRectColor(dc, rects.sidebar, Color(theme.chrome));
     GdiDrawing::FillRectColor(dc, rects.divider, Color(theme.borderChrome));
+
+    const std::string_view query = search.Query();
+    GdiDrawing::DrawSharpFrame(dc, rects.searchField, Color(theme.panel), Color(search.IsFocused() ? theme.accent : theme.borderPanel));
+    constexpr int iconSize = 12;
+    const int iconTop = static_cast<int>(rects.searchField.top) + (static_cast<int>(rects.searchField.bottom - rects.searchField.top) - iconSize) / 2;
+    HeroIconPainter::Draw(dc, RECT{ rects.searchField.left + 8, iconTop, rects.searchField.left + 8 + iconSize, iconTop + iconSize },
+        HeroIconKind::MagnifyingGlass, Color(theme.textDisabled), 1);
+    const RECT searchText{ rects.searchField.left + 26, rects.searchField.top, rects.searchField.right - 6, rects.searchField.bottom };
+    if (query.empty() && !search.IsFocused()) {
+        DrawText(dc, searchText, EditorText("settings.searchPlaceholder", "Search settings"), Color(theme.textDisabled), 12);
+    } else {
+        const std::string shown = std::string{ query } + (search.IsFocused() ? "|" : "");
+        DrawText(dc, searchText, shown.c_str(), Color(theme.textPrimary), 12);
+    }
+
+    const std::array<std::string_view, 3> groups{
+        EditorText("settings.group.project", "PROJECT"),
+        EditorText("settings.group.editor", "EDITOR"),
+        EditorText("settings.group.plugins", "PLUGINS"),
+    };
+    for (int group = 0; group < static_cast<int>(groups.size()); ++group) {
+        DrawText(dc, ProjectSettingsPanelLayout::GroupCaption(rects.sidebar, group), groups[static_cast<std::size_t>(group)],
+            Color(theme.textDisabled), 10, FW_SEMIBOLD, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    // Every category reads the same; only the open one stands out, bright and bold on its band.
     for (int index = 0; index < kCategoryCount; ++index) {
         const RECT row = ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, index);
         const bool selected = index == selectedCategory;
         if (selected) {
             GdiDrawing::FillRectColor(dc, row, Blend(Color(theme.panel), Color(theme.accent), 18));
-            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
+            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, RGB(86, 172, 205));
         }
-        DrawText(dc, RECT{ row.left + 12, row.top, row.right - 8, row.bottom }, CategoryLabel(index), Color(selected ? theme.textPrimary : theme.textSecondary), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
+        DrawText(dc, RECT{ row.left + 12, row.top, row.right - 8, row.bottom }, CategoryLabel(index),
+            Color(selected ? theme.textPrimary : theme.textDisabled), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
     }
 }
 
 void DrawSelectorBox(HDC dc, const RECT& box, const EditorTheme& theme, const std::string& display, bool isNone, bool open) {
     GdiDrawing::DrawSharpFrame(dc, box, Color(theme.chrome), Color(open ? theme.accent : theme.borderPanel));
     DrawText(dc, RECT{ box.left + 8, box.top, box.right - 22, box.bottom }, display.c_str(), Color(isNone ? theme.textDisabled : theme.textPrimary), 12);
-    DrawText(dc, RECT{ box.right - 20, box.top, box.right - 4, box.bottom }, open ? "^" : "v", Color(theme.textSecondary), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    constexpr int chevronSize = 12;
+    const int chevronLeft = static_cast<int>(box.right) - 12 - chevronSize / 2;
+    const int chevronTop = static_cast<int>(box.top) + (static_cast<int>(box.bottom - box.top) - chevronSize) / 2;
+    HeroIconPainter::Draw(dc, RECT{ chevronLeft, chevronTop, chevronLeft + chevronSize, chevronTop + chevronSize },
+        HeroIconKind::ChevronDown, Color(open ? theme.textPrimary : theme.textSecondary), 1);
 }
 
 void DrawOptionButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool selected, bool enabled = true) {
-    const COLORREF fill = selected ? Color(theme.accent) : Color(enabled ? theme.chrome : theme.background);
-    const COLORREF border = selected ? Color(theme.accent) : Color(enabled ? theme.borderPanel : theme.borderChrome);
-    const COLORREF text = Color(selected ? theme.textPrimary : (enabled ? theme.textSecondary : theme.textDisabled));
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, text, 12, selected ? FW_SEMIBOLD : FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    EditorDialogStyle::PaintOptionButton(dc, rect, theme, label, selected, enabled);
 }
 
 void DrawCheckbox(HDC dc, const RECT& rect, const EditorTheme& theme, bool checked) {
-    const COLORREF boxFill = Color(checked ? theme.accent : theme.chrome);
-    const COLORREF boxBorder = Color(checked ? theme.accent : theme.borderPanel);
-    GdiDrawing::DrawSharpFrame(dc, rect, boxFill, boxBorder);
-    if (checked) {
-        DrawText(dc, rect, "x", Color(theme.textPrimary), 12, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+    EditorDialogStyle::PaintSwitch(dc, rect, theme, checked);
 }
 
 void DrawDropdownList(HDC dc, const RECT& fieldBox, const EditorTheme& theme, const std::vector<std::string>& options, const std::string& selected, int hoveredOption) {
@@ -285,6 +322,110 @@ struct TooltipContent {
     }
 }
 
+// The one line under each setting: what it does, in a few words. The tooltip keeps the long form.
+[[nodiscard]] std::string_view DescriptionFor(ProjectSettingsTooltipKind kind) {
+    switch (kind) {
+    case ProjectSettingsTooltipKind::MappingContext:
+        return EditorText("projectSettings.mappingContextDescription", "Input mapping asset the game reads its controls from.");
+    case ProjectSettingsTooltipKind::PhysicsLayers:
+        return EditorText("projectSettings.physicsLayersDescription", "Which layers collide and which queries see each other.");
+    case ProjectSettingsTooltipKind::InputEnabled:
+        return EditorText("projectSettings.inputEnabledDescription", "Turns project input on or off for every scene.");
+    case ProjectSettingsTooltipKind::RenderBackend:
+        return EditorText("projectSettings.renderBackendDescription", "Graphics API used by the editor viewport.");
+    case ProjectSettingsTooltipKind::LightingPath:
+        return EditorText("projectSettings.lightingPathDescription", "How lights are computed for opaque objects.");
+    case ProjectSettingsTooltipKind::PostProcess:
+        return EditorText("projectSettings.postProcessDescription", "Master switch for anti-aliasing, bloom and the outline.");
+    case ProjectSettingsTooltipKind::AntiAliasing:
+        return EditorText("projectSettings.antiAliasingDescription", "Smooths jagged edges; pick one method.");
+    case ProjectSettingsTooltipKind::MsaaSamples:
+        return EditorText("projectSettings.msaaSamplesDescription", "Samples per pixel when Anti-Aliasing is MSAA.");
+    case ProjectSettingsTooltipKind::Bloom:
+        return EditorText("projectSettings.bloomDescription", "Soft glow around bright areas.");
+    case ProjectSettingsTooltipKind::Shadows:
+        return EditorText("projectSettings.shadowsDescription", "Lights cast shadows; off renders faster.");
+    case ProjectSettingsTooltipKind::SelectionOutline:
+        return EditorText("projectSettings.selectionOutlineDescription", "Outline around selected objects in the editor.");
+    case ProjectSettingsTooltipKind::GpuDriven:
+        return EditorText("projectSettings.gpuDrivenDescription", "Lets the GPU cull and submit the scene where supported.");
+    case ProjectSettingsTooltipKind::ShadowQuality:
+        return EditorText("projectSettings.shadowQualityDescription", "Shadow sharpness and range on computers.");
+    case ProjectSettingsTooltipKind::ShadowQualityMobile:
+        return EditorText("projectSettings.shadowQualityMobileDescription", "Shadow quality on phones and tablets.");
+    case ProjectSettingsTooltipKind::GiQuality:
+        return EditorText("projectSettings.giQualityDescription", "Detail of indirect light on computers.");
+    case ProjectSettingsTooltipKind::GiQualityMobile:
+        return EditorText("projectSettings.giQualityMobileDescription", "Detail of indirect light on phones and tablets.");
+    case ProjectSettingsTooltipKind::None:
+    default:
+        return {};
+    }
+}
+
+[[nodiscard]] bool ContainsIgnoringCase(std::string_view text, std::string_view needle) noexcept {
+    const auto lower = [](char character) noexcept {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    };
+    return std::search(text.begin(), text.end(), needle.begin(), needle.end(),
+        [&lower](char a, char b) noexcept { return lower(a) == lower(b); }) != text.end();
+}
+
+struct SearchableSetting {
+    std::string_view label;
+    std::string_view description;
+};
+
+// Everything the search box looks through, per category: the label and description of each
+// setting. Project pages share their texts with the tooltips; Editor and Plugins pages name theirs.
+[[nodiscard]] std::vector<SearchableSetting> SearchableSettings(ProjectSettingsCategory category) {
+    using Kind = ProjectSettingsTooltipKind;
+    const auto fromKinds = [](std::initializer_list<Kind> kinds) {
+        std::vector<SearchableSetting> settings;
+        for (const Kind kind : kinds) {
+            settings.push_back({ TooltipForKind(kind).title, DescriptionFor(kind) });
+        }
+        return settings;
+    };
+    switch (category) {
+    case ProjectSettingsCategory::Inputs:
+        return fromKinds({ Kind::MappingContext, Kind::InputEnabled });
+    case ProjectSettingsCategory::Graphics:
+        return fromKinds({ Kind::RenderBackend, Kind::LightingPath, Kind::PostProcess, Kind::AntiAliasing, Kind::MsaaSamples,
+            Kind::Bloom, Kind::Shadows, Kind::SelectionOutline, Kind::GpuDriven });
+    case ProjectSettingsCategory::Physics:
+        return fromKinds({ Kind::PhysicsLayers });
+    case ProjectSettingsCategory::Lighting:
+        return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
+    case ProjectSettingsCategory::EditorGeneral:
+        return { { EditorText("editorSettings.language", "Language"),
+            EditorText("settings.languageDescription", "Language of the editor's menus and panels.") } };
+    case ProjectSettingsCategory::EditorSaving:
+        return { { EditorText("editorSettings.autosave", "Autosave"), EditorText("settings.autosaveDescription", "Saves open scenes on its own.") },
+            { EditorText("editorSettings.interval", "Interval"), EditorText("settings.intervalDescription", "Minutes between automatic saves.") } };
+    case ProjectSettingsCategory::Plugins:
+        return { { EditorText("projectSettings.category.plugins", "Installed plugins"),
+            EditorText("settings.pluginsDescription", "Turn engine plugins on or off for this project.") } };
+    case ProjectSettingsCategory::Count:
+    default:
+        return {};
+    }
+}
+
+// A setting's label with its description under it. While searching, a setting that does not
+// match is dimmed, so the matching ones stand out on the page.
+void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const RECT& label, std::string_view text,
+    ProjectSettingsTooltipKind kind, const EditorTheme& theme, std::string_view query, bool enabled = true) {
+    const std::string_view description = DescriptionFor(kind);
+    const bool matches = query.empty() || ContainsIgnoringCase(text, query) || ContainsIgnoringCase(description, query) ||
+        ContainsIgnoringCase(TooltipForKind(kind).title, query);
+    const bool active = enabled && matches;
+    DrawText(dc, RECT{ label.left, label.top, label.right - 8, label.bottom }, text,
+        Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled), 12,
+        !query.empty() && matches ? FW_SEMIBOLD : FW_NORMAL);
+    DrawText(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled), 11);
+}
+
 void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const EditorProjectSettingsState& state) {
     const TooltipContent tooltip = TooltipForKind(state.TooltipKind());
     if (tooltip.title.empty()) {
@@ -328,15 +469,16 @@ void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const Ed
 void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
     const bool dropdownOpen = sceneContext.ProjectSettings().IsMappingContextDropdownOpen();
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.inputsSection", "INPUTS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
 
     // Enabled first so an open dropdown can overlap it.
-    DrawText(dc, RECT{ rects.enabledLabel.left, rects.enabledLabel.top, rects.enabledLabel.right - 8, rects.enabledLabel.bottom }, EditorText("projectSettings.inputEnabledLabel", "Enabled"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.enabledLabel, EditorText("projectSettings.inputEnabledLabel", "Enabled"), ProjectSettingsTooltipKind::InputEnabled, theme, query);
     DrawCheckbox(dc, rects.enabledCheckbox, theme, settings.inputEnabled);
 
-    DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, EditorText("projectSettings.mappingContext", "Mapping Context"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.mappingLabel, EditorText("projectSettings.mappingContext", "Mapping Context"), ProjectSettingsTooltipKind::MappingContext, theme, query);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.inputMappingContext), settings.inputMappingContext.empty(), dropdownOpen);
     if (dropdownOpen) {
@@ -350,54 +492,59 @@ void DrawGraphicsPage(
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
     const EditorRenderBackendSettings& renderBackendSettings) {
+    using Kind = ProjectSettingsTooltipKind;
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.graphicsSection", "GRAPHICS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
 
-    DrawText(dc, RECT{ rects.backendLabel.left, rects.backendLabel.top, rects.backendLabel.right - 8, rects.backendLabel.bottom }, EditorText("projectSettings.renderBackend", "bgfx Backend"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.backendLabel, EditorText("projectSettings.renderBackend", "bgfx Backend"), Kind::RenderBackend, theme, query);
     const EditorRenderBackend backend = renderBackendSettings.Backend();
     DrawOptionButton(dc, rects.backendAutoButton, theme, EditorText("projectSettings.backendAuto", "Auto"), backend == EditorRenderBackend::Auto);
     DrawOptionButton(dc, rects.backendDx12Button, theme, "DX12", backend == EditorRenderBackend::DirectX12);
     DrawOptionButton(dc, rects.backendVulkanButton, theme, "Vulkan", backend == EditorRenderBackend::Vulkan);
 
-    DrawText(dc, RECT{ rects.lightingPathLabel.left, rects.lightingPathLabel.top, rects.lightingPathLabel.right - 8, rects.lightingPathLabel.bottom }, EditorText("projectSettings.lightingPath", "Lighting Path"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.lightingPathLabel, EditorText("projectSettings.lightingPath", "Lighting Path"), Kind::LightingPath, theme, query);
     const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.ProjectConfiguration().lightingPath;
     DrawOptionButton(dc, rects.lightingPathForwardButton, theme, EditorText("projectSettings.lightingForward", "Forward"), lightingPath == kb::project::ProjectSceneLightingPath::Forward);
     DrawOptionButton(dc, rects.lightingPathForwardPlusButton, theme, EditorText("projectSettings.lightingForwardPlus", "Forward+"), lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
     DrawOptionButton(dc, rects.lightingPathDeferredButton, theme, EditorText("projectSettings.lightingDeferred", "Deferred"), lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
 
-    DrawText(dc, rects.postProcessLabel, EditorText("projectSettings.postProcess", "Post FX"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.postProcessLabel, EditorText("projectSettings.postProcess", "Post FX"), Kind::PostProcess, theme, query);
     DrawCheckbox(dc, rects.postProcessCheckbox, theme, renderBackendSettings.PostProcessEnabled());
-    DrawText(dc, rects.antiAliasingLabel, EditorText("projectSettings.antiAliasing", "Anti-Aliasing"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.antiAliasingLabel, EditorText("projectSettings.antiAliasing", "Anti-Aliasing"), Kind::AntiAliasing, theme, query);
     const EditorAntiAliasingMode aaMode = renderBackendSettings.AntiAliasingMode();
     DrawOptionButton(dc, rects.antiAliasingNoneButton, theme, EditorText("projectSettings.antiAliasingNone", "None"), aaMode == EditorAntiAliasingMode::None);
     DrawOptionButton(dc, rects.antiAliasingFxaaButton, theme, "FXAA", aaMode == EditorAntiAliasingMode::Fxaa);
     DrawOptionButton(dc, rects.antiAliasingTaaButton, theme, "TAA", aaMode == EditorAntiAliasingMode::Taa);
     DrawOptionButton(dc, rects.antiAliasingMsaaButton, theme, "MSAA", aaMode == EditorAntiAliasingMode::Msaa);
     const bool msaaActive = aaMode == EditorAntiAliasingMode::Msaa;
-    DrawText(dc, rects.msaaLabel, EditorText("projectSettings.msaaSamples", "MSAA Samples"), Color(msaaActive ? theme.textSecondary : theme.textDisabled), 12);
+    DrawSetting(dc, rects, rects.msaaLabel, EditorText("projectSettings.msaaSamples", "MSAA Samples"), Kind::MsaaSamples, theme, query, msaaActive);
     DrawOptionButton(dc, rects.msaaOffButton, theme, EditorText("projectSettings.msaaOff", "Off"), msaaActive && renderBackendSettings.MsaaSamples() == 0U, msaaActive);
     DrawOptionButton(dc, rects.msaa2xButton, theme, "2x", msaaActive && renderBackendSettings.MsaaSamples() == 2U, msaaActive);
     DrawOptionButton(dc, rects.msaa4xButton, theme, "4x", msaaActive && renderBackendSettings.MsaaSamples() == 4U, msaaActive);
     DrawOptionButton(dc, rects.msaa8xButton, theme, "8x", msaaActive && renderBackendSettings.MsaaSamples() == 8U, msaaActive);
     DrawOptionButton(dc, rects.msaa16xButton, theme, "16x", msaaActive && renderBackendSettings.MsaaSamples() == 16U, msaaActive);
-    DrawText(dc, rects.bloomLabel, EditorText("projectSettings.bloom", "Bloom"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.bloomLabel, EditorText("projectSettings.bloom", "Bloom"), Kind::Bloom, theme, query);
     DrawCheckbox(dc, rects.bloomCheckbox, theme, renderBackendSettings.BloomEnabled());
-    DrawText(dc, rects.shadowsLabel, EditorText("projectSettings.shadows", "Shadows"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.shadowsLabel, EditorText("projectSettings.shadows", "Shadows"), Kind::Shadows, theme, query);
     DrawCheckbox(dc, rects.shadowsCheckbox, theme, renderBackendSettings.ShadowsEnabled());
-    DrawText(dc, rects.selectionOutlineLabel, EditorText("projectSettings.selectionOutline", "Selection Outline"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.selectionOutlineLabel, EditorText("projectSettings.selectionOutline", "Selection Outline"), Kind::SelectionOutline, theme, query);
     DrawCheckbox(dc, rects.selectionOutlineCheckbox, theme, renderBackendSettings.SelectionOutlineEnabled());
-    DrawText(dc, rects.gpuDrivenLabel, EditorText("projectSettings.gpuVisibilityDiagnostics", "GPU Visibility Diagnostics"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.gpuDrivenLabel, EditorText("projectSettings.gpuVisibilityDiagnostics", "GPU Visibility Diagnostics"), Kind::GpuDriven, theme, query);
     DrawCheckbox(dc, rects.gpuDrivenCheckbox, theme, renderBackendSettings.GpuDrivenEnabled());
 }
 
 void DrawLightingPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
+    constexpr std::array<ProjectSettingsTooltipKind, 4> kinds{ ProjectSettingsTooltipKind::ShadowQuality,
+        ProjectSettingsTooltipKind::ShadowQualityMobile, ProjectSettingsTooltipKind::GiQuality, ProjectSettingsTooltipKind::GiQualityMobile };
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.lightingSection", "LIGHTING QUALITY"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
     for (int row = 0; row < 4; ++row) {
         const RECT label = rects.qualityLabel[row];
-        DrawText(dc, RECT{ label.left, label.top, label.right - 8, label.bottom }, QualityLabel(row), Color(theme.textSecondary), 12);
+        DrawSetting(dc, rects, label, QualityLabel(row), kinds[static_cast<std::size_t>(row)], theme, query);
         const kb::project::ProjectQualityLevel current = QualityOf(settings, row);
         for (int level = 0; level < 5; ++level) {
             const auto levelValue = static_cast<kb::project::ProjectQualityLevel>(level);
@@ -409,10 +556,11 @@ void DrawLightingPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, cons
 void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
     const bool dropdownOpen = sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen();
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.physicsSection", "PHYSICS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
-    DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, EditorText("projectSettings.physicsLayers", "Collision Layers Asset"), Color(theme.textSecondary), 12);
+    DrawSetting(dc, rects, rects.mappingLabel, EditorText("projectSettings.physicsLayers", "Collision Layers Asset"), ProjectSettingsTooltipKind::PhysicsLayers, theme, query);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.physicsLayersAsset), settings.physicsLayersAsset.empty(), dropdownOpen);
     if (dropdownOpen) {
@@ -437,9 +585,9 @@ void ProjectSettingsPanelRenderer::Paint(
     GdiDrawing::FillRectColor(dc, rects.header, Color(theme.strip));
     GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.top, rects.header.left + 3, rects.header.bottom }, Color(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.bottom - 1, rects.header.right, rects.header.bottom }, Color(theme.borderChrome));
-    DrawText(dc, RECT{ rects.header.left + kPadding, rects.header.top, rects.header.right - kPadding, rects.header.bottom }, EditorText("panel.projectSettings", "Project Settings"), Color(theme.textPrimary), 14, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rects.header.left + kPadding, rects.header.top, rects.header.right - kPadding, rects.header.bottom }, EditorText("panel.settings", "Settings"), Color(theme.textPrimary), 14, FW_SEMIBOLD);
 
-    DrawCategorySidebar(dc, rects, theme, selectedCategory);
+    DrawCategorySidebar(dc, rects, theme, selectedCategory, sceneContext.ProjectSettings().Search());
 
     switch (static_cast<ProjectSettingsCategory>(selectedCategory)) {
     case ProjectSettingsCategory::Inputs:
@@ -454,6 +602,20 @@ void ProjectSettingsPanelRenderer::Paint(
     case ProjectSettingsCategory::Lighting:
         DrawLightingPage(dc, rects, theme, sceneContext);
         break;
+    case ProjectSettingsCategory::EditorGeneral:
+    case ProjectSettingsCategory::EditorSaving: {
+        // The Editor Settings page itself, without its own title bar and category column.
+        EditorSettingsPanelRenderer::SelectCategory(static_cast<ProjectSettingsCategory>(selectedCategory) == ProjectSettingsCategory::EditorGeneral
+            ? EditorSettingsCategory::General : EditorSettingsCategory::Saving);
+        const int saved = SaveDC(dc);
+        IntersectClipRect(dc, rects.content.left, rects.content.top, rects.content.right, rects.content.bottom);
+        EditorSettingsPanelRenderer{}.Paint(dc, EditorSettingsPanelRenderer::ContentForPage(rects.content), theme, sceneContext);
+        RestoreDC(dc, saved);
+        break;
+    }
+    case ProjectSettingsCategory::Plugins:
+        PluginsPanelRenderer{}.Paint(dc, rects.content, theme, sceneContext);
+        break;
     case ProjectSettingsCategory::Count:
     default:
         break;
@@ -464,6 +626,9 @@ void ProjectSettingsPanelRenderer::Paint(
 
 ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
     const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(content);
+    if (PointInRect(rects.searchField, x, y)) {
+        return Hit{ .kind = ProjectSettingsHitKind::SearchField, .index = -1, .rect = rects.searchField };
+    }
 
     // Left sidebar: category selection.
     for (int index = 0; index < kCategoryCount; ++index) {
@@ -561,6 +726,41 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{ .kind = ProjectSettingsHitKind::EnabledCheckbox, .index = -1, .rect = rects.enabledCheckbox };
     }
     return Hit{};
+}
+
+std::optional<RECT> ProjectSettingsPanelRenderer::EmbeddedPage(const RECT& content, const EditorSceneContext& sceneContext) {
+    switch (static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory())) {
+    case ProjectSettingsCategory::EditorGeneral:
+    case ProjectSettingsCategory::EditorSaving:
+    case ProjectSettingsCategory::Plugins:
+        return ProjectSettingsPanelLayout::Resolve(content).content;
+    default:
+        return std::nullopt;
+    }
+}
+
+bool ProjectSettingsPanelRenderer::CategoryMatches(int category, std::string_view query) {
+    if (query.empty()) {
+        return true;
+    }
+    if (ContainsIgnoringCase(CategoryLabel(category), query)) {
+        return true;
+    }
+    for (const SearchableSetting& setting : SearchableSettings(static_cast<ProjectSettingsCategory>(category))) {
+        if (ContainsIgnoringCase(setting.label, query) || ContainsIgnoringCase(setting.description, query)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<int> ProjectSettingsPanelRenderer::FirstMatchingCategory(std::string_view query) {
+    for (int category = 0; category < kCategoryCount; ++category) {
+        if (CategoryMatches(category, query)) {
+            return category;
+        }
+    }
+    return std::nullopt;
 }
 
 ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {

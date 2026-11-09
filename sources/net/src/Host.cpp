@@ -2,6 +2,7 @@
 
 #include "Wire.hpp"
 #include "kb/net/ByteIO.hpp"
+#include "kb/net/Auth.hpp"
 
 #include <algorithm>
 #include <array>
@@ -496,7 +497,16 @@ void Client::Update(std::uint64_t nowMilliseconds) {
 }
 
 SendResult Client::Send(std::uint8_t channel, std::span<const std::uint8_t> data) {
-    return state_ == ClientState::Connected ? session_->Send(channel, data) : SendResult::Closed;
+    if (state_ != ClientState::Connected) return SendResult::Closed;
+    if (!config_.authorizationRequired) return session_->Send(channel, data);
+    if (data.size() >= config_.session.maxMessageBytes) return SendResult::TooLarge;
+    return session_->Send(channel, MakeCommandMessage(data));
+}
+
+SendResult Client::Authenticate(std::string_view token) {
+    if (state_ != ClientState::Connected || !config_.authorizationRequired) return SendResult::Closed;
+    if (token.size() > kMaxTokenBytes) return SendResult::TooLarge;
+    return session_->Send(0U, MakeLoginMessage(token));
 }
 
 void Client::Disconnect() {

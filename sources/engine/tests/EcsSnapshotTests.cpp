@@ -670,6 +670,73 @@ void RunChunkedWorldDeltaSnapshotAfterBulkComponentWriteTest() {
     }
 }
 
+void RunRejectedDeltaPreservesWorldTest() {
+    kb::ecs::World world;
+    RegisterSnapshotDeltaTestReflection(world);
+    const auto removed = world.CreateEntity();
+    const auto changed = world.CreateEntity();
+    world.Set(removed, EcsPosition{ 1.0F, 2.0F });
+    world.Set(changed, EcsPosition{ 3.0F, 4.0F });
+    const auto baseline = world.CaptureChunkedSnapshot();
+    world.DestroyEntity(removed);
+    world.Set(changed, EcsPosition{ 9.0F, 10.0F });
+    auto valid = world.CaptureChunkedDeltaSnapshot(baseline);
+
+    kb::ecs::World target;
+    RegisterSnapshotDeltaTestReflection(target);
+    StreamRestoreContext restore{ .chunks = &baseline.chunks };
+    kb::tests::Require(target.RestoreChunkedSnapshotStream(
+        { .componentTypes = baseline.componentTypes, .entityCount = baseline.entityCount },
+        &ReadStreamChunk, &restore), "ECS rejection baseline restore failed");
+    const auto unchanged = [&] {
+        const auto* a = target.TryGet<EcsPosition>(removed);
+        const auto* b = target.TryGet<EcsPosition>(changed);
+        kb::tests::Require(a != nullptr && b != nullptr && a->x == 1.0F && b->x == 3.0F
+            && target.NativeStorageStats().liveEntities == 2U,
+            "Rejected ECS delta deleted or changed earlier entities");
+    };
+    auto reject = [&](const kb::ecs::ChunkedWorldDeltaSnapshot& invalid) {
+        kb::tests::Require(!target.ApplyChunkedDeltaSnapshot(invalid), "Malformed ECS delta was accepted");
+        unchanged();
+    };
+
+    auto invalid = valid;
+    invalid.chunks.push_back({}); // Invalid only AFTER a valid deletion and component write.
+    reject(invalid);
+    invalid = valid;
+    ++invalid.entityCount;
+    reject(invalid);
+    invalid = valid;
+    invalid.destroyedEntityIds.push_back(changed.Id());
+    invalid.entityCount = 0U;
+    reject(invalid);
+    invalid = valid;
+    invalid.chunks.push_back(valid.chunks.front());
+    reject(invalid);
+    invalid = valid;
+    auto& late = invalid.chunks.emplace_back(valid.chunks.front());
+    late.components.front().data.pop_back();
+    reject(invalid);
+    invalid = valid;
+    invalid.chunks.front().fullArchetype = true;
+    invalid.chunks.front().entityIds.front() = changed.Id() + (1ULL << 32U);
+    ++invalid.entityCount;
+    reject(invalid);
+    invalid = valid;
+    invalid.chunks.front().fullArchetype = true;
+    invalid.chunks.front().entityIds.front() = 1U; // Reserved backend identity.
+    reject(invalid);
+
+    target.SetParent(changed, removed);
+    reject(valid); // A parent deletion cannot silently cascade beyond the explicit set.
+    kb::tests::Require(target.Parent(changed) == removed, "Rejected delta changed parent relation");
+    target.ClearParent(changed);
+
+    kb::tests::Require(target.ApplyChunkedDeltaSnapshot(valid), "Valid ECS delta failed after rejections");
+    kb::tests::Require(!target.IsAlive(removed) && target.TryGet<EcsPosition>(changed)->x == 9.0F,
+        "Valid ECS delta did not apply after rejected inputs");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -682,6 +749,7 @@ void RunEcsSnapshotTests() {
     RunChunkedWorldSnapshotAfterBulkMigrationRoundTripTest();
     RunChunkedWorldDeltaSnapshotApplyTest();
     RunChunkedWorldDeltaSnapshotAfterBulkComponentWriteTest();
+    RunRejectedDeltaPreservesWorldTest();
 }
 
 } // namespace kb::tests

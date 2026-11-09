@@ -1,0 +1,22 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "create_scene", "name": "ExternalReload", "template": "Empty" },
+    { "op": "create_entity", "id": "keep", "name": "Kept" },
+    { "op": "add_component", "entity": "keep", "component": "Light" },
+    { "op": "save_scene" },
+    { "op": "select_entity", "entity": "keep" },
+    { "op": "external_add_entity", "name": "FromTool" },
+    { "op": "reload_after_external_change" },
+    { "op": "bind_entity", "id": "kept", "name": "Kept" },
+    { "op": "bind_entity", "id": "added", "name": "FromTool" },
+    { "op": "assert_selected_entity", "entity": "kept" },
+    { "op": "assert_current_scene", "path": "Assets/Scenes/ExternalReload.21kbscene", "dirty": false },
+    { "op": "undo" },
+    { "op": "bind_entity", "id": "gone", "name": "FromTool", "exists": false },
+    { "op": "bind_entity", "id": "kept", "name": "Kept" },
+    { "op": "undo", "restore_entity": "kept" },
+    { "op": "assert_component", "entity": "kept", "component": "Light", "exists": false },
+    { "op": "assert_no_errors" }
+  ]
+}

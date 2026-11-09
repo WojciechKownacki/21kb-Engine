@@ -32,6 +32,9 @@ struct VisualGraphDebugPauseSnapshot {
 // thread, so synchronisation here would only obscure ordering guarantees.
 class VisualGraphDebugSession final {
 public:
+    // A flow step evaluates a node's pure data dependencies atomically. Their
+    // produced values remain available for inspection at the next flow pause.
+    void SetExecutionNodesOnly(bool enabled) noexcept { executionNodesOnly_ = enabled; }
     void SetBreakpoints(std::vector<VisualGraphDebugBreakpoint> breakpoints) {
         breakpoints_ = std::move(breakpoints);
     }
@@ -42,7 +45,8 @@ public:
     void ClearPause() noexcept { lastPause_ = {}; skipNodeOnce_ = 0U; }
     [[nodiscard]] const VisualGraphDebugPauseSnapshot& LastPause() const noexcept { return lastPause_; }
 
-    [[nodiscard]] bool ShouldPause(kb::assets::AssetId assetId, std::uint32_t eventNodeId, std::uint32_t nodeId) noexcept {
+    [[nodiscard]] bool ShouldPause(kb::assets::AssetId assetId, std::uint32_t eventNodeId, std::uint32_t nodeId, bool executionNode = true) noexcept {
+        if (executionNodesOnly_ && !executionNode) return false;
         if (nodeId == 0U) return false;
         if (skipNodeOnce_ == nodeId && skipAssetOnce_ == assetId.value) {
             skipNodeOnce_ = 0U;
@@ -84,6 +88,7 @@ private:
     std::uint64_t skipAssetOnce_ = 0U;
     std::uint32_t skipNodeOnce_ = 0U;
     bool stepRequested_ = false;
+    bool executionNodesOnly_ = false;
     bool stepStarted_ = false;
 };
 

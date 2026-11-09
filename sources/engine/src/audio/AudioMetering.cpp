@@ -1,4 +1,5 @@
 #include "engine/audio/AudioMetering.hpp"
+#include "engine/audio/AudioDiagnostics.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
@@ -18,6 +19,11 @@ IAudioPlaybackBackend* Playback(kb::scene::Scene& scene) noexcept {
     return state.audioPlaybackBackend;
 }
 } // namespace
+
+AudioRuntimeDiagnostics AudioDiagnostics::Report(kb::scene::Scene& scene) {
+    const auto* capability = dynamic_cast<IAudioDiagnosticsBackend*>(Playback(scene));
+    return capability == nullptr ? AudioRuntimeDiagnostics{} : capability->RuntimeDiagnostics();
+}
 
 bool AudioMetering::Configure(kb::scene::Scene& scene, bool enabled) {
     auto* capability = dynamic_cast<IAudioMeteringBackend*>(Playback(scene));

@@ -1,7 +1,11 @@
 #pragma once
+#include "kb/editor/docking/DockTypes.hpp"
+
+#include "engine/ui/UITheme.hpp"
 
 #include "engine/assets/Map2DAsset.hpp"
 #include "engine/scene/SceneTemplates.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
 #include "engine/assets/AssetImportTypes.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/TerrainAsset.hpp"
@@ -24,6 +28,8 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetUsers.hpp"
+#include "agent/EditorAgentPanelState.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
@@ -34,6 +40,7 @@
 #include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
 #include "settings/EditorConfigurationStore.hpp"
+#include "profiler/EditorProfilerState.hpp"
 #include "settings/EditorBuildGameSettingsStore.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
@@ -47,6 +54,9 @@
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
+#include "scene/TimelineEditorDocumentState.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
+#include "scene/EditorTimelinePreviewSession.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
@@ -124,6 +134,8 @@ struct TerrainLayerPaintSettings;
 } // namespace kb::terrain_editor
 
 namespace kb::editor {
+struct BlendSpace2DEditorState;
+struct GameplayGraphEditorState;
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
@@ -240,6 +252,8 @@ public:
     [[nodiscard]] MaterialEditorState& MaterialEditor() noexcept;
     [[nodiscard]] const MaterialEditorState& MaterialEditor() const noexcept;
     [[nodiscard]] EditorConsoleState& Console() noexcept;
+    [[nodiscard]] EditorAgentPanelState& AgentPanel() noexcept { return agentPanel_; }
+    [[nodiscard]] const EditorAgentPanelState& AgentPanel() const noexcept { return agentPanel_; }
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
@@ -249,6 +263,9 @@ public:
     // Config/EditorSettings.ini. One reader and one writer, both here.
     [[nodiscard]] const EditorConfiguration& EditorConfig() const noexcept;
     [[nodiscard]] bool SaveEditorConfig(EditorConfiguration configuration);
+    // The performance counters: their values, what the scene shows of them and the window that
+    // chooses them. The choice itself is part of EditorConfig().
+    [[nodiscard]] EditorProfilerState& Profiler() const noexcept { return profiler_; }
     [[nodiscard]] EditorPluginsState& Plugins() noexcept;
     [[nodiscard]] const EditorPluginsState& Plugins() const noexcept;
     [[nodiscard]] EditorScriptEditorState& ScriptEditor() noexcept;
@@ -269,6 +286,12 @@ public:
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
+    // Which objects of the open scene use each asset, for the "Used by" column of Project Files.
+    // RefreshAssetUsers recomputes it when the scene changed and returns whether it changed;
+    // the version moves with every change so a retained panel image knows to repaint.
+    bool RefreshAssetUsers();
+    [[nodiscard]] const EditorAssetUsers& AssetUsers() const noexcept { return assetUsers_; }
+    [[nodiscard]] std::uint64_t AssetUsersVersion() const noexcept { return assetUsersVersion_; }
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
     [[nodiscard]] bool SceneRenderStructuralDirty() const noexcept;
@@ -298,6 +321,11 @@ public:
     // installed scene system produced to the Console, so a behaviour that
     // silently fails to run during play surfaces a reason instead of nothing.
     void SurfaceScriptDiagnostics();
+    static void ConfigureLuaDebugger(std::filesystem::path directory);
+    [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& directory, std::string& error);
+    void PollLuaDebugger();
+    [[nodiscard]] bool LuaDebuggerPaused() const;
+
     // Single production play-mode update path shared by the visible editor
     // loop and deterministic automation. Input collection remains owned by
     // the host, but system execution, fault surfacing, diagnostics, render
@@ -307,6 +335,11 @@ public:
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] kb::scene::SceneEntity PlayCameraEntity() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();
+    // After a tool outside the editor (an agent, kb_cli) changed the project: the scene is read
+    // from its file into the open scene as one undoable step, the selection and the undo history
+    // stay, and new or changed assets are picked up. A change to the project's plugins or modules
+    // reloads the whole project as ReloadSceneFromProject, keeping the selection.
+    [[nodiscard]] bool ReloadSceneAfterExternalChange();
     // A new, unsaved Untitled scene filled from `sceneTemplate`.
     [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution, kb::scene::SceneTemplate sceneTemplate);
     // File > New Scene: writes `folder`/`name`.21kbscene from the template, opens it and, when asked,
@@ -410,6 +443,14 @@ public:
     [[nodiscard]] bool ConfigureTerrain(
         kb::scene::SceneEntity entity,
         const EditorTerrainConfiguration& configuration,
+        std::string* error = nullptr);
+    // Replaces the whole terrain of `entity` as one Undo step (a generated world, an eroded one). Refused
+    // when the entity's terrain is not the asset `expectedAssetId` the result was made from.
+    [[nodiscard]] bool ReplaceTerrain(
+        kb::scene::SceneEntity entity,
+        kb::assets::AssetId expectedAssetId,
+        kb::assets::TerrainAsset edited,
+        std::string label,
         std::string* error = nullptr);
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
@@ -520,6 +561,14 @@ public:
     [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
     [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
+    // The Hierarchy clipboard: Copy keeps a snapshot of the selected objects (with their children), Cut also
+    // deletes them, Paste creates the snapshot again under the object's original parent, or at the root
+    // when that parent is gone. Each is one undo step.
+    [[nodiscard]] bool CopySelectedHierarchyEntities();
+    [[nodiscard]] bool CutSelectedHierarchyEntities();
+    [[nodiscard]] bool PasteHierarchyEntities();
+    [[nodiscard]] bool CanPasteHierarchyEntities() const noexcept { return !hierarchyClipboard_.empty(); }
+    [[nodiscard]] bool HasHierarchySelection() const noexcept { return !hierarchySelection_.SelectedEntities().empty(); }
     [[nodiscard]] bool SelectPrefabSourceAsset(kb::scene::SceneEntity entity);
     // The Inspector asks for a selected instance's overrides on every paint, size and hit test; they
     // change only with the scene, so they are worked out once per scene revision.
@@ -554,6 +603,8 @@ public:
         kb::scene::SceneEntity targetCell);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
     [[nodiscard]] kb::scene::SceneEntity CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent = {});
+    // A whole screen (Main Menu, Pause, HUD, Settings) as one hierarchy, with its fonts and Canvas, in one undo step.
+    [[nodiscard]] kb::scene::SceneEntity CreateUIScreen(kb::scene::UIScreenTemplate screen, kb::scene::SceneEntity parent = {});
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
     // An entry of the hierarchy Create menu (kb::scene::SceneCreateMenu), under parent when valid.
     [[nodiscard]] kb::scene::SceneEntity CreateMenuObject(std::string_view id, kb::scene::SceneEntity parent = {});
@@ -563,6 +614,9 @@ public:
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] kb::assets::AssetId AudioMixerPanelAsset() const;
+    [[nodiscard]] std::size_t AudioMixerPanelFirst() const noexcept { return audioMixerPanelFirst_; }
+    [[nodiscard]] bool AudioMixerPanelPointer(DockRect content, int x, int y);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
     // Create > Post-Process Profile and Create > Import Preset (EditorSceneContextPostProcess.cpp).
     [[nodiscard]] bool CreatePostProcessProfileAsset(const std::filesystem::path& virtualFolder);
@@ -584,6 +638,54 @@ public:
     [[nodiscard]] bool CreateNativeScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenTimelineEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenBlendSpace2DEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenGameplayGraphAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool CreateGameplayGraphAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] GameplayGraphEditorState* GameplayGraphEditor() noexcept { return gameplayGraphEditor_.get(); }
+    [[nodiscard]] const GameplayGraphEditorState* GameplayGraphEditor() const noexcept { return gameplayGraphEditor_.get(); }
+    [[nodiscard]] bool ConsumeGameplayGraphOpenRequest() noexcept;
+    void ClearGameplayGraphPreview() noexcept;
+    [[nodiscard]] bool CreateBlendSpace2DAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool ConsumeBlendSpace2DEditorOpenRequest() noexcept;
+    [[nodiscard]] bool EditBlendSpace2DAsset(const std::function<bool(kb::scene::BlendSpace2DAsset&)>& edit);
+    [[nodiscard]] const BlendSpace2DEditorState* BlendSpace2DEditor() const noexcept { return blendSpaceEditor_.get(); }
+    [[nodiscard]] bool UndoBlendSpace2DEditorEdit();
+    [[nodiscard]] bool RedoBlendSpace2DEditorEdit();
+    [[nodiscard]] bool SaveBlendSpace2DEditorAsset();
+    [[nodiscard]] bool RevertBlendSpace2DEditorAsset();
+    [[nodiscard]] bool SetBlendSpace2DPreviewOwner(kb::scene::SceneEntity owner);
+    [[nodiscard]] bool SetBlendSpace2DPreviewCoordinates(float x, float y);
+    [[nodiscard]] bool SeekBlendSpace2DPreview(float phase);
+    [[nodiscard]] bool PlayBlendSpace2DPreview(bool playing);
+    [[nodiscard]] bool TickBlendSpace2DPreview(float delta);
+    void ClearBlendSpace2DPreview() noexcept;
+    void SynchronizeBlendSpace2DReleaseHandler();
+    void FitBlendSpace2DEditorView();
+    void SelectBlendSpace2DSample(std::size_t index);
+    void SetBlendSpace2DEditorFirstRow(std::size_t row);
+    [[nodiscard]] bool BeginBlendSpace2DSampleDrag(std::size_t index);
+    [[nodiscard]] bool MoveBlendSpace2DSample(float x, float y);
+    [[nodiscard]] bool EndBlendSpace2DSampleDrag();
+    [[nodiscard]] const TimelineEditorDocumentState& TimelineEditorDocument() const noexcept { return timelineEditorDocument_; }
+    [[nodiscard]] bool EditTimelineAsset(const std::function<bool(kb::scene::TimelineAsset&)>& edit);
+    [[nodiscard]] bool UndoTimelineEditorEdit();
+    [[nodiscard]] bool RedoTimelineEditorEdit();
+    [[nodiscard]] bool SaveTimelineEditorAsset();
+    [[nodiscard]] bool RevertTimelineEditorAsset();
+    [[nodiscard]] std::size_t TimelineEditorFirstRow() const noexcept { return timelineEditorFirstRow_; }
+    [[nodiscard]] std::size_t TimelineEditorSelectedRow() const noexcept { return timelineEditorSelectedRow_; }
+    void SetTimelineEditorFirstRow(std::size_t row) noexcept { timelineEditorFirstRow_ = row; }
+    void SetTimelineEditorSelectedRow(std::size_t row) noexcept { timelineEditorSelectedRow_ = row; }
+    [[nodiscard]] bool TimelineEditorLoop() const noexcept { return timelineEditorLoop_; }
+    void SetTimelineEditorLoop(bool loop) noexcept { timelineEditorLoop_ = loop; }
+    void ClearTimelineEditorPreview() noexcept { timelineEditorPreview_.Clear(); timelineEditorOwner_ = {}; }
+    [[nodiscard]] bool SetTimelineEditorPreviewOwner(kb::scene::SceneEntity owner);
+    [[nodiscard]] bool SeekTimelineEditorPreview(float time);
+    [[nodiscard]] bool PlayTimelineEditorPreview(float rate, bool loop);
+    void PauseTimelineEditorPreview() noexcept;
+    [[nodiscard]] bool TickTimelineEditorPreview(float deltaSeconds);
+    [[nodiscard]] const EditorTimelinePreviewSession& TimelineEditorPreview() const noexcept { return timelineEditorPreview_; }
     [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool HasParticleEditorAsset() const noexcept;
     [[nodiscard]] kb::assets::AssetId ParticleEditorAssetId() const noexcept;
@@ -849,6 +951,9 @@ public:
     [[nodiscard]] bool SetSceneAudioOcclusion(const kb::scene::AudioOcclusionSettings& settings);
     // A post-process profile asset's values (the Inspector edits them, undoably) and the scene's
     // profile (saved with the scene, undoable through the scene history); 0 clears it.
+    [[nodiscard]] bool CreateUIThemeAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] std::optional<kb::scene::UITheme> ReadUITheme(kb::assets::AssetId id) const;
+    [[nodiscard]] bool SetUITheme(kb::assets::AssetId id, const kb::scene::UITheme& theme);
     [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> ReadPostProcessProfile(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetPostProcessProfile(kb::assets::AssetId id, const kb::render::ScenePostProcessSettings& settings);
     [[nodiscard]] bool SetScenePostProcessProfile(kb::assets::AssetId id);
@@ -1329,6 +1434,10 @@ public:
     // out option `index`; Move puts option `index` at position `target`.
     [[nodiscard]] bool EditUIDropdownOption(kb::scene::SceneEntity entity, UIDropdownOptionEdit edit, std::uint32_t index,
         std::uint32_t target = 0U);
+    // The "On Click" row of a widget: the Lua function that runs on click (null clears it). Writes the event name
+    // and event target of its Selectable, gives the widget the script when nothing else runs it, and adds the
+    // function to the script when the choice is a new one.
+    [[nodiscard]] bool SetUIClickHandler(kb::scene::SceneEntity widget, const struct UIClickChoice* choice);
     [[nodiscard]] bool SetUIComponentProperty(
         kb::scene::SceneEntity entity, kb::scene::UIComponentType component,
         std::string_view property, const kb::scene::UIComponentPropertyValue& value);
@@ -1338,6 +1447,7 @@ public:
     [[nodiscard]] bool SetUIAnchorPreset(kb::scene::SceneEntity entity, int preset,
         bool alignPosition = false, bool alignPivot = false);
     std::optional<EditorUIRectDragState>& UIRectDrag() noexcept { return uiRectDrag_; }
+    const std::optional<EditorUIRectDragState>& UIRectDrag() const noexcept { return uiRectDrag_; }
     void SetUIAuthoringViewportSize(float width, float height) const noexcept {
         if (width > 0.0F && height > 0.0F) uiAuthoringViewportSize_ = {width, height};
     }
@@ -1523,6 +1633,13 @@ private:
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
+    TimelineEditorDocumentState timelineEditorDocument_;
+    std::unique_ptr<BlendSpace2DEditorState> blendSpaceEditor_;
+    std::unique_ptr<GameplayGraphEditorState> gameplayGraphEditor_;
+    std::size_t timelineEditorFirstRow_ = 0, timelineEditorSelectedRow_ = 0;
+    bool timelineEditorLoop_ = false;
+    EditorTimelinePreviewSession timelineEditorPreview_;
+    kb::scene::SceneEntity timelineEditorOwner_{};
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     kb::assets::AssetId skeletalMeshEditorPrimarySkeletonId_{};
     kb::assets::AssetId pendingSkeletalMeshEditorAssetId_{};
@@ -1543,7 +1660,14 @@ private:
     std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
+    EditorAssetUsers assetUsers_;
+    EditorAgentPanelState agentPanel_;
+    std::uint64_t assetUsersVersion_ = 0U;
+    std::uint64_t assetUsersRevision_ = ~std::uint64_t{ 0U };
+    std::uint64_t assetUsersGeneration_ = ~std::uint64_t{ 0U };
     EditorConfiguration editorConfig_;
+    // Written while a const scene context paints, like the other per-frame caches here.
+    mutable EditorProfilerState profiler_;
     EditorPluginsState plugins_;
     bool particleProviderMigrationResolved_ = false;
     EditorScriptEditorState scriptEditor_;
@@ -1559,6 +1683,7 @@ private:
     std::string graphShaderCacheRoot_;
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
+    std::size_t audioMixerPanelFirst_ = 0U;
     EditorCommandStack commandStack_;
     EditorCommandStack playModeDocumentCommands_;
     // The scene document's undo history, selection and unsaved state, kept aside while a prefab is edited.
@@ -1570,6 +1695,7 @@ private:
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
     EditorHierarchyExpansionState hierarchyExpansion_;
+    std::vector<EditorSceneObjectPrefabPayload> hierarchyClipboard_;
     EditorHierarchySearchState hierarchySearch_;
     mutable std::vector<EditorHierarchyRow> hierarchyRowsCache_;
     mutable bool hierarchyRowsDirty_ = true;

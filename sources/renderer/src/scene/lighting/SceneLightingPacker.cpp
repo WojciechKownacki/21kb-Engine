@@ -82,7 +82,7 @@ void FillIblStats(SceneRenderSubmitStats& stats, SceneRenderLightingConfig confi
         if (probe.shape != SceneRenderReflectionProbeShape::Infinite) {
             ++stats.localReflectionProbeCount;
         }
-        if (probe.parallaxCorrection || config.ibl.parallaxCorrection) {
+        if (probe.parallaxCorrection && config.ibl.parallaxCorrection) {
             ++stats.parallaxCorrectedProbeCount;
         }
     }
@@ -112,6 +112,7 @@ void SceneLightingPacker::AssignPointShadowSlots(PackedSceneLighting& lighting, 
     const std::vector<std::uint64_t>& gridIds = lighting.lightGrid.entityIds;
     if (bgfx::isValid(lighting.lightGrid.texture) && !gridIds.empty()) {
         for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {
+            if (binding.entityId[shadow] == 0U) continue;
             const auto found = std::ranges::find(gridIds, binding.entityId[shadow]);
             if (found != gridIds.end()) {
                 lighting.pointShadowSlot[shadow] = static_cast<float>(found - gridIds.begin());
@@ -122,6 +123,7 @@ void SceneLightingPacker::AssignPointShadowSlots(PackedSceneLighting& lighting, 
     const std::uint32_t packedCount = std::min<std::uint32_t>(
         static_cast<std::uint32_t>(lighting.params[0]), kMaxSceneForwardPlusLights);
     for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {
+        if (binding.entityId[shadow] == 0U) continue;
         for (std::uint32_t slot = 0U; slot < packedCount; ++slot) {
             if (lighting.slotEntityId[slot] == binding.entityId[shadow]) {
                 lighting.pointShadowSlot[shadow] = static_cast<float>(slot);
@@ -137,6 +139,7 @@ PackedSceneLighting SceneLightingPacker::Build(
     SceneRenderLightingConfig config,
     const SceneRenderCamera* camera) noexcept {
     PackedSceneLighting lighting{};
+    lighting.ibl = config.ibl;
     const std::uint32_t capacity = ClampedForwardLightBudget(config);
     lighting.params[1] = static_cast<float>(capacity);
     const float ambientIntensity = std::max(config.ambientIntensity, 0.0F);
@@ -164,6 +167,11 @@ PackedSceneLighting SceneLightingPacker::Build(
         std::max(config.environmentSpecularIntensity, 0.0F),
         0.0F,
     };
+    stats.fogProfile = static_cast<std::uint32_t>(config.fogProfile);
+    stats.fogMode = !config.fogEnabled ? 0U : config.volumetricFogEnabled ? 2U : 1U;
+    lighting.fogParams = {std::clamp(config.fogDensity, 0.0F, 10000.0F),
+        std::clamp(config.fogHeightFalloff, 0.0F, 10000.0F), config.fogBaseHeight, config.fogEnabled ? 1.0F : 0.0F};
+    lighting.fogColor = {config.fogColor[0], config.fogColor[1], config.fogColor[2], std::clamp(config.fogAnisotropy, -0.9F, 0.9F)};
     lighting.skyReflection = config.skyReflection;
     lighting.skyReflectionParams = { bgfx::isValid(config.skyReflection) ? 1.0F : 0.0F, config.skyReflectionMaxMip, 0.0F, 0.0F };
     stats.submittedEnvironmentLightingCount = config.environmentMode == SceneRenderEnvironmentMode::Disabled ? 0U : 1U;

@@ -1,6 +1,7 @@
 #include "engine/ui/UIComponentValidation.hpp"
 
 #include "engine/input/InputText.hpp"
+#include "engine/localization/PluralRules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -56,7 +57,8 @@ bool IsUIComponentValid(const UIRectTransform& value) noexcept {
         Finite(value.pivot) && Finite(value.scale) && Finite(value.rotationDegrees) && value.anchorMin.x >= 0.0F &&
         value.anchorMin.y >= 0.0F && value.anchorMax.x <= 1.0F && value.anchorMax.y <= 1.0F &&
         value.anchorMin.x <= value.anchorMax.x && value.anchorMin.y <= value.anchorMax.y &&
-        value.pivot.x >= 0.0F && value.pivot.x <= 1.0F && value.pivot.y >= 0.0F && value.pivot.y <= 1.0F;
+        value.pivot.x >= 0.0F && value.pivot.x <= 1.0F && value.pivot.y >= 0.0F && value.pivot.y <= 1.0F &&
+        Utf8Terminated(value.themeVariant) && Utf8Terminated(value.themeOverrides);
 }
 bool IsUIComponentValid(const UICanvas& value) noexcept {
     return EnumAtMost(value.renderMode, UICanvasRenderMode::WorldSpace) && Finite(value.pixelsPerUnit) &&
@@ -121,7 +123,10 @@ bool IsUIComponentValid(const UIText& value) noexcept {
         EnumAtMost(value.verticalAlignment, UITextVerticalAlignment::Bottom) && EnumAtMost(value.wrapMode, UITextWrapMode::Character) &&
         Finite(value.lineSpacing) && value.lineSpacing > 0.0F && Utf8Terminated(value.localizationKey) &&
         EnumAtMost(value.overflow, UITextOverflow::Ellipsis) && Finite(value.minFontSize) && value.minFontSize > 0.0F &&
-        Finite(value.characterSpacing);
+        Finite(value.characterSpacing) && Utf8Terminated(value.localizationNumber) && Utf8Terminated(value.fontVariations) &&
+        EnumAtMost(value.fontRenderMode, UITextFontRenderMode::MultiChannelSignedDistanceField) &&
+        (UITextLocalizationNumber(value).empty() ||
+            kb::localization::ParsePluralOperands(UITextLocalizationNumber(value)).has_value());
 }
 bool IsUIComponentValid(const UIBorder& value) noexcept {
     return Normalized(value.backgroundColor) && Normalized(value.borderColor) && NonNegative(value.borderWidth) &&
@@ -179,6 +184,11 @@ bool IsUIComponentValid(const UIProgressBar& value) noexcept {
 }
 bool IsUIComponentValid(const UIWidgetSwitcher&) noexcept { return true; }
 
+bool IsUIComponentValid(const UIAccessibility& value) noexcept {
+    return EnumAtMost(value.role,UIAccessibilityRole::List)&&
+        std::find(value.label.begin(),value.label.end(),'\0')!=value.label.end()&&
+        std::find(value.hint.begin(),value.hint.end(),'\0')!=value.hint.end();
+}
 bool IsUIComponentSetValid(const UIComponentSet& value) noexcept {
     const std::size_t layoutCount = static_cast<std::size_t>(value.horizontalLayout.has_value()) +
         static_cast<std::size_t>(value.verticalLayout.has_value()) + static_cast<std::size_t>(value.gridLayout.has_value()) +
@@ -193,7 +203,7 @@ bool IsUIComponentSetValid(const UIComponentSet& value) noexcept {
         OptionalValid(value.selectable) && OptionalValid(value.button) && OptionalValid(value.toggle) &&
         OptionalValid(value.slider) && OptionalValid(value.scrollbar) && OptionalValid(value.scrollView) &&
         OptionalValid(value.inputField) && OptionalValid(value.dropdown) && OptionalValid(value.progressBar) &&
-        OptionalValid(value.widgetSwitcher);
+        OptionalValid(value.widgetSwitcher) && OptionalValid(value.accessibility);
 }
 
 } // namespace kb::scene

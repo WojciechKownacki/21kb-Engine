@@ -1,29 +1,24 @@
 #include "scene/EditorAnimationPreviewScene.hpp"
 
+#include "scene/EditorPreviewStudio.hpp"
+
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
-#include "engine/scene/AmbientRadianceComponent.hpp"
-#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
-#include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
-#include "engine/scene/WorldBackdropComponent.hpp"
-#include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
-#include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
@@ -48,20 +43,6 @@ constexpr float kPreviewFloorHeight = -0.01F;
     const float tolerance = std::max(0.001F, bounds.extents.y * 0.01F);
     return bounds.center.y < -tolerance &&
         bounds.center.y + bounds.extents.y <= tolerance;
-}
-
-void RegisterPreviewFloorAsset(kb::assets::AssetManager& manager) {
-    const kb::assets::AssetId planeAssetId =
-        EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Plane);
-    static_cast<void>(manager.RegisterLoader(std::make_unique<EditorMaterialPreviewMeshLoader>()));
-    static_cast<void>(manager.RegisterAsset(kb::assets::AssetMetadata{
-        .id = planeAssetId,
-        .type = "RenderMesh",
-        .name = "Animation Preview Floor",
-        .virtualPath = "/Editor/Preview/AnimationFloor",
-        .physicalPath = "__editor_animation_preview_floor__",
-        .runtimeLoadable = true,
-    }));
 }
 
 template <typename T>
@@ -358,7 +339,6 @@ void EditorAnimationPreviewScene::Rebuild(
     for (const kb::assets::AssetMetadata& metadata : source.Assets().Manager().Registry().All()) {
         static_cast<void>(scene_->Assets().Manager().RegisterAsset(metadata));
     }
-    RegisterPreviewFloorAsset(scene_->Assets().Manager());
     previewEntity_ = scene_->Entities().CreateEntity(
         kb::scene::SceneObjectDesc{ .name = "Animation Preview" });
     kb::assets::AssetManager& previewAssets = scene_->Assets().Manager();
@@ -477,68 +457,10 @@ void EditorAnimationPreviewScene::Rebuild(
         : kb::scene::Vec3{};
     focusRadius_ = mesh.IsLoaded() ? BoundsRadius(mesh->conservativeBounds) : 1.0F;
 
-    kb::scene::SceneObjectDesc cameraDesc{ .name = "Animation Preview Camera" };
-    cameraDesc.transform.localPosition = camera_.Position();
-    cameraEntity_ = scene_->Entities().CreateEntity(cameraDesc);
-    static_cast<void>(scene_->Components().Cameras().Set(cameraEntity_, kb::scene::CameraComponent{
-        .verticalFovDegrees = camera_.VerticalFovDegrees(),
-        .nearClip = camera_.NearClip(),
-        .farClip = camera_.FarClip(),
-        .primary = true,
-        .clearColor = kb::scene::Vec3{ 0.055F, 0.065F, 0.085F },
-    }));
-
-    kb::scene::SceneObjectDesc floorDesc{ .name = "Animation Preview Floor" };
-    floorDesc.transform.localPosition = kb::scene::Vec3{ 0.0F, kPreviewFloorHeight, 0.0F };
-    floorDesc.transform.localRotation = kb::math::FromToRotation(
-        kb::scene::Vec3{ 0.0F, 0.0F, 1.0F }, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F });
-    floorDesc.transform.localScale = kb::scene::Vec3{ kPreviewFloorExtent, kPreviewFloorExtent, 1.0F };
-    floorEntity_ = scene_->Entities().CreateEntity(floorDesc);
-    static_cast<void>(scene_->Components().MeshRenderers().Set(floorEntity_, kb::scene::MeshRendererComponent{
-        .meshAssetId = EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Plane).value,
-    }));
-
-    kb::scene::SceneObjectDesc keyLightDesc{ .name = "Animation Preview Key Light" };
-    keyLightDesc.transform.localPosition = kb::scene::Vec3{ 3.0F, 6.0F, -4.0F };
-    const kb::scene::SceneEntity keyLight = scene_->Entities().CreateEntity(keyLightDesc);
-    static_cast<void>(scene_->Components().Lights().Set(keyLight, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Directional,
-        .color = kb::scene::Vec3{ 1.0F, 0.95F, 0.88F },
-        .intensity = 2.0F,
-        .castsShadow = true,
-    }));
-
-    kb::scene::SceneObjectDesc fillLightDesc{ .name = "Animation Preview Fill Light" };
-    fillLightDesc.transform.localPosition = kb::scene::Vec3{ -4.0F, 3.0F, 2.0F };
-    const kb::scene::SceneEntity fillLight = scene_->Entities().CreateEntity(fillLightDesc);
-    static_cast<void>(scene_->Components().Lights().Set(fillLight, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Point,
-        .color = kb::scene::Vec3{ 0.54F, 0.68F, 1.0F },
-        .intensity = 7.0F,
-        .range = 12.0F,
-        .castsShadow = false,
-    }));
-
-    environmentEntity_ = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Animation Preview Environment" });
-    static_cast<void>(scene_->Components().WorldBackdrops().Set(environmentEntity_, kb::scene::WorldBackdropComponent{
-        .mode = kb::scene::WorldBackdropMode::VerticalGradient,
-        .horizonColor = kb::scene::Vec3{ 0.08F, 0.10F, 0.14F },
-        .zenithColor = kb::scene::Vec3{ 0.23F, 0.31F, 0.45F },
-        .gradientExponent = 1.35F,
-        .priority = 100,
-        .enabled = true,
-    }));
-    static_cast<void>(scene_->Components().AmbientRadiances().Set(environmentEntity_, kb::scene::AmbientRadianceComponent{
-        .mode = kb::scene::AmbientRadianceMode::Gradient,
-        .horizonColor = kb::scene::Vec3{ 0.10F, 0.12F, 0.16F },
-        .zenithColor = kb::scene::Vec3{ 0.30F, 0.38F, 0.54F },
-        .intensity = 0.75F,
-        .diffuseIntensity = 1.0F,
-        .specularIntensity = 0.35F,
-        .priority = 100,
-        .enabled = true,
-    }));
-    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(*scene_, true);
+    const EditorPreviewStudio studio = BuildEditorPreviewStudio(*scene_, camera_, kPreviewFloorHeight, kPreviewFloorExtent);
+    cameraEntity_ = studio.camera;
+    floorEntity_ = studio.floor;
+    environmentEntity_ = studio.environment;
 
     if (openingDifferentAsset) {
         // Asset editors open on an orthographic-looking front view. The shared scene-camera default
@@ -628,15 +550,7 @@ void EditorAnimationPreviewScene::ApplyLodPolicy() noexcept {
 }
 
 void EditorAnimationPreviewScene::SynchronizeCamera() noexcept {
-    if (scene_ == nullptr || !cameraEntity_.IsValid() || !scene_->Entities().IsAlive(cameraEntity_)) {
-        return;
-    }
-    kb::scene::TransformComponent transform = scene_->Transforms().Get(cameraEntity_);
-    const EditorViewportCameraAxes axes = camera_.Axes();
-    transform.localPosition = axes.position;
-    transform.localRotation = kb::math::LookRotation(axes.forward, axes.up);
-    scene_->Transforms().Set(cameraEntity_, transform);
-    scene_->Runtime().SynchronizeTransforms();
+    if (scene_ != nullptr) SynchronizeEditorPreviewCamera(*scene_, cameraEntity_, camera_);
 }
 
 void EditorAnimationPreviewScene::SynchronizePlayback(AnimationPreviewContext& context) noexcept {

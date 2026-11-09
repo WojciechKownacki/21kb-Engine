@@ -245,6 +245,45 @@ void RunSceneMeshCommandReuseInvalidationTest() {
     Require(nextScene.MeshContentRevision() != scene.MeshContentRevision(), "A replacement scene reused another scene's identity");
 }
 
+// Only primitives that move on their own are drawn into velocity; the rest keep the camera motion that the
+// full-screen pass derives from depth.
+void RunMotionVectorPassDrawsOnlyMovingInstancesTest() {
+    RenderScene scene;
+    for (std::uint64_t id = 1U; id <= 3U; ++id) {
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{
+            .entityId = id, .meshAssetId = 7U, .model = TranslationMatrix(static_cast<float>(id), 0.0F, 5.0F)}));
+    }
+    static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{.entityId = 4U, .meshAssetId = 7U,
+        .model = TranslationMatrix(4.0F, 0.0F, 5.0F), .currentSkinningPalette = {.frame = 1U, .matrixCount = 1U}}));
+    scene.BeginMotionFrame(1U);
+    static_cast<void>(scene.DrawGroups());
+    Require(scene.UpdateMeshTransform(2U, TranslationMatrix(2.5F, 0.0F, 5.0F)), "The moving mesh did not update");
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = {.radius = 0.5F};
+    RenderMaterialResource material{};
+    const auto camera = PerspectiveCamera();
+    const auto drawn = [&](MeshPassType pass, std::uint64_t motionFrame) {
+        const auto groups = scene.DrawGroups();
+        const auto result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = pass, .drawGroups = &groups,
+            .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material, .camera = &camera,
+            .resourceValidation = MeshPipelineResourceValidation::Skip, .motionFrame = motionFrame});
+        std::vector<std::uint64_t> ids;
+        for (const auto& command : result.commands)
+            for (const auto& instance : command.instances) ids.push_back(instance.entityId);
+        std::ranges::sort(ids);
+        return ids;
+    };
+    const std::vector<std::uint64_t> moving{2U, 4U};
+    Require(drawn(MeshPassType::MotionVectors, scene.MotionFrame()) == moving,
+        "The motion pass must draw the moved and the skinned mesh only");
+    Require(drawn(MeshPassType::MotionVectors, 0U).size() == 4U, "Without a motion frame the motion pass draws every mesh");
+    Require(drawn(MeshPassType::GBuffer, scene.MotionFrame()).size() == 4U, "Other passes must draw every mesh");
+    scene.BeginMotionFrame(2U);
+    Require(drawn(MeshPassType::MotionVectors, scene.MotionFrame()) == std::vector<std::uint64_t>{4U},
+        "A mesh that stopped moving must leave the motion pass");
+}
+
 void RunMeshPassTypeNamesResolveTest() {
     Require(MeshPassTypeName(MeshPassType::Depth) == std::string_view("Depth"), "MeshPassTypeName did not resolve Depth");
     Require(MeshPassTypeName(MeshPassType::BaseOpaque) == std::string_view("BaseOpaque"), "MeshPassTypeName did not resolve BaseOpaque");
@@ -2263,6 +2302,7 @@ void RunMeshPipelineTests() {
     RunTemporalCullingConservatismTest();
     RunSceneMeshCommandReuseInvalidationTest();
     RunSceneMeshBatchCommandRetentionTest();
+    RunMotionVectorPassDrawsOnlyMovingInstancesTest();
     // Compare accelerated generated ranges with the original per-instance path.
     // Camera motion, shear, off-centre bounds, growth and mixed owners must not
     // alter accepted ids or pass counters.

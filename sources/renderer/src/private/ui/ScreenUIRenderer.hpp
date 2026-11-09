@@ -20,6 +20,7 @@ class AssetManager;
 }
 
 namespace kb::scene {
+class Scene;
 struct SceneUIFrame;
 }
 
@@ -31,6 +32,7 @@ class SceneRenderResourceMap;
 
 struct ScreenUISubmitDesc {
     std::uint64_t sceneId = 0U;
+    kb::scene::Scene* scene = nullptr;
     std::uint32_t viewportIndex = 0U;
     const kb::scene::SceneUIFrame* frame = nullptr;
     kb::assets::AssetManager* assets = nullptr;
@@ -82,6 +84,8 @@ class ScreenUIRenderer {
     void ResolveFonts(const ScreenUISubmitDesc& desc, std::span<const ScreenUITextRun> textRuns);
     void AppendResolvedTexture(ScreenUIResolvedTexture texture);
 
+    struct DynamicTexture {std::uint64_t sceneId=0,assetId=0,revision=0;std::uint16_t width=0,height=0;bgfx::TextureHandle texture=BGFX_INVALID_HANDLE;};
+    std::vector<DynamicTexture> dynamicTextures_;
     ScreenUIDrawBatchBuilder batchBuilder_;
     ScreenUIFontAtlasCache fontAtlas_;
     ScreenUIComposite composite_;

@@ -30,9 +30,46 @@ The levels are of the blocks the provider rendered, read through the signal mete
 - The package is cooked with no loose assets and the player runs the same script: the clip played by path from the script is kept in the
   package by an Audio Source that names it, because a path inside a script is not a dependency of the scene.
 
+## Native output qualification
+
+Pass `--qualify-device` to `AudioReferenceProjectTests.py` with the same paths as
+its registered CTest command. This opt-in mode requires an available OS output
+device; a no-device or null backend fails instead of silently skipping. The
+shipped player runs the offline signal checks first, then the actual device
+callback with streams, a looping one-shot, DSP and timed snapshot transitions.
+It closes and reopens the device twice, rejects stale voice handles, and requires
+six seconds of mixed callback frames. The authoring project is renamed during
+package execution. The output bus is muted during device qualification; child
+meters continue to measure the decoded signals.
+
+Budgets are 128 MiB for tracked engine allocation requests, 512 MiB for the
+packaged process (50 ms sampled private bytes and OS peak working set), at most 1% of
+callbacks exceeding their buffer period, no short PCM blocks, a callback period
+at most 100 ms, and observation of the first child signal within 500 ms of audio
+clock frames after starting the voice. These are workload qualification limits,
+not universal real-time guarantees or an acoustic latency measurement.
+
+`Audio.Diagnostics()` and `AudioDiagnostics::Report(scene)` expose the current
+engine generation, backend, sample rate, callback block/frame counts, last period,
+worst callback duration, deadline misses and allocation current/peak/count.
+Device short-block counts exclude valid idle silence from an unattached graph.
+The CLI audio JSON includes these fields under `runtime`. Integer counters are
+exact decimal strings. Older or alternative providers can lack this optional
+capability without changing their existing playback interface.
+
+`kb_audio_runtime_tests real-device` additionally stops the OS output device,
+checks public status, reinitializes, verifies that old voices remain invalid,
+and requires zero retained tracked allocations after shutdown. `device-soak`
+repeats this lifecycle for 30 minutes. The default suite tests allocator
+alignment, rejected overflow realloc, shrink/free and offline engine teardown.
+
 ## Limits
 
-This is offline PCM through the real provider and a hidden Windows player. There is no audio device in it, so it says nothing about
-latency, dropouts or memory on a device, about other platforms, or about timed snapshot transitions (those need scene time, which offline
-rendering does not advance; `audio_snapshots.md` covers them in the packaged browser and runtime tests). The spatial check is a direction and
-distance check, not a calibration of the panning law.
+The default CTest remains an offline PCM test. Device qualification is explicit
+and requires a usable native output endpoint. Engine allocation bytes include
+only requests routed through miniaudio's engine allocator; they exclude asset
+payloads, STL allocations and driver memory. Callback deadline misses are mix
+overruns, not OS/hardware underrun counts. Period and audio-clock onset counters
+do not measure end-to-end acoustic latency. This harness targets Windows; it
+does not establish other platform support. The spatial check verifies direction
+and distance, not a calibrated panning law.

@@ -1,4 +1,5 @@
 #include "GameProjectRuntime.hpp"
+#include "GameProjectLighting.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
 #include "RuntimeSceneFrameSync.hpp"
@@ -10,6 +11,8 @@
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioPlayback.hpp"
+#include "engine/audio/AudioDiagnostics.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -17,6 +20,8 @@
 #include "engine/input/InputTouchPoint.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/security/ReleaseKeys.hpp"
@@ -40,6 +45,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cerrno>
 #include <cstddef>
@@ -58,6 +64,7 @@ namespace {
 
 constexpr std::string_view kLogTag = "21kb";
 constexpr std::string_view kPackagedAssetPack = "game.kbpack";
+std::atomic<bool> audioFocusGranted{false};
 
 void LogError(std::string_view message) noexcept {
     const std::size_t length =
@@ -403,6 +410,27 @@ public:
             LogError("Android game controller initialization failed");
             return false;
         }
+        kb::input::InputHaptics::RegisterBackend(*scene_, gamepads_);
+        audioEnabled_ = kb::audio::AudioPlayback::HasBackend(*scene_);
+        if (audioEnabled_) {
+            ApplyAudioState();
+            JNIEnv* environment = nullptr;
+            if (app_.activity->vm->GetEnv(reinterpret_cast<void**>(&environment), JNI_VERSION_1_6) != JNI_OK) {
+                LogError("audio focus bridge could not access the owner thread JNI environment");
+                return false;
+            }
+            const auto activityClass = environment->GetObjectClass(app_.activity->javaGameActivity);
+            const auto enable = activityClass == nullptr ? nullptr :
+                environment->GetMethodID(activityClass, "setAudioEnabled", "(Z)V");
+            if (enable != nullptr) environment->CallVoidMethod(app_.activity->javaGameActivity, enable, JNI_TRUE);
+            const bool exception = environment->ExceptionCheck();
+            if (exception) environment->ExceptionClear();
+            if (activityClass != nullptr) environment->DeleteLocalRef(activityClass);
+            if (enable == nullptr || exception) {
+                LogError("audio focus bridge could not enable platform policy");
+                return false;
+            }
+        }
         android_app_set_key_event_filter(&app_, nullptr);
         android_app_set_motion_event_filter(&app_, nullptr);
         LogInfo("Android runtime host initialized");
@@ -429,6 +457,7 @@ public:
             } while (pollResult >= 0);
 
             ApplyWindowState();
+            ApplyAudioState();
             DrainInput();
             if (CanRender()) {
                 RenderFrame();
@@ -466,13 +495,19 @@ private:
             windowChanged_ = true;
             break;
         case APP_CMD_TERM_WINDOW:
-            windowTerminated_ = true;
+            // The glue acknowledges window destruction when this callback returns.
+            // Finish GPU teardown before the UI thread can destroy that window.
+            ShutdownRenderer();
+            surface_.SetWindow(nullptr);
+            windowChanged_ = false;
             break;
         case APP_CMD_GAINED_FOCUS:
             focused_ = true;
             break;
         case APP_CMD_LOST_FOCUS:
             focused_ = false;
+            gamepads_.StopAll();
+            ApplyAudioState();
             tickClockReady_ = false;
             SetImeVisible(false);
             break;
@@ -482,16 +517,27 @@ private:
         case APP_CMD_PAUSE:
         case APP_CMD_STOP:
             resumed_ = false;
+            ApplyAudioState();
             tickClockReady_ = false;
             SetImeVisible(false);
+            DrainStorageWrites();
             if (command == APP_CMD_STOP) gamepads_.OnStop();
             break;
         case APP_CMD_START:
             gamepads_.OnStart();
             break;
         case APP_CMD_SAVE_STATE:
+            DrainStorageWrites();
+            LogInfo("lifecycle save-state: queued storage writes drained");
+            break;
         case APP_CMD_CONFIG_CHANGED:
+            windowChanged_ = true;
+            tickClockReady_ = false;
+            LogInfo("lifecycle configuration changed");
+            break;
         case APP_CMD_LOW_MEMORY:
+            memoryPressure_ = true;
+            break;
         case APP_CMD_WINDOW_REDRAW_NEEDED:
         case APP_CMD_DESTROY:
             break;
@@ -501,17 +547,22 @@ private:
     }
 
     void ApplyWindowState() {
-        if (windowTerminated_) {
+        if (memoryPressure_) {
+            DrainStorageWrites();
             ShutdownRenderer();
-            surface_.SetWindow(nullptr);
-            windowTerminated_ = false;
-            windowChanged_ = false;
+            const std::size_t pruned = scene_ != nullptr ? scene_->Assets().Manager().PruneUnreferenced() : 0U;
+            std::ostringstream message;
+            message << "lifecycle memory-pressure: renderer-released=1 assets-pruned=" << pruned;
+            LogInfo(message.str());
+            memoryPressure_ = false;
+            windowChanged_ = app_.window != nullptr;
         }
         if (!windowChanged_ || app_.window == nullptr) {
             return;
         }
 
         surface_.SetWindow(app_.window);
+        if (!resumed_) return;
         if (!renderer_.IsInitialized()) {
             kb::render::DisplayConfig config{};
             config.writableStorageRoot = storageRoot_;
@@ -521,6 +572,14 @@ private:
                 failed_ = true;
                 return;
             }
+            ++rendererGeneration_;
+            std::ostringstream generation;
+            generation << "lifecycle renderer-ready generation=" << rendererGeneration_
+                       << " resolution=" << surface_.Width() << 'x' << surface_.Height();
+            LogInfo(generation.str());
+            std::ostringstream lightingDiagnostics;
+            kb::game::ApplyGameProjectLighting(renderer_, projectRuntime_, lightingDiagnostics);
+            LogInfo(lightingDiagnostics.str());
             if (!HasRequiredTextureCapabilities()) {
                 std::ostringstream message;
                 message << "profile=" << targetProfileId_
@@ -558,7 +617,7 @@ private:
             app_.textInputState = 0;
             if (context.valid && scene_ != nullptr && focused_ && imeVisibleRequested_) {
                 static_cast<void>(scene_->UI().QueueTextInputState({imeField_,
-                    {context.text.data(), context.count}, context.caret}));
+                    {context.text.data(), context.count}, context.caret, context.selectionAnchor}));
             }
         }
         android_input_buffer* const input = android_app_swap_input_buffers(&app_);
@@ -615,12 +674,22 @@ private:
         if (app_.activity == nullptr) return;
         const auto field = visible && scene_ != nullptr ? scene_->UI().TextInputState() : std::nullopt;
         visible = field.has_value();
-        if (imeVisibleRequested_ == visible && (!visible || imeField_ == field->entity)) return;
+        bool multiline = false;
+        if (field) {
+            for (const auto& element : scene_->UI().Frame().elements)
+                if (element.entity == field->entity && element.inputField)
+                    multiline = element.inputField->multiline &&
+                        element.inputField->contentType == kb::scene::UIInputContentType::Standard;
+        }
+        if (imeVisibleRequested_ == visible && (!visible ||
+            (imeField_ == field->entity && imeMultiline_ == multiline))) return;
         imeVisibleRequested_ = visible;
+        imeMultiline_ = multiline;
         app_.textInputState = 0;
         if (visible) {
             imeField_ = field->entity;
-            kb::game::SetAndroidTextInputState(app_.activity, field->text, field->caret);
+            kb::game::ConfigureAndroidTextInput(app_.activity, multiline);
+            kb::game::SetAndroidTextInputState(app_.activity, field->text, field->caret, field->selectionAnchor);
             GameActivity_showSoftInput(
                 app_.activity, GAMEACTIVITY_SHOW_SOFT_INPUT_IMPLICIT);
         } else {
@@ -666,6 +735,13 @@ private:
             return;
         }
         const bool submitted = renderSceneSync_.Submit(*scene_, renderer_);
+        if (!renderer_.LastSceneDiagnostics().events.empty()) {
+            std::ostringstream materialDiagnostics;
+            kb::game::ReportGameMaterialFallbacks(renderer_, reportedMaterialShadingFallback_,
+                reportedGraphProgramFallback_, materialDiagnostics);
+            const std::string message = materialDiagnostics.str();
+            if (!message.empty()) LogInfo(message);
+        }
         renderer_.EndFrame();
         if (!submitted) {
             LogError("renderer could not submit the scene");
@@ -681,10 +757,17 @@ private:
             failed_ = true;
             return;
         }
+        if (presentedGeneration_ != rendererGeneration_) {
+            std::ostringstream message;
+            message << "lifecycle frame-presented generation=" << rendererGeneration_;
+            LogInfo(message.str());
+            presentedGeneration_ = rendererGeneration_;
+        }
         if (!firstFrameReported_) {
             std::ostringstream message;
             message << "profile=" << targetProfileId_
                     << " backend=" << renderer_.CapabilityReport().selectedBackendName
+                    << " resolution=" << surface_.Width() << 'x' << surface_.Height()
                     << " first-frame=rendered";
             LogInfo(message.str());
             firstFrameReported_ = true;
@@ -707,18 +790,55 @@ private:
         return false;
     }
 
+    void ApplyAudioState() noexcept {
+        if (!audioEnabled_ || scene_ == nullptr) return;
+        const bool suspended = !resumed_ || !focused_ || !audioFocusGranted.load(std::memory_order_acquire);
+        if (audioSuspended_ == static_cast<int>(suspended)) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now < nextAudioAttempt_) return;
+        if (!kb::audio::AudioPlayback::SetPlatformSuspended(*scene_, suspended)) {
+            LogError(suspended ? "audio platform suspension failed" : "audio platform resume failed");
+            nextAudioAttempt_ = now + std::chrono::seconds{1};
+            return;
+        }
+        audioSuspended_ = static_cast<int>(suspended);
+        nextAudioAttempt_ = {};
+        const auto diagnostics = kb::audio::AudioDiagnostics::Report(*scene_);
+        std::ostringstream message;
+        message << (suspended ? "audio platform suspended" : "audio platform resumed")
+                << " generation=" << diagnostics.generation << " deviceFrames=" << diagnostics.deviceFrames
+                << " status=" << static_cast<int>(kb::audio::AudioPlayback::DeviceStatus(*scene_));
+        LogInfo(message.str());
+    }
+
+    void DrainStorageWrites() noexcept {
+        if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) return;
+        const auto storage = scriptModule_->Host()->UserStorage();
+        if (storage == nullptr) return;
+        storage->WaitForPendingWrites();
+        if (!storage->Flush()) LogError("lifecycle storage flush failed");
+    }
+
     void ShutdownRenderer() noexcept {
         if (renderer_.IsInitialized()) {
             if (scene_ != nullptr) {
                 renderer_.ReleaseScene(*scene_);
             }
             renderer_.Shutdown();
+            const auto resources = renderer_.RuntimeResourceStats();
+            std::ostringstream message;
+            message << "lifecycle renderer-released generation=" << rendererGeneration_
+                    << " meshes=" << resources.cachedMeshCount
+                    << " materials=" << resources.cachedMaterialCount
+                    << " textures=" << resources.cachedTextureCount;
+            LogInfo(message.str());
         }
         tickClockReady_ = false;
         renderSceneSync_.Reset();
     }
 
     void Shutdown() noexcept {
+        if (scene_) kb::input::InputHaptics::UnregisterBackend(*scene_, gamepads_);
         SetImeVisible(false);
         gamepads_.Shutdown();
         if (!scriptShutdownDispatched_ && scene_ != nullptr &&
@@ -768,14 +888,22 @@ private:
     std::string storageRoot_;
     std::string targetProfileId_;
     bool resumed_ = false;
+    bool audioEnabled_ = false;
+    int audioSuspended_ = -1;
+    std::chrono::steady_clock::time_point nextAudioAttempt_{};
     bool focused_ = false;
     bool windowChanged_ = false;
-    bool windowTerminated_ = false;
+    bool memoryPressure_ = false;
+    std::uint64_t rendererGeneration_ = 0U;
+    std::uint64_t presentedGeneration_ = 0U;
     bool failed_ = false;
     bool tickClockReady_ = false;
     bool scriptShutdownDispatched_ = false;
     bool firstFrameReported_ = false;
+    bool reportedMaterialShadingFallback_ = false;
+    bool reportedGraphProgramFallback_ = false;
     bool imeVisibleRequested_ = false;
+    bool imeMultiline_ = false;
     bool imeWasVisible_ = false;
     bool imeDismissed_ = false;
     kb::scene::SceneEntity imeField_{};
@@ -783,6 +911,11 @@ private:
 };
 
 } // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_runtime_MainActivity_setAudioFocusGranted(JNIEnv*, jclass, jboolean granted) {
+    audioFocusGranted.store(granted == JNI_TRUE, std::memory_order_release);
+}
 
 extern "C" void android_main(android_app* app) {
     if (app == nullptr) {

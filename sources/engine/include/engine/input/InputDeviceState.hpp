@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/input/InputKey.hpp"
+#include "engine/input/InputSensors.hpp"
 #include "engine/input/InputText.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 
@@ -36,7 +37,7 @@ public:
     // per WM_TOUCH message on typical hardware); enough for real multi-touch
     // gestures without an unbounded allocation.
     static constexpr std::size_t kMaxTouchPoints = 10U;
-    static constexpr std::size_t kMaxTextInputCodePoints = 64U;
+    static constexpr std::size_t kMaxTextInputCodePoints = 1024U;
 
     void Reset() noexcept {
         digital_.fill(false);
@@ -49,6 +50,7 @@ public:
         }
         touchPointCount_ = 0U;
         textInputCount_ = 0U;
+        sensors_ = {};
     }
 
     // gamepadIndex is ignored for non-gamepad keys (keyboard/mouse/touch are
@@ -137,6 +139,16 @@ public:
         return textInputCount_ - before;
     }
 
+    // Native composition commits are transactions: reject the entire value if
+    // it cannot fit, rather than splitting a combining or emoji sequence.
+    [[nodiscard]] bool TryAddTextInput(std::span<const char32_t> codePoints) noexcept {
+        if (codePoints.size() > textInput_.size() - textInputCount_) return false;
+        for (const char32_t codePoint : codePoints)
+            if (!IsUnicodeScalar(codePoint)) return false;
+        for (const char32_t codePoint : codePoints) textInput_[textInputCount_++] = codePoint;
+        return true;
+    }
+
     [[nodiscard]] std::size_t SetTextInput(
         std::span<const char32_t> codePoints) noexcept {
         textInputCount_ = 0U;
@@ -215,6 +227,9 @@ public:
         return gamepadIndex < kMaxGamepads && gamepadConnected_[gamepadIndex];
     }
 
+    [[nodiscard]] bool SetSensors(const InputSensorFrame& frame) noexcept {if(!IsInputSensorFrameValid(frame))return false;sensors_=frame;return true;}
+    [[nodiscard]] const InputSensorFrame& Sensors() const noexcept {return sensors_;}
+
 private:
     [[nodiscard]] bool HasActiveTouch() const noexcept {
         for (std::size_t index = 0U; index < touchPointCount_; ++index) {
@@ -259,6 +274,7 @@ private:
 
     bool hasFocus_ = false;
     std::array<bool, kMaxGamepads> gamepadConnected_{};
+    InputSensorFrame sensors_{};
 };
 
 } // namespace kb::input

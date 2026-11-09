@@ -67,6 +67,7 @@ public:
         float editorUIScale = 1.0F;
         kb::math::Vec2 editorUIOffset{};
         std::vector<EditorSceneViewportTextLabel> viewportTextLabels;
+        std::vector<EditorSceneViewportOverlayShape> viewportOverlayShapes;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         render::SceneRenderLightingConfig lightingConfig{};
@@ -110,6 +111,7 @@ public:
     // graphs render through their cooked GPU program instead of the CPU PBR fallback (MAT-31).
     void SetGraphShaderCacheRoot(std::string root);
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
+    [[nodiscard]] bool RendererInitialized() const noexcept;
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;
@@ -121,9 +123,15 @@ public:
     void SetHostSurfaceSuspended(HWND host, bool suspended) noexcept;
     void SetAllHostSurfacesSuspended(bool suspended) noexcept;
     void NotifyHostDpiChanged(HWND host) noexcept;
+    void PrepareParticleScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     [[nodiscard]] std::uint32_t RendererCompletedFrame() const noexcept;
     [[nodiscard]] render::SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
+    // How long the last EndFrame took: bgfx::frame waits there for the render thread to finish the
+    // previous frame, so this is time spent waiting more than working.
+    [[nodiscard]] double LastEndFrameMilliseconds() const noexcept { return lastEndFrameMilliseconds_; }
+    // What drawing the text overlays of the last paint took; an overlay that did not change costs nothing.
+    [[nodiscard]] double LastTextOverlayMilliseconds() const noexcept { return lastTextOverlayMilliseconds_; }
     // Advances renderer-owned asynchronous readbacks without rebuilding or
     // submitting a scene. Used only when no visible viewport advanced the
     // renderer since the previous poll.
@@ -314,6 +322,7 @@ private:
     void ReportAaTrace(std::string_view message, bool force = false);
     void ReportAaRouteTrace(std::string_view message, bool force = false);
     void ReportGpuParticleRejection();
+    void NoteTextOverlayResult(bool drawn);
     void SetFailureDetail(std::string detail);
     void TrackPaintHost(HWND parent) noexcept;
     void FailRender(const char* reason) noexcept;
@@ -328,6 +337,8 @@ private:
     EditorRenderBackendSettings* backendSettings_ = nullptr;
     std::uint64_t rendererBackendGeneration_ = 0;
     std::uint8_t rendererMsaaSamples_ = 0;
+    double lastEndFrameMilliseconds_ = 0.0;
+    double lastTextOverlayMilliseconds_ = 0.0;
     HWND contextWindow_ = nullptr;
     HWND paintParent_ = nullptr;
     std::vector<HWND> paintHosts_;
@@ -335,6 +346,7 @@ private:
     bool presentRequested_ = true;
     bool renderFailed_ = false;
     bool renderFailureReported_ = false;
+    bool textOverlayFailureReported_ = false;
     // MAT-72: wall-clock between submitted frames so animated graph materials (Time / Panner / Rotator)
     // advance u_time in the live editor, not only in tests.
     std::chrono::steady_clock::time_point lastFrameClock_{};

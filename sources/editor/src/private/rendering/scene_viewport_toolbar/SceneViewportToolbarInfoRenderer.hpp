@@ -10,7 +10,7 @@ class SceneViewportToolbarInfoRenderer {
 public:
     SceneViewportToolbarInfoRenderer() = delete;
 
-    static void PaintFpsCounter(HDC dc, RECT rect, const EditorTheme& theme);
+    static void PaintFpsCounter(HDC dc, RECT rect, const EditorTheme& theme, bool profilerWindowOpen);
 };
 
 #endif

@@ -1,6 +1,22 @@
 #include "engine/script/ScriptApiExport.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "script/NativeAuthoringGuide.hpp"
+#include "script/PbrMaterialsGuide.hpp"
+#include "script/LightingGuide.hpp"
+#include "script/PhysicsAssembliesGuide.hpp"
+#include "script/ParticleGeometryGuide.hpp"
+#include "script/Map2DGeometryGuide.hpp"
+#include "script/Rig2DGuide.hpp"
+#include "script/CsgGuide.hpp"
+#include "script/PythonAuthoringGuide.hpp"
+#include "script/EditorExtensionGuide.hpp"
+#include "script/SpatialAudioGuide.hpp"
+#include "script/RuntimeUIGuide.hpp"
+#include "script/SensorInputGuide.hpp"
+#include "script/RuntimeUIGuide.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <string_view>
 #include <vector>
@@ -43,7 +59,7 @@ namespace {
 
 [[nodiscard]] std::string PinList(const std::vector<ScriptApiPin>& pins) {
     if (pins.empty()) {
-        return "—";
+        return "Ă˘â‚¬â€ť";
     }
     std::string text;
     for (const ScriptApiPin& pin : pins) {
@@ -260,7 +276,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
     const ScriptApiCatalogLuaBinding& binding) {
     const ScriptApiCatalogFunction* function = catalog.FindFunction(binding.functionName);
     if (function == nullptr) {
-        return "—";
+        return "Ă˘â‚¬â€ť";
     }
     switch (binding.returnKind) {
     case ScriptApiCatalogLuaReturnKind::SingleOutput:
@@ -269,7 +285,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
                 return binding.returnPin + ": " + ToString(pin.type);
             }
         }
-        return "—";
+        return "Ă˘â‚¬â€ť";
     case ScriptApiCatalogLuaReturnKind::OutputsTable:
         return "table { " + PinList(function->outputs) + " }";
     case ScriptApiCatalogLuaReturnKind::GuardedTable: {
@@ -285,7 +301,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
         break;
     }
     if (function->outputs.empty()) {
-        return "—";
+        return "Ă˘â‚¬â€ť";
     }
     if (function->outputs.size() == 1U) {
         return function->outputs.front().name + ": " + ToString(function->outputs.front().type);
@@ -390,7 +406,7 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
     std::string out;
     out.reserve(16U * 1024U);
 
-    out += "# 21kb Engine — Script API Reference\n\n";
+    out += "# 21kb Engine Ă˘â‚¬â€ť Script API Reference\n\n";
     out += "> Generated with `kb_cli api`. Do not edit by hand; regenerate after engine updates.\n\n";
 
     out += "## Behaviour model\n\n";
@@ -496,7 +512,7 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
             out += " | `";
             out += entry.name;
             out += "` | ";
-            out += entry.owner.empty() ? "—" : entry.owner;
+            out += entry.owner.empty() ? "Ă˘â‚¬â€ť" : entry.owner;
             out += " | ";
             if (entry.kind == ScriptApiNameKind::Function || entry.kind == ScriptApiNameKind::Event) {
                 out += "in: ";
@@ -514,6 +530,361 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
     }
 
     return out;
+}
+
+namespace {
+
+[[nodiscard]] std::string Lower(std::string_view text) {
+    std::string lower{ text };
+    std::ranges::transform(lower, lower.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    return lower;
+}
+
+// A name as a file name: letters, digits, spaces and - _ . kept, anything else replaced.
+[[nodiscard]] std::string PageFileName(std::string_view name) {
+    std::string file;
+    for (const char character : name) {
+        const unsigned char code = static_cast<unsigned char>(character);
+        file += std::isalnum(code) != 0 || character == ' ' || character == '-' || character == '_' || character == '.' ? character : '_';
+    }
+    return file.empty() ? std::string{ "_" } : file;
+}
+
+[[nodiscard]] std::string FunctionShortName(std::string_view functionName) {
+    const std::size_t dot = functionName.find('.');
+    return std::string{ dot == std::string_view::npos ? functionName : functionName.substr(dot + 1U) };
+}
+
+[[nodiscard]] std::string FunctionPagePath(std::string_view functionName) {
+    return "functions/" + PageFileName(FunctionGroup(functionName)) + "/" + PageFileName(FunctionShortName(functionName)) + ".md";
+}
+
+[[nodiscard]] std::string GroupPagePath(std::string_view group) {
+    return "functions/" + PageFileName(group) + ".md";
+}
+
+[[nodiscard]] std::string ComponentPagePath(std::string_view component) {
+    return "components/" + PageFileName(component) + ".md";
+}
+
+[[nodiscard]] const ScriptApiCatalogLuaBinding* LuaBindingOf(const ScriptApiCatalog& catalog, std::string_view functionName) {
+    for (const ScriptApiCatalogLuaBinding& binding : catalog.luaBindings) {
+        if (binding.functionName == functionName) {
+            return &binding;
+        }
+    }
+    return nullptr;
+}
+
+// How a script calls the function: its Lua convenience call when there is one, otherwise
+// CallFunction with the inputs by name (a positional table is not read).
+[[nodiscard]] std::string LuaCall(const ScriptApiCatalog& catalog, const ScriptApiCatalogFunction& function) {
+    std::string arguments;
+    std::string named;
+    for (const ScriptApiPin& pin : function.inputs) {
+        arguments += (arguments.empty() ? "" : ", ") + pin.name;
+        named += (named.empty() ? "" : ", ") + pin.name + " = " + pin.name;
+    }
+    if (const ScriptApiCatalogLuaBinding* binding = LuaBindingOf(catalog, function.name); binding != nullptr) {
+        return (binding->tableName.empty() ? std::string{} : binding->tableName + ".") + binding->luaName + "(" + arguments + ")";
+    }
+    return "CallFunction(\"" + function.name + "\", { " + named + " })";
+}
+
+[[nodiscard]] std::map<std::string, std::vector<const ScriptApiCatalogFunction*>> FunctionGroups(const ScriptApiCatalog& catalog) {
+    std::map<std::string, std::vector<const ScriptApiCatalogFunction*>> groups;
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        groups[FunctionGroup(function.name)].push_back(&function);
+    }
+    return groups;
+}
+
+[[nodiscard]] std::string IndexPage(const ScriptApiCatalog& catalog) {
+    std::string out;
+    out += "# 21kb Engine script API\n\n";
+    out += "Read only the page your task needs. The kb-engine `api_reference` tool returns one page by `topic` ";
+    out += "(a group such as `Physics`, a function such as `Physics.Raycast`, a component such as `Rigidbody`) ";
+    out += "or finds topics by `search` text; the same pages are files next to this one.\n\n";
+    out += "Start with [C++ and Lua authoring](NativeAuthoring.md) (topic: `NativeAuthoring`).\n\n";
+    out += "See [builtin PBR advanced materials](PbrMaterials.md) for sheen, transmission and anisotropy.\n\n";
+    out += "Buttons and other widgets call `OnUIClicked(self, event)` and its siblings: see [UI events](UIEvents.md) (topic: `UIEvents`).\n\n";
+    out += "## How scripts work\n\n";
+    out += "A `Behaviour` component runs a script asset on its entity: Lua (`.lua`), Visual Graph (`.kbgraph`) or native C++. ";
+    out += "A Lua script defines global functions named after lifecycle events, each receiving `(self, dt)`: ";
+    for (std::size_t index = 0; index < catalog.lifecycleEvents.size(); ++index) {
+        out += (index == 0U ? "`" : ", `") + catalog.lifecycleEvents[index] + "`";
+    }
+    out += ". A custom event `Name` calls `function Name(self, event)`.\n\n";
+    out += "`self` has `entity`, `asset`, `backend`, `variables` and the methods `HasComponent(name)`, ";
+    out += "`GetProperty(component, property)`, `SetProperty(component, property, value)`, `GetVariable(name)`, `SetVariable(name, value)`. ";
+    out += "The sandbox has no `io`, `os`, `require` or `load`; it adds `Emit`, `EmitTo`, `SetShared`, `GetShared`, `Import`, ";
+    out += "`CallFunction(name, args)` and `Log`. Visual Graphs call the same functions as `Function.<name>` nodes.\n\n";
+    out += "## Function groups\n\n";
+    for (const auto& [group, functions] : FunctionGroups(catalog)) {
+        out += "- [" + group + "](" + GroupPagePath(group) + ") - " + std::to_string(functions.size()) + " functions: ";
+        for (std::size_t index = 0; index < functions.size() && index < 6U; ++index) {
+            out += (index == 0U ? "" : ", ") + FunctionShortName(functions[index]->name);
+        }
+        out += functions.size() > 6U ? ", ...\n" : "\n";
+    }
+    out += "\n## Components\n\n";
+    out += "Each has a page `components/<Name>.md` (topic: its name). Scripts use `self:GetProperty` and `self:SetProperty`.\n\n";
+    for (std::size_t index = 0; index < catalog.components.size(); ++index) {
+        out += (index == 0U ? "" : ", ") + catalog.components[index].name;
+    }
+    out += "\n";
+    return out;
+}
+
+[[nodiscard]] std::string GroupPage(const ScriptApiCatalog& catalog, const std::string& group, const std::vector<const ScriptApiCatalogFunction*>& functions) {
+    std::string out = "# " + group + " functions\n\n| Function | Lua call | What it does |\n|---|---|---|\n";
+    for (const ScriptApiCatalogFunction* function : functions) {
+        out += "| [`" + function->name + "`](" + PageFileName(group) + "/" + PageFileName(FunctionShortName(function->name)) + ".md) | `" +
+            LuaCall(catalog, *function) + "` | " + function->description + " |\n";
+    }
+    out += "\nEach function has its own page with its inputs, outputs and an example.\n";
+    return out;
+}
+
+[[nodiscard]] std::string FunctionPage(const ScriptApiCatalog& catalog, const ScriptApiCatalogFunction& function) {
+    std::string out = "# " + function.name + "\n\n" + function.description + "\n\n";
+    if (!function.inputs.empty()) {
+        out += "| Input | Type | Required |\n|---|---|---|\n";
+        for (const ScriptApiPin& pin : function.inputs) {
+            out += "| `" + pin.name + "` | " + std::string{ ToString(pin.type) } + " | " + (pin.required ? "yes" : "no") + " |\n";
+        }
+        out += '\n';
+    }
+    if (!function.outputs.empty()) {
+        out += "| Output | Type |\n|---|---|\n";
+        for (const ScriptApiPin& pin : function.outputs) {
+            out += "| `" + pin.name + "` | " + std::string{ ToString(pin.type) } + " |\n";
+        }
+        out += '\n';
+    }
+    // One line on calling it; what comes back is the output table above (CallFunction gives nil for
+    // no output, the value itself for one, a table of the outputs for several).
+    const ScriptApiCatalogLuaBinding* binding = LuaBindingOf(catalog, function.name);
+    out += "Lua: `" + LuaCall(catalog, function) + "`";
+    if (binding != nullptr && binding->returnKind != ScriptApiCatalogLuaReturnKind::Default) {
+        out += " returns " + LuaBindingReturnSummary(catalog, *binding);
+    }
+    out += ".\n";
+    // A C++ script calls the same function by name (guide `scripts` has a full example).
+    out += "C++: `context->CallFunction(\"" + function.name + "\", arguments)`, the inputs as `ScriptFunctionArgument`s by name";
+    if (!function.outputs.empty()) out += "; `result.Output(\"" + function.outputs.back().name + "\")`";
+    out += ".\n";
+    return out;
+}
+
+[[nodiscard]] std::string ComponentPage(const ScriptApiCatalogComponent& component) {
+    std::string out = "# " + component.name + " component\n\n";
+    out += "Script access: `self:GetProperty(\"" + component.name + "\", property)` and `self:SetProperty(\"" + component.name +
+        "\", property, value)`; tools: `component_edit` with `type: \"" + component.name + "\"` and `set: [\"property=value\"]`.\n\n";
+    out += "| Property | Type | Access |\n|---|---|---|\n";
+    for (const ScriptApiCatalogProperty& property : component.properties) {
+        out += "| `" + property.name + "` | " + std::string{ ToString(property.type) } + " | " + (property.writable ? "read/write" : "read-only") + " |\n";
+    }
+    return out;
+}
+
+[[nodiscard]] std::string UIEventsPage() {
+    std::string out = "# UI events (UIEvents)\n\n";
+    out += "A widget with a Selectable (a Button, Toggle, Slider, Input Field, ...) tells the Lua script on its own entity what the ";
+    out += "player did, as a global function receiving `(self, event)`:\n\n";
+    for (const kb::scene::SceneUIEventDescriptor& descriptor : kb::scene::SceneUIEventCatalog()) {
+        out += "- `function " + std::string{ descriptor.callbackName } + "(self, event)`\n";
+    }
+    out += "\n`event.args`:\n\n| Argument | Type | Meaning |\n|---|---|---|\n";
+    out += "| `entity` | Entity | The widget the event is about |\n";
+    out += "| `pointerX`, `pointerY` | Float | Pointer position in canvas pixels; `pointerAvailable` says whether there was a pointer |\n";
+    out += "| `value`, `value2` | Float | A Slider, Scrollbar or Toggle value; the drag delta in OnUIDragged |\n";
+    out += "| `text` | String | An Input Field's text, or the link of OnUILinkActivated |\n";
+    out += "| `action` | String | The Selectable's `eventName` (empty when none) |\n";
+    out += "| `other` | Entity | The dragged widget in OnUIDropped |\n\n";
+    out += "## Button to script\n\n";
+    out += "Give the Selectable an `eventName`; a click then also sends an event of that name, to the widget or to the object in its ";
+    out += "`eventTarget`. A plain identifier is a function of that name; any name arrives in `event.args.action`:\n\n";
+    out += "```lua\nfunction PlayClicked(self, event) Log(\"play at \" .. event.args.pointerX) end\n";
+    out += "function OnUIClicked(self, event) Log(event.args.action) end\n```\n\n";
+    out += "Events go only to the script on that object; they do not bubble to parents. `kb_cli validate <scene>` warns when an ";
+    out += "`eventName` or a Button has no script that answers it; guide: `menus-and-buttons`.\n";
+    return out;
+}
+
+} // namespace
+
+std::vector<ScriptApiReferencePage> ScriptApiExport::ToReferencePages(const ScriptApiCatalog& catalog) {
+    std::vector<ScriptApiReferencePage> pages;
+    pages.push_back({ "README.md", IndexPage(catalog) });
+    pages.push_back({ "NativeAuthoring.md", std::string{kNativeAuthoringGuide} });
+    pages.push_back({ "PbrMaterials.md", std::string{kPbrMaterialsGuide} });
+    pages.push_back({ "Lighting.md", std::string{kLightingGuide} });
+    pages.push_back({ "PhysicsAssemblies.md", std::string{kPhysicsAssembliesGuide} });
+    pages.push_back({ "ParticleGeometry.md", std::string{kParticleGeometryGuide} });
+    pages.push_back({ "Map2DGeometry.md", std::string{kMap2DGeometryGuide} });
+    pages.push_back({ "EditorExtensions.md", std::string{kEditorExtensionGuide} });
+    pages.push_back({ "PythonAuthoring.md", std::string{kPythonAuthoringGuide} });
+    pages.push_back({ "CSG.md", std::string{kCsgGuide} });
+    pages.push_back({ "Rig2D.md", std::string{kRig2DGuide} });
+    pages.push_back({ "SpatialAudio.md", std::string{kSpatialAudioGuide} });
+    pages.push_back({ "RuntimeUI.md", std::string{kRuntimeUIGuide} });
+    pages.push_back({ "UIEvents.md", UIEventsPage() });
+    pages.push_back({ "SensorInput.md", std::string{kSensorInputGuide} });
+    for (const auto& [group, functions] : FunctionGroups(catalog)) {
+        pages.push_back({ GroupPagePath(group), GroupPage(catalog, group, functions) });
+        for (const ScriptApiCatalogFunction* function : functions) {
+            pages.push_back({ FunctionPagePath(function->name), FunctionPage(catalog, *function) });
+        }
+    }
+    for (const ScriptApiCatalogComponent& component : catalog.components) {
+        pages.push_back({ ComponentPagePath(component.name), ComponentPage(component) });
+    }
+    return pages;
+}
+
+std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCatalog& catalog, std::string_view topic) {
+    std::string wanted = Lower(topic);
+    while (!wanted.empty() && wanted.back() == ' ') wanted.pop_back();
+    while (!wanted.empty() && wanted.front() == ' ') wanted.erase(wanted.begin());
+    std::ranges::replace(wanted, '/', '.');
+    if (wanted == "nativeauthoring" || wanted == "nativeauthoring.md") return std::string{kNativeAuthoringGuide};
+    if (wanted == "sensorinput" || wanted == "sensorinput.md") return std::string{kSensorInputGuide};
+    if (wanted == "runtimeui" || wanted == "runtimeui.md") return std::string{kRuntimeUIGuide};
+    if (wanted == "uievents" || wanted == "uievents.md" || wanted == "ui events") return UIEventsPage();
+    for (const kb::scene::SceneUIEventDescriptor& descriptor : kb::scene::SceneUIEventCatalog()) {
+        if (Lower(descriptor.callbackName) == wanted) return UIEventsPage();
+    }
+    if (wanted == "spatialaudio" || wanted == "spatialaudio.md") return std::string{kSpatialAudioGuide};
+    if (wanted == "editorextensions" || wanted == "editorextensions.md") return std::string{kEditorExtensionGuide};
+    if (wanted == "pythonauthoring" || wanted == "pythonauthoring.md") return std::string{kPythonAuthoringGuide};
+    if (wanted == "csg" || wanted == "csg.md") return std::string{kCsgGuide};
+    if (wanted == "rig2d" || wanted == "rig2d.md") return std::string{kRig2DGuide};
+    if (wanted == "map2dgeometry" || wanted == "map2dgeometry.md") return std::string{kMap2DGeometryGuide};
+    if (wanted == "particlegeometry" || wanted == "particlegeometry.md") return std::string{kParticleGeometryGuide};
+    if (wanted == "physicsassemblies" || wanted == "physicsassemblies.md") return std::string{kPhysicsAssembliesGuide};
+    if (wanted == "lighting" || wanted == "lighting.md") return std::string{kLightingGuide};
+    if (wanted == "pbrmaterials" || wanted == "pbrmaterials.md") return std::string{kPbrMaterialsGuide};
+    if (wanted.empty() || wanted == "index" || wanted == "readme") {
+        return IndexPage(catalog);
+    }
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        if (Lower(function.name) == wanted) return FunctionPage(catalog, function);
+    }
+    const auto groups = FunctionGroups(catalog);
+    for (const auto& [group, functions] : groups) {
+        if (Lower(group) != wanted) continue;
+        std::string page = GroupPage(catalog, group, functions);
+        // A name can be both: the Text functions and the Text component (its content, font and color).
+        for (const ScriptApiCatalogComponent& component : catalog.components) {
+            if (Lower(component.name) == wanted) page += "\n" + ComponentPage(component);
+        }
+        return page;
+    }
+    for (const ScriptApiCatalogComponent& component : catalog.components) {
+        if (Lower(component.name) == wanted) return ComponentPage(component);
+    }
+    // A function by its short name, when only one group has it.
+    const ScriptApiCatalogFunction* only = nullptr;
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        if (Lower(FunctionShortName(function.name)) == wanted) {
+            if (only != nullptr) return std::nullopt;
+            only = &function;
+        }
+    }
+    if (only != nullptr) return FunctionPage(catalog, *only);
+    return std::nullopt;
+}
+
+std::string ScriptApiExport::SearchReference(const ScriptApiCatalog& catalog, std::string_view text, std::size_t limit) {
+    std::vector<std::string> words;
+    std::string word;
+    for (const char character : Lower(text) + " ") {
+        if (std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '.' || character == '_') {
+            word += character;
+        } else if (!word.empty()) {
+            words.push_back(word);
+            word.clear();
+        }
+    }
+    const auto matches = [&words](const std::string& haystack) {
+        return std::ranges::all_of(words, [&haystack](const std::string& part) { return haystack.find(part) != std::string::npos; });
+    };
+    std::string out;
+    std::size_t found = 0U;
+    if (found < limit && !words.empty() && matches(Lower(std::string{kSensorInputGuide}))) {
+        out += "- `SensorInput` - accelerometer, gyroscope, SI units, provider lifecycle and explicit replay\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(UIEventsPage()))) {
+        out += "- `UIEvents` - OnUIClicked and the other widget callbacks, their event.args, button to script\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kRuntimeUIGuide}))) {
+        out += "- `RuntimeUI` - MSDF, semantic accessibility, speech and decoded video\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kSpatialAudioGuide}))) {
+        out += "- `SpatialAudio` - HRTF convolution and first-order AmbiX binaural decoding\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kEditorExtensionGuide}))) {
+        out += "- `EditorExtensions` - public C++ editor SDK, external actions and dock panels, install and unload\n"; ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kPythonAuthoringGuide}))) {
+        out += "- `PythonAuthoring` - embedded Python kb21 authoring, editor history and scene persistence\n"; ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kCsgGuide}))) {
+        out += "- `CSG` - union subtract intersect boolean blockout meshes and collision\n"; ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kRig2DGuide}))) {
+        out += "- `Rig2D` - planar weighted rigs, bones and skeletal mesh animation\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kMap2DGeometryGuide}))) {
+        out += "- `Map2DGeometry` - isometric/axial hex maps, polygons and deformable lines\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kParticleGeometryGuide}))) {
+        out += "- `ParticleGeometry` - particle collisions with scene solids, signed distance grids and heightfields\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kPhysicsAssembliesGuide}))) {
+        out += "- `PhysicsAssemblies` - ragdoll, cloth soft bodies, vehicles, fracture and buoyancy\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kLightingGuide}))) {
+        out += "- `Lighting` - local reflection probes, baked lightmaps and depth of field\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kPbrMaterialsGuide}))) {
+        out += "- `PbrMaterials` - builtin PBR sheen, transmission, anisotropy, C++/Lua asset assignment and cook\n";
+        ++found;
+    }
+    if (found < limit && !words.empty() && matches(Lower(std::string{kNativeAuthoringGuide}))) {
+        out += "- `NativeAuthoring` - C++ and Lua class creation, CMake/SDK builds, IDE selection and scene execution\n";
+        ++found;
+    }
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        if (found < limit && !words.empty() && matches(Lower(function.name + " " + function.description))) {
+            out += "- `" + function.name + "` - " + function.description + "\n";
+            ++found;
+        }
+    }
+    for (const ScriptApiCatalogComponent& component : catalog.components) {
+        std::string haystack = Lower(component.name);
+        for (const ScriptApiCatalogProperty& property : component.properties) {
+            haystack += " " + Lower(property.name);
+        }
+        if (found < limit && !words.empty() && matches(haystack)) {
+            out += "- `" + component.name + "` - component with " + std::to_string(component.properties.size()) + " properties\n";
+            ++found;
+        }
+    }
+    if (found == 0U) {
+        return "Nothing in the script API matches \"" + std::string{ text } + "\". Ask for the index (no topic) to see the groups and components.\n";
+    }
+    return "Ask for one of these as the topic:\n\n" + out;
 }
 
 std::string ScriptApiExport::ToLuaStubs(const ScriptApiCatalog& catalog) {

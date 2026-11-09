@@ -13,12 +13,12 @@ namespace {
 constexpr int kTransportButtonSize = 30;
 constexpr int kTransportButtonGap = 5;
 constexpr int kToolbarSideInset = 12;
-constexpr int kSaveButtonWidth = 60;
-constexpr int kSaveButtonMinWidth = 50;
-constexpr int kSaveButtonHeight = 26;
-constexpr int kMenuLeftInset = 10;
-constexpr int kMenuTopInset = 2;
-constexpr int kMenuItemHeightPad = 3;
+constexpr int kSaveButtonWidth = 64;
+constexpr int kSaveButtonHeight = 28;
+constexpr int kMenuLeftInset = 8;
+constexpr int kMenuItemHeight = 28;
+// Space kept between the last menu title and the transport controls.
+constexpr int kMenuToTransportGap = 24;
 constexpr int kDropdownTopGap = 4;
 constexpr int kDropdownWidth = 230;
 constexpr int kDropdownRowHeight = 30;
@@ -34,7 +34,7 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 
 // How many of those rows each menu actually shows. Layout counts zero here: its
 // length comes from the project, not from the build.
-constexpr std::array<int, 6> kDropdownRowCounts{ 5, 4, 0, 3, 11, 4 };
+constexpr std::array<int, 6> kDropdownRowCounts{ 5, 3, 0, 7, 11, 4 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -44,6 +44,8 @@ static_assert(EditorMenuRects::MaximumRows >= EditorLayoutMenuModel::MaximumRows
 constexpr int kMenuTitlePadding = 12;
 // Room beside a dropdown row's text: its icon on the left and breathing space on the right.
 constexpr int kDropdownTextAllowance = 76;
+// Room a row's shortcut takes on its right edge, beyond the gap to its label.
+constexpr int kDropdownShortcutGap = 24;
 
 // Width of `text` in the editor's font, measured the way GDI will draw it.
 [[nodiscard]] int TextWidth(std::string_view text, int pointSize) noexcept {
@@ -79,8 +81,10 @@ constexpr int kDropdownTextAllowance = 76;
     int width = kDropdownWidth;
     try {
         for (int row = 0; row < EditorToolbarLayout::FixedRowCount(menu); ++row) {
+            const std::string_view shortcut = EditorToolbarLayout::DropdownShortcut(menu, row);
             width = std::max(width, TextWidth(EditorToolbarLayout::DropdownLabel(menu, row), EditorFontCache::UiPointSize) +
-                kDropdownTextAllowance);
+                kDropdownTextAllowance +
+                (shortcut.empty() ? 0 : TextWidth(shortcut, EditorFontCache::UiPointSize) + kDropdownShortcutGap));
         }
     } catch (...) {
         return kDropdownWidth;
@@ -127,11 +131,12 @@ EditorMenuRects EditorToolbarLayout::ResolveMenu(
     int left = rect.left + kMenuLeftInset;
     for (const EditorMenuDescriptor& descriptor : kMenus) {
         const int width = MenuTitleWidth(descriptor);
+        const int top = rect.top + std::max(0, (static_cast<int>(rect.bottom - rect.top) - kMenuItemHeight) / 2);
         RECT item{
             .left = left,
-            .top = rect.top + kMenuTopInset,
+            .top = top,
             .right = left + width,
-            .bottom = rect.bottom - kMenuItemHeightPad,
+            .bottom = top + kMenuItemHeight,
         };
         switch (descriptor.command) {
         case EditorMenuCommand::File:
@@ -179,18 +184,52 @@ EditorMenuRects EditorToolbarLayout::ResolveMenu(
     return menu;
 }
 
+EditorStatusBarRects EditorToolbarLayout::ResolveStatusBar(const RECT& rect) noexcept {
+    constexpr int inset = 10;
+    constexpr int gap = 16;
+    // Room for the label beside each icon in the editor's font, so a longer translation or a
+    // four-digit count still fits.
+    const auto widthOf = [](std::string_view text) noexcept {
+        return 24 + TextWidth(text, EditorFontCache::UiPointSize);
+    };
+    EditorStatusBarRects bar{};
+    bar.bar = rect;
+    int left = static_cast<int>(rect.left) + inset;
+    const auto next = [&](int width) noexcept {
+        const RECT item{ left, rect.top, std::min(static_cast<int>(rect.right), left + width), rect.bottom };
+        left = item.right + gap;
+        return item;
+    };
+    try {
+        bar.state = next(std::max(widthOf(EditorText("statusBar.ready", "Ready")), widthOf(EditorText("toolbar.playing", "Playing"))));
+        bar.errors = next(widthOf(EditorLocalization::Format("statusBar.errors", "{count} errors", { { "count", "9999" } })));
+        bar.warnings = next(widthOf(EditorLocalization::Format("statusBar.warnings", "{count} warnings", { { "count", "9999" } })));
+    } catch (...) {
+        return bar;
+    }
+    bar.backend = RECT{ std::min(static_cast<int>(rect.right), left), rect.top, static_cast<int>(rect.right) - inset, rect.bottom };
+    return bar;
+}
+
+int EditorToolbarLayout::MenuTitlesRight(const RECT& rect) noexcept {
+    return static_cast<int>(ResolveMenu(rect, EditorMenuCommand::None, 0).help.right);
+}
+
+// The toolbar shares the menu's row: the transport sits in the middle of the window (or
+// just past the menus when the window is too narrow for that) and Save at the right end.
 EditorToolbarRects EditorToolbarLayout::ResolveToolbar(const RECT& rect) noexcept {
     EditorToolbarRects toolbar{};
     toolbar.toolbar = rect;
     const int totalWidth = kTransportButtonSize * 3 + kTransportButtonGap * 2;
     const int toolbarWidth = static_cast<int>(rect.right - rect.left);
-    const int left = rect.left + std::max(0, (toolbarWidth - totalWidth) / 2);
+    const int left = std::max(static_cast<int>(rect.left) + std::max(0, (toolbarWidth - totalWidth) / 2),
+        MenuTitlesRight(rect) + kMenuToTransportGap);
     toolbar.playButton = ButtonRect(rect, left - rect.left, kTransportButtonSize);
     toolbar.pauseButton = ButtonRect(rect, left - rect.left + kTransportButtonSize + kTransportButtonGap, kTransportButtonSize);
     toolbar.stopButton = ButtonRect(rect, left - rect.left + (kTransportButtonSize + kTransportButtonGap) * 2, kTransportButtonSize);
-    const int saveAvailableWidth = toolbar.playButton.left - rect.left - kTransportButtonGap - kToolbarSideInset;
-    if (saveAvailableWidth >= kSaveButtonMinWidth) {
-        toolbar.saveButton = ToolbarRect(rect, kToolbarSideInset, std::min(kSaveButtonWidth, saveAvailableWidth), kSaveButtonHeight);
+    const int saveLeft = static_cast<int>(rect.right) - kToolbarSideInset - kSaveButtonWidth;
+    if (saveLeft >= toolbar.stopButton.right + kTransportButtonGap * 2) {
+        toolbar.saveButton = ToolbarRect(rect, saveLeft - rect.left, kSaveButtonWidth, kSaveButtonHeight);
     }
     return toolbar;
 }
@@ -327,19 +366,22 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
         return rows[static_cast<std::size_t>(row)];
     }
     case EditorMenuCommand::Edit: {
-        const std::array<std::string_view, 4> rows{
+        const std::array<std::string_view, 3> rows{
             EditorText("menu.edit.undo", "Undo"),
             EditorText("menu.edit.redo", "Redo"),
             EditorText("menu.edit.duplicate", "Duplicate"),
-            EditorText("menu.edit.plugins", "Plugins"),
         };
         return rows[static_cast<std::size_t>(row)];
     }
     case EditorMenuCommand::Options: {
-        const std::array<std::string_view, 3> rows{
+        const std::array<std::string_view, 7> rows{
             EditorText("menu.options.renderer", "Renderer"),
             EditorText("menu.options.projectSettings", "Project Settings"),
             EditorText("menu.options.editorSettings", "Editor Settings"),
+            EditorText("menu.edit.plugins", "Plugins"),
+            EditorText("panel.profiler", "Profiler"),
+            EditorText("inspector.audioMixer.subtitle", "Audio Mixer"),
+            EditorText("menu.options.agent", "AI Agent"),
         };
         return rows[static_cast<std::size_t>(row)];
     }
@@ -372,6 +414,76 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
     case EditorMenuCommand::None:
     default:
         return {};
+    }
+}
+
+HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) noexcept {
+    if (MenuIndex(menu) < 0 || row < 0 || row >= FixedRowCount(menu)) {
+        return HeroIconKind::RectangleGroup;
+    }
+    const auto pick = [row](auto icons) noexcept { return icons[static_cast<std::size_t>(row)]; };
+    switch (menu) {
+    case EditorMenuCommand::File:
+        return pick(std::array{ HeroIconKind::Plus, HeroIconKind::Folder, HeroIconKind::Save,
+            HeroIconKind::DocumentText, HeroIconKind::RocketLaunch });
+    case EditorMenuCommand::Edit:
+        return pick(std::array{ HeroIconKind::Undo, HeroIconKind::Redo, HeroIconKind::Duplicate });
+    case EditorMenuCommand::Options:
+        return pick(std::array{ HeroIconKind::Monitor, HeroIconKind::AdjustmentsHorizontal,
+            HeroIconKind::WrenchScrewdriver, HeroIconKind::Plug, HeroIconKind::Activity, HeroIconKind::SpeakerWave, HeroIconKind::Bolt });
+    case EditorMenuCommand::World:
+        return pick(std::array{ HeroIconKind::Camera, HeroIconKind::Download, HeroIconKind::Upload,
+            HeroIconKind::WrenchScrewdriver, HeroIconKind::Grid, HeroIconKind::Map,
+            HeroIconKind::Plus, HeroIconKind::Layers, HeroIconKind::LockClosed,
+            HeroIconKind::Navigation, HeroIconKind::Eye });
+    case EditorMenuCommand::Help:
+        return pick(std::array{ HeroIconKind::BookOpen, HeroIconKind::Flag, HeroIconKind::DocumentText, HeroIconKind::Info });
+    case EditorMenuCommand::Layout:
+    case EditorMenuCommand::None:
+    default:
+        return HeroIconKind::RectangleGroup;
+    }
+}
+
+// Only the shortcuts the editor actually binds (EditorEditCommandInputHandler); a row
+// without one shows nothing rather than a key that does not work.
+std::string_view EditorToolbarLayout::DropdownShortcut(EditorMenuCommand menu, int row) noexcept {
+    if (menu == EditorMenuCommand::File && row == 2) {
+        return "Ctrl+S";
+    }
+    if (menu == EditorMenuCommand::Options && row == 6) {
+        return "Ctrl+K";
+    }
+    if (menu == EditorMenuCommand::Edit) {
+        switch (row) {
+        case 0:
+            return "Ctrl+Z";
+        case 1:
+            return "Ctrl+Y";
+        case 2:
+            return "Ctrl+D";
+        default:
+            break;
+        }
+    }
+    return {};
+}
+
+// The long fixed menus read in groups: File's scene rows apart from Build Game, the
+// project, editor and plugin settings apart from the tools, and World's streaming,
+// build, data layer and navigation commands.
+bool EditorToolbarLayout::DropdownStartsGroup(EditorMenuCommand menu, int row) noexcept {
+    switch (menu) {
+    case EditorMenuCommand::File:
+        return row == 2 || row == 4;
+    case EditorMenuCommand::Options:
+        return row == 1 || row == 4 || row == 6;
+    case EditorMenuCommand::World:
+        return row == 3 || row == 6 || row == 9;
+    case EditorMenuCommand::Help:
+        return row == 3;
+    default:
+        return false;
     }
 }
 

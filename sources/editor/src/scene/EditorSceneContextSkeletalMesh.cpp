@@ -769,7 +769,14 @@ SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() c
     const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
     for (SkeletalMeshEditorDetailsSection& section : details.sections) {
         for (SkeletalMeshEditorDetailsField& field : section.fields) {
-            if (field.action == SkeletalMeshEditorDetailsAction::SectionMaterial && field.assetId != 0U) {
+            if (field.action == SkeletalMeshEditorDetailsAction::None && field.assetId != 0U) {
+                const kb::assets::AssetMetadata* asset =
+                    scene_->Assets().Manager().Registry().Find(kb::assets::AssetId{ field.assetId });
+                if (asset != nullptr) {
+                    const std::string filename = asset->virtualPath.filename().string();
+                    field.value = filename.empty() ? asset->name : filename;
+                }
+            } else if (field.action == SkeletalMeshEditorDetailsAction::SectionMaterial && field.assetId != 0U) {
                 const kb::assets::AssetMetadata* material =
                     scene_->Assets().Manager().Registry().Find(kb::assets::AssetId{ field.assetId });
                 if (material != nullptr) {

@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorWindowResizeInteraction.hpp"
+#include "app/agent/EditorAgentBarOverlay.hpp"
 #include "rendering/DockDropPreviewOverlayWindow.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/EditorDragOverlayRenderer.hpp"
@@ -16,6 +17,7 @@
 #include "rendering/InspectorAddComponentOverlayWindow.hpp"
 #include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
 #include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
+#include "rendering/ProfilerSelectionOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -76,6 +78,31 @@ struct MainWindowPaintContext {
         }
     }
     return std::nullopt;
+}
+
+// The Scene View the agent bar floats over: the bar is the agent's place whenever the docked
+// Agent panel is not on screen, and steps aside during play.
+[[nodiscard]] std::optional<RECT> ResolveAgentBarScene(const DockLayout& layout, const EditorDockModel& dockModel, const EditorPlayModeState& playMode) {
+    if (playMode.IsPlaying()) {
+        return std::nullopt;
+    }
+    std::optional<RECT> scene;
+    for (const DockPanelLayout& panelLayout : layout.panels) {
+        if (!panelLayout.active) {
+            continue;
+        }
+        const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+        if (panel == nullptr) {
+            continue;
+        }
+        if (panel->kind == DockPanelKind::Agent && panelLayout.content.height > 40) {
+            return std::nullopt;
+        }
+        if (panel->kind == DockPanelKind::Scene && !scene.has_value()) {
+            scene = ToRect(panelLayout.content);
+        }
+    }
+    return scene;
 }
 
 struct SceneDropdownContent {
@@ -168,8 +195,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     const DockLayout layout = paintContext->dockModel->Queries().BuildLayout(
         paint.width,
         paint.height,
-        paintContext->metrics->menuHeight,
-        paintContext->metrics->toolbarHeight,
+        paintContext->metrics->menuHeight, paintContext->metrics->statusBarHeight,
         paintContext->metrics->tabStripHeight,
         paintContext->metrics->tabMinWidth,
         paintContext->metrics->tabWidth,
@@ -217,7 +243,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->dockDrag,
         *paintContext->playMode,
         *paintContext->shellInteraction,
-        nullptr);
+        nullptr,
+        // The graphics API the viewport actually runs on once it has started; until then the setting.
+        paintContext->sceneViewport != nullptr && paintContext->sceneViewport->RendererInitialized()
+            ? paintContext->sceneViewport->ActiveBackendLabel()
+            : EditorRenderBackendLabel(paintContext->renderBackendSettings->Backend()));
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
     PaintAutosaveNotification(
         paint.dc,
@@ -246,8 +276,18 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] ProfilerSelectionOverlayWindow& MainProfilerSelectionOverlay() {
+    static ProfilerSelectionOverlayWindow overlay;
+    return overlay;
+}
+
 [[nodiscard]] InspectorAddComponentOverlayWindow& MainAddComponentOverlay() {
     static InspectorAddComponentOverlayWindow overlay;
+    return overlay;
+}
+
+[[nodiscard]] EditorAgentBarOverlay& MainAgentBarOverlay() {
+    static EditorAgentBarOverlay overlay;
     return overlay;
 }
 
@@ -263,8 +303,10 @@ void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
     MainDeleteConfirmOverlay().Hide();
     MainFilterMenuOverlay().Hide();
     MainSceneToolbarDropdownOverlay().Hide();
+    MainProfilerSelectionOverlay().Hide();
     MainAddComponentOverlay().Hide();
     MainToolbarMenuOverlay().Hide();
+    MainAgentBarOverlay().Hide();
 }
 
 void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
@@ -304,8 +346,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
             GetClientRect(target, &client);
             return client.bottom - client.top;
         }(window),
-        metrics.menuHeight,
-        metrics.toolbarHeight,
+        metrics.menuHeight, metrics.statusBarHeight,
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
@@ -318,6 +359,12 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         }
     } else {
         MainFilterMenuOverlay().Hide();
+    }
+    // Before the menus and dropdowns, which open above it.
+    if (const std::optional<RECT> agentScene = ResolveAgentBarScene(layout, dockModel, playMode); agentScene.has_value()) {
+        MainAgentBarOverlay().Show(window, *agentScene, theme, sceneContext);
+    } else {
+        MainAgentBarOverlay().Hide();
     }
     if (const std::optional<SceneDropdownContent> sceneDropdown = ResolveSceneDropdownContent(layout, dockModel, sceneContext); sceneDropdown.has_value()) {
         MainSceneToolbarDropdownOverlay().Show(window, sceneDropdown->content, sceneDropdown->panelId, theme, sceneContext);
@@ -333,6 +380,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
     } else {
         MainAddComponentOverlay().Hide();
     }
+    MainProfilerSelectionOverlay().Show(window, theme, sceneContext, sceneViewport);
     // Shown last so that, of the popups, the open menu is the one on top.
     if (shellInteraction.OpenMenu() != EditorMenuCommand::None) {
         MainToolbarMenuOverlay().Show(window, ToRect(layout.menu), theme, shellInteraction);

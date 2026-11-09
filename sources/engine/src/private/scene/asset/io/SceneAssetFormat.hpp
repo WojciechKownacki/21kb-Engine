@@ -13,6 +13,7 @@ struct SceneAssetFormat {
     static constexpr std::uint32_t MaxNodeCount = 1'000'000U;
     static constexpr std::uint32_t MaxDependencyCount = 1'000'000U;
     static constexpr std::uint32_t MaxNestedOverrideCount = 1'000'000U;
+    static constexpr std::uint32_t MaxBehaviourVariableOverrides = 4096U;
     static constexpr std::uint32_t MaxStringBytes = 1U << 20U;
     static constexpr std::string_view Extension = ".21kbscene";
 };

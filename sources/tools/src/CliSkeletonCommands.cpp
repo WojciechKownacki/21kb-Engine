@@ -36,21 +36,9 @@ struct Session {
     kb::scene::Scene scene;
     std::filesystem::path file;
     std::string virtualPath;
+    std::uint64_t assetId = 0;
     kb::scene::SkeletonAsset skeleton;
 };
-
-[[nodiscard]] std::optional<kb::math::Vec3> ParseVec3(std::string_view text) {
-    std::array<float, 3> values{};
-    for (std::size_t index = 0U; index < values.size(); ++index) {
-        const std::size_t comma = text.find(',');
-        const std::string_view part = text.substr(0, comma);
-        const auto [end, code] = std::from_chars(part.data(), part.data() + part.size(), values[index]);
-        if (code != std::errc{} || end != part.data() + part.size() || !std::isfinite(values[index])) return std::nullopt;
-        if ((comma == std::string_view::npos) != (index + 1U == values.size())) return std::nullopt;
-        text = comma == std::string_view::npos ? std::string_view{} : text.substr(comma + 1U);
-    }
-    return kb::math::Vec3{ values[0], values[1], values[2] };
-}
 
 [[nodiscard]] bool OpenSkeleton(Session& session, const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
@@ -82,6 +70,7 @@ struct Session {
         io.err << "error: " << metadata->virtualPath.generic_string() << " could not be read: " << error << '\n';
         return false;
     }
+    session.assetId = metadata->id.value;
     session.file = metadata->physicalPath;
     session.virtualPath = metadata->virtualPath.generic_string();
     session.skeleton = std::move(*loaded);
@@ -145,6 +134,7 @@ void PrintBone(const kb::scene::SkeletonAsset& skeleton, std::size_t index, std:
     if (!OpenSkeleton(session, arguments, io)) return 1;
     io.out << session.virtualPath << ": " << session.skeleton.bones.size() << " bones, " << session.skeleton.sockets.size()
            << " sockets (any bone name works as a socket too)\n";
+    io.out << "assetId " << session.assetId << " compatibilitySignature " << kb::scene::SkeletonCompatibilitySignature(session.skeleton) << '\n';
     for (std::size_t index = 0U; index < session.skeleton.bones.size(); ++index) {
         if (session.skeleton.bones[index].parentIndex < 0) PrintBone(session.skeleton, index, 0U, io.out);
     }

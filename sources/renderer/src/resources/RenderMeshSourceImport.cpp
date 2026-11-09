@@ -6,6 +6,12 @@
 #include "resources/RenderMeshGltfMaterialImporter.hpp"
 
 #include <cgltf/cgltf.h>
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include <bimg/bimg.h>
+#include <bimg/encode.h>
+#include <bx/allocator.h>
+#include <bx/error.h>
+#include <bx/readerwriter.h>
 #include <ufbx.h>
 
 #include <algorithm>
@@ -13,6 +19,8 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <system_error>
 #include <string>
@@ -234,7 +242,17 @@ using FbxScene = std::unique_ptr<ufbx_scene, FbxDeleter>;
     return texture == nullptr ? std::string{} : FbxTextureKey(*texture);
 }
 
-[[nodiscard]] RenderMeshEmbeddedMaterial FbxMaterial(const ufbx_material& material, std::string* error) {
+// The runtime samples one metallic-roughness image (roughness in green, metalness in blue, as glTF does).
+// An FBX material that keeps the two in separate images gets one packed from them at import.
+[[nodiscard]] bool NeedsPackedMetallicRoughness(const ufbx_texture* metalness, const ufbx_texture* roughness) {
+    return metalness != nullptr && roughness != nullptr && FbxTextureKey(*metalness) != FbxTextureKey(*roughness);
+}
+
+[[nodiscard]] std::string PackedMetallicRoughnessKey(const ufbx_texture& metalness, const ufbx_texture& roughness) {
+    return "MetallicRoughness_" + std::to_string(metalness.typed_id) + "_" + std::to_string(roughness.typed_id) + ".png";
+}
+
+[[nodiscard]] RenderMeshEmbeddedMaterial FbxMaterial(const ufbx_material& material) {
     RenderMeshEmbeddedMaterial output{};
     output.name = UfbxString(material.name);
     if (output.name.empty()) output.name = "Material_" + std::to_string(material.typed_id);
@@ -262,10 +280,9 @@ using FbxScene = std::unique_ptr<ufbx_scene, FbxDeleter>;
     output.occlusionTexturePath = TextureKey(material.pbr.ambient_occlusion);
     const ufbx_texture* metalness = FileTexture(material.pbr.metalness);
     const ufbx_texture* roughness = FileTexture(material.pbr.roughness);
-    if (metalness != nullptr && roughness != nullptr &&
-        FbxTextureKey(*metalness) != FbxTextureKey(*roughness)) {
-        if (error != nullptr) *error = "FBX material uses separate metalness and roughness images; the runtime requires a packed metallic-roughness texture.";
-        return {};
+    if (NeedsPackedMetallicRoughness(metalness, roughness)) {
+        output.metallicRoughnessTexturePath = PackedMetallicRoughnessKey(*metalness, *roughness);
+        return output;
     }
     const ufbx_texture* packed = metalness != nullptr ? metalness : roughness;
     if (packed != nullptr) output.metallicRoughnessTexturePath = FbxTextureKey(*packed);
@@ -293,6 +310,66 @@ using FbxScene = std::unique_ptr<ufbx_scene, FbxDeleter>;
     return output;
 }
 
+[[nodiscard]] std::optional<kb::render::RenderTextureAssetData> DecodeFbxTexture(
+    const ufbx_texture& source,
+    std::string* error) {
+    auto texture = FbxTexture(source, error);
+    if (!texture) return std::nullopt;
+    std::vector<std::byte> bytes = std::move(texture->embeddedBytes);
+    if (bytes.empty()) {
+        std::ifstream file{ texture->sourcePath, std::ios::binary };
+        const std::vector<char> text{ std::istreambuf_iterator<char>{ file }, std::istreambuf_iterator<char>{} };
+        bytes.resize(text.size());
+        std::memcpy(bytes.data(), text.data(), text.size());
+    }
+    auto decoded = kb::render::RenderTextureAssetLoader::DecodeImage(bytes.data(), bytes.size());
+    if (!decoded || decoded->rgba8.empty()) return Fail<kb::render::RenderTextureAssetData>(error,
+        "FBX metalness or roughness image could not be read: " + texture->key);
+    return decoded;
+}
+
+// Roughness goes to green and metalness to blue from each image's red channel; the smaller image is
+// sampled nearest-neighbour up to the larger one's size.
+[[nodiscard]] std::optional<RenderMeshSourceTexture> PackMetallicRoughness(
+    const ufbx_texture& metalness,
+    const ufbx_texture& roughness,
+    std::string* error) {
+    const auto metal = DecodeFbxTexture(metalness, error);
+    if (!metal) return std::nullopt;
+    const auto rough = DecodeFbxTexture(roughness, error);
+    if (!rough) return std::nullopt;
+    const std::uint32_t width = std::max(metal->width, rough->width);
+    const std::uint32_t height = std::max(metal->height, rough->height);
+    const auto red = [](const kb::render::RenderTextureAssetData& image, std::uint32_t x, std::uint32_t y,
+                        std::uint32_t outWidth, std::uint32_t outHeight) {
+        const std::size_t sx = static_cast<std::size_t>(x) * image.width / outWidth;
+        const std::size_t sy = static_cast<std::size_t>(y) * image.height / outHeight;
+        return image.rgba8[(sy * image.width + sx) * 4U];
+    };
+    std::vector<std::uint8_t> packed(static_cast<std::size_t>(width) * height * 4U, 255U);
+    for (std::uint32_t y = 0U; y < height; ++y) {
+        for (std::uint32_t x = 0U; x < width; ++x) {
+            std::uint8_t* pixel = &packed[(static_cast<std::size_t>(y) * width + x) * 4U];
+            pixel[1] = red(*rough, x, y, width, height);
+            pixel[2] = red(*metal, x, y, width, height);
+        }
+    }
+    bx::DefaultAllocator allocator;
+    bx::MemoryBlock block{ &allocator };
+    bx::MemoryWriter writer{ &block };
+    bx::Error writeError;
+    bimg::imageWritePng(&writer, width, height, width * 4U, packed.data(), bimg::TextureFormat::RGBA8, false, &writeError);
+    const auto size = static_cast<std::size_t>(bx::seek(&writer, 0, bx::Whence::Current));
+    if (!writeError.isOk() || size == 0U) return Fail<RenderMeshSourceTexture>(error,
+        "FBX metallic-roughness image could not be packed.");
+    RenderMeshSourceTexture output{};
+    output.key = PackedMetallicRoughnessKey(metalness, roughness);
+    output.extension = ".png";
+    const auto* begin = static_cast<const std::byte*>(block.more(0U));
+    output.embeddedBytes.assign(begin, begin + size);
+    return output;
+}
+
 [[nodiscard]] std::optional<RenderMeshSourceImportManifest> InspectFbx(
     const std::filesystem::path& sourcePath,
     std::string* error) {
@@ -310,10 +387,18 @@ using FbxScene = std::unique_ptr<ufbx_scene, FbxDeleter>;
     RenderMeshSourceImportManifest manifest{};
     manifest.materials.reserve(scene->materials.count);
     for (std::size_t index = 0U; index < scene->materials.count; ++index) {
-        std::string materialError;
-        RenderMeshEmbeddedMaterial material = FbxMaterial(*scene->materials.data[index], &materialError);
-        if (!materialError.empty()) return Fail<RenderMeshSourceImportManifest>(error, std::move(materialError));
-        manifest.materials.push_back(std::move(material));
+        manifest.materials.push_back(FbxMaterial(*scene->materials.data[index]));
+    }
+    for (std::size_t index = 0U; index < scene->materials.count; ++index) {
+        const ufbx_material& material = *scene->materials.data[index];
+        const ufbx_texture* metalness = FileTexture(material.pbr.metalness);
+        const ufbx_texture* roughness = FileTexture(material.pbr.roughness);
+        if (!NeedsPackedMetallicRoughness(metalness, roughness)) continue;
+        const std::string key = PackedMetallicRoughnessKey(*metalness, *roughness);
+        if (std::ranges::any_of(manifest.textures, [&](const RenderMeshSourceTexture& texture) { return texture.key == key; })) continue;
+        auto packed = PackMetallicRoughness(*metalness, *roughness, error);
+        if (!packed) return std::nullopt;
+        manifest.textures.push_back(std::move(*packed));
     }
     std::unordered_map<std::uint32_t, bool> seen;
     for (const RenderMeshEmbeddedMaterial& material : manifest.materials) {

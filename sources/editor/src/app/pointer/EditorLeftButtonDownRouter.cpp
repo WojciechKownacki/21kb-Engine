@@ -1,3 +1,4 @@
+#include "extensions/EditorExtensionHost.hpp"
 #include "app/EditorSceneLifecycleGuard.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
@@ -6,6 +7,8 @@
 
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
+#include "rendering/EditorSettingsPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
@@ -17,12 +20,14 @@
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorPointerDragSourceResolver.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "profiler/ProfilerPanel.hpp"
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/docking/EditorMainDockSplitterPointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/panels/EditorPanelPointerHitContext.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
+#include "app/agent/EditorAgentPanelController.hpp"
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
@@ -30,6 +35,7 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
+#include "app/scene_viewport/EditorTerrainFileDialog.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
@@ -47,11 +53,18 @@
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/InspectorSceneColor.hpp"
+#include "inspection/ui/InspectorUIClickHandler.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "scene/ui/EditorUIThemeAssets.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/TimelineEditorPanel.hpp"
+#include "rendering/BlendSpace2DEditorPanel.hpp"
+#include "rendering/GameplayGraphEditorPanel.hpp"
+#include "scene/GameplayGraphEditorState.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
@@ -358,24 +371,6 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return point;
 }
 
-[[nodiscard]] std::optional<std::filesystem::path> ShowTerrainHeightmapDialog(HWND owner) {
-    std::array<wchar_t, 32768U> path{};
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = owner;
-    const std::wstring filter = EditorFileDialogFilter({
-        { EditorText("fileDialog.heightmapFilter", "Heightmaps (*.png;*.raw;*.r16)"), "*.png;*.raw;*.r16" },
-        { EditorText("fileDialog.allFiles", "All files (*.*)"), "*.*" },
-    });
-    const std::wstring title = ScriptEditorTextEncoding::Widen(EditorText("fileDialog.importHeightmapTitle", "Import Terrain Heightmap"));
-    dialog.lpstrFilter = filter.c_str();
-    dialog.lpstrFile = path.data();
-    dialog.nMaxFile = static_cast<DWORD>(path.size());
-    dialog.lpstrTitle = title.c_str();
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    return GetOpenFileNameW(&dialog) != FALSE ? std::optional<std::filesystem::path>{ path.data() } : std::nullopt;
-}
-
 [[nodiscard]] std::optional<std::array<float, 4U>> ShowGraphColorPicker(
     HWND owner,
     const MaterialEditorParameterValue& value,
@@ -518,6 +513,7 @@ void EditorLeftButtonDownRouter::HandleWorld2DMapClick(InspectorPropertyId prope
 }
 
 void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
+    if (auto* graph=sceneContext_.GameplayGraphEditor()) graph->keyboardFocus=false;
     const EditorProjectFilesDeleteConfirmOverlayController deleteConfirm(messageWindow, sceneContext_);
     if (deleteConfirm.HandlePointerDown(x, y)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -545,6 +541,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor && !ResolveDirtySkeletalMeshEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
+            if (panel != nullptr && panel->kind == DockPanelKind::TimelineEditor && !TimelineEditorPanel::ResolveClose(messageWindow, sceneContext_)) return;
+            if (panel != nullptr && panel->kind == DockPanelKind::TimelineEditor) sceneContext_.PauseTimelineEditorPreview();
+            if (panel && panel->kind == DockPanelKind::GameplayGraphEditor && !GameplayGraphEditorPanel::ResolveClose(messageWindow,sceneContext_)) return;
+            if (panel && panel->kind == DockPanelKind::BlendSpace2DEditor && !BlendSpace2DEditorPanel::ResolveClose(messageWindow,sceneContext_)) return;
             if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor && !ResolveDirtyAnimatorEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
@@ -576,8 +576,71 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
+    if(auto* extensions=EditorExtensionHost::Find(sceneContext_)) {
+        const auto panel=EditorPanelContentResolver::ResolvePanel(DockPanelKind::Generic,messageWindow,mainWindow_,dockModel_,floatingWindows_,metrics_);
+        if(panel) {
+            std::string error;const bool handled=extensions->PointerDown(panel->content,panel->panelId,x,y,error);
+            if(handled||!error.empty()) {if(!error.empty()) sceneContext_.Console().Error("Extension",error);InvalidateRect(messageWindow,nullptr,FALSE);return;}
+        }
+    }
+
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
+
+    // The agent's request box keeps the keyboard only until a click elsewhere, which gives the
+    // keys back to the editor (W/E/R, Delete, shortcuts).
+    if (!panelHit.inAgentPanel && sceneContext_.AgentPanel().InputFocused()) {
+        sceneContext_.AgentPanel().FocusInput(false);
+        sceneContext_.AgentPanel().SetModelMenuOpen(false);
+        EditorWindowInvalidator::InvalidateDockPanel(mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Agent);
+        // The agent bar repaints with the main window.
+        InvalidateRect(mainWindow_, nullptr, FALSE);
+    }
+    if (panelHit.inAgentPanel) {
+        static_cast<void>(EditorAgentPanelController{ sceneContext_ }.HandlePointerDown(messageWindow, *panelHit.agentContent, x, y));
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (const auto content=EditorPanelContentResolver::Resolve(DockPanelKind::GameplayGraphEditor,messageWindow,mainWindow_,dockModel_,floatingWindows_,metrics_); content && PointInRect(*content,x,y)) {
+        static_cast<void>(GameplayGraphEditorPanel::PointerDown(messageWindow,{content->left,content->top,content->right-content->left,content->bottom-content->top},x,y,sceneContext_));
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_,messageWindow);return;
+    }
+    if (const auto content=EditorPanelContentResolver::Resolve(DockPanelKind::BlendSpace2DEditor,messageWindow,mainWindow_,dockModel_,floatingWindows_,metrics_);
+        content && PointInRect(*content,x,y)) {
+        static_cast<void>(BlendSpace2DEditorPanel::PointerDown(messageWindow,
+            {content->left,content->top,content->right-content->left,content->bottom-content->top},x,y,sceneContext_));
+        sceneViewport_.RequestPresent();EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_,messageWindow);return;
+    }
+
+    if (const auto content = EditorPanelContentResolver::Resolve(
+            DockPanelKind::TimelineEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        content && PointInRect(*content, x, y)) {
+        static_cast<void>(TimelineEditorPanel::Pointer(messageWindow,
+            {content->left,content->top,content->right-content->left,content->bottom-content->top}, x, y, sceneContext_));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (const auto content = EditorPanelContentResolver::Resolve(
+            DockPanelKind::AudioMixer, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        content.has_value() && PointInRect(*content, x, y)) {
+        static_cast<void>(sceneContext_.AudioMixerPanelPointer(
+            {content->left, content->top, content->right - content->left, content->bottom - content->top}, x, y));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (const auto content = EditorPanelContentResolver::Resolve(
+            DockPanelKind::Profiler, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        content.has_value() && PointInRect(*content, x, y)) {
+        static_cast<void>(ProfilerPanel::Pointer(messageWindow, *content, x, y, sceneContext_));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
 
     if (const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::ParticleEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
@@ -1629,7 +1692,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
         if (EditorTerrainViewportInteraction::Stamp(
                 messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, true)) {
-            SetCapture(messageWindow);
+            if (EditorTerrainService::ToolState().strokeActive) SetCapture(messageWindow);
             sceneViewport_.RequestPresent();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
@@ -1724,6 +1787,56 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
     if (panelHit.inInspectorPanel) {
         const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
+        if (hit.section == InspectorSectionId::UITheme) {
+            const auto id = sceneContext_.AssetBrowser().InspectorAsset();
+            auto data = sceneContext_.ReadUITheme(id);
+            auto& inspector = sceneContext_.Inspector();
+            if (data) {
+                InspectorUIThemeModel::NormalizeSelection(*data, id.value, inspector.themeAssetId, inspector.themeVariant);
+                if (hit.kind == InspectorHitKind::ChoiceField && hit.property == InspectorPropertyId::UIThemeVariant) {
+                    HMENU menu = CreatePopupMenu();
+                    if (!menu) return;
+                    kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant.empty() ? MF_CHECKED : 0), 1, "Base");
+                    for (std::size_t i = 0; i < data->variants.size(); ++i)
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant == data->variants[i].name ? MF_CHECKED : 0),
+                            i + 2, data->variants[i].name.c_str());
+                    const auto removeId = static_cast<UINT>(data->variants.size() + 2);
+                    if (!inspector.themeVariant.empty()) kb::editor::AppendMenuUtf8(menu, MF_STRING, removeId, "Remove selected variant");
+                    POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
+                    const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
+                        anchor.x, anchor.y, 0, messageWindow, nullptr);
+                    DestroyMenu(menu);
+                    if (choice == 1) inspector.themeVariant.clear();
+                    else if (choice > 1 && choice < removeId) inspector.themeVariant = data->variants[choice - 2].name;
+                    else if (choice == removeId && !inspector.themeVariant.empty() &&
+                        EditorUIThemeAssets::RemoveVariant(*data, inspector.themeVariant) && sceneContext_.SetUITheme(id, *data))
+                        inspector.themeVariant.clear();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+                const auto rows = InspectorUIThemeModel::Rows(*data, inspector.themeVariant);
+                if (hit.property == InspectorPropertyId::UIThemeField && hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                    const auto& row = rows[hit.index];
+                    const auto* descriptor = kb::scene::FindUIComponentProperty(row.key.component, row.key.property);
+                    bool changed = false;
+                    bool handled = true;
+                    if (hit.kind == InspectorHitKind::ColorField && row.color) {
+                        POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
+                        const auto color = EditorMaterialColorPickerDialog::Show(mainWindow_, row.label, *row.color, &anchor);
+                        changed = color && InspectorUIThemeModel::EditColor(*data, inspector.themeVariant, row.key, *color);
+                    } else if (hit.kind == InspectorHitKind::TextField && descriptor && descriptor->assetKind) {
+                        const auto picked = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(), sceneContext_,
+                            kb::assets::AssetId{std::stoull(row.value)}, *descriptor->assetKind);
+                        changed = picked.accepted && EditorUIThemeAssets::SetProperty(*data, inspector.themeVariant, {row.key, picked.assetId.value});
+                    } else handled = false;
+                    if (handled) {
+                        if (changed && sceneContext_.SetUITheme(id, *data)) sceneViewport_.RequestPresent();
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
+                }
+            }
+        }
         if (hit.kind == InspectorHitKind::ChoiceField) {
             const auto component = InspectorUIComponentModel::Component(hit.section);
             if (component) {
@@ -1791,6 +1904,14 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
                 if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
                     const auto& row = rows[static_cast<std::size_t>(hit.index)];
+                    if (row.onClick) {
+                        const auto picked = EditorUIClickPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                            InspectorUIClickHandler::Choices(sceneContext_.Scene(), entity));
+                        if (picked.accepted && sceneContext_.SetUIClickHandler(entity, picked.choice ? &*picked.choice : nullptr))
+                            sceneViewport_.RequestPresent();
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
                     const auto* descriptor = kb::scene::FindUIComponentProperty(*component, row.name);
                     if (descriptor != nullptr && descriptor->assetKind) {
                         const auto result = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
@@ -1856,7 +1977,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
-            if (const std::optional<std::filesystem::path> path = ShowTerrainHeightmapDialog(mainWindow_)) {
+            if (const std::optional<std::filesystem::path> path = EditorTerrainFileDialog::PickHeightImage(mainWindow_, EditorText("fileDialog.importHeightmapTitle", "Import Terrain Heightmap"))) {
                 std::string error;
                 if (sceneContext_.ImportTerrainHeightmap(
                         sceneContext_.SelectedEntity(), *path,
@@ -2079,6 +2200,25 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (panelHit.inProjectSettingsPanel) {
+        // The Editor and Plugins pages of Settings are those panels' own content: their controllers
+        // take the click, the Editor page through the panel rectangle that puts its page here.
+        if (const std::optional<RECT> page = ProjectSettingsPanelRenderer::EmbeddedPage(*panelHit.projectSettingsContent, sceneContext_);
+            page.has_value() && PointInRect(*page, x, y)) {
+            sceneContext_.ProjectSettings().Search().Focus(false);
+            bool handled = false;
+            if (static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Plugins) {
+                EditorPluginsPointerController pluginsPointer(sceneContext_);
+                handled = pluginsPointer.HandlePointerDown(*page, x, y);
+            } else {
+                EditorSettingsPointerController editorSettingsPointer(sceneContext_, dockModel_, floatingWindows_);
+                handled = editorSettingsPointer.HandlePointerDown(messageWindow, EditorSettingsPanelRenderer::ContentForPage(*page), x, y);
+            }
+            if (handled) {
+                sceneViewport_.RequestPresent();
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
         if (projectSettingsPointer.HandlePointerDown(
                 *panelHit.projectSettingsContent,
@@ -2102,7 +2242,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inPluginsPanel) {
         EditorPluginsPointerController pluginsPointer(sceneContext_);
-        static_cast<void>(pluginsPointer.HandlePointerDown(*panelHit.pluginsContent, x, y));
+        if (pluginsPointer.HandlePointerDown(*panelHit.pluginsContent, x, y)) {
+            // A plugin change or a scene reload can change what the viewport draws.
+            sceneViewport_.RequestPresent();
+        }
         if (sceneContext_.Plugins().IsScrollbarDragging()) {
             SetCapture(messageWindow);
         }
@@ -2237,6 +2380,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case BuildGameField::AndroidVersionCode:
             case BuildGameField::AndroidLabel:
             case BuildGameField::AndroidKeyAlias:
+            case BuildGameField::AndroidFormat:
+            case BuildGameField::AndroidBundletool:
             case BuildGameField::AndroidStorePassword:
             case BuildGameField::AndroidKeyPassword:
             case BuildGameField::BuilderExecutable:

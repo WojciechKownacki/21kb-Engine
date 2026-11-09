@@ -173,7 +173,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & MeshRendererBit) != 0U) {
         MeshRendererComponent meshRenderer;
-        if (!SceneAssetRenderComponentCodec::ReadMeshRenderer(input, meshRenderer)) {
+        if (!SceneAssetRenderComponentCodec::ReadMeshRenderer(input, fileVersion, meshRenderer)) {
             return false;
         }
         output.meshRenderer = meshRenderer;
@@ -246,7 +246,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & BehaviourBit) != 0U) {
         BehaviourComponent behaviour;
-        if (!SceneAssetBehaviourComponentCodec::Read(input, behaviour)) {
+        if (!SceneAssetBehaviourComponentCodec::Read(input, fileVersion, behaviour, output.behaviourVariableOverrides)) {
             return false;
         }
         output.behaviour = behaviour;
@@ -775,7 +775,7 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetAudioComponentCodec::WriteListener(output, *components.audioListener);
     }
     if (components.behaviour.has_value()) {
-        SceneAssetBehaviourComponentCodec::Write(output, *components.behaviour);
+        SceneAssetBehaviourComponentCodec::Write(output, *components.behaviour, components.behaviourVariableOverrides);
     }
     if (components.animator.has_value()) {
         SceneAssetBinaryIO::WriteUInt64(output, components.animator->controllerAssetId);

@@ -33,6 +33,8 @@ struct EditorConsoleLayoutRects {
     RECT infoButton{};
     RECT warningButton{};
     RECT errorButton{};
+    // Empty when the toolbar is too narrow to fit it beside the buttons.
+    RECT filterField{};
     RECT copyLineButton{};
     RECT saveLogButton{};
     RECT clearButton{};
@@ -58,13 +60,46 @@ struct EditorConsoleLayoutRects {
     return rect;
 }
 
+// One list row. Identical consecutive entries (same level, category and message) collapse into
+// one row that shows the latest of them and how many there were, so a repeated message is one
+// line with a count instead of a screenful.
+struct EditorConsoleRow {
+    const EditorConsoleEntry* entry = nullptr;
+    std::uint64_t firstSequence = 0;
+    std::uint32_t repeat = 1;
+};
+
+// Calls `visit` with every row the filters show, in order, until it returns false. This is the
+// one definition of what the list holds: counting, hit-testing and painting all walk it.
+template <typename Visit>
+inline void ForEachEditorConsoleRow(const EditorConsoleState& console, Visit&& visit) {
+    EditorConsoleRow run{};
+    for (const EditorConsoleEntry& entry : console.Entries()) {
+        if (!console.Shows(entry)) {
+            continue;
+        }
+        if (run.entry != nullptr && run.entry->level == entry.level && run.entry->category == entry.category &&
+            run.entry->message == entry.message) {
+            run.entry = &entry;
+            ++run.repeat;
+            continue;
+        }
+        if (run.entry != nullptr && !visit(run)) {
+            return;
+        }
+        run = EditorConsoleRow{ &entry, entry.sequence, 1U };
+    }
+    if (run.entry != nullptr) {
+        static_cast<void>(visit(run));
+    }
+}
+
 [[nodiscard]] inline int EditorConsoleAcceptedEntryCount(const EditorConsoleState& console) noexcept {
     int count = 0;
-    for (const EditorConsoleEntry& entry : console.Entries()) {
-        if (console.Accepts(entry.level)) {
-            ++count;
-        }
-    }
+    ForEachEditorConsoleRow(console, [&count](const EditorConsoleRow&) noexcept {
+        ++count;
+        return true;
+    });
     return count;
 }
 
@@ -115,6 +150,14 @@ struct EditorConsoleLayoutRects {
     layout.clearButton = RECT{ layout.toolbar.right - toolbarPadX - clearWidth, layout.toolbar.top + toolbarPadY, layout.toolbar.right - toolbarPadX, layout.toolbar.top + toolbarPadY + buttonHeight };
     layout.saveLogButton = RECT{ layout.clearButton.left - toolbarGap - saveLogWidth, layout.toolbar.top + toolbarPadY, layout.clearButton.left - toolbarGap, layout.toolbar.top + toolbarPadY + buttonHeight };
     layout.copyLineButton = RECT{ layout.saveLogButton.left - toolbarGap - copyLineWidth, layout.toolbar.top + toolbarPadY, layout.saveLogButton.left - toolbarGap, layout.toolbar.top + toolbarPadY + buttonHeight };
+    constexpr int filterGap = 12;
+    constexpr int filterMaxWidth = 260;
+    constexpr int filterMinWidth = 90;
+    const int filterLeft = static_cast<int>(layout.errorButton.right) + filterGap;
+    const int filterRight = std::min(filterLeft + filterMaxWidth, static_cast<int>(layout.copyLineButton.left) - filterGap);
+    if (filterRight - filterLeft >= filterMinWidth) {
+        layout.filterField = RECT{ filterLeft, layout.toolbar.top + toolbarPadY, filterRight, layout.toolbar.top + toolbarPadY + buttonHeight };
+    }
     layout.list = RECT{ content.left, layout.toolbar.bottom, content.right, content.bottom };
     layout.listScrollbarTrack = EditorConsoleInsetRect(RECT{ layout.list.right - 18, layout.list.top, layout.list.right - 6, layout.list.bottom }, 0, 6);
     layout.listRows = RECT{ layout.list.left, layout.list.top, layout.listScrollbarTrack.left - 4, layout.list.bottom };

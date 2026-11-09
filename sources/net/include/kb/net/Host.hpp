@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <vector>
 
 // Connection establishment on top of IDatagramTransport, and the host and client objects that own
@@ -150,6 +151,9 @@ struct ClientConfig {
     std::uint32_t retryMilliseconds = 250U;
     std::uint32_t connectTimeoutMilliseconds = 5000U;
     std::uint64_t clientSalt = 0U; // 0 draws a random one; tests may fix it
+    // Frame application messages for AuthGate. Authenticate after the transport connects;
+    // start replication only after receiving kAuthMessageAccepted.
+    bool authorizationRequired = false;
 };
 
 class Client final {
@@ -159,6 +163,7 @@ public:
 
     void Update(std::uint64_t nowMilliseconds);
     [[nodiscard]] SendResult Send(std::uint8_t channel, std::span<const std::uint8_t> data);
+    [[nodiscard]] SendResult Authenticate(std::string_view token);
     void Disconnect();
     [[nodiscard]] bool PollEvent(NetEvent& event);
     [[nodiscard]] ClientState State() const noexcept { return state_; }

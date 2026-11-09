@@ -1,5 +1,6 @@
 #include "GameProjectRuntime.hpp"
 #include "PackagedGameRuntime.hpp"
+#include "LinuxGamepadInput.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -260,6 +261,7 @@ public:
             const float delta = kb::game::RuntimeDeltaSeconds(previousTick_, now);
             previousTick_ = now;
             if (kb::scene::Scene* scene = runtime_.Scene(); scene != nullptr) {
+                gamepads_.Poll(scene->Input().MutableDeviceState());
                 scene->Input().MutableDeviceState().SetPointerViewportExtent(
                     surface_->Width(), surface_->Height());
             }
@@ -407,6 +409,7 @@ private:
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
     kb::render::Renderer renderer_;
     kb::game::PackagedGameRuntime runtime_;
+    kb::game::LinuxGamepadInput gamepads_;
     std::chrono::steady_clock::time_point previousTick_{};
     bool shutdown_ = false;
     bool shutdownClean_ = true;

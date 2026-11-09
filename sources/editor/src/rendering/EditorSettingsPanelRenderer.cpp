@@ -2,7 +2,12 @@
 
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
+#include "rendering/HeroIconKind.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -24,7 +29,9 @@ constexpr int kSectionHeaderHeight = 26;
 constexpr int kRowHeight = 34;
 constexpr int kRowGap = 6;
 constexpr int kLabelWidth = 150;
-constexpr int kCheckboxSize = 18;
+// The autosave toggle is a switch: wider than tall.
+constexpr int kCheckboxSize = 16;
+constexpr int kCheckboxWidth = 30;
 constexpr int kIntervalButtonWidth = 72;
 constexpr int kIntervalButtonGap = 6;
 constexpr int kLanguageFieldWidth = 240;
@@ -56,6 +63,8 @@ struct EditorSettingsLayout {
     RECT languageLabel{};
     RECT languageField{};
     RECT languageHint{};
+    RECT codeEditorLabel{};
+    RECT codeEditorField{};
 };
 
 [[nodiscard]] EditorSettingsLayout Resolve(const RECT& content) noexcept {
@@ -76,7 +85,7 @@ struct EditorSettingsLayout {
     rects.autosaveCheckbox = {
         left + kLabelWidth,
         checkboxTop,
-        left + kLabelWidth + kCheckboxSize,
+        left + kLabelWidth + kCheckboxWidth,
         checkboxTop + kCheckboxSize,
     };
 
@@ -98,6 +107,9 @@ struct EditorSettingsLayout {
     rects.languageField = {left + kLabelWidth, autosaveTop + 4, std::min(right, left + kLabelWidth + kLanguageFieldWidth),
         autosaveTop + kRowHeight - 4};
     rects.languageHint = {left + kLabelWidth, rects.languageLabel.bottom, right, rects.languageLabel.bottom + 22};
+    const int codeTop = rects.languageHint.bottom + kRowGap;
+    rects.codeEditorLabel = {left, codeTop, left + kLabelWidth, codeTop + kRowHeight};
+    rects.codeEditorField = {rects.languageField.left, codeTop + 4, rects.languageField.right, codeTop + kRowHeight - 4};
     return rects;
 }
 
@@ -132,39 +144,11 @@ void DrawOptionButton(
     const char* label,
     bool selected,
     bool enabled = true) {
-    const COLORREF fill =
-        selected ? Color(theme.accent) :
-        Color(enabled ? theme.chrome : theme.background);
-    const COLORREF border =
-        selected ? Color(theme.accent) :
-        Color(enabled ? theme.borderPanel : theme.borderChrome);
-    const COLORREF text =
-        Color(selected ? theme.textPrimary : (enabled ? theme.textSecondary : theme.textDisabled));
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    DrawText(
-        dc,
-        {rect.left + 8, rect.top, rect.right - 8, rect.bottom},
-        label,
-        text,
-        12,
-        selected ? FW_SEMIBOLD : FW_NORMAL,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    EditorDialogStyle::PaintOptionButton(dc, rect, theme, label, selected, enabled);
 }
 
 void DrawCheckbox(HDC dc, const RECT& rect, const EditorTheme& theme, bool checked) {
-    const COLORREF fill = Color(checked ? theme.accent : theme.chrome);
-    const COLORREF border = Color(checked ? theme.accent : theme.borderPanel);
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    if (checked) {
-        DrawText(
-            dc,
-            rect,
-            "x",
-            Color(theme.textPrimary),
-            12,
-            FW_BOLD,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+    EditorDialogStyle::PaintSwitch(dc, rect, theme, checked);
 }
 
 [[nodiscard]] int AutosaveIntervalIndex(std::uint32_t minutes) noexcept {
@@ -248,12 +232,25 @@ void EditorSettingsPanelRenderer::Paint(
         GdiDrawing::DrawSharpFrame(dc, rects.languageField, Color(theme.background), Color(theme.borderPanel));
         DrawText(dc, {rects.languageField.left + 8, rects.languageField.top, rects.languageField.right - 24, rects.languageField.bottom},
             std::string{ current != nullptr ? current->nativeName : std::string_view{ "English" } }.c_str(), Color(theme.textPrimary), 12);
-        DrawText(dc, {rects.languageField.right - 22, rects.languageField.top, rects.languageField.right - 6, rects.languageField.bottom},
-            "v", Color(theme.textSecondary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        constexpr int chevronSize = 12;
+        const int chevronLeft = static_cast<int>(rects.languageField.right) - 14 - chevronSize / 2;
+        const int chevronTop = static_cast<int>(rects.languageField.top) +
+            (static_cast<int>(rects.languageField.bottom - rects.languageField.top) - chevronSize) / 2;
+        HeroIconPainter::Draw(dc, RECT{chevronLeft, chevronTop, chevronLeft + chevronSize, chevronTop + chevronSize},
+            HeroIconKind::ChevronDown, Color(theme.textSecondary), 1);
         DrawText(dc, rects.languageHint,
             EditorLocalization::Format("editorSettings.languageHint", "{count} languages - applies at once",
                 { { "count", std::to_string(EditorLocalization::Languages().size()) } }).c_str(),
             Color(theme.textDisabled), 11);
+        std::string preferenceError;
+        const std::string preference = EditorExternalCodeLauncher::Preference(EditorProjectPaths::ProjectRoot(), preferenceError);
+        const char* label = preference == "VSCode" ? "VS Code" : preference == "VisualStudio" ? "Visual Studio"
+            : preference == "Auto" ? "Automatic" : "Invalid editor settings";
+        DrawText(dc, rects.codeEditorLabel, "Code editor", Color(theme.textSecondary), 12);
+        GdiDrawing::DrawSharpFrame(dc, rects.codeEditorField, Color(theme.background), Color(theme.borderPanel));
+        RECT text = rects.codeEditorField;
+        text.left += 8;
+        DrawText(dc, text, label, Color(theme.textPrimary), 12);
         return;
     }
 
@@ -311,6 +308,7 @@ EditorSettingsHit EditorSettingsPanelRenderer::HitTest(
         }
     }
     if (g_category == EditorSettingsCategory::General) {
+        if (Contains(rects.codeEditorField, x, y)) return {EditorSettingsHitKind::CodeEditor, 1, -1};
         if (Contains(rects.languageField, x, y) || Contains(rects.languageLabel, x, y)) {
             return {EditorSettingsHitKind::Language, 0, -1};
         }
@@ -328,8 +326,16 @@ EditorSettingsHit EditorSettingsPanelRenderer::HitTest(
     return {};
 }
 
+RECT EditorSettingsPanelRenderer::ContentForPage(const RECT& page) noexcept {
+    return RECT{ page.left - kSidebarWidth - 1, page.top - kHeaderHeight, page.right, page.bottom };
+}
+
 RECT EditorSettingsPanelRenderer::LanguageField(const RECT& content) noexcept {
     return Resolve(content).languageField;
+}
+
+RECT EditorSettingsPanelRenderer::CodeEditorField(const RECT& content) noexcept {
+    return Resolve(content).codeEditorField;
 }
 
 EditorSettingsCategory EditorSettingsPanelRenderer::SelectedCategory() noexcept {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "engine/particles/ParticleGpuEmitter.hpp"
+#include "engine/particles/ParticleProcessAsset.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "kb/render/particles/ParticleGpuUpdateFailure.hpp"
 
 #include <bgfx/bgfx.h>
@@ -56,7 +58,7 @@ public:
     void SetRenderOrigin(std::uint64_t sceneId, const kb::math::DVec3& renderOrigin) noexcept;
     // Applies one frame of drained commands for a scene: creates emitters, uploads spawn records,
     // releases emitters. Positions are carried from each command's simulation origin to the render origin.
-    void Apply(std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands) noexcept;
+    void Apply(std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands, kb::assets::AssetManager* assets = nullptr) noexcept;
     struct RejectedUpdate {
         kb::particles::ParticleGpuEmitterKey key{};
         ParticleGpuUpdateFailure failure = ParticleGpuUpdateFailure::None;
@@ -125,6 +127,12 @@ private:
         // (collisions, forces).
         bgfx::DynamicVertexBufferHandle state = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle stateZeros = BGFX_INVALID_HANDLE;
+        bgfx::ProgramHandle customProgram = BGFX_INVALID_HANDLE;
+        bgfx::DynamicVertexBufferHandle customState = BGFX_INVALID_HANDLE;
+        bgfx::DynamicVertexBufferHandle customZeros = BGFX_INVALID_HANDLE;
+        std::shared_ptr<const kb::particles::ParticleProcessAsset> customAsset;
+        bool initializeCustom = false;
+        std::uint64_t customBytes = 0U;
         // Alpha-blended emitters only: sort keys (distance, slot) padded to a power of two, and the
         // instance records in back-to-front order, which is what gets drawn.
         bgfx::DynamicVertexBufferHandle sortKeys = BGFX_INVALID_HANDLE;
@@ -150,6 +158,7 @@ private:
     };
 
     [[nodiscard]] bool Create(Emitter& emitter, const kb::particles::ParticleGpuEmitterParams& params) noexcept;
+    [[nodiscard]] bool EnsureCustomProcess(Emitter& emitter, std::uint64_t assetId, kb::assets::AssetManager* assets) noexcept;
     void Destroy(Emitter& emitter) noexcept;
     void Upload(Emitter& emitter, std::span<const kb::particles::ParticleGpuSpawn> spawns) noexcept;
     void Clear(Emitter& emitter) noexcept;
@@ -167,6 +176,8 @@ private:
 
     std::vector<kb::particles::ParticleGpuSpawn> spawnScratch_;
     std::uint64_t maxBufferBytes_ = 0U;
+    bgfx::UniformHandle processFrameUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle processInverseUniform_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     // Required for the GPU consumer: absence keeps authored collision/force semantics on the CPU.
     bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;

@@ -4,6 +4,7 @@
 #include "engine/visual/VisualGraphTypes.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -108,6 +109,15 @@ private:
 // parser for hand-authored `-- @expose` directives.
 [[nodiscard]] bool TryParse(std::string_view text, ScriptValueType& out) noexcept;
 [[nodiscard]] kb::visual::VisualGraphValueType ToVisualGraphValueType(ScriptValueType type) noexcept;
+// Exact text form of a value, the one persistence and command lines share: String/Name/Guid are the
+// string itself, everything else its shortest round-tripping number or true/false. TryParseValueText is
+// the inverse for a given type: no trimming, no quotes, and nullopt for text that is not a whole value
+// of that type (including empty text for a non-string type, and Void).
+[[nodiscard]] std::string FormatValueText(const ScriptValue& value);
+[[nodiscard]] std::optional<ScriptValue> TryParseValueText(std::string_view text, ScriptValueType type);
+// The same text with its type in front ("Float:12.5"), for a place that stores a value without a schema.
+[[nodiscard]] std::string FormatTypedValueText(const ScriptValue& value);
+[[nodiscard]] std::optional<ScriptValue> TryParseTypedValueText(std::string_view text);
 
 // LIB-032: ScriptValue is the only channel through which data crosses the
 // Lua/Visual Graph script boundary (function arguments, outputs, event

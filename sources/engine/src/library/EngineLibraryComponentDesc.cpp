@@ -292,23 +292,6 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Lens Flare"),
             .serializable = true,
         },
-        // Older names of Line Renderer, Trail Renderer and Lens Flare, kept for scripts and
-        // serialized API consumers written against them.
-        LibraryComponentDesc{
-            .name = "Kreska przestrzenna",
-            .id = ComputeLibraryComponentId("Kreska przestrzenna"),
-            .serializable = true,
-        },
-        LibraryComponentDesc{
-            .name = "Wst\xC4\x99" "ga historii",
-            .id = ComputeLibraryComponentId("Wst\xC4\x99" "ga historii"),
-            .serializable = true,
-        },
-        LibraryComponentDesc{
-            .name = "Echo soczewki",
-            .id = ComputeLibraryComponentId("Echo soczewki"),
-            .serializable = true,
-        },
         };
         for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) {
             catalog.push_back(LibraryComponentDesc{

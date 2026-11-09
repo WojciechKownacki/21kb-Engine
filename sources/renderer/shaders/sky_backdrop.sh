@@ -121,6 +121,10 @@ vec3 KbProceduralSky(vec3 eyeRay, vec3 sunDirection, vec3 sunLight, float hasSun
 }
 
 // Radiance of the backdrop seen along a direction.
+// Preserve the gradient calculation at HDR rounding boundaries on D3D.
+#if BGFX_SHADER_LANGUAGE_HLSL && !(BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV || BGFX_SHADER_LANGUAGE_WGSL)
+precise
+#endif
 vec3 KbBackdropRadiance(vec3 direction)
 {
     // Horizon to zenith by the view's elevation, as a gradient skybox: the horizon stays

@@ -12,7 +12,7 @@ namespace {
  X(UIHorizontalLayout,horizontalLayout) X(UIVerticalLayout,verticalLayout) X(UIGridLayout,gridLayout) X(UIWrapLayout,wrapLayout) X(UIOverlayLayout,overlayLayout) \
  X(UILayoutElement,layoutElement) X(UIContentSizeFitter,contentSizeFitter) X(UIAspectRatioFitter,aspectRatioFitter) \
  X(UISprite,sprite) X(UIImage,image) X(UIRawImage,rawImage) X(UIText,text) X(UIBorder,border) X(UIMask,mask) X(UIShadow,shadow) X(UIOutline,outline) X(UIBackgroundBlur,backgroundBlur) \
- X(UISelectable,selectable) X(UIButton,button) X(UIToggle,toggle) X(UISlider,slider) X(UIScrollbar,scrollbar) X(UIScrollView,scrollView) X(UIInputField,inputField) X(UIDropdown,dropdown) X(UIProgressBar,progressBar) X(UIWidgetSwitcher,widgetSwitcher)
+ X(UISelectable,selectable) X(UIButton,button) X(UIToggle,toggle) X(UISlider,slider) X(UIScrollbar,scrollbar) X(UIScrollView,scrollView) X(UIInputField,inputField) X(UIDropdown,dropdown) X(UIProgressBar,progressBar) X(UIWidgetSwitcher,widgetSwitcher) X(UIAccessibility,accessibility)
 
 template <typename Access>
 [[nodiscard]] UIComponentSet Capture(const Access& components, SceneEntity entity) {

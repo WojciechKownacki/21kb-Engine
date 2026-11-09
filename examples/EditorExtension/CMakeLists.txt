@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.25)
+project(SampleEditorExtension LANGUAGES CXX)
+set(KB_EDITOR_SDK_ROOT "" CACHE PATH "Engine SDK root containing sources/editor/include")
+set(KB_EXTENSION_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/out" CACHE PATH "Extension DLL destination")
+find_path(KB_EDITOR_SDK_INCLUDE kb/editor/extensions/EditorExtension.h HINTS
+    "${KB_EDITOR_SDK_ROOT}/sources/editor/include" "$ENV{KB_ENGINE_SDK_ROOT}/sources/editor/include" REQUIRED)
+add_library(SampleExtension SHARED SampleExtension.cpp)
+target_compile_features(SampleExtension PRIVATE cxx_std_20)
+target_include_directories(SampleExtension PRIVATE "${KB_EDITOR_SDK_INCLUDE}")
+set_target_properties(SampleExtension PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${KB_EXTENSION_OUTPUT}" RUNTIME_OUTPUT_DIRECTORY_RELEASE "${KB_EXTENSION_OUTPUT}")

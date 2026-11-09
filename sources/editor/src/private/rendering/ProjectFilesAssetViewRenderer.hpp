@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/EditorAssetBrowserLayout.hpp"
+#include "assets/EditorAssetUsers.hpp"
 #include "kb/editor/assets/EditorAssetBrowserTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 
@@ -29,7 +30,8 @@ public:
         kb::assets::AssetManager& manager,
         EditorMeshThumbnailService& meshThumbnails,
         const std::vector<EditorAssetFolderRow>& folders,
-        const std::vector<EditorAssetItemRow>& assets);
+        const std::vector<EditorAssetItemRow>& assets,
+        const EditorAssetUsers& users);
 };
 
 #endif

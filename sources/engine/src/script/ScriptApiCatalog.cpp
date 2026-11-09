@@ -55,6 +55,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Audio", "DspState", "Audio.DspState", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "ConfigureMeters", "Audio.ConfigureMeters", ScriptApiCatalogLuaReturnKind::SingleOutput, "configured" },
     { "Audio", "ResetMeters", "Audio.ResetMeters", ScriptApiCatalogLuaReturnKind::SingleOutput, "reset" },
+    { "Audio", "Diagnostics", "Audio.Diagnostics", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "Meter", "Audio.Meter", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "SetListenerLocalUser", "Audio.SetListenerLocalUser", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "Audio", "ListenerLocalUser", "Audio.ListenerLocalUser", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -209,6 +210,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Timeline", "Create", "Timeline.Create", ScriptApiCatalogLuaReturnKind::SingleOutput, "instance" },
     { "Timeline", "Release", "Timeline.Release", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Play", "Timeline.Play", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "SetPlayback", "Timeline.SetPlayback", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Pause", "Timeline.Pause", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Seek", "Timeline.Seek", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Skip", "Timeline.Skip", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -221,6 +223,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Localization", "Translate", "Localization.Translate", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Localization", "FormatPlural", "Localization.FormatPlural", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Localization", "FormatPluralNumber", "Localization.FormatPluralNumber", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
+    { "Localization", "ResolveResource", "Localization.ResolveResource", ScriptApiCatalogLuaReturnKind::SingleOutput, "asset" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -338,7 +341,7 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
         catalog.components.push_back(std::move(component));
     }
 
-    catalog.luaBindings.reserve(kLuaBindings.size());
+    catalog.luaBindings.reserve(kLuaBindings.size() + catalog.functions.size());
     for (const ScriptApiCatalogLuaBindingDefinition& binding : LuaBindingDefinitions()) {
         catalog.luaBindings.push_back(ScriptApiCatalogLuaBinding{
             .tableName = std::string{ binding.tableName },
@@ -348,8 +351,34 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
             .returnPin = std::string{ binding.returnPin },
         });
     }
+    // The runtime installs every other "Table.Name" function as Table.Name too (CallFunction's result shape).
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        const std::string_view table = GenericLuaTable(function.name);
+        if (table.empty()) continue;
+        const std::string_view luaName = std::string_view{ function.name }.substr(table.size() + 1U);
+        if (std::ranges::any_of(LuaBindingDefinitions(), [&](const ScriptApiCatalogLuaBindingDefinition& binding) {
+                return binding.functionName == function.name || (binding.tableName == table && binding.luaName == luaName);
+            })) {
+            continue;
+        }
+        catalog.luaBindings.push_back(ScriptApiCatalogLuaBinding{
+            .tableName = std::string{ table },
+            .luaName = std::string{ luaName },
+            .functionName = function.name,
+        });
+    }
 
     return catalog;
+}
+
+std::string_view ScriptApiCatalog::GenericLuaTable(std::string_view functionName) noexcept {
+    const std::size_t dot = functionName.find('.');
+    if (dot == std::string_view::npos || dot == 0U || dot + 1U == functionName.size() ||
+        functionName.find('.', dot + 1U) != std::string_view::npos) {
+        return {};
+    }
+    const std::string_view table = functionName.substr(0, dot);
+    return table == "Task" ? std::string_view{} : table;
 }
 
 const char* ToString(ScriptApiCatalogLuaReturnKind kind) noexcept {

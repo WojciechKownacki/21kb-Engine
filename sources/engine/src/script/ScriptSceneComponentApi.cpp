@@ -260,6 +260,17 @@ struct ComponentAccess {
             return true; \
         } }
 
+#define KB_SCENE_ENUM(Component, field, EnumType, lastValue) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(lastValue)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<EnumType>(value.AsInt()); \
+            return true; \
+        } }
+
 #define KB_RIGIDBODY_BODY_TYPE(Component, field) \
     FieldBinding{ #field, \
         [](const void* component) noexcept -> ScriptValue { \
@@ -317,7 +328,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 51> kComponentNames{
+constexpr std::array<std::string_view, 48> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -366,10 +377,6 @@ constexpr std::array<std::string_view, 51> kComponentNames{
     "SocketAttachment",
     "Combatant",
     "AIBrain",
-    // Older names, still accepted (SceneComponentAuthoring::CanonicalName).
-    "Kreska przestrzenna",
-    "Wst\xC4\x99" "ga historii",
-    "Echo soczewki",
 };
 
 // Value names of Int enum properties, in value order (tools accept them in place of numbers).
@@ -383,8 +390,13 @@ constexpr std::array<std::string_view, 3> kNavLinkKindNames{ "Jump", "Ladder", "
 constexpr std::array<std::string_view, 3> kCameraClearModeNames{ "SolidColor", "DepthOnly", "DontClear" };
 constexpr std::array<std::string_view, 6> kLightKindNames{ "Directional", "Point", "Spot", "AreaRect", "AreaDisk", "Tube" };
 constexpr std::array<std::string_view, 2> kLightMobilityNames{ "Movable", "Static" };
+constexpr std::array<std::string_view, 2> kMeshMobilityNames{ "Movable", "Static" };
+constexpr std::array<std::string_view, 4> kLightShadowFilterNames{ "Default", "Hard", "Pcf", "Pcss" };
+constexpr std::array<std::string_view, 5> kLightShadowQualityNames{ "Default", "Low", "Medium", "High", "Ultra" };
 constexpr std::array<std::string_view, 6> kTickGroupNames{ "Input", "Gameplay", "Physics", "Animation", "Camera", "Presentation" };
 constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
+constexpr std::array<std::string_view, 3> kBody2DTypeNames{ "Static", "Kinematic", "Dynamic" };
+constexpr std::array<std::string_view, 3> kCollider2DShapeNames{ "Box", "Circle", "Capsule" };
 constexpr std::array<std::string_view, 4> kAnimatorRootMotionOwnerNames{ "None", "Animator", "CharacterController", "Rigidbody" };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -453,7 +465,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kSprite2DPropertyDesc
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true, kBody2DTypeNames },
     ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "linearDamping", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float, true },
@@ -467,7 +479,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kCollider2DPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true, kCollider2DShapeNames },
     ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float, true },
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float, true },
@@ -703,7 +715,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kAudioListenerProperty
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 20> kLightPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kLightKindNames },
     ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
@@ -726,13 +738,22 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 20> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shadowStrength", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "shadowDistance", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "mobility", ScriptValueType::Int, true, kLightMobilityNames },
+    ScriptSceneComponentPropertyDesc{ "shadowBias", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "shadowNormalBias", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "shadowFilter", ScriptValueType::Int, true, kLightShadowFilterNames },
+    ScriptSceneComponentPropertyDesc{ "shadowQuality", ScriptValueType::Int, true, kLightShadowQualityNames },
+    ScriptSceneComponentPropertyDesc{ "shadowCascadeCount", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "shadowCascadeDistribution", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kMeshRendererPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kMeshRendererPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "materialSlotOverrideCount", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "lodBias", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "lodEnabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "mobility", ScriptValueType::Int, true, kMeshMobilityNames },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
@@ -1094,7 +1115,7 @@ constexpr std::array<FieldBinding, 13> kCameraFields{
     KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, z),
 };
 
-constexpr std::array<FieldBinding, 20> kLightFields{
+constexpr std::array<FieldBinding, 26> kLightFields{
     KB_LIGHT_KIND(kb::scene::LightComponent, kind),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, x),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, y),
@@ -1115,13 +1136,22 @@ constexpr std::array<FieldBinding, 20> kLightFields{
     KB_FLOAT(kb::scene::LightComponent, shadowStrength),
     KB_FLOAT(kb::scene::LightComponent, shadowDistance),
     KB_LIGHT_MOBILITY(kb::scene::LightComponent, mobility),
+    KB_FLOAT(kb::scene::LightComponent, shadowBias),
+    KB_FLOAT(kb::scene::LightComponent, shadowNormalBias),
+    KB_SCENE_ENUM(kb::scene::LightComponent, shadowFilter, kb::scene::LightShadowFilter, kb::scene::LightShadowFilter::Pcss),
+    KB_SCENE_ENUM(kb::scene::LightComponent, shadowQuality, kb::scene::LightShadowQuality, kb::scene::LightShadowQuality::Ultra),
+    KB_UINT32(kb::scene::LightComponent, shadowCascadeCount),
+    KB_FLOAT(kb::scene::LightComponent, shadowCascadeDistribution),
 };
 
-constexpr std::array<FieldBinding, 4> kMeshRendererFields{
+constexpr std::array<FieldBinding, 7> kMeshRendererFields{
     KB_UINT32(kb::scene::MeshRendererComponent, materialSlotOverrideCount),
     KB_BOOL(kb::scene::MeshRendererComponent, castsShadow),
     KB_BOOL(kb::scene::MeshRendererComponent, receivesShadow),
     KB_UINT32(kb::scene::MeshRendererComponent, layer),
+    KB_INT(kb::scene::MeshRendererComponent, lodBias),
+    KB_BOOL(kb::scene::MeshRendererComponent, lodEnabled),
+    KB_SCENE_ENUM(kb::scene::MeshRendererComponent, mobility, kb::scene::MeshMobility, kb::scene::MeshMobility::Static),
 };
 
 constexpr std::array<FieldBinding, 3> kBehaviourFields{

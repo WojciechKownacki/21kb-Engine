@@ -1,3 +1,4 @@
+#include "engine/mods/ModRuntime.hpp"
 #include "TestSupport.hpp"
 
 #include "engine/library/EngineLibrary.hpp"
@@ -328,7 +329,14 @@ void RunModuleInstallStartupReportTest() {
             .version = kb::library::LibraryModuleVersion{ 1U, 2U, 3U },
             .ownerRuntime = "kb::tests::FakeRuntime",
             .capability = true,
-            .Register = [](kb::script::ScriptRuntimeHost&) { return true; },
+            .Register = [](kb::script::ScriptRuntimeHost& runtime) {
+                return runtime.RegisterFunction(kb::script::ScriptFunctionDesc{
+                    .signature = {.name = "AvailableTestModule.Ready", .description = "Check provider registration."},
+                    .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                        return kb::script::ScriptFunctionCallResult{.executed = true};
+                    }
+                });
+            },
         },
         kb::library::LibraryModuleDesc{
             .name = "DisabledTestModule",
@@ -479,8 +487,8 @@ void RunModuleCatalogValidatesTest() {
 
 void RunModuleValidationDuplicateNameTest() {
     const std::vector<kb::library::LibraryModuleDesc> modules{
-        kb::library::LibraryModuleDesc{ .name = "Dup" },
-        kb::library::LibraryModuleDesc{ .name = "Dup" },
+        kb::library::LibraryModuleDesc{ .name = "Dup", .Register = &RecordModuleInstallCall },
+        kb::library::LibraryModuleDesc{ .name = "Dup", .Register = &RecordModuleInstallCall },
     };
     const kb::library::ModuleCatalogValidationResult result = kb::library::ValidateModuleCatalog(modules);
     kb::tests::Require(!result.succeeded, "Engine21kbLibrary module validation must reject duplicate module names");
@@ -489,7 +497,7 @@ void RunModuleValidationDuplicateNameTest() {
 
 void RunModuleValidationUnknownDependencyTest() {
     const std::vector<kb::library::LibraryModuleDesc> modules{
-        kb::library::LibraryModuleDesc{ .name = "A", .dependencies = { "DoesNotExist" } },
+        kb::library::LibraryModuleDesc{ .name = "A", .dependencies = { "DoesNotExist" }, .Register = &RecordModuleInstallCall },
     };
     const kb::library::ModuleCatalogValidationResult result = kb::library::ValidateModuleCatalog(modules);
     kb::tests::Require(!result.succeeded, "Engine21kbLibrary module validation must reject a dependency naming an unknown module");
@@ -497,15 +505,15 @@ void RunModuleValidationUnknownDependencyTest() {
 
 void RunModuleValidationCycleTest() {
     const std::vector<kb::library::LibraryModuleDesc> modules{
-        kb::library::LibraryModuleDesc{ .name = "A", .dependencies = { "B" } },
-        kb::library::LibraryModuleDesc{ .name = "B", .dependencies = { "A" } },
+        kb::library::LibraryModuleDesc{ .name = "A", .dependencies = { "B" }, .Register = &RecordModuleInstallCall },
+        kb::library::LibraryModuleDesc{ .name = "B", .dependencies = { "A" }, .Register = &RecordModuleInstallCall },
     };
     const kb::library::ModuleCatalogValidationResult result = kb::library::ValidateModuleCatalog(modules);
     kb::tests::Require(!result.succeeded, "Engine21kbLibrary module validation must reject a dependency cycle");
 
     const std::vector<kb::library::LibraryModuleDesc> acyclic{
-        kb::library::LibraryModuleDesc{ .name = "A", .dependencies = { "B" } },
-        kb::library::LibraryModuleDesc{ .name = "B" },
+        kb::library::LibraryModuleDesc{ .name = "A", .dependencies = { "B" }, .Register = &RecordModuleInstallCall },
+        kb::library::LibraryModuleDesc{ .name = "B", .Register = &RecordModuleInstallCall },
     };
     const kb::library::ModuleCatalogValidationResult acyclicResult = kb::library::ValidateModuleCatalog(acyclic);
     kb::tests::Require(acyclicResult.succeeded, "Engine21kbLibrary module validation must accept a valid, acyclic dependency chain");
@@ -515,10 +523,12 @@ void RunModuleValidationDuplicateFunctionTest() {
     const std::vector<kb::library::LibraryModuleDesc> modules{
         kb::library::LibraryModuleDesc{
             .name = "A",
+            .Register = &RecordModuleInstallCall,
             .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Shared.Fn" } },
         },
         kb::library::LibraryModuleDesc{
             .name = "B",
+            .Register = &RecordModuleInstallCall,
             .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Shared.Fn" } },
         },
     };
@@ -534,6 +544,7 @@ void RunModuleValidationFunctionPrefixMismatchTest() {
     const std::vector<kb::library::LibraryModuleDesc> mismatched{
         kb::library::LibraryModuleDesc{
             .name = "World",
+            .Register = &RecordModuleInstallCall,
             .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Physics.Raycast" } },
         },
     };
@@ -543,6 +554,7 @@ void RunModuleValidationFunctionPrefixMismatchTest() {
     const std::vector<kb::library::LibraryModuleDesc> matched{
         kb::library::LibraryModuleDesc{
             .name = "World",
+            .Register = &RecordModuleInstallCall,
             .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "World.Exists" } },
         },
     };
@@ -567,6 +579,7 @@ void RunModuleValidationFunctionSignatureChangedTest() {
     const std::vector<kb::library::LibraryModuleDesc> conflicting{
         kb::library::LibraryModuleDesc{
             .name = "World",
+            .Register = &RecordModuleInstallCall,
             .functions = {
                 LibraryFunctionDesc{
                     .canonicalName = "World.Exists",
@@ -597,6 +610,7 @@ void RunModuleValidationFunctionSignatureChangedTest() {
     const std::vector<kb::library::LibraryModuleDesc> identicalDuplicate{
         kb::library::LibraryModuleDesc{
             .name = "World",
+            .Register = &RecordModuleInstallCall,
             .functions = {
                 LibraryFunctionDesc{
                     .canonicalName = "World.Exists",
@@ -2657,6 +2671,38 @@ void RunFunctionDeprecationWiringTest() {
 // A module that cannot finish registering (its registration budget is too small), one with capability but no Register
 // function, and one that audits a function it never registered each fail the install with a diagnostic naming the module;
 // the startup report calls the allocation figure what it is.
+void RunPublishedModProviderTest() {
+    struct RestorePublishedMods {
+        std::vector<kb::mods::LoadedMod> previous = kb::mods::PublishedLoadedMods();
+        ~RestorePublishedMods() { kb::mods::PublishLoadedMods(std::move(previous)); }
+    } restore;
+    kb::mods::PublishLoadedMods({{.id = "sample", .name = "Sample", .version = "1.2.0", .entryScene = "/Game/Scenes/Entry.21kbscene"}});
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{scene};
+    const auto call = [&](const char* name, const char* id) {
+        const std::vector<kb::script::ScriptFunctionArgument> arguments{
+            {"id", kb::script::ScriptValue{std::string{id}}}
+        };
+        const auto result = host.Functions().Call(name, arguments, kb::script::ScriptFunctionCallContext{.scene = &scene});
+        kb::tests::Require(result.executed && result.Succeeded(), "Published mod API call failed");
+        return result;
+    };
+    const auto count = host.Functions().Call("Mods.Count", {}, kb::script::ScriptFunctionCallContext{.scene = &scene});
+    const std::vector<kb::script::ScriptFunctionArgument> indexArguments{{"index", kb::script::ScriptValue{0}}};
+    const auto record = host.Functions().Call("Mods.Get", indexArguments, kb::script::ScriptFunctionCallContext{.scene = &scene});
+    kb::tests::Require(count.executed && count.Succeeded() && count.Output("count")->AsInt() == 1 &&
+        record.executed && record.Succeeded() && record.Output("id")->AsString() == "sample" && record.Output("version")->AsString() == "1.2.0",
+        "Mod enumeration API did not expose the published record");
+    const auto loaded = call("Mods.IsLoaded", "sample");
+    kb::tests::Require(loaded.Output("loaded")->AsBool() && loaded.Output("version")->AsString() == "1.2.0" &&
+        call("Mods.EntryScene", "sample").Output("scene")->AsString() == "/Game/Scenes/Entry.21kbscene",
+        "Mod provider did not expose the published runtime record");
+    kb::mods::PublishLoadedMods({});
+    kb::tests::Require(!call("Mods.IsLoaded", "sample").Output("loaded")->AsBool() &&
+        call("Mods.EntryScene", "sample").Output("scene")->AsString().empty(),
+        "Mod provider retained an unloaded mod");
+}
+
 void RunModuleInstallFaultsAreReportedTest() {
     const auto registerOne = [](kb::script::ScriptRuntimeHost& host) {
         return host.RegisterFunction(kb::script::ScriptFunctionDesc{
@@ -2699,6 +2745,8 @@ void RunModuleInstallFaultsAreReportedTest() {
         kb::scene::Scene scene;
         kb::script::ScriptRuntimeHost host{ scene };
         const std::vector<kb::library::LibraryModuleDesc> modules{ kb::library::LibraryModuleDesc{ .name = "NoRegister" } };
+        const auto validation = kb::library::ValidateModuleCatalog(modules);
+        kb::tests::Require(!validation.succeeded, "catalog validation must reject capability without a provider before installation");
         const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
         kb::tests::Require(!result.succeeded && hasDiagnostic(result, "module 'NoRegister' has capability but no Register function"),
             "a module with capability and no Register function must fail with its own diagnostic");
@@ -2714,6 +2762,29 @@ void RunModuleInstallFaultsAreReportedTest() {
         kb::tests::Require(!result.succeeded && hasDiagnostic(result, "module 'Faulty' audits 'Faulty.Never', but Register() did not register it"),
             "an audited function that was never registered must fail the install");
         kb::tests::Require(!hasDiagnostic(result, "Faulty.One"), "the audited function that was registered must not be reported");
+    }
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{scene};
+        const std::vector<kb::library::LibraryModuleDesc> modules{
+            {.name = "EmptyProvider", .Register = [](kb::script::ScriptRuntimeHost&) { return true; }}
+        };
+        const auto result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "provider registered no callable API"),
+            "a provider returning success without implementation must fail product validation");
+    }
+    for (const bool affinityMismatch : {false, true}) {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::library::LibraryFunctionDesc function{.canonicalName = "Faulty.One"};
+        if (affinityMismatch) function.threadAffinity = kb::library::LibraryThreadAffinity::WorkerSafe;
+        else function.inputs.push_back({"unexpected", kb::script::ScriptValueType::Int, true});
+        const std::vector<kb::library::LibraryModuleDesc> modules{
+            {.name = "Faulty", .Register = registerOne, .functions = {function}}
+        };
+        const auto result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "differ from its registered implementation"),
+            "installation must reject metadata that differs from the real callable signature");
     }
 }
 
@@ -3087,12 +3158,12 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::tests::Require(restoredStroke != nullptr && restoredStroke->meshAssetId == 904U && restoredStroke->materialAssetId == 905U &&
                             restoredStroke->mode == kb::scene::SpaceStrokeMode::Cable && kb::tests::NearlyEqual(restoredStroke->width, 0.25F) &&
                             kb::tests::NearlyEqual(restoredStroke->cableSag, 1.5F) && restoredStroke->splineSegments == 12U && restoredStroke->enabled,
-        "Engine21kbLibrary component registry: Kreska przestrzenna must survive real save/load with its curve render policy");
+        "Engine21kbLibrary component registry: Line Renderer must survive real save/load with its curve render policy");
     const kb::scene::HistoryRibbonComponent* restoredRibbon = target.Components().HistoryRibbons().TryGet(restored);
     kb::tests::Require(restoredRibbon != nullptr && restoredRibbon->meshAssetId == 906U && restoredRibbon->materialAssetId == 907U &&
                             kb::tests::NearlyEqual(restoredRibbon->lifetimeSeconds, 2.0F) && kb::tests::NearlyEqual(restoredRibbon->width, 0.3F) &&
                             kb::tests::NearlyEqual(restoredRibbon->sampleIntervalSeconds, 0.1F) && restoredRibbon->enabled,
-        "Engine21kbLibrary component registry: Wstęga historii must survive real save/load with its sampling policy");
+        "Engine21kbLibrary component registry: Trail Renderer must survive real save/load with its sampling policy");
     const kb::scene::ParticleEffectComponent* restoredParticleEffect = target.Components().ParticleEffects().TryGet(restored);
     kb::tests::Require(restoredParticleEffect != nullptr && restoredParticleEffect->effectAssetId == 908U &&
                             restoredParticleEffect->deterministicSeed == 123456U &&
@@ -3298,7 +3369,7 @@ void RunStreamFocusRuntimeTest() {
 
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 19U + kb::scene::SceneUIEventCatalog().size(),
+    kb::tests::Require(catalog.size() == 20U + kb::scene::SceneUIEventCatalog().size(),
         "Engine21kbLibrary event schema registry must catalog every built-in event emitted by the engine");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
@@ -3312,7 +3383,7 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     }
 
     const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed",
-        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker" };
+        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnControllerColliderHit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker", "OnTimelineEvent" };
     for (const std::string& name : expectedNames) {
         kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
     }
@@ -3438,9 +3509,8 @@ void RunComponentInspectorDescCatalogTest() {
     const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
     const std::vector<kb::library::LibraryComponentInspectorDesc>& catalog = kb::library::EngineLibraryComponentInspectorRegistry::Catalog();
 
-    // Older names still accepted: 3D Radiance Emitter (Light) and the first Polish names of
-    // Line Renderer, Trail Renderer and Lens Flare.
-    constexpr std::size_t compatibilityAliasCount = 4U;
+    // Older name still accepted: 3D Radiance Emitter (Light).
+    constexpr std::size_t compatibilityAliasCount = 1U;
     kb::tests::Require(catalog.size() + compatibilityAliasCount == scriptComponentNames.size(),
         "Engine21kbLibrary component inspector catalog plus its compatibility aliases must cover exactly the components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
 
@@ -3476,14 +3546,13 @@ void RunComponentInspectorDescCatalogTest() {
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
     // 3D Radiance Emitter remains a public compatibility alias for Light and
-    // intentionally reuses the canonical inspector metadata for its 16 fields; the
-    // older names of Line Renderer (10), Trail Renderer (9) and Lens Flare (7) do too.
+    // intentionally reuses the canonical inspector metadata for its 16 fields.
     // WorldBackdrop grew eleven procedural sky fields (Unity Skybox/Procedural).
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 857U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (857, including the collision mesh and the compatibility aliases) across all components");
+    kb::tests::Require(fieldsChecked == 838U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (838, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5833,6 +5902,7 @@ void RunEngineLibraryTests() {
     RunDeprecationTest();
     RunFunctionDeprecationWiringTest();
     RunModuleInstallFaultsAreReportedTest();
+    RunPublishedModProviderTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunVisibilityGateResolutionTest();

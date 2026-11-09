@@ -25,6 +25,8 @@ struct ImportedAsset {
     std::uint16_t importOptions = 0;
     // Scale and rotation the model's mesh data takes (identity for a container written without them).
     AssetMeshImportTransform meshTransform{};
+    // How the model's levels of detail are built (the defaults for a container written without them).
+    AssetMeshLodSettings meshLod{};
     std::vector<std::byte> payload;
     std::vector<ImportedAssetResource> resources;
 };

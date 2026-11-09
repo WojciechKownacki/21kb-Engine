@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/core/RuntimeState.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -14,11 +15,14 @@ struct JoltPhysicsSceneSystemSettings {
     std::uint32_t workerThreadCount = 0U;
 };
 
-class JoltPhysicsSceneSystem final : public kb::scene::SceneSystem {
+class JoltPhysicsSceneSystem final : public kb::scene::SceneSystem, public kb::core::IRuntimeStateProvider {
 public:
     JoltPhysicsSceneSystem();
     explicit JoltPhysicsSceneSystem(JoltPhysicsSceneSystemSettings settings);
     ~JoltPhysicsSceneSystem() override;
+    [[nodiscard]] std::unique_ptr<kb::core::RuntimeStateSnapshot> CaptureRuntimeState(std::string& error) override;
+    [[nodiscard]] bool ValidateRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) const override;
+    [[nodiscard]] bool RestoreRuntimeState(const kb::core::RuntimeStateSnapshot& state, std::string& error) override;
 
     JoltPhysicsSceneSystem(const JoltPhysicsSceneSystem&) = delete;
     JoltPhysicsSceneSystem& operator=(const JoltPhysicsSceneSystem&) = delete;

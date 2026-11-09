@@ -66,6 +66,8 @@ struct MeshRenderProxyDesc {
     std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
     std::uint32_t materialSlotOverrideCount = 0;
     std::array<float, 16> model{};
+    // Already included in model; reapplied when publishing an ECS world transform.
+    std::array<float, 3> localRenderOffset{};
     // Optional animated/deformed local-space sphere. When valid it replaces
     // static mesh bounds for every visibility and shadow-culling path.
     RenderBoundsSphere boundsOverride{};
@@ -90,6 +92,8 @@ struct MeshRenderProxyDesc {
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
     bool morphDeformationEnabled = false;
+    // kb::scene::MeshRendererComponent::mobility == Static.
+    bool isStatic = false;
 };
 
 struct CameraRenderProxyDesc {
@@ -132,15 +136,21 @@ struct LightRenderProxyDesc {
     bool castsShadow = true;
     bool visible = true;
     // kb::scene::LightComponent: soft-shadow size (m; directional: source angle in degrees), Shadow
-    // Strength, a directional light's Shadow Distance (0 = the project's) and Mobility Static.
+    // Strength and a directional light's Shadow Distance (0 = the project's).
     float sourceRadius = 0.0F;
     float shadowStrength = 1.0F;
     float shadowDistance = 0.0F;
-    bool staticMobility = false;
     // LIB-141: mirrors kb::scene::LightComponent::layerMask. Filtered against the current
     // camera's cullingMask by SceneForwardLightSelector - see LightComponent.hpp's own doc
     // comment for the default-safety reasoning.
     std::uint32_t layer = 1U;
+    // kb::scene::LightComponent shadow settings; 0 / Default = the project's (SceneRenderLightingConfig).
+    float shadowBias = 0.0F;
+    float shadowNormalBias = 0.0F;
+    RenderLightShadowFilter shadowFilter = RenderLightShadowFilter::Default;
+    RenderLightShadowQuality shadowQuality = RenderLightShadowQuality::Default;
+    std::uint32_t shadowCascadeCount = 0U;
+    float shadowCascadeDistribution = 0.0F;
 };
 
 // This proxy never produces a draw. It is a renderer-derived representation
@@ -229,6 +239,9 @@ struct MeshRenderProxy {
     std::array<float, 16> previousModel{};
     std::uint64_t previousModelFrame = 0U;
     std::uint64_t spawnMotionFrame = 0U;
+    // The motion frame of the last change a shadow can show: the model, the mesh, its visibility, its shadow
+    // flags, the material or the skin. A cached local shadow stays while no such change reaches its light.
+    std::uint64_t shadowChangeFrame = 0U;
 };
 
 struct CameraRenderProxy {
@@ -354,10 +367,17 @@ public:
     void BeginMotionFrame(std::uint64_t rendererFrame) noexcept;
     // The current motion frame (never 0): what SceneRenderPreviousModel compares instance records against.
     [[nodiscard]] std::uint64_t MotionFrame() const noexcept { return motionFrame_; }
+    // The motion frame of the last change to shadow casters that no mesh proxy accounts for (a removed mesh, a
+    // generated swarm, a surface cast, a moved render origin): every cached local shadow of that frame is stale.
+    [[nodiscard]] std::uint64_t ShadowCasterGlobalChangeFrame() const noexcept { return shadowGlobalChangeFrame_; }
+    // Records such a change for the current motion frame.
+    void NoteNonMeshShadowCasterChange() noexcept { shadowGlobalChangeFrame_ = motionFrame_; }
     void SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept;
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
     void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
     [[nodiscard]] const std::optional<SceneRenderAmbientRadiance>& AmbientRadiance() const noexcept;
+    void SetLocalReflectionProbes(std::vector<SceneRenderReflectionProbe> probes);
+    [[nodiscard]] std::span<const SceneRenderReflectionProbe> LocalReflectionProbes() const noexcept;
 
     enum class TransformUpdateOutcome {
         NotFound,
@@ -515,6 +535,8 @@ private:
         std::uint64_t entityId, const GeometrySwarmRenderProxy& proxy, std::uint32_t index) const;
     void RebuildDrawGroupsIfNeeded() const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
+    // InvalidateDrawGroups for a change of a non-mesh proxy, which also marks every cached local shadow stale.
+    void InvalidateDrawGroupsOfNonMeshProxy() noexcept;
 
     MeshProxyMap meshes_;
     std::uint64_t meshContentRevision_ = NextContentRevision();
@@ -530,6 +552,7 @@ private:
     SpaceStrokeProxyMap spaceStrokes_;
     std::optional<SceneRenderWorldBackdrop> worldBackdrop_;
     std::optional<SceneRenderAmbientRadiance> ambientRadiance_;
+    std::vector<SceneRenderReflectionProbe> localReflectionProbes_;
     std::shared_ptr<const kb::particles::ParticleRenderSnapshot> particleRenderSnapshot_;
     mutable std::vector<SceneRenderDrawGroup> drawGroups_;
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;
@@ -542,6 +565,7 @@ private:
     std::uint64_t renderOriginRevision_ = 0U;
     std::uint64_t motionFrame_ = 1U;
     std::uint64_t motionRendererFrame_ = 0U;
+    std::uint64_t shadowGlobalChangeFrame_ = 0U;
     std::vector<std::pair<std::uint64_t, RenderOriginListener>> renderOriginListeners_;
     std::uint64_t nextRenderOriginListenerId_ = 1U;
 };

@@ -76,18 +76,19 @@ public:
     void ResetGraphMaterialDrawStats() const noexcept { passResources_.ResetGraphMaterialDrawStats(); }
     [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept { return passResources_.GraphMaterialDrawStats(); }
     void EndFrame(std::uint64_t frameIndex) const {
+        gpuDrivenCullingPass_.EndFrame();
         instanceBuffers_.EndFrame();
         passResources_.EndFrame(frameIndex);
     }
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
     [[nodiscard]] bool SubmitScreenMaterial(const SceneMeshScreenMaterialDesc& desc) const { return passResources_.SubmitScreenMaterial(desc); }
     void SetSkinningPaletteAllocator(const RenderSkinningPaletteAllocator* allocator) noexcept { skinningPaletteAllocator_ = allocator; }
+    void SetCoverageProbe(SceneMeshCoverageProbe* probe) noexcept { coverageProbe_ = probe; }
 
 private:
     SceneMeshPassResources passResources_;
     SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
     mutable SceneMeshInstanceBufferPool instanceBuffers_;
-    mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
     mutable MeshPipelineBuildResult gpuMeshScratch_;
     mutable std::vector<MeshDrawCommand> gpuMeshCommandScratch_;
@@ -104,6 +105,7 @@ private:
     // Derived renderer state only. The authored detail-switch policy remains in ECS.
     mutable const RenderScene* detailSwitchScene_ = nullptr;
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;
+    SceneMeshCoverageProbe* coverageProbe_ = nullptr;
 };
 
 } // namespace kb::render

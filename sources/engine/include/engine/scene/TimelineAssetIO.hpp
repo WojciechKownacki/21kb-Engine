@@ -14,6 +14,7 @@ inline constexpr const char* kTimelineAssetType = "Timeline";
 class TimelineAssetIO final {
 public:
     TimelineAssetIO() = delete;
+    [[nodiscard]] static bool Validate(const TimelineAsset& asset);
     [[nodiscard]] static std::optional<TimelineAsset> Load(
         const std::filesystem::path& path);
     [[nodiscard]] static std::optional<TimelineAsset> Load(std::istream& input);

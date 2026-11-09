@@ -48,7 +48,7 @@ public:
     // it, on every repaint and on every mouse move across the panel.
     [[nodiscard]] static constexpr int FieldCount(PhysicsComponentKind component) noexcept {
         switch (component) {
-        case PhysicsComponentKind::Rigidbody: return 12;
+        case PhysicsComponentKind::Rigidbody: return 14;
         case PhysicsComponentKind::Collider: return 14;
         case PhysicsComponentKind::CharacterController: return 9;
         case PhysicsComponentKind::Joint: return 13;

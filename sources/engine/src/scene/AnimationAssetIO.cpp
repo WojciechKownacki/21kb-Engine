@@ -296,10 +296,23 @@ bool ValidateAnimatorController(const AnimatorController& controller, std::strin
                 return false;
             }
             const bool hasClip = !state.clipReference.empty();
-            const bool hasBlendTree = !state.blendParameter.empty() || !state.blendChildren.empty();
-            if (hasClip == hasBlendTree) {
+            const bool hasBlendSpace = !state.blendSpaceReference.empty() || !state.blendParameterY.empty();
+            const bool hasBlendTree = !state.blendChildren.empty() || (!hasBlendSpace && !state.blendParameter.empty());
+            if (static_cast<int>(hasClip) + static_cast<int>(hasBlendTree) + static_cast<int>(hasBlendSpace) != 1) {
                 setError("State \"" + state.name + "\" in layer \"" + layer.name + "\" must have exactly one motion source.");
                 return false;
+            }
+            if (hasBlendSpace) {
+                const auto floatParameter = [&](const std::string& name) {
+                    return std::ranges::any_of(controller.parameters, [&](const AnimatorParameterDefinition& value) {
+                        return value.name == name && value.type == AnimatorParameterType::Float;
+                    });
+                };
+                if (state.blendSpaceReference.empty() || state.blendParameter == state.blendParameterY ||
+                    !floatParameter(state.blendParameter) || !floatParameter(state.blendParameterY)) {
+                    setError("State \"" + state.name + "\" requires a BlendSpace2D reference and two distinct Float parameters.");
+                    return false;
+                }
             }
             if (hasBlendTree) {
                 const auto parameter = std::find_if(controller.parameters.begin(), controller.parameters.end(),
@@ -670,6 +683,17 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
             }
             if (layerIndex >= controller.layers.size()) return std::nullopt;
             controller.layers[layerIndex].states.push_back(std::move(state));
+        } else if (command == "blend2D") {
+            std::size_t layerIndex = 0U, stateIndex = 0U;
+            std::string reference, x, y;
+            if (schemaVersion < 4U || !(input >> layerIndex >> stateIndex >> std::quoted(reference) >> std::quoted(x) >> std::quoted(y)) ||
+                layerIndex >= controller.layers.size() || stateIndex >= controller.layers[layerIndex].states.size() ||
+                !EndOfRecord(input)) return std::nullopt;
+            auto& state = controller.layers[layerIndex].states[stateIndex];
+            if (!state.blendSpaceReference.empty() || !state.blendParameter.empty()) return std::nullopt;
+            state.blendSpaceReference = std::move(reference);
+            state.blendParameter = std::move(x);
+            state.blendParameterY = std::move(y);
         } else if (command == "blend1D") {
             std::size_t layerIndex = 0U;
             std::size_t stateIndex = 0U;
@@ -886,6 +910,10 @@ bool AnimationAssetIO::SaveController(
             output << "state " << layerIndex << ' ' << state.id << ' ' << std::quoted(state.name) << ' ' << std::quoted(state.clipReference) << '\n';
             const std::size_t stateIndex =
                 static_cast<std::size_t>(&state - layer.states.data());
+            if (!state.blendSpaceReference.empty()) {
+                output << "blend2D " << layerIndex << ' ' << stateIndex << ' ' << std::quoted(state.blendSpaceReference)
+                       << ' ' << std::quoted(state.blendParameter) << ' ' << std::quoted(state.blendParameterY) << '\n';
+            }
             if (!state.blendChildren.empty()) {
                 output << "blend1D " << layerIndex << ' ' << stateIndex << ' '
                        << std::quoted(state.blendParameter) << '\n';

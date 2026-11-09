@@ -29,6 +29,7 @@ class SceneParticleRenderSynchronizer final {
 public:
     SceneParticleRenderSynchronizer();
     ~SceneParticleRenderSynchronizer();
+    [[nodiscard]] bool Prepare(kb::scene::Scene& scene) noexcept;
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene);
     void Acknowledge(const kb::scene::Scene& scene, std::uint64_t fixedStepIndex);
     void ReleaseScene(const kb::scene::Scene& scene, RenderScene* renderScene = nullptr) noexcept;

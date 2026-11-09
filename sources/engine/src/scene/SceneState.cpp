@@ -15,7 +15,9 @@ SceneState::SceneState()
 SceneState::SceneState(kb::ecs::WorldConfig worldConfig)
     : world(worldConfig)
     , components(world)
-    , componentStorage(world, components) {}
+    , componentStorage(world, components)
+    , systemScheduler(kb::ecs::SystemSchedulerConfig{
+        .workerPool = {.workerCount = worldConfig.workerThreadLimit}}) {}
 
 SceneState::~SceneState() {
     // Join the in-flight animator debug snapshot build before any member it

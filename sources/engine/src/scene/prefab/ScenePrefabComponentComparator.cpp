@@ -25,7 +25,7 @@ namespace {
         && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
         && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount
         && lhs.castsShadow == rhs.castsShadow
-        && lhs.receivesShadow == rhs.receivesShadow;
+        && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
 }
 
 [[nodiscard]] bool Equal(const LightComponent& lhs, const LightComponent& rhs) noexcept {
@@ -41,7 +41,9 @@ namespace {
         && lhs.volumetricScattering == rhs.volumetricScattering
         && lhs.castsShadow == rhs.castsShadow
         && lhs.sourceRadius == rhs.sourceRadius && lhs.shadowStrength == rhs.shadowStrength
-        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility;
+        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility && lhs.shadowBias == rhs.shadowBias && lhs.shadowNormalBias == rhs.shadowNormalBias
+        && lhs.shadowFilter == rhs.shadowFilter && lhs.shadowQuality == rhs.shadowQuality
+        && lhs.shadowCascadeCount == rhs.shadowCascadeCount && lhs.shadowCascadeDistribution == rhs.shadowCascadeDistribution;
 }
 
 [[nodiscard]] bool Equal(const InputComponent& lhs, const InputComponent& rhs) noexcept {

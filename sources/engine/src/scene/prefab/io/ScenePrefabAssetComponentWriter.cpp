@@ -1,6 +1,7 @@
 #include "scene/prefab/io/ScenePrefabAssetComponentWriter.hpp"
 
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 #include "scene/prefab/io/ScenePrefabAssetEscaper.hpp"
 #include "scene/CombatantFields.hpp"
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace kb::scene {
@@ -52,6 +54,9 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "meshRenderer.castsShadow=" << (components.meshRenderer->castsShadow ? 1 : 0) << '\n';
         output << "meshRenderer.receivesShadow=" << (components.meshRenderer->receivesShadow ? 1 : 0) << '\n';
         output << "meshRenderer.layer=" << components.meshRenderer->layer << '\n';
+        output << "meshRenderer.lodBias=" << components.meshRenderer->lodBias << '\n';
+        output << "meshRenderer.lodEnabled=" << (components.meshRenderer->lodEnabled ? 1 : 0) << '\n';
+        output << "meshRenderer.mobility=" << static_cast<int>(components.meshRenderer->mobility) << '\n';
     }
 
     output << "light=" << (components.light.has_value() ? 1 : 0) << '\n';
@@ -74,6 +79,12 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "light.shadowStrength=" << components.light->shadowStrength << '\n';
         output << "light.shadowDistance=" << components.light->shadowDistance << '\n';
         output << "light.mobility=" << static_cast<int>(components.light->mobility) << '\n';
+        output << "light.shadowBias=" << components.light->shadowBias << '\n';
+        output << "light.shadowNormalBias=" << components.light->shadowNormalBias << '\n';
+        output << "light.shadowFilter=" << static_cast<int>(components.light->shadowFilter) << '\n';
+        output << "light.shadowQuality=" << static_cast<int>(components.light->shadowQuality) << '\n';
+        output << "light.shadowCascadeCount=" << components.light->shadowCascadeCount << '\n';
+        output << "light.shadowCascadeDistribution=" << components.light->shadowCascadeDistribution << '\n';
     }
 
     output << "input=" << (components.input.has_value() ? 1 : 0) << '\n';
@@ -455,6 +466,15 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "behaviour.enabled=" << (components.behaviour->enabled ? 1 : 0) << '\n';
         output << "behaviour.tickGroup=" << static_cast<int>(components.behaviour->tickGroup) << '\n';
         output << "behaviour.executionOrder=" << components.behaviour->executionOrder << '\n';
+        if (!components.behaviourVariableOverrides.empty()) {
+            output << "behaviour.variableCount=" << components.behaviourVariableOverrides.size() << '\n';
+        }
+        for (std::size_t index = 0U; index < components.behaviourVariableOverrides.size(); ++index) {
+            const BehaviourVariableOverride& entry = components.behaviourVariableOverrides[index];
+            const std::string key = "behaviour.variable." + std::to_string(index);
+            output << key << ".name=" << ScenePrefabAssetEscaper::Escape(entry.name) << '\n';
+            output << key << ".value=" << ScenePrefabAssetEscaper::Escape(kb::script::FormatTypedValueText(entry.value)) << '\n';
+        }
     }
 
     output << "audioSource=" << (components.audioSource.has_value() ? 1 : 0) << '\n';

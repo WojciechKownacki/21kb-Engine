@@ -87,8 +87,6 @@ constexpr std::uint32_t kNoSiblingIndex = SceneHistoryObjectChange::NoSiblingInd
     state.node.components = ScenePrefabComponentSnapshot::Capture(scene, object);
     state.active = SceneEntityService::IsActive(scene, entity);
     state.persistent = SceneEntityService::IsPersistent(scene, entity);
-    const std::span<const BehaviourVariableOverride> overrides = SceneEntityService::BehaviourVariableOverrides(scene, entity);
-    state.behaviourVariableOverrides.assign(overrides.begin(), overrides.end());
     return state;
 }
 
@@ -142,6 +140,7 @@ template <typename T>
         && SameValue(lhs.particleEffect, rhs.particleEffect)
         && SameValue(lhs.lensEcho, rhs.lensEcho)
         && SameValue(lhs.behaviour, rhs.behaviour)
+        && SameBehaviourVariableOverrides(lhs.behaviourVariableOverrides, rhs.behaviourVariableOverrides)
         && SameValue(lhs.audioSource, rhs.audioSource)
         && SameValue(lhs.audioListener, rhs.audioListener)
         && SameValue(lhs.animator, rhs.animator)
@@ -166,17 +165,13 @@ template <typename T>
     }
     const TransformComponent& left = lhs.node.transform;
     const TransformComponent& right = rhs.node.transform;
-    const bool sameOverrides = std::ranges::equal(lhs.behaviourVariableOverrides, rhs.behaviourVariableOverrides,
-        [](const BehaviourVariableOverride& a, const BehaviourVariableOverride& b) noexcept {
-            return a.name == b.name && a.value == b.value;
-        });
     return lhs.parent == rhs.parent && lhs.node.name == rhs.node.name
         && lhs.node.LocalTranslation() == rhs.node.LocalTranslation() && SameVec3(left.localScale, right.localScale)
         && left.localRotation.x == right.localRotation.x && left.localRotation.y == right.localRotation.y
         && left.localRotation.z == right.localRotation.z && left.localRotation.w == right.localRotation.w
         && lhs.node.visibility.mode == rhs.node.visibility.mode && lhs.node.visibility.mask == rhs.node.visibility.mask
         && lhs.node.visibility.visible == rhs.node.visibility.visible
-        && lhs.active == rhs.active && lhs.persistent == rhs.persistent && sameOverrides
+        && lhs.active == rhs.active && lhs.persistent == rhs.persistent
         && SameComponents(lhs.node.components, rhs.node.components);
 }
 
@@ -474,7 +469,6 @@ void Seal(Scene& scene, SceneState& state) {
             ScenePrefabReferenceResolver::Apply(scene, node, entity, references);
             SceneEntityService::SetActive(scene, entity, objectState.active);
             SceneEntityService::SetPersistent(scene, entity, objectState.persistent);
-            SceneEntityService::ReplaceBehaviourVariableOverrides(scene, entity, objectState.behaviourVariableOverrides);
         }
     }
 

@@ -26,6 +26,9 @@ struct ParticleEmitterExecutionView {
     std::uint64_t snapshotRevision = 0U;
     std::uint32_t cpuRenderRecords = 0U;
     std::uint64_t cpuRenderBytes = 0U;
+    bool cpuWorkProfiled = false;
+    std::uint64_t cpuEmissionNanoseconds = 0U;
+    std::uint64_t cpuIntegrationNanoseconds = 0U;
 };
 
 enum class ParticleEditorProperty : std::uint16_t {
@@ -36,7 +39,7 @@ enum class ParticleEditorProperty : std::uint16_t {
     OutputAntiAliasing, OutputAlignment, FlipbookColumns, FlipbookRows,
     FlipbookFramesPerSecond, FlipbookLooping, OutputVelocityScale, OutputMinimumLength,
     OutputPointDiameter, ModulePayload,
-    FlipbookStartFrame, FlipbookFrameCount,
+    FlipbookStartFrame, FlipbookFrameCount, CustomProcessPath,
 };
 
 enum class ParticleEditorPropertyWidget : std::uint8_t {
@@ -77,7 +80,7 @@ struct ParticleEditorPropertyRow {
 }
 
 [[nodiscard]] constexpr bool IsParticleEditorOutputProperty(ParticleEditorProperty property) noexcept {
-    return property >= ParticleEditorProperty::OutputBlend && property <= ParticleEditorProperty::OutputPointDiameter;
+    return property == ParticleEditorProperty::CustomProcessPath || (property >= ParticleEditorProperty::OutputBlend && property <= ParticleEditorProperty::OutputPointDiameter);
 }
 
 struct ParticleOutputChoiceRow {

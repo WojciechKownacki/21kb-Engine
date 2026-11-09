@@ -100,6 +100,9 @@ struct ScriptApiCatalog {
     [[nodiscard]] static ScriptApiCatalog Build(const ScriptRuntimeHost& host);
     [[nodiscard]] static ScriptApiCatalog Build(const ScriptRuntimeHost& host, kb::assets::AssetManager& assets);
     [[nodiscard]] static std::span<const ScriptApiCatalogLuaBindingDefinition> LuaBindingDefinitions() noexcept;
+    // The Lua table a registered function without an authored binding is reachable in: "Table.Name"
+    // is Table.Name(inputs in order). Empty for a name with no single dot and for Task.
+    [[nodiscard]] static std::string_view GenericLuaTable(std::string_view functionName) noexcept;
 };
 
 [[nodiscard]] const char* ToString(ScriptApiCatalogLuaReturnKind kind) noexcept;

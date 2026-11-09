@@ -1,10 +1,12 @@
 #include "assets/EditorAssetOpenPolicy.hpp"
 
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/BlendSpace2D.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
+#include "scene/StaticMeshEditorSession.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -31,9 +33,9 @@ bool EditorAssetOpenPolicy::IsWorldDocument(const kb::assets::AssetMetadata& met
 }
 
 bool EditorAssetOpenPolicy::CanOpen(const kb::assets::AssetMetadata& metadata) {
-    return metadata.type == "LuaScript" || metadata.type == "NativeBehaviour" || ProjectFilesAssetIconResolver::IsSkeletalMesh(metadata) ||
-        ProjectFilesAssetIconResolver::IsSkeleton(metadata) || metadata.type == kb::scene::kAnimationClipAssetType ||
-        metadata.type == kb::scene::kAnimatorControllerAssetType ||
+    return metadata.type == "VisualGraph" || metadata.type == "LuaScript" || metadata.type == "NativeBehaviour" || ProjectFilesAssetIconResolver::IsSkeletalMesh(metadata) ||
+        ProjectFilesAssetIconResolver::IsSkeleton(metadata) || StaticMeshEditorSession::CanOpen(metadata) || metadata.type == kb::scene::kAnimationClipAssetType ||
+        metadata.type == kb::scene::kAnimatorControllerAssetType || metadata.type == kb::scene::kBlendSpace2DAssetType ||
         metadata.type == kb::scene::kParticleEffectAssetType || metadata.type == kb::scene::kTimelineAssetType ||
         metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance" ||
         metadata.type == kb::render::kRenderMaterialGraphAssetType || IsSceneDocument(metadata) || IsWorldDocument(metadata);

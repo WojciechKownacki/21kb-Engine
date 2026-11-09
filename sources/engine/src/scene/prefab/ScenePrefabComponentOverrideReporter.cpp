@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabComponentOverrideReporter.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include "scene/prefab/ScenePrefabCameraOverrideReporter.hpp"
@@ -10,6 +11,7 @@
 #include "scene/CombatantFields.hpp"
 #include "scene/AIBrainFields.hpp"
 
+#include <algorithm>
 #include <string>
 
 namespace kb::scene {
@@ -545,6 +547,24 @@ void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, Sc
     AppendAIBrain(components, entity, expected.aiBrain, report, nodeIndex, object);
     AppendDeformedGeometry(components, entity, expected.deformedGeometry, report, nodeIndex, object);
     AppendParticleEffect(components, entity, expected.particleEffect, report, nodeIndex, object);
+}
+
+void ScenePrefabComponentOverrideReporter::AppendBehaviourVariables(std::span<const BehaviourVariableOverride> actual, const ScenePrefabNodeComponents& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const auto find = [](std::span<const BehaviourVariableOverride> entries, const std::string& name) {
+        return std::ranges::find_if(entries, [&name](const BehaviourVariableOverride& entry) { return entry.name == name; });
+    };
+    for (const BehaviourVariableOverride& entry : actual) {
+        const std::span<const BehaviourVariableOverride> prefabEntries{ expected.behaviourVariableOverrides };
+        const auto match = find(prefabEntries, entry.name);
+        if (match == prefabEntries.end() || match->value != entry.value) {
+            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "behaviour.variable." + entry.name, kb::script::FormatTypedValueText(entry.value), ScenePrefabOverrideFlag::Behaviour);
+        }
+    }
+    for (const BehaviourVariableOverride& entry : expected.behaviourVariableOverrides) {
+        if (find(actual, entry.name) == actual.end()) {
+            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "behaviour.variable." + entry.name, "default", ScenePrefabOverrideFlag::Behaviour);
+        }
+    }
 }
 
 } // namespace kb::scene

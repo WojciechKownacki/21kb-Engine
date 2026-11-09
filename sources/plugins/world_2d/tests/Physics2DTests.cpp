@@ -85,6 +85,20 @@ struct World {
 } // namespace
 
 int main() {
+    // A visual/camera child delays world-transform composition after physics writes.
+    {
+        World world;
+        static_cast<void>(Ground(world));
+        const auto hero = world.Make("Player", 0.0F, 3.0F);
+        world.scene.Components().CharacterControllers2D().Set(hero, CharacterController2DComponent{});
+        static_cast<void>(world.scene.Entities().CreateEntity({ .name = "Camera", .parent = world.scene.Entities().Object(hero) }));
+        world.Run(1.0F);
+        Require(world.runtime->IsGrounded(hero), "a character with a child must fall and land without resetting velocity");
+        Require(world.runtime->JumpCharacter(hero, 7.0F), "a hierarchical character must jump");
+        world.Run(0.2F);
+        Require(world.At(hero).y > 1.8F, "a hierarchical character must preserve upward velocity");
+    }
+
     // A ball falls, lands on a static floor and rests; the floor never moves.
     {
         World world;
@@ -136,6 +150,13 @@ int main() {
         Require(call("Physics2D.AddImpulse", { entityArg(floating), number("x", 0.0F), number("y", 4.0F) }).Succeeded(), "a script gives a dynamic body an impulse");
         world.Run(0.1F);
         Require(world.At(floating).y > 5.0F, "an impulse moves a body");
+        const float beforeForce = call("Physics2D.GetVelocity", {entityArg(floating)}).Output("x")->AsFloat();
+        Require(call("Physics2D.AddForce", {entityArg(floating), number("x", 20.0F), number("y", 0.0F)}).Succeeded(),
+            "a script applies force to a dynamic body");
+        // Observe the next step before the rising body reaches the static obstacle.
+        world.Run(1.0F / 60.0F);
+        Require(call("Physics2D.GetVelocity", {entityArg(floating)}).Output("x")->AsFloat() > beforeForce,
+            "Physics2D.AddForce did not change the simulated velocity");
         Require(!call("Physics2D.AddImpulse", { entityArg(staticBody), number("x", 1.0F), number("y", 0.0F) }).Succeeded(), "a static body takes no impulse");
         Require(!call("Physics2D.SetVelocity", { entityArg(floating), number("x", std::nanf("")), number("y", 0.0F) }).Succeeded(), "a script velocity must be finite");
         Require(!call("Physics2D.SetVelocity", { entityArg(world.Make("NoBody", 0.0F, 0.0F)), number("x", 1.0F), number("y", 0.0F) }).Succeeded(), "an entity without a body is refused");
@@ -325,6 +346,26 @@ int main() {
         Require(world.runtime->IsGrounded(hero) && Near(world.At(hero).y, 1.0F, 0.08F), "a character that jumped lands again");
     }
 
+    // A grounded character follows a translating platform and detaches when it jumps.
+    {
+        World world;
+        const auto platform = world.Make("MovingPlatform", 0.0F, 0.0F);
+        world.scene.Components().Bodies2D().Set(platform, Body2DComponent{.type=1});
+        world.scene.Components().Colliders2D().Set(platform, Collider2DComponent{.width=6.0F,.height=0.5F});
+        const auto hero = world.Make("Rider", 0.0F, 1.5F);
+        world.scene.Components().CharacterControllers2D().Set(hero, CharacterController2DComponent{});
+        world.Run(1.0F);
+        Require(world.runtime->IsGrounded(hero), "the rider lands on the platform");
+        Require(world.runtime->SetVelocity(platform,2.0F,0.5F), "start the moving platform");
+        world.Run(1.0F);
+        Require(world.runtime->IsGrounded(hero) && Near(world.At(hero).x,2.0F,0.08F) && world.At(hero).y>1.15F,
+            "the grounded rider follows horizontal and vertical platform movement");
+        Require(world.runtime->JumpCharacter(hero,7.0F), "jump from the moving platform");
+        const auto takeoff = world.At(hero);
+        world.Run(0.3F);
+        Require(Near(world.At(hero).x,takeoff.x,0.05F) && world.At(hero).y>takeoff.y+1.0F,
+            "jumping detaches the rider from platform motion");
+    }
     // Slopes and ledges.
     {
         World world;
@@ -549,6 +590,8 @@ int main() {
         const auto ledgeHit = world.runtime->Raycast(true, -4.5F, 10.0F, 0.0F, -1.0F, 50.0F, 65535U);
         Require(ledgeHit.hit && Near(ledgeHit.y, 4.0F, 0.02F), "a ray down finds the top of a ledge");
 
+        const auto slopeNormal = world.runtime->Raycast(true, .5F, 5.0F, 0.0F, -1.0F, 10.0F, 65535U);
+        Require(slopeNormal.hit && slopeNormal.normalX < -.6F && slopeNormal.normalY > .6F, "tile slope exposes the upward outward normal");
         // Walk the character onto the slope and the block behind it.
         kb::script::ScriptRuntimeHost host{ world.scene };
         Require(host.Functions().Call("Physics2D.MoveCharacter", std::vector<kb::script::ScriptFunctionArgument>{ { "entity", kb::script::ScriptValue{ hero.Id(), kb::script::ScriptValueType::Entity } },
@@ -562,7 +605,7 @@ int main() {
         Require(Near(world.At(ball).y, 1.5F, 0.06F) && Near(world.At(ball).x, -6.5F, 0.3F), "a ball lands on the floor of the map");
         Require(Near(world.At(under).y, 4.4F, 0.08F) && world.At(under).x > -6.0F && world.At(under).x < -4.0F, "a ball thrown up from under a ledge passes through it and lands on top");
         Require(zoneEnter, "a ball falling into a trigger cell reports it, to the map and to the ball");
-        Require(world.At(hero).x > 1.5F && world.At(hero).y > 2.3F && world.runtime->IsGrounded(hero), "a character walks up the slope of the map onto the block");
+        Require(world.At(hero).x > 1.5F && world.At(hero).x < 3.8F && world.At(hero).y > 2.3F && world.runtime->IsGrounded(hero), "a character crosses the slope/block seam and stops at the adjoining wall");
 
         // A cell changed while playing changes the shapes: the floor under the ball goes away.
         const SceneEntity dropper = world.Make("Dropper", 7.5F, 3.0F);
@@ -614,6 +657,44 @@ int main() {
         world.Run(3.0F);
         Require(Near(world.At(ball).z, 0.75F, 0.1F) && Near(world.At(ball).y, 0.0F, 0.0001F), "a body stops at the wall of a flat map and keeps its height");
         Require(Near(world.At(hero).z, 0.5F, 0.12F) && Near(world.At(hero).x, 2.0F, 0.05F), "a character is stopped by the wall of a flat map");
+        std::filesystem::remove_all(root);
+    }
+
+    // Graphic rotations and flips must reach the actual Box2D polygon, including its boundary normals.
+    {
+        const auto root = std::filesystem::temp_directory_path() / "kb_world2d_rotated_collision_tests";
+        std::filesystem::create_directories(root);
+        for (std::uint8_t rotation = 0; rotation < 4; ++rotation) for (unsigned flip = 0; flip < 4; ++flip) {
+            auto map = kb::assets::MakeEmptyMap2DAsset(1U, 1U);
+            map.background = false;
+            map.orientation = kb::assets::Map2DOrientation::Wall;
+            kb::assets::Map2DSheet sheet;
+            sheet.texture = "/Game/Outline.png";
+            sheet.definitions[0].collision = { .kind = kb::assets::Map2DCollisionKind::Polygon, .polygon = {{0,1},{1,0},{1,1}} };
+            map.sheets.push_back(sheet);
+            const kb::assets::Map2DSprite sprite{ .sheet = 0, .rotation = rotation, .flipX = (flip & 1U) != 0U, .flipY = (flip & 2U) != 0U };
+            map.tiles[kb::assets::Map2DTileKey(0,0,0)].ground = sprite;
+            const auto file = root / "Outline.kbmap2d";
+            Require(kb::assets::Map2DAssetIO::Save(file, map), "save rotated collision map");
+            World world(true);
+            auto& manager = world.scene.Assets().Manager();
+            Require(manager.Mounts().Mount("Game", root), "mount rotated collision map");
+            Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register rotated map loader");
+            const kb::assets::AssetId source{ 90100U };
+            Require(manager.RegisterAsset({ .id = source, .type = "RenderMesh", .virtualPath = "/Game/Outline.kbmap2d", .physicalPath = file, .contentHash = 1U }), "register rotated map");
+            const auto level = world.scene.Entities().CreateEntity({ .name = "Outline" });
+            kb::world2d::SetUpMap2DComponents(world.scene, level, source.value, map);
+            world.Run(0.05F);
+            for (const float x : { -.25F, .25F }) {
+                const auto hit = world.runtime->Raycast(true, x, 2.0F, 0.0F, -1.0F, 4.0F, 65535U);
+                Require(hit.hit && hit.entity == level && hit.normalY > 0.6F && Near(hit.normalX*hit.normalX+hit.normalY*hit.normalY,1.0F,.01F),
+                    "rotated polygon must return an outward unit normal");
+                const auto uv = kb::assets::Map2DSpriteUV(sprite, hit.x + .5F, 1.0F - hit.y);
+                Require(uv[0] >= -.02F && uv[1] >= -.02F && uv[0] <= 1.02F && uv[1] <= 1.02F && uv[0]+uv[1] >= .98F &&
+                    std::min({std::abs(uv[0]-1.0F),std::abs(uv[1]-1.0F),std::abs(uv[0]+uv[1]-1.0F)}) < .02F,
+                    "Box2D hit must lie on the rendered rotated triangle boundary");
+            }
+        }
         std::filesystem::remove_all(root);
     }
 

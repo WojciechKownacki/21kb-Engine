@@ -1,7 +1,9 @@
 #include "console/EditorConsoleState.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <string_view>
 #include <utility>
 
 namespace kb::editor {
@@ -37,6 +39,26 @@ bool EditorConsoleState::Accepts(EditorConsoleLevel level) const noexcept {
         return showErrors_;
     }
     return true;
+}
+
+namespace {
+
+[[nodiscard]] bool ContainsIgnoringCase(std::string_view text, std::string_view needle) noexcept {
+    const auto lower = [](char character) noexcept {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    };
+    return std::search(text.begin(), text.end(), needle.begin(), needle.end(),
+        [&lower](char a, char b) noexcept { return lower(a) == lower(b); }) != text.end();
+}
+
+} // namespace
+
+bool EditorConsoleState::Shows(const EditorConsoleEntry& entry) const noexcept {
+    if (!Accepts(entry.level)) {
+        return false;
+    }
+    const std::string_view query = filter_.Query();
+    return query.empty() || ContainsIgnoringCase(entry.message, query) || ContainsIgnoringCase(entry.category, query);
 }
 
 void EditorConsoleState::Select(std::uint64_t sequence) noexcept {

@@ -48,6 +48,28 @@ inline constexpr std::array<PackagedRuntimeModuleDesc, 6U> kPackagedRuntimeModul
 
 inline constexpr std::string_view kWindowsCustomRuntimeModuleDirectory = "RuntimeModules";
 
+[[nodiscard]] constexpr bool IsPackagedHostModule(std::string_view name) noexcept {
+    return name == "Input" || name == "Script";
+}
+
+// Disabled entries participate too: module activation uses the first matching
+// descriptor entry, so conflicting duplicates must never reach a packaged host.
+[[nodiscard]] inline std::string ValidatePackagedRuntimeModuleReferences(
+    const kb::project::ProjectDescriptor& descriptor) {
+    for (std::size_t index = 0U; index < descriptor.plugins.size(); ++index) {
+        const auto& plugin = descriptor.plugins[index];
+        if (plugin.name.empty()) {
+            return "runtime module reference has an empty name";
+        }
+        for (std::size_t previous = 0U; previous < index; ++previous) {
+            if (descriptor.plugins[previous].name == plugin.name) {
+                return "duplicate runtime module reference: " + plugin.name;
+            }
+        }
+    }
+    return {};
+}
+
 [[nodiscard]] constexpr const PackagedRuntimeModuleDesc*
 FindPackagedRuntimeModule(std::string_view name) noexcept {
     for (const PackagedRuntimeModuleDesc& module : kPackagedRuntimeModules) {
@@ -119,6 +141,7 @@ TryPackagedRuntimeModuleKind(std::string_view name) noexcept {
     std::string_view targetProfileId,
     std::string_view moduleName) noexcept {
     return !TargetRequiresPackagedRuntimeModules(targetProfileId) ||
+        IsPackagedHostModule(moduleName) ||
         TryPackagedRuntimeModuleKind(moduleName).has_value();
 }
 

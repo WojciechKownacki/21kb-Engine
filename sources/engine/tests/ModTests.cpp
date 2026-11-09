@@ -12,8 +12,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kb::tests {

@@ -2500,7 +2500,7 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
     lighting.clusterDimensions = { 4U, 3U, 2U };
     lighting.environmentMode = SceneRenderEnvironmentMode::ImageBased;
-    lighting.globalIllumination = SceneRenderGlobalIlluminationMode::ProbeGrid;
+    lighting.globalIllumination = SceneRenderGlobalIlluminationMode::VoxelGrid;
     lighting.ibl.reflectionProbeCount = 2U;
     lighting.ibl.reflectionProbes[0].shape = SceneRenderReflectionProbeShape::Box;
     lighting.ibl.reflectionProbes[0].parallaxCorrection = true;
@@ -2526,8 +2526,8 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     Require(stats.environmentLightingSampleCount == 4U, "SceneRenderer validation did not report IBL sample count");
     Require(stats.reflectionProbeCount == 2U, "SceneRenderer validation did not report reflection probes");
     Require(stats.localReflectionProbeCount == 1U, "SceneRenderer validation did not report local reflection probes");
-    Require(stats.parallaxCorrectedProbeCount == 2U, "SceneRenderer validation did not report parallax corrected probes");
-    Require(stats.globalIlluminationMode == static_cast<std::uint32_t>(SceneRenderGlobalIlluminationMode::ProbeGrid) + 1U, "SceneRenderer validation did not report GI mode");
+    Require(stats.parallaxCorrectedProbeCount == 1U, "Only a probe with both per-probe and global parallax enabled should report correction");
+    Require(stats.globalIlluminationMode == static_cast<std::uint32_t>(SceneRenderGlobalIlluminationMode::VoxelGrid) + 1U, "SceneRenderer validation did not report GI mode");
     Require(stats.submittedAreaLightCount == 1U, "SceneRenderer validation did not report submitted area lights");
     Require(stats.submittedVolumetricLightCount == 1U, "SceneRenderer validation did not report volumetric lights");
     Require(stats.contactShadowLightCount == 1U, "SceneRenderer validation did not report contact shadow lights");
@@ -2668,6 +2668,13 @@ void RunDirectionalShadowCameraCoverageTest() {
     Require(setup.valid && NearlyEqual(std::abs(setup.camera.projection[0]), 1.0F / 50.0F),
         "Distant world geometry must not expand camera shadow coverage");
     Require(setup.camera.cullingMask == 1U, "Shadow submission must retain camera layer filtering");
+    // The engine's own shadow distance keeps the sun's maps around the camera: a scene kilometre-wide is not
+    // squeezed into one map.
+    const auto standard = DirectionalShadowPassPlanner{}.Build(
+        scene, resources, resourceMap, SceneRenderLightingConfig{}, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(standard.valid && standard.binding.cascadeCount == SceneRenderLightingConfig{}.shadowCascadeCount &&
+            SceneRenderLightingConfig{}.shadowDistance <= 400.0F,
+        "The default shadow distance must give a wide scene camera cascades");
     config.shadowCascadeCount = 3U;
     const auto cascaded = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
     Require(cascaded.valid && cascaded.binding.cascadeCount == 3U && cascaded.atlasSize == 2U * config.shadowMapSize,
@@ -2677,6 +2684,22 @@ void RunDirectionalShadowCameraCoverageTest() {
             NearlyEqual(std::abs(cascaded.cascadeCameras[1].projection[0]), 4.0F / 50.0F) &&
             NearlyEqual(std::abs(cascaded.cascadeCameras[2].projection[0]), 1.0F / 50.0F),
         "Cascade extents must shrink by a quarter from the shadow distance down to the nearest cascade");
+    // The sun's own cascades, resolution, filter, bias and normal bias replace the project's, and the bias and the
+    // normal offset are counted in texels of each cascade.
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{ .entityId = 3U, .kind = RenderLightKind::Directional, .castsShadow = true,
+        .shadowBias = 0.5F, .shadowNormalBias = 3.0F, .shadowFilter = RenderLightShadowFilter::Hard,
+        .shadowQuality = RenderLightShadowQuality::Low, .shadowCascadeCount = 2U, .shadowCascadeDistribution = 2.0F }));
+    const auto own = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    Require(own.valid && own.binding.cascadeCount == 2U && own.atlasSize == 2U * (config.shadowMapSize / 2U),
+        "A light's own cascade count and shadow quality must replace the project's");
+    Require(NearlyEqual(std::abs(own.cascadeCameras[0].projection[0]), 1.0F / 25.0F) && NearlyEqual(std::abs(own.cascadeCameras[1].projection[0]), 1.0F / 50.0F),
+        "A light's cascade distribution must set how much wider each cascade reaches than the finer one");
+    Require(own.binding.params[3] == 1.0F, "A light's own filter must replace the project's");
+    const float coarseTexel = 100.0F / static_cast<float>(config.shadowMapSize / 2U);
+    Require(NearlyEqual(own.binding.cascadeBias[5], 3.0F * coarseTexel) && NearlyEqual(own.binding.cascadeBias[1], 3.0F * 50.0F / static_cast<float>(config.shadowMapSize / 2U)) &&
+            own.binding.cascadeBias[4] > 0.0F && own.binding.cascadeBias[0] < own.binding.cascadeBias[4],
+        "The normal offset must be the light's normal bias in texels of each cascade, and the depth bias must grow with the texel");
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{ .entityId = 3U, .kind = RenderLightKind::Directional, .castsShadow = true }));
     config.shadowCascadeCount = 1U;
     const bgfx::Caps* caps = bgfx::getCaps();
     const float textureYScale = caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F;
@@ -2961,6 +2984,46 @@ void RunRenderSceneRecordsPreviousModelsPerMotionFrameTest() {
         }
     }
     Require(swarmChecked, "Motion history test lost the swarm instances");
+}
+
+void RunTilemapSortingSurvivesTransformPublicationTest() {
+    for (const bool wall : { false, true }) {
+        for (const bool generated : { false, true }) {
+            kb::scene::Scene scene;
+            const auto owner = scene.Entities().CreateEntity({ .name = "Map" });
+            scene.Components().Grids().Set(owner, { .wall = wall });
+            scene.Components().Tilemaps().Set(owner, { .mapAssetId = 42U });
+            scene.Components().TilemapRenderers().Set(owner, { .sortingOrder = 2 });
+            const auto mesh = generated ? scene.Entities().CreateEntity({ .name = "Chunk", .parent = scene.Entities().Object(owner) }) : owner;
+            scene.Components().MeshRenderers().Set(mesh, { .meshAssetId = 42U, .transient = generated });
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            RenderScene renderScene;
+            EcsRenderSceneSynchronizer synchronizer;
+            synchronizer.Sync(scene, renderScene);
+            const auto check = [&](float y, float z) {
+                const auto* proxy = renderScene.FindMeshByEntity(mesh.Id());
+                Require(proxy && NearlyEqual(proxy->desc.model[13], y) && NearlyEqual(proxy->desc.model[14], z),
+                    "Tilemap sorting offset was lost or applied twice during transform publication");
+            };
+            check(wall ? 0.0F : 1.0F, wall ? -1.0F : 0.0F);
+            synchronizer.PullTransforms(scene, renderScene);
+            check(wall ? 0.0F : 1.0F, wall ? -1.0F : 0.0F);
+            static_cast<void>(renderScene.DrawGroups());
+            kb::scene::WorldTransformAffine3x4 affine{};
+            affine.values[0] = affine.values[4] = affine.values[8] = 2.0F;
+            affine.values[10] = 6.0F;
+            affine.values[11] = 7.0F;
+            const std::array entities{ mesh };
+            const std::array affines{ affine };
+            synchronizer.SyncMeshWorldAffines(renderScene, entities, affines);
+            check(wall ? 6.0F : 8.0F, wall ? 5.0F : 7.0F);
+            kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+            if (!pool.Running()) pool.Start(kb::ecs::WorkerPoolConfig{});
+            synchronizer.SyncMeshWorldAffinesParallel(renderScene, entities, affines, pool);
+            pool.Stop();
+            check(wall ? 6.0F : 8.0F, wall ? 5.0F : 7.0F);
+        }
+    }
 }
 
 void RunSyncMeshWorldAffinesPushesColumnarTransformTest() {
@@ -4166,6 +4229,7 @@ void RunRenderSceneSyncTests() {
     RunSyncFallsBackToResolveForDirtyTransformTest();
     RunUpdateMeshTransformRefreshesInstanceInPlaceTest();
     RunRenderSceneRecordsPreviousModelsPerMotionFrameTest();
+    RunTilemapSortingSurvivesTransformPublicationTest();
     RunSyncMeshWorldAffinesPushesColumnarTransformTest();
     RunSyncMeshWorldAffinesParallelTest();
     RunRenderBridgeTelemetryAggregatesBridgeStatsTest();

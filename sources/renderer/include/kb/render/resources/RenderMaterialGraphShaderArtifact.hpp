@@ -13,7 +13,10 @@
 
 namespace kb::render {
 
-inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 9ULL;
+inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 11ULL;
+
+// Four-target variant of graph deferred shading. Additional model color/iris data is omitted.
+inline constexpr std::string_view kRenderMaterialGraphCompactGBufferPass = "GBufferCompact";
 
 // The scene pass that writes motion vectors with the graph's own program (Unreal's velocity pass).
 inline constexpr std::string_view kRenderMaterialGraphMotionVectorsPass = "MotionVectors";
@@ -144,7 +147,9 @@ struct RenderMaterialGraphShaderManifest {
 // same cases.
 [[nodiscard]] bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflection& reflection) noexcept;
 // Whether a scene cook produces `pass` (one of kRenderMaterialGraphScenePasses) for a graph.
-[[nodiscard]] bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass) noexcept;
+// Four-target profiles require the compact variant for graphs with extra model data.
+[[nodiscard]] bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection,
+    std::string_view pass, bool fourTargetGBuffer = false) noexcept;
 // Whether the graph's scene passes draw with its generated vertex shader instead of the builtin mesh one:
 // vertex-domain outputs move or re-map the surface, and a Deferred Decal carries its box's inverse transform.
 [[nodiscard]] bool RenderMaterialGraphRequiresGeneratedVertexShader(const RenderMaterialGraphReflection& reflection) noexcept;

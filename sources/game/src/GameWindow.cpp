@@ -5,6 +5,7 @@
 namespace kb::game {
 
 GameWindow::~GameWindow() {
+    rawMouse_.Reset();
     if (window_ != nullptr) {
         static_cast<void>(UnregisterTouchWindow(window_));
         DestroyWindow(window_);
@@ -83,6 +84,7 @@ bool GameWindow::Open(
     if (RegisterTouchWindow(window_, 0U) == 0) {
         return false;
     }
+    static_cast<void>(rawMouse_.Register(window_));
 
     // Windows overrides the first ShowWindow of a process whose launcher passed
     // STARTF_USESHOWWINDOW, so a shortcut set to "Run: minimized" - or any
@@ -167,6 +169,17 @@ LRESULT CALLBACK GameWindow::WindowProc(
         switch (message) {
         case WM_DISPLAYCHANGE:
         case WM_DPICHANGED:
+            if (message == WM_DPICHANGED && !self->fullscreen_) {
+                const auto* suggested = reinterpret_cast<const RECT*>(lparam);
+                if (suggested != nullptr) {
+                    SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                        suggested->right - suggested->left, suggested->bottom - suggested->top,
+                        SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                // SetWindowPos delivers WM_SIZE, keeping the renderer, layout and
+                // pointer hit testing in the same client-pixel coordinate space.
+                return 0;
+            }
             if (self->fullscreen_) {
                 MONITORINFO monitorInfo{ .cbSize = sizeof(MONITORINFO) };
                 const HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY);

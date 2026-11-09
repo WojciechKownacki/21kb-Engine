@@ -28,6 +28,18 @@ struct EditorToolbarRects {
 #endif
 };
 
+// The window's bottom status bar: the editor's state, then the Console's error and warning
+// counts (both open the Console when clicked), and the render backend on the right.
+struct EditorStatusBarRects {
+#if defined(_WIN32)
+    RECT bar{};
+    RECT state{};
+    RECT errors{};
+    RECT warnings{};
+    RECT backend{};
+#endif
+};
+
 struct EditorMenuRects {
 #if defined(_WIN32)
     // The Layout menu is as long as the project has layouts, so the rows are a
@@ -57,6 +69,9 @@ public:
     [[nodiscard]] static std::optional<int> HitTestMenuRow(const EditorMenuRects& rects, int x, int y) noexcept;
     [[nodiscard]] static EditorTransportCommand HitTestTransport(const EditorToolbarRects& rects, int x, int y) noexcept;
     [[nodiscard]] static bool HitTestSave(const EditorToolbarRects& rects, int x, int y) noexcept;
+    [[nodiscard]] static EditorStatusBarRects ResolveStatusBar(const RECT& rect) noexcept;
+    // True over the error or warning count, which open the Console.
+    [[nodiscard]] static bool HitTestStatusBarConsole(const EditorStatusBarRects& rects, int x, int y) noexcept;
     // Everything the open menu's dropdown paints, its shadow included.
     [[nodiscard]] static RECT MenuDropdownPaintBounds(const EditorMenuRects& menu) noexcept;
 
@@ -67,6 +82,8 @@ public:
     // The open menu's dropdown at the dropdown and row rectangles `menu` holds.
     void PaintMenuDropdown(HDC dc, const EditorMenuRects& menu, const EditorTheme& theme, const EditorShellInteractionState& interaction) const;
     void PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, const EditorShellInteractionState& interaction) const;
+    // `drawerCollapsed` adds the reminder that Ctrl+Space opens the collapsed bottom drawer.
+    void PaintStatusBar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, std::string_view backendLabel, bool drawerCollapsed) const;
 #endif
 
 private:

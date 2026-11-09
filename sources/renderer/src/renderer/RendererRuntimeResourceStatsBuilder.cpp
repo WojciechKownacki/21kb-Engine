@@ -6,6 +6,7 @@ namespace kb::render {
 
 Renderer::RuntimeSceneResourceStats RendererRuntimeResourceStatsBuilder::Build(const RendererRuntimeResourceStatsBuildDesc& desc) noexcept {
     return Renderer::RuntimeSceneResourceStats{
+        .memory = desc.resourceStats.memory,
         .cachedMeshCount = desc.cacheStats.meshCount,
         .cachedMaterialCount = desc.cacheStats.materialCount,
         .cachedTextureCount = desc.cacheStats.textureCount,

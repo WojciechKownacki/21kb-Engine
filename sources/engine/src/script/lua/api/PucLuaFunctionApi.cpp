@@ -1,4 +1,7 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
+#include "script/lua/PucLuaArguments.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
+#include "engine/assets/AssetId.hpp"
 
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/script/PucLuaSafeCall.hpp"
@@ -28,7 +31,7 @@ namespace kb::script {
 namespace {
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return PucLuaRuntimeApi::ContextFromUpvalue(state);
 }
 
 [[nodiscard]] std::vector<ScriptFunctionArgument> ArgumentsFromTable(lua_State* state, int index) {
@@ -51,6 +54,28 @@ namespace {
     return arguments;
 }
 
+// The Lua arguments as the signature's inputs: in order, or one table of them by name. A nil
+// argument leaves its input out, so an optional one keeps its default.
+[[nodiscard]] std::vector<ScriptFunctionArgument> ArgumentsBySignature(lua_State* state, const ScriptFunctionSignature& signature) {
+    const int count = lua_gettop(state);
+    const bool named = count == 1 && lua_istable(state, 1) != 0;
+    std::vector<ScriptFunctionArgument> arguments;
+    for (std::size_t index = 0; index < signature.inputs.size(); ++index) {
+        const ScriptFunctionPin& input = signature.inputs[index];
+        if (named) lua_getfield(state, 1, input.name.c_str());
+        else if (static_cast<int>(index) < count) lua_pushvalue(state, static_cast<int>(index) + 1);
+        else break;
+        if (!lua_isnil(state, -1)) {
+            ScriptValue value = input.type == ScriptValueType::Double && lua_type(state, -1) == LUA_TNUMBER
+                ? ScriptValue{ static_cast<double>(lua_tonumber(state, -1)) }
+                : PucLuaValueBridge::FromLua(state, -1);
+            arguments.push_back(ScriptFunctionArgument{ .name = input.name, .value = std::move(value) });
+        }
+        lua_pop(state, 1);
+    }
+    return arguments;
+}
+
 int LuaCallFunction(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -58,7 +83,7 @@ int LuaCallFunction(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* functionName = luaL_checkstring(state, 1);
+    const char* functionName = PucLuaCheckString(state, 1);
     std::vector<ScriptFunctionArgument> arguments;
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         arguments = ArgumentsFromTable(state, 2);
@@ -146,6 +171,10 @@ int LuaAudioPlay(lua_State* state) {
         if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
             std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
             arguments.insert(arguments.end(), options.begin(), options.end());
+        } else if (const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("Audio.Play") : nullptr;
+                   signature != nullptr && lua_gettop(state) >= 2) {
+            // Play(clip, volume, pitch, ...): the inputs in order.
+            arguments = ArgumentsBySignature(state, *signature);
         }
     }
 
@@ -250,13 +279,13 @@ int LuaAudioVoiceCall(lua_State* state, const char* function, const char* result
         return 1;
     }
     std::vector<ScriptFunctionArgument> arguments{
-        Arg("voice", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("voice", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
     };
     if (valuePin != nullptr) {
         if (valueIsBool) {
             arguments.push_back(Arg(valuePin, ScriptValue{ lua_toboolean(state, 2) != 0 }));
         } else {
-            arguments.push_back(Arg(valuePin, ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+            arguments.push_back(Arg(valuePin, ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }));
         }
     }
     const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
@@ -294,7 +323,7 @@ int LuaAudioSourceCall(lua_State* state, const char* function) {
     if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
         arguments.push_back(Arg(
             "entity",
-            ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }));
+            ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)), ScriptValueType::Entity }));
     }
     return PushAudioResultTable(state, context->CallFunction(function, arguments));
 }
@@ -326,12 +355,12 @@ int LuaAudioDspCall(lua_State* state, const char* function, const char* field = 
     }
     std::vector<ScriptFunctionArgument> arguments;
     if (field != nullptr && std::string_view{field} == "frames") {
-        const lua_Integer frames = luaL_checkinteger(state, 1);
-        luaL_argcheck(state, frames >= 1 && frames <= 384000, 1, "offline audio frames must be between 1 and 384000");
+        const lua_Integer frames = PucLuaCheckInteger(state, 1);
+        PucLuaArgumentCheck(state, frames >= 1 && frames <= 384000, 1, "offline audio frames must be between 1 and 384000");
         arguments.push_back(Arg(field, ScriptValue{static_cast<int>(frames)}));
     } else if (field != nullptr) {
         std::size_t length = 0U;
-        const char* value = luaL_checklstring(state, 1, &length);
+        const char* value = PucLuaCheckLString(state, 1, &length);
         arguments.push_back(Arg(field, ScriptValue{std::string{value, length}}));
     }
     const auto result = context->CallFunction(function, arguments);
@@ -384,6 +413,7 @@ int LuaAudioMeterCall(lua_State* state, const char* function, const char* output
 
 int LuaAudioConfigureMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ConfigureMeters", "configured"); }
 int LuaAudioResetMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ResetMeters", "reset"); }
+int LuaAudioDiagnostics(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Diagnostics"); }
 int LuaAudioMeter(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Meter"); }
 
 int LuaAudioSetListenerLocalUser(lua_State* state) {
@@ -392,8 +422,8 @@ int LuaAudioSetListenerLocalUser(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const lua_Integer localUser = luaL_checkinteger(state, 1);
-    luaL_argcheck(
+    const lua_Integer localUser = PucLuaCheckInteger(state, 1);
+    PucLuaArgumentCheck(
         state,
         localUser >= 0 && static_cast<std::uint64_t>(localUser) <= std::numeric_limits<std::uint32_t>::max(),
         1,
@@ -447,7 +477,7 @@ int LuaAudioSetBusVolume(lua_State* state) {
     if (bus != nullptr) {
         lua_pop(state, 1);
     }
-    arguments.push_back(Arg("volume", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+    arguments.push_back(Arg("volume", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }));
     const ScriptFunctionCallResult result = context->CallFunction("Audio.SetBusVolume", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "audio bus volume request failed");
@@ -489,6 +519,9 @@ int LuaAudioConfigureOcclusion(lua_State* state) {
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
         arguments.insert(arguments.end(), options.begin(), options.end());
+    } else if (const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("Audio.ConfigureOcclusion") : nullptr;
+               signature != nullptr && lua_gettop(state) >= 2) {
+        arguments = ArgumentsBySignature(state, *signature); // the inputs in order
     }
     const ScriptFunctionCallResult result = context->CallFunction("Audio.ConfigureOcclusion", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -504,7 +537,7 @@ int LuaAudioGetPosition(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("voice", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("voice", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Audio.GetPosition", arguments);
     lua_createtable(state, 0, 2);
@@ -525,7 +558,7 @@ int LuaAudioAddMarker(lua_State* state) {
         return 2;
     }
     std::vector<ScriptFunctionArgument> arguments{
-        Arg("voice", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("voice", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
     };
     std::size_t length = 0;
     const char* marker = luaL_tolstring(state, 2, &length);
@@ -533,7 +566,7 @@ int LuaAudioAddMarker(lua_State* state) {
     if (marker != nullptr) {
         lua_pop(state, 1);
     }
-    arguments.push_back(Arg("positionSeconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }));
+    arguments.push_back(Arg("positionSeconds", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }));
     const ScriptFunctionCallResult result = context->CallFunction("Audio.AddMarker", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "audio marker request failed");
@@ -571,7 +604,7 @@ int LuaAudioTransitionToSnapshot(lua_State* state) {
             lua_pop(state, 1);
         }
     }
-    arguments.push_back(Arg("durationSeconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+    arguments.push_back(Arg("durationSeconds", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }));
     const ScriptFunctionCallResult result = context->CallFunction("Audio.TransitionToSnapshot", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "audio snapshot transition request failed");
@@ -603,6 +636,12 @@ int LuaMeshRendererAssign(lua_State* state, const char* functionName, const char
         return 2;
     }
 
+    if (lua_gettop(state) > 2 || (lua_istable(state, 1) != 0 && lua_gettop(state) > 1)) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "mesh assignment expects an asset and optional entity/options, or one argument table");
+        return 2;
+    }
+
     std::vector<ScriptFunctionArgument> arguments;
     if (lua_istable(state, 1) != 0) {
         arguments = ArgumentsFromTable(state, 1);
@@ -619,6 +658,16 @@ int LuaMeshRendererAssign(lua_State* state, const char* functionName, const char
         if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
             std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
             arguments.insert(arguments.end(), options.begin(), options.end());
+        } else if (lua_gettop(state) >= 2 && lua_isnil(state, 2) == 0) {
+            int integer = 0;
+            const lua_Integer entity = lua_tointegerx(state, 2, &integer);
+            if (integer == 0 || entity < 0) {
+                lua_pushnil(state);
+                lua_pushliteral(state, "mesh assignment entity must be a nonnegative integer or an options table");
+                return 2;
+            }
+            arguments.push_back(ScriptFunctionArgument{ "entity",
+                ScriptValue{static_cast<std::uint64_t>(entity), ScriptValueType::Entity} });
         }
     }
 
@@ -645,7 +694,7 @@ int LuaMeshRendererSetMaterialSlot(lua_State* state) {
         return 2;
     }
 
-    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    const int slot = static_cast<int>(PucLuaCheckInteger(state, 1));
     std::size_t length = 0;
     const char* material = luaL_tolstring(state, 2, &length);
     std::vector<ScriptFunctionArgument> arguments{
@@ -679,7 +728,7 @@ int LuaMeshRendererGetMaterialSlot(lua_State* state) {
         return 2;
     }
 
-    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    const int slot = static_cast<int>(PucLuaCheckInteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("slot", ScriptValue{ slot }) };
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
@@ -706,7 +755,7 @@ int LuaMeshRendererClearMaterialSlot(lua_State* state) {
         return 2;
     }
 
-    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    const int slot = static_cast<int>(PucLuaCheckInteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("slot", ScriptValue{ slot }) };
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
@@ -732,7 +781,7 @@ int LuaMeshRendererSetMaterialInstance(lua_State* state) {
         return 2;
     }
 
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
         std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
@@ -805,7 +854,7 @@ int LuaMaterialInstanceRelease(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Release", arguments);
     lua_pushboolean(state, result.Output("released").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -818,7 +867,7 @@ int LuaMaterialInstanceExists(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Exists", arguments);
     lua_pushboolean(state, result.Output("exists").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -831,7 +880,7 @@ int LuaMaterialInstanceParent(lua_State* state) {
         lua_pushliteral(state, "");
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Parent", arguments);
     const std::string material = result.Output("material").value_or(ScriptValue{ std::string{} }).AsString();
@@ -846,9 +895,9 @@ int LuaMaterialInstanceSetParameterScalar(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const char* name = luaL_checkstring(state, 2);
-    const auto value = static_cast<float>(luaL_checknumber(state, 3));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const char* name = PucLuaCheckString(state, 2);
+    const auto value = static_cast<float>(PucLuaCheckNumber(state, 3));
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
         Arg("name", ScriptValue{ std::string{ name } }),
@@ -866,8 +915,8 @@ int LuaMaterialInstanceSetParameterBool(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const char* name = luaL_checkstring(state, 2);
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const char* name = PucLuaCheckString(state, 2);
     const bool value = lua_toboolean(state, 3) != 0;
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
@@ -886,8 +935,8 @@ int LuaMaterialInstanceClearParameter(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const char* name = luaL_checkstring(state, 2);
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const char* name = PucLuaCheckString(state, 2);
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
         Arg("name", ScriptValue{ std::string{ name } }),
@@ -940,7 +989,7 @@ int LuaParticlesRelease(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("Particles.Release", arguments);
     lua_pushboolean(state, result.Output("released").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -953,7 +1002,7 @@ int LuaParticlesExists(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("Particles.Exists", arguments);
     lua_pushboolean(state, result.Output("exists").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -966,7 +1015,7 @@ int LuaParticlesPlay(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("Particles.Play", arguments);
     lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -979,7 +1028,7 @@ int LuaParticlesStop(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("Particles.Stop", arguments);
     lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -992,7 +1041,7 @@ int LuaParticlesIsPlaying(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("Particles.IsPlaying", arguments);
     lua_pushboolean(state, result.Output("playing").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -1005,8 +1054,8 @@ int LuaParticlesSetSeed(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const auto seed = static_cast<std::uint64_t>(luaL_checkinteger(state, 2));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const auto seed = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 2));
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
         Arg("seed", ScriptValue{ seed, ScriptValueType::Hash }),
@@ -1023,9 +1072,9 @@ int LuaParticlesSetParameterScalar(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const char* name = luaL_checkstring(state, 2);
-    const auto value = static_cast<float>(luaL_checknumber(state, 3));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const char* name = PucLuaCheckString(state, 2);
+    const auto value = static_cast<float>(PucLuaCheckNumber(state, 3));
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
         Arg("name", ScriptValue{ std::string{ name } }),
@@ -1042,8 +1091,8 @@ int LuaParticlesClearParameter(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const char* name = luaL_checkstring(state, 2);
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const char* name = PucLuaCheckString(state, 2);
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
         Arg("name", ScriptValue{ std::string{ name } }),
@@ -1061,8 +1110,8 @@ int LuaParticlesEmit(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const auto count = static_cast<int>(luaL_checkinteger(state, 2));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const auto count = static_cast<int>(PucLuaCheckInteger(state, 2));
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
         Arg("count", ScriptValue{ count }),
@@ -1078,7 +1127,7 @@ int LuaParticlesLiveCount(lua_State* state) {
         lua_pushinteger(state, 0);
         return 1;
     }
-    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto instance = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("Particles.LiveCount", arguments);
     lua_pushinteger(state, result.Output("count").value_or(ScriptValue{ 0 }).AsInt());
@@ -1197,10 +1246,10 @@ int LuaRendererTestFrustum(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-        Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.0)) }),
+        Arg("centerX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+        Arg("centerY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("centerZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("radius", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 4, 0.0)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Renderer.TestFrustum", arguments);
     lua_pushboolean(state, result.Output("inside").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -1227,9 +1276,9 @@ int LuaRendererWorldToScreen(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("z", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("x", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+        Arg("y", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("z", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Renderer.WorldToScreen", arguments);
     lua_createtable(state, 0, 5);
@@ -1249,8 +1298,8 @@ int LuaRendererScreenPointToRay(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("screenX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-        Arg("screenY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("screenX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+        Arg("screenY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Renderer.ScreenPointToRay", arguments);
     lua_createtable(state, 0, 7);
@@ -1268,9 +1317,9 @@ int LuaRendererScreenToWorld(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("screenX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-        Arg("screenY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("distance", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("screenX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+        Arg("screenY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("distance", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Renderer.ScreenToWorld", arguments);
     lua_createtable(state, 0, 4);
@@ -1313,7 +1362,7 @@ int LuaRendererCaptureStatus(lua_State* state) {
         lua_pushliteral(state, "unknown");
         return 1;
     }
-    const auto capture = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto capture = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("capture", ScriptValue{ capture, ScriptValueType::Hash }) };
     const ScriptFunctionCallResult result = context->CallFunction("Renderer.CaptureStatus", arguments);
     const std::string status = result.Output("status").value_or(ScriptValue{ std::string{ "unknown" } }).AsString();
@@ -1332,7 +1381,7 @@ int LuaWorldFindByName(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* name = luaL_checkstring(state, 1);
+    const char* name = PucLuaCheckString(state, 1);
     std::vector<ScriptFunctionArgument> arguments{ Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }) };
     const ScriptFunctionCallResult result = context->CallFunction("World.FindByName", arguments);
     if (!result.Succeeded()) {
@@ -1348,7 +1397,7 @@ int LuaWorldExists(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
     const ScriptFunctionCallResult result = context->CallFunction("World.Exists", arguments);
     lua_pushboolean(state, result.Output("exists").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -1361,7 +1410,7 @@ int LuaWorldName(lua_State* state) {
         lua_pushliteral(state, "");
         return 1;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
     const ScriptFunctionCallResult result = context->CallFunction("World.Name", arguments);
     const std::string name = result.Output("name").value_or(ScriptValue{ std::string{} }).AsString();
@@ -1376,17 +1425,9 @@ int LuaWorldSpawn(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    std::vector<ScriptFunctionArgument> arguments;
-    if (lua_istable(state, 1) != 0) {
-        arguments = ArgumentsFromTable(state, 1);
-    } else if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
-        std::size_t length = 0;
-        const char* name = luaL_tolstring(state, 1, &length);
-        arguments.push_back(Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "", name != nullptr ? length : std::size_t{ 0 } } }));
-        if (name != nullptr) {
-            lua_pop(state, 1);
-        }
-    }
+    // Every input by position (name, prefab, parent, x, y, z, ...) or one table by name.
+    const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("World.Spawn") : nullptr;
+    const std::vector<ScriptFunctionArgument> arguments = signature != nullptr ? ArgumentsBySignature(state, *signature) : std::vector<ScriptFunctionArgument>{};
     const ScriptFunctionCallResult result = context->CallFunction("World.Spawn", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "world spawn failed");
@@ -1401,7 +1442,7 @@ int LuaWorldDestroy(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
     if (!lua_isnoneornil(state, 2)) {
         arguments.push_back(Arg("deferred", ScriptValue{ lua_toboolean(state, 2) != 0 }));
@@ -1417,8 +1458,8 @@ int LuaWorldSetTag(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const char* tag = luaL_checkstring(state, 2);
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const char* tag = PucLuaCheckString(state, 2);
     const bool enabled = lua_gettop(state) < 3 || lua_toboolean(state, 3) != 0;
     std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }),
@@ -1436,8 +1477,8 @@ int LuaWorldHasTag(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const char* tag = luaL_checkstring(state, 2);
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const char* tag = PucLuaCheckString(state, 2);
     std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }),
         Arg("tag", ScriptValue{ std::string{ tag != nullptr ? tag : "" } }),
@@ -1453,7 +1494,7 @@ int LuaWorldDefineTag(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const char* tag = luaL_checkstring(state, 1);
+    const char* tag = PucLuaCheckString(state, 1);
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("tag", ScriptValue{ std::string{ tag != nullptr ? tag : "" } }),
     };
@@ -1468,7 +1509,7 @@ int LuaWorldRemoveTagDefinition(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const char* tag = luaL_checkstring(state, 1);
+    const char* tag = PucLuaCheckString(state, 1);
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("tag", ScriptValue{ std::string{ tag != nullptr ? tag : "" } }),
     };
@@ -1513,10 +1554,10 @@ int LuaWorldTagAt(lua_State* state) {
         lua_pushliteral(state, "");
         return 1;
     }
-    const lua_Integer index = luaL_checkinteger(state, 1);
+    const lua_Integer index = PucLuaCheckInteger(state, 1);
     if (index < static_cast<lua_Integer>(std::numeric_limits<std::int32_t>::min()) ||
         index > static_cast<lua_Integer>(std::numeric_limits<std::int32_t>::max())) {
-        return luaL_error(state, "World.TagAt index must fit an Int");
+        PucLuaRaise("World.TagAt index must fit an Int");
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("index", ScriptValue{ static_cast<std::int32_t>(index) }),
@@ -1534,7 +1575,7 @@ int LuaWorldFindByTag(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* tag = luaL_checkstring(state, 1);
+    const char* tag = PucLuaCheckString(state, 1);
     std::vector<ScriptFunctionArgument> arguments{ Arg("tag", ScriptValue{ std::string{ tag != nullptr ? tag : "" } }) };
     const ScriptFunctionCallResult result = context->CallFunction("World.FindByTag", arguments);
     if (!result.Succeeded()) {
@@ -1550,8 +1591,8 @@ int LuaWorldSetParent(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
-    const auto parent = static_cast<std::uint64_t>(luaL_optinteger(state, 2, 0));
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    const auto parent = static_cast<std::uint64_t>(PucLuaOptInteger(state, 2, 0));
     std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }),
         Arg("parent", ScriptValue{ parent, ScriptValueType::Entity }),
@@ -1568,13 +1609,10 @@ int LuaWorldInstantiatePrefab(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    std::vector<ScriptFunctionArgument> arguments;
-    if (lua_istable(state, 1) != 0) {
-        arguments = ArgumentsFromTable(state, 1);
-    } else {
-        const char* prefab = luaL_checkstring(state, 1);
-        arguments.push_back(Arg("prefab", ScriptValue{ std::string{ prefab != nullptr ? prefab : "" } }));
-    }
+    // Every input by position (prefab, parameters, parent, x, y, z, ...) or one table by name.
+    if (lua_istable(state, 1) == 0) static_cast<void>(PucLuaCheckString(state, 1));
+    const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("World.InstantiatePrefab") : nullptr;
+    const std::vector<ScriptFunctionArgument> arguments = signature != nullptr ? ArgumentsBySignature(state, *signature) : std::vector<ScriptFunctionArgument>{};
     const ScriptFunctionCallResult result = context->CallFunction("World.InstantiatePrefab", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "prefab instantiate failed");
@@ -1590,13 +1628,10 @@ int LuaWorldSpawnGeometrySwarm(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    std::vector<ScriptFunctionArgument> arguments;
-    if (lua_istable(state, 1) != 0) {
-        arguments = ArgumentsFromTable(state, 1);
-    } else {
-        const char* prefab = luaL_checkstring(state, 1);
-        arguments.push_back(Arg("prefab", ScriptValue{ std::string{ prefab != nullptr ? prefab : "" } }));
-    }
+    // Every input by position (prefab, parameters, parent, x, y, z, ...) or one table by name.
+    if (lua_istable(state, 1) == 0) static_cast<void>(PucLuaCheckString(state, 1));
+    const ScriptFunctionSignature* signature = context->Functions() != nullptr ? context->Functions()->FindSignature("World.SpawnGeometrySwarm") : nullptr;
+    const std::vector<ScriptFunctionArgument> arguments = signature != nullptr ? ArgumentsBySignature(state, *signature) : std::vector<ScriptFunctionArgument>{};
     const ScriptFunctionCallResult result = context->CallFunction("World.SpawnGeometrySwarm", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "geometry swarm spawn failed");
@@ -1612,7 +1647,7 @@ int LuaSceneLoad(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* path = luaL_checkstring(state, 1);
+    const char* path = PucLuaCheckString(state, 1);
     const bool additive = lua_gettop(state) >= 2 && lua_toboolean(state, 2) != 0;
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("path", ScriptValue{ std::string{ path != nullptr ? path : "" } }),
@@ -1632,7 +1667,7 @@ int LuaSceneUnload(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto id = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto id = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("id", ScriptValue{ id, ScriptValueType::Hash }),
     };
@@ -1647,7 +1682,7 @@ int LuaSceneSetActive(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const auto id = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto id = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("id", ScriptValue{ id, ScriptValueType::Hash }),
     };
@@ -1673,7 +1708,7 @@ int LuaSceneFind(lua_State* state) {
         lua_pushinteger(state, 0);
         return 1;
     }
-    const char* name = luaL_checkstring(state, 1);
+    const char* name = PucLuaCheckString(state, 1);
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }),
     };
@@ -1688,7 +1723,7 @@ int LuaSceneLoadProgress(lua_State* state) {
         lua_pushnumber(state, 0.0);
         return 1;
     }
-    const auto id = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto id = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("id", ScriptValue{ id, ScriptValueType::Hash }),
     };
@@ -1703,7 +1738,7 @@ int LuaSceneSetDataLayerActive(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const char* layer = luaL_checkstring(state, 1);
+    const char* layer = PucLuaCheckString(state, 1);
     const bool active = lua_toboolean(state, 2) != 0;
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("layer", ScriptValue{ std::string{ layer } }),
@@ -1720,7 +1755,7 @@ int LuaSceneIsDataLayerActive(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const char* layer = luaL_checkstring(state, 1);
+    const char* layer = PucLuaCheckString(state, 1);
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("layer", ScriptValue{ std::string{ layer } }),
     };
@@ -1736,18 +1771,18 @@ int LuaUICreate(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* preset = luaL_checkstring(state, 1);
+    const char* preset = PucLuaCheckString(state, 1);
     std::vector<ScriptFunctionArgument> arguments{
         Arg("preset", ScriptValue{ std::string{ preset != nullptr ? preset : "" } }),
     };
     if (lua_gettop(state) >= 2 && lua_isnil(state, 2) == 0) {
-        const char* name = luaL_checkstring(state, 2);
+        const char* name = PucLuaCheckString(state, 2);
         arguments.push_back(Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }));
     }
     if (lua_gettop(state) >= 3 && lua_isnil(state, 3) == 0) {
         arguments.push_back(Arg(
             "parent",
-            ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 3)), ScriptValueType::Entity }));
+            ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, 3)), ScriptValueType::Entity }));
     }
     const ScriptFunctionCallResult result = context->CallFunction("UI.Create", arguments);
     if (!result.Succeeded()) {
@@ -1766,9 +1801,9 @@ int LuaUIComponentCall(lua_State* state, const char* function, const char* outpu
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* component = luaL_checkstring(state, 2);
+    const char* component = PucLuaCheckString(state, 2);
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)), ScriptValueType::Entity }),
         Arg("component", ScriptValue{ std::string{ component != nullptr ? component : "" } }),
     };
     const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
@@ -1798,7 +1833,7 @@ int LuaUIFocus(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+        Arg("entity", ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)), ScriptValueType::Entity }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("UI.Focus", arguments);
     lua_pushboolean(state, result.Output("focused").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -1823,8 +1858,8 @@ int LuaUIHitTest(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("x", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+        Arg("y", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("UI.HitTest", arguments);
     PucLuaValueBridge::Push(
@@ -1865,7 +1900,7 @@ int LuaTransformGetPosition(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
     const ScriptFunctionCallResult result = context->CallFunction("Transform.GetPosition", arguments);
     if (!result.Succeeded() || !result.Output("found").value_or(ScriptValue{ false }).AsBool()) {
@@ -1894,10 +1929,10 @@ int LuaTransformSetPosition(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
-            Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("z", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+            Arg("entity", ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)), ScriptValueType::Entity }),
+            Arg("x", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("y", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("z", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Transform.SetPosition", arguments);
@@ -1916,10 +1951,10 @@ int LuaTransformTranslate(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
-            Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("z", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+            Arg("entity", ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)), ScriptValueType::Entity }),
+            Arg("x", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("y", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("z", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Transform.Translate", arguments);
@@ -1940,7 +1975,7 @@ int LuaTransformTranslate(lua_State* state) {
     std::vector<ScriptFunctionArgument> arguments;
     if (lua_istable(state, 1) != 0) {
         lua_getfield(state, 1, "entity");
-        arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, -1)), ScriptValueType::Entity }));
+        arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, -1)), ScriptValueType::Entity }));
         lua_pop(state, 1);
         for (const char* axis : { "x", "y", "z" }) {
             bool present = false;
@@ -1949,10 +1984,10 @@ int LuaTransformTranslate(lua_State* state) {
         }
         return arguments;
     }
-    arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }));
-    arguments.push_back(Arg("x", ScriptValue{ static_cast<double>(luaL_checknumber(state, 2)) }));
-    arguments.push_back(Arg("y", ScriptValue{ static_cast<double>(luaL_checknumber(state, 3)) }));
-    arguments.push_back(Arg("z", ScriptValue{ static_cast<double>(luaL_checknumber(state, 4)) }));
+    arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)), ScriptValueType::Entity }));
+    arguments.push_back(Arg("x", ScriptValue{ static_cast<double>(PucLuaCheckNumber(state, 2)) }));
+    arguments.push_back(Arg("y", ScriptValue{ static_cast<double>(PucLuaCheckNumber(state, 3)) }));
+    arguments.push_back(Arg("z", ScriptValue{ static_cast<double>(PucLuaCheckNumber(state, 4)) }));
     return arguments;
 }
 
@@ -1963,7 +1998,7 @@ int LuaPrecisePositionQuery(lua_State* state, const char* function) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
     const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
     if (!result.Succeeded() || !result.Output("found").value_or(ScriptValue{ false }).AsBool()) {
@@ -2032,14 +2067,14 @@ int LuaPhysicsRaycast(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("originX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-            Arg("originY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("originZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("directionX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
-            Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
-            Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
-            Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
-            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 8, static_cast<int>(kb::scene::kPhysicsAllLayers))) }),
+            Arg("originX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+            Arg("originY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("originZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("directionX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
+            Arg("directionY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 5)) }),
+            Arg("directionZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 6)) }),
+            Arg("distance", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 7, 1000.0)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 8, static_cast<int>(kb::scene::kPhysicsAllLayers))) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.Raycast", arguments);
@@ -2062,7 +2097,7 @@ int LuaPhysicsRaycast(lua_State* state) {
 // exceeds int32 range) and would silently mis-marshal a small-magnitude
 // entity id as Int instead (see LIB-123's World.SetPropertyEntity notes).
 [[nodiscard]] std::uint64_t CheckEntityArg(lua_State* state, int index) {
-    return static_cast<std::uint64_t>(luaL_checkinteger(state, index));
+    return static_cast<std::uint64_t>(PucLuaCheckInteger(state, index));
 }
 
 int LuaPhysicsAddForce(lua_State* state) {
@@ -2073,9 +2108,9 @@ int LuaPhysicsAddForce(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("forceX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("forceY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("forceZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("forceX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("forceY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("forceZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.AddForce", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2090,9 +2125,9 @@ int LuaPhysicsAddImpulse(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("impulseX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("impulseY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("impulseZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("impulseX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("impulseY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("impulseZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.AddImpulse", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2107,9 +2142,9 @@ int LuaPhysicsAddTorque(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("torqueX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("torqueY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("torqueZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("torqueX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("torqueY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("torqueZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.AddTorque", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2125,11 +2160,11 @@ int LuaPhysicsAddExplosionForce(lua_State* state) {
     }
     std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("force", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
-        Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
-        Arg("radius", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
+        Arg("force", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("centerX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("centerY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
+        Arg("centerZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 5)) }),
+        Arg("radius", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 6)) }),
     };
     if (!lua_isnoneornil(state, 7)) {
         arguments.push_back(Arg("impulse", ScriptValue{ lua_toboolean(state, 7) != 0 }));
@@ -2147,9 +2182,9 @@ int LuaPhysicsSetVelocity(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("velocityX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("velocityY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("velocityZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("velocityX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("velocityY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("velocityZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.SetVelocity", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2180,9 +2215,9 @@ int LuaPhysicsSetAngularVelocity(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("angularVelocityX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("angularVelocityY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("angularVelocityZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("angularVelocityX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("angularVelocityY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("angularVelocityZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.SetAngularVelocity", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2211,16 +2246,17 @@ int LuaPhysicsMoveKinematic(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const std::vector<ScriptFunctionArgument> arguments{
+    std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("targetX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("targetY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("targetZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
-        Arg("rotationX", ScriptValue{ static_cast<float>(luaL_optnumber(state, 5, 0.0)) }),
-        Arg("rotationY", ScriptValue{ static_cast<float>(luaL_optnumber(state, 6, 0.0)) }),
-        Arg("rotationZ", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 0.0)) }),
-        Arg("rotationW", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 1.0)) }),
+        Arg("targetX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("targetY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("targetZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
+        Arg("rotationX", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 5, 0.0)) }),
+        Arg("rotationY", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 6, 0.0)) }),
+        Arg("rotationZ", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 7, 0.0)) }),
+        Arg("rotationW", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 8, 1.0)) }),
     };
+    if (lua_isnoneornil(state, 9) == 0) arguments.push_back(Arg("deltaSeconds", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 9)) }));
     const ScriptFunctionCallResult result = context->CallFunction("Physics.MoveKinematic", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;
@@ -2270,7 +2306,7 @@ int LuaPhysicsLayerBit(lua_State* state) {
         lua_pushinteger(state, 0);
         return 1;
     }
-    const char* name = luaL_checkstring(state, 1);
+    const char* name = PucLuaCheckString(state, 1);
     const std::vector<ScriptFunctionArgument> arguments{ Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }) };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.LayerBit", arguments);
     lua_pushinteger(state, static_cast<lua_Integer>(result.Output("bit").value_or(ScriptValue{ 0 }).AsInt()));
@@ -2288,8 +2324,8 @@ int LuaPhysicsCharacterMove(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("moveX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("moveZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("moveX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("moveZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterMove", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2304,7 +2340,7 @@ int LuaPhysicsCharacterJump(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("speed", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("speed", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterJump", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2319,7 +2355,7 @@ int LuaPhysicsSetCharacterJumpGrace(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("seconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("seconds", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.SetCharacterJumpGrace", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2431,15 +2467,15 @@ int LuaPhysicsSphereCast(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("originX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-            Arg("originY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("originZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("directionX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
-            Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
-            Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
-            Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
-            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 0.5)) }),
-            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 9, PushShapeQueryLayerMaskDefault())) }),
+            Arg("originX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+            Arg("originY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("originZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("directionX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
+            Arg("directionY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 5)) }),
+            Arg("directionZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 6)) }),
+            Arg("distance", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 7, 1000.0)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 8, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 9, PushShapeQueryLayerMaskDefault())) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.SphereCast", arguments);
@@ -2466,17 +2502,17 @@ int LuaPhysicsBoxCast(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("originX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-            Arg("originY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("originZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("directionX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
-            Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
-            Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
-            Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
-            Arg("halfExtentsX", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 0.5)) }),
-            Arg("halfExtentsY", ScriptValue{ static_cast<float>(luaL_optnumber(state, 9, 0.5)) }),
-            Arg("halfExtentsZ", ScriptValue{ static_cast<float>(luaL_optnumber(state, 10, 0.5)) }),
-            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 11, PushShapeQueryLayerMaskDefault())) }),
+            Arg("originX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+            Arg("originY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("originZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("directionX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
+            Arg("directionY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 5)) }),
+            Arg("directionZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 6)) }),
+            Arg("distance", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 7, 1000.0)) }),
+            Arg("halfExtentsX", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 8, 0.5)) }),
+            Arg("halfExtentsY", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 9, 0.5)) }),
+            Arg("halfExtentsZ", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 10, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 11, PushShapeQueryLayerMaskDefault())) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.BoxCast", arguments);
@@ -2503,16 +2539,16 @@ int LuaPhysicsCapsuleCast(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("originX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-            Arg("originY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("originZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("directionX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
-            Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
-            Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
-            Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
-            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 0.5)) }),
-            Arg("height", ScriptValue{ static_cast<float>(luaL_optnumber(state, 9, 2.0)) }),
-            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 10, PushShapeQueryLayerMaskDefault())) }),
+            Arg("originX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+            Arg("originY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("originZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("directionX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
+            Arg("directionY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 5)) }),
+            Arg("directionZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 6)) }),
+            Arg("distance", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 7, 1000.0)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 8, 0.5)) }),
+            Arg("height", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 9, 2.0)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 10, PushShapeQueryLayerMaskDefault())) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.CapsuleCast", arguments);
@@ -2539,12 +2575,12 @@ int LuaPhysicsOverlapSphere(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-            Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
-            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
-            Arg("skip", ScriptValue{ static_cast<int>(luaL_optinteger(state, 6, 0)) }),
+            Arg("centerX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+            Arg("centerY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("centerZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 4, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
+            Arg("skip", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 6, 0)) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapSphere", arguments);
@@ -2571,14 +2607,15 @@ int LuaPhysicsOverlapBox(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-            Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("halfExtentsX", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
-            Arg("halfExtentsY", ScriptValue{ static_cast<float>(luaL_optnumber(state, 5, 0.5)) }),
-            Arg("halfExtentsZ", ScriptValue{ static_cast<float>(luaL_optnumber(state, 6, 0.5)) }),
-            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 7, PushShapeQueryLayerMaskDefault())) }),
+            Arg("centerX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+            Arg("centerY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("centerZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("halfExtentsX", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 4, 0.5)) }),
+            Arg("halfExtentsY", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 5, 0.5)) }),
+            Arg("halfExtentsZ", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 6, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 7, PushShapeQueryLayerMaskDefault())) }),
         };
+        if (lua_isnoneornil(state, 8) == 0) arguments.push_back(Arg("skip", ScriptValue{ CheckEntityArg(state, 8), ScriptValueType::Entity }));
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapBox", arguments);
     if (!result.Succeeded()) {
@@ -2604,13 +2641,14 @@ int LuaPhysicsOverlapCapsule(lua_State* state) {
         arguments = ArgumentsFromTable(state, 1);
     } else {
         arguments = {
-            Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
-            Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-            Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
-            Arg("height", ScriptValue{ static_cast<float>(luaL_optnumber(state, 5, 2.0)) }),
-            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 6, PushShapeQueryLayerMaskDefault())) }),
+            Arg("centerX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 1)) }),
+            Arg("centerY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+            Arg("centerZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 4, 0.5)) }),
+            Arg("height", ScriptValue{ static_cast<float>(PucLuaOptNumber(state, 5, 2.0)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 6, PushShapeQueryLayerMaskDefault())) }),
         };
+        if (lua_isnoneornil(state, 7) == 0) arguments.push_back(Arg("skip", ScriptValue{ CheckEntityArg(state, 7), ScriptValueType::Entity }));
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapCapsule", arguments);
     if (!result.Succeeded()) {
@@ -2633,10 +2671,10 @@ int LuaPhysicsClosestPoint(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
-        Arg("pointX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("pointY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
-        Arg("pointZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
-        Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
+        Arg("pointX", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("pointY", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
+        Arg("pointZ", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 4)) }),
+        Arg("layerMask", ScriptValue{ static_cast<int>(PucLuaOptInteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.ClosestPoint", arguments);
     if (!result.Succeeded()) {
@@ -2651,9 +2689,9 @@ int LuaPhysicsClosestPoint(lua_State* state) {
 }
 
 [[nodiscard]] std::vector<ScriptFunctionArgument> InputActionArgs(lua_State* state) {
-    const char* action = luaL_checkstring(state, 1);
+    const char* action = PucLuaCheckString(state, 1);
     std::vector<ScriptFunctionArgument> arguments{ Arg("action", ScriptValue{ std::string{ action != nullptr ? action : "" } }) };
-    const int player = static_cast<int>(luaL_optinteger(state, 2, 0));
+    const int player = static_cast<int>(PucLuaOptInteger(state, 2, 0));
     if (player > 0) {
         arguments.push_back(Arg("player", ScriptValue{ player }));
     }
@@ -2772,7 +2810,7 @@ int LuaInputVector3(lua_State* state) {
     if (lua_isinteger(state, index) != 0) {
         return std::to_string(static_cast<std::uint64_t>(lua_tointeger(state, index)));
     }
-    const char* context = luaL_checkstring(state, index);
+    const char* context = PucLuaCheckString(state, index);
     return std::string{ context != nullptr ? context : "" };
 }
 
@@ -2782,8 +2820,8 @@ int LuaInputAddMappingContext(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const int priority = static_cast<int>(luaL_optinteger(state, 2, 0));
-    const int player = static_cast<int>(luaL_optinteger(state, 3, 0));
+    const int priority = static_cast<int>(PucLuaOptInteger(state, 2, 0));
+    const int player = static_cast<int>(PucLuaOptInteger(state, 3, 0));
     std::vector<ScriptFunctionArgument> arguments{
         Arg("context", ScriptValue{ LuaContextId(state, 1) }),
         Arg("priority", ScriptValue{ priority }),
@@ -2802,7 +2840,7 @@ int LuaInputRemoveMappingContext(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const int player = static_cast<int>(luaL_optinteger(state, 2, 0));
+    const int player = static_cast<int>(PucLuaOptInteger(state, 2, 0));
     std::vector<ScriptFunctionArgument> arguments{ Arg("context", ScriptValue{ LuaContextId(state, 1) }) };
     if (player > 0) {
         arguments.push_back(Arg("player", ScriptValue{ player }));
@@ -2814,7 +2852,7 @@ int LuaInputRemoveMappingContext(lua_State* state) {
 
 int LuaInputTouchCount(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
     const ScriptFunctionCallResult result = context->CallFunction("Input.TouchCount", {});
     if (!result.Succeeded()) return PushCallError(state, result, "touch count query failed");
     lua_pushinteger(state, result.Output("count").value_or(ScriptValue{0}).AsInt());
@@ -2823,9 +2861,9 @@ int LuaInputTouchCount(lua_State* state) {
 
 int LuaInputTouchPoint(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
-    const lua_Integer index = luaL_checkinteger(state, 1);
-    luaL_argcheck(state, index >= std::numeric_limits<int>::min() && index <= std::numeric_limits<int>::max(),
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
+    const lua_Integer index = PucLuaCheckInteger(state, 1);
+    PucLuaArgumentCheck(state, index >= std::numeric_limits<int>::min() && index <= std::numeric_limits<int>::max(),
         1, "index must fit an Int");
     const std::array arguments{
         Arg("index", ScriptValue{static_cast<int>(index)}),
@@ -2876,7 +2914,7 @@ int LuaPointerButton(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const int button = static_cast<int>(luaL_optinteger(state, 1, 0));
+    const int button = static_cast<int>(PucLuaOptInteger(state, 1, 0));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("button", ScriptValue{ button }) };
     const ScriptFunctionCallResult result = context->CallFunction("Pointer.Button", arguments);
     lua_pushboolean(state, result.Output("pressed").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -2889,10 +2927,10 @@ int LuaInputRebind(lua_State* state) {
         lua_pushnil(state);
         return 1;
     }
-    const char* key = luaL_checkstring(state, 3);
-    const int gamepadIndex = static_cast<int>(luaL_optinteger(state, 4, 0));
+    const char* key = PucLuaCheckString(state, 3);
+    const int gamepadIndex = static_cast<int>(PucLuaOptInteger(state, 4, 0));
     const bool allowConflict = lua_toboolean(state, 5) != 0;
-    const int player = static_cast<int>(luaL_optinteger(state, 6, 0));
+    const int player = static_cast<int>(PucLuaOptInteger(state, 6, 0));
     std::vector<ScriptFunctionArgument> arguments{
         Arg("context", ScriptValue{LuaContextId(state, 1)}),
         Arg("binding", ScriptValue{LuaContextId(state, 2)}),
@@ -2929,8 +2967,8 @@ int LuaInputSaveRebindProfile(lua_State* state) {
         lua_pushnil(state);
         return 1;
     }
-    const char* path = luaL_checkstring(state, 2);
-    const int player = static_cast<int>(luaL_optinteger(state, 3, 0));
+    const char* path = PucLuaCheckString(state, 2);
+    const int player = static_cast<int>(PucLuaOptInteger(state, 3, 0));
     std::vector<ScriptFunctionArgument> arguments{
         Arg("context", ScriptValue{LuaContextId(state, 1)}),
         Arg(
@@ -2966,8 +3004,8 @@ int LuaInputLoadRebindProfile(lua_State* state) {
         lua_pushnil(state);
         return 1;
     }
-    const char* path = luaL_checkstring(state, 2);
-    const int player = static_cast<int>(luaL_optinteger(state, 3, 0));
+    const char* path = PucLuaCheckString(state, 2);
+    const int player = static_cast<int>(PucLuaOptInteger(state, 3, 0));
     std::vector<ScriptFunctionArgument> arguments{
         Arg("context", ScriptValue{LuaContextId(state, 1)}),
         Arg(
@@ -3015,7 +3053,7 @@ int LuaPointerRay(lua_State* state) {
         lua_pushnil(state);
         return 1;
     }
-    const lua_Integer player = luaL_optinteger(state, 1, 0);
+    const lua_Integer player = PucLuaOptInteger(state, 1, 0);
     const std::array<ScriptFunctionArgument, 1> arguments{
         ScriptFunctionArgument{
             "player",
@@ -3048,9 +3086,9 @@ int LuaNavigationCall(lua_State* state, const char* function, std::initializer_l
             if (index > required && lua_isnoneornil(state, index)) break;
             const std::string_view pin{ name };
             if (pin == "profile" || pin == "areaMask" || pin == "index" || pin == "area") {
-                arguments.push_back(Arg(name, ScriptValue{ static_cast<int>(luaL_checkinteger(state, index)) }));
+                arguments.push_back(Arg(name, ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, index)) }));
             } else {
-                arguments.push_back(Arg(name, ScriptValue{ static_cast<float>(luaL_checknumber(state, index)) }));
+                arguments.push_back(Arg(name, ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, index)) }));
             }
             ++index;
         }
@@ -3090,8 +3128,8 @@ int LuaNavigationSetAreaCost(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("area", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
-        Arg("cost", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("area", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
+        Arg("cost", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Navigation.SetAreaCost", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3142,7 +3180,7 @@ int LuaInputIsGamepadConnected(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const int gamepadIndex = static_cast<int>(luaL_optinteger(state, 1, 0));
+    const int gamepadIndex = static_cast<int>(PucLuaOptInteger(state, 1, 0));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("gamepadIndex", ScriptValue{ gamepadIndex }) };
     const ScriptFunctionCallResult result = context->CallFunction("Input.IsGamepadConnected", arguments);
     lua_pushboolean(state, result.Output("connected").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3157,7 +3195,7 @@ int LuaInputHasHaptics(lua_State* state) {
         lua_pushnil(state);
         return 1;
     }
-    const int gamepadIndex = static_cast<int>(luaL_optinteger(state, 1, 0));
+    const int gamepadIndex = static_cast<int>(PucLuaOptInteger(state, 1, 0));
     const std::vector<ScriptFunctionArgument> arguments{ Arg("gamepadIndex", ScriptValue{ gamepadIndex }) };
     const ScriptFunctionCallResult result = context->CallFunction("Input.HasHaptics", arguments);
     lua_createtable(state, 0, 5);
@@ -3175,9 +3213,9 @@ int LuaInputSetVibration(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("gamepadIndex", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
-        Arg("lowFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("highFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("gamepadIndex", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
+        Arg("lowFrequency", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("highFrequency", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Input.SetVibration", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3191,8 +3229,8 @@ int LuaInputBindHapticsUser(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("localUser", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
-        Arg("gamepadIndex", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 2)) }),
+        Arg("localUser", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
+        Arg("gamepadIndex", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 2)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Input.BindHapticsUser", arguments);
     lua_pushboolean(state, result.Output("bound").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3206,9 +3244,9 @@ int LuaInputSetUserVibration(lua_State* state) {
         return 1;
     }
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("localUser", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
-        Arg("lowFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
-        Arg("highFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("localUser", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
+        Arg("lowFrequency", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
+        Arg("highFrequency", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 3)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Input.SetUserVibration", arguments);
     lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3234,7 +3272,7 @@ int LuaTimelineCreate(lua_State* state) {
         return 2;
     }
     std::size_t length = 0U;
-    const char* asset = luaL_checklstring(state, 1, &length);
+    const char* asset = PucLuaCheckLString(state, 1, &length);
     std::vector<ScriptFunctionArgument> arguments{
         Arg("asset", ScriptValue{ std::string{ asset, length } }),
     };
@@ -3242,7 +3280,7 @@ int LuaTimelineCreate(lua_State* state) {
         arguments.push_back(Arg(
             "entity",
             ScriptValue{
-                static_cast<std::uint64_t>(luaL_checkinteger(state, 2)),
+                static_cast<std::uint64_t>(PucLuaCheckInteger(state, 2)),
                 ScriptValueType::Entity }));
     }
     const ScriptFunctionCallResult result =
@@ -3278,7 +3316,7 @@ int LuaTimelineAppliedCall(
 int LuaTimelineRelease(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Release", {
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
     });
 }
@@ -3286,7 +3324,7 @@ int LuaTimelineRelease(lua_State* state) {
 int LuaTimelinePlay(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Play", {
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
     });
 }
@@ -3294,28 +3332,38 @@ int LuaTimelinePlay(lua_State* state) {
 int LuaTimelinePause(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Pause", {
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
+    });
+}
+
+int LuaTimelineSetPlayback(lua_State* state) {
+    PucLuaCheckType(state, 3, LUA_TBOOLEAN);
+    return LuaTimelineAppliedCall(state, "Timeline.SetPlayback", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)), ScriptValueType::Hash }),
+        Arg("rate", ScriptValue{static_cast<float>(PucLuaCheckNumber(state, 2))}),
+        Arg("loop", ScriptValue{lua_toboolean(state, 3) != 0}),
     });
 }
 
 int LuaTimelineSeek(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Seek", {
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
         Arg("time", ScriptValue{
-            static_cast<float>(luaL_checknumber(state, 2)) }),
+            static_cast<float>(PucLuaCheckNumber(state, 2)) }),
     });
 }
 
 int LuaTimelineSkip(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Skip", {
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
         Arg("time", ScriptValue{
-            static_cast<float>(luaL_checknumber(state, 2)) }),
+            static_cast<float>(PucLuaCheckNumber(state, 2)) }),
         Arg("emitMarkers", ScriptValue{ lua_toboolean(state, 3) != 0 }),
     });
 }
@@ -3323,12 +3371,12 @@ int LuaTimelineSkip(lua_State* state) {
 int LuaTimelineBind(lua_State* state) {
     return LuaTimelineAppliedCall(state, "Timeline.Bind", {
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
         Arg("binding", ScriptValue{ std::string{
-            luaL_checkstring(state, 2) } }),
+            PucLuaCheckString(state, 2) } }),
         Arg("entity", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 3)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 3)),
             ScriptValueType::Entity }),
     });
 }
@@ -3341,7 +3389,7 @@ int LuaTimelineIsPlaying(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
     };
     const ScriptFunctionCallResult result =
@@ -3363,7 +3411,7 @@ int LuaTimelineTime(lua_State* state) {
     }
     const std::vector<ScriptFunctionArgument> arguments{
         Arg("instance", ScriptValue{
-            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1)),
             ScriptValueType::Hash }),
     };
     const ScriptFunctionCallResult result =
@@ -3384,11 +3432,22 @@ ScriptFunctionCallResult CallLocalization(ScriptExecutionContext& context, const
 
 int LuaLocalizationSetCatalog(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
-    const lua_Integer catalog = luaL_checkinteger(state, 1);
-    if (catalog < 0) return luaL_error(state, "Localization.SetCatalog requires a non-negative asset id");
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
+    std::uint64_t catalog = 0U;
+    if (lua_type(state, 1) == LUA_TSTRING) {
+        std::size_t length = 0U;
+        const char* text = lua_tolstring(state, 1, &length);
+        kb::assets::AssetId id;
+        if (!kb::assets::TryParseAssetId(std::string_view{text, length}, id))
+            PucLuaRaise("Localization.SetCatalog requires a hexadecimal asset id string");
+        catalog = id.value;
+    } else {
+        const lua_Integer value = PucLuaCheckInteger(state, 1);
+        if (value < 0) PucLuaRaise("Localization.SetCatalog requires a non-negative asset id or hexadecimal string");
+        catalog = static_cast<std::uint64_t>(value);
+    }
     const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.SetCatalog", {
-        Arg("catalog", ScriptValue{ static_cast<std::uint64_t>(catalog), ScriptValueType::Hash }),
+        Arg("catalog", ScriptValue{ catalog, ScriptValueType::Hash }),
     });
     if (!result.Succeeded()) return PushCallError(state, result, "Localization catalog was rejected");
     lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3397,9 +3456,9 @@ int LuaLocalizationSetCatalog(lua_State* state) {
 
 int LuaLocalizationSetLanguage(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
     const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.SetLanguage", {
-        Arg("language", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+        Arg("language", ScriptValue{ std::string{ PucLuaCheckString(state, 1) } }),
     });
     if (!result.Succeeded()) return PushCallError(state, result, "Localization language was rejected");
     lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
@@ -3408,7 +3467,7 @@ int LuaLocalizationSetLanguage(lua_State* state) {
 
 int LuaLocalizationLanguage(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
     const ScriptFunctionCallResult result = context->CallFunction("Localization.Language", {});
     if (!result.Succeeded()) return PushCallError(state, result, "Localization language query failed");
     PucLuaValueBridge::Push(state, result.Output("language").value_or(ScriptValue{ std::string{} }));
@@ -3417,9 +3476,9 @@ int LuaLocalizationLanguage(lua_State* state) {
 
 int LuaLocalizationTranslate(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
     const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.Translate", {
-        Arg("key", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+        Arg("key", ScriptValue{ std::string{ PucLuaCheckString(state, 1) } }),
     });
     if (!result.Succeeded()) return PushCallError(state, result, "Localization translation failed");
     PucLuaValueBridge::Push(state, result.Output("text").value_or(ScriptValue{ std::string{} }));
@@ -3428,13 +3487,13 @@ int LuaLocalizationTranslate(lua_State* state) {
 
 int LuaLocalizationFormatPlural(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
-    const lua_Integer count = luaL_checkinteger(state, 2);
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
+    const lua_Integer count = PucLuaCheckInteger(state, 2);
     if (count < static_cast<lua_Integer>(std::numeric_limits<int>::min()) || count > static_cast<lua_Integer>(std::numeric_limits<int>::max())) {
-        return luaL_error(state, "Localization.FormatPlural count must fit an Int");
+        PucLuaRaise("Localization.FormatPlural count must fit an Int");
     }
     const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.FormatPlural", {
-        Arg("key", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+        Arg("key", ScriptValue{ std::string{ PucLuaCheckString(state, 1) } }),
         Arg("count", ScriptValue{ static_cast<int>(count) }),
     });
     if (!result.Succeeded()) return PushCallError(state, result, "Localization plural formatting failed");
@@ -3444,13 +3503,37 @@ int LuaLocalizationFormatPlural(lua_State* state) {
 
 int LuaLocalizationFormatPluralNumber(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
     const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.FormatPluralNumber", {
-        Arg("key", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
-        Arg("number", ScriptValue{ std::string{ luaL_checkstring(state, 2) } }),
+        Arg("key", ScriptValue{ std::string{ PucLuaCheckString(state, 1) } }),
+        Arg("number", ScriptValue{ std::string{ PucLuaCheckString(state, 2) } }),
     });
     if (!result.Succeeded()) return PushCallError(state, result, "Localization plural formatting failed");
     PucLuaValueBridge::Push(state, result.Output("text").value_or(ScriptValue{ std::string{} }));
+    return 1;
+}
+
+int LuaLocalizationResolveResource(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) PucLuaRaise("lua script execution context is not available");
+    std::uint64_t source = 0U;
+    if (lua_type(state, 1) == LUA_TSTRING) {
+        std::size_t length = 0U;
+        const char* text = lua_tolstring(state, 1, &length);
+        kb::assets::AssetId id;
+        if (!kb::assets::TryParseAssetId(std::string_view{text, length}, id))
+            PucLuaRaise("Localization.ResolveResource requires a hexadecimal asset id string");
+        source = id.value;
+    } else {
+        const lua_Integer value = PucLuaCheckInteger(state, 1);
+        if (value < 0) PucLuaRaise("Localization.ResolveResource requires a non-negative asset id or hexadecimal string");
+        source = static_cast<std::uint64_t>(value);
+    }
+    const auto result = CallLocalization(*context, "Localization.ResolveResource", {
+        Arg("source", ScriptValue{source, ScriptValueType::Hash})});
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization resource lookup failed");
+    const auto output = kb::assets::ToString(kb::assets::AssetId{result.Output("asset")->AsUInt64()});
+    lua_pushlstring(state, output.data(), output.size());
     return 1;
 }
 
@@ -3468,8 +3551,8 @@ int SetClosureTrampoline(lua_State* state) {
     return PucLuaSafeInvoke(state, function);
 }
 
-void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
-    lua_pushlightuserdata(state, &context);
+void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext&) {
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushlightuserdata(state, reinterpret_cast<void*>(function));
     lua_pushcclosure(state, &SetClosureTrampoline, 2);
     lua_setfield(state, -2, name);
@@ -3507,6 +3590,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioDspState,
     &LuaAudioConfigureMeters,
     &LuaAudioResetMeters,
+    &LuaAudioDiagnostics,
     &LuaAudioMeter,
     &LuaAudioSetListenerLocalUser,
     &LuaAudioListenerLocalUser,
@@ -3661,6 +3745,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaTimelineCreate,
     &LuaTimelineRelease,
     &LuaTimelinePlay,
+    &LuaTimelineSetPlayback,
     &LuaTimelinePause,
     &LuaTimelineSeek,
     &LuaTimelineSkip,
@@ -3673,6 +3758,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaLocalizationTranslate,
     &LuaLocalizationFormatPlural,
     &LuaLocalizationFormatPluralNumber,
+    &LuaLocalizationResolveResource,
     &LuaPointerPosition,
     &LuaPointerDelta,
     &LuaPointerButton,
@@ -3727,18 +3813,107 @@ void AttachCatalogModuleTables(lua_State* state, int environmentIndex, ScriptExe
     }
 }
 
+// Table.Name(...) for a registered function without a hand-written adapter: the arguments are its
+// inputs in order (or one table of them by name), the result is CallFunction's (nil for no
+// output, the value for one, a table for several; nil and the error when the call fails).
+// Returns the result count, or -1 with the error message pushed for the caller to raise once
+// every C++ object here is destroyed (lua_error longjmps).
+int CallGenericFunction(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    const char* functionName = lua_tostring(state, lua_upvalueindex(2));
+    const ScriptFunctionSignature* signature =
+        context != nullptr && context->Functions() != nullptr ? context->Functions()->FindSignature(functionName) : nullptr;
+    if (signature == nullptr) {
+        lua_pushnil(state);
+        lua_pushfstring(state, "%s is not available in this runtime", functionName);
+        return 2;
+    }
+    const int count = lua_gettop(state);
+    const bool named = count == 1 && lua_istable(state, 1) != 0;
+    const std::vector<ScriptFunctionArgument> arguments = ArgumentsBySignature(state, *signature);
+    if (!named && static_cast<std::size_t>(count) > signature->inputs.size()) {
+        lua_pushfstring(state, "%s takes %d arguments, got %d", functionName, static_cast<int>(signature->inputs.size()), count);
+        return -1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(functionName, arguments);
+    if (!result.Succeeded()) {
+        const std::string error = result.errors.empty() ? "script function call failed" : result.errors.front();
+        // Rejected before it ran (a missing or mistyped argument) is a mistake in the script: stop
+        // with the reason instead of returning nil the script may never look at.
+        if (!result.executed) {
+            lua_pushlstring(state, error.data(), error.size());
+            return -1;
+        }
+        lua_pushnil(state);
+        lua_pushlstring(state, error.data(), error.size());
+        return 2;
+    }
+    if (result.outputs.empty()) {
+        lua_pushnil(state);
+        return 1;
+    }
+    if (result.outputs.size() == 1U) {
+        PucLuaValueBridge::Push(state, result.outputs.front().value);
+        return 1;
+    }
+    lua_createtable(state, 0, static_cast<int>(result.outputs.size()));
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaGenericFunction(lua_State* state) {
+    const int results = CallGenericFunction(state);
+    return results >= 0 ? results : lua_error(state);
+}
+
+// Every registered "Table.Name" function is reachable as Table.Name, not only the ones with an
+// adapter above - a script calling Transform.Rotate must not find nil.
+void AttachRegisteredFunctions(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
+    if (context.Functions() == nullptr) return;
+    for (const ScriptFunctionDesc& function : context.Functions()->Functions()) {
+        const std::string& name = function.signature.name;
+        const std::string table{ ScriptApiCatalog::GenericLuaTable(name) };
+        if (table.empty()) continue;
+        const std::size_t dot = table.size();
+        lua_getfield(state, environmentIndex, table.c_str());
+        if (lua_isnil(state, -1)) {
+            lua_pop(state, 1);
+            lua_newtable(state);
+            lua_pushvalue(state, -1);
+            lua_setfield(state, environmentIndex, table.c_str());
+        } else if (lua_istable(state, -1) == 0) {
+            lua_pop(state, 1);
+            continue;
+        }
+        lua_getfield(state, -1, name.c_str() + dot + 1U);
+        const bool present = !lua_isnil(state, -1);
+        lua_pop(state, 1);
+        if (!present) {
+            PucLuaRuntimeApi::PushContextSlot(state);
+            lua_pushlstring(state, name.data(), name.size());
+            lua_pushcclosure(state, &PucLuaSafeCall<&LuaGenericFunction>, 2);
+            lua_setfield(state, -2, name.c_str() + dot + 1U);
+        }
+        lua_pop(state, 1);
+    }
+}
+
 } // namespace
 
 void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaCallFunction>, 1);
     lua_setfield(state, environmentIndex, "CallFunction");
 
-    lua_pushlightuserdata(state, &context);
+    PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaLog>, 1);
     lua_setfield(state, environmentIndex, "Log");
 
     AttachCatalogModuleTables(state, environmentIndex, context);
+    AttachRegisteredFunctions(state, environmentIndex, context);
 
 }
 

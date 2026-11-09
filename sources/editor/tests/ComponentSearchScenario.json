@@ -1,0 +1,10 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {"op": "create_scene", "name": "ComponentSearch", "template": "Empty"},
+    {"op": "create_entity", "id": "sample", "name": "Sample"},
+    {"op": "select_entity", "entity": "sample"},
+    {"op": "verify_add_component_search_input"},
+    {"op": "assert_no_errors"}
+  ]
+}

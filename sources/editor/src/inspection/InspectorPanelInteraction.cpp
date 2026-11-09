@@ -6,6 +6,8 @@
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
 #include "inspection/InspectorAudioMixerRuntimeInteraction.hpp"
 #include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "inspection/ui/InspectorUIThemeModel.hpp"
+#include "scene/ui/EditorUIThemeAssets.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
@@ -377,6 +379,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightSourceRadius:
     case InspectorPropertyId::LightShadowStrength:
     case InspectorPropertyId::LightShadowDistance:
+    case InspectorPropertyId::LightShadowBias:
+    case InspectorPropertyId::LightShadowNormalBias:
+    case InspectorPropertyId::LightShadowCascadeDistribution:
         return true;
     default:
         return false;
@@ -498,6 +503,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightShadowDistance:
         value = light.shadowDistance;
         return true;
+    case InspectorPropertyId::LightShadowBias:
+        value = light.shadowBias;
+        return true;
+    case InspectorPropertyId::LightShadowNormalBias:
+        value = light.shadowNormalBias;
+        return true;
+    case InspectorPropertyId::LightShadowCascadeDistribution:
+        value = light.shadowCascadeDistribution;
+        return true;
     default:
         return false;
     }
@@ -547,6 +561,16 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         return true;
     case InspectorPropertyId::LightShadowDistance:
         light.shadowDistance = std::clamp(value, 0.0F, 5000.0F);
+        return true;
+    case InspectorPropertyId::LightShadowBias:
+        light.shadowBias = std::clamp(value, 0.0F, 16.0F);
+        return true;
+    case InspectorPropertyId::LightShadowNormalBias:
+        light.shadowNormalBias = std::clamp(value, 0.0F, 16.0F);
+        return true;
+    case InspectorPropertyId::LightShadowCascadeDistribution:
+        // 0 is the project's; otherwise at least 1.5, the smallest spread the shadow cascades accept.
+        light.shadowCascadeDistribution = value <= 0.0F ? 0.0F : std::clamp(value, 1.5F, 16.0F);
         return true;
     default:
         return false;
@@ -674,6 +698,22 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
+    if (hit.property == InspectorPropertyId::MeshRendererLodBias || hit.property == InspectorPropertyId::MeshRendererLodEnabled ||
+        hit.property == InspectorPropertyId::MeshRendererMobility) {
+        const kb::scene::MeshRendererComponent* current = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (current == nullptr) return true;
+        if (hit.property == InspectorPropertyId::MeshRendererLodBias) {
+            if (hit.kind == InspectorHitKind::TextField) sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(current->lodBias));
+            return true;
+        }
+        if (!sceneContext.BeginSceneEditTransaction("Edit Mesh Level of Detail")) return true;
+        kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (hit.property == InspectorPropertyId::MeshRendererLodEnabled) renderer->lodEnabled = !renderer->lodEnabled;
+        else renderer->mobility = renderer->mobility == kb::scene::MeshMobility::Static ? kb::scene::MeshMobility::Movable : kb::scene::MeshMobility::Static;
+        sceneContext.Scene().Components().MeshRenderers().MarkModified(entity);
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        return true;
+    }
     if (hit.kind == InspectorHitKind::BoolField &&
         (hit.property == InspectorPropertyId::MeshRendererCastsShadow ||
             hit.property == InspectorPropertyId::MeshRendererReceivesShadow)) {
@@ -1131,7 +1171,7 @@ template <typename Mutator>
     case InspectorPropertyId::TerrainBrushRadius: candidate.radius = value; break;
     case InspectorPropertyId::TerrainBrushStrength: candidate.strength = value; break;
     case InspectorPropertyId::TerrainBrushFalloff: candidate.falloff = value; break;
-    case InspectorPropertyId::TerrainFlattenHeight: candidate.targetHeight = value; break;
+    case InspectorPropertyId::TerrainFlattenHeight: candidate.targetHeight = value; candidate.sampleTargetHeight = false; break;
     case InspectorPropertyId::TerrainTerraceStep: candidate.terraceStep = value; break;
     default: return false;
     }
@@ -1183,6 +1223,28 @@ template <typename Mutator>
         return MutateLightComponent(sceneContext, entity, "Edit Light Mobility", [](kb::scene::LightComponent& light) {
             light.mobility = light.mobility == kb::scene::LightMobility::Static
                 ? kb::scene::LightMobility::Movable : kb::scene::LightMobility::Static;
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightShadowFilter) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shadow Filter", [](kb::scene::LightComponent& light) {
+            light.shadowFilter = light.shadowFilter == kb::scene::LightShadowFilter::Pcss
+                ? kb::scene::LightShadowFilter::Default
+                : static_cast<kb::scene::LightShadowFilter>(static_cast<std::uint32_t>(light.shadowFilter) + 1U);
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightShadowQuality) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shadow Quality", [](kb::scene::LightComponent& light) {
+            light.shadowQuality = light.shadowQuality == kb::scene::LightShadowQuality::Ultra
+                ? kb::scene::LightShadowQuality::Default
+                : static_cast<kb::scene::LightShadowQuality>(static_cast<std::uint32_t>(light.shadowQuality) + 1U);
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightShadowCascadeCount) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shadow Cascades", [](kb::scene::LightComponent& light) {
+            light.shadowCascadeCount = light.shadowCascadeCount >= 4U ? 0U : light.shadowCascadeCount + 1U;
         });
     }
     if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::LightCastsShadow) {
@@ -3178,12 +3240,22 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     switch (property) {
     case InspectorPropertyId::MeshRendererAdvanced:
         return InspectorDisclosureId::MeshRendererAdvanced;
+    case InspectorPropertyId::CameraAdvanced:
+        return InspectorDisclosureId::CameraAdvanced;
+    case InspectorPropertyId::LightAdvanced:
+        return InspectorDisclosureId::LightAdvanced;
+    case InspectorPropertyId::RigidbodyAdvanced:
+        return InspectorDisclosureId::RigidbodyAdvanced;
+    case InspectorPropertyId::ColliderAdvanced:
+        return InspectorDisclosureId::ColliderAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
     case InspectorPropertyId::UIAnchorPresets:
         return InspectorDisclosureId::UIAnchorPresets;
     case InspectorPropertyId::UIRectAdvanced:
         return InspectorDisclosureId::UIRectAdvanced;
+    case InspectorPropertyId::UISelectableAdvanced:
+        return InspectorDisclosureId::UISelectableAdvanced;
     default:
         return std::nullopt;
     }
@@ -3473,6 +3545,22 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
     const bool assetSelected = sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset;
+    if (assetSelected && hit.section == InspectorSectionId::UITheme && hit.kind == InspectorHitKind::TextField &&
+        (hit.property == InspectorPropertyId::UIThemeVariant || hit.property == InspectorPropertyId::UIThemeField)) {
+        const auto data = sceneContext.ReadUITheme(sceneContext.AssetBrowser().InspectorAsset());
+        if (!data) return true;
+        InspectorUIThemeModel::NormalizeSelection(*data, sceneContext.AssetBrowser().InspectorAsset().value,
+            sceneContext.Inspector().themeAssetId, sceneContext.Inspector().themeVariant);
+        std::string value = hit.index == -2 ? std::string{} : sceneContext.Inspector().themeVariant;
+        if (hit.property == InspectorPropertyId::UIThemeField) {
+            const auto rows = InspectorUIThemeModel::Rows(*data, sceneContext.Inspector().themeVariant);
+            if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) return true;
+            value = rows[static_cast<std::size_t>(hit.index)].value;
+        }
+        sceneContext.Inspector().BeginTextEdit(hit.property, value);
+        sceneContext.Inspector().SetEditIndex(hit.index);
+        return true;
+    }
     if (assetSelected && hit.property == InspectorPropertyId::PostProcessProfileField &&
         InspectorPostProcessProfileModel::IsSection(hit.section)) {
         // A checkbox toggles and a choice steps to the next value at once; a number opens its
@@ -3623,7 +3711,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             InspectorUIComponentModel::Properties(sceneContext.Scene(), entity, *component);
         if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) return true;
         const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(hit.index)];
-        if (!row.writable) return true;
+        if (!row.writable || row.onClick) return true;
         if (hit.kind == InspectorHitKind::BoolField) {
             static_cast<void>(sceneContext.SetUIComponentProperty(
                 entity, *component, row.name,
@@ -4055,6 +4143,30 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             inspector.EndTextEdit();
             return true;
         }
+        if (inspector.EditedProperty() == InspectorPropertyId::UIThemeVariant ||
+            inspector.EditedProperty() == InspectorPropertyId::UIThemeField) {
+            const auto id = sceneContext.AssetBrowser().InspectorAsset();
+            auto data = sceneContext.ReadUITheme(id);
+            if (data) {
+                InspectorUIThemeModel::NormalizeSelection(*data, id.value, inspector.themeAssetId, inspector.themeVariant);
+                if (inspector.EditedProperty() == InspectorPropertyId::UIThemeVariant) {
+                    const std::string name{inspector.EditBuffer()};
+                    if (name.empty() || std::ranges::any_of(data->variants, [&](const auto& v) { return v.name == name; }))
+                        inspector.themeVariant = name;
+                    else if (EditorUIThemeAssets::AddVariant(*data, name) && sceneContext.SetUITheme(id, *data))
+                        inspector.themeVariant = name;
+                } else {
+                    const auto rows = InspectorUIThemeModel::Rows(*data, inspector.themeVariant);
+                    const int index = inspector.EditIndex();
+                    if (index >= 0 && static_cast<std::size_t>(index) < rows.size() &&
+                        InspectorUIThemeModel::Edit(*data, inspector.themeVariant, rows[static_cast<std::size_t>(index)].key,
+                                                    inspector.EditBuffer()))
+                        static_cast<void>(sceneContext.SetUITheme(id, *data));
+                }
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
         if (inspector.EditedProperty() == InspectorPropertyId::PostProcessProfileField) {
             const kb::assets::AssetId profile = sceneContext.AssetBrowser().InspectorAsset();
             const std::optional<kb::render::ScenePostProcessSettings> settings = sceneContext.ReadPostProcessProfile(profile);
@@ -4354,6 +4466,24 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 sceneContext,
                 entity,
                 inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::MeshRendererLodBias) {
+            const std::string text = std::string{ Trim(inspector.EditBuffer()) };
+            std::int32_t bias = 0;
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), bias);
+            constexpr auto kMax = static_cast<std::int32_t>(kb::scene::kMaxMeshRendererLodBias);
+            if (!text.empty() && parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && bias >= -kMax && bias <= kMax &&
+                sceneContext.Scene().Entities().IsAlive(entity) && sceneContext.BeginSceneEditTransaction("Edit Mesh LOD Bias")) {
+                if (auto* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity)) {
+                    renderer->lodBias = bias;
+                    sceneContext.Scene().Components().MeshRenderers().MarkModified(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                } else {
+                    sceneContext.CancelSceneEditTransaction();
+                }
+            }
             inspector.EndTextEdit();
             return true;
         }

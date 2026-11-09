@@ -12,12 +12,16 @@ add_library(kb_net STATIC
     include/kb/net/ScriptBridge.hpp
     include/kb/net/Session.hpp
     include/kb/net/Transport.hpp
+    include/kb/net/WebSocketTransport.hpp
+    src/BrowserWebSocketTransport.cpp
     src/Auth.cpp
     src/Host.cpp
     src/Loopback.cpp
     src/Replication.cpp
     src/Rpc.cpp
     src/SceneReplication.cpp
+    src/SceneClient.cpp
+    include/kb/net/SceneClient.hpp
     src/ScriptBridge.cpp
     src/Session.cpp
     src/UdpTransport.cpp
@@ -32,6 +36,9 @@ target_include_directories(kb_net
 )
 
 target_link_libraries(kb_net PUBLIC kb_engine)
+if(EMSCRIPTEN)
+    target_link_options(kb_net INTERFACE "-lwebsocket.js")
+endif()
 
 if(WIN32)
     target_link_libraries(kb_net PUBLIC ws2_32)
@@ -69,7 +76,23 @@ endif()
 add_library(kb_net_server STATIC
     server/DedicatedServer.cpp
     server/DedicatedServer.hpp
+    src/WebSocketServerTransport.cpp
 )
+set(_kb_websocket_default OFF)
+if(NOT ANDROID AND NOT EMSCRIPTEN AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    set(_kb_websocket_default ON)
+endif()
+option(KB_NET_WEBSOCKET_SERVER "Enable the dedicated server WebSocket listener" ${_kb_websocket_default})
+if(KB_NET_WEBSOCKET_SERVER)
+    include(${CMAKE_SOURCE_DIR}/CMake/NetworkWebSocket.cmake)
+    target_compile_definitions(kb_net_server PRIVATE KB_NET_WEBSOCKET_SERVER=1)
+    target_link_libraries(kb_net_server PRIVATE websockets)
+    if(BUILD_TESTING)
+        add_executable(kb_websocket_transport_harness tests/WebSocketTransportHarness.cpp)
+        target_link_libraries(kb_websocket_transport_harness PRIVATE kb_net_server)
+        kb_apply_quality_gates(kb_websocket_transport_harness)
+    endif()
+endif()
 target_include_directories(kb_net_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/server)
 target_link_libraries(kb_net_server PUBLIC kb_net)
 kb_apply_quality_gates(kb_net_server)

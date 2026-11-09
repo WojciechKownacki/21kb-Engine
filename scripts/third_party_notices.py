@@ -104,7 +104,9 @@ def stage_notices(engine_root: Path, destination: Path, components: Sequence[Com
             if name is None:
                 # Texts kept in third_party/licenses keep their names, which other notices refer to.
                 suffix = "" if index == 0 else f"-{index + 1}"
-                shared = license_file.startswith("third_party/licenses/")
+                # Root texts have stable shared names. Component subdirectories
+                # may each contain LICENSE, so give those texts component names.
+                shared = Path(license_file).parent.as_posix() == "third_party/licenses"
                 name = Path(license_file).name if shared else f"{component.id}{suffix}.txt"
                 shutil.copy2(engine_root / license_file, licenses / name)
                 copied[license_file] = name

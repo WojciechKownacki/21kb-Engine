@@ -82,6 +82,65 @@ struct AssetMeshImportTransform {
     [[nodiscard]] bool operator==(const AssetMeshImportTransform&) const noexcept = default;
 };
 
+// How the levels of detail of a model are built, one record per mesh asset. The editor, the command line, the cooker and a game that
+// draws the source file all read this same record, so a level looks the same wherever it was built.
+inline constexpr std::uint32_t kMeshLodMaxLevels = 8U;
+
+// One coarser level in Manual mode.
+struct AssetMeshLodLevel {
+    // The share of the finest level's triangles the level keeps.
+    float trianglePercent = 0.0F;
+    // The most deviation the level may add beyond the one above it, as a percent of the mesh's own extent.
+    float errorPercent = 20.0F;
+
+    [[nodiscard]] bool operator==(const AssetMeshLodLevel&) const noexcept = default;
+};
+
+struct AssetMeshLodSettings {
+    // Auto derives every level from keepPercent and errorPercent; Manual takes each level from `levels`.
+    bool manual = false;
+    // Levels including the finest one; 1 means the mesh has no chain.
+    std::uint8_t levelCount = static_cast<std::uint8_t>(kMeshLodMaxLevels);
+    // Auto: each level keeps this share of the triangles of the level above it.
+    float keepPercent = 50.0F;
+    // Auto: the most deviation a level may add beyond the one above it, as a percent of the mesh's own extent.
+    float errorPercent = 20.0F;
+    // A mesh with fewer triangles gets no chain.
+    std::uint32_t minTriangles = 1024U;
+    // Manual: levels 1 .. levelCount - 1.
+    std::array<AssetMeshLodLevel, kMeshLodMaxLevels - 1U> levels{};
+
+    [[nodiscard]] bool operator==(const AssetMeshLodSettings&) const noexcept = default;
+    [[nodiscard]] bool IsDefault() const noexcept { return *this == AssetMeshLodSettings{}; }
+    // Whether a mesh of `triangles` is given a chain at all.
+    [[nodiscard]] bool BuildsChain(std::uint64_t triangles) const noexcept { return levelCount > 1U && triangles >= minTriangles; }
+    // The share of triangles and the deviation of level `level` (1 .. levelCount - 1).
+    [[nodiscard]] AssetMeshLodLevel Level(std::uint32_t level) const noexcept {
+        if (manual) return levels[level - 1U];
+        float share = 100.0F;
+        for (std::uint32_t step = 0U; step < level; ++step) share *= keepPercent / 100.0F;
+        return AssetMeshLodLevel{ .trianglePercent = share, .errorPercent = errorPercent };
+    }
+    // Levels 1 .. 8; shares above 0 and below 100, falling level by level; deviations above 0 up to 100.
+    [[nodiscard]] bool IsValid() const noexcept {
+        if (levelCount < 1U || levelCount > kMeshLodMaxLevels) return false;
+        if (!manual) {
+            return std::isfinite(keepPercent) && keepPercent > 0.0F && keepPercent < 100.0F &&
+                std::isfinite(errorPercent) && errorPercent > 0.0F && errorPercent <= 100.0F;
+        }
+        float previous = 100.0F;
+        for (std::uint32_t level = 1U; level < levelCount; ++level) {
+            const AssetMeshLodLevel& entry = levels[level - 1U];
+            if (!std::isfinite(entry.trianglePercent) || !(entry.trianglePercent > 0.0F) || !(entry.trianglePercent < previous) ||
+                !std::isfinite(entry.errorPercent) || !(entry.errorPercent > 0.0F) || entry.errorPercent > 100.0F) {
+                return false;
+            }
+            previous = entry.trianglePercent;
+        }
+        return true;
+    }
+};
+
 struct AssetMeshImportOptions {
     bool importMaterialSlots = true;
     bool importTextures = false;
@@ -155,6 +214,7 @@ struct AssetImportResult {
 };
 
 [[nodiscard]] std::string_view ToString(AssetImportCategory category) noexcept;
+[[nodiscard]] std::string AssetImportRecoveryAdvice(const AssetImportItemResult& item);
 [[nodiscard]] std::string_view ToString(AssetImportItemStatus status) noexcept;
 [[nodiscard]] std::string_view RuntimeAssetType(AssetImportCategory category) noexcept;
 

@@ -145,6 +145,7 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] std::vector<std::string> BakedAssetTypes() const override;
+    [[nodiscard]] bool AllowsConcurrentLoad() const noexcept override { return true; }
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
 
     // LoadTexture(path) decodes through a process-wide cache keyed by (path, last-write-time, size): a file is
@@ -152,6 +153,8 @@ public:
     // overload is uncached (no path to key on). A changed file is a cache miss, so hot-reload still works.
     [[nodiscard]] static std::optional<RenderTextureAssetData> LoadTexture(const std::filesystem::path& path);
     [[nodiscard]] static std::optional<RenderTextureAssetData> LoadTexture(std::istream& input);
+    // Decodes encoded image bytes (PNG, JPEG, ...) to RGBA8 without a file; uncached.
+    [[nodiscard]] static std::optional<RenderTextureAssetData> DecodeImage(const void* data, std::size_t size);
 
     // Count of real decodes performed (cache misses) for cacheable paths. Test/telemetry hook: lets a caller
     // prove that a repeated load of an unchanged file did not re-decode.

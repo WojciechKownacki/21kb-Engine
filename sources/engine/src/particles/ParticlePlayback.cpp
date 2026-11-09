@@ -28,6 +28,16 @@ void AssertOwnerThread(const kb::scene::Scene& scene) noexcept {
 
 } // namespace
 
+void ParticlePlayback::SetEmitterProfilingEnabled(kb::scene::Scene& scene, bool enabled) noexcept {
+    AssertOwnerThread(scene);
+    kb::scene::SceneAccess::State(scene).particleEmitterProfilingEnabled = enabled;
+}
+
+bool ParticlePlayback::EmitterProfilingEnabled(const kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
+    return kb::scene::SceneAccess::State(scene).particleEmitterProfilingEnabled;
+}
+
 ParticleRuntimeResult ParticlePlayback::RegisterBackend(kb::scene::Scene& scene, IParticleSimulationBackend& backend) noexcept {
     AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);

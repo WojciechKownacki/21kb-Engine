@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene/EditorHierarchySearchState.hpp"
+
 #include <cstdint>
 
 namespace kb::editor {
@@ -29,6 +31,13 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
 // Grows as the panel gains more categories/settings.
 class EditorProjectSettingsState {
 public:
+    // The search box above the categories.
+    [[nodiscard]] EditorHierarchySearchState& Search() noexcept {
+        return search_;
+    }
+    [[nodiscard]] const EditorHierarchySearchState& Search() const noexcept {
+        return search_;
+    }
     [[nodiscard]] int SelectedCategory() const noexcept {
         return selectedCategory_;
     }
@@ -116,6 +125,7 @@ public:
     }
 
 private:
+    EditorHierarchySearchState search_;
     int selectedCategory_ = 0;
     bool mappingContextDropdownOpen_ = false;
     bool physicsLayersDropdownOpen_ = false;

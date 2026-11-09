@@ -25,6 +25,15 @@ enum class ScriptLifecycleEvent : std::uint8_t {
 [[nodiscard]] const char* ToString(ScriptLifecycleEvent event) noexcept;
 [[nodiscard]] kb::visual::VisualGraphLifecycleEvent ToVisualGraphLifecycleEvent(ScriptLifecycleEvent event) noexcept;
 
+// A global function a Lua source declares: "function Name(" at the start of a line (indented or not).
+struct LuaGlobalFunction {
+    std::uint32_t line = 0U;
+    std::string name;
+};
+
+// Every such function in `luaSource`, in source order.
+[[nodiscard]] std::vector<LuaGlobalFunction> FindLuaGlobalFunctions(std::string_view luaSource);
+
 // A global function of a Lua behaviour named after another engine's lifecycle callback - Unity's
 // Start/Update, Godot's _ready/_process, Unreal's BeginPlay - which 21kb never calls. `hook` is the
 // 21kb hook that function meant.
