@@ -2753,9 +2753,15 @@ bool EditorHeadlessAutomation::StepRuntime(
             bgfx::setDebug(BGFX_DEBUG_TEXT | BGFX_DEBUG_PROFILER);
             viewProfiler.enabled = true;
         }
-        if (requireShadows && impl_->viewport.LastSceneSubmitStats().submittedShadowDrawCallCount == 0U) {
+        // A shadow kept from an earlier frame draws nothing in this one: the light still counts as casting it.
+        if (const auto shadowStats = impl_->viewport.LastSceneSubmitStats();
+            requireShadows && shadowStats.submittedShadowDrawCallCount == 0U && shadowStats.selectedShadowLightCount == 0U) {
             Trace("step_runtime", false, "required-shadow-draws-missing");
             return false;
+        } else if (requireShadows && frame + 1U == frames) {
+            Trace("step_runtime_shadows", true, std::format("lights={} dropped={} casters={} submitted={} draws={}",
+                shadowStats.selectedShadowLightCount, shadowStats.droppedShadowLightCount, shadowStats.shadowCasterCount,
+                shadowStats.submittedShadowCasterCount, shadowStats.submittedShadowDrawCallCount));
         }
         if (profile) {
             const auto end = std::chrono::steady_clock::now();

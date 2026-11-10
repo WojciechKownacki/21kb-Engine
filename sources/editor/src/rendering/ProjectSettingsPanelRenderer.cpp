@@ -106,7 +106,10 @@ void DrawCategorySidebar(HDC dc, const ProjectSettingsPanelLayoutRects& rects, c
         HeroIconKind::MagnifyingGlass, Color(theme.textDisabled), 1);
     const RECT searchText{ rects.searchField.left + 26, rects.searchField.top, rects.searchField.right - 6, rects.searchField.bottom };
     if (query.empty() && !search.IsFocused()) {
-        DrawText(dc, searchText, EditorText("settings.searchPlaceholder", "Search settings"), Color(theme.textDisabled), 12);
+        // The hint is longer in some languages than the field is wide: it gets the largest size it fits at.
+        const std::string_view hint = EditorText("settings.searchPlaceholder", "Search settings");
+        DrawText(dc, searchText, hint, Color(theme.textDisabled),
+            EditorDialogStyle::FittingSize(dc, hint, static_cast<int>(searchText.right - searchText.left), 12));
     } else {
         const std::string shown = std::string{ query } + (search.IsFocused() ? "|" : "");
         DrawText(dc, searchText, shown.c_str(), Color(theme.textPrimary), 12);

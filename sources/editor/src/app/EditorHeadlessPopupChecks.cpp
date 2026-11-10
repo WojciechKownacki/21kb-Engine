@@ -20,6 +20,7 @@
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <memory>
 #include <bx/math.h>
 
 #include <algorithm>
@@ -238,20 +239,24 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls
     auto panel = editor.ActivePanel(DockPanelKind::ParticleEditor);
     if (!panel) return {false, "particle panel layout"};
     static_cast<void>(editor.Dock().Commands().ToggleMaximizedLeaf(panel->leafId));
-    const auto layout = [&] {
+    // The panel's layout is some fifty kilobytes. One on the heap serves every step: a copy on the
+    // stack for each of them, under the window procedures the clicks run, overflowed it.
+    const auto geometryStorage = std::make_unique<ParticleEditorPanelLayout>();
+    const auto layout = [&]() -> const ParticleEditorPanelLayout& {
         const auto inspector = context.ParticleEditorInspector();
-        return ParticleEditorPanelLayoutResolver::Resolve(ToRect(editor.ActivePanel(DockPanelKind::ParticleEditor)->content),
+        *geometryStorage = ParticleEditorPanelLayoutResolver::Resolve(ToRect(editor.ActivePanel(DockPanelKind::ParticleEditor)->content),
             context.ParticleEditorEmitterRows(), context.ParticleEditorWorkspace().ComposerScrollOffset(),
             GetDpiForWindow(editor.Window()), &inspector, context.ParticleEditorRecipes().size(), &context.ParticleEditorWorkspace());
+        return *geometryStorage;
     };
     for (const auto type : {kb::scene::ParticleOutputType::Volumetric, kb::scene::ParticleOutputType::Decal}) {
         context.SetParticleEditorComposerScrollOffset(0);
-        auto geometry = layout();
+        const ParticleEditorPanelLayout& geometry = layout();
         const auto index = static_cast<std::size_t>(type);
         if (index >= geometry.outputChoiceCount) return {false, "depth output choice missing"};
         context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0,
             geometry.outputChoices[index].top - geometry.composer.top - 40));
-        geometry = layout();
+        layout();
         editor.Click(editor.Window(), Center(geometry.outputChoices[index]));
         if (context.ParticleEditorWorkingAsset()->emitters.front().output.type != type)
             return {false, "depth output click did not change type"};
@@ -273,10 +278,10 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls
     const auto originalBlend = context.ParticleEditorWorkingAsset()->emitters.front().output.blend;
     for (unsigned choice = 0U; choice < 6U; ++choice) {
         context.SetParticleEditorComposerScrollOffset(0);
-        auto geometry = layout();
+        const ParticleEditorPanelLayout& geometry = layout();
         context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0,
             geometry.propertyRows[blendIndex].bounds.top - geometry.composer.top - 40));
-        geometry = layout();
+        layout();
         if (geometry.propertyRows[blendIndex].enumChipCount != 6U) return {false, "blend choices missing"};
         editor.Click(editor.Window(), Center(geometry.propertyRows[blendIndex].enumChips[choice]));
         if (static_cast<unsigned>(context.ParticleEditorWorkingAsset()->emitters.front().output.blend) != choice)
@@ -295,10 +300,10 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls
         if (row == inspector.properties.end()) return false;
         const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
         context.SetParticleEditorComposerScrollOffset(0);
-        auto geometry = layout();
+        const ParticleEditorPanelLayout& geometry = layout();
         context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0,
             geometry.propertyRows[index].bounds.top - geometry.composer.top - 40));
-        geometry = layout();
+        layout();
         const auto point = Center(geometry.propertyRows[index].curvePreview);
         const auto hit = ParticleEditorPanelLayoutResolver::HitTest(geometry, point.x, point.y);
         if (hit.action != ParticleEditorPanelAction::EditProperty || hit.propertyIndex != index) return false;
@@ -345,13 +350,13 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls
     const auto tinted = liveColor();
     if (!tinted || tinted->r <= tinted->g + 0.2F) return {false, "gradient did not tint live particles"};
     context.SetParticleEditorComposerScrollOffset(0);
-    auto geometry = layout();
+    const ParticleEditorPanelLayout& geometry = layout();
     const auto row = std::find_if(geometry.moduleRows.begin(), geometry.moduleRows.begin() + geometry.moduleRowCount,
         [color](const auto& value) { return value.moduleId == color; });
     if (row == geometry.moduleRows.begin() + geometry.moduleRowCount) return {false, "module toggle missing"};
     const auto index = static_cast<std::size_t>(row - geometry.moduleRows.begin());
     context.SetParticleEditorComposerScrollOffset(std::max<LONG>(0, row->bounds.top - geometry.composer.top - 40));
-    geometry = layout();
+    layout();
     editor.Click(editor.Window(), Center(geometry.moduleRows[index].enabledToggle));
     if (!context.TickParticleEditorPreview(0.1F)) return {false, "preview after topology edit"};
     const auto untinted = liveColor();
