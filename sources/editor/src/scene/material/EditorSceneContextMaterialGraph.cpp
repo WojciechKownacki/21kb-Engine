@@ -1178,6 +1178,10 @@ bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
         materialGraphViewport_.zoom = view->second.zoom;
         materialGraphViewport_.panX = view->second.panX;
         materialGraphViewport_.panY = view->second.panY;
+        materialGraphViewport_.frameAllPending = false;
+    } else {
+        // No view of its own yet: it must not inherit the pan and zoom of the material open before it.
+        materialGraphViewport_.frameAllPending = true;
     }
     materialEditorDetailsScrollOffset_ = 0;
     EditorCrashBreadcrumbs::Write(
@@ -2068,10 +2072,32 @@ bool EditorSceneContext::FrameSelectedMaterialGraphNodes() {
 }
 
 bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight) {
+    return FrameMaterialGraph(canvasWidth, canvasHeight, false);
+}
+
+bool EditorSceneContext::FrameAllMaterialGraphNodes(int canvasWidth, int canvasHeight) {
+    return FrameMaterialGraph(canvasWidth, canvasHeight, true);
+}
+
+bool EditorSceneContext::FrameNewlyOpenedMaterialGraph(int canvasWidth, int canvasHeight) {
+    if (!materialGraphViewport_.frameAllPending || canvasWidth <= 0 || canvasHeight <= 0) {
+        return false;
+    }
+    materialGraphViewport_.frameAllPending = false;
+    const bool wasFocused = materialGraphViewport_.focused;
+    const bool changed = FrameMaterialGraph(canvasWidth, canvasHeight, true);
+    // Opening a material does not move the keyboard into its graph.
+    materialGraphViewport_.focused = wasFocused;
+    return changed;
+}
+
+bool EditorSceneContext::FrameMaterialGraph(int canvasWidth, int canvasHeight, bool wholeGraph) {
     if (!materialEditor_.WorkingCopy().has_value()) {
         return false;
     }
     const kb::render::RenderMaterialGraphDocument& graph = materialEditor_.WorkingCopy()->graph;
+    // With nothing selected there is nothing narrower to frame than the graph itself.
+    wholeGraph = wholeGraph || (materialEditor_.SelectedNodeIds().empty() && materialEditor_.SelectedCommentId() == 0U);
 
     struct FrameItem {
         float x = 0.0F;
@@ -2082,7 +2108,14 @@ bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int ca
     };
     std::vector<FrameItem> frameItems;
 
-    for (const std::uint32_t nodeId : materialEditor_.SelectedNodeIds()) {
+    std::vector<std::uint32_t> framedNodeIds = materialEditor_.SelectedNodeIds();
+    if (wholeGraph) {
+        framedNodeIds.clear();
+        for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
+            framedNodeIds.push_back(node.id);
+        }
+    }
+    for (const std::uint32_t nodeId : framedNodeIds) {
         const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(graph, nodeId);
         if (node == nullptr) {
             continue;
@@ -2104,15 +2137,22 @@ bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int ca
         });
     }
 
-    if (const std::uint32_t commentId = materialEditor_.SelectedCommentId(); commentId != 0U) {
+    const auto frameComment = [&frameItems](const kb::render::RenderMaterialGraphCommentBox& comment) {
+        frameItems.push_back(FrameItem{
+            static_cast<float>(comment.positionX),
+            static_cast<float>(comment.positionY),
+            static_cast<float>(std::max<std::int32_t>(1, comment.width)),
+            static_cast<float>(std::max<std::int32_t>(1, comment.height)),
+            false,
+        });
+    };
+    if (wholeGraph) {
+        for (const kb::render::RenderMaterialGraphCommentBox& comment : graph.comments) {
+            frameComment(comment);
+        }
+    } else if (const std::uint32_t commentId = materialEditor_.SelectedCommentId(); commentId != 0U) {
         if (const std::optional<kb::render::RenderMaterialGraphCommentBox> comment = materialEditor_.GraphComment(commentId)) {
-            frameItems.push_back(FrameItem{
-                static_cast<float>(comment->positionX),
-                static_cast<float>(comment->positionY),
-                static_cast<float>(std::max<std::int32_t>(1, comment->width)),
-                static_cast<float>(std::max<std::int32_t>(1, comment->height)),
-                false,
-            });
+            frameComment(*comment);
         }
     }
 
@@ -2147,7 +2187,8 @@ bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int ca
             bounds[3] - bounds[1] <= static_cast<float>(fitHeight);
     };
     float low = MaterialGraphInteractionPolicy::MinimumZoom;
-    float high = MaterialGraphInteractionPolicy::MaximumZoom;
+    // A whole graph is shown at its natural size when it fits; only a selection is zoomed into.
+    float high = wholeGraph ? MaterialGraphInteractionPolicy::DefaultZoom : MaterialGraphInteractionPolicy::MaximumZoom;
     if (fits(high)) {
         low = high;
     } else {

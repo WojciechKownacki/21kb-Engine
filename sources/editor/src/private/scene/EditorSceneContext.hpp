@@ -1046,8 +1046,14 @@ public:
     [[nodiscard]] bool ScrollMaterialEditorDetails(int wheelDelta, int maxOffset) noexcept;
     // Select a node and centre the graph view on it. Used to jump to a diagnostic's offending node.
     [[nodiscard]] bool FocusMaterialGraphNode(std::uint32_t nodeId);
+    // Fits the selected nodes and comment in the canvas, or the whole graph when nothing is selected.
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);
+    // Fits the whole graph in the canvas, whatever is selected.
+    [[nodiscard]] bool FrameAllMaterialGraphNodes(int canvasWidth, int canvasHeight);
+    // Frames a material that was just opened for the first time, now that its canvas size is known.
+    // True when the view changed.
+    [[nodiscard]] bool FrameNewlyOpenedMaterialGraph(int canvasWidth, int canvasHeight);
     [[nodiscard]] bool SelectMaterialGraphUpstream();
     [[nodiscard]] bool SelectMaterialGraphDownstream();
     [[nodiscard]] bool AlignSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphAlignMode mode);
@@ -1487,6 +1493,7 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool FrameMaterialGraph(int canvasWidth, int canvasHeight, bool wholeGraph);
     [[nodiscard]] bool CompleteUIComponentDependencies(kb::scene::SceneEntity entity);
     void CompleteLoadedUIComponents();
     // Marks a loaded scene that links its prefab instances by object name for saving, which records node ids.

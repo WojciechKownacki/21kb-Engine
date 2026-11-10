@@ -390,9 +390,13 @@ void PanelContentRenderer::Paint(
     case DockPanelKind::Inspector:
         InspectorPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
-    case DockPanelKind::MaterialEditor:
+    case DockPanelKind::MaterialEditor: {
+        // The first paint of a newly opened material is the first moment its canvas size is known.
+        const RECT canvas = MaterialEditorPanelRenderer::ResolveLayout(visibleContent).graphCanvas;
+        static_cast<void>(sceneContext.FrameNewlyOpenedMaterialGraph(canvas.right - canvas.left, canvas.bottom - canvas.top));
         MaterialEditorPanelRenderer{}.Paint(dc, visibleContent, theme, sceneContext);
         break;
+    }
     case DockPanelKind::SkeletalMeshEditor:
         SkeletalMeshEditorPanelRenderer{}.Paint(
             dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,

@@ -449,6 +449,15 @@ template <typename Changed>
         }
     }
 
+    if (key == VK_HOME && !ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
+        static_cast<void>(sceneContext.FrameAllMaterialGraphNodes(sceneContext.MaterialGraphCanvasWidth(), sceneContext.MaterialGraphCanvasHeight()));
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
+    }
+
     if (key == 'F' && !ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
         static_cast<void>(sceneContext.FrameSelectedMaterialGraphNodes());
         InvalidateRect(messageWindow, nullptr, FALSE);
