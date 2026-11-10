@@ -1096,6 +1096,10 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
             context.ScriptEditor().AssetId() != controllerId,
         "Animator Controller is never routed to the Script Editor when its runtime data is unavailable");
     const kb::assets::AssetId timelineId{ 0xA111U };
+    const std::filesystem::path timelinePath = ArtifactPath("SelfTest.kbtimeline");
+    kb::scene::TimelineAsset timeline;
+    timeline.bindings = { { "Target", "." } };
+    report.Check(kb::scene::TimelineAssetIO::Save(timelinePath, timeline), "Create Timeline fixture for the editor asset surface");
     report.Check(context.Scene().Assets().Manager().RegisterAsset(
                      kb::assets::AssetMetadata{
                          .id = timelineId,
@@ -1103,13 +1107,14 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
                          .name = "SelfTestTimeline",
                          .virtualPath =
                              "/Game/Cinematics/SelfTest.kbtimeline",
+                         .physicalPath = timelinePath,
                          .runtimeLoadable = true,
                      }),
         "Register Timeline for the editor asset surface");
     report.Check(context.OpenAnimationAsset(timelineId) &&
-            context.ScriptEditor().IsOpen() &&
-            context.ScriptEditor().AssetId() == timelineId,
-        "Timeline opens in the editor's writable typed-asset surface");
+            context.TimelineEditorDocument().AssetId() == timelineId &&
+            context.ScriptEditor().AssetId() != timelineId,
+        "Timeline opens in the Timeline editor document, not the Script Editor");
     report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Assign Animator Controller through Inspector asset path");
     report.Check(context.SetAnimatorControllerAsset(actor, {}), "Clear Animator Controller through asset picker path");
     const kb::scene::Animator* clearedAnimator = context.Scene().Components().Animators().TryGet(actor);
@@ -2772,7 +2777,8 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
 
 void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
     auto nodeRectFor = [](kb::render::RenderMaterialGraphNodeKind kind) {
-        const SIZE size = MaterialEditorPanelGraphNodeSize(kind);
+        // A node grows with its pin rows, so its rect comes from a node of that kind, not from the kind's minimum size.
+        const SIZE size = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode{ .id = 1U, .kind = kind });
         return RECT{ 40, 40, 40 + size.cx, 40 + size.cy };
     };
     auto nodeRectForNode = [](const kb::render::RenderMaterialGraphNode& node) {
@@ -2812,11 +2818,11 @@ void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
         "CollectionParameter output pins keep readable spacing");
     checkInputSpacing(
         kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
-        14U,
+        kb::render::RenderMaterialGraphNodeInputPinNames(kb::render::RenderMaterialGraphNodeKind::MaterialOutput).size(),
         "MaterialOutput input pins keep readable spacing");
     checkInputSpacing(
         kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes,
-        11U,
+        kb::render::RenderMaterialGraphNodeInputPinNames(kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes).size(),
         "SetMaterialAttributes input pins keep readable spacing");
 
     bool allCatalogInputsSpaced = true;
@@ -4300,7 +4306,7 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
 
     // With nothing selected, the Inspector shows the three material settings.
     const std::vector<MaterialEditorGraphNodeProperty> settings = context.MaterialEditor().MaterialSettingsProperties();
-    report.Check(settings.size() == 3U, "Finding 25: three material settings are exposed");
+    report.Check(settings.size() == 4U, "Finding 25: three enum settings and the displacement margin are exposed");
     const auto findSetting = [&settings](std::string_view stableId) -> const MaterialEditorGraphNodeProperty* {
         for (const MaterialEditorGraphNodeProperty& row : settings) {
             if (row.stableId == stableId) {
@@ -4327,13 +4333,17 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
     };
     // Options are derived from the renderer's production predicates, so non-production values are never
     // offered and the editor cannot author a material the compiler would reject.
-    report.Check(hasOption(*domainRow, "surface") && domainRow->options.size() == 1U,
-        "Finding 25: only the production domain (surface) is offered");
+    report.Check(hasOption(*domainRow, "surface") && hasOption(*domainRow, "postProcess") &&
+            hasOption(*domainRow, "deferredDecal") && hasOption(*domainRow, "userInterface") &&
+            !hasOption(*domainRow, "lightFunction") && !hasOption(*domainRow, "volume") && domainRow->options.size() == 4U,
+        "Finding 25: only the production domains are offered");
     report.Check(hasOption(*shadingRow, "unlit") && hasOption(*shadingRow, "defaultLit") &&
             hasOption(*shadingRow, "subsurface") && hasOption(*shadingRow, "clearCoat"),
         "Finding 25: production shading models are offered");
-    report.Check(!hasOption(*shadingRow, "cloth") && !hasOption(*shadingRow, "hair") && !hasOption(*shadingRow, "eye"),
-        "Finding 25: non-production shading models are NOT offered");
+    report.Check(hasOption(*shadingRow, "cloth") && hasOption(*shadingRow, "hair") && hasOption(*shadingRow, "eye") &&
+            hasOption(*shadingRow, "singleLayerWater") && hasOption(*shadingRow, "thinTranslucent") &&
+            shadingRow->options.size() == 9U,
+        "Finding 25: the later production shading models are offered and no other");
     report.Check(blendRow->options.size() == 7U && hasOption(*blendRow, "opaque") && hasOption(*blendRow, "alphaHoldout"),
         "Finding 25: all seven blend modes are offered");
     report.Check(shadingRow->value.text == "Default Lit",
@@ -4349,8 +4359,8 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
     // A no-op and a non-production value are both declined and change nothing.
     report.Check(!context.SetMaterialGraphSetting(id, "material.shadingModel", "unlit"),
         "Finding 25: setting the same value again is a declined no-op");
-    report.Check(!context.SetMaterialGraphSetting(id, "material.shadingModel", "cloth") &&
-            context.MaterialEditor().WorkingCopy()->graph.shadingModel == "unlit",
+    report.Check(!context.SetMaterialGraphSetting(id, "material.domain", "volume") &&
+            context.MaterialEditor().WorkingCopy()->graph.materialDomain == "surface",
         "Finding 25: a non-production value is refused and leaves the document untouched");
     report.Check(!context.SetMaterialGraphSetting(id, "material.bogus", "whatever"),
         "Finding 25: an unknown setting id is refused");
@@ -4375,7 +4385,7 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
     // the Material section; selecting a node replaces them with that node's properties.
     const MaterialEditorPanelDetailsRows unselectedRows =
         MaterialEditorPanelRenderer::DetailsRowsForDocument(context, *context.MaterialEditor().WorkingCopy(), false);
-    report.Check(unselectedRows.nodePropertiesAreMaterialSettings && unselectedRows.nodePropertyRows.size() == 3U,
+    report.Check(unselectedRows.nodePropertiesAreMaterialSettings && unselectedRows.nodePropertyRows.size() == 4U,
         "Finding 25: the panel shows the material settings when nothing is selected");
     // The developer-only diagnostic dumps (Material Diff, Debug Channels) are off by default so the panel
     // reads like an Inspector rather than a debug log; they return only under KB_MATERIAL_EDITOR_DEBUG_DETAILS.
@@ -5700,7 +5710,11 @@ void RunPrefabPlacementSuite(Report& report) {
     const std::filesystem::path linkedPath = EditorProjectPaths::PrefabsRoot() / "LinkedCrate.kbprefab";
     const kb::assets::AssetMetadata* linkedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/LinkedCrate.kbprefab");
     report.Check(linkedAsset != nullptr && !context.DeleteAssetBrowserItem(linkedAsset->id) && std::filesystem::exists(linkedPath), "Deleting a prefab asset with scene instances is blocked");
-    report.Check(linkedAsset != nullptr && !context.MoveAssetToFolder(linkedAsset->id, "/Game") && std::filesystem::exists(linkedPath), "Moving a prefab asset with scene instances is blocked");
+    const kb::assets::AssetId linkedAssetId = linkedAsset != nullptr ? linkedAsset->id : kb::assets::AssetId{};
+    report.Check(linkedAssetId.IsValid() && context.MoveAssetToFolder(linkedAssetId, "/Game") && !std::filesystem::exists(linkedPath), "Moving a prefab asset with scene instances moves the file");
+    const kb::assets::AssetMetadata* movedLinkedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/LinkedCrate.kbprefab");
+    report.Check(movedLinkedAsset != nullptr, "A moved prefab asset is found at its new path");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Scene instances of a moved prefab asset stay linked");
     const kb::scene::SceneEntity unused = context.CreateHierarchyObject();
     context.Scene().Entities().SetName(unused, "UnusedPrefabSource");
     report.Check(context.CreatePrefabAsset(unused, EditorProjectPaths::PrefabsRoot() / "UnusedPrefab.kbprefab"), "Create prefab asset to delete");

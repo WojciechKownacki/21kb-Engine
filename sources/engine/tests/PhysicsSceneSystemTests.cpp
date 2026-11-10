@@ -3524,8 +3524,30 @@ void RunProjectSimulationSettingsTest() {
     kb::tests::Require(std::fabs(weightless - 100.0F) < 0.001F, "A project without gravity must leave a body where it is");
 }
 
+// A body asleep on the old gravity wakes when the gravity changes, and stays asleep when the gravity is set to what it already is.
+void RunGravityChangeWakesBodiesTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    const auto floor = scene.Entities().CreateObject({.name = "Floor", .transform = {.localPosition = {0.0F, -0.5F, 0.0F}}});
+    scene.Components().Colliders().Set(floor.Entity(), {.boxSize = {20.0F, 1.0F, 20.0F}});
+    const auto box = scene.Entities().CreateObject({.name = "Resting box", .transform = {.localPosition = {0.0F, 0.5F, 0.0F}}});
+    scene.Components().Colliders().Set(box.Entity(), {});
+    scene.Components().Rigidbodies().Set(box.Entity(), {});
+    for (int frame = 0; frame < 120; ++frame) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "A box resting on a floor must fall asleep");
+    static_cast<void>(kb::scene::PhysicsBackend::SetGravity(scene, kb::scene::PhysicsBackend::Gravity(scene)));
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "Setting the gravity it already has must leave a sleeping body asleep");
+    kb::tests::Require(kb::scene::PhysicsBackend::SetGravity(scene, {0.0F, 9.81F, 0.0F}), "The live physics world must take a new gravity");
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "Changing the gravity must wake a sleeping body");
+}
+
 void RunPhysicsSceneSystemTests() {
     RunProjectSimulationSettingsTest();
+    RunGravityChangeWakesBodiesTest();
     RunPhysicsMemoryMeasurementTest();
     RunPhysicsStackAndConnectedBodyRemovalTest();
     RunStaticColliderBatchInvalidationTest();

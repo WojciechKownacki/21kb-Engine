@@ -483,9 +483,11 @@ void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const REC
     const bool matches = query.empty() || ContainsIgnoringCase(text, query) || ContainsIgnoringCase(description, query) ||
         ContainsIgnoringCase(TooltipForKind(kind).title, query);
     const bool active = enabled && matches;
-    DrawText(dc, RECT{ label.left, label.top, label.right - 8, label.bottom }, text,
-        Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled), 12,
-        !query.empty() && matches ? FW_SEMIBOLD : FW_NORMAL);
+    // The label is longer in some languages than its column is wide: it gets the largest size it fits at.
+    const RECT room{ label.left, label.top, label.right - 8, label.bottom };
+    const int weight = !query.empty() && matches ? FW_SEMIBOLD : FW_NORMAL;
+    DrawText(dc, room, text, Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled),
+        EditorDialogStyle::FittingSize(dc, text, static_cast<int>(room.right - room.left), 12, weight), weight);
     DrawText(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled), 11);
 }
 

@@ -75,6 +75,15 @@ end
         disabled = json.loads(run('run', '--project', project, '--frames', '1',
                                   '--report', 'determinism').stdout)
         assert disabled['succeeded'] and not disabled['enabled']
+        assert abs(disabled['fixed_delta_seconds'] - 1 / 60) < 1e-6, disabled
+        # The run takes its fixed step from the project settings, like the game and the editor.
+        run('new', '--parent', parent, '--name', 'FixedStep', '--template', 'Empty')
+        settings = parent / 'FixedStep/Config/ProjectSettings.ini'
+        text = settings.read_text(encoding='utf-8')
+        assert 'FixedStepHz=60' in text, text
+        settings.write_text(text.replace('FixedStepHz=60', 'FixedStepHz=30'), encoding='utf-8')
+        stepped = json.loads(run('run', '--project', parent / 'FixedStep', '--frames', '1', '--report', 'determinism').stdout)
+        assert abs(stepped['fixed_delta_seconds'] - 1 / 30) < 1e-6, stepped
         print(json.dumps({'status': 'PASS', 'frames': 30, 'fixed_ticks': 60,
                           'separate_process_runs': 2, 'rng_sum': expected, 'physics_absolute_tolerance': 0.001,
                           'scope': 'actual CLI, Lua fixed-tick RNG and Jolt linear-motion numeric golden; no cross-host execution claim'}))

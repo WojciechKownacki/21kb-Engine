@@ -8,8 +8,8 @@
 
 namespace kb::world2d {
 
-// The 2D physics of a scene, on Box2D: one world for the X and Y plane (side view, gravity down) and one for the X and Z plane (top
-// down, no gravity). While playing, every Body 2D, Collider 2D and Character Controller 2D is made into Box2D bodies and shapes,
+// The 2D physics of a scene, on Box2D: one world for the X and Y plane (side view) and one for the X and Z plane (top down), each
+// pulled by the project gravity (PhysicsBackend::Gravity). While playing, every Body 2D, Collider 2D and Character Controller 2D is made into Box2D bodies and shapes,
 // stepped on the fixed step, and written back to the transforms; contacts and triggers reach scripts as the same OnCollision and
 // OnTrigger events the 3D physics sends. The collision of every Tilemap with an enabled Tilemap Collider is also made into static
 // shapes of the plane of its map (a wall map is a side view, a flat map is top down): solid cells, slopes and polygons, ledges that

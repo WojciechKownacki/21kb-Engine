@@ -77,7 +77,7 @@ struct UIComponentSet {
             !gridLayout && !wrapLayout && !overlayLayout && !layoutElement && !contentSizeFitter && !aspectRatioFitter &&
             !sprite && !image && !rawImage && !text && !border && !mask && !shadow && !outline && !backgroundBlur &&
             !selectable && !button && !toggle && !slider && !scrollbar && !scrollView && !inputField && !dropdown &&
-            !progressBar && !widgetSwitcher;
+            !progressBar && !widgetSwitcher && !accessibility;
     }
 };
 

@@ -59,7 +59,7 @@ namespace {
 
 [[nodiscard]] std::string PinList(const std::vector<ScriptApiPin>& pins) {
     if (pins.empty()) {
-        return "Ă˘â‚¬â€ť";
+        return "—";
     }
     std::string text;
     for (const ScriptApiPin& pin : pins) {
@@ -276,7 +276,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
     const ScriptApiCatalogLuaBinding& binding) {
     const ScriptApiCatalogFunction* function = catalog.FindFunction(binding.functionName);
     if (function == nullptr) {
-        return "Ă˘â‚¬â€ť";
+        return "—";
     }
     switch (binding.returnKind) {
     case ScriptApiCatalogLuaReturnKind::SingleOutput:
@@ -285,7 +285,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
                 return binding.returnPin + ": " + ToString(pin.type);
             }
         }
-        return "Ă˘â‚¬â€ť";
+        return "—";
     case ScriptApiCatalogLuaReturnKind::OutputsTable:
         return "table { " + PinList(function->outputs) + " }";
     case ScriptApiCatalogLuaReturnKind::GuardedTable: {
@@ -301,7 +301,7 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
         break;
     }
     if (function->outputs.empty()) {
-        return "Ă˘â‚¬â€ť";
+        return "—";
     }
     if (function->outputs.size() == 1U) {
         return function->outputs.front().name + ": " + ToString(function->outputs.front().type);
@@ -406,7 +406,7 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
     std::string out;
     out.reserve(16U * 1024U);
 
-    out += "# 21kb Engine Ă˘â‚¬â€ť Script API Reference\n\n";
+    out += "# 21kb Engine — Script API Reference\n\n";
     out += "> Generated with `kb_cli api`. Do not edit by hand; regenerate after engine updates.\n\n";
 
     out += "## Behaviour model\n\n";
@@ -512,7 +512,7 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
             out += " | `";
             out += entry.name;
             out += "` | ";
-            out += entry.owner.empty() ? "Ă˘â‚¬â€ť" : entry.owner;
+            out += entry.owner.empty() ? "—" : entry.owner;
             out += " | ";
             if (entry.kind == ScriptApiNameKind::Function || entry.kind == ScriptApiNameKind::Event) {
                 out += "in: ";

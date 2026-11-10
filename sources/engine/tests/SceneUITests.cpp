@@ -98,8 +98,8 @@ using kb::scene::SceneEntity;
 
 void TestCatalogAndPresets() {
     const std::span<const kb::scene::UIComponentDescriptor> catalog = kb::scene::UIComponentCatalog();
-    kb::tests::Require(catalog.size() == 31U, "UI component catalog must expose every canonical ECS component");
-    std::array<bool, 31U> seen{};
+    kb::tests::Require(catalog.size() == 32U, "UI component catalog must expose every canonical ECS component");
+    std::array<bool, 32U> seen{};
     for (const kb::scene::UIComponentDescriptor& descriptor : catalog) {
         const std::size_t index = static_cast<std::size_t>(descriptor.type);
         kb::tests::Require(index < seen.size() && !seen[index], "UI component catalog types must be unique and contiguous");

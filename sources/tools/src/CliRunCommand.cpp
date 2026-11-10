@@ -600,6 +600,9 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         ? projectSettings.settings.inputEnabled : loadedProject.legacySettings.inputEnabled;
     const std::string inputMappingContext = projectSettings.found && projectSettings.Succeeded()
         ? projectSettings.settings.inputMappingContext : loadedProject.legacySettings.inputMappingContext;
+    // An older project keeps no simulation settings in its descriptor, so it runs with the defaults.
+    const kb::project::ProjectSimulationSettings simulation = projectSettings.found && projectSettings.Succeeded()
+        ? projectSettings.settings.simulation : kb::project::ProjectSimulationSettings{};
     kb::ecs::WorldConfig worldConfig;
     worldConfig.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk64KB;
     worldConfig.workerThreadLimit = workerLimit;
@@ -734,6 +737,8 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         io.err << "error: script scene system could not be installed\n";
         return 1;
     }
+    // After the script system is installed: it sets the scene's fixed step from its own default when it is created.
+    scene.Runtime().ApplyProjectSimulation(simulation);
     // The script heap is the one kind of memory only this host can read; the engine reads the instances and the assets itself.
     std::optional<kb::world::WorldPartitionRuntime> worlds;
     if (worldMemoryReport != nullptr) {

@@ -1289,7 +1289,15 @@ public:
     bool SetGravity(Vec3 gravity) noexcept override {
         if (!IsFinite(gravity)) return false;
         JoinStep();
-        physicsSystem_.SetGravity(JPH::Vec3(gravity.x, gravity.y, gravity.z));
+        const JPH::Vec3 next(gravity.x, gravity.y, gravity.z);
+        if (next == physicsSystem_.GetGravity()) return true;
+        physicsSystem_.SetGravity(next);
+        // A body asleep on the old gravity would stay asleep on the new one.
+        JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
+        for (const auto& [entityId, record] : bodies_) {
+            static_cast<void>(entityId);
+            if (record.signature.bodyType == RigidbodyBodyType::Dynamic) bodyInterface.ActivateBody(record.bodyId);
+        }
         return true;
     }
 

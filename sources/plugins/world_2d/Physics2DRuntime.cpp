@@ -39,7 +39,6 @@ using kb::scene::SceneEntity;
 
 constexpr float kPi = 3.14159265358979F;
 constexpr int kSubSteps = 4;
-constexpr float kGravity = 9.81F;
 
 struct Pose {
     float x = 0.0F;
@@ -100,6 +99,14 @@ void WritePose(kb::scene::Scene& scene, SceneEntity entity, bool sideView, const
 
 [[nodiscard]] b2Vec2 ToB2(float x, float y) noexcept { return b2Vec2{ x, y }; }
 
+// The project gravity (PhysicsBackend::Gravity) pulls each plane along its own two axes: the side view takes X and Y, the top down
+// plane X and Z, the same axes the poses are mapped onto. The component across a plane is ignored, so the default gravity falls down
+// the side view and leaves the top down plane weightless. A Character Controller 2D, whose horizontal speed is its own input, takes
+// the vertical component only, and only in the side view.
+[[nodiscard]] b2Vec2 PlaneGravity(const kb::math::Vec3& gravity, bool sideView) noexcept {
+    return ToB2(gravity.x, sideView ? gravity.y : gravity.z);
+}
+
 [[nodiscard]] void* UserData(SceneEntity entity) noexcept { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(entity.Id())); }
 [[nodiscard]] SceneEntity EntityOf(void* data) noexcept { return SceneEntity{ static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(data)) }; }
 
@@ -158,12 +165,27 @@ struct Physics2DRuntime::State {
     std::map<SceneEntity, CharacterRec> characters;
     std::map<SceneEntity, MapRec> maps;
     std::set<std::uint64_t> oneWayShapes;   // b2StoreShapeId of the ledges
+    kb::math::Vec3 gravity{};               // the project gravity, read at the start of every fixed step
+
+    // A changed gravity reaches the live worlds and wakes the bodies, which would otherwise keep resting on the old one.
+    void SetGravity(const kb::math::Vec3& value) {
+        if (value.x == gravity.x && value.y == gravity.y && value.z == gravity.z) return;
+        gravity = value;
+        for (const bool sideView : { true, false }) {
+            const b2WorldId world = worlds[sideView ? 0 : 1];
+            if (b2World_IsValid(world)) b2World_SetGravity(world, PlaneGravity(gravity, sideView));
+        }
+        for (auto& [entity, body] : bodies) {
+            static_cast<void>(entity);
+            if (b2Body_IsValid(body.id)) b2Body_SetAwake(body.id, true);
+        }
+    }
 
     [[nodiscard]] b2WorldId World(bool sideView) {
         b2WorldId& world = worlds[sideView ? 0 : 1];
         if (!b2World_IsValid(world)) {
             b2WorldDef definition = b2DefaultWorldDef();
-            definition.gravity = ToB2(0.0F, sideView ? -kGravity : 0.0F);
+            definition.gravity = PlaneGravity(gravity, sideView);
             world = b2CreateWorld(&definition);
             b2World_SetPreSolveCallback(world, &PreSolve, this);
         }
@@ -334,6 +356,7 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         state.ReleaseAll();
         return;
     }
+    state.SetGravity(kb::scene::PhysicsBackend::Gravity(scene));
     const float step = context.DeltaSeconds();
     const auto query = std::as_const(scene).Components();
 
@@ -597,7 +620,7 @@ void Physics2DRuntime::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
         const b2WorldId world = state.WorldIfAny(character.sideView);
         if (!b2World_IsValid(world) || !b2Body_IsValid(character.body)) continue;
         const bool gravity = value.useGravity && character.sideView;
-        if (gravity) character.velocityY -= kGravity * value.gravityScale * step;
+        if (gravity) character.velocityY += state.gravity.y * value.gravityScale * step;
         if (!character.sideView) character.velocityY = 0.0F;
         const float desiredX = character.moveX;
         const float desiredY = character.sideView ? character.velocityY : character.moveY;

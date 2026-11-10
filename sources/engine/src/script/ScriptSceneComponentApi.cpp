@@ -1140,7 +1140,16 @@ constexpr std::array<FieldBinding, 26> kLightFields{
     KB_FLOAT(kb::scene::LightComponent, shadowNormalBias),
     KB_SCENE_ENUM(kb::scene::LightComponent, shadowFilter, kb::scene::LightShadowFilter, kb::scene::LightShadowFilter::Pcss),
     KB_SCENE_ENUM(kb::scene::LightComponent, shadowQuality, kb::scene::LightShadowQuality, kb::scene::LightShadowQuality::Ultra),
-    KB_UINT32(kb::scene::LightComponent, shadowCascadeCount),
+    FieldBinding{ "shadowCascadeCount",
+        [](const void* component) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<const kb::scene::LightComponent*>(component)->shadowCascadeCount };
+        },
+        [](void* component, const ScriptValue& value) noexcept -> bool {
+            if (value.Type() != ScriptValueType::UInt32 && (value.Type() != ScriptValueType::Int || value.AsInt() < 0)) return false;
+            static_cast<kb::scene::LightComponent*>(component)->shadowCascadeCount =
+                value.Type() == ScriptValueType::UInt32 ? value.AsUInt32() : static_cast<std::uint32_t>(value.AsInt());
+            return true;
+        } },
     KB_FLOAT(kb::scene::LightComponent, shadowCascadeDistribution),
 };
 

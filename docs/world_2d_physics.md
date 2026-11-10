@@ -14,9 +14,9 @@ collider has no shape. A character is its own kinematic body: do not add a Body 
 
 ## Planes
 
-`sideView` true (the default) simulates in the X and Y plane with gravity down; `sideView` false simulates in the X and Z plane with no
-gravity, for a top-down game. The two planes are separate worlds: a shape only meets shapes of its own plane. In a top-down body, the
-second coordinate of every 2D call (velocity, ray, impulse) is Z.
+`sideView` true (the default) simulates in the X and Y plane, pulled by the X and Y of the project gravity (down by default); `sideView`
+false simulates in the X and Z plane, pulled by its X and Z (none by default), for a top-down game. The two planes are separate worlds: a
+shape only meets shapes of its own plane. In a top-down body, the second coordinate of every 2D call (velocity, ray, impulse) is Z.
 
 ## Layers
 

@@ -283,6 +283,35 @@ int main() {
         Require(Near(world.At(ball).z, 5.0F, 0.1F) && Near(world.At(ball).x, 0.0F, 0.05F), "a top-down ball moves along Z and stops at the wall");
     }
 
+    // The project gravity pulls both planes: its X and Y the side view, its X and Z the top down plane.
+    {
+        World world;
+        kb::scene::PhysicsBackend::SetGravity(world.scene, { 0.0F, -2.0F, 3.0F });
+        const SceneEntity side = world.Make("Side", 0.0F, 20.0F, 0.0F);
+        world.scene.Components().Bodies2D().Set(side, Body2DComponent{});
+        world.scene.Components().Colliders2D().Set(side, Collider2DComponent{ .shape = 1, .radius = 0.5F });
+        const SceneEntity top = world.Make("Top", 0.0F, 0.0F, 0.0F);
+        world.scene.Components().Bodies2D().Set(top, Body2DComponent{ .sideView = false });
+        world.scene.Components().Colliders2D().Set(top, Collider2DComponent{ .shape = 1, .radius = 0.5F, .sideView = false });
+        world.Run(1.0F);
+        Require(Near(world.At(side).y, 19.0F, 0.1F) && Near(world.At(side).z, 0.0F, 0.0001F), "a side view body falls with the Y of the project gravity");
+        Require(Near(world.At(top).z, 1.5F, 0.1F) && Near(world.At(top).y, 0.0F, 0.0001F), "a top down body is pulled along Z by the Z of the project gravity");
+    }
+
+    // A body asleep on the old gravity wakes when the project gravity changes.
+    {
+        World world;
+        static_cast<void>(Ground(world));
+        const SceneEntity ball = world.Make("Ball", 0.0F, 3.0F);
+        world.scene.Components().Bodies2D().Set(ball, Body2DComponent{});
+        world.scene.Components().Colliders2D().Set(ball, Collider2DComponent{ .shape = 1, .radius = 0.5F, .restitution = 0.0F });
+        world.Run(3.0F);
+        Require(Near(world.At(ball).y, 1.0F, 0.06F), "a ball rests on the floor before the project gravity changes");
+        kb::scene::PhysicsBackend::SetGravity(world.scene, { 0.0F, 5.0F, 0.0F });
+        world.Run(1.0F);
+        Require(world.At(ball).y > 2.0F, "a changed project gravity wakes a resting body");
+    }
+
     // A body with a child collider; removing the component removes the shape; removing the body removes the body.
     {
         World world;
