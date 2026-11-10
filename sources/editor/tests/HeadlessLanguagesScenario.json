@@ -71,6 +71,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pl-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pl-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -171,6 +191,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "de-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "de-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "de-project_settings_tags",
       "text_fits": true
     },
     {
@@ -279,6 +319,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fr-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fr-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -379,6 +439,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "es-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "es-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "es-project_settings_tags",
       "text_fits": true
     },
     {
@@ -487,6 +567,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "it-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "it-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -587,6 +687,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "ru-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ru-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ru-project_settings_tags",
       "text_fits": true
     },
     {
@@ -695,6 +815,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ja-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ja-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -795,6 +935,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "zh-Hans-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "zh-Hans-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "zh-Hans-project_settings_tags",
       "text_fits": true
     },
     {
@@ -903,6 +1063,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ko-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ko-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -1003,6 +1183,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "pt-PT-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-PT-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-PT-project_settings_tags",
       "text_fits": true
     },
     {
@@ -1111,6 +1311,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-BR-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-BR-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -1211,6 +1431,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "nl-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nl-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nl-project_settings_tags",
       "text_fits": true
     },
     {
@@ -1319,6 +1559,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "cs-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "cs-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -1419,6 +1679,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "hu-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hu-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hu-project_settings_tags",
       "text_fits": true
     },
     {
@@ -1527,6 +1807,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ro-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ro-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -1627,6 +1927,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "uk-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "uk-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "uk-project_settings_tags",
       "text_fits": true
     },
     {
@@ -1735,6 +2055,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sv-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sv-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -1835,6 +2175,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "tr-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "tr-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "tr-project_settings_tags",
       "text_fits": true
     },
     {
@@ -1943,6 +2303,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hi-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hi-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -2043,6 +2423,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "el-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "el-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "el-project_settings_tags",
       "text_fits": true
     },
     {
@@ -2151,6 +2551,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "da-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "da-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -2251,6 +2671,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "nb-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nb-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nb-project_settings_tags",
       "text_fits": true
     },
     {
@@ -2359,6 +2799,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fi-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fi-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -2459,6 +2919,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "sk-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sk-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sk-project_settings_tags",
       "text_fits": true
     },
     {
@@ -2567,6 +3047,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "bg-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "bg-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -2667,6 +3167,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "sr-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sr-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sr-project_settings_tags",
       "text_fits": true
     },
     {
@@ -2775,6 +3295,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hr-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hr-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -2875,6 +3415,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "ar-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ar-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ar-project_settings_tags",
       "text_fits": true
     },
     {
@@ -2983,6 +3543,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "id-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "id-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -3083,6 +3663,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "th-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "th-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "th-project_settings_tags",
       "text_fits": true
     },
     {
@@ -3191,6 +3791,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "vi-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "vi-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -3295,6 +3915,26 @@
     },
     {
       "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ms-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ms-project_settings_tags",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
       "category": "physics"
     },
     {
@@ -3395,6 +4035,26 @@
       "op": "capture",
       "panel": "project_settings",
       "checkpoint": "en-project_settings_scenes",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "audio"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "en-project_settings_audio",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "tags"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "en-project_settings_tags",
       "text_fits": true
     },
     {

@@ -56,7 +56,7 @@ scenario-local aliases.
 | `map2d_dock` | Map `entity`. Creates a hidden native host, docks the production map canvas at a known size, then verifies hiding it with its panel. |
 | `assert_map2d_camera` | Map `entity`; optional `orientation`: `flat` or `wall`. Verifies a primary orthographic map camera and its direction. |
 | `assert_map2d_collision` | Map `entity`, expected `boxes` count. Checks the generated solid colliders, including shared-map updates and Undo/Redo. |
-| `select_project_settings_category` | `category`: `inputs`, `graphics`, or `physics`; selects the visible Project Settings page before a panel capture |
+| `select_project_settings_category` | `category`: `inputs`, `graphics`, `physics`, `display`, `audio`, `scenes`, or `tags`; selects the visible Project Settings page before a panel capture |
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
 | `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
 | `set_visibility_mode` | `entity`, authoring `mode`: `inherit`, `visible`, or `hidden`; uses the production Inspector command and its undo stack |

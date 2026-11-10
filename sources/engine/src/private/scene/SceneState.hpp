@@ -338,6 +338,8 @@ public:
     // Single source of truth for authorable/runtime tag definitions. Entity
     // TagsComponent instances only reference values from this list.
     std::vector<std::string> tagDefinitions{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision" };
+    // The project's own tags, set by the host: every definition list the scene takes keeps them.
+    std::vector<std::string> projectTagDefinitions;
     ScenePrefabRegistry prefabs;
     ScenePrefabInstanceRegistry prefabInstances;
     ScenePrefabInstantiationStats lastPrefabInstantiationStats;
@@ -766,6 +768,8 @@ public:
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
+    // Host-set master gain, kept here so a backend registered later starts at it.
+    float audioMasterVolume = 1.0F;
 #if !defined(NDEBUG)
     const std::thread::id audioPlaybackOwnerThread = std::this_thread::get_id();
 #endif

@@ -245,6 +245,16 @@ bool MiniaudioPlaybackBackend::SetPlatformSuspended(kb::scene::Scene& scene, boo
     return engine_.SetPlatformSuspended(suspended);
 }
 
+bool MiniaudioPlaybackBackend::SetMasterVolume(kb::scene::Scene& scene, float volume) noexcept {
+    AssertOwnerThread();
+    static_cast<void>(scene);
+    if (!kb::audio::IsAudioMasterVolumeValid(volume)) {
+        return false;
+    }
+    engine_.SetMasterVolume(volume);
+    return true;
+}
+
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::scene::Scene& scene, bool forceNoDevice) noexcept {
     static_cast<void>(scene);
     const bool suspended = engine_.IsPlatformSuspended();

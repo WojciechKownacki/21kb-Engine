@@ -46,6 +46,8 @@ inline constexpr float kProjectGravityLimit = 1000.0F;
 inline constexpr float kProjectTimeScaleMax = 100.0F;
 // Most scenes a project lists for its package besides the startup scene.
 inline constexpr std::size_t kProjectAdditionalScenesMax = 256U;
+// Most tags a project defines of its own: the scene's tag catalogue holds 256 names, six of them built in.
+inline constexpr std::size_t kProjectTagsMax = 250U;
 
 // How the shipped game opens its window and paces its frames. The defaults are what the game did
 // before these were settings.
@@ -123,6 +125,15 @@ struct ProjectSettings {
     // Display
     ProjectDisplaySettings display;
 
+    // Audio
+    // The master gain of the game, 0 (silent) to 1 (full); it scales every sound after the mixer.
+    float masterVolume = 1.0F;
+
+    // Tags
+    // The tags the project defines, in order, besides the built-in ones. Every scene of the project starts
+    // from this list; a tag only a scene file defines is added here when the editor opens that scene.
+    std::vector<std::string> tags;
+
     // Input
     bool inputEnabled = true;
     std::string inputMappingContext;
@@ -145,6 +156,12 @@ struct ProjectSettings {
 // Sets the scenes a package holds from an ordered list: its first scene becomes the startup scene. Empty
 // and repeated entries are dropped; an empty list leaves the settings as they are.
 void SetProjectBuildScenes(ProjectSettings& settings, std::vector<std::string> scenes);
+
+// Adds a tag to the project's list. False, and nothing changes, for a name that is not a valid tag, is built in,
+// is listed already or would pass kProjectTagsMax.
+[[nodiscard]] bool AddProjectTag(ProjectSettings& settings, std::string_view name);
+// Takes a tag out of the list; false when it was not there.
+[[nodiscard]] bool RemoveProjectTag(ProjectSettings& settings, std::string_view name);
 
 // The settings an older project file carried before the settings file existed.
 struct ProjectLegacySettings {

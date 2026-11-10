@@ -1,6 +1,7 @@
 #include "engine/project/ProjectSettings.hpp"
 
 #include "engine/config/IniDocument.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +23,8 @@ constexpr std::string_view kDisplay = "Project.Display";
 constexpr std::string_view kInput = "Project.Input";
 constexpr std::string_view kPhysics = "Project.Physics";
 constexpr std::string_view kTime = "Project.Time";
+constexpr std::string_view kAudio = "Project.Audio";
+constexpr std::string_view kTags = "Project.Tags";
 constexpr std::string_view kCrashReports = "Project.CrashReports";
 
 [[nodiscard]] std::string_view LightingPathName(ProjectSceneLightingPath path) noexcept {
@@ -77,6 +80,16 @@ void AppendScene(std::vector<std::string>& scenes, const std::string& scene) {
     }
 }
 
+// The tag a name stands for in the project's list, empty when it cannot be listed: not a valid tag name, a built-in
+// tag, or one the list holds already.
+[[nodiscard]] std::string ListableTag(const std::vector<std::string>& tags, std::string_view name) {
+    std::string tag = kb::scene::SceneTagCatalog::CanonicalName(name);
+    if (kb::scene::SceneTagCatalog::IsBuiltIn(tag) || std::ranges::find(tags, tag) != tags.end()) {
+        return {};
+    }
+    return tag;
+}
+
 } // namespace
 
 std::string_view ProjectQualityLevelName(ProjectQualityLevel level) noexcept {
@@ -123,6 +136,20 @@ void SetProjectBuildScenes(ProjectSettings& settings, std::vector<std::string> s
     }
     settings.defaultMap = unique.front();
     settings.additionalScenes.assign(unique.begin() + 1, unique.end());
+}
+
+bool AddProjectTag(ProjectSettings& settings, std::string_view name) {
+    std::string tag = ListableTag(settings.tags, name);
+    if (tag.empty() || settings.tags.size() >= kProjectTagsMax) {
+        return false;
+    }
+    settings.tags.push_back(std::move(tag));
+    return true;
+}
+
+bool RemoveProjectTag(ProjectSettings& settings, std::string_view name) {
+    const std::string tag = kb::scene::SceneTagCatalog::CanonicalName(name);
+    return std::erase(settings.tags, tag) != 0U;
 }
 
 std::filesystem::path ProjectSettingsStore::FilePath(const std::filesystem::path& projectRoot) {
@@ -218,6 +245,14 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     display.vsync = document.GetBool(kDisplay, "VSync").value_or(defaults.display.vsync);
     display.frameRateCap = ReadBounded(document, kDisplay, "FrameRateCap", defaults.display.frameRateCap,
         0U, kProjectFrameRateCapMax);
+    result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
+    const std::int64_t tagCount = std::clamp<std::int64_t>(
+        document.GetInt(kTags, "Count").value_or(0), 0, static_cast<std::int64_t>(kProjectTagsMax));
+    for (std::int64_t index = 0; index < tagCount; ++index) {
+        if (const auto tag = document.GetString(kTags, "Tag" + std::to_string(index)); tag.has_value()) {
+            static_cast<void>(AddProjectTag(result.settings, *tag));
+        }
+    }
     result.settings.inputEnabled = document.GetBool(kInput, "Enabled").value_or(defaults.inputEnabled);
     result.settings.inputMappingContext = ReadString(document, kInput, "MappingContext", defaults.inputMappingContext);
     result.settings.physicsLayersAsset = ReadString(document, kPhysics, "LayersAsset", defaults.physicsLayersAsset);
@@ -289,6 +324,19 @@ bool ProjectSettingsStore::Save(
     document.SetBool(kDisplay, "Resizable", settings.display.resizable);
     document.SetBool(kDisplay, "VSync", settings.display.vsync);
     document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
+    document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
+    // The tags as a count and one key each; keys a shorter list leaves behind are removed.
+    const std::size_t tagCount = std::min(settings.tags.size(), kProjectTagsMax);
+    if (tagCount == 0U) {
+        document.Remove(kTags, "Count");
+    } else {
+        document.SetInt(kTags, "Count", static_cast<std::int64_t>(tagCount));
+    }
+    for (std::size_t index = 0U; index < tagCount; ++index) {
+        document.SetString(kTags, "Tag" + std::to_string(index), settings.tags[index]);
+    }
+    for (std::size_t index = tagCount; document.Remove(kTags, "Tag" + std::to_string(index)); ++index) {
+    }
     document.SetBool(kInput, "Enabled", settings.inputEnabled);
     document.SetString(kInput, "MappingContext", settings.inputMappingContext);
     document.SetString(kPhysics, "LayersAsset", settings.physicsLayersAsset);

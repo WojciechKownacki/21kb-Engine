@@ -1,6 +1,10 @@
 #include "engine/project/ProjectCreator.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
+#include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 
@@ -28,6 +32,19 @@ namespace {
     settings.description = "21kb project";
     settings.defaultMap = "/Game/Scenes/Main.21kbscene"; // written by Create() below
     return settings;
+}
+
+// Where a new project's default audio mixer lives, and the id the asset database gives it: the id follows the
+// virtual path and the asset type, so the startup scene can name the mixer before the project is ever opened.
+constexpr std::string_view kDefaultMixerVirtualPath = "/Game/Audio/DefaultMixer.kbmixer";
+
+[[nodiscard]] kb::audio::AudioMixerAsset DefaultMixer() {
+    // Music, Effects and Voice feed the master directly, each at full volume.
+    kb::audio::AudioMixerAsset mixer;
+    for (const char* name : { "Music", "Effects", "Voice" }) {
+        mixer.buses.push_back(kb::audio::AudioMixerBus{ .name = name });
+    }
+    return mixer;
 }
 
 // The name is UTF-8; a plain std::string would be read in the Windows code page.
@@ -154,10 +171,20 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
         return Refuse(descriptorFile, "The project settings could not be written: " + settingsError);
     }
 
+    // The default mixer is the startup scene's active one, as when an author picks a mixer for a scene.
+    std::filesystem::create_directories(projectRoot / "Assets" / "Audio", error);
+    if (error || !kb::audio::AudioMixerAssetIO::Save(projectRoot / "Assets" / "Audio" / "DefaultMixer.kbmixer", DefaultMixer())) {
+        undo();
+        return Refuse(descriptorFile, "The default audio mixer could not be written.");
+    }
+    const kb::assets::AssetId mixerId = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath(std::filesystem::path{ std::string{ kDefaultMixerVirtualPath } }) + ":" +
+        kb::audio::kAudioMixerAssetType);
+
     // The settings name Main.21kbscene as the startup map: it has to exist, or the game and every
     // headless tool start from a scene that is not there.
     if (std::string written = kb::scene::SceneTemplates::WriteSceneFile(
-            projectRoot / "Assets" / "Scenes" / "Main.21kbscene", startupTemplate, descriptor);
+            projectRoot / "Assets" / "Scenes" / "Main.21kbscene", startupTemplate, descriptor, mixerId.value);
         !written.empty()) {
         undo();
         return Refuse(descriptorFile, "The startup scene could not be written: " + written);

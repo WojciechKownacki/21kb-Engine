@@ -126,6 +126,11 @@ bool SceneTagCatalogQueries::IsAssigned(SceneEntity entity, std::string_view nam
     return std::find(assigned.begin(), assigned.end(), normalized) != assigned.end();
 }
 
+std::string SceneTagCatalog::CanonicalName(std::string_view name) {
+    std::string normalized = Normalize(name);
+    return IsValidName(normalized) ? normalized : std::string{};
+}
+
 SceneTagCatalog::SceneTagCatalog(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -178,6 +183,8 @@ bool SceneTagCatalog::ReplaceDefinitions(std::span<const std::string> names) {
     for (const std::string_view builtIn : DefaultNames) {
         replacement.emplace_back(builtIn);
     }
+    const std::vector<std::string>& project = SceneAccess::State(scene_).projectTagDefinitions;
+    replacement.insert(replacement.end(), project.begin(), project.end());
     std::vector<std::string> provided;
     provided.reserve(names.size());
     for (const std::string& name : names) {
@@ -186,7 +193,7 @@ bool SceneTagCatalog::ReplaceDefinitions(std::span<const std::string> names) {
             return false;
         }
         provided.push_back(normalized);
-        if (IsBuiltIn(normalized)) {
+        if (IsBuiltIn(normalized) || std::find(project.begin(), project.end(), normalized) != project.end()) {
             continue;
         }
         if (replacement.size() >= MaxDefinitions) {
@@ -196,6 +203,37 @@ bool SceneTagCatalog::ReplaceDefinitions(std::span<const std::string> names) {
     }
     Definitions(scene_) = std::move(replacement);
     return true;
+}
+
+bool SceneTagCatalog::SetProjectDefinitions(std::span<const std::string> names) {
+    std::vector<std::string> project;
+    for (const std::string& name : names) {
+        const std::string normalized = CanonicalName(name);
+        if (normalized.empty()) {
+            return false;
+        }
+        if (!IsBuiltIn(normalized) && std::find(project.begin(), project.end(), normalized) == project.end()) {
+            project.push_back(normalized);
+        }
+    }
+    // Built-in tags, then the project's, then whatever only this scene defines.
+    std::vector<std::string> next{ DefaultNames.begin(), DefaultNames.end() };
+    next.insert(next.end(), project.begin(), project.end());
+    for (const std::string& existing : Definitions(scene_)) {
+        if (std::find(next.begin(), next.end(), existing) == next.end()) {
+            next.push_back(existing);
+        }
+    }
+    if (next.size() > MaxDefinitions) {
+        return false;
+    }
+    SceneAccess::State(scene_).projectTagDefinitions = std::move(project);
+    Definitions(scene_) = std::move(next);
+    return true;
+}
+
+std::span<const std::string> SceneTagCatalog::ProjectDefinitions() const noexcept {
+    return SceneAccess::State(scene_).projectTagDefinitions;
 }
 
 void SceneTagCatalog::ResetToDefaults() {

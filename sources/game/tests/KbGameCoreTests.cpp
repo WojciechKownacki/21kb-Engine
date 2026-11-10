@@ -27,6 +27,7 @@
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
@@ -35,6 +36,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -1406,6 +1408,8 @@ void RunWindowsRuntimeModulePackagingTests() {
     settings.display.windowHeight = 1080U;
     settings.display.frameRateCap = 75U;
     settings.simulation.fixedStepHz = 90U;
+    settings.masterVolume = 0.6F;
+    settings.tags = { "Boss", "Trap" };
     WriteSettings(fixture.root, settings);
     std::error_code copyError;
     std::filesystem::create_directories(fixture.root / "Binaries", copyError);
@@ -1482,6 +1486,8 @@ void RunWindowsRuntimeModulePackagingTests() {
         "Mounted Windows runtime did not accept its sealed module DLLs");
     Require(runtime.display == settings.display && runtime.simulation == settings.simulation,
         "A packaged game must read the display and simulation settings from its cooked manifest");
+    Require(runtime.masterVolume == 0.6F && runtime.tags == settings.tags,
+        "A packaged game must read the master volume and the tag list from its cooked manifest");
     Require(
         std::filesystem::path{ runtime.descriptor.plugins[0].binaryPath } ==
             std::filesystem::weakly_canonical(stagedModules / "Binaries" / "custom.dll") &&
@@ -2440,6 +2446,8 @@ void RunSettingsTests() {
     settings.display = { .windowWidth = 1600U, .windowHeight = 900U, .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen,
         .resizable = false, .vsync = false, .frameRateCap = 60U };
     settings.simulation = { .fixedStepHz = 120U, .gravity = { 0.0F, -3.7F, 0.0F }, .timeScale = 0.5F };
+    settings.masterVolume = 0.25F;
+    settings.tags = { "Boss" };
     WriteSettings(fixture.root, settings);
 
     std::ostringstream err;
@@ -2461,6 +2469,8 @@ void RunSettingsTests() {
     Require(
         runtime.display == settings.display && runtime.simulation == settings.simulation,
         "The display and simulation settings must reach the runtime");
+    Require(runtime.masterVolume == 0.25F && runtime.tags == settings.tags,
+        "The master volume and the project's tags must reach the runtime");
     {
         // Loading the project's scene applies the simulation settings to it.
         kb::scene::Scene configured;
@@ -2630,6 +2640,22 @@ void RunSceneLoadTests() {
             loaded.filename() == "Main.21kbscene",
             "The physical scene file the registry named is the one that is read");
         Require(scene.Entities().Count() == 3U, "The scene has to be instantiated, not just read");
+    }
+
+    {
+        // The project's master volume and tags are the scene's once it is loaded.
+        kb::scene::Scene scene;
+        kb::game::GameProjectRuntime runtime = RuntimeFor(fixture);
+        runtime.masterVolume = 0.3F;
+        runtime.tags = { "Boss" };
+        std::ostringstream err;
+        std::filesystem::path loaded;
+        std::size_t discovered = 0U;
+        Require(kb::game::LoadGameProjectScene(runtime, scene, loaded, discovered, err),
+            "A project with a master volume and tags must load");
+        Require(kb::audio::AudioPlayback::MasterVolume(scene) == 0.3F && scene.Tags().Contains("Boss") &&
+                scene.Tags().ProjectDefinitions().size() == 1U,
+            "Loading the project's scene must apply its master volume and tag list");
     }
 
     {

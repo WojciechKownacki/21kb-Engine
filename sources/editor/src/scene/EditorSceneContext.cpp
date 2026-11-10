@@ -434,6 +434,7 @@ EditorSceneContext::EditorSceneContext()
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
     scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
+    ApplyProjectAudioAndTags(*scene_);
     // Like Unity: the scene that was open when the editor was last closed, else the startup scene.
     std::error_code error;
     currentScenePath_ = ResolveDefaultScenePath();
@@ -458,6 +459,7 @@ EditorSceneContext::EditorSceneContext()
     }
     if (loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
+        AdoptSceneTagsIntoProject();
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened the " + std::string{ openedAs } + ": " + currentScenePath_.generic_string());
         UpgradePrefabLinksOnSave(loaded.document);
@@ -2231,7 +2233,24 @@ EditorProtectedScenes EditorSceneContext::ProtectedScenes() const {
 }
 
 bool EditorSceneContext::CommitAssetTextEdit() {
+    // A scene renamed here keeps its place in the package list under its new name.
+    std::string renamedFrom;
+    std::string renamedTo;
+    if (assetBrowser_.TextEditMode() == EditorAssetTextEditMode::RenameAsset) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetBrowser_.TextEditTargetAsset());
+        if (metadata != nullptr && metadata->virtualPath.extension() == ".21kbscene") {
+            renamedFrom = metadata->virtualPath.generic_string();
+            renamedTo = (metadata->virtualPath.parent_path() /
+                (std::string{ assetBrowser_.TextEditValue() } + metadata->virtualPath.extension().string())).generic_string();
+        }
+    }
     const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(*scene_, assetBrowser_, ProtectedScenes());
+    if (committed && !renamedFrom.empty()) {
+        if (const auto listed = std::ranges::find(projectConfig_.additionalScenes, renamedFrom); listed != projectConfig_.additionalScenes.end()) {
+            *listed = renamedTo;
+            static_cast<void>(SaveProjectConfiguration());
+        }
+    }
     if (committed) {
         console_.Info("Assets", "Asset browser text edit committed.");
     } else {
@@ -2244,9 +2263,36 @@ void EditorSceneContext::CancelAssetTextEdit() noexcept {
     assetBrowser_.CancelTextEdit();
 }
 
+std::vector<std::string> EditorSceneContext::ListedScenesOnDisk() const {
+    std::vector<std::string> present;
+    std::error_code error;
+    for (const std::string& scene : projectConfig_.additionalScenes) {
+        const std::optional<std::filesystem::path> file = scene_->Assets().Manager().Mounts().Resolve(std::filesystem::path{ scene });
+        if (file.has_value() && std::filesystem::is_regular_file(*file, error)) {
+            present.push_back(scene);
+        }
+    }
+    return present;
+}
+
+void EditorSceneContext::DropDeletedBuildScenes(const std::vector<std::string>& before) {
+    const std::vector<std::string> after = ListedScenesOnDisk();
+    const std::size_t listed = projectConfig_.additionalScenes.size();
+    for (const std::string& scene : before) {
+        if (std::ranges::find(after, scene) == after.end()) {
+            std::erase(projectConfig_.additionalScenes, scene);
+        }
+    }
+    if (projectConfig_.additionalScenes.size() != listed) {
+        static_cast<void>(SaveProjectConfiguration());
+    }
+}
+
 bool EditorSceneContext::DeleteSelectedAssetBrowserItem() {
+    const std::vector<std::string> scenesBefore = ListedScenesOnDisk();
     const bool deleted = EditorSceneAssetBrowserCommands::DeleteSelected(*scene_, assetBrowser_, ProtectedScenes());
     if (deleted) {
+        DropDeletedBuildScenes(scenesBefore);
         console_.Info("Assets", "Moved the selection to the Recycle Bin.");
     } else {
         console_.Warning("Assets", AssetErrorOr(scene_->Assets().Manager(), "Nothing was deleted."));
@@ -2418,8 +2464,10 @@ bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
         }
     }
 
+    const std::vector<std::string> scenesBefore = ListedScenesOnDisk();
     const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(*scene_, assetBrowser_, id, ProtectedScenes());
     if (deleted) {
+        DropDeletedBuildScenes(scenesBefore);
         console_.Info("Assets", "Asset deleted.");
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset delete failed."));
@@ -2428,8 +2476,10 @@ bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
 }
 
 bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder) {
+    const std::vector<std::string> scenesBefore = ListedScenesOnDisk();
     const bool deleted = EditorSceneAssetBrowserCommands::DeleteFolder(*scene_, assetBrowser_, virtualFolder, ProtectedScenes());
     if (deleted) {
+        DropDeletedBuildScenes(scenesBefore);
         console_.Info("Assets", "Folder deleted: " + virtualFolder.generic_string());
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Folder delete failed."));
@@ -3272,6 +3322,39 @@ bool EditorSceneContext::SetProjectBuildScenes(std::vector<std::string> scenes) 
     }
     projectConfig_ = std::move(next);
     return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectMasterVolume(float volume) {
+    if (!kb::audio::IsAudioMasterVolumeValid(volume) || projectConfig_.masterVolume == volume) {
+        return false;
+    }
+    projectConfig_.masterVolume = volume;
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(*scene_, volume));
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::AddProjectTag(std::string_view name) {
+    if (!kb::project::AddProjectTag(projectConfig_, name)) {
+        return false;
+    }
+    static_cast<void>(scene_->Tags().SetProjectDefinitions(projectConfig_.tags));
+    return SaveProjectConfiguration();
+}
+
+void EditorSceneContext::ApplyProjectAudioAndTags(kb::scene::Scene& scene) {
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, projectConfig_.masterVolume));
+    static_cast<void>(scene.Tags().SetProjectDefinitions(projectConfig_.tags));
+}
+
+void EditorSceneContext::AdoptSceneTagsIntoProject() {
+    bool grew = false;
+    for (const std::string& tag : scene_->Tags().Names()) {
+        grew = kb::project::AddProjectTag(projectConfig_, tag) || grew;
+    }
+    if (grew) {
+        static_cast<void>(scene_->Tags().SetProjectDefinitions(projectConfig_.tags));
+        static_cast<void>(SaveProjectConfiguration());
+    }
 }
 
 bool EditorSceneContext::SetProjectSimulation(const kb::project::ProjectSimulationSettings& simulation) {
@@ -4718,9 +4801,14 @@ bool EditorSceneContext::SetEntityTagSelected(kb::scene::SceneEntity entity, std
         return false;
     }
     const std::string tag{ tagText };
-    return ExecuteSceneCommand(selected ? "Assign Tag" : "Remove Tag", [this, entity, tag, selected]() {
+    const bool changed = ExecuteSceneCommand(selected ? "Assign Tag" : "Remove Tag", [this, entity, tag, selected]() {
         return scene_->Tags().SetAssigned(entity, tag, selected);
     });
+    // Assigning a tag the scene did not know defines it, and the project owns the list of defined tags.
+    if (changed && selected) {
+        AdoptSceneTagsIntoProject();
+    }
+    return changed;
 }
 
 bool EditorSceneContext::RemoveTagsFromEntity(kb::scene::SceneEntity entity) {
@@ -4734,9 +4822,20 @@ bool EditorSceneContext::DeleteSceneTag(std::string_view tagText) {
     if (tag.empty()) {
         return false;
     }
-    return ExecuteSceneCommand("Delete Tag", [this, tag]() {
-        return scene_->Tags().Undefine(tag);
-    });
+    // The scene forgets the tag and clears it from its objects (Undefine); the project's list loses it too, so no
+    // scene opened afterwards defines it again. Undoing the step brings it back to the scene, not to the list.
+    bool removed = false;
+    if (scene_->Tags().Contains(tag)) {
+        removed = ExecuteSceneCommand("Delete Tag", [this, tag]() {
+            return scene_->Tags().Undefine(tag);
+        });
+    }
+    if (kb::project::RemoveProjectTag(projectConfig_, tag)) {
+        static_cast<void>(scene_->Tags().SetProjectDefinitions(projectConfig_.tags));
+        static_cast<void>(SaveProjectConfiguration());
+        removed = true;
+    }
+    return removed;
 }
 
 bool EditorSceneContext::SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {

@@ -59,8 +59,12 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.lighting", "Lighting");
     case ProjectSettingsCategory::Display:
         return EditorText("projectSettings.category.display", "Display");
+    case ProjectSettingsCategory::Audio:
+        return EditorText("projectSettings.category.audio", "Audio");
     case ProjectSettingsCategory::Scenes:
         return EditorText("projectSettings.category.scenes", "Scenes");
+    case ProjectSettingsCategory::Tags:
+        return EditorText("projectSettings.category.tags", "Tags");
     case ProjectSettingsCategory::EditorGeneral:
         return EditorText("projectSettings.category.editorGeneral", "General");
     case ProjectSettingsCategory::EditorSaving:
@@ -247,6 +251,10 @@ struct TooltipContent {
         return EditorText("projectSettings.gravityPreset", "Gravity Preset");
     case ProjectSettingsTooltipKind::TimeScale:
         return EditorText("projectSettings.timeScale", "Time Scale");
+    case ProjectSettingsTooltipKind::MasterVolume:
+        return EditorText("projectSettings.masterVolume", "Master Volume");
+    case ProjectSettingsTooltipKind::Tags:
+        return EditorText("projectSettings.category.tags", "Tags");
     default:
         return {};
     }
@@ -363,6 +371,8 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::Gravity:
     case ProjectSettingsTooltipKind::GravityPreset:
     case ProjectSettingsTooltipKind::TimeScale:
+    case ProjectSettingsTooltipKind::MasterVolume:
+    case ProjectSettingsTooltipKind::Tags:
         // These settings say all there is to say in their one-line description.
         return TooltipContent{ SettingLabel(kind), DescriptionFor(kind) };
     case ProjectSettingsTooltipKind::None:
@@ -422,6 +432,10 @@ struct TooltipContent {
         return EditorText("projectSettings.gravityDescription", "Gravity of the scene in metres per second squared.");
     case ProjectSettingsTooltipKind::TimeScale:
         return EditorText("projectSettings.timeScaleDescription", "Speed of game time when a scene starts; 1 is normal.");
+    case ProjectSettingsTooltipKind::MasterVolume:
+        return EditorText("projectSettings.masterVolumeDescription", "Loudness of the whole game; 1 is full volume.");
+    case ProjectSettingsTooltipKind::Tags:
+        return EditorText("projectSettings.tagsDescription", "Tags for objects, shared by every scene, besides the built-in ones.");
     case ProjectSettingsTooltipKind::GravityPreset:
     case ProjectSettingsTooltipKind::None:
     default:
@@ -465,6 +479,10 @@ struct SearchableSetting {
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
     case ProjectSettingsCategory::Display:
         return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit });
+    case ProjectSettingsCategory::Audio:
+        return fromKinds({ Kind::MasterVolume });
+    case ProjectSettingsCategory::Tags:
+        return fromKinds({ Kind::Tags });
     case ProjectSettingsCategory::Scenes:
         return { { EditorText("projectSettings.scenesInBuild", "Scenes in Build"),
             EditorText("projectSettings.scenesInBuildDescription", "Scenes in the game package, in order. The first one starts the game.") } };
@@ -481,6 +499,13 @@ struct SearchableSetting {
     default:
         return {};
     }
+}
+
+// How many rows the list of the open page has: the scenes of the build on the Scenes page, the tags on the Tags page.
+[[nodiscard]] int ListedRowCount(const EditorSceneContext& sceneContext) {
+    return static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Tags
+        ? static_cast<int>(sceneContext.ProjectConfiguration().tags.size())
+        : static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
 }
 
 // A setting's label with its description under it. While searching, a setting that does not
@@ -679,6 +704,56 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
     DrawNumberCell(dc, rects.frameRateValue, theme, sceneContext, ProjectSettingsNumber::FrameRateCap);
 }
 
+void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.audioSection", "AUDIO"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawSetting(dc, rects, rects.stepperLabel[5], SettingLabel(ProjectSettingsTooltipKind::MasterVolume), ProjectSettingsTooltipKind::MasterVolume, theme, query);
+    DrawStepper(dc, rects.stepperButton[5][0], rects.stepperValue[5], rects.stepperButton[5][1], theme, sceneContext, ProjectSettingsNumber::MasterVolume);
+}
+
+// The cell that takes the name of a new tag: a hint while it is empty, the text so far with a caret while it is typed.
+void DrawTagNameCell(HDC dc, const RECT& cell, const EditorTheme& theme, const EditorProjectSettingsState& state) {
+    const bool editing = state.IsTagNameEditing();
+    GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.borderPanel));
+    const RECT text{ cell.left + 8, cell.top, cell.right - 8, cell.bottom };
+    if (editing) {
+        const CutTextDataScope data;
+        DrawText(dc, text, std::string{ state.NumberEdit().Query() } + "|", Color(theme.textPrimary), 12);
+        return;
+    }
+    const std::string_view hint = EditorText("projectSettings.tagNameHint", "New tag name");
+    DrawText(dc, text, hint, Color(theme.textDisabled),
+        EditorDialogStyle::FittingSize(dc, hint, static_cast<int>(text.right - text.left), 12));
+}
+
+// The tags the project defines: a cell and a button that add one, and per tag a remove button. The list scrolls with
+// the wheel when it is longer than the pane, like the Scenes page's.
+void DrawTagsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const std::vector<std::string>& tags = sceneContext.ProjectConfiguration().tags;
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.tagsSection", "TAGS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, rects.scenesIntro, DescriptionFor(ProjectSettingsTooltipKind::Tags), Color(theme.textDisabled), 11);
+    DrawTagNameCell(dc, rects.tagNameField, theme, sceneContext.ProjectSettings());
+    DrawOptionButton(dc, rects.tagAddButton, theme, EditorText("projectSettings.tagAdd", "Add tag"), false);
+
+    const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+    const int first = ProjectSettingsPanelRenderer::FirstVisibleScene(sceneContext, rects);
+    for (int visible = 0; visible < capacity && first + visible < static_cast<int>(tags.size()); ++visible) {
+        const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, row, Color(theme.chrome), Color(theme.borderPanel));
+        // The tag's name is the project's data, not interface text: a long one ends in an ellipsis.
+        const RECT label = ProjectSettingsPanelLayout::TagRowLabel(rects, visible);
+        {
+            const CutTextDataScope data;
+            DrawText(dc, RECT{ row.left + 10, label.top, label.right, label.bottom }, tags[static_cast<std::size_t>(first + visible)], Color(theme.textPrimary), 12);
+        }
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible), theme, EditorText("projectSettings.sceneRemove", "Remove"), false);
+    }
+}
+
 // The scenes a package holds, startup scene first: the list, a button that adds a scene, and per scene a move up
 // and a remove button. The list scrolls with the wheel when it is longer than the pane.
 void DrawScenesPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -795,8 +870,14 @@ void ProjectSettingsPanelRenderer::Paint(
     case ProjectSettingsCategory::Display:
         DrawDisplayPage(dc, rects, theme, sceneContext);
         break;
+    case ProjectSettingsCategory::Audio:
+        DrawAudioPage(dc, rects, theme, sceneContext);
+        break;
     case ProjectSettingsCategory::Scenes:
         DrawScenesPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Tags:
+        DrawTagsPage(dc, rects, theme, sceneContext);
         break;
     case ProjectSettingsCategory::EditorGeneral:
     case ProjectSettingsCategory::EditorSaving: {
@@ -917,6 +998,37 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{};
     }
 
+    if (category == ProjectSettingsCategory::Audio) {
+        for (int direction = 0; direction < 2; ++direction) {
+            if (PointInRect(rects.stepperButton[5][direction], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::MasterVolumeStepper, .index = direction, .rect = rects.stepperButton[5][direction] };
+            }
+        }
+        if (PointInRect(rects.stepperValue[5], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(ProjectSettingsNumber::MasterVolume), .rect = rects.stepperValue[5] };
+        }
+        return Hit{};
+    }
+
+    if (category == ProjectSettingsCategory::Tags) {
+        if (PointInRect(rects.tagAddButton, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::TagAdd, .index = -1, .rect = rects.tagAddButton };
+        }
+        if (PointInRect(rects.tagNameField, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::TagNameField, .index = -1, .rect = rects.tagNameField };
+        }
+        const int count = ListedRowCount(sceneContext);
+        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+        const int first = FirstVisibleScene(sceneContext, rects);
+        for (int visible = 0; visible < capacity && first + visible < count; ++visible) {
+            const RECT remove = ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible);
+            if (PointInRect(remove, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::TagRemove, .index = first + visible, .rect = remove };
+            }
+        }
+        return Hit{};
+    }
+
     if (category == ProjectSettingsCategory::Scenes) {
         if (PointInRect(rects.sceneAddButton, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::BuildSceneAdd, .index = -1, .rect = rects.sceneAddButton };
@@ -997,13 +1109,13 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
 }
 
 int ProjectSettingsPanelRenderer::FirstVisibleScene(const EditorSceneContext& sceneContext, const ProjectSettingsPanelLayoutRects& rects) {
-    const int count = static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
+    const int count = ListedRowCount(sceneContext);
     const int last = std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(rects));
     return std::clamp(sceneContext.ProjectSettings().FirstVisibleScene(), 0, last);
 }
 
 int ProjectSettingsPanelRenderer::MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext) {
-    const int count = static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
+    const int count = ListedRowCount(sceneContext);
     return std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(ProjectSettingsPanelLayout::Resolve(content)));
 }
 
@@ -1020,6 +1132,8 @@ ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSe
     case ProjectSettingsNumber::WindowWidth:
     case ProjectSettingsNumber::WindowHeight:
         return { static_cast<double>(kb::project::kProjectWindowExtentMin), static_cast<double>(kb::project::kProjectWindowExtentMax), true };
+    case ProjectSettingsNumber::MasterVolume:
+        return { 0.0, 1.0, false };
     case ProjectSettingsNumber::FrameRateCap:
     case ProjectSettingsNumber::Count:
     default:
@@ -1050,6 +1164,9 @@ std::string ProjectSettingsPanelRenderer::NumberText(const kb::project::ProjectS
         break;
     case ProjectSettingsNumber::FrameRateCap:
         std::snprintf(text, sizeof(text), "%u", settings.display.frameRateCap);
+        break;
+    case ProjectSettingsNumber::MasterVolume:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.masterVolume));
         break;
     case ProjectSettingsNumber::Count:
     default:
@@ -1083,6 +1200,9 @@ kb::project::ProjectSettings ProjectSettingsPanelRenderer::WithNumber(
         break;
     case ProjectSettingsNumber::FrameRateCap:
         settings.display.frameRateCap = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::MasterVolume:
+        settings.masterVolume = static_cast<float>(value);
         break;
     case ProjectSettingsNumber::Count:
     default:
@@ -1176,6 +1296,10 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
                 return Hit{ .kind = kinds[static_cast<std::size_t>(row)], .index = row >= 2 && row <= 3 ? row - 2 : -1, .rect = rects.displayLabel[row] };
             }
         }
+    }
+
+    if (category == ProjectSettingsCategory::Audio && PointInRect(rects.stepperLabel[5], x, y)) {
+        return Hit{ .kind = ProjectSettingsHitKind::MasterVolumeStepper, .index = -1, .rect = rects.stepperLabel[5] };
     }
 
     if (category == ProjectSettingsCategory::Physics) {

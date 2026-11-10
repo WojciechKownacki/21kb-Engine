@@ -40,6 +40,7 @@ constexpr int kSizeButtonWidth = 88;
 constexpr int kRateButtonWidth = 56;
 constexpr int kNumberCellWidth = 64;
 constexpr int kSceneAddButtonWidth = 180;
+constexpr int kTagNameFieldWidth = 240;
 constexpr int kSceneUpButtonWidth = 100;
 constexpr int kSceneRemoveButtonWidth = 110;
 constexpr int kSceneRowPitch = kRowHeight + 4;
@@ -187,9 +188,16 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
         rects.scenesIntro.bottom + kRowGap + kOptionHeight };
     rects.sceneList = RECT{ left, rects.sceneAddButton.bottom + kRowGap * 2, right, std::max(static_cast<int>(rects.sceneAddButton.bottom), static_cast<int>(content.bottom) - kPadding) };
 
-    // Physics page rows 1..4 are the steppers, 5 the gravity presets, 6 the time scale.
-    constexpr std::array<int, 5> kStepperRows{ 1, 2, 3, 4, 6 };
-    for (int stepper = 0; stepper < 5; ++stepper) {
+    // Tags page: where the Scenes page has its add button, the cell for a new name and the button that adds it.
+    rects.tagNameField = RECT{ left, rects.scenesIntro.bottom + kRowGap, left + kTagNameFieldWidth,
+        rects.scenesIntro.bottom + kRowGap + kOptionHeight };
+    rects.tagAddButton = RECT{ rects.tagNameField.right + kButtonGap, rects.tagNameField.top,
+        rects.tagNameField.right + kButtonGap + kSceneAddButtonWidth, rects.tagNameField.bottom };
+
+    // Physics page rows 1..4 are the steppers, 5 the gravity presets, 6 the time scale; the Audio page's master
+    // volume is the sixth stepper, in the first row.
+    constexpr std::array<int, 6> kStepperRows{ 1, 2, 3, 4, 6, 0 };
+    for (int stepper = 0; stepper < 6; ++stepper) {
         const int rowTop = rowTopAt(kStepperRows[static_cast<std::size_t>(stepper)]);
         rects.stepperLabel[stepper] = RECT{ left, rowTop, left + kLabelWidth, rowTop + kRowHeight };
         buttonRow(rects.stepperButton[stepper], 1, rowTop, kStepperButtonWidth);
@@ -337,6 +345,12 @@ RECT ProjectSettingsPanelLayout::SceneMoveUpButton(const ProjectSettingsPanelLay
 RECT ProjectSettingsPanelLayout::SceneRemoveButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
     const RECT row = SceneRow(rects, visibleRow);
     return RECT{ row.right - kSceneRemoveButtonWidth, row.top + 3, row.right, row.bottom - 3 };
+}
+
+RECT ProjectSettingsPanelLayout::TagRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    RECT row = SceneRow(rects, visibleRow);
+    row.right = SceneRemoveButton(rects, visibleRow).left - kButtonGap;
+    return row;
 }
 
 RECT ProjectSettingsPanelLayout::MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {

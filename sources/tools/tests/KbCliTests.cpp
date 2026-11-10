@@ -17,6 +17,7 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -3578,6 +3579,24 @@ void RunAudioMixerCommandTests() {
         Require(input.is_open(), "audio mixer fixture could not be read");
         return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
     };
+    {
+        // A new project comes with a default mixer - Music, Effects and Voice routed to the master - and its startup
+        // scene has it active, under the id the asset database gives the file.
+        const auto defaultMixer = kb::audio::AudioMixerAssetIO::Load(root / "Assets/Audio/DefaultMixer.kbmixer");
+        Require(defaultMixer && defaultMixer->buses.size() == 3U && defaultMixer->buses[0].name == "Music" &&
+            defaultMixer->buses[1].name == "Effects" && defaultMixer->buses[2].name == "Voice" &&
+            std::ranges::all_of(defaultMixer->buses, [](const kb::audio::AudioMixerBus& bus) {
+                return bus.parentBus.empty() && bus.volume == 1.0F && !bus.mute;
+            }), "a new project did not get its default mixer");
+        kb::scene::Scene discovery;
+        Require(discovery.Assets().MountProject(root), "the new project did not mount");
+        static_cast<void>(discovery.Assets().Discover());
+        const auto* asset = discovery.Assets().Manager().Registry().FindByPath("/Game/Audio/DefaultMixer.kbmixer");
+        const auto startup = kb::scene::SceneDocumentService::Load(sceneFile);
+        Require(asset != nullptr && asset->type == kb::audio::kAudioMixerAssetType && startup.succeeded &&
+            startup.document.audioMixerAssetId == asset->id.value,
+            "the startup scene of a new project did not have the default mixer active");
+    }
     auto result = run({"new", "--name", "Main", "--bus", "Output", "--bus", "Effects.Main",
         "--set", "Effects.Main.parent=Output", "--set", "Output.volume=0.5", "--set", "Effects.Main.volume=0.25"});
     Require(result.exitCode == 0, "audio mixer creation failed: " + result.output);

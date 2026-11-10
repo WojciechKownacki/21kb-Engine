@@ -1319,6 +1319,11 @@ public:
     [[nodiscard]] bool SetProjectSimulation(const kb::project::ProjectSimulationSettings& simulation);
     // The scenes the package holds, in order, the first being the startup scene; true when the list changed and was saved.
     [[nodiscard]] bool SetProjectBuildScenes(std::vector<std::string> scenes);
+    // The master volume of the game, 0..1; true when it changed and was saved. The open scene takes it at once.
+    [[nodiscard]] bool SetProjectMasterVolume(float volume);
+    // Adds a tag to the project's list, which every scene of the project starts from; true when it was new and
+    // valid. The open scene defines it at once. Removing one is DeleteSceneTag.
+    [[nodiscard]] bool AddProjectTag(std::string_view name);
     [[nodiscard]] bool SetProjectPhysicsLayersAsset(std::string virtualPath);
     bool CloseProjectSettingsDropdowns() noexcept;
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
@@ -1575,6 +1580,15 @@ private:
     // Switches a plugin that new projects have on by default on for this project too.
     [[nodiscard]] bool SwitchOnDefaultPlugin(std::string_view pluginId, std::string_view notice);
     [[nodiscard]] bool SaveProjectConfiguration();
+    // Gives a scene the project's master volume and tag list.
+    void ApplyProjectAudioAndTags(kb::scene::Scene& scene);
+    // Adds the tags the open scene defines and the project's list lacks to the list, so a tag an author made in
+    // an older scene is not lost; the list is saved when it grew.
+    void AdoptSceneTagsIntoProject();
+    // The scenes of the package list that exist as files, taken before an asset operation that may delete some.
+    [[nodiscard]] std::vector<std::string> ListedScenesOnDisk() const;
+    // Takes the scenes of `before` that are gone out of the package list.
+    void DropDeletedBuildScenes(const std::vector<std::string>& before);
     // Records the document the author has open, so reopening the project returns to it.
     void RememberLastOpenMap();
     // The editor's start when no saved scene can be opened: a new, unsaved Untitled scene from Basic.

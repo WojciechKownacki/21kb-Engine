@@ -172,8 +172,18 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     return simulation;
 }
 
+// The master volume after one click of its minus (direction 0) or plus (1); it stays inside 0..1 with two decimals.
+[[nodiscard]] float SteppedMasterVolume(float volume, int direction) noexcept {
+    const float sign = direction == 0 ? -1.0F : 1.0F;
+    return std::clamp(std::round((volume + sign * kProjectSettingsMasterVolumeIncrement) * 100.0F) / 100.0F, 0.0F, 1.0F);
+}
+
 [[nodiscard]] ProjectSettingsTooltipKind TooltipKindForHit(ProjectSettingsPanelRenderer::Hit hit) noexcept {
     switch (hit.kind) {
+    case ProjectSettingsHitKind::MasterVolumeStepper:
+        return ProjectSettingsTooltipKind::MasterVolume;
+    case ProjectSettingsHitKind::TagNameField:
+        return ProjectSettingsTooltipKind::Tags;
     case ProjectSettingsHitKind::WindowModeOption:
         return ProjectSettingsTooltipKind::WindowMode;
     case ProjectSettingsHitKind::WindowSizeOption:
@@ -204,6 +214,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
             return ProjectSettingsTooltipKind::WindowSize;
         case ProjectSettingsNumber::FrameRateCap:
             return ProjectSettingsTooltipKind::FrameRateLimit;
+        case ProjectSettingsNumber::MasterVolume:
+            return ProjectSettingsTooltipKind::MasterVolume;
         case ProjectSettingsNumber::Count:
         default:
             return ProjectSettingsTooltipKind::None;
@@ -234,6 +246,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::BuildSceneMoveUp:
     case ProjectSettingsHitKind::BuildSceneRemove:
     case ProjectSettingsHitKind::BuildSceneAdd:
+    case ProjectSettingsHitKind::TagAdd:
+    case ProjectSettingsHitKind::TagRemove:
     default:
         return ProjectSettingsTooltipKind::None;
     }
@@ -295,10 +309,11 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(content, sceneContext, x, y);
     // A click in the search box starts typing there; anywhere else in the panel ends it.
     sceneContext.ProjectSettings().Search().Focus(hit.kind == ProjectSettingsHitKind::SearchField);
-    // A click outside the number being typed applies it first.
+    // A click outside the number (or the tag name) being typed applies it first.
     const EditorProjectSettingsState& settingsState = sceneContext.ProjectSettings();
-    const bool committed = settingsState.IsNumberEditing() &&
-        (hit.kind != ProjectSettingsHitKind::NumberField || hit.index != settingsState.EditedNumber()) &&
+    const bool staysInCell = (hit.kind == ProjectSettingsHitKind::NumberField && hit.index == settingsState.EditedNumber()) ||
+        (hit.kind == ProjectSettingsHitKind::TagNameField && settingsState.IsTagNameEditing());
+    const bool committed = settingsState.IsNumberEditing() && !staysInCell &&
         EditorProjectSettingsPointerController::CommitNumberEdit(sceneContext);
     switch (hit.kind) {
     case ProjectSettingsHitKind::SearchField:
@@ -327,6 +342,28 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     }
     case ProjectSettingsHitKind::BuildSceneAdd:
         static_cast<void>(AddSceneFromMenu(sceneContext, owner));
+        return true;
+    case ProjectSettingsHitKind::TagNameField:
+        if (!sceneContext.ProjectSettings().IsTagNameEditing()) {
+            sceneContext.ProjectSettings().BeginTagNameEdit();
+        }
+        return true;
+    case ProjectSettingsHitKind::TagAdd:
+        // A typed name was added above; the cell is ready for the next one.
+        sceneContext.ProjectSettings().BeginTagNameEdit();
+        return true;
+    case ProjectSettingsHitKind::TagRemove: {
+        const std::vector<std::string> tags = sceneContext.ProjectConfiguration().tags;
+        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < tags.size()) {
+            static_cast<void>(sceneContext.DeleteSceneTag(tags[static_cast<std::size_t>(hit.index)]));
+        }
+        return true;
+    }
+    case ProjectSettingsHitKind::MasterVolumeStepper:
+        if (hit.index >= 0) {
+            static_cast<void>(sceneContext.SetProjectMasterVolume(SteppedMasterVolume(sceneContext.ProjectConfiguration().masterVolume, hit.index)));
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;
     case ProjectSettingsHitKind::CategoryItem:
         // SelectCategory also closes any open dropdown; always repaint to show the
@@ -524,8 +561,14 @@ bool EditorProjectSettingsPointerController::CommitNumberEdit(EditorSceneContext
     if (!state.IsNumberEditing()) {
         return false;
     }
-    const auto number = static_cast<ProjectSettingsNumber>(state.EditedNumber());
     const std::string text{ state.NumberEdit().Query() };
+    if (state.IsTagNameEditing()) {
+        // A typed tag name is added to the project's list (a name that cannot be listed is dropped).
+        state.EndNumberEdit();
+        static_cast<void>(sceneContext.AddProjectTag(text));
+        return true;
+    }
+    const auto number = static_cast<ProjectSettingsNumber>(state.EditedNumber());
     state.EndNumberEdit();
     if (const std::optional<double> value = ParseTypedNumber(text); value.has_value()) {
         const kb::project::ProjectSettings& current = sceneContext.ProjectConfiguration();
@@ -535,6 +578,9 @@ bool EditorProjectSettingsPointerController::CommitNumberEdit(EditorSceneContext
         }
         if (next.simulation != current.simulation) {
             static_cast<void>(sceneContext.SetProjectSimulation(next.simulation));
+        }
+        if (next.masterVolume != current.masterVolume) {
+            static_cast<void>(sceneContext.SetProjectMasterVolume(next.masterVolume));
         }
     }
     return true;

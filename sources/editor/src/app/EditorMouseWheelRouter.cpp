@@ -298,10 +298,11 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         }
     }
 
-    // The build list of the Scenes page scrolls by whole rows.
+    // The build list of the Scenes page, and the tag list of the Tags page, scroll by whole rows.
     if (const std::optional<RECT> settingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
         settingsContent.has_value() && x >= settingsContent->left && x < settingsContent->right && y >= settingsContent->top && y < settingsContent->bottom &&
-        static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Scenes) {
+        (static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Scenes ||
+            static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Tags)) {
         EditorProjectSettingsState& settings = sceneContext_.ProjectSettings();
         const int furthest = ProjectSettingsPanelRenderer::MaximumFirstVisibleScene(*settingsContent, sceneContext_);
         const int first = std::min(settings.FirstVisibleScene(), furthest);

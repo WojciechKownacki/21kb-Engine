@@ -35,6 +35,8 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     Gravity,
     GravityPreset,
     TimeScale,
+    MasterVolume,
+    Tags,
 };
 
 // Transient UI state for the Project Settings panel: which category is selected
@@ -68,10 +70,14 @@ public:
         return true;
     }
 
-    // Typing a number into a setting's value cell: which cell (a ProjectSettingsNumber, -1 for none) and the
-    // text typed so far. The text starts out selected, so the first key replaces the old value.
+    // Typing into a setting's cell: which cell (a ProjectSettingsNumber, kTagNameEdit for the new tag's name,
+    // -1 for none) and the text typed so far. The text starts out selected, so the first key replaces the old value.
+    static constexpr int kTagNameEdit = 1000;
     [[nodiscard]] bool IsNumberEditing() const noexcept {
         return editedNumber_ >= 0;
+    }
+    [[nodiscard]] bool IsTagNameEditing() const noexcept {
+        return editedNumber_ == kTagNameEdit;
     }
     [[nodiscard]] int EditedNumber() const noexcept {
         return editedNumber_;
@@ -91,13 +97,16 @@ public:
         numberEdit_.Focus(true);
         numberEdit_.SelectAll();
     }
+    void BeginTagNameEdit() {
+        BeginNumberEdit(kTagNameEdit, {});
+    }
     void EndNumberEdit() noexcept {
         editedNumber_ = -1;
         numberEdit_.Clear();
         numberEdit_.Focus(false);
     }
 
-    // The scene list of the Scenes page starts at this scene of the project's build list.
+    // The list of the Scenes page, or of the Tags page, starts at this row.
     [[nodiscard]] int FirstVisibleScene() const noexcept {
         return firstVisibleScene_;
     }

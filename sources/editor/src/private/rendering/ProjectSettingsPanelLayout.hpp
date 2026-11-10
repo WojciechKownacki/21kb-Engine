@@ -74,11 +74,16 @@ struct ProjectSettingsPanelLayoutRects {
     RECT scenesIntro{};
     RECT sceneAddButton{};
     RECT sceneList{};
+    // Tags page: the cell that takes a new tag's name and the button that adds it, where the Scenes page has its add
+    // button; the list of tags fills sceneList.
+    RECT tagNameField{};
+    RECT tagAddButton{};
     // Physics page, under the collision layers row: fixed step, gravity X, Y and Z, and time scale are steppers
     // (a minus button, the value, a plus button); the gravity presets sit between the axes and the time scale.
-    RECT stepperLabel[5]{};
-    RECT stepperValue[5]{};
-    RECT stepperButton[5][2]{};
+    // The sixth stepper is the Audio page's master volume, in its first row.
+    RECT stepperLabel[6]{};
+    RECT stepperValue[6]{};
+    RECT stepperButton[6][2]{};
     RECT gravityPresetLabel{};
     RECT gravityPresetButton[3]{};
 };
@@ -91,8 +96,8 @@ public:
 
     // The sidebar groups its categories under captions: Project from the first category,
     // Editor from kEditorGroupStart, Plugins from kPluginsGroupStart.
-    static constexpr int kEditorGroupStart = 6;
-    static constexpr int kPluginsGroupStart = 8;
+    static constexpr int kEditorGroupStart = 8;
+    static constexpr int kPluginsGroupStart = 10;
     // A category row in the left sidebar (index 0 is the first category).
     [[nodiscard]] static RECT CategoryRow(const RECT& sidebar, int index) noexcept;
     // The caption above group 0 (Project), 1 (Editor) or 2 (Plugins).
@@ -124,6 +129,8 @@ public:
     [[nodiscard]] static RECT SceneRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
     [[nodiscard]] static RECT SceneMoveUpButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
     [[nodiscard]] static RECT SceneRemoveButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    // The Tags page uses the same rows: the tag's name fills the row up to the remove button.
+    [[nodiscard]] static RECT TagRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
 };
 
 #endif

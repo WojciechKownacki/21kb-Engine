@@ -47,6 +47,10 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     BuildSceneMoveUp,     // Scenes: moves a scene one place up the build list (index = position in the list).
     BuildSceneRemove,     // Scenes: takes a scene out of the build list (index = position in the list).
     BuildSceneAdd,        // Scenes: the button that offers the project's scenes that are not in the list yet.
+    MasterVolumeStepper,  // Audio: index 0 minus, 1 plus; -1 over the label.
+    TagNameField,         // Tags: the cell that takes the name of a new tag.
+    TagAdd,               // Tags: the button that adds the typed tag.
+    TagRemove,            // Tags: takes a tag out of the project's list (index = position in the list).
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
@@ -58,7 +62,9 @@ enum class ProjectSettingsCategory : int {
     Physics,
     Lighting,
     Display,
+    Audio,
     Scenes,
+    Tags,
     // Editor: the Editor Settings pages, shown in this window.
     EditorGeneral,
     EditorSaving,
@@ -69,7 +75,7 @@ enum class ProjectSettingsCategory : int {
 #endif
 
 #if defined(_WIN32)
-static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 6 && static_cast<int>(ProjectSettingsCategory::Plugins) == 8,
+static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 8 && static_cast<int>(ProjectSettingsCategory::Plugins) == 10,
     "the sidebar's group captions (ProjectSettingsPanelLayout::k*GroupStart) follow the category order");
 #endif
 
@@ -92,6 +98,7 @@ inline constexpr std::array<std::array<float, 3U>, 3U> kProjectSettingsGravityPr
 inline constexpr std::uint32_t kProjectSettingsFixedStepIncrement = 10U;
 inline constexpr float kProjectSettingsGravityIncrement = 0.5F;
 inline constexpr float kProjectSettingsTimeScaleIncrement = 0.25F;
+inline constexpr float kProjectSettingsMasterVolumeIncrement = 0.1F;
 
 // The numeric settings whose value cell takes a typed number.
 enum class ProjectSettingsNumber : int {
@@ -103,6 +110,7 @@ enum class ProjectSettingsNumber : int {
     WindowWidth,
     WindowHeight,
     FrameRateCap,
+    MasterVolume,
     Count,
 };
 // What a number setting accepts: whole numbers or not, and the bounds a typed value is clamped to.
@@ -132,7 +140,8 @@ public:
     [[nodiscard]] static Hit TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
     // A number setting's bounds, its current value as text (what the cell shows and what editing starts
     // from), and the settings with that value replaced - clamped to the bounds and rounded for whole numbers.
-    // The first scene of the build list on view, and the furthest the list can scroll (0 when it all fits).
+    // The first row of the Scenes page's build list, or of the Tags page's tag list, on view, and the furthest the
+    // list can scroll (0 when it all fits).
     [[nodiscard]] static int FirstVisibleScene(const EditorSceneContext& sceneContext, const ProjectSettingsPanelLayoutRects& rects);
     [[nodiscard]] static int MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext);
     [[nodiscard]] static ProjectSettingsNumberLimits NumberLimits(ProjectSettingsNumber number) noexcept;

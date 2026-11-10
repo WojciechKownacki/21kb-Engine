@@ -25,6 +25,8 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "engine/audio/AudioPlayback.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
@@ -532,6 +534,114 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(controller.HandlePointerDown(kContent, removeSecond.x, removeSecond.y) && project.additionalScenes.empty() &&
             HitKindAt(context, removeFirst) != ProjectSettingsHitKind::BuildSceneRemove,
         "The last scene of the list cannot be removed");
+
+    // The Audio page: the master volume is a stepper and takes a typed number; the open scene takes it at once.
+    const POINT audioCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Audio)));
+    report.Check(controller.HandlePointerDown(kContent, audioCategory.x, audioCategory.y) &&
+            context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Audio) && project.masterVolume == 1.0F,
+        "Clicking the Audio category selects it, and a project starts at full volume");
+    const POINT volumeMinus = Center(lightingRects.stepperButton[5][0]);
+    const POINT volumePlus = Center(lightingRects.stepperButton[5][1]);
+    const POINT volumeCell = Center(lightingRects.stepperValue[5]);
+    report.Check(HitKindAt(context, volumeMinus) == ProjectSettingsHitKind::MasterVolumeStepper &&
+            HitKindAt(context, volumePlus) == ProjectSettingsHitKind::MasterVolumeStepper &&
+            HitKindAt(context, volumeCell) == ProjectSettingsHitKind::NumberField,
+        "The master volume controls hit-test as their own kinds");
+    report.Check(controller.HandlePointerDown(kContent, volumeMinus.x, volumeMinus.y) && project.masterVolume == 0.9F &&
+            stored().Succeeded() && stored().settings.masterVolume == 0.9F && kb::audio::AudioPlayback::MasterVolume(context.Scene()) == 0.9F,
+        "The minus button lowers the master volume, persists it and gives it to the open scene");
+    report.Check(typeNumber(volumeCell, "0,35") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            project.masterVolume == 0.35F && stored().settings.masterVolume == 0.35F &&
+            kb::audio::AudioPlayback::MasterVolume(context.Scene()) == 0.35F,
+        "A typed master volume is applied, persisted and given to the open scene");
+    report.Check(typeNumber(volumeCell, "7") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && project.masterVolume == 1.0F,
+        "A typed master volume above 1 is clamped to full volume");
+    report.Check(controller.HandlePointerDown(kContent, volumePlus.x, volumePlus.y) && project.masterVolume == 1.0F,
+        "The plus button stops at full volume");
+
+    // The Tags page: a typed name is added to the project's list, the remove button takes a tag out, and the open
+    // scene follows both.
+    const POINT tagsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Tags)));
+    report.Check(controller.HandlePointerDown(kContent, tagsCategory.x, tagsCategory.y) &&
+            context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Tags) && project.tags.empty(),
+        "Clicking the Tags category selects it, and a project starts with no tags of its own");
+    const POINT tagNameField = Center(lightingRects.tagNameField);
+    const POINT tagAddButton = Center(lightingRects.tagAddButton);
+    report.Check(HitKindAt(context, tagNameField) == ProjectSettingsHitKind::TagNameField &&
+            HitKindAt(context, tagAddButton) == ProjectSettingsHitKind::TagAdd,
+        "The tag name cell and the Add tag button hit-test as their own kinds");
+    const auto typeTag = [&](const std::string_view text) {
+        const bool started = controller.HandlePointerDown(kContent, tagNameField.x, tagNameField.y) && settingsState.IsTagNameEditing();
+        for (const char character : text) {
+            settingsState.NumberEdit().AppendAscii(static_cast<wchar_t>(character));
+        }
+        return started;
+    };
+    const kb::scene::SceneEntity tagged = context.Scene().Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "TaggedForPage" });
+    report.Check(typeTag("Boss") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && !settingsState.IsNumberEditing() &&
+            project.tags == std::vector<std::string>{ "Boss" } && stored().settings.tags == project.tags && context.Scene().Tags().Contains("Boss"),
+        "A typed tag name is added to the project's list, persisted, and defined in the open scene");
+    report.Check(typeTag("Trap") && controller.HandlePointerDown(kContent, tagAddButton.x, tagAddButton.y) &&
+            project.tags == std::vector<std::string>{ "Boss", "Trap" } && settingsState.IsTagNameEditing(),
+        "The Add tag button adds the typed name and readies the cell for the next one");
+    settingsState.EndNumberEdit();
+    report.Check(typeTag("Boss") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeTag("Player") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeTag("a,b") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeTag("") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            project.tags == std::vector<std::string>{ "Boss", "Trap" },
+        "A tag that is listed, built in, invalid or empty is not added");
+    report.Check(typeTag("Cancelled") && (settingsState.EndNumberEdit(), true) && project.tags.size() == 2U,
+        "Cancelling a typed tag name adds nothing");
+    // Removing a tag follows the scene's own Undefine: it is cleared from the objects that carry it.
+    report.Check(context.SetEntityTagSelected(tagged, "Trap", true) && context.Scene().Tags().IsAssigned(tagged, "Trap"),
+        "A tag of the project can be assigned to an object");
+    const POINT removeTrap = Center(ProjectSettingsPanelLayout::SceneRemoveButton(lightingRects, 1));
+    report.Check(HitKindAt(context, removeTrap) == ProjectSettingsHitKind::TagRemove && controller.HandlePointerDown(kContent, removeTrap.x, removeTrap.y) &&
+            project.tags == std::vector<std::string>{ "Boss" } && stored().settings.tags == project.tags &&
+            !context.Scene().Tags().Contains("Trap") && !context.Scene().Tags().IsAssigned(tagged, "Trap") && context.Scene().Tags().Contains("Boss"),
+        "Removing a tag takes it out of the project's list and clears it from the open scene's objects");
+    // A tag made through the Inspector's Add Tag joins the project's list too, and deleting one there leaves it.
+    report.Check(context.SetEntityTagSelected(tagged, "Chest", true) && project.tags == std::vector<std::string>{ "Boss", "Chest" } &&
+            stored().settings.tags == project.tags,
+        "A tag made while tagging an object is added to the project's list");
+    report.Check(context.DeleteSceneTag("Chest") && project.tags == std::vector<std::string>{ "Boss" } && !context.Scene().Tags().Contains("Chest"),
+        "Deleting a tag in the Inspector takes it out of the project's list");
+    // A tag only a scene file defines is added to the list when the editor opens that scene.
+    report.Check(context.Scene().Tags().Define("OnlyInScene") && std::ranges::find(project.tags, std::string{ "OnlyInScene" }) == project.tags.end(),
+        "A tag defined in the scene alone is not in the project's list yet");
+    const std::filesystem::path tagScenePath = EditorProjectPaths::AssetsRoot() / "Scenes" / "TagPage.21kbscene";
+    report.Check(context.SaveCurrentSceneAs(tagScenePath) && context.OpenScene(tagScenePath, EditorDirtySceneResolution::Discard) &&
+            project.tags == std::vector<std::string>{ "Boss", "OnlyInScene" } && stored().settings.tags == project.tags &&
+            context.Scene().Tags().Contains("OnlyInScene"),
+        "Opening a scene adds the tags its file defines to the project's list");
+    const std::vector<std::string> names{ context.Scene().Tags().Names().begin(), context.Scene().Tags().Names().end() };
+    report.Check(names.size() >= 8U && names[6] == "Boss" && names[7] == "OnlyInScene",
+        "A scene defines the built-in tags, then the project's");
+
+    // A scene renamed or deleted in Project Files follows into the package list.
+    const std::filesystem::path scenesFolder = EditorProjectPaths::AssetsRoot() / "Scenes";
+    report.Check(context.SaveCurrentSceneAs(scenesFolder / "ListedA.21kbscene") && context.SaveCurrentSceneAs(scenesFolder / "ListedB.21kbscene") &&
+            context.OpenScene(tagScenePath, EditorDirtySceneResolution::Discard),
+        "Two more scenes are made for the package list");
+    static_cast<void>(context.Scene().Assets().Discover());
+    const std::string listedA = "/Game/Scenes/ListedA.21kbscene";
+    const std::string listedB = "/Game/Scenes/ListedB.21kbscene";
+    const std::string renamed = "/Game/Scenes/ListedRenamed.21kbscene";
+    report.Check(context.SetProjectBuildScenes({ project.defaultMap, listedA, listedB }) &&
+            project.additionalScenes == std::vector<std::string>{ listedA, listedB },
+        "Two scenes are listed for the package");
+    const kb::assets::AssetMetadata* assetA = context.Scene().Assets().Manager().Registry().FindByPath(listedA);
+    report.Check(assetA != nullptr && context.BeginAssetRename(assetA->id) &&
+            (context.AssetBrowser().SetTextEditValue("ListedRenamed"), true) && context.CommitAssetTextEdit() &&
+            project.additionalScenes == std::vector<std::string>{ renamed, listedB } && stored().settings.additionalScenes == project.additionalScenes,
+        "Renaming a listed scene in Project Files renames its entry in the package list");
+    const kb::assets::AssetMetadata* assetB = context.Scene().Assets().Manager().Registry().FindByPath(listedB);
+    report.Check(assetB != nullptr && context.DeleteAssetBrowserItem(assetB->id) &&
+            project.additionalScenes == std::vector<std::string>{ renamed } && stored().settings.additionalScenes == project.additionalScenes,
+        "Deleting a listed scene in Project Files takes it out of the package list");
 }
 
 void RunProjectPhysicsLayersRuntimeSuite(Report& report) {

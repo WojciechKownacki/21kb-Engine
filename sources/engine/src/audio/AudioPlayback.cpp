@@ -92,7 +92,9 @@ bool IsAudioVoiceMarkerRequestValid(
 
 void AudioPlayback::RegisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend) {
     AssertOwnerThread(scene);
-    kb::scene::SceneAccess::State(scene).audioPlaybackBackend = &backend;
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    state.audioPlaybackBackend = &backend;
+    static_cast<void>(backend.SetMasterVolume(scene, state.audioMasterVolume));
 }
 
 void AudioPlayback::UnregisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend) noexcept {
@@ -181,6 +183,21 @@ bool AudioPlayback::SetPlatformSuspended(kb::scene::Scene& scene, bool suspended
     AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SetPlatformSuspended(scene, suspended);
+}
+
+bool AudioPlayback::SetMasterVolume(kb::scene::Scene& scene, float volume) noexcept {
+    AssertOwnerThread(scene);
+    if (!IsAudioMasterVolumeValid(volume)) {
+        return false;
+    }
+    kb::scene::SceneAccess::State(scene).audioMasterVolume = volume;
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr || backend->SetMasterVolume(scene, volume);
+}
+
+float AudioPlayback::MasterVolume(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
+    return kb::scene::SceneAccess::State(scene).audioMasterVolume;
 }
 
 AudioOfflinePcm AudioPlayback::RenderOffline(kb::scene::Scene& scene, std::uint32_t frames) {

@@ -776,6 +776,36 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     Require(bake::EncodeRuntimeAssetManifest(outOfBounds, outOfBoundsBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
         "A runtime manifest accepted a window narrower than the supported minimum");
 
+    // The master volume and the project's tags travel too, each only while it differs from the default, and
+    // alongside the display settings; a volume above 1 or a tag that cannot be listed is refused.
+    bake::RuntimeAssetManifest audible = first;
+    audible.settings.masterVolume = 0.4F;
+    audible.settings.tags = { "Boss", "Loot Chest" };
+    std::vector<std::uint8_t> audibleBytes;
+    bake::RuntimeAssetManifest audibleDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(audible, audibleBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            audibleBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(audibleBytes, audibleDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            audibleDecoded.settings == audible.settings,
+        "A runtime manifest lost the master volume or the tags during the round trip");
+    bake::RuntimeAssetManifest everything = configured;
+    everything.settings.masterVolume = 0.4F;
+    everything.settings.tags = { "Boss" };
+    std::vector<std::uint8_t> everythingBytes;
+    bake::RuntimeAssetManifest everythingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(everything, everythingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            bake::DecodeRuntimeAssetManifest(everythingBytes, everythingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            everythingDecoded.settings == everything.settings,
+        "A runtime manifest lost a setting when the display, the volume and the tags were written together");
+    bake::RuntimeAssetManifest tooLoud = first;
+    tooLoud.settings.masterVolume = 1.5F;
+    std::vector<std::uint8_t> tooLoudBytes;
+    bake::RuntimeAssetManifest badTag = first;
+    badTag.settings.tags = { "a,b" };
+    Require(bake::EncodeRuntimeAssetManifest(tooLoud, tooLoudBytes) == bake::RuntimeAssetManifestStatus::InvalidProject &&
+            bake::EncodeRuntimeAssetManifest(badTag, tooLoudBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a master volume above 1 or a tag that cannot be listed");
+
     std::vector<std::uint8_t> unsupported = firstBytes;
     PokeUInt32(unsupported, 8U, bake::kRuntimeAssetManifestVersion + 1U);
     Require(bake::DecodeRuntimeAssetManifest(unsupported, decoded) ==

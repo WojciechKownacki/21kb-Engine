@@ -51,6 +51,7 @@
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 #include "scene/asset/io/components/SceneAssetAudioComponentCodec.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -587,6 +588,82 @@ void RunProjectBuildScenesTest() {
     Require(kb::project::ProjectSettingsStore::Load(file).settings.additionalScenes == std::vector<std::string>{ "/Game/B.21kbscene" },
         "the startup scene and a repeated scene must not be listed twice");
     CleanTempRoot();
+}
+
+// The master volume and the tag list: a settings file without them reads as full volume and no tags, both
+// round-trip, an out-of-range volume is brought back inside, and a tag that cannot be listed (invalid, built in,
+// repeated) never enters the list, from the file or from the helpers.
+void RunProjectAudioAndTagSettingsTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    std::error_code directoryError;
+    std::filesystem::create_directories(file.parent_path(), directoryError);
+    const kb::project::ProjectSettings defaults;
+    Require(defaults.masterVolume == 1.0F && defaults.tags.empty(), "a project must start at full volume with no tags of its own");
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Identity]\nName=Older\n";
+    }
+    const kb::project::ProjectSettings older = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(older.masterVolume == 1.0F && older.tags.empty(), "a settings file without audio or tags must read as the defaults");
+
+    kb::project::ProjectSettings chosen = older;
+    chosen.masterVolume = 0.35F;
+    Require(kb::project::AddProjectTag(chosen, "  Boss ") && kb::project::AddProjectTag(chosen, "Loot Chest") &&
+            !kb::project::AddProjectTag(chosen, "Boss") && !kb::project::AddProjectTag(chosen, "Player") &&
+            !kb::project::AddProjectTag(chosen, "") && !kb::project::AddProjectTag(chosen, "a,b") &&
+            chosen.tags == std::vector<std::string>{ "Boss", "Loot Chest" },
+        "the tag list must take valid new names in order and refuse the rest");
+    std::string error;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the audio and tag settings could not be saved");
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
+    Require(reloaded.Succeeded() && reloaded.settings == chosen, "the settings file did not keep the master volume and the tags");
+
+    Require(kb::project::RemoveProjectTag(chosen, "Boss") && !kb::project::RemoveProjectTag(chosen, "Boss") &&
+            chosen.tags == std::vector<std::string>{ "Loot Chest" },
+        "removing a tag must take it out of the list once");
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the shorter tag list could not be saved");
+    const kb::project::ProjectSettings shorter = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(shorter.tags == chosen.tags && shorter.masterVolume == 0.35F, "a shorter tag list left stale entries in the file");
+
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Audio]\nMasterVolume=7\n[Project.Tags]\nCount=5\nTag0=Boss\nTag1=Boss\nTag2=Enemy\nTag3=x;y\nTag4=Trap\n";
+    }
+    const kb::project::ProjectSettings clamped = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(clamped.masterVolume == 1.0F && clamped.tags == std::vector<std::string>{ "Boss", "Trap" },
+        "an out-of-range volume must be brought back inside and unlistable tags dropped");
+    CleanTempRoot();
+}
+
+// Every scene of a project starts from the project's tags: the catalogue holds the built-in tags, then the
+// project's, then what only the scene defines - whether the project list is set before a scene loads or after - and
+// a scene file's own definitions stay honoured.
+void RunProjectTagsReachSceneCatalogTest() {
+    kb::scene::Scene scene;
+    const std::vector<std::string> project{ "Boss", "Trap" };
+    Require(scene.Tags().SetProjectDefinitions(project) && scene.Tags().ProjectDefinitions().size() == 2U,
+        "the project's tags could not be set on a scene");
+    const std::vector<std::string> expected{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision", "Boss", "Trap" };
+    Require(std::ranges::equal(scene.Tags().Names(), expected), "a scene must define the built-in tags and then the project's");
+
+    kb::scene::SceneDocument document;
+    document.guid = "scene:older";
+    document.name = "Older";
+    document.tagDefinitions = { "Player", "Enemy", "Monster", "AI", "NPC", "Collision", "Trap", "OnlyHere" };
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "a scene with its own tags did not load");
+    const std::vector<std::string> merged{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision", "Boss", "Trap", "OnlyHere" };
+    Require(std::ranges::equal(scene.Tags().Names(), merged),
+        "loading a scene must keep the project's tags and honour a tag only the scene file defines");
+
+    // Set after the scene holds a tag of its own: the project's tags move ahead of it.
+    kb::scene::Scene late;
+    Require(late.Tags().Define("OnlyHere") && late.Tags().SetProjectDefinitions(project) &&
+            std::ranges::equal(late.Tags().Names(), merged),
+        "the project's tags must come before a tag only the scene has");
+    const std::vector<std::string> invalid{ "Fine", "a;b" };
+    Require(!late.Tags().SetProjectDefinitions(invalid) && late.Tags().ProjectDefinitions().size() == 2U,
+        "a list with an invalid tag must change nothing");
 }
 
 // A project directory deep enough to leave no room for the files that go inside it is refused at
@@ -2003,6 +2080,8 @@ void RunProjectSceneTests() {
     RunProjectQualitySettingsTest();
     RunProjectDisplayAndSimulationSettingsTest();
     RunProjectBuildScenesTest();
+    RunProjectAudioAndTagSettingsTest();
+    RunProjectTagsReachSceneCatalogTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneAssetUsersTest();
     RunProjectPathBudgetTest();

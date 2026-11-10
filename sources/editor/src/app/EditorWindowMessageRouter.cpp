@@ -701,9 +701,10 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (EditorProjectSettingsState& settings = context_.sceneContext.ProjectSettings(); settings.IsNumberEditing()) {
-            // A number takes digits, a minus and a decimal point or comma; anything else typed is ignored.
+            // A number takes digits, a minus and a decimal point or comma; anything else typed is ignored. A tag name
+            // takes any character.
             constexpr std::string_view kNumberCharacters = "0123456789.,-";
-            const bool accepted = wparam < 0x20U || (wparam < 0x80U && kNumberCharacters.find(static_cast<char>(wparam)) != std::string_view::npos);
+            const bool accepted = settings.IsTagNameEditing() || wparam < 0x20U || (wparam < 0x80U && kNumberCharacters.find(static_cast<char>(wparam)) != std::string_view::npos);
             static_cast<void>(accepted && HandleSearchFieldChar(settings.NumberEdit(), wparam, [] {}));
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
@@ -820,7 +821,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (EditorProjectSettingsState& settings = context_.sceneContext.ProjectSettings(); settings.IsNumberEditing()) {
-            // Enter applies the typed number and Esc drops it; the other keys edit the text like a search box.
+            // Enter applies the typed number (or adds the typed tag) and Esc drops it; the other keys edit the text like a search box.
             bool handled = true;
             if (wparam == VK_RETURN) {
                 static_cast<void>(EditorProjectSettingsPointerController::CommitNumberEdit(context_.sceneContext));

@@ -17,9 +17,10 @@ struct NewProjectResult {
 
 // The one way a new project comes into being - the Hub and kb_cli both call it - so a project made
 // without a window is the same project the Hub makes: <parent>/<name>/<name>.21kbproject, the
-// Assets/Scenes and Assets/Prefabs folders, the settings file the editor and the game both read and
-// the startup scene Assets/Scenes/Main.21kbscene made from `startupTemplate` (Basic: camera, sun,
-// sky and floor). `name` must be a valid project name (letters, digits, '-' and '_'). The project
+// Assets/Scenes and Assets/Prefabs folders, the settings file the editor and the game both read, a default
+// audio mixer (Assets/Audio/DefaultMixer.kbmixer: Music, Effects and Voice buses) and the startup scene
+// Assets/Scenes/Main.21kbscene made from `startupTemplate` (Basic: camera, sun, sky and floor) with that
+// mixer active. `name` must be a valid project name (letters, digits, '-' and '_'). The project
 // folder must not exist or be empty - nothing the user already has is overwritten - and nothing
 // is left on disk when the project cannot be created.
 class ProjectCreator {

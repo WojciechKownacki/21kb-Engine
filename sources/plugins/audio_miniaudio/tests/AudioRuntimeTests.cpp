@@ -1361,6 +1361,73 @@ void RunSnapshotTransitionPcmTest() {
     measure("captured-mix-half", 0.625 * 0.65625 * 0.25);
 }
 
+// The master gain scales the output above the buses and a snapshot, leaves snapshots working, survives a device
+// restart and refuses a value outside 0..1.
+void RunMasterVolumePcmTest() {
+    const auto tonePath = TestRoot() / "MasterTone.wav";
+    WriteToneWav(tonePath);
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(TestRoot() / "MasterPcmProject"), "Master PCM project did not mount");
+    const std::array files{tonePath};
+    const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), files, "/Game/Audio");
+    Require(imported.Succeeded() && imported.items.size() == 1U, "Master PCM tone did not import");
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {{.name = "Output", .volume = 0.5F}};
+    mixer.snapshots = {{.name = "Quiet", .busVolumes = {{.bus = "Output", .volume = 0.25F}}}};
+    const auto mixerPath = TestRoot() / "MasterMixer.kbmixer";
+    constexpr kb::assets::AssetId mixerId{9601U};
+    Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Master PCM mixer did not save");
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = mixerId, .type = kb::audio::kAudioMixerAssetType, .name = "MasterMixer",
+        .virtualPath = "/Game/Audio/MasterMixer.kbmixer", .physicalPath = mixerPath, .contentHash = 1U,
+    }), "Master PCM mixer did not register");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Master PCM backend must use its actual offline engine");
+    kb::audio::AudioPlayDesc desc{.clipAssetId = imported.items.front().id.value, .volume = 0.25F, .loop = true, .spatial = false};
+    desc.outputBus = "Output";
+    const auto play = [&] {
+        const auto result = backend.PlayOneShotForTesting(scene, desc);
+        Require(result.Succeeded() && backend.IsVoicePlaying(scene, result.voiceId), "Master PCM voice did not start");
+        return result.voiceId;
+    };
+    const auto measure = [&](std::string_view phase, double gain) {
+        const double expected = (3276.0 / 32768.0) * gain * 2.0 / 3.141592653589793;
+        std::size_t good = 0U;
+        double mean = 0.0;
+        for (std::size_t attempt = 0U; attempt < 8U && good < 4U; ++attempt) {
+            const auto block = backend.PumpFramesForTesting(2048U);
+            Require(block.frames == 2048U && std::isfinite(block.energy), "Master PCM block is incomplete or non-finite");
+            mean = block.energy / (2.0 * static_cast<double>(block.frames));
+            const bool matches = expected == 0.0 ? mean < 0.000001 : std::abs(mean / expected - 1.0) < 0.02;
+            good = matches ? good + 1U : 0U;
+        }
+        std::cout << "Master PCM " << phase << " gain=" << gain << " mean=" << mean << " expected=" << expected << " blocks=" << good << '\n';
+        Require(good == 4U, std::string{phase} + " did not produce the expected PCM");
+    };
+    play();
+    measure("full", 0.25 * 0.5);
+    Require(backend.SetMasterVolume(scene, 0.5F), "The backend refused a valid master volume");
+    measure("half", 0.5 * 0.25 * 0.5);
+    // The snapshot still drives the bus, under the master gain; a silent trigger makes the backend sync its buses.
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Quiet"), "Master PCM snapshot did not select");
+    auto silent = desc;
+    silent.volume = 0.0F;
+    const auto trigger = backend.PlayOneShotForTesting(scene, silent);
+    Require(trigger.Succeeded() && backend.StopVoice(scene, trigger.voiceId), "Master PCM snapshot trigger failed");
+    measure("snapshot", 0.5 * 0.25 * 0.25);
+    Require(!backend.SetMasterVolume(scene, 1.5F) && !backend.SetMasterVolume(scene, -0.5F), "The backend accepted a master volume outside 0..1");
+    measure("refused-value", 0.5 * 0.25 * 0.25);
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Master PCM backend did not restart");
+    play();
+    measure("after-restart", 0.5 * 0.25 * 0.25);
+    Require(backend.SetMasterVolume(scene, 0.0F), "The backend refused a muted master volume");
+    measure("muted", 0.0);
+    backend.Shutdown();
+}
+
 void RunVorbisTransportTest() {
     const auto path = FixtureRoot() / "seek.ogg";
     const auto bytes = ReadFileBytesU8(path);
@@ -3600,6 +3667,9 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "bus-topology") {
         RunBusTopologyPcmTest();
+    }
+    if (filter.empty() || filter == "master-volume") {
+        RunMasterVolumePcmTest();
     }
     if (filter.empty() || filter == "snapshot-transition") {
         RunSnapshotTransitionPcmTest();

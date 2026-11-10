@@ -3,6 +3,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/bake/AssetPack.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "project/ProjectDescriptorFormat.hpp"
 
 #include <algorithm>
@@ -23,10 +24,14 @@ constexpr std::array<std::uint8_t, 8U> kMagic{ '2', '1', 'K', 'B', 'R', 'M', 'F'
 constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R', 'C', 0U };
 // The word after the version: once reserved and zero, now flags. Bit 0 marks a partial manifest;
 // bit 1 says the tombstone lists follow the auxiliary files; bit 2 says the display and simulation
-// settings follow the physics layers asset (settings that are all defaults leave them out).
+// settings follow the physics layers asset (settings that are all defaults leave them out); bit 3 says the
+// master volume follows them and bit 4 that the project's tag list does (each left out while it is the default).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
 constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
+constexpr std::uint32_t kMasterVolumeManifestFlag = 8U;
+constexpr std::uint32_t kTagsManifestFlag = 16U;
+constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -248,13 +253,19 @@ private:
         within(simulation.gravity[0], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
         within(simulation.gravity[1], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
         within(simulation.gravity[2], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
-        within(simulation.timeScale, 0.0F, kb::project::kProjectTimeScaleMax);
+        within(simulation.timeScale, 0.0F, kb::project::kProjectTimeScaleMax) &&
+        within(settings.masterVolume, 0.0F, 1.0F) && settings.tags.size() <= kb::project::kProjectTagsMax &&
+        std::ranges::all_of(settings.tags, [](const std::string& tag) {
+            return !tag.empty() && kb::scene::SceneTagCatalog::CanonicalName(tag) == tag;
+        });
 }
 
-// Whether the display and simulation settings differ from their defaults, so they have to be written.
-[[nodiscard]] bool HasRuntimeSettings(const kb::project::ProjectSettings& settings) noexcept {
+// The manifest flags of the settings that differ from their defaults and so have to be written.
+[[nodiscard]] std::uint32_t SettingsFlags(const kb::project::ProjectSettings& settings) noexcept {
     const kb::project::ProjectSettings defaults;
-    return settings.display != defaults.display || settings.simulation != defaults.simulation;
+    return ((settings.display != defaults.display || settings.simulation != defaults.simulation) ? kRuntimeSettingsManifestFlag : 0U) |
+        (settings.masterVolume != defaults.masterVolume ? kMasterVolumeManifestFlag : 0U) |
+        (!settings.tags.empty() ? kTagsManifestFlag : 0U);
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -458,7 +469,7 @@ void EncodeDescriptor(std::vector<std::uint8_t>& bytes, const kb::project::Proje
     return RuntimeAssetManifestStatus::Success;
 }
 
-void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::ProjectSettings& settings, bool runtimeSettings) {
+void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::ProjectSettings& settings, std::uint32_t flags) {
     PutString(bytes, settings.name);
     PutString(bytes, settings.gameName);
     PutString(bytes, settings.category);
@@ -473,7 +484,7 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     PutUInt8(bytes, settings.inputEnabled ? 1U : 0U);
     PutString(bytes, settings.inputMappingContext);
     PutString(bytes, settings.physicsLayersAsset);
-    if (runtimeSettings) {
+    if ((flags & kRuntimeSettingsManifestFlag) != 0U) {
         PutUInt32(bytes, settings.display.windowWidth);
         PutUInt32(bytes, settings.display.windowHeight);
         PutUInt8(bytes, static_cast<std::uint8_t>(settings.display.windowMode));
@@ -485,6 +496,15 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
             PutFloat(bytes, axis);
         }
         PutFloat(bytes, settings.simulation.timeScale);
+    }
+    if ((flags & kMasterVolumeManifestFlag) != 0U) {
+        PutFloat(bytes, settings.masterVolume);
+    }
+    if ((flags & kTagsManifestFlag) != 0U) {
+        PutUInt32(bytes, static_cast<std::uint32_t>(settings.tags.size()));
+        for (const std::string& tag : settings.tags) {
+            PutString(bytes, tag);
+        }
     }
 }
 
@@ -509,7 +529,16 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     return true;
 }
 
-[[nodiscard]] bool DecodeSettings(Reader& reader, kb::project::ProjectSettings& settings, bool runtimeSettings) {
+[[nodiscard]] bool DecodeTags(Reader& reader, std::vector<std::string>& tags) {
+    std::uint32_t count = 0U;
+    if (!reader.ReadUInt32(count) || count > kb::project::kProjectTagsMax) {
+        return false;
+    }
+    tags.resize(count);
+    return std::ranges::all_of(tags, [&reader](std::string& tag) { return reader.ReadString(tag, kMaxShortStringBytes); });
+}
+
+[[nodiscard]] bool DecodeSettings(Reader& reader, kb::project::ProjectSettings& settings, std::uint32_t flags) {
     std::uint32_t lightingPath = 0U;
     std::array<std::uint8_t, 4U> quality{};
     std::uint8_t inputEnabled = 0U;
@@ -533,7 +562,9 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     settings.giQuality = static_cast<kb::project::ProjectQualityLevel>(quality[2]);
     settings.giQualityMobile = static_cast<kb::project::ProjectQualityLevel>(quality[3]);
     settings.inputEnabled = inputEnabled != 0U;
-    return !runtimeSettings || DecodeRuntimeSettings(reader, settings);
+    return ((flags & kRuntimeSettingsManifestFlag) == 0U || DecodeRuntimeSettings(reader, settings)) &&
+        ((flags & kMasterVolumeManifestFlag) == 0U || reader.ReadFloat(settings.masterVolume)) &&
+        ((flags & kTagsManifestFlag) == 0U || DecodeTags(reader, settings.tags));
 }
 
 } // namespace
@@ -566,13 +597,12 @@ RuntimeAssetManifestStatus EncodeRuntimeAssetManifest(
     PutUInt32(bytes, kRuntimeAssetManifestVersion);
     // Flags. Zero for a complete manifest, which keeps its bytes what they always were.
     const bool tombstones = !canonical.removedAssets.empty() || !canonical.removedAuxiliaryFiles.empty();
-    const bool runtimeSettings = HasRuntimeSettings(canonical.settings);
-    PutUInt32(bytes, (canonical.partial ? kPartialManifestFlag : 0U) | (tombstones ? kTombstonesManifestFlag : 0U) |
-        (runtimeSettings ? kRuntimeSettingsManifestFlag : 0U));
+    const std::uint32_t settingsFlags = SettingsFlags(canonical.settings);
+    PutUInt32(bytes, (canonical.partial ? kPartialManifestFlag : 0U) | (tombstones ? kTombstonesManifestFlag : 0U) | settingsFlags);
     PutString(bytes, canonical.targetProfileId);
     PutUInt64(bytes, canonical.targetProfileHash);
     EncodeDescriptor(bytes, canonical.descriptor);
-    EncodeSettings(bytes, canonical.settings, runtimeSettings);
+    EncodeSettings(bytes, canonical.settings, settingsFlags);
     PutUInt32(bytes, static_cast<std::uint32_t>(canonical.assets.size()));
     for (const RuntimeAssetManifestEntry& asset : canonical.assets) {
         PutUInt64(bytes, asset.id.value);
@@ -643,7 +673,7 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (version != kRuntimeAssetManifestVersion) {
         return RuntimeAssetManifestStatus::UnsupportedVersion;
     }
-    if (!reader.ReadUInt32(reserved) || (reserved & ~(kPartialManifestFlag | kTombstonesManifestFlag | kRuntimeSettingsManifestFlag)) != 0U ||
+    if (!reader.ReadUInt32(reserved) || (reserved & ~(kPartialManifestFlag | kTombstonesManifestFlag | kSettingsManifestFlags)) != 0U ||
         !reader.ReadString(manifest.targetProfileId, kMaxShortStringBytes) ||
         !reader.ReadUInt64(manifest.targetProfileHash)) {
         return RuntimeAssetManifestStatus::Malformed;
@@ -653,7 +683,7 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (descriptorStatus != RuntimeAssetManifestStatus::Success) {
         return descriptorStatus;
     }
-    if (!DecodeSettings(reader, manifest.settings, (reserved & kRuntimeSettingsManifestFlag) != 0U)) {
+    if (!DecodeSettings(reader, manifest.settings, reserved & kSettingsManifestFlags)) {
         return RuntimeAssetManifestStatus::Malformed;
     }
 

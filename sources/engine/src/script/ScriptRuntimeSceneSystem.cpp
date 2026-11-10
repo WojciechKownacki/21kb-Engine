@@ -80,11 +80,15 @@ ScriptRuntimeSceneSystem::ScriptRuntimeSceneSystem(ScriptRuntime& runtime, Scrip
 void ScriptRuntimeSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
     attachedScene_ = &context.GetScene();
     // A step the system was configured with wins. Left at its own default it has no opinion, and a
-    // fixed step the scene already carries (the project's) is kept instead of being overwritten.
-    const float sceneStepSeconds = attachedScene_->Runtime().FixedStepSettings().fixedDeltaSeconds;
+    // fixed step and step limit the scene already carries are kept instead of being overwritten.
+    const kb::scene::SceneRuntimeFixedStepSettings sceneSettings = attachedScene_->Runtime().FixedStepSettings();
     if (frameSettings_.fixedDeltaSeconds == ScriptRuntimeFrameSettings{}.fixedDeltaSeconds &&
-        sceneStepSeconds != kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds) {
-        frameSettings_.fixedDeltaSeconds = sceneStepSeconds;
+        sceneSettings.fixedDeltaSeconds != kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds) {
+        frameSettings_.fixedDeltaSeconds = sceneSettings.fixedDeltaSeconds;
+    }
+    if (frameSettings_.maxFixedStepsPerFrame == ScriptRuntimeFrameSettings{}.maxFixedStepsPerFrame &&
+        sceneSettings.maxFixedStepsPerFrame != kb::scene::kSceneRuntimeDefaultMaxFixedStepsPerFrame) {
+        frameSettings_.maxFixedStepsPerFrame = sceneSettings.maxFixedStepsPerFrame;
     }
     ConfigureSceneFixedStep(*attachedScene_);
     static_cast<void>(ExecuteStartup(context.GetScene(), context.DeltaSeconds()));

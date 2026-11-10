@@ -2,6 +2,7 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -121,7 +122,7 @@ NewScenePath SceneTemplates::ResolveNewScene(const std::filesystem::path& projec
 }
 
 std::string SceneTemplates::WriteSceneFile(const std::filesystem::path& scenePath, SceneTemplate kind,
-    const kb::project::ProjectDescriptor& project) {
+    const kb::project::ProjectDescriptor& project, std::uint64_t audioMixerAssetId) {
     std::error_code error;
     if (std::filesystem::exists(scenePath, error)) {
         return "A scene named " + Utf8Stem(scenePath) + " already exists. Choose another name.";
@@ -133,6 +134,9 @@ std::string SceneTemplates::WriteSceneFile(const std::filesystem::path& scenePat
     Scene scene{ project };
     if (std::string filled = Fill(scene, kind, project); !filled.empty()) {
         return filled;
+    }
+    if (audioMixerAssetId != 0U) {
+        SceneAudioMixerAccess::SetActiveMixer(scene, audioMixerAssetId);
     }
     if (!SceneDocumentService::Save(scene, scenePath, Utf8Stem(scenePath))) {
         return "The scene file could not be written.";

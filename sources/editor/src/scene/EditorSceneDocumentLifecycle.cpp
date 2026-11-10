@@ -247,6 +247,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         return false;
     }
     scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(*scene_, projectConfig_.masterVolume));
     trace.Phase(phaseStarted, "transition=begin phase=physics-layers");
 
     phaseStarted = std::chrono::steady_clock::now();
@@ -391,6 +392,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         return false;
     }
     nextScene->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
+    ApplyProjectAudioAndTags(*nextScene);
 
     kb::scene::SceneDocumentLoadResult loaded;
     if (worldPartition_.IsOpen()) {
@@ -434,6 +436,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     scene_ = documentScene_.get();
     AdvanceSceneDocumentGeneration();
     plugins_.ClearPendingReload();
+    AdoptSceneTagsIntoProject();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
@@ -506,6 +509,7 @@ bool EditorSceneContext::ReloadSceneAfterExternalChange() {
         commandStack_.RemapEntities(EditorCommandHistoryKey::Scene(), remap);
         if (!loaded || !resumed) return false;
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
+        AdoptSceneTagsIntoProject();
         before.Restore(*scene_, hierarchySelection_);
         ReleaseRenderedSceneResources();
         CompleteLoadedUIComponents();
@@ -652,6 +656,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
 
     currentScenePath_ = scenePath;
     RememberLastOpenMap();
+    AdoptSceneTagsIntoProject();
     AdvanceSceneDocumentGeneration();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();

@@ -5,6 +5,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/mods/ModRuntime.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
@@ -19,6 +20,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -421,6 +423,8 @@ bool ReadMountedGameProjectRuntime(
     packaged.giQuality = kMobileDevice ? manifest.settings.giQualityMobile : manifest.settings.giQuality;
     packaged.display = manifest.settings.display;
     packaged.simulation = manifest.settings.simulation;
+    packaged.masterVolume = manifest.settings.masterVolume;
+    packaged.tags = manifest.settings.tags;
     for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
         if (plugin.enabled && !plugin.name.empty()) {
             packaged.requiredModules.push_back(plugin.name);
@@ -652,6 +656,8 @@ bool ReadGameProjectRuntime(
     runtime.giQuality = kMobileDevice ? resolved.giQualityMobile : resolved.giQuality;
     runtime.display = resolved.display;
     runtime.simulation = resolved.simulation;
+    runtime.masterVolume = resolved.masterVolume;
+    runtime.tags = resolved.tags;
     runtime.descriptor = std::move(loaded.descriptor);
     return true;
 }
@@ -742,6 +748,9 @@ bool LoadGameProjectScene(
         return false;
     }
     scene.Runtime().ApplyProjectSimulation(runtime.simulation);
+    // The master gain, and the tags every scene of the project starts from, before any scene is loaded.
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, runtime.masterVolume));
+    static_cast<void>(scene.Tags().SetProjectDefinitions(runtime.tags));
 
     if (!runtime.sceneReference.empty() && runtime.sceneReference.front() == '/') {
         const kb::assets::AssetMetadata* metadata =

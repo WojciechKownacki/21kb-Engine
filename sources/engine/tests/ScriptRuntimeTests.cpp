@@ -184,7 +184,12 @@ public:
     [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene&, std::uint64_t voiceId, std::string_view marker, float, kb::scene::SceneEntity) override {
         return IsLive(voiceId) && !marker.empty();
     }
+    [[nodiscard]] bool SetMasterVolume(kb::scene::Scene&, float volume) noexcept override {
+        masterVolume = volume;
+        return true;
+    }
 
+    float masterVolume = -1.0F;
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
     int stopAllCount = 0;
@@ -5542,6 +5547,25 @@ end
         "Audio.OcclusionEnabled must report the configured state");
 }
 
+// The master gain belongs to the scene: set before a backend exists it reaches the backend when that registers, set
+// after it reaches it at once, and a value outside 0..1 changes nothing.
+void RunAudioMasterVolumeFacadeTest() {
+    kb::scene::Scene scene;
+    kb::tests::Require(kb::audio::AudioPlayback::MasterVolume(scene) == 1.0F, "A scene must start at full master volume");
+    kb::tests::Require(kb::audio::AudioPlayback::SetMasterVolume(scene, 0.5F) && kb::audio::AudioPlayback::MasterVolume(scene) == 0.5F,
+        "The master volume was not kept without a backend");
+    ProbeAudioPlaybackBackend backend;
+    kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+    kb::tests::Require(backend.masterVolume == 0.5F, "A backend registered later did not start at the scene's master volume");
+    kb::tests::Require(kb::audio::AudioPlayback::SetMasterVolume(scene, 0.25F) && backend.masterVolume == 0.25F,
+        "The master volume did not reach the registered backend");
+    kb::tests::Require(!kb::audio::AudioPlayback::SetMasterVolume(scene, 1.5F) && !kb::audio::AudioPlayback::SetMasterVolume(scene, -0.1F) &&
+            !kb::audio::AudioPlayback::SetMasterVolume(scene, std::numeric_limits<float>::quiet_NaN()) &&
+            kb::audio::AudioPlayback::MasterVolume(scene) == 0.25F && backend.masterVolume == 0.25F,
+        "A master volume outside 0..1 changed the gain");
+    kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+}
+
 // LIB-148: per-voice playback control - the AudioPlayback facade contract without a
 // backend (everything honestly false), the full per-voice flow through a fake backend
 // (no plugin required), registration of all ten functions on Native+VisualGraph, and
@@ -5638,6 +5662,7 @@ void RunScriptAudioVoiceControlApiTest() {
             lastMarkerTarget = target;
             return true;
         }
+        [[nodiscard]] bool SetMasterVolume(kb::scene::Scene&, float) noexcept override { return true; }
         std::string lastMarker;
         float lastMarkerSeconds = -1.0F;
         kb::scene::SceneEntity lastMarkerTarget{};
@@ -12766,6 +12791,13 @@ void RunScriptRuntimeKeepsConfiguredSceneFixedStepTest() {
             kb::tests::NearlyEqual(configured.Runtime().ScriptFixedDeltaSeconds(), 1.0F / 120.0F),
         "The script scene system replaced the fixed step the scene already had with its own default");
 
+    kb::scene::Scene limited;
+    limited.Runtime().SetFixedStepSettings({ .maxFixedStepsPerFrame = 16U });
+    kb::script::ScriptRuntimeHost limitedHost{ limited };
+    kb::tests::Require(limitedHost.Succeeded() && limitedHost.InstallSceneSystem(), "Step limit configured-scene script host install failed");
+    kb::tests::Require(limited.Runtime().FixedStepSettings().maxFixedStepsPerFrame == 16U,
+        "The script scene system replaced the step limit the scene already had with its own default");
+
     kb::scene::Scene plain;
     kb::script::ScriptRuntimeHost plainHost{ plain };
     kb::tests::Require(plainHost.Succeeded() && plainHost.InstallSceneSystem(), "Fixed step plain-scene script host install failed");
@@ -17607,6 +17639,7 @@ void RunScriptRuntimeTests() {
     RunScriptPostProcessApiTest();
     RunAudioMixerAssetIOAndAccessTest();
     RunScriptAudioMixerApiTest();
+    RunAudioMasterVolumeFacadeTest();
     RunScriptAudioVoiceControlApiTest();
     RunAudioAssetUnloadAndSceneChangeLifecycleTest();
     RunScriptInputHapticsApiTest();

@@ -105,7 +105,9 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     {
         std::string error;
         const std::string language = EditorLocalization::PreferredLanguage();
-        if (!EditorLocalization::SetLanguage(language, EditorLocalization::DefaultCatalogFolder(), error)) {
+        // The startup screen loaded it already; a failed load is tried again here and reported.
+        if (EditorLocalization::Current() != language &&
+            !EditorLocalization::SetLanguage(language, EditorLocalization::DefaultCatalogFolder(), error)) {
             state.sceneContext.Console().Warning("Editor", error + " The editor stays in English.");
         }
     }

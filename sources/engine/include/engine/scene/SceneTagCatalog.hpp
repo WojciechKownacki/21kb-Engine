@@ -43,6 +43,9 @@ public:
         return false;
     }
 
+    // The name as the catalogue keeps it (trimmed), or an empty string when it is not a valid tag name.
+    [[nodiscard]] static std::string CanonicalName(std::string_view name);
+
     explicit SceneTagCatalog(Scene& scene) noexcept;
 
     [[nodiscard]] std::span<const std::string> Names() const noexcept;
@@ -51,7 +54,15 @@ public:
     // Removes a custom definition and every matching assignment in this scene.
     // Built-in definitions are immutable and cannot be removed.
     [[nodiscard]] bool Undefine(std::string_view name);
+    // Replaces the scene's definitions with the built-in ones, the project's (see SetProjectDefinitions) and
+    // then `names`. Built-in and project names in `names` are not repeated.
     [[nodiscard]] bool ReplaceDefinitions(std::span<const std::string> names);
+    // The tags the project defines, which the host passes on to every scene it builds. They are defined in this
+    // scene at once, ahead of any tag only the scene has, and ReplaceDefinitions keeps them. A name that is not
+    // a valid tag, or a list the catalogue cannot hold, changes nothing and returns false; a built-in or repeated
+    // name is skipped.
+    [[nodiscard]] bool SetProjectDefinitions(std::span<const std::string> names);
+    [[nodiscard]] std::span<const std::string> ProjectDefinitions() const noexcept;
     void ResetToDefaults();
 
     // An entity has at most one author-facing tag. Assigning a new one replaces

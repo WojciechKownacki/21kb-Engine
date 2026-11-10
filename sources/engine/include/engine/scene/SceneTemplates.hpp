@@ -49,10 +49,11 @@ public:
     // AssetFileNameError, the folder lies inside Assets, and no scene of that name exists there.
     [[nodiscard]] static NewScenePath ResolveNewScene(const std::filesystem::path& projectRoot, std::string_view folder,
         std::string_view name);
-    // Writes a new scene file (and its .meta) made from the template. Refuses an existing file.
-    // Returns why nothing was written, or an empty string.
+    // Writes a new scene file (and its .meta) made from the template. Refuses an existing file. A non-zero
+    // `audioMixerAssetId` makes that mixer the scene's active one. Returns why nothing was written, or an
+    // empty string.
     [[nodiscard]] static std::string WriteSceneFile(const std::filesystem::path& scenePath, SceneTemplate kind,
-        const kb::project::ProjectDescriptor& project);
+        const kb::project::ProjectDescriptor& project, std::uint64_t audioMixerAssetId = 0U);
 };
 
 } // namespace kb::scene
