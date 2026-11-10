@@ -78,6 +78,10 @@ struct DockRect {
     [[nodiscard]] bool Empty() const noexcept;
 };
 
+// Panels an editor extension registers at run time take their ids from here up; the ids
+// below belong to the panels the editor is built with.
+inline constexpr std::uint32_t kFirstToolPanelId = 1000000U;
+
 struct DockPanel {
     std::uint32_t id = 0;
     DockPanelKind kind = DockPanelKind::Generic;

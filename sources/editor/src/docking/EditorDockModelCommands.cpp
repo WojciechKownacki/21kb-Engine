@@ -1,5 +1,7 @@
 #include "docking/EditorDockModelCommands.hpp"
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 #include "docking/DefaultDockWorkspace.hpp"
 #include "docking/DockLayoutSerializer.hpp"
@@ -27,10 +29,38 @@ namespace {
     return FirstLeaf(node->second.get());
 }
 
-bool ToolPanel(const DockPanel& p) {return p.kind==DockPanelKind::Generic&&p.id>=1000000U;}
-std::unique_ptr<DockNode> CopyNode(const DockNode* n) {
-    if(!n) return {};auto copy=std::make_unique<DockNode>();copy->kind=n->kind;copy->id=n->id;copy->axis=n->axis;copy->ratio=n->ratio;copy->panels=n->panels;copy->activePanelId=n->activePanelId;copy->first=CopyNode(n->first.get());copy->second=CopyNode(n->second.get());return copy;
+// A panel an editor extension registered at run time: it is in the workspace, but not in the
+// layouts a project saves, because the next session may not have the extension.
+[[nodiscard]] bool IsToolPanel(const DockPanel& panel) noexcept {
+    return panel.kind == DockPanelKind::Generic && panel.id >= kFirstToolPanelId;
 }
+
+[[nodiscard]] std::vector<DockPanel> ToolPanels(const DockPanelCollection& panels) {
+    std::vector<DockPanel> tools;
+    for (const DockPanel& panel : panels.All()) {
+        if (IsToolPanel(panel)) {
+            tools.push_back(panel);
+        }
+    }
+    return tools;
+}
+
+[[nodiscard]] std::unique_ptr<DockNode> CopyNode(const DockNode* node) {
+    if (node == nullptr) {
+        return {};
+    }
+    auto copy = std::make_unique<DockNode>();
+    copy->kind = node->kind;
+    copy->id = node->id;
+    copy->axis = node->axis;
+    copy->ratio = node->ratio;
+    copy->panels = node->panels;
+    copy->activePanelId = node->activePanelId;
+    copy->first = CopyNode(node->first.get());
+    copy->second = CopyNode(node->second.get());
+    return copy;
+}
+
 } // namespace
 
 EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId, bool& drawerCollapsed) noexcept
@@ -49,11 +79,13 @@ bool EditorDockModelCommands::SetDrawerCollapsed(bool collapsed) noexcept {
 }
 
 void EditorDockModelCommands::ResetWorkspace() {
-    std::vector<DockPanel> tools;for(const auto& p:panels_.All()) if(ToolPanel(p)) tools.push_back(p);
+    std::vector<DockPanel> tools = ToolPanels(panels_);
     panels_.Reset(DefaultDockWorkspace{}.CreatePanels());
     nextNodeId_ = 1U;
     root_ = DefaultDockWorkspace{}.CreateRoot(nextNodeId_);
-    for(auto& p:tools) static_cast<void>(RegisterToolPanel(std::move(p)));
+    for (DockPanel& tool : tools) {
+        static_cast<void>(RegisterToolPanel(std::move(tool)));
+    }
     maximizedLeafId_ = 0U;
 }
 
@@ -61,7 +93,9 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
     std::vector<std::uint32_t> knownPanels;
     knownPanels.reserve(panels_.All().size());
     for (const DockPanel& panel : panels_.All()) {
-        if(!ToolPanel(panel)) knownPanels.push_back(panel.id);
+        if (!IsToolPanel(panel)) {
+            knownPanels.push_back(panel.id);
+        }
     }
 
     std::uint32_t nextNodeId = 1U;
@@ -69,7 +103,7 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
     if (restored == nullptr) {
         return false;
     }
-    std::vector<DockPanel> tools;for(const auto& p:panels_.All()) if(ToolPanel(p)) tools.push_back(p);
+    std::vector<DockPanel> tools = ToolPanels(panels_);
     root_ = std::move(restored);
     nextNodeId_ = nextNodeId;
     maximizedLeafId_ = 0U;
@@ -85,31 +119,77 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
             }
         }
     }
-    for(auto& p:tools) static_cast<void>(RegisterToolPanel(std::move(p)));
+    for (DockPanel& tool : tools) {
+        static_cast<void>(RegisterToolPanel(std::move(tool)));
+    }
     return true;
 }
 
 std::string EditorDockModelCommands::SerializeWorkspace() const {
-    auto saved=CopyNode(root_.get());
-    for(const auto& p:panels_.All()) if(ToolPanel(p)) DockTreeMutation::RemovePanel(saved,p.id);
+    std::unique_ptr<DockNode> saved = CopyNode(root_.get());
+    for (const DockPanel& panel : panels_.All()) {
+        if (IsToolPanel(panel)) {
+            DockTreeMutation::RemovePanel(saved, panel.id);
+        }
+    }
     DockTreeMutation::PruneEmptyBranches(saved);
     return DockLayoutSerializer::Serialize(saved.get());
 }
 
 bool EditorDockModelCommands::RegisterToolPanel(DockPanel panel) {
-    if(!ToolPanel(panel)||panel.title.empty()) return false;
-    if(const auto* existing=panels_.Find(panel.id);existing&&!ToolPanel(*existing)) return false;
-    auto all=panels_.All();std::erase_if(all,[&](const auto& p){return p.id==panel.id;});panel.detachable=false;all.push_back(panel);panels_.Reset(std::move(all));
-    auto* leaf=DockNodeQuery::FindLeafContaining(root_.get(),panel.id);
-    if(!leaf) {for(const auto& candidate:panels_.All()) if(candidate.area==DockArea::Right&&candidate.visible) {leaf=DockNodeQuery::FindLeafContaining(root_.get(),candidate.id);if(leaf) break;}
-        if(!leaf) leaf=FirstLeaf(root_.get());
-        if(!leaf) {root_=DockNodeFactory::MakeLeaf(NextNodeId(),{panel.id});leaf=root_.get();}else leaf->panels.push_back(panel.id);
+    if (!IsToolPanel(panel) || panel.title.empty()) {
+        return false;
     }
-    auto* stored=panels_.Find(panel.id);stored->area=DockArea::Right;stored->visible=true;leaf->activePanelId=panel.id;maximizedLeafId_=0;return true;
+    if (const DockPanel* existing = panels_.Find(panel.id); existing != nullptr && !IsToolPanel(*existing)) {
+        return false;
+    }
+    const std::uint32_t panelId = panel.id;
+    std::vector<DockPanel> all = panels_.All();
+    std::erase_if(all, [panelId](const DockPanel& candidate) { return candidate.id == panelId; });
+    panel.detachable = false;
+    all.push_back(std::move(panel));
+    panels_.Reset(std::move(all));
+
+    // A tool panel keeps the place it already has; a new one joins the group at the right, or
+    // the first group there is, or becomes the workspace when nothing else is open.
+    DockNode* leaf = DockNodeQuery::FindLeafContaining(root_.get(), panelId);
+    if (leaf == nullptr) {
+        for (const DockPanel& candidate : panels_.All()) {
+            if (candidate.area == DockArea::Right && candidate.visible) {
+                leaf = DockNodeQuery::FindLeafContaining(root_.get(), candidate.id);
+                if (leaf != nullptr) {
+                    break;
+                }
+            }
+        }
+        if (leaf == nullptr) {
+            leaf = FirstLeaf(root_.get());
+        }
+        if (leaf == nullptr) {
+            root_ = DockNodeFactory::MakeLeaf(NextNodeId(), { panelId });
+            leaf = root_.get();
+        } else {
+            leaf->panels.push_back(panelId);
+        }
+    }
+    DockPanel* stored = panels_.Find(panelId);
+    stored->area = DockArea::Right;
+    stored->visible = true;
+    leaf->activePanelId = panelId;
+    maximizedLeafId_ = 0;
+    return true;
 }
+
 bool EditorDockModelCommands::UnregisterToolPanel(std::uint32_t id) {
-    const auto* panel=panels_.Find(id);if(!panel||!ToolPanel(*panel)) return false;
-    static_cast<void>(ClosePanel(id));auto all=panels_.All();std::erase_if(all,[&](const auto& p){return p.id==id;});panels_.Reset(std::move(all));return true;
+    const DockPanel* panel = panels_.Find(id);
+    if (panel == nullptr || !IsToolPanel(*panel)) {
+        return false;
+    }
+    static_cast<void>(ClosePanel(id));
+    std::vector<DockPanel> all = panels_.All();
+    std::erase_if(all, [id](const DockPanel& candidate) { return candidate.id == id; });
+    panels_.Reset(std::move(all));
+    return true;
 }
 
 void EditorDockModelCommands::ActivatePanel(std::uint32_t panelId) {
