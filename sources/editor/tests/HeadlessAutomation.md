@@ -104,6 +104,7 @@ scenario-local aliases.
 | `assert_platform_locale` | Verifies the game-facing locale, bounded UTC offset and overflow-safe local-time conversion without system-clock access. |
 | `assert_runtime_settings` | Verifies transactional audio, video and input settings with device-capability validation and revert semantics. |
 | `assert_optional_platform_adapter` | Verifies achievements, cloud save, DLC and user services remain capability-gated and unavailable services fail closed. |
+| `assert_docking_interactions` | none; drives the dock workspace of a hidden editor window with pointer and key messages: tab click, reorder, tear-off into a floating window, grouping by a tab strip, ungrouping at a panel edge, Escape, double-click maximize, the tab menu, middle-click close, the floating close button, the Layout menu panel rows, Settings in its own window, a crowded tab strip and a splitter. Writes `dock-*.bmp` captures of each stage. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder; optional `skeletal`, `import_textures`, `import_materials`, and `combine_meshes` booleans |
