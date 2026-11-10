@@ -367,7 +367,10 @@ bool EditorSceneContext::SetStartupScene(const std::string& virtualPath) {
         console_.Error("Project", "The game starts in a scene of this project; " + virtualPath + " is not one.");
         return false;
     }
-    projectConfig_.defaultMap = virtualPath;
+    // The scene leads the list of scenes the package holds, in place of the previous startup scene.
+    std::vector<std::string> packaged{ virtualPath };
+    packaged.insert(packaged.end(), projectConfig_.additionalScenes.begin(), projectConfig_.additionalScenes.end());
+    kb::project::SetProjectBuildScenes(projectConfig_, std::move(packaged));
     if (!SaveProjectConfiguration()) {
         return false;
     }

@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace kb::project {
 namespace {
@@ -14,6 +16,7 @@ constexpr std::string_view kIdentity = "Project.Identity";
 constexpr std::string_view kProduct = "Project.Product";
 constexpr std::string_view kAndroid = "Project.Android";
 constexpr std::string_view kMaps = "Project.Maps";
+constexpr std::string_view kBuildScenes = "Project.BuildScenes";
 constexpr std::string_view kRendering = "Project.Rendering";
 constexpr std::string_view kDisplay = "Project.Display";
 constexpr std::string_view kInput = "Project.Input";
@@ -67,6 +70,13 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     return value.has_value() ? std::string{*value} : std::move(fallback);
 }
 
+// A scene path added to a list unless it is empty or already there.
+void AppendScene(std::vector<std::string>& scenes, const std::string& scene) {
+    if (!scene.empty() && std::ranges::find(scenes, scene) == scenes.end()) {
+        scenes.push_back(scene);
+    }
+}
+
 } // namespace
 
 std::string_view ProjectQualityLevelName(ProjectQualityLevel level) noexcept {
@@ -92,6 +102,27 @@ std::optional<ProjectQualityLevel> ParseProjectQualityLevel(std::string_view nam
     if (same("high")) return ProjectQualityLevel::High;
     if (same("ultra")) return ProjectQualityLevel::Ultra;
     return std::nullopt;
+}
+
+std::vector<std::string> ProjectBuildScenes(const ProjectSettings& settings) {
+    std::vector<std::string> scenes;
+    AppendScene(scenes, settings.defaultMap);
+    for (const std::string& scene : settings.additionalScenes) {
+        AppendScene(scenes, scene);
+    }
+    return scenes;
+}
+
+void SetProjectBuildScenes(ProjectSettings& settings, std::vector<std::string> scenes) {
+    std::vector<std::string> unique;
+    for (const std::string& scene : scenes) {
+        AppendScene(unique, scene);
+    }
+    if (unique.empty()) {
+        return;
+    }
+    settings.defaultMap = unique.front();
+    settings.additionalScenes.assign(unique.begin() + 1, unique.end());
 }
 
 std::filesystem::path ProjectSettingsStore::FilePath(const std::filesystem::path& projectRoot) {
@@ -155,6 +186,15 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.androidLabel = ReadString(document, kAndroid, "Label", defaults.androidLabel);
     result.settings.defaultMap = ReadString(document, kMaps, "DefaultMap", defaults.defaultMap);
     result.settings.lastOpenMap = ReadString(document, kMaps, "LastOpenMap", defaults.lastOpenMap);
+    const std::int64_t additionalCount = std::clamp<std::int64_t>(
+        document.GetInt(kBuildScenes, "Count").value_or(0), 0, static_cast<std::int64_t>(kProjectAdditionalScenesMax));
+    for (std::int64_t index = 0; index < additionalCount; ++index) {
+        if (const auto scene = document.GetString(kBuildScenes, "Scene" + std::to_string(index)); scene.has_value()) {
+            AppendScene(result.settings.additionalScenes, std::string{ *scene });
+        }
+    }
+    // The startup scene leads the list; a scene named there as well is not packaged twice.
+    std::erase(result.settings.additionalScenes, result.settings.defaultMap);
     result.settings.lightingPath = ParseLightingPath(
         ReadString(document, kRendering, "LightingPath", std::string{LightingPathName(defaults.lightingPath)}),
         defaults.lightingPath);
@@ -226,6 +266,18 @@ bool ProjectSettingsStore::Save(
     document.SetString(kAndroid, "Label", settings.androidLabel);
     document.SetString(kMaps, "DefaultMap", settings.defaultMap);
     document.SetString(kMaps, "LastOpenMap", settings.lastOpenMap);
+    // The additional scenes as a count and one key each; keys a shorter list leaves behind are removed.
+    const std::size_t additionalCount = std::min(settings.additionalScenes.size(), kProjectAdditionalScenesMax);
+    if (additionalCount == 0U) {
+        document.Remove(kBuildScenes, "Count");
+    } else {
+        document.SetInt(kBuildScenes, "Count", static_cast<std::int64_t>(additionalCount));
+    }
+    for (std::size_t index = 0U; index < additionalCount; ++index) {
+        document.SetString(kBuildScenes, "Scene" + std::to_string(index), settings.additionalScenes[index]);
+    }
+    for (std::size_t index = additionalCount; document.Remove(kBuildScenes, "Scene" + std::to_string(index)); ++index) {
+    }
     document.SetString(kRendering, "LightingPath", std::string{LightingPathName(settings.lightingPath)});
     document.SetString(kRendering, "ShadowQuality", std::string{ProjectQualityLevelName(settings.shadowQuality)});
     document.SetString(kRendering, "ShadowQualityMobile", std::string{ProjectQualityLevelName(settings.shadowQualityMobile)});

@@ -2308,7 +2308,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 *panelHit.projectSettingsContent,
                 x,
                 y,
-                renderBackendSettings_)) {
+                renderBackendSettings_,
+                mainWindow_)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

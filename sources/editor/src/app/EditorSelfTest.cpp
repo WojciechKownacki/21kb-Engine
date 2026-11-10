@@ -446,6 +446,92 @@ void RunProjectSettingsSuite(Report& report) {
     const ProjectSettingsPanelRenderer::Hit gravityLabelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, gravityLabel.x, gravityLabel.y);
     report.Check(gravityLabelHit.kind == ProjectSettingsHitKind::SimulationStepper && gravityLabelHit.index / 2 == 2,
         "A stepper label hit-tests for its tooltip");
+
+    // Typing a number into a value cell: a click starts it with the old value selected, Enter applies what was typed
+    // (clamped to the bounds), Esc and text that is not a number change nothing, and a click elsewhere applies it.
+    EditorProjectSettingsState& settingsState = context.ProjectSettings();
+    const auto typeNumber = [&](const POINT cell, const std::string_view text) {
+        const bool started = controller.HandlePointerDown(kContent, cell.x, cell.y) && settingsState.IsNumberEditing();
+        for (const char character : text) {
+            settingsState.NumberEdit().AppendAscii(static_cast<wchar_t>(character));
+        }
+        return started;
+    };
+    const POINT gravityYCell = Center(lightingRects.stepperValue[2]);
+    report.Check(HitKindAt(context, gravityYCell) == ProjectSettingsHitKind::NumberField,
+        "A value cell hit-tests as a number field");
+    report.Check(controller.HandlePointerDown(kContent, gravityYCell.x, gravityYCell.y) && settingsState.IsNumberEditing() &&
+            settingsState.EditedNumber() == static_cast<int>(ProjectSettingsNumber::GravityY) && settingsState.NumberEdit().Query() == "-1.62",
+        "Clicking a value cell starts typing with the current value");
+    settingsState.EndNumberEdit();
+    report.Check(typeNumber(gravityYCell, "-3.5") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            !settingsState.IsNumberEditing() && simulation.gravity == std::array<float, 3U>{ 0.0F, -3.5F, 0.0F } && simulation.fixedStepHz == 70U,
+        "Typing a number and pressing Enter sets that value and nothing else");
+    report.Check(stored().Succeeded() && stored().settings.simulation == simulation &&
+            kb::scene::PhysicsBackend::Gravity(context.Scene()).y == -3.5F,
+        "A typed simulation value is persisted and applied to the open scene");
+    const POINT fixedStepCell = Center(lightingRects.stepperValue[0]);
+    const POINT timeScaleCell = Center(lightingRects.stepperValue[4]);
+    report.Check(typeNumber(fixedStepCell, "9999") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            simulation.fixedStepHz == kb::project::kProjectFixedStepHzMax,
+        "A typed value above the bound is clamped to it");
+    report.Check(typeNumber(timeScaleCell, "-5") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && simulation.timeScale == 0.0F,
+        "A typed value below the bound is clamped to it");
+    report.Check(typeNumber(timeScaleCell, "1,5") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && simulation.timeScale == 1.5F,
+        "A decimal comma is read as a decimal point");
+    report.Check(typeNumber(timeScaleCell, "-") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && simulation.timeScale == 1.5F,
+        "Text that is not a number changes nothing");
+    report.Check(typeNumber(fixedStepCell, "30") && (settingsState.EndNumberEdit(), true) && !settingsState.IsNumberEditing() &&
+            simulation.fixedStepHz == kb::project::kProjectFixedStepHzMax,
+        "Cancelling a typed number changes nothing");
+    const POINT outsideCell = Center(lightingRects.header);
+    report.Check(typeNumber(timeScaleCell, "2") && controller.HandlePointerDown(kContent, outsideCell.x, outsideCell.y) &&
+            !settingsState.IsNumberEditing() && simulation.timeScale == 2.0F,
+        "A click outside the cell applies the typed number");
+
+    // The Display page: the window size and the frame rate limit take typed numbers too.
+    report.Check(controller.HandlePointerDown(kContent, displayCategory.x, displayCategory.y), "Clicking the Display category again is handled");
+    report.Check(typeNumber(Center(lightingRects.windowWidthValue), "1000") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeNumber(Center(lightingRects.windowHeightValue), "50") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeNumber(Center(lightingRects.frameRateValue), "240") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            display.windowWidth == 1000U && display.windowHeight == kb::project::kProjectWindowExtentMin && display.frameRateCap == 240U &&
+            !display.vsync && !display.resizable,
+        "Typed window size and frame rate limit are applied, clamped, and leave the other display settings alone");
+    report.Check(stored().Succeeded() && stored().settings.display == display, "Typed display values persisted to the settings file");
+
+    // The Scenes page: the build list, startup scene first, with a move up and a remove button per scene.
+    const POINT scenesCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Scenes)));
+    report.Check(controller.HandlePointerDown(kContent, scenesCategory.x, scenesCategory.y) &&
+            context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Scenes),
+        "Clicking the Scenes category selects it");
+    const kb::project::ProjectSettings& project = context.ProjectConfiguration();
+    const std::string startup = project.defaultMap;
+    const std::string second = "/Game/Scenes/Second.21kbscene";
+    const std::string third = "/Game/Scenes/Third.21kbscene";
+    report.Check(HitKindAt(context, Center(lightingRects.sceneAddButton)) == ProjectSettingsHitKind::BuildSceneAdd,
+        "The Add scene button hit-tests as its own kind");
+    report.Check(context.SetProjectBuildScenes({ startup, second, third }) && project.defaultMap == startup &&
+            project.additionalScenes == std::vector<std::string>{ second, third } && stored().settings.additionalScenes == project.additionalScenes,
+        "A scene list keeps the startup scene first and is persisted");
+    report.Check(HitKindAt(context, Center(ProjectSettingsPanelLayout::SceneMoveUpButton(lightingRects, 0))) != ProjectSettingsHitKind::BuildSceneMoveUp,
+        "The first scene has nothing above it to move past");
+    const POINT thirdUp = Center(ProjectSettingsPanelLayout::SceneMoveUpButton(lightingRects, 2));
+    report.Check(HitKindAt(context, thirdUp) == ProjectSettingsHitKind::BuildSceneMoveUp && controller.HandlePointerDown(kContent, thirdUp.x, thirdUp.y) &&
+            project.additionalScenes == std::vector<std::string>{ third, second },
+        "Move up swaps a scene with the one above it");
+    const POINT thirdUpAgain = Center(ProjectSettingsPanelLayout::SceneMoveUpButton(lightingRects, 1));
+    report.Check(controller.HandlePointerDown(kContent, thirdUpAgain.x, thirdUpAgain.y) && project.defaultMap == third &&
+            project.additionalScenes == std::vector<std::string>{ startup, second } && stored().settings.defaultMap == third,
+        "Moving a scene to the top makes it the startup scene");
+    const POINT removeFirst = Center(ProjectSettingsPanelLayout::SceneRemoveButton(lightingRects, 0));
+    report.Check(HitKindAt(context, removeFirst) == ProjectSettingsHitKind::BuildSceneRemove && controller.HandlePointerDown(kContent, removeFirst.x, removeFirst.y) &&
+            project.defaultMap == startup && project.additionalScenes == std::vector<std::string>{ second },
+        "Removing the startup scene promotes the next one");
+    const POINT removeSecond = Center(ProjectSettingsPanelLayout::SceneRemoveButton(lightingRects, 1));
+    report.Check(controller.HandlePointerDown(kContent, removeSecond.x, removeSecond.y) && project.additionalScenes.empty() &&
+            HitKindAt(context, removeFirst) != ProjectSettingsHitKind::BuildSceneRemove,
+        "The last scene of the list cannot be removed");
 }
 
 void RunProjectPhysicsLayersRuntimeSuite(Report& report) {

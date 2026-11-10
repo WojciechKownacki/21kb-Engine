@@ -35,6 +35,7 @@
 #include "scene/EditorSceneDocumentAssetLoaders.hpp"
 #include "scene/EditorMap2DService.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <memory>

@@ -3,6 +3,8 @@
 #include "scene/EditorHierarchySearchState.hpp"
 
 #include <cstdint>
+#include <string>
+#include <utility>
 
 namespace kb::editor {
 
@@ -59,9 +61,48 @@ public:
         selectedCategory_ = category;
         mappingContextDropdownOpen_ = false; // Closing a stale dropdown on switch.
         physicsLayersDropdownOpen_ = false;
+        EndNumberEdit();
+        firstVisibleScene_ = 0;
         hoveredOption_ = -1;
         tooltipKind_ = ProjectSettingsTooltipKind::None;
         return true;
+    }
+
+    // Typing a number into a setting's value cell: which cell (a ProjectSettingsNumber, -1 for none) and the
+    // text typed so far. The text starts out selected, so the first key replaces the old value.
+    [[nodiscard]] bool IsNumberEditing() const noexcept {
+        return editedNumber_ >= 0;
+    }
+    [[nodiscard]] int EditedNumber() const noexcept {
+        return editedNumber_;
+    }
+    [[nodiscard]] EditorHierarchySearchState& NumberEdit() noexcept {
+        return numberEdit_;
+    }
+    [[nodiscard]] const EditorHierarchySearchState& NumberEdit() const noexcept {
+        return numberEdit_;
+    }
+    void BeginNumberEdit(int number, std::string text) {
+        mappingContextDropdownOpen_ = false;
+        physicsLayersDropdownOpen_ = false;
+        search_.Focus(false);
+        editedNumber_ = number;
+        numberEdit_.SetQuery(std::move(text));
+        numberEdit_.Focus(true);
+        numberEdit_.SelectAll();
+    }
+    void EndNumberEdit() noexcept {
+        editedNumber_ = -1;
+        numberEdit_.Clear();
+        numberEdit_.Focus(false);
+    }
+
+    // The scene list of the Scenes page starts at this scene of the project's build list.
+    [[nodiscard]] int FirstVisibleScene() const noexcept {
+        return firstVisibleScene_;
+    }
+    void SetFirstVisibleScene(int index) noexcept {
+        firstVisibleScene_ = index < 0 ? 0 : index;
     }
 
     [[nodiscard]] bool IsMappingContextDropdownOpen() const noexcept {
@@ -135,6 +176,9 @@ public:
 
 private:
     EditorHierarchySearchState search_;
+    EditorHierarchySearchState numberEdit_;
+    int editedNumber_ = -1;
+    int firstVisibleScene_ = 0;
     int selectedCategory_ = 0;
     bool mappingContextDropdownOpen_ = false;
     bool physicsLayersDropdownOpen_ = false;

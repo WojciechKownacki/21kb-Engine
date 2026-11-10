@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::project {
 
@@ -43,6 +44,8 @@ inline constexpr std::uint32_t kProjectFixedStepHzMax = 480U;
 inline constexpr std::uint32_t kProjectFrameRateCapMax = 1000U;
 inline constexpr float kProjectGravityLimit = 1000.0F;
 inline constexpr float kProjectTimeScaleMax = 100.0F;
+// Most scenes a project lists for its package besides the startup scene.
+inline constexpr std::size_t kProjectAdditionalScenesMax = 256U;
 
 // How the shipped game opens its window and paces its frames. The defaults are what the game did
 // before these were settings.
@@ -101,6 +104,9 @@ struct ProjectSettings {
     // creates for it, which is where the default used to live before the descriptor
     // stopped carrying settings.
     std::string defaultMap = "/Game/Scenes/Main.21kbscene";
+    // The scenes a package holds besides defaultMap, in order. Empty packages the startup scene alone, plus
+    // whatever the scenes reference. See ProjectBuildScenes.
+    std::vector<std::string> additionalScenes;
     // The scene the editor had open when it was last closed. Deliberately separate
     // from defaultMap: where an author left off is not where the game begins.
     std::string lastOpenMap;
@@ -132,6 +138,13 @@ struct ProjectSettings {
 
     [[nodiscard]] bool operator==(const ProjectSettings&) const noexcept = default;
 };
+
+// The scenes a package holds, in order: the startup scene (defaultMap) first, then the additional scenes.
+// An empty defaultMap contributes nothing and a scene listed twice counts once.
+[[nodiscard]] std::vector<std::string> ProjectBuildScenes(const ProjectSettings& settings);
+// Sets the scenes a package holds from an ordered list: its first scene becomes the startup scene. Empty
+// and repeated entries are dropped; an empty list leaves the settings as they are.
+void SetProjectBuildScenes(ProjectSettings& settings, std::vector<std::string> scenes);
 
 // The settings an older project file carried before the settings file existed.
 struct ProjectLegacySettings {

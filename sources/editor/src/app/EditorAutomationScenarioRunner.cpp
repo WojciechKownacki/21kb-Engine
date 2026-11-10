@@ -2415,6 +2415,8 @@ ReadScriptValue(
             index = 2;
         } else if (*category == "display") {
             index = static_cast<int>(ProjectSettingsCategory::Display);
+        } else if (*category == "scenes") {
+            index = static_cast<int>(ProjectSettingsCategory::Scenes);
         } else {
             return { false, "unknown project settings category" };
         }

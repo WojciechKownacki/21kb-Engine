@@ -540,6 +540,55 @@ void RunProjectDisplayAndSimulationSettingsTest() {
     CleanTempRoot();
 }
 
+// The scenes a package holds: a settings file without the list keeps packaging the startup scene alone, the
+// list round-trips in order behind the startup scene, a scene named twice counts once, and a shorter list
+// leaves no stale entries in the file.
+void RunProjectBuildScenesTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    std::error_code directoryError;
+    std::filesystem::create_directories(file.parent_path(), directoryError);
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Maps]\nDefaultMap=/Game/Scenes/Start.21kbscene\n";
+    }
+    const kb::project::ProjectSettings older = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(older.additionalScenes.empty() &&
+            kb::project::ProjectBuildScenes(older) == std::vector<std::string>{ "/Game/Scenes/Start.21kbscene" },
+        "a settings file without a scene list must package the startup scene alone");
+
+    kb::project::ProjectSettings chosen = older;
+    kb::project::SetProjectBuildScenes(chosen, { "/Game/Scenes/Hub.21kbscene", "/Game/Scenes/Start.21kbscene", "", "/Game/Scenes/Hub.21kbscene", "/Game/Scenes/End.21kbscene" });
+    Require(chosen.defaultMap == "/Game/Scenes/Hub.21kbscene" &&
+            chosen.additionalScenes == std::vector<std::string>{ "/Game/Scenes/Start.21kbscene", "/Game/Scenes/End.21kbscene" },
+        "the first scene of the list must become the startup scene, with empty and repeated entries dropped");
+    kb::project::ProjectSettings untouched = chosen;
+    kb::project::SetProjectBuildScenes(untouched, {});
+    Require(untouched == chosen, "an empty scene list must leave the settings as they are");
+
+    std::string error;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the scene list could not be saved");
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
+    Require(reloaded.Succeeded() && reloaded.settings == chosen &&
+            kb::project::ProjectBuildScenes(reloaded.settings) == std::vector<std::string>{
+                "/Game/Scenes/Hub.21kbscene", "/Game/Scenes/Start.21kbscene", "/Game/Scenes/End.21kbscene" },
+        "the settings file did not keep the scene list in order");
+
+    kb::project::SetProjectBuildScenes(chosen, { "/Game/Scenes/Hub.21kbscene" });
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the shorter scene list could not be saved");
+    const kb::project::ProjectSettings shorter = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(shorter.additionalScenes.empty() && shorter.defaultMap == "/Game/Scenes/Hub.21kbscene", "a shorter scene list left stale entries in the file");
+
+    {
+        // A file that lists the startup scene among the others does not package it twice.
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Maps]\nDefaultMap=/Game/A.21kbscene\n[Project.BuildScenes]\nCount=3\nScene0=/Game/A.21kbscene\nScene1=/Game/B.21kbscene\nScene2=/Game/B.21kbscene\n";
+    }
+    Require(kb::project::ProjectSettingsStore::Load(file).settings.additionalScenes == std::vector<std::string>{ "/Game/B.21kbscene" },
+        "the startup scene and a repeated scene must not be listed twice");
+    CleanTempRoot();
+}
+
 // A project directory deep enough to leave no room for the files that go inside it is refused at
 // the door, with the three numbers the reader needs, instead of failing later inside whichever
 // asset write crosses MAX_PATH first with the operating system's own message.
@@ -1953,6 +2002,7 @@ void RunProjectSceneTests() {
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
     RunProjectDisplayAndSimulationSettingsTest();
+    RunProjectBuildScenesTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneAssetUsersTest();
     RunProjectPathBudgetTest();

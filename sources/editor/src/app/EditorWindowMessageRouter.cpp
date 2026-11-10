@@ -11,6 +11,7 @@
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
 #include "app/agent/EditorAgentPanelController.hpp"
+#include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "app/EditorBuildGameInputHandler.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
@@ -35,6 +36,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace kb::editor {
 namespace {
@@ -684,6 +686,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return 0;
     }
     case WM_KILLFOCUS:
+        if (EditorProjectSettingsPointerController::CommitNumberEdit(context_.sceneContext)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+        }
         if (context_.sceneContext.IsBuildGameTextEditing()) {
             static_cast<void>(context_.sceneContext.CommitBuildGameTextEdit());
             InvalidateRect(messageWindow, nullptr, FALSE);
@@ -691,6 +696,15 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         break;
     case WM_CHAR:
         if (EditorAgentPanelController{ context_.sceneContext }.HandleChar(wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
+        if (EditorProjectSettingsState& settings = context_.sceneContext.ProjectSettings(); settings.IsNumberEditing()) {
+            // A number takes digits, a minus and a decimal point or comma; anything else typed is ignored.
+            constexpr std::string_view kNumberCharacters = "0123456789.,-";
+            const bool accepted = wparam < 0x20U || (wparam < 0x80U && kNumberCharacters.find(static_cast<char>(wparam)) != std::string_view::npos);
+            static_cast<void>(accepted && HandleSearchFieldChar(settings.NumberEdit(), wparam, [] {}));
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
@@ -804,6 +818,22 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.sceneViewport.RequestPresent();
             InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
+        }
+        if (EditorProjectSettingsState& settings = context_.sceneContext.ProjectSettings(); settings.IsNumberEditing()) {
+            // Enter applies the typed number and Esc drops it; the other keys edit the text like a search box.
+            bool handled = true;
+            if (wparam == VK_RETURN) {
+                static_cast<void>(EditorProjectSettingsPointerController::CommitNumberEdit(context_.sceneContext));
+            } else if (wparam == VK_ESCAPE) {
+                settings.EndNumberEdit();
+            } else {
+                handled = HandleSearchFieldKeyDown(settings.NumberEdit(), messageWindow, wparam, [] {});
+            }
+            if (handled) {
+                InvalidateRect(messageWindow, nullptr, FALSE);
+                if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+                return 0;
+            }
         }
         if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             InvalidateRect(messageWindow, nullptr, FALSE);

@@ -22,6 +22,7 @@
 #include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -12752,6 +12753,27 @@ void RunScriptRuntimeHostFrameSettingsTest() {
     kb::tests::Require(fixedDeltas.size() == 1U && kb::tests::NearlyEqual(fixedDeltas[0], 0.1F), "Script runtime host did not pass custom fixed step to scene system");
 }
 
+// The script system keeps a fixed step the scene already carries (the project's) whatever the order of setup, and
+// gives a scene nobody configured its own default step and step limit.
+void RunScriptRuntimeKeepsConfiguredSceneFixedStepTest() {
+    kb::scene::Scene configured;
+    kb::project::ProjectSimulationSettings simulation;
+    simulation.fixedStepHz = 120U;
+    configured.Runtime().ApplyProjectSimulation(simulation);
+    kb::script::ScriptRuntimeHost configuredHost{ configured };
+    kb::tests::Require(configuredHost.Succeeded() && configuredHost.InstallSceneSystem(), "Fixed step configured-scene script host install failed");
+    kb::tests::Require(kb::tests::NearlyEqual(configured.Runtime().FixedStepSettings().fixedDeltaSeconds, 1.0F / 120.0F) &&
+            kb::tests::NearlyEqual(configured.Runtime().ScriptFixedDeltaSeconds(), 1.0F / 120.0F),
+        "The script scene system replaced the fixed step the scene already had with its own default");
+
+    kb::scene::Scene plain;
+    kb::script::ScriptRuntimeHost plainHost{ plain };
+    kb::tests::Require(plainHost.Succeeded() && plainHost.InstallSceneSystem(), "Fixed step plain-scene script host install failed");
+    kb::tests::Require(kb::tests::NearlyEqual(plain.Runtime().FixedStepSettings().fixedDeltaSeconds, 1.0F / 60.0F) &&
+            plain.Runtime().FixedStepSettings().maxFixedStepsPerFrame == 64U,
+        "The script scene system changed the fixed step of a scene nobody configured");
+}
+
 void RunScriptSceneComponentApiTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script Api Object" });
@@ -17683,6 +17705,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeHostSceneSystemTest();
     RunScriptRuntimeHostNativeDescriptorBindingTest();
     RunScriptRuntimeHostFrameSettingsTest();
+    RunScriptRuntimeKeepsConfiguredSceneFixedStepTest();
     RunScriptSceneComponentApiTest();
     RunScriptAudioComponentPropertiesTest();
     RunScriptUIApiTest();

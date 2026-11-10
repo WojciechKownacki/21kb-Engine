@@ -13,6 +13,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace kb::editor {
@@ -42,6 +43,10 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     FrameRateOption,      // Display: one of the frame rate limits; -1 over the label.
     SimulationStepper,    // Physics: index = stepper * 2 + (0 minus, 1 plus); stepper 0 fixed step, 1..3 gravity, 4 time scale. -1 over a label.
     GravityPresetOption,  // Physics: one of the gravity presets; -1 over the label.
+    NumberField,          // A value cell that takes a typed number (index = ProjectSettingsNumber); -1 over its label.
+    BuildSceneMoveUp,     // Scenes: moves a scene one place up the build list (index = position in the list).
+    BuildSceneRemove,     // Scenes: takes a scene out of the build list (index = position in the list).
+    BuildSceneAdd,        // Scenes: the button that offers the project's scenes that are not in the list yet.
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
@@ -53,6 +58,7 @@ enum class ProjectSettingsCategory : int {
     Physics,
     Lighting,
     Display,
+    Scenes,
     // Editor: the Editor Settings pages, shown in this window.
     EditorGeneral,
     EditorSaving,
@@ -63,11 +69,13 @@ enum class ProjectSettingsCategory : int {
 #endif
 
 #if defined(_WIN32)
-static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 5 && static_cast<int>(ProjectSettingsCategory::Plugins) == 7,
+static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 6 && static_cast<int>(ProjectSettingsCategory::Plugins) == 8,
     "the sidebar's group captions (ProjectSettingsPanelLayout::k*GroupStart) follow the category order");
 #endif
 
 #if defined(_WIN32)
+struct ProjectSettingsPanelLayoutRects;
+
 // The choices of the Display and Physics pages, shared by painting and by the clicks that apply them.
 struct ProjectSettingsWindowSize {
     std::uint32_t width;
@@ -84,6 +92,25 @@ inline constexpr std::array<std::array<float, 3U>, 3U> kProjectSettingsGravityPr
 inline constexpr std::uint32_t kProjectSettingsFixedStepIncrement = 10U;
 inline constexpr float kProjectSettingsGravityIncrement = 0.5F;
 inline constexpr float kProjectSettingsTimeScaleIncrement = 0.25F;
+
+// The numeric settings whose value cell takes a typed number.
+enum class ProjectSettingsNumber : int {
+    FixedStep = 0,
+    GravityX,
+    GravityY,
+    GravityZ,
+    TimeScale,
+    WindowWidth,
+    WindowHeight,
+    FrameRateCap,
+    Count,
+};
+// What a number setting accepts: whole numbers or not, and the bounds a typed value is clamped to.
+struct ProjectSettingsNumberLimits {
+    double minimum;
+    double maximum;
+    bool whole;
+};
 #endif
 
 class ProjectSettingsPanelRenderer {
@@ -103,6 +130,15 @@ public:
         const EditorRenderBackendSettings& renderBackendSettings) const;
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static Hit TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
+    // A number setting's bounds, its current value as text (what the cell shows and what editing starts
+    // from), and the settings with that value replaced - clamped to the bounds and rounded for whole numbers.
+    // The first scene of the build list on view, and the furthest the list can scroll (0 when it all fits).
+    [[nodiscard]] static int FirstVisibleScene(const EditorSceneContext& sceneContext, const ProjectSettingsPanelLayoutRects& rects);
+    [[nodiscard]] static int MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext);
+    [[nodiscard]] static ProjectSettingsNumberLimits NumberLimits(ProjectSettingsNumber number) noexcept;
+    [[nodiscard]] static std::string NumberText(const kb::project::ProjectSettings& settings, ProjectSettingsNumber number);
+    [[nodiscard]] static kb::project::ProjectSettings WithNumber(
+        kb::project::ProjectSettings settings, ProjectSettingsNumber number, double value);
     // The page area when the selected category shows another panel's content (Editor or Plugins),
     // so clicks and the wheel there go to that panel's controller; nothing otherwise.
     [[nodiscard]] static std::optional<RECT> EmbeddedPage(const RECT& content, const EditorSceneContext& sceneContext);

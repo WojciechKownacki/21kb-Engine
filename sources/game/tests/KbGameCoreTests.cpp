@@ -539,6 +539,64 @@ private:
 // ordinary path at MAX_PATH. The publication lock is a raw CreateFileW, so a deep output turned
 // into "already being cooked" - a message that sends the reader looking for another cook that was
 // never running.
+// A package holds the startup scene and the scenes the project lists besides it, and no other scene that
+// nothing references; a listed scene that is not a scene of the project fails the cook by name.
+void RunBuildSceneListCookTest() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "build_scene_list", "Project");
+    {
+        kb::scene::Scene authored;
+        Require(authored.Assets().MountProject(fixture.root), "Build scene list fixture could not be mounted");
+        static_cast<void>(authored.Assets().Discover());
+        static_cast<void>(authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hub_0" }));
+        Require(kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Hub.21kbscene", "Hub"),
+            "Build scene list hub scene could not be saved");
+        static_cast<void>(authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Extra_0" }));
+        Require(kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Extra.21kbscene", "Extra"),
+            "Build scene list extra scene could not be saved");
+    }
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    const auto cook = [&](const kb::project::ProjectSettings& chosen, const std::string& name) {
+        WriteSettings(fixture.root, chosen);
+        std::ostringstream diagnostics;
+        auto result = kb::game::CookProject(
+            kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64",
+                .outputPackPath = fixture.root / (name + ".kbpack") }, diagnostics);
+        return result;
+    };
+    const auto packaged = [&](const std::string& name) {
+        auto pack = std::make_unique<bake::RuntimeAssetPack>();
+        Require(pack->Mount(fixture.root / (name + ".kbpack"), bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+            "A build scene list pack did not mount");
+        return pack;
+    };
+
+    // A project without a list packages the startup scene alone.
+    Require(cook(settings, "alone").succeeded, "The startup scene alone did not cook");
+    {
+        const auto pack = packaged("alone");
+        Require(pack->FindAsset("/Game/Scenes/Main.21kbscene") != nullptr && pack->FindAsset("/Game/Scenes/Hub.21kbscene") == nullptr &&
+                pack->FindAsset("/Game/Scenes/Extra.21kbscene") == nullptr,
+            "A project without a scene list packaged more than its startup scene");
+    }
+    // A listed scene is packaged with it; a scene that is not listed is not.
+    settings.additionalScenes = { "/Game/Scenes/Hub.21kbscene" };
+    Require(cook(settings, "listed").succeeded, "The listed scenes did not cook");
+    {
+        const auto pack = packaged("listed");
+        Require(pack->FindAsset("/Game/Scenes/Main.21kbscene") != nullptr && pack->FindAsset("/Game/Scenes/Hub.21kbscene") != nullptr &&
+                pack->FindAsset("/Game/Scenes/Extra.21kbscene") == nullptr,
+            "A package must hold exactly the startup scene and the listed scenes");
+    }
+    settings.additionalScenes = { "/Game/Scenes/Missing.21kbscene" };
+    const kb::game::ProjectCookResult missing = cook(settings, "missing");
+    Require(!missing.succeeded && Mentions(missing.error, "scene in build") && Mentions(missing.error, "Missing.21kbscene"),
+        "A listed scene that does not exist must fail the cook and be named");
+}
+
 void RunDeepOutputPathCookTest() {
     const Fixture fixture = BuildFixture(TestRoot() / "deep_output_cook", "Project");
     kb::project::ProjectSettings settings;
@@ -2755,6 +2813,7 @@ int main(int argc, char** argv) {
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
     RunTextureReuseCookTests();
+    RunBuildSceneListCookTest();
     RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();
     RunNativeBehaviourPackagingTests();

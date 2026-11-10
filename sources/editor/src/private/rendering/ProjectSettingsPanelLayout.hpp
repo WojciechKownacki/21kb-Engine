@@ -65,6 +65,15 @@ struct ProjectSettingsPanelLayoutRects {
     RECT resizableCheckbox{};
     RECT vsyncCheckbox{};
     RECT frameRateButton[5]{};
+    // The cells that take a typed window width, window height and frame rate limit, right of their presets.
+    RECT windowWidthValue{};
+    RECT windowHeightValue{};
+    RECT frameRateValue{};
+    // Scenes page: a line of explanation, the button that adds a scene, and the area the build list fills
+    // (one row per scene, each with a move up and a remove button).
+    RECT scenesIntro{};
+    RECT sceneAddButton{};
+    RECT sceneList{};
     // Physics page, under the collision layers row: fixed step, gravity X, Y and Z, and time scale are steppers
     // (a minus button, the value, a plus button); the gravity presets sit between the axes and the time scale.
     RECT stepperLabel[5]{};
@@ -82,8 +91,8 @@ public:
 
     // The sidebar groups its categories under captions: Project from the first category,
     // Editor from kEditorGroupStart, Plugins from kPluginsGroupStart.
-    static constexpr int kEditorGroupStart = 5;
-    static constexpr int kPluginsGroupStart = 7;
+    static constexpr int kEditorGroupStart = 6;
+    static constexpr int kPluginsGroupStart = 8;
     // A category row in the left sidebar (index 0 is the first category).
     [[nodiscard]] static RECT CategoryRow(const RECT& sidebar, int index) noexcept;
     // The caption above group 0 (Project), 1 (Editor) or 2 (Plugins).
@@ -107,6 +116,14 @@ public:
     [[nodiscard]] static RECT AntiAliasingModeButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT QualityOptionButton(const ProjectSettingsPanelLayoutRects& rects, int row, int level) noexcept;
+
+    // The build list of the Scenes page: how many rows fit, and the parts of the row at `visibleRow`
+    // (0 is the first row on view): its whole width, the label, and the two buttons.
+    [[nodiscard]] static int SceneRowCapacity(const ProjectSettingsPanelLayoutRects& rects) noexcept;
+    [[nodiscard]] static RECT SceneRow(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    [[nodiscard]] static RECT SceneRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    [[nodiscard]] static RECT SceneMoveUpButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    [[nodiscard]] static RECT SceneRemoveButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
 };
 
 #endif

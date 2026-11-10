@@ -36,7 +36,13 @@ constexpr int kQualityButtonWidth = 72;
 constexpr int kQualityButtonGap = 6;
 constexpr int kButtonGap = 6;
 constexpr int kModeButtonWidth = 110;
-constexpr int kSizeButtonWidth = 96;
+constexpr int kSizeButtonWidth = 88;
+constexpr int kRateButtonWidth = 56;
+constexpr int kNumberCellWidth = 64;
+constexpr int kSceneAddButtonWidth = 180;
+constexpr int kSceneUpButtonWidth = 100;
+constexpr int kSceneRemoveButtonWidth = 110;
+constexpr int kSceneRowPitch = kRowHeight + 4;
 constexpr int kStepperButtonWidth = 32;
 constexpr int kStepperValueWidth = 84;
 constexpr int kGravityPresetButtonWidth = 110;
@@ -160,7 +166,26 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     buttonRow(rects.windowSizeButton, 4, rowTopAt(1), kSizeButtonWidth);
     rects.resizableCheckbox = CheckboxForRow(left, rowTopAt(2));
     rects.vsyncCheckbox = CheckboxForRow(left, rowTopAt(3));
-    buttonRow(rects.frameRateButton, 5, rowTopAt(4), kSizeButtonWidth);
+    // The Off button holds a word that is long in some languages; the rates are numbers.
+    buttonRow(rects.frameRateButton, 1, rowTopAt(4), kSizeButtonWidth + 8);
+    for (int index = 1; index < 5; ++index) {
+        const int buttonLeft = rects.frameRateButton[index - 1].right + kButtonGap;
+        rects.frameRateButton[index] = RECT{ buttonLeft, rowTopAt(4) + 3, buttonLeft + kRateButtonWidth, rowTopAt(4) + kRowHeight - 3 };
+    }
+    const auto numberCell = [&](const RECT& previous, int rowTop) noexcept {
+        const int cellLeft = previous.right + 2 * kButtonGap;
+        return RECT{ cellLeft, rowTop + 3, cellLeft + kNumberCellWidth, rowTop + kRowHeight - 3 };
+    };
+    rects.windowWidthValue = numberCell(rects.windowSizeButton[3], rowTopAt(1));
+    rects.windowHeightValue = RECT{ rects.windowWidthValue.right + kButtonGap, rects.windowWidthValue.top,
+        rects.windowWidthValue.right + kButtonGap + kNumberCellWidth, rects.windowWidthValue.bottom };
+    rects.frameRateValue = numberCell(rects.frameRateButton[4], rowTopAt(4));
+
+    // Scenes page: the explanation, the add button, then the list down to the bottom of the pane.
+    rects.scenesIntro = RECT{ left, rects.sectionHeader.bottom + kRowGap, right, rects.sectionHeader.bottom + kRowGap + kDescriptionHeight };
+    rects.sceneAddButton = RECT{ left, rects.scenesIntro.bottom + kRowGap, left + kSceneAddButtonWidth,
+        rects.scenesIntro.bottom + kRowGap + kOptionHeight };
+    rects.sceneList = RECT{ left, rects.sceneAddButton.bottom + kRowGap * 2, right, std::max(static_cast<int>(rects.sceneAddButton.bottom), static_cast<int>(content.bottom) - kPadding) };
 
     // Physics page rows 1..4 are the steppers, 5 the gravity presets, 6 the time scale.
     constexpr std::array<int, 5> kStepperRows{ 1, 2, 3, 4, 6 };
@@ -286,6 +311,32 @@ RECT ProjectSettingsPanelLayout::QualityOptionButton(const ProjectSettingsPanelL
         return {};
     }
     return rects.qualityButton[row][level];
+}
+
+int ProjectSettingsPanelLayout::SceneRowCapacity(const ProjectSettingsPanelLayoutRects& rects) noexcept {
+    return std::max(0, static_cast<int>(rects.sceneList.bottom - rects.sceneList.top + 4) / kSceneRowPitch);
+}
+
+RECT ProjectSettingsPanelLayout::SceneRow(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const int top = rects.sceneList.top + visibleRow * kSceneRowPitch;
+    return RECT{ rects.sceneList.left, top, rects.sceneList.right, top + kRowHeight };
+}
+
+RECT ProjectSettingsPanelLayout::SceneRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    RECT row = SceneRow(rects, visibleRow);
+    row.right = SceneMoveUpButton(rects, visibleRow).left - kButtonGap;
+    return row;
+}
+
+RECT ProjectSettingsPanelLayout::SceneMoveUpButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = SceneRow(rects, visibleRow);
+    const int right = row.right - kSceneRemoveButtonWidth - kButtonGap;
+    return RECT{ right - kSceneUpButtonWidth, row.top + 3, right, row.bottom - 3 };
+}
+
+RECT ProjectSettingsPanelLayout::SceneRemoveButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = SceneRow(rects, visibleRow);
+    return RECT{ row.right - kSceneRemoveButtonWidth, row.top + 3, row.right, row.bottom - 3 };
 }
 
 RECT ProjectSettingsPanelLayout::MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {

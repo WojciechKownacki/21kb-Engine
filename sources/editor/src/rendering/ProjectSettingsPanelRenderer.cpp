@@ -9,18 +9,21 @@
 #include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
+#include "rendering/gdi/CutTextAudit.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <algorithm>
 #include <optional>
 #include <string_view>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kb::editor {
@@ -56,6 +59,8 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.lighting", "Lighting");
     case ProjectSettingsCategory::Display:
         return EditorText("projectSettings.category.display", "Display");
+    case ProjectSettingsCategory::Scenes:
+        return EditorText("projectSettings.category.scenes", "Scenes");
     case ProjectSettingsCategory::EditorGeneral:
         return EditorText("projectSettings.category.editorGeneral", "General");
     case ProjectSettingsCategory::EditorSaving:
@@ -460,6 +465,9 @@ struct SearchableSetting {
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
     case ProjectSettingsCategory::Display:
         return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit });
+    case ProjectSettingsCategory::Scenes:
+        return { { EditorText("projectSettings.scenesInBuild", "Scenes in Build"),
+            EditorText("projectSettings.scenesInBuildDescription", "Scenes in the game package, in order. The first one starts the game.") } };
     case ProjectSettingsCategory::EditorGeneral:
         return { { EditorText("editorSettings.language", "Language"),
             EditorText("settings.languageDescription", "Language of the editor's menus and panels.") } };
@@ -618,12 +626,22 @@ void DrawLightingPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, cons
     }
 }
 
+// A setting's value in its cell: the number, or - while it is being typed - the text so far with a caret.
+void DrawNumberCell(HDC dc, const RECT& cell, const EditorTheme& theme, const EditorSceneContext& sceneContext, ProjectSettingsNumber number) {
+    const EditorProjectSettingsState& state = sceneContext.ProjectSettings();
+    const bool editing = state.EditedNumber() == static_cast<int>(number);
+    const std::string text = editing ? std::string{ state.NumberEdit().Query() } + "|"
+                                     : ProjectSettingsPanelRenderer::NumberText(sceneContext.ProjectConfiguration(), number);
+    GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.borderPanel));
+    DrawText(dc, GdiDrawing::Inset(cell, 2), text, Color(theme.textPrimary), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 // A value between a minus and a plus button.
-void DrawStepper(HDC dc, const RECT& minus, const RECT& value, const RECT& plus, const EditorTheme& theme, std::string_view text) {
+void DrawStepper(HDC dc, const RECT& minus, const RECT& value, const RECT& plus, const EditorTheme& theme,
+    const EditorSceneContext& sceneContext, ProjectSettingsNumber number) {
     DrawOptionButton(dc, minus, theme, "-", false);
     DrawOptionButton(dc, plus, theme, "+", false);
-    GdiDrawing::DrawSharpFrame(dc, value, Color(theme.chrome), Color(theme.borderPanel));
-    DrawText(dc, GdiDrawing::Inset(value, 2), text, Color(theme.textPrimary), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawNumberCell(dc, value, theme, sceneContext, number);
 }
 
 void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -644,6 +662,8 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
         const std::string text = std::to_string(size.width) + "x" + std::to_string(size.height);
         DrawOptionButton(dc, rects.windowSizeButton[index], theme, text, display.windowWidth == size.width && display.windowHeight == size.height);
     }
+    DrawNumberCell(dc, rects.windowWidthValue, theme, sceneContext, ProjectSettingsNumber::WindowWidth);
+    DrawNumberCell(dc, rects.windowHeightValue, theme, sceneContext, ProjectSettingsNumber::WindowHeight);
 
     DrawSetting(dc, rects, rects.displayLabel[2], SettingLabel(Kind::Resizable), Kind::Resizable, theme, query);
     DrawCheckbox(dc, rects.resizableCheckbox, theme, display.resizable);
@@ -655,6 +675,49 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
         const std::uint32_t rate = kProjectSettingsFrameRates[index];
         const std::string text = rate == 0U ? std::string{ EditorText("projectSettings.msaaOff", "Off") } : std::to_string(rate);
         DrawOptionButton(dc, rects.frameRateButton[index], theme, text, display.frameRateCap == rate);
+    }
+    DrawNumberCell(dc, rects.frameRateValue, theme, sceneContext, ProjectSettingsNumber::FrameRateCap);
+}
+
+// The scenes a package holds, startup scene first: the list, a button that adds a scene, and per scene a move up
+// and a remove button. The list scrolls with the wheel when it is longer than the pane.
+void DrawScenesPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const std::vector<std::string> scenes = kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration());
+    const std::vector<std::string> projectScenes = sceneContext.ProjectScenePaths();
+
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.scenesSection", "SCENES IN BUILD"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, rects.scenesIntro, EditorText("projectSettings.scenesInBuildDescription", "Scenes in the game package, in order. The first one starts the game."),
+        Color(theme.textDisabled), 11);
+    DrawOptionButton(dc, rects.sceneAddButton, theme, EditorText("projectSettings.sceneAdd", "Add scene"), false);
+
+    const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+    const int first = ProjectSettingsPanelRenderer::FirstVisibleScene(sceneContext, rects);
+    for (int visible = 0; visible < capacity && first + visible < static_cast<int>(scenes.size()); ++visible) {
+        const int index = first + visible;
+        const std::string& scene = scenes[static_cast<std::size_t>(index)];
+        const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, row, Color(theme.chrome), Color(theme.borderPanel));
+        // The first scene starts the game; the others show their place in the list.
+        constexpr int kPlaceWidth = 96;
+        const RECT place{ row.left + 10, row.top, row.left + kPlaceWidth, row.bottom };
+        if (index == 0) {
+            const std::string_view startup = EditorText("projectSettings.sceneStartup", "Startup");
+            DrawText(dc, place, startup, Color(theme.accent), EditorDialogStyle::FittingSize(dc, startup, static_cast<int>(place.right - place.left), 12, FW_SEMIBOLD), FW_SEMIBOLD);
+        } else {
+            DrawText(dc, place, "#" + std::to_string(index + 1), Color(theme.textSecondary), 12);
+        }
+        // The scene's path is the project's data, not interface text: a long one ends in an ellipsis.
+        const bool present = std::ranges::find(projectScenes, scene) != projectScenes.end();
+        const RECT label = ProjectSettingsPanelLayout::SceneRowLabel(rects, visible);
+        {
+            const CutTextDataScope data;
+            DrawText(dc, RECT{ row.left + kPlaceWidth, label.top, label.right, label.bottom }, std::filesystem::path{ scene }.replace_extension().generic_string(),
+                Color(present ? theme.textPrimary : theme.textDisabled), 12);
+        }
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneMoveUpButton(rects, visible), theme, EditorText("projectSettings.sceneMoveUp", "Move up"), false, index > 0);
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible), theme, EditorText("projectSettings.sceneRemove", "Remove"), false, scenes.size() > 1U);
     }
 }
 
@@ -677,14 +740,8 @@ void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
             label += stepper == 1 ? " X" : (stepper == 2 ? " Y" : " Z");
         }
         DrawSetting(dc, rects, rects.stepperLabel[stepper], label, kind, theme, query);
-        if (stepper == 0) {
-            std::snprintf(value, sizeof(value), "%u", simulation.fixedStepHz);
-        } else if (stepper == 4) {
-            std::snprintf(value, sizeof(value), "%.2f", static_cast<double>(simulation.timeScale));
-        } else {
-            std::snprintf(value, sizeof(value), "%.2f", static_cast<double>(simulation.gravity[static_cast<std::size_t>(stepper - 1)]));
-        }
-        DrawStepper(dc, rects.stepperButton[stepper][0], rects.stepperValue[stepper], rects.stepperButton[stepper][1], theme, value);
+        DrawStepper(dc, rects.stepperButton[stepper][0], rects.stepperValue[stepper], rects.stepperButton[stepper][1], theme,
+            sceneContext, static_cast<ProjectSettingsNumber>(stepper));
     }
     DrawSetting(dc, rects, rects.gravityPresetLabel, SettingLabel(ProjectSettingsTooltipKind::GravityPreset), ProjectSettingsTooltipKind::GravityPreset, theme, query);
     for (std::size_t preset = 0U; preset < kProjectSettingsGravityPresets.size(); ++preset) {
@@ -737,6 +794,9 @@ void ProjectSettingsPanelRenderer::Paint(
         break;
     case ProjectSettingsCategory::Display:
         DrawDisplayPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Scenes:
+        DrawScenesPage(dc, rects, theme, sceneContext);
         break;
     case ProjectSettingsCategory::EditorGeneral:
     case ProjectSettingsCategory::EditorSaving: {
@@ -838,11 +898,41 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::FrameRateOption, .index = index, .rect = rects.frameRateButton[index] };
             }
         }
+        const std::array<std::pair<const RECT*, ProjectSettingsNumber>, 3U> cells{ {
+            { &rects.windowWidthValue, ProjectSettingsNumber::WindowWidth },
+            { &rects.windowHeightValue, ProjectSettingsNumber::WindowHeight },
+            { &rects.frameRateValue, ProjectSettingsNumber::FrameRateCap } } };
+        for (const auto& [cell, number] : cells) {
+            if (PointInRect(*cell, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(number), .rect = *cell };
+            }
+        }
         const std::array<std::array<RECT, 2U>, 2U> toggles{ { { rects.resizableCheckbox, rects.displayLabel[2] }, { rects.vsyncCheckbox, rects.displayLabel[3] } } };
         for (int index = 0; index < 2; ++index) {
             const std::array<RECT, 2U>& toggle = toggles[static_cast<std::size_t>(index)];
             if (PointInRect(toggle[0], x, y) || PointInRect(toggle[1], x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = index, .rect = toggle[0] };
+            }
+        }
+        return Hit{};
+    }
+
+    if (category == ProjectSettingsCategory::Scenes) {
+        if (PointInRect(rects.sceneAddButton, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::BuildSceneAdd, .index = -1, .rect = rects.sceneAddButton };
+        }
+        const std::size_t count = kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size();
+        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+        const int first = FirstVisibleScene(sceneContext, rects);
+        for (int visible = 0; visible < capacity && first + visible < static_cast<int>(count); ++visible) {
+            const int index = first + visible;
+            const RECT up = ProjectSettingsPanelLayout::SceneMoveUpButton(rects, visible);
+            const RECT remove = ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible);
+            if (index > 0 && PointInRect(up, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::BuildSceneMoveUp, .index = index, .rect = up };
+            }
+            if (count > 1U && PointInRect(remove, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::BuildSceneRemove, .index = index, .rect = remove };
             }
         }
         return Hit{};
@@ -868,6 +958,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 if (PointInRect(button, x, y)) {
                     return Hit{ .kind = ProjectSettingsHitKind::SimulationStepper, .index = stepper * 2 + direction, .rect = button };
                 }
+            }
+            if (PointInRect(rects.stepperValue[stepper], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = stepper, .rect = rects.stepperValue[stepper] };
             }
         }
         for (int index = 0; index < 3; ++index) {
@@ -901,6 +994,101 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{ .kind = ProjectSettingsHitKind::EnabledCheckbox, .index = -1, .rect = rects.enabledCheckbox };
     }
     return Hit{};
+}
+
+int ProjectSettingsPanelRenderer::FirstVisibleScene(const EditorSceneContext& sceneContext, const ProjectSettingsPanelLayoutRects& rects) {
+    const int count = static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
+    const int last = std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(rects));
+    return std::clamp(sceneContext.ProjectSettings().FirstVisibleScene(), 0, last);
+}
+
+int ProjectSettingsPanelRenderer::MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext) {
+    const int count = static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
+    return std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(ProjectSettingsPanelLayout::Resolve(content)));
+}
+
+ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSettingsNumber number) noexcept {
+    switch (number) {
+    case ProjectSettingsNumber::FixedStep:
+        return { static_cast<double>(kb::project::kProjectFixedStepHzMin), static_cast<double>(kb::project::kProjectFixedStepHzMax), true };
+    case ProjectSettingsNumber::GravityX:
+    case ProjectSettingsNumber::GravityY:
+    case ProjectSettingsNumber::GravityZ:
+        return { -static_cast<double>(kb::project::kProjectGravityLimit), static_cast<double>(kb::project::kProjectGravityLimit), false };
+    case ProjectSettingsNumber::TimeScale:
+        return { 0.0, static_cast<double>(kb::project::kProjectTimeScaleMax), false };
+    case ProjectSettingsNumber::WindowWidth:
+    case ProjectSettingsNumber::WindowHeight:
+        return { static_cast<double>(kb::project::kProjectWindowExtentMin), static_cast<double>(kb::project::kProjectWindowExtentMax), true };
+    case ProjectSettingsNumber::FrameRateCap:
+    case ProjectSettingsNumber::Count:
+    default:
+        return { 0.0, static_cast<double>(kb::project::kProjectFrameRateCapMax), true };
+    }
+}
+
+std::string ProjectSettingsPanelRenderer::NumberText(const kb::project::ProjectSettings& settings, ProjectSettingsNumber number) {
+    const kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    char text[32]{};
+    switch (number) {
+    case ProjectSettingsNumber::FixedStep:
+        std::snprintf(text, sizeof(text), "%u", simulation.fixedStepHz);
+        break;
+    case ProjectSettingsNumber::GravityX:
+    case ProjectSettingsNumber::GravityY:
+    case ProjectSettingsNumber::GravityZ:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(simulation.gravity[static_cast<std::size_t>(number) - 1U]));
+        break;
+    case ProjectSettingsNumber::TimeScale:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(simulation.timeScale));
+        break;
+    case ProjectSettingsNumber::WindowWidth:
+        std::snprintf(text, sizeof(text), "%u", settings.display.windowWidth);
+        break;
+    case ProjectSettingsNumber::WindowHeight:
+        std::snprintf(text, sizeof(text), "%u", settings.display.windowHeight);
+        break;
+    case ProjectSettingsNumber::FrameRateCap:
+        std::snprintf(text, sizeof(text), "%u", settings.display.frameRateCap);
+        break;
+    case ProjectSettingsNumber::Count:
+    default:
+        break;
+    }
+    return text;
+}
+
+kb::project::ProjectSettings ProjectSettingsPanelRenderer::WithNumber(
+    kb::project::ProjectSettings settings, ProjectSettingsNumber number, double value) {
+    const ProjectSettingsNumberLimits limits = NumberLimits(number);
+    value = std::clamp(limits.whole ? std::round(value) : value, limits.minimum, limits.maximum);
+    kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    switch (number) {
+    case ProjectSettingsNumber::FixedStep:
+        simulation.fixedStepHz = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::GravityX:
+    case ProjectSettingsNumber::GravityY:
+    case ProjectSettingsNumber::GravityZ:
+        simulation.gravity[static_cast<std::size_t>(number) - 1U] = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::TimeScale:
+        simulation.timeScale = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::WindowWidth:
+        settings.display.windowWidth = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::WindowHeight:
+        settings.display.windowHeight = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::FrameRateCap:
+        settings.display.frameRateCap = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::Count:
+    default:
+        break;
+    }
+    return settings;
 }
 
 std::optional<RECT> ProjectSettingsPanelRenderer::EmbeddedPage(const RECT& content, const EditorSceneContext& sceneContext) {

@@ -22,7 +22,13 @@ public:
 
     // Returns true when the click mutated a setting and the panel should repaint.
     [[nodiscard]] bool HandlePointerDown(const RECT& content, int x, int y);
-    [[nodiscard]] bool HandlePointerDown(const RECT& content, int x, int y, EditorRenderBackendSettings& renderBackendSettings);
+    // `owner` hosts the menu the Add scene button opens; without one that button does nothing.
+    [[nodiscard]] bool HandlePointerDown(const RECT& content, int x, int y, EditorRenderBackendSettings& renderBackendSettings, HWND owner = nullptr);
+
+    // Ends the typing of a number into a setting: the typed value is applied (clamped to the setting's bounds,
+    // and dropped when it is not a number) and the cell goes back to showing the setting. False when nothing was
+    // being typed.
+    static bool CommitNumberEdit(EditorSceneContext& sceneContext);
 
     // Hover tracking for the open dropdown list. Returns true when the hovered
     // option changed (so the caller can repaint).

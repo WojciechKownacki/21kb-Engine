@@ -724,6 +724,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
     }
 
+    scene.Runtime().ApplyProjectSimulation(simulation);
     kb::script::ScriptRuntimeHost host{ scene };
     RegisterStdoutLog(host, io.out);
     if (!host.Succeeded()) {
@@ -737,8 +738,6 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         io.err << "error: script scene system could not be installed\n";
         return 1;
     }
-    // After the script system is installed: it sets the scene's fixed step from its own default when it is created.
-    scene.Runtime().ApplyProjectSimulation(simulation);
     // The script heap is the one kind of memory only this host can read; the engine reads the instances and the assets itself.
     std::optional<kb::world::WorldPartitionRuntime> worlds;
     if (worldMemoryReport != nullptr) {

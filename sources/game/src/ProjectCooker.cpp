@@ -1665,8 +1665,16 @@ struct LinkedNativeModule {
         return true;
     };
 
-    if (!addRoot("default map", settings.defaultMap, true, "Scene") ||
-        (settings.inputEnabled &&
+    if (!addRoot("default map", settings.defaultMap, true, "Scene")) {
+        return false;
+    }
+    // The scenes the project lists besides the startup scene are packaged as well.
+    for (const std::string& scene : settings.additionalScenes) {
+        if (!addRoot("scene in build", scene, true, "Scene")) {
+            return false;
+        }
+    }
+    if ((settings.inputEnabled &&
             !addRoot("input mapping context", settings.inputMappingContext, false, "InputMappingContext")) ||
         !addRoot("physics layers asset", settings.physicsLayersAsset, false, "PhysicsLayers")) {
         return false;

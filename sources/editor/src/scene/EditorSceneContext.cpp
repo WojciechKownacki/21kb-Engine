@@ -1967,6 +1967,7 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
         || IsMaterialEditorFindFocused()
         || console_.Filter().IsFocused()
         || projectSettings_.Search().IsFocused()
+        || projectSettings_.IsNumberEditing()
         || agentPanel_.InputFocused();
 }
 
@@ -3237,6 +3238,16 @@ bool EditorSceneContext::SetProjectDisplay(const kb::project::ProjectDisplaySett
         return false;
     }
     projectConfig_.display = display;
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectBuildScenes(std::vector<std::string> scenes) {
+    kb::project::ProjectSettings next = projectConfig_;
+    kb::project::SetProjectBuildScenes(next, std::move(scenes));
+    if (next.defaultMap == projectConfig_.defaultMap && next.additionalScenes == projectConfig_.additionalScenes) {
+        return false;
+    }
+    projectConfig_ = std::move(next);
     return SaveProjectConfiguration();
 }
 

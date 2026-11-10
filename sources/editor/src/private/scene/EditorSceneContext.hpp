@@ -1317,6 +1317,8 @@ public:
     [[nodiscard]] bool SetProjectDisplay(const kb::project::ProjectDisplaySettings& display);
     // The fixed step, gravity and time scale; true when they changed and were saved. The open scene takes them at once.
     [[nodiscard]] bool SetProjectSimulation(const kb::project::ProjectSimulationSettings& simulation);
+    // The scenes the package holds, in order, the first being the startup scene; true when the list changed and was saved.
+    [[nodiscard]] bool SetProjectBuildScenes(std::vector<std::string> scenes);
     [[nodiscard]] bool SetProjectPhysicsLayersAsset(std::string virtualPath);
     bool CloseProjectSettingsDropdowns() noexcept;
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;

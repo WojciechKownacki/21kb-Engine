@@ -2,13 +2,17 @@
 
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -185,6 +189,25 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     }
     case ProjectSettingsHitKind::GravityPresetOption:
         return ProjectSettingsTooltipKind::GravityPreset;
+    case ProjectSettingsHitKind::NumberField:
+        switch (static_cast<ProjectSettingsNumber>(hit.index)) {
+        case ProjectSettingsNumber::FixedStep:
+            return ProjectSettingsTooltipKind::FixedStep;
+        case ProjectSettingsNumber::GravityX:
+        case ProjectSettingsNumber::GravityY:
+        case ProjectSettingsNumber::GravityZ:
+            return ProjectSettingsTooltipKind::Gravity;
+        case ProjectSettingsNumber::TimeScale:
+            return ProjectSettingsTooltipKind::TimeScale;
+        case ProjectSettingsNumber::WindowWidth:
+        case ProjectSettingsNumber::WindowHeight:
+            return ProjectSettingsTooltipKind::WindowSize;
+        case ProjectSettingsNumber::FrameRateCap:
+            return ProjectSettingsTooltipKind::FrameRateLimit;
+        case ProjectSettingsNumber::Count:
+        default:
+            return ProjectSettingsTooltipKind::None;
+        }
     case ProjectSettingsHitKind::MappingContextField:
         return ProjectSettingsTooltipKind::MappingContext;
     case ProjectSettingsHitKind::PhysicsLayersField:
@@ -207,9 +230,59 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::CategoryItem:
     case ProjectSettingsHitKind::MappingContextOption:
     case ProjectSettingsHitKind::PhysicsLayersOption:
+    case ProjectSettingsHitKind::SearchField:
+    case ProjectSettingsHitKind::BuildSceneMoveUp:
+    case ProjectSettingsHitKind::BuildSceneRemove:
+    case ProjectSettingsHitKind::BuildSceneAdd:
     default:
         return ProjectSettingsTooltipKind::None;
     }
+}
+
+// The number a person typed: digits with an optional minus and a decimal point or comma; nothing else.
+[[nodiscard]] std::optional<double> ParseTypedNumber(std::string text) {
+    std::ranges::replace(text, ',', '.');
+    double value = 0.0;
+    const char* const end = text.data() + text.size();
+    const std::from_chars_result parsed = std::from_chars(text.data(), end, value);
+    if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != end || !std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+// Offers the project's scenes that are not in the build list yet and appends the chosen one.
+[[nodiscard]] bool AddSceneFromMenu(EditorSceneContext& sceneContext, HWND owner) {
+    if (owner == nullptr) {
+        return false;
+    }
+    const std::vector<std::string> listed = kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration());
+    std::vector<std::string> choices;
+    for (const std::string& scene : sceneContext.ProjectScenePaths()) {
+        if (std::ranges::find(listed, scene) == listed.end()) {
+            choices.push_back(scene);
+        }
+    }
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) {
+        return false;
+    }
+    if (choices.empty()) {
+        AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0U, EditorText("projectSettings.sceneNoneToAdd", "Every scene of this project is in the build").data());
+    }
+    for (std::size_t index = 0; index < choices.size(); ++index) {
+        AppendMenuUtf8(menu, MF_STRING, static_cast<UINT_PTR>(index + 1U), choices[index].c_str());
+    }
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY, cursor.x, cursor.y, 0, owner, nullptr);
+    DestroyMenu(menu);
+    if (chosen <= 0 || static_cast<std::size_t>(chosen) > choices.size()) {
+        return false;
+    }
+    std::vector<std::string> next = listed;
+    next.push_back(choices[static_cast<std::size_t>(chosen - 1)]);
+    return sceneContext.SetProjectBuildScenes(std::move(next));
 }
 
 [[nodiscard]] bool HandleProjectSettingsPointerDown(
@@ -217,12 +290,43 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     EditorRenderBackendSettings* renderBackendSettings,
     const RECT& content,
     int x,
-    int y) {
+    int y,
+    HWND owner) {
     const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(content, sceneContext, x, y);
     // A click in the search box starts typing there; anywhere else in the panel ends it.
     sceneContext.ProjectSettings().Search().Focus(hit.kind == ProjectSettingsHitKind::SearchField);
+    // A click outside the number being typed applies it first.
+    const EditorProjectSettingsState& settingsState = sceneContext.ProjectSettings();
+    const bool committed = settingsState.IsNumberEditing() &&
+        (hit.kind != ProjectSettingsHitKind::NumberField || hit.index != settingsState.EditedNumber()) &&
+        EditorProjectSettingsPointerController::CommitNumberEdit(sceneContext);
     switch (hit.kind) {
     case ProjectSettingsHitKind::SearchField:
+        return true;
+    case ProjectSettingsHitKind::NumberField: {
+        // A click on a label cell only answers the tooltip.
+        if (hit.index >= 0 && !sceneContext.ProjectSettings().IsNumberEditing()) {
+            sceneContext.ProjectSettings().BeginNumberEdit(hit.index,
+                ProjectSettingsPanelRenderer::NumberText(sceneContext.ProjectConfiguration(), static_cast<ProjectSettingsNumber>(hit.index)));
+        }
+        return true;
+    }
+    case ProjectSettingsHitKind::BuildSceneMoveUp:
+    case ProjectSettingsHitKind::BuildSceneRemove: {
+        std::vector<std::string> scenes = kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration());
+        const auto index = static_cast<std::size_t>(std::max(hit.index, 0));
+        if (index < scenes.size()) {
+            if (hit.kind == ProjectSettingsHitKind::BuildSceneRemove) {
+                scenes.erase(scenes.begin() + static_cast<std::ptrdiff_t>(index));
+            } else if (index > 0U) {
+                std::swap(scenes[index], scenes[index - 1U]);
+            }
+            static_cast<void>(sceneContext.SetProjectBuildScenes(std::move(scenes)));
+        }
+        return true;
+    }
+    case ProjectSettingsHitKind::BuildSceneAdd:
+        static_cast<void>(AddSceneFromMenu(sceneContext, owner));
         return true;
     case ProjectSettingsHitKind::CategoryItem:
         // SelectCategory also closes any open dropdown; always repaint to show the
@@ -401,18 +505,39 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::None:
     default:
         // A click anywhere else in the panel dismisses an open dropdown.
-        return sceneContext.CloseProjectSettingsDropdowns();
+        return sceneContext.CloseProjectSettingsDropdowns() || committed;
     }
 }
 
 } // namespace
 
 bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& content, int x, int y) {
-    return HandleProjectSettingsPointerDown(sceneContext_, nullptr, content, x, y);
+    return HandleProjectSettingsPointerDown(sceneContext_, nullptr, content, x, y, nullptr);
 }
 
-bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& content, int x, int y, EditorRenderBackendSettings& renderBackendSettings) {
-    return HandleProjectSettingsPointerDown(sceneContext_, &renderBackendSettings, content, x, y);
+bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& content, int x, int y, EditorRenderBackendSettings& renderBackendSettings, HWND owner) {
+    return HandleProjectSettingsPointerDown(sceneContext_, &renderBackendSettings, content, x, y, owner);
+}
+
+bool EditorProjectSettingsPointerController::CommitNumberEdit(EditorSceneContext& sceneContext) {
+    EditorProjectSettingsState& state = sceneContext.ProjectSettings();
+    if (!state.IsNumberEditing()) {
+        return false;
+    }
+    const auto number = static_cast<ProjectSettingsNumber>(state.EditedNumber());
+    const std::string text{ state.NumberEdit().Query() };
+    state.EndNumberEdit();
+    if (const std::optional<double> value = ParseTypedNumber(text); value.has_value()) {
+        const kb::project::ProjectSettings& current = sceneContext.ProjectConfiguration();
+        const kb::project::ProjectSettings next = ProjectSettingsPanelRenderer::WithNumber(current, number, *value);
+        if (next.display != current.display) {
+            static_cast<void>(sceneContext.SetProjectDisplay(next.display));
+        }
+        if (next.simulation != current.simulation) {
+            static_cast<void>(sceneContext.SetProjectSimulation(next.simulation));
+        }
+    }
+    return true;
 }
 
 bool EditorProjectSettingsPointerController::UpdateHover(const RECT& content, int x, int y) {
