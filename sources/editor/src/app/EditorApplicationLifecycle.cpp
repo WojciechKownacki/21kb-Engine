@@ -3,6 +3,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorApplicationWindowProc.hpp"
+#include "app/EditorStartupProgress.hpp"
 #include "app/EditorWorkspaceSession.hpp"
 #include "docking/EditorFloatingWindowSync.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -109,6 +110,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
         }
     }
 
+    EditorStartupProgress::Begin(EditorStartupStage::Interface);
     if (!state.windowClasses.Register(state.instance, &EditorApplicationWindowProc::Handle)) {
         return false;
     }
@@ -155,8 +157,13 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     // now, and creating a window a panel already has is a no-op.
     EditorFloatingWindowSync::Reconcile(state.dockModel, state.floatingWindows);
 
+    // The renderer starts, and loads its shaders, before the window is shown rather than at its first frame.
+    EditorStartupProgress::Begin(EditorStartupStage::Renderer);
+    state.sceneViewport.PrepareRenderer();
+
     ShowWindow(state.window, SW_SHOWMAXIMIZED);
     UpdateWindow(state.window);
+    EditorStartupProgress::Finish();
 
     state.running = true;
     return true;

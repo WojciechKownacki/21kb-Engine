@@ -112,6 +112,9 @@ public:
     void SetGraphShaderCacheRoot(std::string root);
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
     [[nodiscard]] bool RendererInitialized() const noexcept;
+    // Starts the renderer now instead of at the first frame, so its shaders are loaded before the
+    // editor window is shown; the loads are reported to EditorStartupProgress.
+    void PrepareRenderer();
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;

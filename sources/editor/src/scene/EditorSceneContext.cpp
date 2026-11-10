@@ -12,6 +12,7 @@
 #include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
+#include "app/EditorStartupProgress.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -346,6 +347,22 @@ void LogAssetImportReport(EditorConsoleState& console, const kb::assets::AssetIm
     }
 }
 
+// The two longest steps of the member initialisation below tell the startup screen where they are.
+[[nodiscard]] EditorProjectBootstrapResult BootstrapProjectReportingProgress() {
+    EditorStartupProgress::Begin(EditorStartupStage::Project);
+    return EditorProjectBootstrap::BootstrapDefaultProject();
+}
+
+[[nodiscard]] std::unique_ptr<kb::scene::Scene> CreateDocumentSceneReportingProgress(
+    const kb::project::ProjectDescriptor& project) {
+    EditorStartupProgress::Begin(EditorStartupStage::Modules);
+    EditorStartupProgress::Note(EditorStartupProgress::PluginsText(static_cast<std::size_t>(std::count_if(
+        project.plugins.begin(), project.plugins.end(), [](const kb::project::ProjectPluginReference& plugin) {
+            return plugin.enabled;
+        }))));
+    return std::make_unique<kb::scene::Scene>(project);
+}
+
 void ApplySavingPreferences(
     const EditorSavingPreferences& preferences,
     EditorAutosaveState& autosave) noexcept {
@@ -357,13 +374,13 @@ void ApplySavingPreferences(
 EditorSceneContext::EditorSceneContext()
     // Load the project descriptor first, then construct the scene from it so the
     // scene's engine module host honours the project's enabled/disabled module set.
-    : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
+    : projectBootstrap_(BootstrapProjectReportingProgress())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectConfig_(projectBootstrap_.settings)
     // A project that failed to load has no file to write back to: saving the empty fallback
     // descriptor over it would erase its plugins and settings.
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : std::filesystem::path{})
-    , documentScene_(std::make_unique<kb::scene::Scene>(project_))
+    , documentScene_(CreateDocumentSceneReportingProgress(project_))
     , scene_(documentScene_.get())
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
@@ -399,6 +416,7 @@ EditorSceneContext::EditorSceneContext()
         console_.Error("Project", projectBootstrap_.error.empty() ? "Project descriptor bootstrap failed." : projectBootstrap_.error);
     }
 
+    EditorStartupProgress::Begin(EditorStartupStage::Assets);
     if (scene_->Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
         console_.Info("Project", "Mounted project assets.");
     } else {
@@ -427,6 +445,11 @@ EditorSceneContext::EditorSceneContext()
             currentScenePath_ = *last;
             openedAs = "last scene";
         }
+    }
+    EditorStartupProgress::Begin(EditorStartupStage::Scene);
+    {
+        const std::u8string sceneName = currentScenePath_.stem().u8string();
+        EditorStartupProgress::Note(std::string{ sceneName.begin(), sceneName.end() });
     }
     kb::scene::SceneDocumentLoadResult loaded;
     const bool sceneFileExists = !currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error;

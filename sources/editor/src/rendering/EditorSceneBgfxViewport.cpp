@@ -3,6 +3,9 @@
 
 #if defined(_WIN32)
 #include "engine/scene/Scene.hpp"
+#include "app/EditorStartupProgress.hpp"
+#include "kb/render/ShaderLoader.hpp"
+#include "kb/render/ShaderManifest.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorBgfxBackendSelector.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -18,7 +21,10 @@
 #include <cstdlib>
 #include <ranges>
 #include <string>
+#include <mutex>
 #include <span>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::editor {
@@ -28,6 +34,29 @@ constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
 constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
 constexpr std::uint32_t kMaxEditorViewportIndex =
     (render::ViewId::DetachedViewportLimit - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
+
+// The distinct shaders the renderer has loaded while the editor warms it up, reported to the startup screen.
+struct ShaderLoadReport {
+    std::mutex mutex;
+    std::unordered_set<std::string> seen;
+    std::size_t total = 0U;
+    std::thread::id thread;
+};
+
+ShaderLoadReport& ShaderReport() {
+    static ShaderLoadReport report;
+    return report;
+}
+
+void ReportShaderLoad(const char* name) {
+    ShaderLoadReport& report = ShaderReport();
+    const std::lock_guard<std::mutex> lock{ report.mutex };
+    // Only the thread that began the startup reports its progress.
+    if (name == nullptr || std::this_thread::get_id() != report.thread || !report.seen.emplace(name).second) {
+        return;
+    }
+    EditorStartupProgress::Shaders(report.seen.size(), std::max(report.total, report.seen.size()), name);
+}
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return EditorSceneViewportGeometry::RectWidth(rect);
@@ -271,6 +300,22 @@ void EditorSceneBgfxViewport::SetGraphShaderCacheRoot(std::string root) {
 
 bool EditorSceneBgfxViewport::RendererInitialized() const noexcept {
     return renderer_.IsInitialized();
+}
+
+void EditorSceneBgfxViewport::PrepareRenderer() {
+    ShaderLoadReport& report = ShaderReport();
+    {
+        const std::lock_guard<std::mutex> lock{ report.mutex };
+        report.seen.clear();
+        // The manifest lists the shaders the editor can load; a few may stay unloaded.
+        report.total = render::RequiredPackagedShaderNames(~render::ShaderRuntimeFeatureMask{ 0U }).size();
+        report.thread = std::this_thread::get_id();
+    }
+    render::ShaderLoader::SetLoadObserver(&ReportShaderLoad);
+    // A renderer that cannot start is reported by the first frame, which tries again.
+    const bool started = EnsureRenderer();
+    render::ShaderLoader::SetLoadObserver(nullptr);
+    static_cast<void>(started);
 }
 
 const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {

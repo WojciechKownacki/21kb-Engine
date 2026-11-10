@@ -24,6 +24,7 @@
 namespace kb::editor {
 
 class EditorSceneContext;
+struct EditorStartupSnapshot;
 
 // Deterministic, windowless driver for the production editor interaction
 // paths. It resolves controls from the live Inspector layout and sends the
@@ -206,6 +207,8 @@ public:
     [[nodiscard]] bool CaptureProfilerWindow(std::string_view checkpoint, int width, int height);
     [[nodiscard]] bool ClickProfilerWindow(int x, int y, int width, int height);
     [[nodiscard]] bool CaptureProfilerOverlay(std::string_view checkpoint, std::string_view sceneCheckpoint);
+    // The startup screen in the state `snapshot`, painted for `dpi` into <checkpoint>.bmp.
+    [[nodiscard]] bool CaptureStartupSplash(std::string_view checkpoint, int dpi, const EditorStartupSnapshot& snapshot);
     [[nodiscard]] bool CaptureTimelinePreview(std::string_view checkpoint);
     [[nodiscard]] bool CaptureBlendSpace2DPreview(std::string_view checkpoint);
     // The Material Editor's preview of the open material, presented as the panel presents it.

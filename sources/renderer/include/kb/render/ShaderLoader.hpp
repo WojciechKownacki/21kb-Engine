@@ -22,6 +22,11 @@ public:
     static void ClearBinaryProvider(const std::shared_ptr<const ShaderBinaryProvider>& provider) noexcept;
     [[nodiscard]] static bool HasBinaryProvider() noexcept;
 
+    // Called with the name of every shader load, on the loading thread, while set. A startup screen
+    // follows renderer start-up with it. Pass nullptr to stop.
+    using LoadObserver = void (*)(const char* name);
+    static void SetLoadObserver(LoadObserver observer) noexcept;
+
     [[nodiscard]] static bgfx::ShaderHandle Load(const char* name);
     [[nodiscard]] static bgfx::ProgramHandle LoadProgram(const char* vertexShader, const char* fragmentShader);
     [[nodiscard]] static bgfx::ProgramHandle LoadComputeProgram(const char* computeShader);

@@ -23,6 +23,7 @@ void RunEditorSettingsTests();
 void RunEditorProfilerTests();
 void RunEditorProfilerPanelTests();
 void RunEditorLocalizationTests();
+void RunEditorStartupProgressTests();
 void RunEditorInspectorTests();
 void RunEditorMaterialAssetAuthoringTests();
 void RunEditorMaterialGraphCanvasTests();

@@ -33,6 +33,8 @@
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "profiler/ProfilerOverlayLayout.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
+#include "app/EditorStartupProgress.hpp"
+#include "rendering/EditorSplashPainter.hpp"
 #include "rendering/ProfilerSelectionOverlayWindow.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
@@ -3924,6 +3926,16 @@ bool EditorHeadlessAutomation::CaptureProfilerWindow(std::string_view checkpoint
         window.PaintInto(memory, RECT{ 0, 0, width, height }, MakeEditorDarkTheme(), context_);
     });
     Trace("capture_profiler_window", saved, path.filename().string());
+    return saved;
+}
+
+bool EditorHeadlessAutomation::CaptureStartupSplash(std::string_view checkpoint, int dpi, const EditorStartupSnapshot& snapshot) {
+    const EditorSplashLayout layout = EditorSplashPainter::Layout(dpi);
+    const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");
+    // The layout is already in pixels at `dpi`, so the bitmap is made at 96 and the painter is not scaled.
+    const bool saved = CaptureBitmap(path, ScreenshotDimensions{ layout.client.right, layout.client.bottom, 96 },
+        [&](HDC memory) { EditorSplashPainter::Paint(memory, layout, MakeEditorDarkTheme(), snapshot); });
+    Trace("capture_startup_splash", saved, path.filename().string());
     return saved;
 }
 

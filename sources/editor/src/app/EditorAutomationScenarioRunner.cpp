@@ -8,6 +8,7 @@
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
+#include "app/EditorStartupSplashChecks.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
 #include "rendering/GameplayGraphEditorPanel.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
@@ -6122,6 +6123,12 @@ ReadScriptValue(
             || *x < 0 || *y < 0 || *x >= *width || *y >= *height) return {false, "invalid mixer panel pointer geometry"};
         return {state.context.AudioMixerPanelPointer({0, 0, static_cast<int>(*width), static_cast<int>(*height)},
             static_cast<int>(*x), static_cast<int>(*y)), "audio mixer panel pointer"};
+    }
+
+    if (*operation == "check_startup_splash") {
+        // The startup screen painted at 0 %, about 50 % and 100 % and checked at two DPI and in every language.
+        const auto result = EditorStartupSplashChecks::Run(state.automation);
+        return { result.first, result.second };
     }
 
     if (*operation == "capture") {

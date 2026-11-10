@@ -8,6 +8,10 @@ add_executable(kb_editor WIN32
     src/authoring/EditorPythonRuntime.cpp
     src/extensions/EditorExtensionHost.cpp
     src/app/EditorApplicationLifecycle.cpp
+    src/app/EditorStartupProgress.cpp
+    src/app/EditorStartupSplashChecks.cpp
+    src/rendering/EditorSplashPainter.cpp
+    src/platform/win32/EditorSplashWindow.cpp
     src/app/EditorWorkspaceSession.cpp
     src/app/EditorCrashBreadcrumbs.cpp
     src/app/EditorApplicationMessageDispatcher.cpp
@@ -321,6 +325,10 @@ add_executable(kb_editor WIN32
     src/private/console/EditorConsoleLayout.hpp
     src/private/console/EditorConsoleState.hpp
     src/private/app/EditorApplicationLifecycle.hpp
+    src/private/app/EditorStartupProgress.hpp
+    src/private/app/EditorStartupSplashChecks.hpp
+    src/private/rendering/EditorSplashPainter.hpp
+    src/private/platform/win32/EditorSplashWindow.hpp
     src/private/app/EditorWorkspaceSession.hpp
     src/private/app/EditorApplicationMessageDispatcher.hpp
     src/private/app/EditorApplicationMessageLoop.hpp
@@ -1411,6 +1419,8 @@ if(BUILD_TESTING)
         tests/EditorProfilerTests.cpp
         tests/EditorProfilerPanelTests.cpp
         tests/EditorLocalizationTests.cpp
+        tests/EditorStartupProgressTests.cpp
+        src/app/EditorStartupProgress.cpp
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorMaterialGraphCanvasTests.cpp
@@ -2316,6 +2326,14 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-ProfilerLanguages")
     set_tests_properties(kb_editor_profiler_languages_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;profiler" TIMEOUT 300)
+    # The startup screen painted without a window: layout at two DPI, the bar, and every language's text.
+    add_test(NAME kb_editor_startup_splash_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessStartupSplashScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-StartupSplash")
+    set_tests_properties(kb_editor_startup_splash_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;localization" TIMEOUT 180)
     add_test(NAME kb_editor_workspace_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorkspaceScenario.json"

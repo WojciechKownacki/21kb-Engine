@@ -82,6 +82,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorProfilerTests();
     kb::editor::tests::RunEditorProfilerPanelTests();
     kb::editor::tests::RunEditorLocalizationTests();
+    kb::editor::tests::RunEditorStartupProgressTests();
     kb::editor::tests::RunEditorInspectorTests();
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();
     kb::editor::tests::RunScriptEditorTests();
