@@ -19,7 +19,7 @@ namespace kb::editor {
 // Everything in the Profiler panel that answers a click.
 enum class ProfilerPanelAction : std::uint8_t {
     Tab, Record, Pause, Clear, FirstFrame, PreviousFrame, NextFrame, Live, Snapshot, WhatToShow,
-    AreasAll, AreasNone, CountersAll, CountersNone, Area, LeftCounter,
+    AreasAll, AreasNone, CountersAll, CountersNone, Area,
     PickFrame,
     CounterPanel, CounterScene, CounterBudget, CounterAlarm,
     Severity, Category, ShowIgnored, Finding, ShowInMeasurements, IgnoreFinding,
@@ -53,9 +53,13 @@ struct ProfilerChartRow {
 struct ProfilerPanelGeometry {
     RECT content{};
     RECT tabs{}, toolbar{}, status{};
+    // The overview under the toolbar: the verdict in plain words and the big numbers. One line
+    // high when the panel is short, empty when there is no room for it at all.
+    RECT health{};
+    bool healthCompact = false;
     RECT left{}, center{}, right{};
-    // The left pane of the first two tabs: the areas, then the counters.
-    RECT areasHeader{}, areasList{}, countersHeader{}, countersList{};
+    // The left pane of the first two tabs: the areas to measure, and a word on what checking one does.
+    RECT areasHeader{}, areasList{}, areasHint{};
     // Measurements.
     RECT ruler{}, hierarchyTabs{}, hierarchyHeader{}, hierarchyRows{};
     std::vector<ProfilerChartRow> charts;
@@ -64,10 +68,16 @@ struct ProfilerPanelGeometry {
 
     static constexpr int kRowHeight = 22;
     static constexpr int kCounterRowHeight = 24;
-    static constexpr int kFindingHeight = 48;
-    static constexpr int kLeftWidth = 250;
+    // A headline and two lines of what it means.
+    static constexpr int kFindingHeight = 58;
+    static constexpr int kLeftWidth = 220;
+    static constexpr int kHealthHeight = 60;
+    static constexpr int kHealthCompactHeight = 30;
     static constexpr int kRightWidth = 272;
     static constexpr int kLabelWidth = 190;
+    // A chart too low for its reading to sit under its name has both on one line, which takes more room.
+    static constexpr int kSqueezedLabelWidth = 250;
+    static constexpr int kSqueezedChartHeight = 44;
 };
 
 [[nodiscard]] ProfilerPanelGeometry ResolveProfilerPanelGeometry(const RECT& content, const ProfilerPanelState& state, const ProfilerSelection& selection);

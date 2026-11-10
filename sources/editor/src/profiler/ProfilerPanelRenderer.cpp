@@ -3,9 +3,11 @@
 
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
+#include "profiler/ProfilerHealth.hpp"
 #include "profiler/ProfilerPalette.hpp"
 #include "profiler/ProfilerPanelLayout.hpp"
 #include "profiler/ProfilerText.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
 
@@ -137,6 +139,7 @@ public:
         const Canvas& c = canvas_;
         c.Fill(geometry_.content, theme_.panel);
         PaintStrips();
+        PaintHealth();
         if (profiler_.Panel().tab == ProfilerPanelTab::Diagnosis) {
             PaintDiagnosisLeft();
             PaintDiagnosis();
@@ -214,6 +217,86 @@ private:
         }
     }
 
+    [[nodiscard]] EditorColor HealthTone(ProfilerHealthLevel level) const {
+        switch (level) {
+        case ProfilerHealthLevel::Smooth: return palette::kGreen;
+        case ProfilerHealthLevel::Hitches:
+        case ProfilerHealthLevel::BelowTarget: return palette::kWarning;
+        case ProfilerHealthLevel::TooSlow: return palette::kAlarm;
+        case ProfilerHealthLevel::Waiting:
+        default: return theme_.textSecondary;
+        }
+    }
+
+    // The overview: how the game runs in plain words, then the numbers most people look for.
+    // The numbers are laid out from the right, each as wide as its own words in the editor's
+    // language; one that would crowd the verdict is left out rather than cut.
+    void PaintHealth() const {
+        const RECT& strip = geometry_.health;
+        if (strip.bottom <= strip.top) return;
+        const Canvas& c = canvas_;
+        const ProfilerHealth health = BuildProfilerHealth(registry_, selection_);
+        const EditorColor tone = HealthTone(health.level);
+        const bool compact = geometry_.healthCompact;
+        c.Fill(strip, theme_.panel);
+        c.Fill(Rect(strip.left, strip.bottom - 1, strip.right, strip.bottom), theme_.borderChrome);
+        c.Fill(Rect(strip.left, strip.top, strip.left + 3, strip.bottom - 1), tone);
+
+        const int headlineSize = compact ? 12 : 15;
+        const int verdictLeft = strip.left + 14;
+        const int headlineWidth = c.Width(health.headline, headlineSize, FW_SEMIBOLD) + 6;
+        // The verdict keeps room for its headline, and for a readable line of the reason when the strip is tall.
+        const int verdictWanted = compact ? headlineWidth + 12 : std::max(headlineWidth + 12, 300);
+
+        struct Slot { const ProfilerHealthCard* card; int width; };
+        std::vector<Slot> slots;
+        int cardsWidth = 0;
+        constexpr int kCardGap = 8;
+        constexpr int kCardPad = 10;
+        for (const ProfilerHealthCard& card : health.cards) {
+            const int valueWidth = c.Width(card.value, compact ? 12 : 16, FW_SEMIBOLD);
+            const int labelWidth = c.Width(card.label, 10);
+            const int width = compact
+                ? labelWidth + 6 + valueWidth + kCardPad
+                : std::max({ labelWidth, valueWidth, card.detail.empty() ? 0 : c.Width(card.detail, 10), 72 }) + kCardPad * 2;
+            if (verdictLeft + verdictWanted + cardsWidth + width + kCardGap > strip.right - 10) break;
+            slots.push_back({ &card, width });
+            cardsWidth += width + kCardGap;
+        }
+
+        int x = strip.right - 10 - cardsWidth + kCardGap;
+        const int verdictRight = std::max(verdictLeft, x - kCardGap - 6);
+        if (compact) {
+            c.Text(Rect(verdictLeft, strip.top, std::min(verdictRight, verdictLeft + headlineWidth), strip.bottom - 1), health.headline, tone, headlineSize, FW_SEMIBOLD);
+            const int adviceLeft = verdictLeft + headlineWidth + 10;
+            if (adviceLeft + c.Width(health.advice, 10) + 4 <= verdictRight) {
+                c.Text(Rect(adviceLeft, strip.top, verdictRight, strip.bottom - 1), health.advice, theme_.textSecondary, 10);
+            }
+        } else {
+            c.Text(Rect(verdictLeft, strip.top + 7, verdictRight, strip.top + 29), health.headline, tone, headlineSize, FW_SEMIBOLD);
+            c.Wrapped(Rect(verdictLeft, strip.top + 29, verdictRight, strip.bottom - 3), health.advice, theme_.textSecondary, 10);
+        }
+
+        for (const Slot& slot : slots) {
+            const ProfilerHealthCard& card = *slot.card;
+            const EditorColor valueColor = card.available ? SeverityColor(theme_, card.severity) : theme_.textDisabled;
+            if (compact) {
+                const int labelWidth = c.Width(card.label, 10) + 6;
+                c.Text(Rect(x, strip.top, x + labelWidth, strip.bottom - 1), card.label, theme_.textDisabled, 10);
+                c.Text(Rect(x + labelWidth, strip.top, x + slot.width, strip.bottom - 1), card.value, valueColor, 12, FW_SEMIBOLD);
+            } else {
+                const RECT box = Rect(x, strip.top + 6, x + slot.width, strip.bottom - 7);
+                panel_style::DrawRoundedFrame(c.dc, box, Canvas::C(theme_.strip), Canvas::C(theme_.borderChrome), 5.0F, 1.0F);
+                c.Text(Rect(box.left + kCardPad, box.top + 3, box.right - 4, box.top + 16), card.label, theme_.textDisabled, 10);
+                c.Text(Rect(box.left + kCardPad, box.top + 15, box.right - 4, box.top + 35), card.value, valueColor, 16, FW_SEMIBOLD);
+                if (!card.detail.empty()) {
+                    c.Text(Rect(box.left + kCardPad, box.top + 33, box.right - 4, box.bottom - 1), card.detail, theme_.textSecondary, 10);
+                }
+            }
+            x += slot.width + kCardGap;
+        }
+    }
+
     void PaintGroupHeader(const RECT& rect, std::string_view text) const {
         canvas_.Fill(rect, theme_.chrome);
         canvas_.Text(Rect(rect.left + kPad, rect.top, rect.right - kPad, rect.bottom), text, theme_.textDisabled, 10, FW_SEMIBOLD);
@@ -229,18 +312,15 @@ private:
         c.Fill(geometry_.left, theme_.strip);
         c.Fill(Rect(geometry_.left.right - 1, geometry_.left.top, geometry_.left.right, geometry_.left.bottom), theme_.borderChrome);
         PaintSectionHeader(geometry_.areasHeader, std::string{ EditorText("profiler.panel.areas", "Areas") });
-        PaintSectionHeader(geometry_.countersHeader, std::string{ EditorText("profiler.panel.counters", "Counters") });
         for (const ProfilerPanelButton& button : ProfilerPanelButtons(geometry_, profiler_, selection_)) {
             using Action = ProfilerPanelAction;
-            const Action action = button.hit.action;
-            if (action == Action::AreasAll || action == Action::AreasNone || action == Action::CountersAll || action == Action::CountersNone) {
+            if (button.hit.action == Action::AreasAll || button.hit.action == Action::AreasNone) {
                 c.TextRight(button.hit.bounds, button.text, theme_.textDisabled, 10);
             }
         }
-        // The dot between the two links of each header.
-        for (const RECT& header : { geometry_.areasHeader, geometry_.countersHeader }) {
-            c.Text(Rect(header.right - 10 - 28 - 14, header.top, header.right - 10 - 28, header.bottom), "\xC2\xB7", theme_.textDisabled, 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
+        // The dot between the two links of the header.
+        c.Text(Rect(geometry_.areasHeader.right - 10 - 28 - 14, geometry_.areasHeader.top, geometry_.areasHeader.right - 10 - 28, geometry_.areasHeader.bottom),
+            "\xC2\xB7", theme_.textDisabled, 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         for (std::size_t index = 0U; index < kAreas.size(); ++index) {
             const ProfilerArea area = kAreas[index];
             const RECT row = Rect(geometry_.areasList.left, geometry_.areasList.top + static_cast<int>(index) * ProfilerPanelGeometry::kRowHeight,
@@ -248,30 +328,17 @@ private:
             const bool measured = selection_.AreaMeasured(area);
             EditorDialogStyle::PaintCheckbox(c.dc, Rect(row.left + kPad, row.top + 4, row.left + kPad + 14, row.top + 18), theme_, measured);
             c.Fill(Rect(row.left + kPad + 22, row.top + 7, row.left + kPad + 30, row.top + 15), palette::Area(area));
-            c.Text(Rect(row.left + kPad + 38, row.top, row.right - 80, row.bottom), ProfilerText::Area(area), measured ? theme_.textPrimary : theme_.textSecondary);
-            c.TextRight(Rect(row.right - 78, row.top, row.right - kPad, row.bottom), measured ? AreaHeadline(registry_, area) : std::string{ "-" }, theme_.textDisabled, 10);
+            // The reading takes the room its digits need, and the name what is left.
+            const std::string reading = measured ? AreaHeadline(registry_, area) : std::string{ "-" };
+            const int readingLeft = row.right - kPad - c.Width(reading, 10) - 6;
+            c.Text(Rect(row.left + kPad + 38, row.top, readingLeft - 4, row.bottom), ProfilerText::Area(area), measured ? theme_.textPrimary : theme_.textSecondary);
+            c.TextRight(Rect(readingLeft, row.top, row.right - kPad, row.bottom), reading, theme_.textDisabled, 10);
         }
-        const RECT list = geometry_.countersList;
-        const int saved = SaveDC(c.dc);
-        Clip(list);
-        int top = list.top - profiler_.Panel().leftScroll;
-        for (const ProfilerCounterRow& row : ProfilerCounterRows(registry_)) {
-            const kb::core::ProfilerCounterInfo& info = registry_.Info(row.counter);
-            if (row.startsGroup) {
-                PaintGroupHeader(Rect(list.left, top, list.right - 1, top + ProfilerPanelGeometry::kRowHeight), ProfilerText::Group(info.group));
-                top += ProfilerPanelGeometry::kRowHeight;
-            }
-            const bool measured = selection_.AreaMeasured(info.area);
-            const bool shown = selection_.InPanel(info.id);
-            const RECT r = Rect(list.left, top, list.right - 1, top + ProfilerPanelGeometry::kRowHeight);
-            if (r.bottom > list.top && r.top < list.bottom) {
-                EditorDialogStyle::PaintCheckbox(c.dc, Rect(r.left + kPad, r.top + 4, r.left + kPad + 14, r.top + 18), theme_, shown, measured);
-                c.Text(Rect(r.left + kPad + 24, r.top, r.right - 62, r.bottom), ProfilerText::Counter(info), measured && shown ? theme_.textPrimary : measured ? theme_.textSecondary : theme_.textDisabled);
-                c.TextRight(Rect(r.right - 60, r.top, r.right - kPad, r.bottom), measured ? ValueText(registry_, row.counter) : std::string{ "-" }, theme_.textDisabled, 10);
-            }
-            top += ProfilerPanelGeometry::kRowHeight;
+        // What a check means, for whoever opens the profiler for the first time.
+        if (geometry_.areasHint.bottom - geometry_.areasHint.top >= 44) {
+            c.Wrapped(Rect(geometry_.areasHint.left + kPad, geometry_.areasHint.top + 4, geometry_.areasHint.right - kPad, geometry_.areasHint.bottom - 4),
+                EditorText("profiler.areas.hint", "Checked areas are measured and appear in the window. Unchecked ones cost nothing."), theme_.textDisabled, 10);
         }
-        RestoreDC(c.dc, saved);
     }
 
     // The unit-less size of a chart's vertical axis: room above the highest reading and the thresholds.
@@ -469,6 +536,7 @@ private:
 
     // The hierarchy of regions of the frame being shown.
     void PaintHierarchy() const {
+        if (geometry_.hierarchyTabs.bottom <= geometry_.hierarchyTabs.top) return;  // a panel too low for it
         const Canvas& c = canvas_;
         const ProfilerPanelState& state = profiler_.Panel();
         c.Fill(geometry_.hierarchyTabs, theme_.strip);
@@ -581,6 +649,18 @@ private:
         c.Fill(header, theme_.strip);
         c.Fill(Rect(header.left, header.bottom - 1, header.right, header.bottom), theme_.borderChrome);
         c.Text(Rect(columns.name, header.top, columns.now, header.bottom), std::string{ EditorText("profiler.counters.caption", "Counter") }, theme_.textDisabled, 10);
+        // "all . none" over the names: every counter into the panel, or none of them.
+        const ProfilerPanelButton* noneLink = nullptr;
+        const std::vector<ProfilerPanelButton> buttons = ProfilerPanelButtons(geometry_, profiler_, selection_);
+        for (const ProfilerPanelButton& button : buttons) {
+            if (button.hit.action == ProfilerPanelAction::CountersAll || button.hit.action == ProfilerPanelAction::CountersNone) {
+                c.TextRight(button.hit.bounds, button.text, theme_.textDisabled, 10);
+                if (button.hit.action == ProfilerPanelAction::CountersNone) noneLink = &button;
+            }
+        }
+        if (noneLink != nullptr) {
+            c.Text(Rect(noneLink->hit.bounds.left - 14, header.top, noneLink->hit.bounds.left, header.bottom), "\xC2\xB7", theme_.textDisabled, 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
         const std::array<std::pair<int, std::string>, 7> numeric{ { { columns.now, std::string{ EditorText("profiler.table.now", "Now") } }, { columns.average, std::string{ EditorText("profiler.table.average", "Average") } },
             { columns.minimum, std::string{ EditorText("profiler.table.min", "Min") } }, { columns.maximum, std::string{ EditorText("profiler.table.max", "Max") } }, { columns.p95, "p95" },
             { columns.budget, std::string{ EditorText("profiler.panel.budget_label", "Budget") } }, { columns.alarm, std::string{ EditorText("profiler.panel.alarm_label", "Alarm") } } } };
@@ -767,7 +847,7 @@ private:
             if (!state.selectedFinding.empty() && finding.Key() == state.selectedFinding) c.Fill(r, theme_.tabActive);
             c.Fill(Rect(r.left, r.bottom - 1, r.right, r.bottom), theme_.borderChrome);
             const EditorColor tone = SeverityTone(finding.severity);
-            c.Pill(Rect(r.left + kPad, r.top + 14, r.left + kPad + pillWidth, r.top + 34), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));
+            c.Pill(Rect(r.left + kPad, r.top + (kFindingHeight - 20) / 2, r.left + kPad + pillWidth, r.top + (kFindingHeight + 20) / 2), ProfilerText::Severity(finding.severity), tone, c.Mix(theme_.panel, tone, 22));
             c.Wrapped(Rect(r.left + kPad + pillWidth + 12, r.top + 5, whereLeft - 8, r.top + 25), ProfilerText::FindingTitle(finding, registry_), ignored ? theme_.textDisabled : theme_.textPrimary, 12, FW_SEMIBOLD);
             c.Wrapped(Rect(r.left + kPad + pillWidth + 12, r.top + 25, whereLeft - 8, r.bottom - 3), ProfilerText::FindingDetail(finding), theme_.textSecondary, 10);
             c.Wrapped(Rect(whereLeft, r.top, gainLeft, r.bottom), ProfilerText::FindingWhere(finding, registry_), theme_.textSecondary);

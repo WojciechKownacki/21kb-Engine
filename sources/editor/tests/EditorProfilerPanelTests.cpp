@@ -5,6 +5,7 @@
 #include "profiler/ProfilerOverlayLayout.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "profiler/ProfilerFiles.hpp"
+#include "profiler/ProfilerHealth.hpp"
 #include "profiler/ProfilerNumber.hpp"
 #include "profiler/ProfilerText.hpp"
 #include "profiler/ProfilerPanelLayout.hpp"
@@ -82,13 +83,80 @@ void RunPanelGeometryTest() {
         expectedTop = chart.row.bottom;
     }
     Require(geometry.hierarchyTabs.top == expectedTop && geometry.hierarchyRows.bottom - geometry.hierarchyRows.top >= 100, "The hierarchy takes what the charts leave, and enough of it");
-    Require(geometry.center.left == geometry.left.right && geometry.status.bottom == content.bottom && geometry.countersList.bottom <= geometry.status.top, "The panes fill the panel");
+    Require(geometry.center.left == geometry.left.right && geometry.status.bottom == content.bottom && geometry.areasHint.bottom <= geometry.status.top, "The panes fill the panel");
+    Require(geometry.health.top == geometry.toolbar.bottom && geometry.health.bottom - geometry.health.top == ProfilerPanelGeometry::kHealthHeight && !geometry.healthCompact &&
+            geometry.left.top == geometry.health.bottom && geometry.ruler.top == geometry.health.bottom,
+        "The overview sits between the toolbar and everything else");
+
+    // A panel docked in a low strip: the overview on one line, the charts, and no hierarchy squeezed under them.
+    geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 1920, 300 }, state, selection);
+    Require(geometry.healthCompact && geometry.health.bottom - geometry.health.top == ProfilerPanelGeometry::kHealthCompactHeight, "A low panel has the overview on one line");
+    Require(geometry.charts.size() == 5U && geometry.charts.back().row.bottom <= geometry.status.top, "A low panel keeps every chart above the status line");
+    for (const ProfilerChartRow& chart : geometry.charts) {
+        Require(chart.row.bottom - chart.row.top >= 22, "A chart of a low panel is still tall enough to read");
+    }
+    Require(geometry.hierarchyRows.bottom == geometry.hierarchyRows.top && geometry.hierarchyTabs.bottom == geometry.hierarchyTabs.top, "A low panel leaves the hierarchy out");
+    geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 960, 200 }, state, selection);
+    Require(geometry.charts.size() == 2U && geometry.charts[0].kind == ProfilerChartKind::Frame && geometry.charts[1].row.bottom <= geometry.status.top &&
+            geometry.charts[0].row.bottom - geometry.charts[0].row.top >= 22,
+        "A panel with room for two readable charts shows the first two rather than none");
+    geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 900, 160 }, state, selection);
+    Require(geometry.health.bottom == geometry.health.top, "A panel lower still has no overview");
+    for (const ProfilerChartRow& chart : geometry.charts) {
+        Require(chart.row.bottom <= geometry.status.top, "No chart of the lowest panel runs under the status line");
+    }
 
     state.tab = ProfilerPanelTab::Diagnosis;
     geometry = ResolveProfilerPanelGeometry(content, state, selection);
     Require(geometry.right.right - geometry.right.left == ProfilerPanelGeometry::kRightWidth && geometry.center.right == geometry.right.left && geometry.charts.empty(), "Diagnosis has its details pane and no charts");
     geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 800, 600 }, state, selection);
     Require(geometry.right.right == geometry.right.left, "A narrow panel leaves the details out");
+}
+
+// One measured frame of the given length: six tenths of it game code, three tenths the render thread.
+void PublishHealthFrame(ProfilerRegistry& registry, double frameMilliseconds) {
+    registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime), frameMilliseconds);
+    registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::FramesPerSecond), 1000.0 / frameMilliseconds);
+    registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::GameThreadTime), frameMilliseconds * 0.6);
+    registry.Publish(ProfilerRegistry::Id(ProfilerBuiltIn::RenderThreadTime), frameMilliseconds * 0.3);
+}
+
+void RunHealthTest() {
+    ProfilerSelection selection;  // cpu and gpu
+    ProfilerRegistry registry;
+    ProfilerHealth health = BuildProfilerHealth(registry, selection);
+    Require(health.level == ProfilerHealthLevel::Waiting && !health.headline.empty() && !health.advice.empty(), "Before any frame the overview says it is waiting");
+    Require(health.cards.size() == 4U && !health.cards[0].available && health.cards[0].value == "-", "CPU and GPU measured: FPS, frame, game thread and GPU cards, empty until measured");
+
+    for (int frame = 0; frame < 60; ++frame) PublishHealthFrame(registry, 8.0);
+    health = BuildProfilerHealth(registry, selection);
+    Require(health.level == ProfilerHealthLevel::Smooth && health.headline.find("125") != std::string::npos, "Frames inside the budget run smoothly, and the headline names the FPS");
+    Require(health.cards[0].available && health.cards[0].value.find("125") != std::string::npos && health.cards[1].value.find("8") != std::string::npos,
+        "The cards carry the readings of their counters");
+
+    PublishHealthFrame(registry, 40.0);
+    PublishHealthFrame(registry, 40.0);
+    PublishHealthFrame(registry, 40.0);
+    PublishHealthFrame(registry, 40.0);
+    health = BuildProfilerHealth(registry, selection);
+    Require(health.level == ProfilerHealthLevel::Hitches, "A few slow frames among fast ones are hitches, not a slow game");
+
+    ProfilerRegistry slow;
+    for (int frame = 0; frame < 60; ++frame) PublishHealthFrame(slow, 20.0);
+    health = BuildProfilerHealth(slow, selection);
+    Require(health.level == ProfilerHealthLevel::BelowTarget && health.advice.find("16.6") != std::string::npos, "Frames over the budget are below the target, and the reason names the target");
+    Require(health.advice.find("12.0") != std::string::npos, "The reason names the part of the frame that takes the longest");
+    Require(health.cards[1].severity == kb::core::ProfilerSeverity::Warning, "A reading over its budget is marked on its card");
+
+    ProfilerRegistry slower;
+    for (int frame = 0; frame < 60; ++frame) PublishHealthFrame(slower, 50.0);
+    Require(BuildProfilerHealth(slower, selection).level == ProfilerHealthLevel::TooSlow, "Frames over the alarm are too slow");
+
+    selection.ApplyPreset(ProfilerPreset::Everything, registry);
+    Require(BuildProfilerHealth(registry, selection).cards.size() == 6U, "Every area measured: draw calls and memory join the cards");
+    selection.SetAreaMeasured(kb::core::ProfilerArea::Cpu, false);
+    health = BuildProfilerHealth(registry, selection);
+    Require(health.level == ProfilerHealthLevel::Waiting && health.cards.size() == 3U, "Without the CPU area there is no verdict and no frame cards");
 }
 
 void RunPanelHitsTest() {
@@ -334,6 +402,7 @@ void RunEditorProfilerPanelTests() {
 #if defined(_WIN32)
     RunThresholdsTest();
     RunPanelGeometryTest();
+    RunHealthTest();
     RunPanelHitsTest();
     RunFramePickingTest();
     RunFindingFiltersTest();

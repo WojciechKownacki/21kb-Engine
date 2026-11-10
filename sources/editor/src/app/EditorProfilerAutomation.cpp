@@ -140,13 +140,13 @@ using Outcome = std::pair<bool, std::string>;
 }
 
 [[nodiscard]] std::optional<ProfilerPanelAction> ActionNamed(std::string_view name) {
-    static constexpr std::array<std::pair<std::string_view, ProfilerPanelAction>, 25> names{ {
+    static constexpr std::array<std::pair<std::string_view, ProfilerPanelAction>, 24> names{ {
         { "tab", ProfilerPanelAction::Tab }, { "record", ProfilerPanelAction::Record }, { "pause", ProfilerPanelAction::Pause },
         { "clear", ProfilerPanelAction::Clear }, { "first_frame", ProfilerPanelAction::FirstFrame }, { "previous_frame", ProfilerPanelAction::PreviousFrame },
         { "next_frame", ProfilerPanelAction::NextFrame }, { "live", ProfilerPanelAction::Live }, { "snapshot", ProfilerPanelAction::Snapshot },
         { "what_to_show", ProfilerPanelAction::WhatToShow }, { "areas_all", ProfilerPanelAction::AreasAll }, { "areas_none", ProfilerPanelAction::AreasNone },
         { "counters_all", ProfilerPanelAction::CountersAll }, { "counters_none", ProfilerPanelAction::CountersNone }, { "area", ProfilerPanelAction::Area },
-        { "left_counter", ProfilerPanelAction::LeftCounter }, { "pick_frame", ProfilerPanelAction::PickFrame }, { "counter_panel", ProfilerPanelAction::CounterPanel },
+        { "pick_frame", ProfilerPanelAction::PickFrame }, { "counter_panel", ProfilerPanelAction::CounterPanel },
         { "counter_scene", ProfilerPanelAction::CounterScene }, { "severity", ProfilerPanelAction::Severity }, { "category", ProfilerPanelAction::Category },
         { "show_ignored", ProfilerPanelAction::ShowIgnored }, { "finding", ProfilerPanelAction::Finding },
         { "show_in_measurements", ProfilerPanelAction::ShowInMeasurements }, { "ignore_finding", ProfilerPanelAction::IgnoreFinding } } };

@@ -24,6 +24,9 @@ constexpr int kDiagnosisSummaryHeight = 56;
 constexpr int kTableHeaderHeight = 22;
 constexpr int kButtonHeight = 26;
 constexpr int kGap = 8;
+// The panel heights from which the overview is shown at all, and at its full height.
+constexpr int kHealthFrom = 200;
+constexpr int kHealthTallFrom = 420;
 constexpr std::array<ProfilerArea, 5> kAreas{
     ProfilerArea::Cpu, ProfilerArea::Gpu, ProfilerArea::Render, ProfilerArea::Ecs, ProfilerArea::Memory };
 
@@ -40,24 +43,30 @@ ProfilerPanelGeometry ResolveProfilerPanelGeometry(const RECT& content, const Pr
     ProfilerPanelGeometry geometry;
     geometry.content = content;
     const int width = content.right - content.left;
+    const int panelHeight = content.bottom - content.top;
     // The left pane gives room to the table when the panel is not wide.
-    const int leftWidth = width >= 1100 ? ProfilerPanelGeometry::kLeftWidth : width >= 760 ? 220 : 200;
+    const int leftWidth = width >= 760 ? ProfilerPanelGeometry::kLeftWidth : 200;
     const int rightWidth = state.tab == ProfilerPanelTab::Diagnosis && width >= 900 ? ProfilerPanelGeometry::kRightWidth : 0;
     geometry.tabs = Rect(content.left, content.top, content.right, content.top + kTabsHeight);
     geometry.toolbar = Rect(content.left, geometry.tabs.bottom, content.right, geometry.tabs.bottom + kToolbarHeight);
     geometry.status = Rect(content.left, content.bottom - kStatusHeight, content.right, content.bottom);
-    const int bodyTop = geometry.toolbar.bottom;
+    // The overview keeps its full height while the panel has room for the charts under it; a
+    // panel docked in a low strip gets it on one line, and one lower still does without.
+    geometry.healthCompact = panelHeight < kHealthTallFrom;
+    const int healthHeight = panelHeight < kHealthFrom ? 0
+        : geometry.healthCompact ? ProfilerPanelGeometry::kHealthCompactHeight : ProfilerPanelGeometry::kHealthHeight;
+    geometry.health = Rect(content.left, geometry.toolbar.bottom, content.right, geometry.toolbar.bottom + healthHeight);
+    const int bodyTop = geometry.health.bottom;
     const int bodyBottom = geometry.status.top;
     geometry.left = Rect(content.left, bodyTop, content.left + leftWidth, bodyBottom);
     geometry.right = Rect(content.right - rightWidth, bodyTop, content.right, bodyBottom);
     geometry.center = Rect(geometry.left.right, bodyTop, geometry.right.left, bodyBottom);
 
-    // The left pane: the five areas, then the counters under their own header.
+    // The left pane: the five areas, and under them what checking one means.
     const int rows = ProfilerPanelGeometry::kRowHeight;
     geometry.areasHeader = Rect(geometry.left.left, bodyTop, geometry.left.right, bodyTop + kHeaderHeight);
     geometry.areasList = Rect(geometry.left.left, geometry.areasHeader.bottom, geometry.left.right, geometry.areasHeader.bottom + static_cast<int>(kAreas.size()) * rows);
-    geometry.countersHeader = Rect(geometry.left.left, geometry.areasList.bottom + kGap, geometry.left.right, geometry.areasList.bottom + kGap + kHeaderHeight);
-    geometry.countersList = Rect(geometry.left.left, geometry.countersHeader.bottom, geometry.left.right, std::max<int>(geometry.countersHeader.bottom, bodyBottom));
+    geometry.areasHint = Rect(geometry.left.left, std::min<int>(geometry.areasList.bottom + kGap, bodyBottom), geometry.left.right, bodyBottom);
 
     if (state.tab == ProfilerPanelTab::Measurements) {
         geometry.ruler = Rect(geometry.center.left, bodyTop, geometry.center.right, bodyTop + kRulerHeight);
@@ -72,24 +81,45 @@ ProfilerPanelGeometry ResolveProfilerPanelGeometry(const RECT& content, const Pr
         if (selection.AreaMeasured(ProfilerArea::Render)) wanted.push_back({ ProfilerChartKind::Drawing, 56 });
         int total = 0;
         for (const Row& row : wanted) total += row.height;
-        // The charts give way before the hierarchy below them does.
+        // The charts give way before the hierarchy below them does, down to half their height.
+        // A panel too low for both keeps the charts and leaves the hierarchy out.
         constexpr int kHierarchyMinimum = 150;
-        const int available = bodyBottom - geometry.ruler.bottom - kHierarchyMinimum;
-        const double scale = total <= 0 ? 1.0 : std::clamp(static_cast<double>(available) / total, 0.5, 1.0);
+        constexpr int kChartMinimum = 22;
+        const int room = bodyBottom - geometry.ruler.bottom;
+        const bool hierarchyFits = total <= 0 || room - kHierarchyMinimum >= total / 2;
+        double scale = total <= 0 ? 1.0
+            : hierarchyFits ? std::clamp(static_cast<double>(room - kHierarchyMinimum) / total, 0.5, 1.0)
+                            : std::clamp(static_cast<double>(room) / total, 0.0, 1.0);
+        // Lower still: the first charts at the least height a chart can be read at, rather than all of them at none.
+        const std::size_t readable = static_cast<std::size_t>(std::max(0, room / kChartMinimum));
+        const bool everyChartFits = total <= 0 || static_cast<int>(wanted.back().height * scale) >= kChartMinimum;
+        if (!everyChartFits) {
+            wanted.resize(std::min(wanted.size(), readable));
+            scale = 0.0;
+        }
+        const int evenHeight = wanted.empty() ? 0 : room / static_cast<int>(wanted.size());
         int top = geometry.ruler.bottom;
         for (const Row& row : wanted) {
-            const int height = static_cast<int>(row.height * scale);
+            const int height = everyChartFits ? static_cast<int>(row.height * scale) : evenHeight;
+            if (height < kChartMinimum || top + height > bodyBottom) {
+                break;
+            }
             ProfilerChartRow chart;
             chart.kind = row.kind;
             chart.row = Rect(geometry.center.left, top, geometry.center.right, top + height);
-            chart.label = Rect(chart.row.left, top, chart.row.left + ProfilerPanelGeometry::kLabelWidth, top + height);
+            const int labelWidth = height < ProfilerPanelGeometry::kSqueezedChartHeight ? ProfilerPanelGeometry::kSqueezedLabelWidth : ProfilerPanelGeometry::kLabelWidth;
+            chart.label = Rect(chart.row.left, top, std::min<int>(chart.row.left + labelWidth, chart.row.right), top + height);
             chart.plot = Rect(chart.label.right, top, chart.row.right, top + height);
             geometry.charts.push_back(chart);
             top += height;
         }
-        geometry.hierarchyTabs = Rect(geometry.center.left, top, geometry.center.right, top + kHeaderHeight);
-        geometry.hierarchyHeader = Rect(geometry.center.left, geometry.hierarchyTabs.bottom, geometry.center.right, geometry.hierarchyTabs.bottom + kTableHeaderHeight);
-        geometry.hierarchyRows = Rect(geometry.center.left, geometry.hierarchyHeader.bottom, geometry.center.right, std::max<int>(geometry.hierarchyHeader.bottom, bodyBottom));
+        if (hierarchyFits) {
+            geometry.hierarchyTabs = Rect(geometry.center.left, top, geometry.center.right, top + kHeaderHeight);
+            geometry.hierarchyHeader = Rect(geometry.center.left, geometry.hierarchyTabs.bottom, geometry.center.right, geometry.hierarchyTabs.bottom + kTableHeaderHeight);
+            geometry.hierarchyRows = Rect(geometry.center.left, geometry.hierarchyHeader.bottom, geometry.center.right, std::max<int>(geometry.hierarchyHeader.bottom, bodyBottom));
+        } else {
+            geometry.hierarchyTabs = geometry.hierarchyHeader = geometry.hierarchyRows = Rect(geometry.center.left, bodyBottom, geometry.center.right, bodyBottom);
+        }
     } else {
         const int summary = state.tab == ProfilerPanelTab::Counters ? kSummaryHeight : kDiagnosisSummaryHeight;
         geometry.summary = Rect(geometry.center.left, bodyTop, geometry.center.right, bodyTop + summary);
@@ -157,18 +187,22 @@ std::vector<ProfilerPanelButton> ProfilerPanelButtons(const ProfilerPanelGeometr
     }
 
     // The links "all · none" in the headers of the lists.
-    const auto links = [&](const RECT& header, Action all, Action none) {
+    const auto links = [&](const RECT& header, Action all, Action none, int inset) {
         const std::string noneText = std::string{ EditorText("profiler.select.none", "none") };
         const std::string allText = std::string{ EditorText("profiler.select.all", "all") };
         const int noneWidth = ButtonWidth(noneText, 4);
         const int allWidth = ButtonWidth(allText, 4);
-        const RECT noneRect = Rect(header.right - 10 - noneWidth, header.top + 5, header.right - 10, header.bottom - 5);
+        const RECT noneRect = Rect(header.right - 10 - noneWidth, header.top + inset, header.right - 10, header.bottom - inset);
         add(none, 0, noneRect, noneText);
-        add(all, 0, Rect(noneRect.left - 14 - allWidth, header.top + 5, noneRect.left - 14, header.bottom - 5), allText);
+        add(all, 0, Rect(noneRect.left - 14 - allWidth, header.top + inset, noneRect.left - 14, header.bottom - inset), allText);
     };
     if (state.tab != ProfilerPanelTab::Diagnosis) {
-        links(geometry.areasHeader, Action::AreasAll, Action::AreasNone);
-        links(geometry.countersHeader, Action::CountersAll, Action::CountersNone);
+        links(geometry.areasHeader, Action::AreasAll, Action::AreasNone, 5);
+    }
+    if (state.tab == ProfilerPanelTab::Counters) {
+        // Over the name column of the table: every counter into the panel, or none.
+        const ProfilerCounterColumns columns = ResolveProfilerCounterColumns(geometry.tableRows);
+        links(Rect(columns.name, geometry.tableHeader.top, columns.now, geometry.tableHeader.bottom), Action::CountersAll, Action::CountersNone, 2);
     }
     return buttons;
 }
@@ -286,14 +320,6 @@ std::vector<ProfilerPanelHit> ProfilerPanelHits(const ProfilerPanelGeometry& geo
     for (std::size_t index = 0U; index < kAreas.size(); ++index) {
         const int top = geometry.areasList.top + static_cast<int>(index) * rowHeight;
         hits.push_back({ Action::Area, static_cast<int>(kAreas[index]), Rect(geometry.areasList.left, top, geometry.areasList.right, top + rowHeight) });
-    }
-    int top = geometry.countersList.top - state.leftScroll;
-    for (const ProfilerCounterRow& row : ProfilerCounterRows(registry)) {
-        if (row.startsGroup) top += rowHeight;
-        if (inside(geometry.countersList, top, top + rowHeight)) {
-            hits.push_back({ Action::LeftCounter, static_cast<int>(row.counter), Rect(geometry.countersList.left, std::max<int>(top, geometry.countersList.top), geometry.countersList.right, std::min<int>(top + rowHeight, geometry.countersList.bottom)) });
-        }
-        top += rowHeight;
     }
 
     if (state.tab == ProfilerPanelTab::Measurements) {

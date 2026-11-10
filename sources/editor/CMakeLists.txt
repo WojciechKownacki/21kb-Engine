@@ -484,6 +484,7 @@ add_executable(kb_editor WIN32
     src/private/authoring/EditorAuthoringHost.hpp
     src/private/extensions/EditorExtensionHost.hpp
     src/private/profiler/ProfilerNumber.hpp
+    src/private/profiler/ProfilerHealth.hpp
     src/private/profiler/EditorProfilerRegions.hpp
     src/private/profiler/ProfilerFiles.hpp
     src/private/profiler/ProfilerPanel.hpp
@@ -1001,6 +1002,7 @@ add_executable(kb_editor WIN32
     src/settings/EditorConfigurationStore.cpp
     src/profiler/EditorProfilerSampler.cpp
     src/profiler/ProfilerNumber.cpp
+    src/profiler/ProfilerHealth.cpp
     src/profiler/EditorProfilerRegions.cpp
     src/profiler/ProfilerFiles.cpp
     src/profiler/ProfilerFindingText.cpp
@@ -1466,6 +1468,7 @@ if(BUILD_TESTING)
             src/profiler/ProfilerPanelLayout.cpp
             src/profiler/EditorProfilerRegions.cpp
             src/profiler/ProfilerNumber.cpp
+            src/profiler/ProfilerHealth.cpp
             src/profiler/ProfilerText.cpp
             src/profiler/ProfilerFindingText.cpp
             src/profiler/ProfilerFiles.cpp

@@ -26,7 +26,6 @@ struct ProfilerPanelState {
     bool paused = false;
     // The frame the hierarchy is of; empty follows the latest one.
     std::optional<std::uint64_t> selectedFrame;
-    int leftScroll = 0;
     int hierarchyScroll = 0;
     int countersScroll = 0;
     int findingsScroll = 0;
