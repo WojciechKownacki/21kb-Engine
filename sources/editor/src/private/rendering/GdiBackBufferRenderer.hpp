@@ -25,6 +25,16 @@ public:
     GdiBackBufferRenderer() = delete;
 
     static void Paint(HWND window, GdiBackBufferPaintFn paint, void* context);
+
+    // While one of these lives, Paint for its window draws the whole client into `target`
+    // instead of the screen: how a window answers WM_PRINTCLIENT with what it would paint.
+    class PrintScope final {
+    public:
+        PrintScope(HWND window, HDC target) noexcept;
+        ~PrintScope();
+        PrintScope(const PrintScope&) = delete;
+        PrintScope& operator=(const PrintScope&) = delete;
+    };
 };
 
 #endif

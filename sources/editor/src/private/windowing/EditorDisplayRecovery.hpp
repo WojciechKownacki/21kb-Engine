@@ -58,6 +58,16 @@ inline DockRect RecoverNativeDisplayRect(DockRect rect) {
     return RecoverDisplayRect(rect, areas);
 }
 
+// False for a window parked outside every display, as an automation host is.
+inline bool OwnerOnDisplay(HWND owner) {
+    return owner == nullptr || MonitorFromWindow(owner, MONITOR_DEFAULTTONULL) != nullptr;
+}
+
+// Where a floating panel of `owner` goes: onto a display, unless its owner is on none.
+inline DockRect RecoverOwnedDisplayRect(HWND owner, DockRect rect) {
+    return OwnerOnDisplay(owner) ? RecoverNativeDisplayRect(rect) : rect;
+}
+
 inline void RecoverNativeWindow(HWND window, const RECT* suggested = nullptr) {
     RECT rect{};
     if (suggested) rect = *suggested;

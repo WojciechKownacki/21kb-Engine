@@ -570,6 +570,9 @@ add_executable(kb_editor WIN32
     src/private/rendering/InspectorSceneAudioView.hpp
     src/private/rendering/EditorOverlayPopupWindow.hpp
     src/private/app/EditorHeadlessPopupChecks.hpp
+    src/private/app/EditorWindowUnderTest.hpp
+    src/private/app/docking/EditorDockTabMenu.hpp
+    src/private/app/panels/EditorPanelCloser.hpp
     src/private/rendering/EditorToolbarMenuOverlayWindow.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
@@ -813,6 +816,9 @@ add_executable(kb_editor WIN32
     src/rendering/InspectorSceneAudioView.cpp
     src/rendering/EditorOverlayPopupWindow.cpp
     src/app/EditorHeadlessPopupChecks.cpp
+    src/app/EditorHeadlessDockingChecks.cpp
+    src/app/docking/EditorDockTabMenu.cpp
+    src/app/panels/EditorPanelCloser.cpp
     src/rendering/EditorToolbarMenuOverlayWindow.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
@@ -2239,6 +2245,15 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-New-Scene")
     set_tests_properties(kb_editor_new_scene_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    # The dock workspace driven with pointer and key messages: tab click, reorder, tear-off, grouping, Escape,
+    # maximize, the tab menu, closing, the Layout menu's panel rows and a crowded tab strip.
+    add_test(NAME kb_editor_docking_interactions_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessDockingScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Docking")
+    set_tests_properties(kb_editor_docking_interactions_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;docking" TIMEOUT 180)
     # The dock workspace from the command line: float and close panels, save the arrangement to a file, reset to the default,
     # restore the file, and check at several window sizes that no panel is lost.
     add_test(NAME kb_editor_component_search_headless

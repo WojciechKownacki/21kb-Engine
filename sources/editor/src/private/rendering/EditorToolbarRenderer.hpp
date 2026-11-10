@@ -44,7 +44,7 @@ struct EditorMenuRects {
 #if defined(_WIN32)
     // The Layout menu is as long as the project has layouts, so the rows are a
     // fixed-capacity run with a live count rather than a fixed four.
-    static constexpr std::size_t MaximumRows = 16U;
+    static constexpr std::size_t MaximumRows = 24U;
 
     RECT menuBar{};
     RECT file{};

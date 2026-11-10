@@ -189,6 +189,9 @@ public:
     [[nodiscard]] bool VerifyToolbarMenuOverlay();
     [[nodiscard]] bool VerifyParticleControls();
     [[nodiscard]] bool VerifyWorkspaceControls();
+    [[nodiscard]] bool VerifyDockingInteractions();
+    // What the last check that reports through here found, for the scenario report.
+    [[nodiscard]] const std::string& LastCheckDetail() const noexcept { return lastCheckDetail_; }
     [[nodiscard]] bool VerifyDebuggerInteraction();
     // Clicking the Add Component browser's search box on a real editor window and
     // typing filters the components, whether the keys reach the window or the popup.
@@ -235,6 +238,7 @@ private:
     EditorSceneContext& context_;
     std::filesystem::path artifactRoot_;
     std::filesystem::path tracePath_;
+    std::string lastCheckDetail_;
     std::unique_ptr<Impl> impl_;
 };
 

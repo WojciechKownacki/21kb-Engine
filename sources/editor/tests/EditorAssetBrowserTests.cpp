@@ -1125,7 +1125,7 @@ void RunMaterialContextMenuCommandTest() {
 void RunAssetContextMenuExposesOpenAndDuplicateTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("Sparks", "ParticleEffect", "/Game/Vfx/Sparks.kbvfx")));
-    static_cast<void>(manager.RegisterAsset(Metadata("Character", "RenderMesh", "/Game/Environment/Character.gltf")));
+    static_cast<void>(manager.RegisterAsset(Metadata("Footstep", "AudioClip", "/Game/Audio/Footstep.wav")));
     kb::editor::EditorAssetBrowserState state;
 
     const auto commandsFor = [&](const char* virtualPath) {
@@ -1146,13 +1146,13 @@ void RunAssetContextMenuExposesOpenAndDuplicateTest() {
     kb::editor::tests::Require(has(effectItems, kb::editor::EditorAssetContextCommand::Duplicate),
         "Every asset context menu should offer Duplicate");
 
-    // A mesh has no editor behind the open route, so the entry must stay away rather
+    // An audio clip has no editor behind the open route, so the entry must stay away rather
     // than sit there declining every click.
-    const std::vector<kb::editor::EditorAssetContextMenuItem> meshItems = commandsFor("/Game/Environment/Character.gltf");
-    kb::editor::tests::Require(!has(meshItems, kb::editor::EditorAssetContextCommand::Open),
+    const std::vector<kb::editor::EditorAssetContextMenuItem> clipItems = commandsFor("/Game/Audio/Footstep.wav");
+    kb::editor::tests::Require(!has(clipItems, kb::editor::EditorAssetContextCommand::Open),
         "Open must not be offered for an asset the open route cannot open");
-    kb::editor::tests::Require(has(meshItems, kb::editor::EditorAssetContextCommand::Duplicate),
-        "A mesh asset should still offer Duplicate");
+    kb::editor::tests::Require(has(clipItems, kb::editor::EditorAssetContextCommand::Duplicate),
+        "An asset without an editor should still offer Duplicate");
 
     for (const kb::editor::EditorAssetContextCommand command : {
              kb::editor::EditorAssetContextCommand::Open,
@@ -1163,9 +1163,9 @@ void RunAssetContextMenuExposesOpenAndDuplicateTest() {
     }
 
     const kb::assets::AssetMetadata* effect = manager.Registry().FindByPath("/Game/Vfx/Sparks.kbvfx");
-    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
-    kb::editor::tests::Require(effect != nullptr && mesh != nullptr, "Open policy test lost its fixtures");
-    kb::editor::tests::Require(kb::editor::EditorAssetOpenPolicy::CanOpen(*effect) && !kb::editor::EditorAssetOpenPolicy::CanOpen(*mesh),
+    const kb::assets::AssetMetadata* clip = manager.Registry().FindByPath("/Game/Audio/Footstep.wav");
+    kb::editor::tests::Require(effect != nullptr && clip != nullptr, "Open policy test lost its fixtures");
+    kb::editor::tests::Require(kb::editor::EditorAssetOpenPolicy::CanOpen(*effect) && !kb::editor::EditorAssetOpenPolicy::CanOpen(*clip),
         "The open policy must agree with the menu about what can be opened");
 }
 

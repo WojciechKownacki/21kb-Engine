@@ -5813,6 +5813,11 @@ ReadScriptValue(
         return {state.automation.VerifyWorkspaceControls(), "real toolbar, keyboard, display and DPI routing"};
     }
 
+    if (*operation == "assert_docking_interactions") {
+        const bool succeeded = state.automation.VerifyDockingInteractions();
+        return {succeeded, state.automation.LastCheckDetail()};
+    }
+
     if (*operation == "assert_workspace_layout_persistence") {
         const auto workspace = state.automation.VerifyWorkspaceLayoutPersistence();
         return {

@@ -46,6 +46,12 @@ void DockFloatingDragOperation::MoveWindow(DockPointerDrag& drag, POINT screen, 
     }
 
     RECT rect{};
+    if (IsZoomed(floating) != FALSE) {
+        // A maximized panel comes off the screen edge at its own size, held where it was grabbed.
+        ShowWindow(floating, SW_RESTORE);
+        GetWindowRect(floating, &rect);
+        drag.offsetX = std::min(drag.offsetX, static_cast<int>(rect.right - rect.left) / 2);
+    }
     GetWindowRect(floating, &rect);
     const int x = screen.x - drag.offsetX;
     const int y = screen.y - drag.offsetY;

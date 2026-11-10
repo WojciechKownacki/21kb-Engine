@@ -6,7 +6,8 @@
 namespace kb::editor {
 
 void EditorLayoutMenuModel::Rebuild(
-    const std::vector<std::string>& savedLayouts, std::string_view activeLayout) {
+    const std::vector<std::string>& savedLayouts, std::string_view activeLayout,
+    const std::vector<EditorLayoutMenuPanel>& panels) {
     rows_.clear();
     rows_.push_back({
         .label = std::string{ EditorText("layout.default", "Default") },
@@ -14,7 +15,7 @@ void EditorLayoutMenuModel::Rebuild(
         .active = activeLayout.empty(),
     });
     for (const std::string& name : savedLayouts) {
-        if (rows_.size() + 2U >= MaximumRows) {
+        if (rows_.size() > EditorLayoutLibrary::MaximumLayouts) {
             break;
         }
         rows_.push_back({
@@ -26,6 +27,22 @@ void EditorLayoutMenuModel::Rebuild(
     }
     rows_.push_back({ .label = std::string{ EditorText("layout.saveRow", "Save Layout...") }, .action = EditorLayoutMenuAction::Save });
     rows_.push_back({ .label = std::string{ EditorText("layout.deleteRow", "Delete Layout...") }, .action = EditorLayoutMenuAction::Delete });
+    if (panels.empty()) {
+        return;
+    }
+    rows_.push_back({
+        .label = std::string{ EditorText("layout.panelsCaption", "Panels") },
+        .action = EditorLayoutMenuAction::TogglePanel,
+        .enabled = false,
+    });
+    for (std::size_t index = 0; index < panels.size() && index < MaximumPanels; ++index) {
+        rows_.push_back({
+            .label = panels[index].title,
+            .action = EditorLayoutMenuAction::TogglePanel,
+            .active = panels[index].open,
+            .panelKind = panels[index].kind,
+        });
+    }
 }
 
 void EditorLayoutMenuModel::RebuildForDelete(const std::vector<std::string>& savedLayouts) {
@@ -38,7 +55,7 @@ void EditorLayoutMenuModel::RebuildForDelete(const std::vector<std::string>& sav
         .enabled = false,
     });
     for (const std::string& name : savedLayouts) {
-        if (rows_.size() + 2U >= MaximumRows) {
+        if (rows_.size() > EditorLayoutLibrary::MaximumLayouts) {
             break;
         }
         rows_.push_back({

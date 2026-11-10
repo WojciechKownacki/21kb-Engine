@@ -34,8 +34,7 @@ bool EditorDockPointerDownHandler::Handle(
         return HandleMainWindowDown(window, x, y, dockModel, metrics, drag);
     }
 
-    HandleFloatingWindowDown(window, x, y, floatingWindows, metrics, drag);
-    return false;
+    return HandleFloatingWindowDown(window, x, y, floatingWindows, metrics, drag);
 }
 
 bool EditorDockPointerDownHandler::IsMainWindow(HWND window, HWND mainWindow) noexcept {
@@ -64,17 +63,21 @@ bool EditorDockPointerDownHandler::HandleMainWindowDown(HWND window, int x, int 
     return true;
 }
 
-void EditorDockPointerDownHandler::HandleFloatingWindowDown(HWND window, int x, int y, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {
+// True when the window's own chrome took the press: one of its controls, or the title it is dragged by.
+// The caller then leaves the scene selection alone, as it does for a tab or a splitter.
+bool EditorDockPointerDownHandler::HandleFloatingWindowDown(HWND window, int x, int y, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {
     const std::uint32_t panelId = floatingWindows.Queries().PanelId(window);
     RECT client{};
     GetClientRect(window, &client);
     if (panelId != 0 && FloatingWindowControlInteractor{}.HandlePointerDown(window, metrics, x, y)) {
-        return;
+        return true;
     }
 
     if (panelId != 0 && y <= metrics.tabStripHeight + 2 && x < client.right - FloatingWindowControlLayout::TotalWidth(metrics)) {
         drag = DockPointerDragFactory::FromFloatingWindow(window, panelId, x, y, metrics);
+        return true;
     }
+    return false;
 }
 
 } // namespace kb::editor

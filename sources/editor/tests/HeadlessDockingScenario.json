@@ -1,0 +1,11 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "assert_docking_interactions"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

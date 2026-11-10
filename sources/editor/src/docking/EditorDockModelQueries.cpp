@@ -37,12 +37,14 @@ namespace {
     };
 
     int panelCount = 0;
+    int activeIndex = -1;
     for (const DockPanelLayout& panel : base.panels) {
         if (panel.leafId == leafId) {
-            ++panelCount;
             if (panel.active) {
                 leaf.activePanelId = panel.panelId;
+                activeIndex = panelCount;
             }
+            ++panelCount;
         }
     }
     if (panelCount <= 0) {
@@ -50,15 +52,15 @@ namespace {
     }
 
     maximized.leaves.push_back(leaf);
-    const int maxTabWidth = std::max(1, tabWidth);
-    const int minTabWidth = std::clamp(tabMinWidth, 1, maxTabWidth);
-    const int resolvedTabWidth = std::clamp(leaf.tabStrip.width / std::max(1, panelCount), minTabWidth, maxTabWidth);
+    const std::vector<int> tabWidths = DockGeometry::TabWidths(leaf.tabStrip.width, panelCount, activeIndex, tabMinWidth, tabWidth);
     int tabX = leaf.tabStrip.x;
+    std::size_t tabIndex = 0;
 
     for (const DockPanelLayout& panel : base.panels) {
         if (panel.leafId != leafId) {
             continue;
         }
+        const int resolvedTabWidth = tabWidths[tabIndex++];
         maximized.panels.push_back(DockPanelLayout{
             .panelId = panel.panelId,
             .leafId = leafId,
@@ -132,6 +134,20 @@ DockHit EditorDockModelQueries::HitTest(const DockLayout& layout, int x, int y) 
 
 std::optional<DockDropPreview> EditorDockModelQueries::ResolveDropPreview(const DockLayout& layout, int x, int y) const {
     return DockModelQueries::ResolveDropPreview(layout, x, y);
+}
+
+std::uint32_t EditorDockModelQueries::LeafOfPanel(std::uint32_t panelId) const noexcept {
+    const DockNode* leaf = DockNodeFinder::FindLeafContaining(root_, panelId);
+    return leaf != nullptr ? leaf->id : 0U;
+}
+
+std::vector<std::uint32_t> EditorDockModelQueries::PanelsSharingLeaf(std::uint32_t panelId) const {
+    const DockNode* leaf = DockNodeFinder::FindLeafContaining(root_, panelId);
+    return leaf != nullptr ? leaf->panels : std::vector<std::uint32_t>{};
+}
+
+std::uint32_t EditorDockModelQueries::MaximizedLeafId() const noexcept {
+    return maximizedLeafId_;
 }
 
 std::uint32_t EditorDockModelQueries::PanelCountInLeaf(std::uint32_t leafId) const noexcept {

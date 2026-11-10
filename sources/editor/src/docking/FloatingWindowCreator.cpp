@@ -1,6 +1,7 @@
 #include "docking/FloatingWindowCreator.hpp"
 
 #if defined(_WIN32)
+#include "windowing/EditorDisplayRecovery.hpp"
 #include "windowing/FloatingWindowFactory.hpp"
 
 namespace kb::editor {
@@ -28,7 +29,8 @@ bool FloatingWindowCreator::Create(
     SetWindowPos(
         floating, nullptr, 0, 0, 0, 0,
         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    ShowWindow(floating, SW_SHOW);
+    // A panel torn off a host parked outside every display stays there with it, unseen and inactive.
+    ShowWindow(floating, OwnerOnDisplay(owner) ? SW_SHOW : SW_SHOWNOACTIVATE);
     UpdateWindow(floating);
     return true;
 }

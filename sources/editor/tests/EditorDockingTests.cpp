@@ -19,6 +19,7 @@
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAutosaveState.hpp"
+#include "docking/DockGeometry.hpp"
 #include "docking/DockLeafLayoutBuilder.hpp"
 #include "docking/DockLayoutBuildSettings.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
@@ -997,6 +998,68 @@ void RunLayoutMenuModelTest() {
         "a row outside the menu should resolve to nothing");
 }
 
+void RunLayoutMenuPanelRowsTest() {
+    kb::editor::EditorLayoutMenuModel model;
+    model.Rebuild({ "Lighting" }, {}, {
+        { .kind = kb::editor::DockPanelKind::Hierarchy, .title = "Hierarchy", .open = true },
+        { .kind = kb::editor::DockPanelKind::Console, .title = "Console", .open = false },
+    });
+    const std::vector<kb::editor::EditorLayoutMenuRow>& rows = model.Rows();
+    kb::editor::tests::Require(rows.size() == 7U,
+        "the Layout menu should list the layouts, the two commands, a caption and one row for each everyday panel");
+    kb::editor::tests::Require(
+        rows[4].action == kb::editor::EditorLayoutMenuAction::TogglePanel && !rows[4].enabled,
+        "the panels should sit under a caption that cannot be chosen");
+    kb::editor::tests::Require(
+        rows[5].label == "Hierarchy" && rows[5].panelKind == kb::editor::DockPanelKind::Hierarchy && rows[5].active && rows[5].enabled &&
+            rows[6].panelKind == kb::editor::DockPanelKind::Console && !rows[6].active,
+        "an open panel should be marked in the menu and a closed one left unmarked");
+    kb::editor::tests::Require(kb::editor::EditorLayoutMenuModel::MaximumRows <= kb::editor::EditorMenuRects::MaximumRows,
+        "the menu geometry should have a row for everything the Layout menu can list");
+}
+
+void RunCrowdedTabStripTest() {
+    using kb::editor::DockGeometry;
+    kb::editor::tests::Require(DockGeometry::TabWidths(600, 3, 0, 92, 156) == std::vector<int>({ 156, 156, 156 }),
+        "tabs with room to spare should take their full width");
+    kb::editor::tests::Require(DockGeometry::TabWidths(300, 3, 1, 92, 156) == std::vector<int>({ 100, 100, 100 }),
+        "tabs should share a strip that still fits their minimum");
+    const std::vector<int> crowded = DockGeometry::TabWidths(280, 5, 4, 92, 156);
+    int total = 0;
+    for (const int width : crowded) total += width;
+    kb::editor::tests::Require(crowded.size() == 5U && total <= 280 && crowded[4] == 92 && crowded[0] == 47,
+        "a crowded strip should keep the active tab's title and fit every other tab beside it");
+    const std::vector<int> packed = DockGeometry::TabWidths(120, 6, 0, 92, 156);
+    total = 0;
+    for (const int width : packed) total += width;
+    kb::editor::tests::Require(total <= 120 && packed[0] >= packed[1] && packed[1] >= 1,
+        "a strip narrower than its compact tabs should still keep every tab inside it");
+    kb::editor::tests::Require(DockGeometry::TabWidths(280, 0, -1, 92, 156).empty(), "an empty group has no tabs");
+
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel& inspector = *RequirePanel(model, 4U);
+    for (const kb::editor::DockPanelKind kind : { kb::editor::DockPanelKind::ProjectSettings, kb::editor::DockPanelKind::Plugins, kb::editor::DockPanelKind::EditorSettings }) {
+        kb::editor::tests::Require(model.Commands().ActivatePanelKind(kind, kb::editor::DockArea::Right), "a side panel should open beside the Inspector");
+    }
+    const std::uint32_t leaf = model.Queries().LeafOfPanel(inspector.id);
+    kb::editor::tests::Require(leaf != 0U && model.Queries().PanelsSharingLeaf(inspector.id).size() == 5U,
+        "the Inspector's group should hold the panels opened beside it");
+    const kb::editor::DockLayout layout = model.Queries().BuildLayout(1280, 760, 48, 24, 28, 92, 156, 3);
+    for (const kb::editor::DockPanelLayout& panel : layout.panels) {
+        if (panel.leafId != leaf) continue;
+        kb::editor::tests::Require(panel.tab.width > 0 && panel.tab.x + panel.tab.width <= panel.tabStrip.x + panel.tabStrip.width,
+            "every tab of a crowded group should stay inside its strip");
+        kb::editor::tests::Require(!panel.active || panel.tab.width == 92, "the active tab of a crowded group should keep its minimum width");
+    }
+    kb::editor::tests::Require(model.Commands().ToggleMaximizedLeaf(leaf) && model.Queries().MaximizedLeafId() == leaf,
+        "the maximized group should be reported by the model");
+    kb::editor::tests::Require(model.Commands().RestoreMaximizedLeaf() && model.Queries().MaximizedLeafId() == 0U,
+        "restoring should leave no group maximized");
+    kb::editor::tests::Require(model.Queries().LeafOfPanel(RequirePanel(model, 8U)->id) == 0U &&
+            model.Queries().PanelsSharingLeaf(RequirePanel(model, 8U)->id).empty(),
+        "a closed panel belongs to no group");
+}
+
 void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
@@ -1479,6 +1542,8 @@ void RunEditorDockingTests() {
     RunSavedLayoutLibraryTest();
     RunFloatingPanelContentMatchesDockedTest();
     RunLayoutMenuModelTest();
+    RunLayoutMenuPanelRowsTest();
+    RunCrowdedTabStripTest();
     RunAnimatorEditorDefaultLayoutTest();
     RunAnimatorEditorGraphDocumentStateTest();
     RunSkeletalMeshEditorDefaultLayoutTest();

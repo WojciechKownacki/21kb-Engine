@@ -3,6 +3,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorMouseWheelRouter.hpp"
+#include "app/docking/EditorDockTabMenu.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "app/pointer/EditorLeftButtonDoubleClickRouter.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
@@ -126,6 +127,10 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (EditorDockTabMenu::HandleRightButtonDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, sceneContext_, metrics_)) {
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     if (SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
         const bool alt = EditorKeyDown(VK_MENU);
         sceneContext_.AnimationPreviewCamera().BeginNavigation(
@@ -145,6 +150,10 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LP
 LRESULT EditorWindowPointerHandler::HandleMiddleButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (EditorDockTabMenu::HandleMiddleButtonDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, sceneContext_, metrics_)) {
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     if (SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
         sceneContext_.AnimationPreviewCamera().BeginNavigation(EditorViewportCameraNavigationMode::Pan, x, y);
         SetCapture(messageWindow);

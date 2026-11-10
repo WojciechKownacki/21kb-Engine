@@ -4655,6 +4655,14 @@ bool EditorHeadlessAutomation::VerifyWorkspaceControls() {
     return result.succeeded;
 }
 
+bool EditorHeadlessAutomation::VerifyDockingInteractions() {
+    const auto result = EditorHeadlessPopupChecks::VerifyDockingInteractions(
+        context_, impl_->viewport, artifactRoot_ / "screenshots");
+    Trace("verify_docking_interactions", result.succeeded, result.detail);
+    lastCheckDetail_ = result.detail;
+    return result.succeeded;
+}
+
 bool EditorHeadlessAutomation::VerifyToolbarMenuOverlay() {
     const EditorHeadlessPopupCheckResult result =
         EditorHeadlessPopupChecks::VerifyToolbarMenuOverlay(context_, impl_->viewport);

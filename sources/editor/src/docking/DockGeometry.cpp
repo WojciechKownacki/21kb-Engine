@@ -35,6 +35,26 @@ DockRect DockGeometry::PanelContent(const DockRect& frame, int tabStripHeight) {
         std::max(0, frame.height - tabStripHeight - 2));
 }
 
+std::vector<int> DockGeometry::TabWidths(int stripWidth, int tabCount, int activeIndex, int tabMinWidth, int tabMaxWidth) {
+    const int count = std::max(0, tabCount);
+    if (count == 0) {
+        return {};
+    }
+    const int maxWidth = std::max(1, tabMaxWidth);
+    const int minWidth = std::clamp(tabMinWidth, 1, maxWidth);
+    const int share = std::max(1, stripWidth / count);
+    if (share >= minWidth || count == 1 || activeIndex < 0 || activeIndex >= count) {
+        return std::vector<int>(static_cast<std::size_t>(count), std::min(share, maxWidth));
+    }
+    // An icon and a close button: the least a tab can be and still be told apart and closed.
+    constexpr int kCompactTabWidth = 44;
+    const int others = count - 1;
+    const int activeWidth = std::clamp(stripWidth - (others * kCompactTabWidth), share, minWidth);
+    std::vector<int> widths(static_cast<std::size_t>(count), std::max(1, (stripWidth - activeWidth) / others));
+    widths[static_cast<std::size_t>(activeIndex)] = activeWidth;
+    return widths;
+}
+
 DockRect DockGeometry::Split(const DockRect& rect, DockDropZone zone, float ratio) {
     switch (zone) {
     case DockDropZone::Left:

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 
 namespace kb::editor {
@@ -27,6 +28,11 @@ public:
         EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
     [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyWorkspaceControls(
         EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
+    // Drives the dock workspace with pointer and key messages: tab click, reorder, tear-off,
+    // grouping and ungrouping, Escape, maximize, the tab menu, closing, the Layout menu's panel
+    // rows and a crowded strip. Writes what the window painted along the way into `screenshots`.
+    [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyDockingInteractions(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport, const std::filesystem::path& screenshots);
     // Opens toolbar menus with clicks on the menu bar and checks that each dropdown
     // is a popup above the window and its scene viewport, paints every row, and
     // hands a click on a row to the toolbar's own menu handling.

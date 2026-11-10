@@ -5393,6 +5393,9 @@ void InspectorPanelRenderer::Paint(
     }
 
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
+        ScopedFont font(12, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, viewport, EditorText("inspector.empty", "Select an object or asset to inspect it"), Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         RestoreDC(dc, -1);
         RestoreDC(dc, savedDc);
         return;

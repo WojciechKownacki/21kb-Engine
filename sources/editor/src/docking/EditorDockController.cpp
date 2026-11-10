@@ -5,6 +5,10 @@
 #include "docking/DockDragOperationHandler.hpp"
 #include "docking/DockHoverCursorUpdater.hpp"
 #include "docking/EditorDockPointerDownHandler.hpp"
+#include "docking/EditorFloatingWindowSync.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
+
+#include <utility>
 
 namespace kb::editor {
 
@@ -32,6 +36,7 @@ bool EditorDockController::HandlePointerDown(HWND window, int x, int y) {
     SetFocus(window);
     const bool handled = EditorDockPointerDownHandler::Handle(window, x, y, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, drag_);
     if (drag_.has_value()) {
+        dragOrigin_ = EditorWorkspaceArrangement::Capture(*dockModel_);
         CaptureSourceWindow();
     }
     return handled;
@@ -68,6 +73,7 @@ bool EditorDockController::HandlePointerUp(HWND window) {
     const DockPointerDrag drag = *drag_;
     const HWND capturedWindow = drag.sourceWindow;
     drag_.reset();
+    dragOrigin_.reset();
     if (GetCapture() == window || GetCapture() == capturedWindow) {
         ReleaseCapture();
     }
@@ -84,6 +90,19 @@ void EditorDockController::CancelDrag() noexcept {
     if (mainWindow_ != nullptr) {
         InvalidateRect(mainWindow_, nullptr, FALSE);
     }
+}
+
+bool EditorDockController::CancelDragAndRestore() {
+    if (!Ready() || !drag_.has_value()) {
+        return false;
+    }
+    const bool rearranged = drag_->detached || drag_->manualTabDrag || drag_->kind == DockHitKind::Splitter;
+    const std::optional<EditorLayoutPreset> origin = std::move(dragOrigin_);
+    CancelDrag();
+    if (rearranged && origin.has_value() && EditorWorkspaceArrangement::Apply(*dockModel_, *origin)) {
+        EditorFloatingWindowSync::Reconcile(*dockModel_, *floatingWindows_);
+    }
+    return true;
 }
 
 void EditorDockController::HandleCaptureChanged(HWND newCapture) noexcept {

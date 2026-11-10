@@ -16,6 +16,7 @@
 #include "app/EditorPendingTextEditCommitter.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
+#include "app/panels/EditorPanelCloser.hpp"
 #include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorPointerDragSourceResolver.hpp"
@@ -191,69 +192,6 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
         }
     }
     return nullptr;
-}
-
-[[nodiscard]] bool ResolveDirtyMaterialEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
-    // Same contract as the window-close twin in EditorWindowLifecycleHandler: settle any graph gesture before
-    // the dirty check, so the prompt describes - and a Save writes - a document the user could have confirmed.
-    // The click that reaches this row normally ends a gesture on its own, but not every gesture dies at the
-    // mouse-up (a wire dropped on empty canvas stays armed while its node menu is open), so do not rely on it.
-    static_cast<void>(sceneContext.SettleMaterialGraphGesture());
-
-    if (!sceneContext.HasDirtyMaterialAssetEdit()) {
-        return true;
-    }
-    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = std::string{ EditorText("materialDirty.title", "Unsaved Material") },
-        .message = std::string{ EditorText("materialDirty.beforeCloseMaterialEditor", "Save changes to the open material before closing the Material Editor?") },
-        .supportingText = std::string{ EditorText("materialDirty.supporting", "Choose whether to preserve the current material changes.") },
-        .primaryLabel = std::string{ EditorText("common.save", "Save") },
-        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
-        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
-        .icon = HeroIconKind::RectangleGroup,
-    });
-    const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
-    switch (result) {
-    case EditorChoiceDialogResult::Primary:
-        return sceneContext.SaveMaterialEditorAsset(materialId);
-    case EditorChoiceDialogResult::Secondary:
-        return sceneContext.RevertMaterialEditorAsset(materialId);
-    case EditorChoiceDialogResult::Cancel:
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool ResolveDirtySkeletalMeshEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
-    if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
-    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = std::string{ EditorText("skeletalDirty.title", "Unsaved Skeletal Asset") },
-        .message = std::string{ EditorText("skeletalDirty.beforeCloseTab", "Save changes to the open skeletal assets before closing the editor?") },
-        .supportingText = std::string{ EditorText("skeletalDirty.supporting", "Choose whether to preserve the current asset changes.") },
-        .primaryLabel = std::string{ EditorText("common.save", "Save") },
-        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
-        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
-        .icon = HeroIconKind::Skeleton,
-    });
-    if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveSkeletalMeshEditorAsset();
-    if (result == EditorChoiceDialogResult::Secondary) return sceneContext.RevertSkeletalMeshEditorAsset();
-    return false;
-}
-
-[[nodiscard]] bool ResolveDirtyAnimatorEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
-    if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
-    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = std::string{ EditorText("animatorDirty.title", "Unsaved Animator Controller") },
-        .message = std::string{ EditorText("animatorDirty.beforeCloseTab", "Save changes to the open Animator Controller before closing the editor?") },
-        .supportingText = std::string{ EditorText("animatorDirty.supporting", "Choose whether to preserve the current controller changes.") },
-        .primaryLabel = std::string{ EditorText("common.save", "Save") },
-        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
-        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
-        .icon = HeroIconKind::Gamepad2,
-    });
-    if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveAnimatorEditorAsset();
-    if (result == EditorChoiceDialogResult::Secondary) return sceneContext.RevertAnimatorEditorAsset();
-    return false;
 }
 
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
@@ -534,36 +472,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (messageWindow == mainWindow_) {
         const DockLayout layout = DockMainLayoutResolver::Resolve(mainWindow_, dockModel_, metrics_);
         if (const DockPanelLayout* closeTab = TabCloseHit(layout, x, y); closeTab != nullptr) {
-            const DockPanel* panel = dockModel_.Queries().FindPanel(closeTab->panelId);
-            if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor && !ResolveDirtyMaterialEditorTabClose(messageWindow, sceneContext_)) {
-                return;
-            }
-            if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor && !ResolveDirtySkeletalMeshEditorTabClose(messageWindow, sceneContext_)) {
-                return;
-            }
-            if (panel != nullptr && panel->kind == DockPanelKind::TimelineEditor && !TimelineEditorPanel::ResolveClose(messageWindow, sceneContext_)) return;
-            if (panel != nullptr && panel->kind == DockPanelKind::TimelineEditor) sceneContext_.PauseTimelineEditorPreview();
-            if (panel && panel->kind == DockPanelKind::GameplayGraphEditor && !GameplayGraphEditorPanel::ResolveClose(messageWindow,sceneContext_)) return;
-            if (panel && panel->kind == DockPanelKind::BlendSpace2DEditor && !BlendSpace2DEditorPanel::ResolveClose(messageWindow,sceneContext_)) return;
-            if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor && !ResolveDirtyAnimatorEditorTabClose(messageWindow, sceneContext_)) {
-                return;
-            }
-            if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor &&
-                !EditorParticleDocumentLifecycle::Resolve(
-                    messageWindow, sceneContext_,
-                    kb::particle_editor::ParticleDocumentTransition::CloseTab)) {
-                return;
-            }
-            if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
-                if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor) {
-                    sceneContext_.CloseMaterialEditorAsset();
-                }
-                if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor) {
-                    sceneContext_.CloseSkeletalMeshEditorAsset();
-                }
-                if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) {
-                    sceneContext_.CloseParticleEditorAsset();
-                }
+            if (EditorPanelCloser::Close(messageWindow, closeTab->panelId, dockModel_, floatingWindows_, sceneContext_)) {
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             }

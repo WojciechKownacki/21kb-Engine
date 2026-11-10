@@ -27,6 +27,7 @@
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
+#include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -553,6 +554,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         static HBRUSH consoleDetailBrush = CreateSolidBrush(RGB(20, 22, 24));
         return reinterpret_cast<LRESULT>(consoleDetailBrush);
     }
+    case WM_PRINTCLIENT: {
+        // The same painters, drawing the whole window into the device context the message carries.
+        const GdiBackBufferRenderer::PrintScope print(messageWindow, reinterpret_cast<HDC>(wparam));
+        return Handle(messageWindow, WM_PAINT, 0, 0);
+    }
     case WM_PAINT:
         EditorPaintDispatcher{
             context_.mainWindow,
@@ -722,6 +728,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (wparam == VK_ESCAPE && context_.dockController.CancelDragAndRestore()) {
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (wparam == '1' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
             !ModifierDown(VK_SHIFT)) {
             if (context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Scene, DockArea::Center)) {
