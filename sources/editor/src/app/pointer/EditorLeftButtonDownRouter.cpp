@@ -450,6 +450,1552 @@ void EditorLeftButtonDownRouter::HandleWorld2DMapClick(InspectorPropertyId prope
     viewport.RequestPresent();
 }
 
+bool EditorLeftButtonDownRouter::HandleParticleEditorDown(HWND messageWindow, int x, int y, const RECT& particleEditorContent) {
+    sceneContext_.SetParticleEditorFocused(true);
+    if (!sceneContext_.HasParticleEditorAsset())
+        return true;
+    const auto rows = sceneContext_.ParticleEditorEmitterRows();
+    const auto inspector = sceneContext_.ParticleEditorInspector();
+    const auto recipes = sceneContext_.ParticleEditorRecipes();
+    const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
+        particleEditorContent, rows,
+        sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow), &inspector,
+        recipes.size(), &sceneContext_.ParticleEditorWorkspace());
+    ParticleEditorPanelHit hit = ParticleEditorPanelLayoutResolver::HitTest(layout, x, y);
+    if (hit.action != ParticleEditorPanelAction::None) {
+        kb::assets::AssetId selectedMaterial{};
+        std::string editedValue;
+        if (hit.action == ParticleEditorPanelAction::PickOutputMaterial) {
+            const auto selected = EditorMaterialAssetPickerDialog::Show(
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
+            if (!selected.accepted) return true;
+            selectedMaterial = selected.assetId;
+        } else if (hit.action == ParticleEditorPanelAction::PickOutputMesh) {
+            const auto selected = EditorMeshAssetPickerDialog::Show(
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, {});
+            if (!selected.accepted) return true;
+            selectedMaterial = selected.assetId;
+        } else if (hit.action == ParticleEditorPanelAction::PickOutputTexture) {
+            const auto selected = EditorTextureAssetPickerDialog::Show(
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, {}, EditorTextureAssetPickerFilter::Texture2D);
+            if (!selected.accepted) return true;
+            selectedMaterial = selected.assetId;
+        } else if (hit.action == ParticleEditorPanelAction::AddModule) {
+            // The button is drawn disabled once the emitter holds the maximum number of modules.
+            if (inspector.modules.size() >= kb::scene::kParticleEffectMaxModulesPerEmitter) return true;
+            HMENU menu = CreatePopupMenu();
+            if (menu == nullptr) return true;
+            // Index = ParticleModuleType.
+            const std::array<std::string, 14> labels{
+                std::string{ EditorText("particleEditor.module.initialVelocity", "Initial Velocity") },
+                std::string{ EditorText("particleEditor.module.gravity", "Gravity") },
+                std::string{ EditorText("particleEditor.module.wind", "Wind") },
+                std::string{ EditorText("particleEditor.module.drag", "Drag") },
+                std::string{ EditorText("particleEditor.module.colorOverLife", "Color Over Life") },
+                std::string{ EditorText("particleEditor.module.sizeOverLife", "Size Over Life") },
+                std::string{ EditorText("particleEditor.module.alphaOverLife", "Alpha Over Life") },
+                std::string{ EditorText("particleEditor.module.collisionPlane", "Collision Plane") },
+                std::string{ EditorText("particleEditor.module.subEmitter", "Sub Emitter") },
+                std::string{ EditorText("particleEditor.module.noise", "Noise") },
+                std::string{ EditorText("particleEditor.module.axisRotation", "Axis Rotation") },
+                std::string{ EditorText("particleEditor.module.attraction", "Attraction") },
+                std::string{ EditorText("particleEditor.module.torusSwirl", "Torus Swirl") },
+                std::string{ EditorText("particleEditor.module.separation", "Separation") },
+            };
+            for (UINT index = 0U; index < static_cast<UINT>(labels.size()); ++index) {
+                const UINT flags = index == static_cast<UINT>(kb::scene::ParticleModuleType::SubEmitter) &&
+                    rows.size() < 2U ? MF_STRING | MF_GRAYED : MF_STRING;
+                kb::editor::AppendMenuUtf8(menu, flags, 100U + index, labels[index].c_str());
+            }
+            POINT point{x, y}; ClientToScreen(messageWindow, &point);
+            const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
+                TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
+            DestroyMenu(menu);
+            if (choice < 100U || choice >= 100U + static_cast<UINT>(labels.size())) return true;
+            hit.moduleType = static_cast<kb::scene::ParticleModuleType>(choice - 100U);
+            if (hit.moduleType == kb::scene::ParticleModuleType::SubEmitter) {
+                HMENU targets = CreatePopupMenu();
+                if (targets == nullptr) return true;
+                std::array<kb::scene::ParticleStableId, kb::scene::kParticleEffectMaxEmitters> targetIds{};
+                UINT targetCount = 0U;
+                for (const auto& row : rows) {
+                    if (row.emitterId == inspector.emitterId) continue;
+                    targetIds[targetCount] = row.emitterId;
+                    kb::editor::AppendMenuUtf8(targets, MF_STRING, 200U + targetCount, row.name.c_str());
+                    ++targetCount;
+                }
+                const UINT targetChoice = TrackPopupMenu(targets, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
+                    TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
+                DestroyMenu(targets);
+                if (targetChoice < 200U || targetChoice >= 200U + targetCount) return true;
+                hit.targetEmitterId = targetIds[targetChoice - 200U];
+            }
+        } else if (hit.action == ParticleEditorPanelAction::DragPropertySlider) {
+            if (ParticleEditorPanelInteraction::BeginPropertySlider(sceneContext_, layout, hit, x)) {
+                SetCapture(messageWindow);
+                sceneViewport_.RequestPresent();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            }
+            return true;
+        } else if (hit.action == ParticleEditorPanelAction::ToggleProperty) {
+            static_cast<void>(ParticleEditorPanelInteraction::Execute(sceneContext_, hit));
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        } else if (hit.action == ParticleEditorPanelAction::EditProperty) {
+            if (hit.propertyIndex >= inspector.properties.size() || !inspector.properties[hit.propertyIndex].editable)
+                return true;
+            const auto& property = inspector.properties[hit.propertyIndex];
+            if (hit.propertyChoice != 0xFFFFFFFFU) {
+                editedValue = std::to_string(hit.propertyChoice);
+            } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Color) {
+                POINT screen{x, y};
+                ClientToScreen(messageWindow, &screen);
+                const auto picked = EditorMaterialColorPickerDialog::Show(
+                    mainWindow_, property.label,
+                    {property.colorValue.r, property.colorValue.g, property.colorValue.b, property.colorValue.a},
+                    &screen);
+                if (!picked.has_value()) return true;
+                editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatColor({
+                    (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]});
+            } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Gradient) {
+                kb::math::Gradient gradient = property.gradient;
+                if (gradient.stops.empty()) return true;
+                const RECT& preview = layout.propertyRows[hit.propertyIndex].curvePreview;
+                const float width = static_cast<float>(std::max<LONG>(1, preview.right - preview.left));
+                const float t = std::clamp(static_cast<float>(x - preview.left) / width, 0.0F, 1.0F);
+                std::size_t nearest = 0U;
+                float best = std::abs(gradient.stops[0].time - t);
+                for (std::size_t index = 1U; index < gradient.stops.size(); ++index) {
+                    const float distance = std::abs(gradient.stops[index].time - t);
+                    if (distance < best) {
+                        best = distance;
+                        nearest = index;
+                    }
+                }
+                POINT screen{x, y};
+                ClientToScreen(messageWindow, &screen);
+                const auto& stop = gradient.stops[nearest];
+                const auto picked = EditorMaterialColorPickerDialog::Show(
+                    mainWindow_, property.label,
+                    {stop.color.r, stop.color.g, stop.color.b, stop.color.a}, &screen);
+                if (!picked.has_value()) return true;
+                gradient.stops[nearest].color = {
+                    (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]};
+                editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatGradient(gradient);
+            } else {
+                const bool isCurve = property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve ||
+                    property.label == "Curve" || property.label == "Rate curve";
+                const auto edited = EditorMaterialParameterValueDialog::Show(
+                    mainWindow_, property.label, property.value,
+                    isCurve ? EditorText("particleEditor.curveHint", "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3")
+                    : EditorText("materialParameter.valueHint", "Use numbers like: 0.25 or 1 0 0 1"));
+                if (!edited.has_value()) return true;
+                editedValue = *edited;
+            }
+        }
+        if (ParticleEditorPanelInteraction::Execute(sceneContext_, hit, selectedMaterial, editedValue) &&
+            (hit.action == ParticleEditorPanelAction::BeginEmitterDrag ||
+             hit.action == ParticleEditorPanelAction::BeginModuleDrag)) {
+            SetCapture(messageWindow);
+        }
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (PointInRect(layout.preview, x, y)) {
+        static_cast<void>(sceneContext_.BeginParticlePreviewOrbit(x, y));
+        SetCapture(messageWindow);
+        sceneViewport_.RequestPresent();
+        return true;
+    }
+    return false;
+}
+
+bool EditorLeftButtonDownRouter::HandleMaterialEditorDown(HWND messageWindow, int x, int y, const RECT& materialEditorContent) {
+    const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
+    const kb::assets::AssetMetadata* materialMetadata = materialId.IsValid()
+        ? sceneContext_.Scene().Assets().Manager().Registry().Find(materialId)
+        : nullptr;
+    const bool editingMaterialInstance = materialMetadata != nullptr && materialMetadata->type == "RenderMaterialInstance";
+    if (sceneContext_.IsMaterialGraphTexturePickerOpen()) {
+        const MaterialEditorGraphTexturePickerHit pickerHit =
+            MaterialEditorPanelRenderer::GraphTexturePickerHit(materialEditorContent, sceneContext_, x, y);
+        const auto acceptTexturePickerSelection = [&]() {
+            const kb::assets::AssetId textureId = sceneContext_.MaterialGraphTexturePickerSelectedAssetId();
+            static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(
+                sceneContext_.MaterialGraphTexturePickerAssetId(),
+                sceneContext_.MaterialGraphTexturePickerNodeId(),
+                textureId));
+            static_cast<void>(sceneContext_.CloseMaterialGraphTexturePicker());
+        };
+        switch (pickerHit.kind) {
+        case MaterialEditorGraphTexturePickerHitKind::Search:
+            break;
+        case MaterialEditorGraphTexturePickerHitKind::Texture:
+            if (sceneContext_.MaterialGraphTexturePickerSelectedAssetId() == pickerHit.assetId) {
+                acceptTexturePickerSelection();
+            } else {
+                static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected(pickerHit.assetId));
+            }
+            break;
+        case MaterialEditorGraphTexturePickerHitKind::Clear:
+            static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected({}));
+            break;
+        case MaterialEditorGraphTexturePickerHitKind::Accept:
+            acceptTexturePickerSelection();
+            break;
+        case MaterialEditorGraphTexturePickerHitKind::Cancel:
+        case MaterialEditorGraphTexturePickerHitKind::Backdrop:
+            static_cast<void>(sceneContext_.CloseMaterialGraphTexturePicker());
+            break;
+        case MaterialEditorGraphTexturePickerHitKind::None:
+            break;
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (sceneContext_.IsMaterialGraphContextMenuOpen()) {
+        const MaterialEditorGraphContextMenuHit menuHit = MaterialEditorPanelRenderer::GraphContextMenuHit(sceneContext_, x, y);
+        if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::Search) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+        if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::Category) {
+            static_cast<void>(sceneContext_.ToggleMaterialGraphContextMenuCategory(menuHit.categoryIndex));
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+        if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::FavoriteToggle) {
+            static_cast<void>(sceneContext_.ToggleMaterialGraphPaletteFavorite(menuHit.command));
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+        if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::Command) {
+            if (editingMaterialInstance) {
+                static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+            const MaterialEditorPanelLayout menuLayout = MaterialEditorPanelRenderer::ResolveLayout(materialEditorContent);
+            sceneContext_.SetMaterialGraphCanvasViewport(
+                menuLayout.graphCanvas.left,
+                menuLayout.graphCanvas.top,
+                MaterialEditorPanelRectWidth(menuLayout.graphCanvas),
+                MaterialEditorPanelRectHeight(menuLayout.graphCanvas));
+            const bool commandEnabled = MaterialEditorGraphContextMenuCommandEnabled(
+                menuHit.command,
+                sceneContext_.SelectedMaterialGraphNodeIds().size(),
+                sceneContext_.SelectedMaterialGraphCommentId() != 0U);
+            // The deferred pointer-drag path exists only for the "drag a palette command onto the canvas
+            // to drop it there" gesture. When the menu was opened by dropping a wire (pin-filtered), there
+            // is no drop-placement to choose - the node goes at the wire's drop point and auto-connects -
+            // so execute it immediately on press. Deferring to mouse-up left the pick at the mercy of the
+            // pin-connection release branch (which reopened the menu) and of any micro-movement flipping
+            // the drag to "active" (which skipped the mouse-up executor): both made "pick a node -> nothing
+            // appears". Immediate execution here removes that whole fragile path for the wire-drop case.
+            const bool takesDeferredPath = commandEnabled &&
+                MaterialEditorGraphMenuCommandCreatesCanvasObject(menuHit.command) &&
+                !sceneContext_.IsMaterialGraphContextMenuPinFiltered();
+            if (takesDeferredPath) {
+                pointerDrag_.Clear();
+                pointerDrag_.kind = EditorPointerDragKind::MaterialGraphPaletteCommand;
+                pointerDrag_.materialGraphAssetId = materialId;
+                pointerDrag_.materialGraphCommand = menuHit.command;
+                pointerDrag_.assetLabel = std::string{ MaterialEditorGraphContextMenuCommandName(menuHit.command) };
+                pointerDrag_.startX = x;
+                pointerDrag_.startY = y;
+                pointerDrag_.x = x;
+                pointerDrag_.y = y;
+                SetCapture(messageWindow);
+            } else if (commandEnabled) {
+                static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(menuHit.command));
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+        const bool hadPendingPinConnection = sceneContext_.HasMaterialGraphPinConnection();
+        static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
+        if (hadPendingPinConnection) {
+            // Dismissing the "what do you want to connect?" menu leaves the wire unplugged rather than
+            // silently restoring the link the drag pulled off.
+            static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(materialEditorContent, x, y);
+    if (command != MaterialEditorPanelCommand::None) {
+        static_cast<void>(ExecuteMaterialEditorPanelCommand(sceneContext_, materialId, command));
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+
+    const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(materialEditorContent);
+    const MaterialEditorOpaqueOverlayHit opaqueOverlay =
+        MaterialEditorPanelRenderer::OpaqueOverlayAt(materialEditorContent, sceneContext_, x, y);
+    if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Diagnostics) {
+        // A diagnostic tied to a node jumps to it; otherwise the click is swallowed by the overlay.
+        if (const std::uint32_t nodeId =
+                MaterialEditorPanelRenderer::DiagnosticsRowNodeAt(materialEditorContent, sceneContext_, x, y);
+            nodeId != 0U) {
+            static_cast<void>(sceneContext_.FocusMaterialGraphNode(nodeId));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Preview) {
+        // Drag the preview to orbit the object around it. Capture so the drag continues
+        // even as the cursor leaves the small overlay.
+        static_cast<void>(sceneContext_.BeginMaterialPreviewOrbit(x, y));
+        SetCapture(messageWindow);
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::None &&
+        opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::Details) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
+        sceneContext_.AssetBrowser().ClearSelection();
+        sceneContext_.FocusMaterialGraph(true);
+        EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
+        const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
+            ? sceneContext_.MaterialEditor().WorkingCopy()
+            : sceneContext_.ReadMaterialDocumentAsset(materialId);
+        if (material.has_value()) {
+            if (sceneContext_.MaterialEditor().InfoPanelVisible()) {
+                const MaterialEditorPanelDetailsRows detailsRows =
+                    MaterialEditorPanelRenderer::DetailsRowsForDocument(
+                        sceneContext_,
+                        *material,
+                        editingMaterialInstance);
+                const MaterialEditorDetailsLayout detailsLayout =
+                    MaterialEditorPanelRenderer::ResolveDetailsLayout(
+                        materialEditorContent,
+                        detailsRows,
+                        sceneContext_.MaterialEditorDetailsScrollOffset());
+                const MaterialEditorDetailsHit detailsHit =
+                    MaterialEditorPanelRenderer::DetailsHitAt(detailsLayout, detailsRows, x, y);
+                if (detailsHit.kind == MaterialEditorDetailsHitKind::Search) {
+                    sceneContext_.FocusMaterialEditorFind(true);
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+                if (detailsHit.kind == MaterialEditorDetailsHitKind::FindResult) {
+                    static_cast<void>(sceneContext_.FocusMaterialEditorFindResult(
+                        detailsHit.resultIndex,
+                        MaterialEditorPanelRectWidth(materialLayout.graphCanvas),
+                        MaterialEditorPanelRectHeight(materialLayout.graphCanvas)));
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+                if (detailsHit.kind == MaterialEditorDetailsHitKind::NodeProperty) {
+                    const MaterialEditorGraphNodePropertyHit& property = detailsHit.nodeProperty;
+                    // Node id 0 means the material-settings rows, which are not a node; only sync the
+                    // selection for a real node.
+                    if (property.nodeId != 0U) {
+                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(property.nodeId));
+                    }
+                    switch (property.kind) {
+                    case MaterialEditorGraphNodePropertyHitKind::TextField:
+                        sceneContext_.CloseMaterialGraphNodeEnumDropdown();
+                        if (property.stableId == "node.name") {
+                            static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property.nodeId));
+                        } else if (property.nodeId == 0U) {
+                            // A typed material setting (Max World Position Offset Displacement).
+                            const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                                messageWindow,
+                                property.displayName,
+                                MaterialEditorPanelParameterValueText(property.value));
+                            if (value.has_value()) {
+                                static_cast<void>(sceneContext_.SetMaterialGraphSetting(materialId, property.stableId, *value));
+                            }
+                        } else {
+                            const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                                messageWindow,
+                                property.displayName,
+                                MaterialEditorPanelParameterValueText(property.value));
+                            if (value.has_value()) {
+                                static_cast<void>(sceneContext_.SetMaterialGraphNodeTextProperty(
+                                    materialId,
+                                    property.nodeId,
+                                    property.stableId,
+                                    *value));
+                            }
+                        }
+                        break;
+                    case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
+                        if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(messageWindow, property.value, ScreenPointFor(messageWindow, x, y))) {
+                            static_cast<void>(sceneContext_.SetMaterialGraphNodeColorPropertyValue(
+                                materialId,
+                                property.nodeId,
+                                property.stableId,
+                                *color));
+                        }
+                        break;
+                    case MaterialEditorGraphNodePropertyHitKind::Slider:
+                        sceneContext_.CloseMaterialGraphNodeEnumDropdown();
+                        static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, property.nodeId));
+                        break;
+                    case MaterialEditorGraphNodePropertyHitKind::EnumField:
+                        // Node id 0 is the material itself (domain / shading model / blend mode), which
+                        // uses its own dropdown-state slot; a real node uses the node-keyed one.
+                        if (property.nodeId == 0U) {
+                            sceneContext_.ToggleMaterialGraphSettingDropdown(property.stableId);
+                        } else {
+                            sceneContext_.ToggleMaterialGraphNodeEnumDropdown(property.nodeId, property.stableId);
+                        }
+                        break;
+                    case MaterialEditorGraphNodePropertyHitKind::EnumOption:
+                        if (property.nodeId == 0U) {
+                            static_cast<void>(sceneContext_.SetMaterialGraphSetting(materialId, property.stableId, property.optionValue));
+                        } else {
+                            static_cast<void>(sceneContext_.SetMaterialGraphNodeEnumValue(materialId, property.nodeId, property.stableId, property.optionValue));
+                        }
+                        break;
+                    case MaterialEditorGraphNodePropertyHitKind::TexturePicker:
+                        sceneContext_.CloseMaterialGraphNodeEnumDropdown();
+                        static_cast<void>(sceneContext_.OpenMaterialGraphTexturePicker(
+                            materialId,
+                            property.nodeId,
+                            TextureGraphAssetId(*material, property.nodeId)));
+                        break;
+                    case MaterialEditorGraphNodePropertyHitKind::None:
+                        break;
+                    }
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+                if (detailsHit.kind == MaterialEditorDetailsHitKind::Parameter) {
+                    const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
+                    const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                        messageWindow,
+                        parameter.displayName,
+                        MaterialEditorPanelParameterValueText(parameter.value));
+                    if (value.has_value()) {
+                        if (editingMaterialInstance) {
+                            static_cast<void>(sceneContext_.SetMaterialInstanceEditorGraphParameterValue(
+                                materialId,
+                                parameter.stableId,
+                                parameter.type,
+                                *value));
+                        } else {
+                            static_cast<void>(sceneContext_.SetMaterialEditorGraphParameterValue(
+                                materialId,
+                                parameter.stableId,
+                                parameter.type,
+                                *value));
+                        }
+                    }
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+                if (detailsHit.kind == MaterialEditorDetailsHitKind::TextureParameter) {
+                    const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
+                    const EditorTextureAssetPickerDialog::Result result = EditorTextureAssetPickerDialog::Show(
+                        messageWindow,
+                        MakeEditorDarkTheme(),
+                        sceneContext_,
+                        kb::assets::AssetId{ parameter.value.assetId },
+                        EditorTextureAssetPickerFilter::Texture2D);
+                    if (result.accepted) {
+                        if (editingMaterialInstance) {
+                            static_cast<void>(sceneContext_.SetMaterialInstanceEditorTextureParameterValue(
+                                materialId,
+                                parameter.stableId,
+                                result.assetId));
+                        } else {
+                            const auto materialSlot = [&]() -> std::optional<EditorMaterialTextureSlot> {
+                                if (parameter.stableId == "albedoTextureAssetId") return EditorMaterialTextureSlot::Albedo;
+                                if (parameter.stableId == "normalTextureAssetId") return EditorMaterialTextureSlot::Normal;
+                                if (parameter.stableId == "metallicRoughnessTextureAssetId") return EditorMaterialTextureSlot::MetallicRoughness;
+                                if (parameter.stableId == "occlusionTextureAssetId") return EditorMaterialTextureSlot::Occlusion;
+                                if (parameter.stableId == "emissiveTextureAssetId") return EditorMaterialTextureSlot::Emissive;
+                                return std::nullopt;
+                            }();
+                            if (materialSlot.has_value()) {
+                                static_cast<void>(sceneContext_.SetMaterialTextureAsset(materialId, *materialSlot, result.assetId));
+                            }
+                        }
+                    }
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+                if (detailsHit.kind == MaterialEditorDetailsHitKind::Backdrop) {
+                    sceneContext_.FocusMaterialEditorFind(false);
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+            }
+            if (editingMaterialInstance) {
+                static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                if (const std::optional<std::uint32_t> nodeId = MaterialEditorPanelRenderer::GraphNodeAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId));
+                } else if (const std::optional<std::uint32_t> commentId = MaterialEditorPanelRenderer::GraphCommentAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphComment(*commentId));
+                } else {
+                    static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                    static_cast<void>(sceneContext_.ClearMaterialGraphCommentSelection());
+                }
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+            if (LeftAltDown()) {
+                if (const std::optional<MaterialEditorGraphLinkHit> link = MaterialEditorPanelRenderer::GraphLinkAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.DisconnectMaterialGraphLink(
+                        materialId,
+                        link->fromNodeId,
+                        link->fromPin,
+                        link->toNodeId,
+                        link->toPin));
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+            }
+            if (const std::optional<std::uint32_t> textureSampleNodeId = MaterialEditorPanelRenderer::GraphTextureSampleAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                static_cast<void>(sceneContext_.SelectMaterialGraphNode(*textureSampleNodeId));
+                static_cast<void>(sceneContext_.OpenMaterialGraphTexturePicker(
+                    materialId,
+                    *textureSampleNodeId,
+                    TextureGraphAssetId(*material, *textureSampleNodeId)));
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+            if (const std::optional<MaterialEditorGraphColorWatcherHit> colorWatcher =
+                    MaterialEditorPanelRenderer::GraphColorWatcherAt(materialEditorContent, *material, sceneContext_, materialId, x, y)) {
+                static_cast<void>(sceneContext_.SelectMaterialGraphNode(colorWatcher->nodeId));
+                static_cast<void>(ApplyGraphColorWatcherHit(messageWindow, sceneContext_, materialId, *colorWatcher, ScreenPointFor(messageWindow, x, y)));
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+            if (const std::optional<MaterialEditorGraphConstantValueHit> constant = MaterialEditorPanelRenderer::GraphConstantValueAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                static_cast<void>(sceneContext_.SelectMaterialGraphNode(constant->nodeId));
+                static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, constant->nodeId));
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+            if (const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                // Unplugging a wire is not a selection gesture: selecting the node that owns the input
+                // pin would leave e.g. Material Output selected just because a link was pulled off it.
+                const bool detached = pin->direction == MaterialEditorGraphPinDirection::Input &&
+                    sceneContext_.DetachMaterialGraphInputPinConnection(materialId, pin->nodeId, pin->pin, x, y);
+                if (detached) {
+                    static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                } else {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(pin->nodeId));
+                }
+                const bool connectionStarted = detached ||
+                    (pin->direction == MaterialEditorGraphPinDirection::Output
+                        ? sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, true, x, y)
+                        : sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, false, x, y));
+                if (connectionStarted) {
+                    SetCapture(messageWindow);
+                }
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+            static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+            if (const std::optional<std::uint32_t> nodeId = MaterialEditorPanelRenderer::GraphNodeAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                const bool ctrl = KeyDown(VK_CONTROL);
+                const bool shift = KeyDown(VK_SHIFT);
+                if (ctrl) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId, false, true));
+                } else if (shift) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId, true, false));
+                } else if (!sceneContext_.IsMaterialGraphNodeSelected(*nodeId)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId));
+                }
+                if (sceneContext_.IsMaterialGraphNodeSelected(*nodeId) && sceneContext_.BeginMaterialGraphNodeDrag(materialId, *nodeId, x, y)) {
+                    SetCapture(messageWindow);
+                }
+            } else if (const std::optional<std::uint32_t> commentId = MaterialEditorPanelRenderer::GraphCommentAt(materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                if (!sceneContext_.IsMaterialGraphCommentSelected(*commentId)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphComment(*commentId));
+                }
+                if (sceneContext_.BeginMaterialGraphCommentDrag(materialId, *commentId, x, y)) {
+                    SetCapture(messageWindow);
+                }
+            } else if (const std::optional<kb::render::RenderMaterialGraphNodeKind> shortcutKind = MaterialGraphShortcutNodeKind()) {
+                const POINT graphPoint = MaterialGraphDocumentPointFromWindow(materialLayout, sceneContext_, x, y);
+                static_cast<void>(sceneContext_.AddMaterialGraphNode(materialId, *shortcutKind, graphPoint.x, graphPoint.y));
+            } else {
+                static_cast<void>(sceneContext_.ClearMaterialGraphCommentSelection());
+                const MaterialGraphSelectionOperation selectionOperation =
+                    ResolveMaterialGraphSelectionOperation(
+                        KeyDown(VK_MENU),
+                        KeyDown(VK_CONTROL),
+                        KeyDown(VK_SHIFT));
+                // Clicking empty canvas drops the selection right away instead of waiting for the box
+                // selection to end; the modifier operations keep it, because they extend it.
+                if (selectionOperation == MaterialGraphSelectionOperation::Replace) {
+                    static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                }
+                if (sceneContext_.BeginMaterialGraphBoxSelection(materialId, x, y, selectionOperation)) {
+                    SetCapture(messageWindow);
+                }
+            }
+        } else {
+            static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    return false;
+}
+
+bool EditorLeftButtonDownRouter::HandleSkeletalMeshEditorDown(HWND messageWindow, int x, int y, const RECT& skeletalMeshEditorContent) {
+    const SkeletalMeshEditorPanelLayout skeletalLayout =
+        SkeletalMeshEditorPanelLayoutResolver::Resolve(
+            skeletalMeshEditorContent,
+            sceneContext_.SkeletalMeshEditorToolboxWidth(),
+            sceneContext_.SkeletalMeshEditorSkeletonTreeWidth(),
+            sceneContext_.SkeletalMeshEditorSkeletonTreeHeight());
+    if (PointInRect(skeletalLayout.toolboxSplitter, x, y)) {
+        sceneContext_.SetSkeletalMeshEditorToolboxWidth(
+            x - skeletalMeshEditorContent.left);
+        sceneContext_.BeginSkeletalMeshEditorToolboxWidthDrag();
+        SetCapture(messageWindow);
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (PointInRect(skeletalLayout.treeDetailsSplitter, x, y)) {
+        sceneContext_.SetSkeletalMeshEditorSkeletonTreeHeight(
+            SkeletalMeshEditorPanelLayoutResolver::SkeletonTreeHeightFromPointer(
+                skeletalMeshEditorContent, y));
+        sceneContext_.BeginSkeletalMeshEditorTreeDetailsHeightDrag();
+        SetCapture(messageWindow);
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (PointInRect(skeletalLayout.skeletonTreeSplitter, x, y)) {
+        sceneContext_.SetSkeletalMeshEditorSkeletonTreeWidth(
+            skeletalMeshEditorContent.right - x);
+        sceneContext_.BeginSkeletalMeshEditorSkeletonTreeWidthDrag();
+        SetCapture(messageWindow);
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    const int treeMaxScroll = SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+        skeletalMeshEditorContent, sceneContext_);
+    if (treeMaxScroll > 0) {
+        const RECT treeTrack = SkeletalMeshEditorPanelRenderer::TreeScrollbarTrack(
+            skeletalMeshEditorContent, sceneContext_);
+        const RECT treeThumb = SkeletalMeshEditorPanelRenderer::TreeScrollbarThumb(
+            skeletalMeshEditorContent, sceneContext_);
+        if (PointInRect(treeThumb, x, y)) {
+            sceneContext_.BeginSkeletalMeshEditorTreeScrollbarDrag(y);
+            SetCapture(messageWindow);
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+        if (PointInRect(treeTrack, x, y)) {
+            const RECT treeList = SkeletalMeshEditorPanelRenderer::TreeListRect(
+                skeletalMeshEditorContent, sceneContext_);
+            const int page = std::max(
+                SkeletalMeshEditorPanelRenderer::TreeRowHeight,
+                RectHeight(treeList) - SkeletalMeshEditorPanelRenderer::TreeRowHeight);
+            const int offset = sceneContext_.SkeletalMeshEditorTreeScrollOffset() +
+                (y < treeThumb.top ? -page : page);
+            static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                offset, treeMaxScroll));
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+    }
+    const int detailsMaxScroll = SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(
+        skeletalMeshEditorContent, sceneContext_);
+    if (detailsMaxScroll > 0) {
+        const RECT detailsTrack = SkeletalMeshEditorPanelRenderer::DetailsScrollbarTrack(
+            skeletalMeshEditorContent, sceneContext_);
+        const RECT detailsThumb = SkeletalMeshEditorPanelRenderer::DetailsScrollbarThumb(
+            skeletalMeshEditorContent, sceneContext_);
+        if (PointInRect(detailsThumb, x, y)) {
+            sceneContext_.BeginSkeletalMeshEditorDetailsScrollbarDrag(y);
+            SetCapture(messageWindow);
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+        if (PointInRect(detailsTrack, x, y)) {
+            const RECT detailsList = SkeletalMeshEditorPanelRenderer::DetailsListRect(
+                skeletalMeshEditorContent, sceneContext_);
+            const int page = std::max(22, RectHeight(detailsList) - 22);
+            const int offset = sceneContext_.SkeletalMeshEditorDetailsScrollOffset() +
+                (y < detailsThumb.top ? -page : page);
+            static_cast<void>(sceneContext_.SetSkeletalMeshEditorDetailsScrollOffset(
+                offset, detailsMaxScroll));
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+    }
+    if (const std::optional<SkeletalAssetDocument> document =
+            SkeletalMeshEditorPanelRenderer::LinkedDocumentAt(
+                skeletalMeshEditorContent, sceneContext_, x, y);
+        document.has_value()) {
+        const bool skeletonDocument = *document == SkeletalAssetDocument::Skeleton;
+        if (sceneContext_.SwitchSkeletalMeshEditorDocument(skeletonDocument)) {
+            const kb::assets::AssetId assetId = sceneContext_.RequestedSkeletalMeshEditorAssetId();
+            const kb::assets::AssetMetadata* metadata =
+                sceneContext_.Scene().Assets().Manager().Registry().Find(assetId);
+            if (metadata != nullptr) {
+                const std::string filename = metadata->virtualPath.filename().string();
+                static_cast<void>(dockModel_.Commands().SetPanelTitle(
+                    DockPanelKind::SkeletalMeshEditor,
+                    filename.empty() ? metadata->name : filename));
+            }
+        }
+    } else if (const std::optional<SkeletalAssetCommand> command =
+            SkeletalMeshEditorPanelRenderer::CommandAt(
+                skeletalMeshEditorContent, sceneContext_, x, y);
+        command.has_value()) {
+        switch (*command) {
+        case SkeletalAssetCommand::Save:
+            static_cast<void>(sceneContext_.SaveSkeletalMeshEditorAsset());
+            break;
+        case SkeletalAssetCommand::Undo:
+            static_cast<void>(sceneContext_.UndoSkeletalMeshEditorAssetEdit());
+            break;
+        case SkeletalAssetCommand::Redo:
+            static_cast<void>(sceneContext_.RedoSkeletalMeshEditorAssetEdit());
+            break;
+        case SkeletalAssetCommand::Reload:
+            if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || EditorChoiceDialog::Show(
+                    mainWindow_, EditorChoiceDialogDescriptor{
+                        .title = std::string{ sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                            ? EditorText("skeletalMeshEditor.reloadSkeletonTitle", "Reload Skeleton")
+                            : EditorText("skeletalMeshEditor.reloadMeshTitle", "Reload Skeletal Mesh") },
+                        .message = std::string{ sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                            ? EditorText("skeletalMeshEditor.reloadSkeleton", "Reload will discard unsaved Skeleton edits.")
+                            : EditorText("skeletalMeshEditor.reloadMesh", "Reload will discard unsaved Skeletal Mesh edits.") },
+                        .supportingText = std::string{ EditorText("common.cannotUndo", "This action cannot be undone.") },
+                        .primaryLabel = std::string{ EditorText("skeletalMeshEditor.reload", "Reload") },
+                        .secondaryLabel = std::string{ EditorText("skeletalMeshEditor.keepEditing", "Keep Editing") },
+                        .icon = HeroIconKind::Skeleton,
+                        .primaryTone = EditorDialogButtonTone::Destructive,
+                    }) == EditorChoiceDialogResult::Primary) {
+                static_cast<void>(sceneContext_.ReloadSkeletalMeshEditorAsset());
+            }
+            break;
+        case SkeletalAssetCommand::PreviewMesh: {
+            const EditorSkeletalMeshAssetPickerDialog::Result result =
+                EditorSkeletalMeshAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_,
+                    sceneContext_.SkeletalMeshEditorAssetId());
+            if (result.accepted) {
+                static_cast<void>(sceneContext_.SetSkeletonEditorPreviewMesh(result.assetId));
+            }
+            break;
+        }
+        case SkeletalAssetCommand::AddSocket:
+            if (sceneContext_.AddSkeletonEditorSocket()) {
+                static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                    SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
+                        skeletalMeshEditorContent, sceneContext_),
+                    SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+                        skeletalMeshEditorContent, sceneContext_)));
+            }
+            break;
+        case SkeletalAssetCommand::DuplicateSocket:
+            if (sceneContext_.DuplicateSkeletonEditorSocket()) {
+                static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                    SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
+                        skeletalMeshEditorContent, sceneContext_),
+                    SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+                        skeletalMeshEditorContent, sceneContext_)));
+            }
+            break;
+        case SkeletalAssetCommand::DeleteSocket:
+            if (EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                    .title = std::string{ EditorText("skeletalMeshEditor.deleteSocketTitle", "Delete Skeleton Socket") },
+                    .message = std::string{ EditorText("skeletalMeshEditor.deleteSocket", "Delete the selected socket from this Skeleton?") },
+                    .supportingText = std::string{ EditorText("common.cannotUndo", "This action cannot be undone.") },
+                    .primaryLabel = std::string{ EditorText("common.delete", "Delete") },
+                    .secondaryLabel = std::string{ EditorText("common.cancel", "Cancel") },
+                    .icon = HeroIconKind::XMark,
+                    .primaryTone = EditorDialogButtonTone::Destructive,
+                }) == EditorChoiceDialogResult::Primary) {
+                static_cast<void>(sceneContext_.DeleteSkeletonEditorSocket());
+            }
+            break;
+        case SkeletalAssetCommand::BoundsMode:
+            static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorBoundsMode());
+            break;
+        case SkeletalAssetCommand::ReferencePose:
+            static_cast<void>(sceneContext_.ShowSkeletalMeshEditorReferencePose());
+            break;
+        case SkeletalAssetCommand::Focus:
+            static_cast<void>(sceneContext_.FocusSkeletalMeshEditorPreview());
+            break;
+        }
+    } else if (const std::optional<std::uint8_t> overlay = SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
+            skeletalMeshEditorContent, sceneContext_, x, y);
+        overlay.has_value()) {
+        AnimationPreviewOverlayState& overlays = sceneContext_.AnimationPreview().Overlays();
+        switch (*overlay) {
+        case 0U: static_cast<void>(overlays.SetBonesVisible(!overlays.BonesVisible())); break;
+        case 1U: static_cast<void>(overlays.SetBoneNamesVisible(!overlays.BoneNamesVisible())); break;
+        case 2U: static_cast<void>(overlays.SetSocketsVisible(!overlays.SocketsVisible())); break;
+        case 3U: static_cast<void>(overlays.SetBoundsVisible(!overlays.BoundsVisible())); break;
+        case 4U: static_cast<void>(overlays.SetLodVisible(!overlays.LodVisible())); break;
+        case 5U: static_cast<void>(overlays.SetNormalsVisible(!overlays.NormalsVisible())); break;
+        default: break;
+        }
+    } else if (const std::optional<SkeletalMeshEditorDetailsHit> hit =
+                   SkeletalMeshEditorPanelRenderer::DetailsHitAt(
+                       skeletalMeshEditorContent, sceneContext_, x, y);
+               hit.has_value()) {
+        if (hit->kind == SkeletalMeshEditorDetailsHitKind::Section) {
+            static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorDetailsSection(hit->sectionTitle));
+        } else {
+            const SkeletalMeshEditorDetailsField& field = hit->field;
+            switch (field.action) {
+            case SkeletalMeshEditorDetailsAction::PreviewLod: {
+                HMENU menu = CreatePopupMenu();
+                if (menu != nullptr) {
+                    const std::optional<std::uint32_t> forced =
+                        sceneContext_.SkeletalMeshEditorForcedPreviewLod();
+                    kb::editor::AppendMenuUtf8(menu, MF_STRING | (!forced.has_value() ? MF_CHECKED : 0U), 1U,
+                        std::string{ EditorText("skeletalMeshEditor.lodAuto", "Auto") }.c_str());
+                    const std::uint32_t lodCount = sceneContext_.SkeletalMeshEditorLodCount();
+                    for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
+                        const std::string label = EditorLocalization::Format("skeletalMeshEditor.lod", "LOD {index}",
+                            { { "index", std::to_string(lod) } });
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (forced == lod ? MF_CHECKED : 0U),
+                            100U + lod, label.c_str());
+                    }
+                    POINT point{ x, y };
+                    ClientToScreen(messageWindow, &point);
+                    SetForegroundWindow(messageWindow);
+                    const UINT choice = TrackPopupMenu(menu,
+                        TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                        point.x, point.y, 0, messageWindow, nullptr);
+                    DestroyMenu(menu);
+                    if (choice == 1U) {
+                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorPreviewLod(std::nullopt));
+                    } else if (choice >= 100U && choice < 100U + lodCount) {
+                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorPreviewLod(choice - 100U));
+                    }
+                }
+                break;
+            }
+            case SkeletalMeshEditorDetailsAction::BoundsMode:
+                static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorBoundsMode());
+                break;
+            case SkeletalMeshEditorDetailsAction::LodScreenCoverage: {
+                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                    mainWindow_, EditorLocalization::Format("skeletalMeshEditor.lodMinScreenCoverage", "LOD {index} Min Screen Coverage",
+                        { { "index", std::to_string(field.lodIndex) } }), field.value);
+                float parsed = 0.0F;
+                if (value.has_value() && kb::render::ParseFiniteMaterialFloatToken(*value, parsed)) {
+                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorLodScreenCoverage(field.lodIndex, parsed));
+                } else if (value.has_value()) {
+                    static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                        .title = std::string{ EditorText("skeletalMeshEditor.invalidCoverageTitle", "Invalid LOD Screen Coverage") },
+                        .message = std::string{ EditorText("skeletalMeshEditor.invalidCoverage", "Enter a finite number from 0 to 1.") },
+                        .supportingText = std::string{ EditorText("common.valueNotApplied", "The previous value was not applied.") },
+                        .primaryLabel = std::string{ EditorText("common.ok", "OK") },
+                        .icon = HeroIconKind::AdjustmentsHorizontal,
+                    }));
+                }
+                break;
+            }
+            case SkeletalMeshEditorDetailsAction::SectionMaterial: {
+                const EditorMaterialAssetPickerDialog::Result result =
+                    EditorMaterialAssetPickerDialog::Show(
+                        mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_,
+                        kb::assets::AssetId{ field.assetId }, true);
+                if (result.accepted) {
+                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorSectionMaterial(
+                        field.lodIndex, field.sectionIndex, result.assetId));
+                }
+                break;
+            }
+            case SkeletalMeshEditorDetailsAction::FixedBoundsCenter:
+            case SkeletalMeshEditorDetailsAction::FixedBoundsExtents: {
+                const bool extents = field.action == SkeletalMeshEditorDetailsAction::FixedBoundsExtents;
+                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                    mainWindow_, extents ? EditorText("skeletalMeshEditor.fixedBoundsExtents", "Fixed Bounds Extents (X, Y, Z)")
+                                         : EditorText("skeletalMeshEditor.fixedBoundsCenter", "Fixed Bounds Center (X, Y, Z)"),
+                    TupleEditorValue(field.value));
+                std::array<float, 3U> parsed{};
+                if (value.has_value() && kb::render::ParseExactFiniteMaterialFloatTuple(*value, parsed)) {
+                    const kb::scene::Vec3 vector{ parsed[0], parsed[1], parsed[2] };
+                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorFixedBounds(
+                        extents ? std::nullopt : std::optional<kb::scene::Vec3>{ vector },
+                        extents ? std::optional<kb::scene::Vec3>{ vector } : std::nullopt));
+                } else if (value.has_value()) {
+                    static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                        .title = std::string{ EditorText("skeletalMeshEditor.invalidBoundsTitle", "Invalid Fixed Bounds") },
+                        .message = std::string{ EditorText("skeletalMeshEditor.invalidBounds", "Enter three finite values: X, Y, Z.") },
+                        .supportingText = std::string{ EditorText("common.valueNotApplied", "The previous value was not applied.") },
+                        .primaryLabel = std::string{ EditorText("common.ok", "OK") },
+                        .icon = HeroIconKind::AdjustmentsHorizontal,
+                    }));
+                }
+                break;
+            }
+            case SkeletalMeshEditorDetailsAction::None:
+            default:
+                break;
+            }
+        }
+    } else if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(
+                   skeletalMeshEditorContent, sceneContext_, x, y)) {
+        sceneContext_.FocusSkeletalMeshEditorTreeSearch(true);
+    } else if (const std::optional<kb::scene::SkeletonBoneId> disclosure =
+                   SkeletalMeshEditorPanelRenderer::TreeDisclosureAt(
+                       skeletalMeshEditorContent, sceneContext_, x, y);
+               disclosure.has_value()) {
+        sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+        static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorTreeBoneExpanded(*disclosure));
+    } else if (const std::optional<SkeletalMeshEditorTreeRow> row =
+            SkeletalMeshEditorPanelRenderer::TreeRowAt(skeletalMeshEditorContent, sceneContext_, x, y);
+        row.has_value()) {
+        sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+        if (row->kind == SkeletalMeshEditorTreeItemKind::Bone) {
+            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(row->boneId));
+            diagnostics::EditorLagTrace::Marker(
+                "skeletal-bone-selection",
+                "source=tree hit=1 boneId=" + std::to_string(row->boneId));
+        } else {
+            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName));
+        }
+    } else if (const std::optional<kb::scene::SkeletonBoneId> bone =
+                   SkeletalMeshEditorPanelRenderer::BoneAt(skeletalMeshEditorContent, sceneContext_, x, y);
+               bone.has_value()) {
+        sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+        static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
+        diagnostics::EditorLagTrace::Marker(
+            "skeletal-bone-selection",
+            "source=viewport hit=1 boneId=" + std::to_string(*bone));
+    } else {
+        sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+        static_cast<void>(sceneContext_.ClearSkeletalMeshEditorTreeSelection());
+        diagnostics::EditorLagTrace::Marker(
+            "skeletal-bone-selection", "source=viewport hit=0");
+    }
+    // The viewport is a native GPU child and sits above the invalidated GDI panel. Repainting
+    // the host alone cannot update its selected-bone overlay; request a new GPU composition
+    // for every selection transition, including clearing the selection.
+    sceneViewport_.RequestPresent();
+    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    return true;
+}
+
+bool EditorLeftButtonDownRouter::HandleAnimationClipEditorDown(HWND messageWindow, int x, int y, const RECT& animationClipEditorContent) {
+    AnimationPreviewTransport& transport = sceneContext_.AnimationPreview().Transport();
+    AnimationClipTimelineState& timeline = sceneContext_.AnimationClipEditorTimeline();
+    if (const std::optional<std::uint8_t> control =
+            AnimationClipEditorPanelRenderer::TransportControlAt(animationClipEditorContent, x, y);
+        control.has_value()) {
+        switch (*control) {
+        case 0U:
+            if (transport.NormalizedTime() > transport.LoopStartNormalized()) {
+                static_cast<void>(transport.SetLoopRange(transport.LoopStartNormalized(), transport.NormalizedTime()));
+            }
+            break;
+        case 1U:
+            if (transport.NormalizedTime() < transport.LoopEndNormalized()) {
+                static_cast<void>(transport.SetLoopRange(transport.NormalizedTime(), transport.LoopEndNormalized()));
+            }
+            break;
+        case 2U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 2.0F)); break;
+        case 3U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 0.5F)); break;
+        case 4U: static_cast<void>(timeline.SetSnappingEnabled(!timeline.SnappingEnabled())); break;
+        case 5U: static_cast<void>(transport.SetLooping(!transport.Loops())); break;
+        case 6U: static_cast<void>(transport.Step(1)); break;
+        case 7U: static_cast<void>(transport.SetPlaying(!transport.IsPlaying())); break;
+        case 8U: static_cast<void>(transport.Step(-1)); break;
+        default: break;
+        }
+    } else if (const std::optional<std::size_t> track = AnimationClipEditorPanelRenderer::TimelineTrackAt(
+                   animationClipEditorContent, timeline, x, y);
+               track.has_value()) {
+        static_cast<void>(timeline.SelectTrack(*track));
+        if (const AnimationClipTimelineTrack* selected = timeline.SelectedTrackData();
+            selected != nullptr && selected->boneId != 0U) {
+            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(selected->boneId));
+        }
+    } else if (const std::optional<kb::scene::SkeletonBoneId> bone = AnimationClipEditorPanelRenderer::BoneAt(
+                   animationClipEditorContent, sceneContext_, x, y);
+               bone.has_value()) {
+        static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
+    } else if (const std::optional<float> time = AnimationClipEditorPanelRenderer::TimelineTimeAt(
+                   animationClipEditorContent, timeline, x, y);
+               time.has_value()) {
+        if (KeyDown(VK_SHIFT)) {
+            static_cast<void>(timeline.Pan(*time - (timeline.PanSeconds() + timeline.VisibleDurationSeconds() * 0.5F)));
+        } else {
+            const float snapped = timeline.SnapTime(*time, transport.FrameRate());
+            static_cast<void>(transport.Scrub(snapped / transport.DurationSeconds()));
+        }
+    }
+    sceneViewport_.RequestPresent();
+    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    return true;
+}
+
+bool EditorLeftButtonDownRouter::HandleInspectorDown(HWND messageWindow, int x, int y, const EditorPanelPointerHitContext& panelHit) {
+    const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
+    if (hit.section == InspectorSectionId::UITheme) {
+        const auto id = sceneContext_.AssetBrowser().InspectorAsset();
+        auto data = sceneContext_.ReadUITheme(id);
+        auto& inspector = sceneContext_.Inspector();
+        if (data) {
+            InspectorUIThemeModel::NormalizeSelection(*data, id.value, inspector.themeAssetId, inspector.themeVariant);
+            if (hit.kind == InspectorHitKind::ChoiceField && hit.property == InspectorPropertyId::UIThemeVariant) {
+                HMENU menu = CreatePopupMenu();
+                if (!menu) return true;
+                kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant.empty() ? MF_CHECKED : 0), 1, "Base");
+                for (std::size_t i = 0; i < data->variants.size(); ++i)
+                    kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant == data->variants[i].name ? MF_CHECKED : 0),
+                        i + 2, data->variants[i].name.c_str());
+                const auto removeId = static_cast<UINT>(data->variants.size() + 2);
+                if (!inspector.themeVariant.empty()) kb::editor::AppendMenuUtf8(menu, MF_STRING, removeId, "Remove selected variant");
+                POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
+                const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
+                    anchor.x, anchor.y, 0, messageWindow, nullptr);
+                DestroyMenu(menu);
+                if (choice == 1) inspector.themeVariant.clear();
+                else if (choice > 1 && choice < removeId) inspector.themeVariant = data->variants[choice - 2].name;
+                else if (choice == removeId && !inspector.themeVariant.empty() &&
+                    EditorUIThemeAssets::RemoveVariant(*data, inspector.themeVariant) && sceneContext_.SetUITheme(id, *data))
+                    inspector.themeVariant.clear();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+            const auto rows = InspectorUIThemeModel::Rows(*data, inspector.themeVariant);
+            if (hit.property == InspectorPropertyId::UIThemeField && hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                const auto& row = rows[hit.index];
+                const auto* descriptor = kb::scene::FindUIComponentProperty(row.key.component, row.key.property);
+                bool changed = false;
+                bool handled = true;
+                if (hit.kind == InspectorHitKind::ColorField && row.color) {
+                    POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
+                    const auto color = EditorMaterialColorPickerDialog::Show(mainWindow_, row.label, *row.color, &anchor);
+                    changed = color && InspectorUIThemeModel::EditColor(*data, inspector.themeVariant, row.key, *color);
+                } else if (hit.kind == InspectorHitKind::TextField && descriptor && descriptor->assetKind) {
+                    const auto picked = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(), sceneContext_,
+                        kb::assets::AssetId{std::stoull(row.value)}, *descriptor->assetKind);
+                    changed = picked.accepted && EditorUIThemeAssets::SetProperty(*data, inspector.themeVariant, {row.key, picked.assetId.value});
+                } else handled = false;
+                if (handled) {
+                    if (changed && sceneContext_.SetUITheme(id, *data)) sceneViewport_.RequestPresent();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+            }
+        }
+    }
+    if (hit.kind == InspectorHitKind::ChoiceField) {
+        const auto component = InspectorUIComponentModel::Component(hit.section);
+        if (component) {
+            const auto entity = sceneContext_.SelectedEntity();
+            const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
+            if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                const auto& row = rows[hit.index];
+                HMENU menu = CreatePopupMenu();
+                if (menu == nullptr) return true;
+                for (std::size_t index = 0; index < row.choices.size(); ++index) {
+                    kb::editor::AppendMenuUtf8(menu, MF_STRING | (std::stoul(row.value) == index ? MF_CHECKED : 0),
+                        index + 1, std::string{row.choices[index]}.c_str());
+                }
+                POINT anchor{x, y};
+                ClientToScreen(messageWindow, &anchor);
+                const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
+                    anchor.x, anchor.y, 0, messageWindow, nullptr);
+                DestroyMenu(menu);
+                if (choice > 0 && choice <= row.choices.size() &&
+                    sceneContext_.SetUIComponentProperty(entity, *component, row.name, static_cast<std::int32_t>(choice - 1)))
+                    sceneViewport_.RequestPresent();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+        }
+    }
+    if (hit.kind == InspectorHitKind::ColorField && InspectorSceneColor::IsColorProperty(hit.property)) {
+        // Scene colours are linear; the picker shows and returns sRGB, as Unity's does.
+        const auto entity = sceneContext_.SelectedEntity();
+        if (const auto linear = InspectorSceneColor::Read(sceneContext_, entity, hit.property)) {
+            POINT anchor{x, y};
+            ClientToScreen(messageWindow, &anchor);
+            const std::array<float, 4U> shown{ InspectorSceneColor::LinearToSrgb((*linear)[0]),
+                InspectorSceneColor::LinearToSrgb((*linear)[1]), InspectorSceneColor::LinearToSrgb((*linear)[2]), 1.0F };
+            if (const auto picked = EditorMaterialColorPickerDialog::Show(mainWindow_, InspectorSceneColor::Label(hit.property), shown, &anchor)) {
+                const std::array<float, 3U> chosen{ InspectorSceneColor::SrgbToLinear((*picked)[0]),
+                    InspectorSceneColor::SrgbToLinear((*picked)[1]), InspectorSceneColor::SrgbToLinear((*picked)[2]) };
+                if (InspectorSceneColor::Apply(sceneContext_, entity, hit.property, chosen)) sceneViewport_.RequestPresent();
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::ColorField) {
+        const auto component = InspectorUIComponentModel::Component(hit.section);
+        if (component) {
+            const auto entity = sceneContext_.SelectedEntity();
+            const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
+            if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size() && rows[hit.index].color) {
+                const auto& row = rows[hit.index];
+                POINT anchor{x, y};
+                ClientToScreen(messageWindow, &anchor);
+                const auto color = EditorMaterialColorPickerDialog::Show(mainWindow_, row.label, row.rgba, &anchor);
+                if (color && sceneContext_.SetUIColor(entity, *component, row.name, *color))
+                    sceneViewport_.RequestPresent();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+        }
+    }
+    if (hit.kind == InspectorHitKind::TextField) {
+        const auto component = InspectorUIComponentModel::Component(hit.section);
+        if (component) {
+            const auto entity = sceneContext_.SelectedEntity();
+            const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
+            if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+                const auto& row = rows[static_cast<std::size_t>(hit.index)];
+                if (row.onClick) {
+                    const auto picked = EditorUIClickPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                        InspectorUIClickHandler::Choices(sceneContext_.Scene(), entity));
+                    if (picked.accepted && sceneContext_.SetUIClickHandler(entity, picked.choice ? &*picked.choice : nullptr))
+                        sceneViewport_.RequestPresent();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+                const auto* descriptor = kb::scene::FindUIComponentProperty(*component, row.name);
+                if (descriptor != nullptr && descriptor->assetKind) {
+                    const auto result = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                        sceneContext_, kb::assets::AssetId{std::stoull(row.value)}, *descriptor->assetKind);
+                    if (result.accepted) {
+                        static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
+                            row.name, kb::scene::UIComponentPropertyValue{result.assetId.value}));
+                        sceneViewport_.RequestPresent();
+                    }
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+                if (descriptor != nullptr && descriptor->type == kb::scene::UIComponentPropertyType::Entity) {
+                    const auto result = EditorUIEntityPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
+                        sceneContext_, entity, *component, row.name, kb::scene::SceneEntity{std::stoull(row.value)});
+                    if (result.accepted) {
+                        static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
+                            row.name, kb::scene::UIComponentPropertyValue{result.entity.Id()}));
+                        sceneViewport_.RequestPresent();
+                    }
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return true;
+                }
+            }
+        }
+    }
+    if (hit.section == InspectorSectionId::ScenePostProcess
+        && hit.property == InspectorPropertyId::ScenePostProcessProfile) {
+        const EditorPostProcessProfileAssetPickerDialog::Result result =
+            EditorPostProcessProfileAssetPickerDialog::Show(
+                mainWindow_,
+                MakeEditorDarkTheme(),
+                sceneContext_,
+                kb::assets::AssetId{ kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext_.Scene()) });
+        if (result.accepted) {
+            static_cast<void>(sceneContext_.SetScenePostProcessProfile(result.assetId));
+            sceneViewport_.RequestPresent();
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::SceneAudioRouting
+        && hit.property == InspectorPropertyId::SceneAudioMixerPicker) {
+        const EditorAudioMixerAssetPickerDialog::Result result =
+            EditorAudioMixerAssetPickerDialog::Show(
+                mainWindow_,
+                MakeEditorDarkTheme(),
+                sceneContext_,
+                kb::assets::AssetId{
+                    kb::scene::SceneAudioMixerAccess::ActiveMixer(sceneContext_.Scene()) });
+        if (const std::optional<InspectorSceneAudioCommand> command =
+                InspectorSceneAudioInteraction::ResolvePicker(result.accepted, result.assetId)) {
+            static_cast<void>(InspectorSceneAudioInteraction::Apply(sceneContext_, *command));
+            sceneViewport_.RequestPresent();
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::World2DMap &&
+        (hit.property == InspectorPropertyId::World2DMapOpenEditor || hit.property == InspectorPropertyId::World2DMapView)) {
+        HandleWorld2DMapClick(hit.property);
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
+        if (const std::optional<std::filesystem::path> path = EditorTerrainFileDialog::PickHeightImage(mainWindow_, EditorText("fileDialog.importHeightmapTitle", "Import Terrain Heightmap"))) {
+            std::string error;
+            if (sceneContext_.ImportTerrainHeightmap(
+                    sceneContext_.SelectedEntity(), *path,
+                    EditorTerrainService::ToolState().heightmapImport,
+                    &error)) {
+                sceneContext_.Console().Info("Terrain", "Imported heightmap: " + path->filename().string());
+                sceneViewport_.RequestPresent();
+            } else {
+                sceneContext_.Console().Warning("Terrain", error.empty() ? "Heightmap import failed." : error);
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::ParticleEffect &&
+        (hit.property == InspectorPropertyId::ParticleEffectAsset ||
+         hit.property == InspectorPropertyId::ParticleEffectAssetPicker)) {
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::scene::ParticleEffectComponent* particleEffect =
+            sceneContext_.Scene().Components().ParticleEffects().TryGet(entity);
+        if (particleEffect != nullptr) {
+            EditorSceneContext* const persistentSceneContext = &sceneContext_;
+            EditorSceneBgfxViewport* const persistentSceneViewport = &sceneViewport_;
+            const HWND persistentMainWindow = mainWindow_;
+            EditorCrashBreadcrumbs::WriteValue(
+                "particle_picker", "open entity", entity.Id());
+            static_cast<void>(EditorParticleEffectAssetPickerDialog::Open(
+                mainWindow_,
+                MakeEditorDarkTheme(),
+                sceneContext_,
+                sceneViewport_,
+                kb::assets::AssetId{ particleEffect->effectAssetId },
+                [persistentSceneContext, persistentSceneViewport,
+                 persistentMainWindow, entity](kb::assets::AssetId assetId) {
+                    EditorCrashBreadcrumbs::WriteValue(
+                        "particle_picker", "assign asset", assetId.value);
+                    if (persistentSceneContext->SetParticleEffectAsset(entity, assetId)) {
+                        EditorCrashBreadcrumbs::Write(
+                            "particle_picker", "assignment completed");
+                        persistentSceneViewport->RequestPresent();
+                        InvalidateRect(persistentMainWindow, nullptr, FALSE);
+                    } else {
+                        EditorCrashBreadcrumbs::Write(
+                            "particle_picker", "assignment rejected");
+                    }
+                }));
+        }
+        EditorWindowInvalidator::InvalidateDockPanel(
+            mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Inspector);
+        EditorWindowInvalidator::InvalidateDockPanel(
+            mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Scene);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::Animator &&
+        (hit.property == InspectorPropertyId::AnimatorController ||
+         hit.property == InspectorPropertyId::AnimatorControllerPicker)) {
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::scene::Animator* animator = sceneContext_.Scene().Components().Animators().TryGet(entity);
+        if (animator != nullptr) {
+            const EditorAnimatorControllerAssetPickerDialog::Result result =
+                EditorAnimatorControllerAssetPickerDialog::Show(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    kb::assets::AssetId{ animator->controllerAssetId });
+            if (result.accepted && sceneContext_.SetAnimatorControllerAsset(entity, result.assetId)) {
+                sceneViewport_.RequestPresent();
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::SkeletonBinding &&
+        (hit.property == InspectorPropertyId::SkeletonBindingAsset ||
+         hit.property == InspectorPropertyId::SkeletonBindingAssetPicker)) {
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::scene::SkeletonBindingComponent* binding = sceneContext_.Scene().Components().SkeletonBindings().TryGet(entity);
+        if (binding != nullptr) {
+            const EditorSkeletonAssetPickerDialog::Result result = EditorSkeletonAssetPickerDialog::Show(
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ binding->skeletonAssetId });
+            if (result.accepted && sceneContext_.SetSkeletonBindingAsset(entity, result.assetId)) {
+                sceneViewport_.RequestPresent();
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::DeformedGeometry &&
+        (hit.property == InspectorPropertyId::DeformedGeometryMesh ||
+         hit.property == InspectorPropertyId::DeformedGeometryMeshPicker)) {
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
+        if (geometry != nullptr) {
+            const EditorSkeletalMeshAssetPickerDialog::Result result = EditorSkeletalMeshAssetPickerDialog::Show(
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ geometry->skeletalMeshAssetId });
+            if (result.accepted && sceneContext_.SetDeformedGeometryMeshAsset(entity, result.assetId)) {
+                sceneViewport_.RequestPresent();
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::DeformedGeometry) {
+        if (const std::optional<std::uint32_t> slot = DeformedGeometryMaterialSlotForProperty(hit.property)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
+            if (geometry != nullptr) {
+                const std::uint64_t current = *slot < geometry->materialSlotOverrideCount
+                    ? geometry->materialSlotAssetIds[*slot]
+                    : 0U;
+                const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, kb::assets::AssetId{ current }, true);
+                if (result.accepted && sceneContext_.SetDeformedGeometryMaterialSlotAsset(entity, *slot, result.assetId)) {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return true;
+        }
+    }
+    if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMeshPicker) {
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer != nullptr) {
+            const EditorMeshAssetPickerDialog::Result result = EditorMeshAssetPickerDialog::Show(
+                mainWindow_,
+                MakeEditorDarkTheme(),
+                sceneContext_,
+                kb::assets::AssetId{ renderer->meshAssetId });
+            if (result.accepted) {
+                static_cast<void>(sceneContext_.SetMeshRendererMeshAsset(entity, result.assetId));
+                sceneViewport_.RequestPresent();
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
+    if (hit.section == InspectorSectionId::Terrain &&
+        hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
+        terrain_material_layer_menu::Close();
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::assets::TerrainAsset* terrain = sceneContext_.TerrainForEditing(entity);
+        if (terrain == nullptr) {
+            sceneContext_.Console().Warning("Terrain", "Terrain asset is unavailable.");
+        } else if (terrain->materialLayers.size() >= kb::assets::TerrainAsset::MaximumMaterialLayers) {
+            sceneContext_.Console().Warning("Terrain", "Terrain supports at most four material layers.");
+        } else {
+            const std::filesystem::path destinationFolder = sceneContext_.AssetBrowser().SelectedFolder();
+            if (sceneContext_.CreateMaterialAsset(destinationFolder)) {
+                const kb::assets::AssetId materialAssetId = sceneContext_.AssetBrowser().SelectedAsset();
+                sceneContext_.SelectEntity(entity);
+                std::string error;
+                if (!materialAssetId.IsValid() ||
+                    !sceneContext_.AddTerrainMaterialLayer(entity, materialAssetId, &error)) {
+                    sceneContext_.Console().Warning(
+                        "Terrain",
+                        error.empty() ? "The material was created, but its terrain layer could not be added." : error);
+                } else {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::Terrain &&
+        hit.property == InspectorPropertyId::TerrainMaterialLayerAdd) {
+        terrain_material_layer_menu::Close();
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+            mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
+        if (result.accepted) {
+            std::string error;
+            const bool assigned = sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
+            if (!assigned) {
+                sceneContext_.Console().Warning("Terrain", error.empty() ? "Material layer could not be added." : error);
+            } else {
+                sceneViewport_.RequestPresent();
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if ((hit.section == InspectorSectionId::MeshRenderer || hit.section == InspectorSectionId::Terrain)
+        && (hit.property == InspectorPropertyId::MeshRendererMaterialPicker || materialSlotPicker.has_value())) {
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer != nullptr) {
+            const bool overridePicker = materialSlotPicker.has_value();
+            const std::uint32_t slotIndex = materialSlotPicker.value_or(0U);
+            const std::uint64_t current = overridePicker
+                ? (slotIndex < renderer->materialSlotOverrideCount ? renderer->materialSlotAssetIds[slotIndex] : 0U)
+                : renderer->materialAssetId;
+            const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+                mainWindow_,
+                MakeEditorDarkTheme(),
+                sceneContext_,
+                sceneViewport_,
+                kb::assets::AssetId{ current });
+            if (result.accepted) {
+                const bool assigned = overridePicker
+                    ? sceneContext_.SetMeshRendererMaterialSlotAsset(entity, slotIndex, result.assetId)
+                    : sceneContext_.SetMeshRendererMaterialAsset(entity, result.assetId);
+                if (assigned) {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    EditorInspectorPointerController inspectorPointer(sceneContext_);
+    static_cast<void>(inspectorPointer.HandlePointerDown(*panelHit.inspectorContent, x, y, sceneViewport_));
+    if (inspectorPointer.ShouldCaptureMouse()) {
+        SetCapture(messageWindow);
+    }
+    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    return true;
+}
+
+bool EditorLeftButtonDownRouter::HandleBuildGameDown(HWND messageWindow, int x, int y, const RECT& buildGameContent) {
+    if (BuildGamePanelRenderer::HitTestBuildButton(buildGameContent, x, y)) {
+        if (sceneContext_.BuildGamePackageSnapshot().state == EditorPackageJobState::Running) {
+            sceneContext_.CancelBuildGamePackage();
+        } else {
+            const std::optional<EditorDirtySceneResolution> resolution =
+                EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, EditorSceneTransition::BuildGame);
+            if (resolution.has_value() && sceneContext_.StartBuildGamePackage(*resolution)) {
+                static_cast<void>(SetTimer(messageWindow, kEditorPackageStatusTimer, 100U, nullptr));
+            }
+        }
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, buildGameContent);
+        return true;
+    }
+    const BuildGamePanelRenderer::SidebarHit sidebar =
+        BuildGamePanelRenderer::HitTestSidebar(buildGameContent, x, y);
+    if (sidebar.target >= 0) {
+        if (sceneContext_.SetBuildGameSelectedTarget(sidebar.target)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, buildGameContent);
+        }
+        return true;
+    }
+    if (sidebar.profile >= 0) {
+        if (sceneContext_.SetBuildGameSelectedProfile(sidebar.profile)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, buildGameContent);
+        }
+        return true;
+    }
+    const BuildGamePanelRenderer::RowHit hit =
+        BuildGamePanelRenderer::HitTest(buildGameContent, sceneContext_, x, y);
+    if (hit.section >= 0 && hit.row < 0) {
+        sceneContext_.ToggleBuildGameSection(hit.section);
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, buildGameContent);
+        return true;
+    }
+    if (hit.section >= 0 && hit.row >= 0) {
+        const BuildGameField field = BuildGamePanelRenderer::FieldForHit(sceneContext_, hit);
+        bool changed = false;
+        switch (field) {
+        case BuildGameField::OutputDirectory: {
+            const std::filesystem::path initial = sceneContext_.BuildGameSettings().For(
+                sceneContext_.BuildGameTarget()).outputDirectory;
+            if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
+                    mainWindow_, initial, EditorText("fileDialog.selectOutputDirectoryTitle", "Select package output directory"))) {
+                changed = sceneContext_.SetBuildGameOutputDirectory(*selected);
+            }
+            break;
+        }
+        case BuildGameField::BuildRoot:
+            if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
+                    mainWindow_, sceneContext_.BuildGameSettings().buildRoot, EditorText("fileDialog.selectBuildDirectoryTitle", "Select build directory"))) {
+                changed = sceneContext_.SetBuildGameBuildRoot(*selected);
+            }
+            break;
+        case BuildGameField::EmsdkRoot:
+            if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
+                    mainWindow_, sceneContext_.BuildGameSettings().emsdkRoot, EditorText("fileDialog.selectEmsdkDirectoryTitle", "Select Emscripten SDK directory"))) {
+                changed = sceneContext_.SetBuildGameToolchainDirectory(field, *selected);
+            }
+            break;
+        case BuildGameField::ApplicationIcon:
+            if (const auto selected = EditorBuildGameFileDialog::SelectPng(mainWindow_)) {
+                changed = sceneContext_.ImportBuildGameApplicationIcon(*selected);
+            }
+            break;
+        case BuildGameField::AndroidKeystore:
+            if (const auto selected = EditorBuildGameFileDialog::SelectKeystore(mainWindow_)) {
+                changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+            }
+            break;
+        case BuildGameField::LinuxIdentity:
+            if (const auto selected = EditorBuildGameFileDialog::SelectIdentity(mainWindow_)) {
+                changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+            }
+            break;
+        case BuildGameField::WindowsCertificateFile:
+            if (const auto selected = EditorBuildGameFileDialog::SelectCertificate(mainWindow_)) {
+                changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+            }
+            break;
+        case BuildGameField::LaunchAfterBuild:
+            changed = sceneContext_.ToggleBuildGameLaunchAfterBuild();
+            break;
+        case BuildGameField::StartupMap: {
+            // A list of the project's scenes, like Unreal's Game Default Map, not a free path.
+            const std::vector<std::string> scenes = sceneContext_.ProjectScenePaths();
+            HMENU menu = CreatePopupMenu();
+            if (menu != nullptr) {
+                if (scenes.empty()) {
+                    kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0U,
+                        EditorText("buildGame.noScenes", "This project has no scenes yet").data());
+                }
+                for (std::size_t index = 0; index < scenes.size(); ++index) {
+                    const bool current = scenes[index] == sceneContext_.ProjectConfiguration().defaultMap;
+                    kb::editor::AppendMenuUtf8(menu, MF_STRING | (current ? MF_CHECKED : 0U),
+                        static_cast<UINT_PTR>(index + 1U), scenes[index].c_str());
+                }
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY,
+                    cursor.x, cursor.y, 0, mainWindow_, nullptr);
+                DestroyMenu(menu);
+                if (chosen > 0 && static_cast<std::size_t>(chosen) <= scenes.size()) {
+                    changed = sceneContext_.SetStartupScene(scenes[static_cast<std::size_t>(chosen - 1)]);
+                }
+            }
+            break;
+        }
+        case BuildGameField::Publisher:
+        case BuildGameField::Version:
+        case BuildGameField::ProductName:
+        case BuildGameField::ExecutableName:
+        case BuildGameField::AndroidApplicationId:
+        case BuildGameField::AndroidVersionCode:
+        case BuildGameField::AndroidLabel:
+        case BuildGameField::AndroidKeyAlias:
+        case BuildGameField::AndroidFormat:
+        case BuildGameField::AndroidBundletool:
+        case BuildGameField::AndroidStorePassword:
+        case BuildGameField::AndroidKeyPassword:
+        case BuildGameField::BuilderExecutable:
+        case BuildGameField::LinuxHost:
+        case BuildGameField::LinuxUser:
+        case BuildGameField::LinuxHostKey:
+        case BuildGameField::LinuxPort:
+        case BuildGameField::LinuxEngineRoot:
+        case BuildGameField::LinuxDisplay:
+        case BuildGameField::CrashReportUrl:
+        case BuildGameField::WindowsCertificateThumbprint:
+        case BuildGameField::WindowsCertificatePassword:
+        case BuildGameField::WindowsTimestampUrl:
+            changed = sceneContext_.BeginBuildGameTextEdit(field);
+            break;
+        case BuildGameField::None:
+        case BuildGameField::ProjectName:
+            break;
+        }
+        if (changed) EditorWindowInvalidator::InvalidatePanel(messageWindow, buildGameContent);
+        return true;
+    }
+    return false;
+}
+
 void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (auto* graph=sceneContext_.GameplayGraphEditor()) graph->keyboardFocus=false;
     const EditorProjectFilesDeleteConfirmOverlayController deleteConfirm(messageWindow, sceneContext_);
@@ -554,162 +2100,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::ParticleEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         particleEditorContent.has_value() && PointInRect(*particleEditorContent, x, y)) {
-        sceneContext_.SetParticleEditorFocused(true);
-        if (!sceneContext_.HasParticleEditorAsset())
-            return;
-        const auto rows = sceneContext_.ParticleEditorEmitterRows();
-        const auto inspector = sceneContext_.ParticleEditorInspector();
-        const auto recipes = sceneContext_.ParticleEditorRecipes();
-        const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
-            *particleEditorContent, rows,
-            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow), &inspector,
-            recipes.size(), &sceneContext_.ParticleEditorWorkspace());
-        ParticleEditorPanelHit hit = ParticleEditorPanelLayoutResolver::HitTest(layout, x, y);
-        if (hit.action != ParticleEditorPanelAction::None) {
-            kb::assets::AssetId selectedMaterial{};
-            std::string editedValue;
-            if (hit.action == ParticleEditorPanelAction::PickOutputMaterial) {
-                const auto selected = EditorMaterialAssetPickerDialog::Show(
-                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
-                if (!selected.accepted) return;
-                selectedMaterial = selected.assetId;
-            } else if (hit.action == ParticleEditorPanelAction::PickOutputMesh) {
-                const auto selected = EditorMeshAssetPickerDialog::Show(
-                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, {});
-                if (!selected.accepted) return;
-                selectedMaterial = selected.assetId;
-            } else if (hit.action == ParticleEditorPanelAction::PickOutputTexture) {
-                const auto selected = EditorTextureAssetPickerDialog::Show(
-                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, {}, EditorTextureAssetPickerFilter::Texture2D);
-                if (!selected.accepted) return;
-                selectedMaterial = selected.assetId;
-            } else if (hit.action == ParticleEditorPanelAction::AddModule) {
-                // The button is drawn disabled once the emitter holds the maximum number of modules.
-                if (inspector.modules.size() >= kb::scene::kParticleEffectMaxModulesPerEmitter) return;
-                HMENU menu = CreatePopupMenu();
-                if (menu == nullptr) return;
-                // Index = ParticleModuleType.
-                const std::array<std::string, 14> labels{
-                    std::string{ EditorText("particleEditor.module.initialVelocity", "Initial Velocity") },
-                    std::string{ EditorText("particleEditor.module.gravity", "Gravity") },
-                    std::string{ EditorText("particleEditor.module.wind", "Wind") },
-                    std::string{ EditorText("particleEditor.module.drag", "Drag") },
-                    std::string{ EditorText("particleEditor.module.colorOverLife", "Color Over Life") },
-                    std::string{ EditorText("particleEditor.module.sizeOverLife", "Size Over Life") },
-                    std::string{ EditorText("particleEditor.module.alphaOverLife", "Alpha Over Life") },
-                    std::string{ EditorText("particleEditor.module.collisionPlane", "Collision Plane") },
-                    std::string{ EditorText("particleEditor.module.subEmitter", "Sub Emitter") },
-                    std::string{ EditorText("particleEditor.module.noise", "Noise") },
-                    std::string{ EditorText("particleEditor.module.axisRotation", "Axis Rotation") },
-                    std::string{ EditorText("particleEditor.module.attraction", "Attraction") },
-                    std::string{ EditorText("particleEditor.module.torusSwirl", "Torus Swirl") },
-                    std::string{ EditorText("particleEditor.module.separation", "Separation") },
-                };
-                for (UINT index = 0U; index < static_cast<UINT>(labels.size()); ++index) {
-                    const UINT flags = index == static_cast<UINT>(kb::scene::ParticleModuleType::SubEmitter) &&
-                        rows.size() < 2U ? MF_STRING | MF_GRAYED : MF_STRING;
-                    kb::editor::AppendMenuUtf8(menu, flags, 100U + index, labels[index].c_str());
-                }
-                POINT point{x, y}; ClientToScreen(messageWindow, &point);
-                const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
-                    TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
-                DestroyMenu(menu);
-                if (choice < 100U || choice >= 100U + static_cast<UINT>(labels.size())) return;
-                hit.moduleType = static_cast<kb::scene::ParticleModuleType>(choice - 100U);
-                if (hit.moduleType == kb::scene::ParticleModuleType::SubEmitter) {
-                    HMENU targets = CreatePopupMenu();
-                    if (targets == nullptr) return;
-                    std::array<kb::scene::ParticleStableId, kb::scene::kParticleEffectMaxEmitters> targetIds{};
-                    UINT targetCount = 0U;
-                    for (const auto& row : rows) {
-                        if (row.emitterId == inspector.emitterId) continue;
-                        targetIds[targetCount] = row.emitterId;
-                        kb::editor::AppendMenuUtf8(targets, MF_STRING, 200U + targetCount, row.name.c_str());
-                        ++targetCount;
-                    }
-                    const UINT targetChoice = TrackPopupMenu(targets, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
-                        TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
-                    DestroyMenu(targets);
-                    if (targetChoice < 200U || targetChoice >= 200U + targetCount) return;
-                    hit.targetEmitterId = targetIds[targetChoice - 200U];
-                }
-            } else if (hit.action == ParticleEditorPanelAction::DragPropertySlider) {
-                if (ParticleEditorPanelInteraction::BeginPropertySlider(sceneContext_, layout, hit, x)) {
-                    SetCapture(messageWindow);
-                    sceneViewport_.RequestPresent();
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                }
-                return;
-            } else if (hit.action == ParticleEditorPanelAction::ToggleProperty) {
-                static_cast<void>(ParticleEditorPanelInteraction::Execute(sceneContext_, hit));
-                sceneViewport_.RequestPresent();
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            } else if (hit.action == ParticleEditorPanelAction::EditProperty) {
-                if (hit.propertyIndex >= inspector.properties.size() || !inspector.properties[hit.propertyIndex].editable)
-                    return;
-                const auto& property = inspector.properties[hit.propertyIndex];
-                if (hit.propertyChoice != 0xFFFFFFFFU) {
-                    editedValue = std::to_string(hit.propertyChoice);
-                } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Color) {
-                    POINT screen{x, y};
-                    ClientToScreen(messageWindow, &screen);
-                    const auto picked = EditorMaterialColorPickerDialog::Show(
-                        mainWindow_, property.label,
-                        {property.colorValue.r, property.colorValue.g, property.colorValue.b, property.colorValue.a},
-                        &screen);
-                    if (!picked.has_value()) return;
-                    editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatColor({
-                        (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]});
-                } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Gradient) {
-                    kb::math::Gradient gradient = property.gradient;
-                    if (gradient.stops.empty()) return;
-                    const RECT& preview = layout.propertyRows[hit.propertyIndex].curvePreview;
-                    const float width = static_cast<float>(std::max<LONG>(1, preview.right - preview.left));
-                    const float t = std::clamp(static_cast<float>(x - preview.left) / width, 0.0F, 1.0F);
-                    std::size_t nearest = 0U;
-                    float best = std::abs(gradient.stops[0].time - t);
-                    for (std::size_t index = 1U; index < gradient.stops.size(); ++index) {
-                        const float distance = std::abs(gradient.stops[index].time - t);
-                        if (distance < best) {
-                            best = distance;
-                            nearest = index;
-                        }
-                    }
-                    POINT screen{x, y};
-                    ClientToScreen(messageWindow, &screen);
-                    const auto& stop = gradient.stops[nearest];
-                    const auto picked = EditorMaterialColorPickerDialog::Show(
-                        mainWindow_, property.label,
-                        {stop.color.r, stop.color.g, stop.color.b, stop.color.a}, &screen);
-                    if (!picked.has_value()) return;
-                    gradient.stops[nearest].color = {
-                        (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]};
-                    editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatGradient(gradient);
-                } else {
-                    const bool isCurve = property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve ||
-                        property.label == "Curve" || property.label == "Rate curve";
-                    const auto edited = EditorMaterialParameterValueDialog::Show(
-                        mainWindow_, property.label, property.value,
-                        isCurve ? EditorText("particleEditor.curveHint", "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3")
-                        : EditorText("materialParameter.valueHint", "Use numbers like: 0.25 or 1 0 0 1"));
-                    if (!edited.has_value()) return;
-                    editedValue = *edited;
-                }
-            }
-            if (ParticleEditorPanelInteraction::Execute(sceneContext_, hit, selectedMaterial, editedValue) &&
-                (hit.action == ParticleEditorPanelAction::BeginEmitterDrag ||
-                 hit.action == ParticleEditorPanelAction::BeginModuleDrag)) {
-                SetCapture(messageWindow);
-            }
-            sceneViewport_.RequestPresent();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (PointInRect(layout.preview, x, y)) {
-            static_cast<void>(sceneContext_.BeginParticlePreviewOrbit(x, y));
-            SetCapture(messageWindow);
-            sceneViewport_.RequestPresent();
+        if (HandleParticleEditorDown(messageWindow, x, y, *particleEditorContent)) {
             return;
         }
     } else {
@@ -718,433 +2109,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         materialEditorContent.has_value() && PointInRect(*materialEditorContent, x, y)) {
-        const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
-        const kb::assets::AssetMetadata* materialMetadata = materialId.IsValid()
-            ? sceneContext_.Scene().Assets().Manager().Registry().Find(materialId)
-            : nullptr;
-        const bool editingMaterialInstance = materialMetadata != nullptr && materialMetadata->type == "RenderMaterialInstance";
-        if (sceneContext_.IsMaterialGraphTexturePickerOpen()) {
-            const MaterialEditorGraphTexturePickerHit pickerHit =
-                MaterialEditorPanelRenderer::GraphTexturePickerHit(*materialEditorContent, sceneContext_, x, y);
-            const auto acceptTexturePickerSelection = [&]() {
-                const kb::assets::AssetId textureId = sceneContext_.MaterialGraphTexturePickerSelectedAssetId();
-                static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(
-                    sceneContext_.MaterialGraphTexturePickerAssetId(),
-                    sceneContext_.MaterialGraphTexturePickerNodeId(),
-                    textureId));
-                static_cast<void>(sceneContext_.CloseMaterialGraphTexturePicker());
-            };
-            switch (pickerHit.kind) {
-            case MaterialEditorGraphTexturePickerHitKind::Search:
-                break;
-            case MaterialEditorGraphTexturePickerHitKind::Texture:
-                if (sceneContext_.MaterialGraphTexturePickerSelectedAssetId() == pickerHit.assetId) {
-                    acceptTexturePickerSelection();
-                } else {
-                    static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected(pickerHit.assetId));
-                }
-                break;
-            case MaterialEditorGraphTexturePickerHitKind::Clear:
-                static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected({}));
-                break;
-            case MaterialEditorGraphTexturePickerHitKind::Accept:
-                acceptTexturePickerSelection();
-                break;
-            case MaterialEditorGraphTexturePickerHitKind::Cancel:
-            case MaterialEditorGraphTexturePickerHitKind::Backdrop:
-                static_cast<void>(sceneContext_.CloseMaterialGraphTexturePicker());
-                break;
-            case MaterialEditorGraphTexturePickerHitKind::None:
-                break;
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (sceneContext_.IsMaterialGraphContextMenuOpen()) {
-            const MaterialEditorGraphContextMenuHit menuHit = MaterialEditorPanelRenderer::GraphContextMenuHit(sceneContext_, x, y);
-            if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::Search) {
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-            if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::Category) {
-                static_cast<void>(sceneContext_.ToggleMaterialGraphContextMenuCategory(menuHit.categoryIndex));
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-            if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::FavoriteToggle) {
-                static_cast<void>(sceneContext_.ToggleMaterialGraphPaletteFavorite(menuHit.command));
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-            if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::Command) {
-                if (editingMaterialInstance) {
-                    static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                const MaterialEditorPanelLayout menuLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
-                sceneContext_.SetMaterialGraphCanvasViewport(
-                    menuLayout.graphCanvas.left,
-                    menuLayout.graphCanvas.top,
-                    MaterialEditorPanelRectWidth(menuLayout.graphCanvas),
-                    MaterialEditorPanelRectHeight(menuLayout.graphCanvas));
-                const bool commandEnabled = MaterialEditorGraphContextMenuCommandEnabled(
-                    menuHit.command,
-                    sceneContext_.SelectedMaterialGraphNodeIds().size(),
-                    sceneContext_.SelectedMaterialGraphCommentId() != 0U);
-                // The deferred pointer-drag path exists only for the "drag a palette command onto the canvas
-                // to drop it there" gesture. When the menu was opened by dropping a wire (pin-filtered), there
-                // is no drop-placement to choose - the node goes at the wire's drop point and auto-connects -
-                // so execute it immediately on press. Deferring to mouse-up left the pick at the mercy of the
-                // pin-connection release branch (which reopened the menu) and of any micro-movement flipping
-                // the drag to "active" (which skipped the mouse-up executor): both made "pick a node -> nothing
-                // appears". Immediate execution here removes that whole fragile path for the wire-drop case.
-                const bool takesDeferredPath = commandEnabled &&
-                    MaterialEditorGraphMenuCommandCreatesCanvasObject(menuHit.command) &&
-                    !sceneContext_.IsMaterialGraphContextMenuPinFiltered();
-                if (takesDeferredPath) {
-                    pointerDrag_.Clear();
-                    pointerDrag_.kind = EditorPointerDragKind::MaterialGraphPaletteCommand;
-                    pointerDrag_.materialGraphAssetId = materialId;
-                    pointerDrag_.materialGraphCommand = menuHit.command;
-                    pointerDrag_.assetLabel = std::string{ MaterialEditorGraphContextMenuCommandName(menuHit.command) };
-                    pointerDrag_.startX = x;
-                    pointerDrag_.startY = y;
-                    pointerDrag_.x = x;
-                    pointerDrag_.y = y;
-                    SetCapture(messageWindow);
-                } else if (commandEnabled) {
-                    static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(menuHit.command));
-                }
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-            const bool hadPendingPinConnection = sceneContext_.HasMaterialGraphPinConnection();
-            static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
-            if (hadPendingPinConnection) {
-                // Dismissing the "what do you want to connect?" menu leaves the wire unplugged rather than
-                // silently restoring the link the drag pulled off.
-                static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(*materialEditorContent, x, y);
-        if (command != MaterialEditorPanelCommand::None) {
-            static_cast<void>(ExecuteMaterialEditorPanelCommand(sceneContext_, materialId, command));
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-
-        const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
-        const MaterialEditorOpaqueOverlayHit opaqueOverlay =
-            MaterialEditorPanelRenderer::OpaqueOverlayAt(*materialEditorContent, sceneContext_, x, y);
-        if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Diagnostics) {
-            // A diagnostic tied to a node jumps to it; otherwise the click is swallowed by the overlay.
-            if (const std::uint32_t nodeId =
-                    MaterialEditorPanelRenderer::DiagnosticsRowNodeAt(*materialEditorContent, sceneContext_, x, y);
-                nodeId != 0U) {
-                static_cast<void>(sceneContext_.FocusMaterialGraphNode(nodeId));
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Preview) {
-            // Drag the preview to orbit the object around it. Capture so the drag continues
-            // even as the cursor leaves the small overlay.
-            static_cast<void>(sceneContext_.BeginMaterialPreviewOrbit(x, y));
-            SetCapture(messageWindow);
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::None &&
-            opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::Details) {
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
-            sceneContext_.AssetBrowser().ClearSelection();
-            sceneContext_.FocusMaterialGraph(true);
-            EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
-            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
-                ? sceneContext_.MaterialEditor().WorkingCopy()
-                : sceneContext_.ReadMaterialDocumentAsset(materialId);
-            if (material.has_value()) {
-                if (sceneContext_.MaterialEditor().InfoPanelVisible()) {
-                    const MaterialEditorPanelDetailsRows detailsRows =
-                        MaterialEditorPanelRenderer::DetailsRowsForDocument(
-                            sceneContext_,
-                            *material,
-                            editingMaterialInstance);
-                    const MaterialEditorDetailsLayout detailsLayout =
-                        MaterialEditorPanelRenderer::ResolveDetailsLayout(
-                            *materialEditorContent,
-                            detailsRows,
-                            sceneContext_.MaterialEditorDetailsScrollOffset());
-                    const MaterialEditorDetailsHit detailsHit =
-                        MaterialEditorPanelRenderer::DetailsHitAt(detailsLayout, detailsRows, x, y);
-                    if (detailsHit.kind == MaterialEditorDetailsHitKind::Search) {
-                        sceneContext_.FocusMaterialEditorFind(true);
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                    if (detailsHit.kind == MaterialEditorDetailsHitKind::FindResult) {
-                        static_cast<void>(sceneContext_.FocusMaterialEditorFindResult(
-                            detailsHit.resultIndex,
-                            MaterialEditorPanelRectWidth(materialLayout.graphCanvas),
-                            MaterialEditorPanelRectHeight(materialLayout.graphCanvas)));
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                    if (detailsHit.kind == MaterialEditorDetailsHitKind::NodeProperty) {
-                        const MaterialEditorGraphNodePropertyHit& property = detailsHit.nodeProperty;
-                        // Node id 0 means the material-settings rows, which are not a node; only sync the
-                        // selection for a real node.
-                        if (property.nodeId != 0U) {
-                            static_cast<void>(sceneContext_.SelectMaterialGraphNode(property.nodeId));
-                        }
-                        switch (property.kind) {
-                        case MaterialEditorGraphNodePropertyHitKind::TextField:
-                            sceneContext_.CloseMaterialGraphNodeEnumDropdown();
-                            if (property.stableId == "node.name") {
-                                static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property.nodeId));
-                            } else if (property.nodeId == 0U) {
-                                // A typed material setting (Max World Position Offset Displacement).
-                                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                                    messageWindow,
-                                    property.displayName,
-                                    MaterialEditorPanelParameterValueText(property.value));
-                                if (value.has_value()) {
-                                    static_cast<void>(sceneContext_.SetMaterialGraphSetting(materialId, property.stableId, *value));
-                                }
-                            } else {
-                                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                                    messageWindow,
-                                    property.displayName,
-                                    MaterialEditorPanelParameterValueText(property.value));
-                                if (value.has_value()) {
-                                    static_cast<void>(sceneContext_.SetMaterialGraphNodeTextProperty(
-                                        materialId,
-                                        property.nodeId,
-                                        property.stableId,
-                                        *value));
-                                }
-                            }
-                            break;
-                        case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
-                            if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(messageWindow, property.value, ScreenPointFor(messageWindow, x, y))) {
-                                static_cast<void>(sceneContext_.SetMaterialGraphNodeColorPropertyValue(
-                                    materialId,
-                                    property.nodeId,
-                                    property.stableId,
-                                    *color));
-                            }
-                            break;
-                        case MaterialEditorGraphNodePropertyHitKind::Slider:
-                            sceneContext_.CloseMaterialGraphNodeEnumDropdown();
-                            static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, property.nodeId));
-                            break;
-                        case MaterialEditorGraphNodePropertyHitKind::EnumField:
-                            // Node id 0 is the material itself (domain / shading model / blend mode), which
-                            // uses its own dropdown-state slot; a real node uses the node-keyed one.
-                            if (property.nodeId == 0U) {
-                                sceneContext_.ToggleMaterialGraphSettingDropdown(property.stableId);
-                            } else {
-                                sceneContext_.ToggleMaterialGraphNodeEnumDropdown(property.nodeId, property.stableId);
-                            }
-                            break;
-                        case MaterialEditorGraphNodePropertyHitKind::EnumOption:
-                            if (property.nodeId == 0U) {
-                                static_cast<void>(sceneContext_.SetMaterialGraphSetting(materialId, property.stableId, property.optionValue));
-                            } else {
-                                static_cast<void>(sceneContext_.SetMaterialGraphNodeEnumValue(materialId, property.nodeId, property.stableId, property.optionValue));
-                            }
-                            break;
-                        case MaterialEditorGraphNodePropertyHitKind::TexturePicker:
-                            sceneContext_.CloseMaterialGraphNodeEnumDropdown();
-                            static_cast<void>(sceneContext_.OpenMaterialGraphTexturePicker(
-                                materialId,
-                                property.nodeId,
-                                TextureGraphAssetId(*material, property.nodeId)));
-                            break;
-                        case MaterialEditorGraphNodePropertyHitKind::None:
-                            break;
-                        }
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                    if (detailsHit.kind == MaterialEditorDetailsHitKind::Parameter) {
-                        const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
-                        const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                            messageWindow,
-                            parameter.displayName,
-                            MaterialEditorPanelParameterValueText(parameter.value));
-                        if (value.has_value()) {
-                            if (editingMaterialInstance) {
-                                static_cast<void>(sceneContext_.SetMaterialInstanceEditorGraphParameterValue(
-                                    materialId,
-                                    parameter.stableId,
-                                    parameter.type,
-                                    *value));
-                            } else {
-                                static_cast<void>(sceneContext_.SetMaterialEditorGraphParameterValue(
-                                    materialId,
-                                    parameter.stableId,
-                                    parameter.type,
-                                    *value));
-                            }
-                        }
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                    if (detailsHit.kind == MaterialEditorDetailsHitKind::TextureParameter) {
-                        const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
-                        const EditorTextureAssetPickerDialog::Result result = EditorTextureAssetPickerDialog::Show(
-                            messageWindow,
-                            MakeEditorDarkTheme(),
-                            sceneContext_,
-                            kb::assets::AssetId{ parameter.value.assetId },
-                            EditorTextureAssetPickerFilter::Texture2D);
-                        if (result.accepted) {
-                            if (editingMaterialInstance) {
-                                static_cast<void>(sceneContext_.SetMaterialInstanceEditorTextureParameterValue(
-                                    materialId,
-                                    parameter.stableId,
-                                    result.assetId));
-                            } else {
-                                const auto materialSlot = [&]() -> std::optional<EditorMaterialTextureSlot> {
-                                    if (parameter.stableId == "albedoTextureAssetId") return EditorMaterialTextureSlot::Albedo;
-                                    if (parameter.stableId == "normalTextureAssetId") return EditorMaterialTextureSlot::Normal;
-                                    if (parameter.stableId == "metallicRoughnessTextureAssetId") return EditorMaterialTextureSlot::MetallicRoughness;
-                                    if (parameter.stableId == "occlusionTextureAssetId") return EditorMaterialTextureSlot::Occlusion;
-                                    if (parameter.stableId == "emissiveTextureAssetId") return EditorMaterialTextureSlot::Emissive;
-                                    return std::nullopt;
-                                }();
-                                if (materialSlot.has_value()) {
-                                    static_cast<void>(sceneContext_.SetMaterialTextureAsset(materialId, *materialSlot, result.assetId));
-                                }
-                            }
-                        }
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                    if (detailsHit.kind == MaterialEditorDetailsHitKind::Backdrop) {
-                        sceneContext_.FocusMaterialEditorFind(false);
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                }
-                if (editingMaterialInstance) {
-                    static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
-                    if (const std::optional<std::uint32_t> nodeId = MaterialEditorPanelRenderer::GraphNodeAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId));
-                    } else if (const std::optional<std::uint32_t> commentId = MaterialEditorPanelRenderer::GraphCommentAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphComment(*commentId));
-                    } else {
-                        static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
-                        static_cast<void>(sceneContext_.ClearMaterialGraphCommentSelection());
-                    }
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                if (LeftAltDown()) {
-                    if (const std::optional<MaterialEditorGraphLinkHit> link = MaterialEditorPanelRenderer::GraphLinkAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                        static_cast<void>(sceneContext_.DisconnectMaterialGraphLink(
-                            materialId,
-                            link->fromNodeId,
-                            link->fromPin,
-                            link->toNodeId,
-                            link->toPin));
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                }
-                if (const std::optional<std::uint32_t> textureSampleNodeId = MaterialEditorPanelRenderer::GraphTextureSampleAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*textureSampleNodeId));
-                    static_cast<void>(sceneContext_.OpenMaterialGraphTexturePicker(
-                        materialId,
-                        *textureSampleNodeId,
-                        TextureGraphAssetId(*material, *textureSampleNodeId)));
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                if (const std::optional<MaterialEditorGraphColorWatcherHit> colorWatcher =
-                        MaterialEditorPanelRenderer::GraphColorWatcherAt(*materialEditorContent, *material, sceneContext_, materialId, x, y)) {
-                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(colorWatcher->nodeId));
-                    static_cast<void>(ApplyGraphColorWatcherHit(messageWindow, sceneContext_, materialId, *colorWatcher, ScreenPointFor(messageWindow, x, y)));
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                if (const std::optional<MaterialEditorGraphConstantValueHit> constant = MaterialEditorPanelRenderer::GraphConstantValueAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(constant->nodeId));
-                    static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, constant->nodeId));
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                if (const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    // Unplugging a wire is not a selection gesture: selecting the node that owns the input
-                    // pin would leave e.g. Material Output selected just because a link was pulled off it.
-                    const bool detached = pin->direction == MaterialEditorGraphPinDirection::Input &&
-                        sceneContext_.DetachMaterialGraphInputPinConnection(materialId, pin->nodeId, pin->pin, x, y);
-                    if (detached) {
-                        static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
-                    } else {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(pin->nodeId));
-                    }
-                    const bool connectionStarted = detached ||
-                        (pin->direction == MaterialEditorGraphPinDirection::Output
-                            ? sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, true, x, y)
-                            : sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, false, x, y));
-                    if (connectionStarted) {
-                        SetCapture(messageWindow);
-                    }
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
-                if (const std::optional<std::uint32_t> nodeId = MaterialEditorPanelRenderer::GraphNodeAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    const bool ctrl = KeyDown(VK_CONTROL);
-                    const bool shift = KeyDown(VK_SHIFT);
-                    if (ctrl) {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId, false, true));
-                    } else if (shift) {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId, true, false));
-                    } else if (!sceneContext_.IsMaterialGraphNodeSelected(*nodeId)) {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId));
-                    }
-                    if (sceneContext_.IsMaterialGraphNodeSelected(*nodeId) && sceneContext_.BeginMaterialGraphNodeDrag(materialId, *nodeId, x, y)) {
-                        SetCapture(messageWindow);
-                    }
-                } else if (const std::optional<std::uint32_t> commentId = MaterialEditorPanelRenderer::GraphCommentAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    if (!sceneContext_.IsMaterialGraphCommentSelected(*commentId)) {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphComment(*commentId));
-                    }
-                    if (sceneContext_.BeginMaterialGraphCommentDrag(materialId, *commentId, x, y)) {
-                        SetCapture(messageWindow);
-                    }
-                } else if (const std::optional<kb::render::RenderMaterialGraphNodeKind> shortcutKind = MaterialGraphShortcutNodeKind()) {
-                    const POINT graphPoint = MaterialGraphDocumentPointFromWindow(materialLayout, sceneContext_, x, y);
-                    static_cast<void>(sceneContext_.AddMaterialGraphNode(materialId, *shortcutKind, graphPoint.x, graphPoint.y));
-                } else {
-                    static_cast<void>(sceneContext_.ClearMaterialGraphCommentSelection());
-                    const MaterialGraphSelectionOperation selectionOperation =
-                        ResolveMaterialGraphSelectionOperation(
-                            KeyDown(VK_MENU),
-                            KeyDown(VK_CONTROL),
-                            KeyDown(VK_SHIFT));
-                    // Clicking empty canvas drops the selection right away instead of waiting for the box
-                    // selection to end; the modifier operations keep it, because they extend it.
-                    if (selectionOperation == MaterialGraphSelectionOperation::Replace) {
-                        static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
-                    }
-                    if (sceneContext_.BeginMaterialGraphBoxSelection(materialId, x, y, selectionOperation)) {
-                        SetCapture(messageWindow);
-                    }
-                }
-            } else {
-                static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (HandleMaterialEditorDown(messageWindow, x, y, *materialEditorContent)) {
             return;
         }
     }
@@ -1169,400 +2134,18 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         skeletalMeshEditorContent.has_value() && PointInRect(*skeletalMeshEditorContent, x, y) &&
         sceneContext_.HasSkeletalMeshEditorAsset()) {
-        const SkeletalMeshEditorPanelLayout skeletalLayout =
-            SkeletalMeshEditorPanelLayoutResolver::Resolve(
-                *skeletalMeshEditorContent,
-                sceneContext_.SkeletalMeshEditorToolboxWidth(),
-                sceneContext_.SkeletalMeshEditorSkeletonTreeWidth(),
-                sceneContext_.SkeletalMeshEditorSkeletonTreeHeight());
-        if (PointInRect(skeletalLayout.toolboxSplitter, x, y)) {
-            sceneContext_.SetSkeletalMeshEditorToolboxWidth(
-                x - skeletalMeshEditorContent->left);
-            sceneContext_.BeginSkeletalMeshEditorToolboxWidthDrag();
-            SetCapture(messageWindow);
-            sceneViewport_.RequestPresent();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (HandleSkeletalMeshEditorDown(messageWindow, x, y, *skeletalMeshEditorContent)) {
             return;
         }
-        if (PointInRect(skeletalLayout.treeDetailsSplitter, x, y)) {
-            sceneContext_.SetSkeletalMeshEditorSkeletonTreeHeight(
-                SkeletalMeshEditorPanelLayoutResolver::SkeletonTreeHeightFromPointer(
-                    *skeletalMeshEditorContent, y));
-            sceneContext_.BeginSkeletalMeshEditorTreeDetailsHeightDrag();
-            SetCapture(messageWindow);
-            sceneViewport_.RequestPresent();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (PointInRect(skeletalLayout.skeletonTreeSplitter, x, y)) {
-            sceneContext_.SetSkeletalMeshEditorSkeletonTreeWidth(
-                skeletalMeshEditorContent->right - x);
-            sceneContext_.BeginSkeletalMeshEditorSkeletonTreeWidthDrag();
-            SetCapture(messageWindow);
-            sceneViewport_.RequestPresent();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        const int treeMaxScroll = SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
-            *skeletalMeshEditorContent, sceneContext_);
-        if (treeMaxScroll > 0) {
-            const RECT treeTrack = SkeletalMeshEditorPanelRenderer::TreeScrollbarTrack(
-                *skeletalMeshEditorContent, sceneContext_);
-            const RECT treeThumb = SkeletalMeshEditorPanelRenderer::TreeScrollbarThumb(
-                *skeletalMeshEditorContent, sceneContext_);
-            if (PointInRect(treeThumb, x, y)) {
-                sceneContext_.BeginSkeletalMeshEditorTreeScrollbarDrag(y);
-                SetCapture(messageWindow);
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-            if (PointInRect(treeTrack, x, y)) {
-                const RECT treeList = SkeletalMeshEditorPanelRenderer::TreeListRect(
-                    *skeletalMeshEditorContent, sceneContext_);
-                const int page = std::max(
-                    SkeletalMeshEditorPanelRenderer::TreeRowHeight,
-                    RectHeight(treeList) - SkeletalMeshEditorPanelRenderer::TreeRowHeight);
-                const int offset = sceneContext_.SkeletalMeshEditorTreeScrollOffset() +
-                    (y < treeThumb.top ? -page : page);
-                static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
-                    offset, treeMaxScroll));
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-        }
-        const int detailsMaxScroll = SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(
-            *skeletalMeshEditorContent, sceneContext_);
-        if (detailsMaxScroll > 0) {
-            const RECT detailsTrack = SkeletalMeshEditorPanelRenderer::DetailsScrollbarTrack(
-                *skeletalMeshEditorContent, sceneContext_);
-            const RECT detailsThumb = SkeletalMeshEditorPanelRenderer::DetailsScrollbarThumb(
-                *skeletalMeshEditorContent, sceneContext_);
-            if (PointInRect(detailsThumb, x, y)) {
-                sceneContext_.BeginSkeletalMeshEditorDetailsScrollbarDrag(y);
-                SetCapture(messageWindow);
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-            if (PointInRect(detailsTrack, x, y)) {
-                const RECT detailsList = SkeletalMeshEditorPanelRenderer::DetailsListRect(
-                    *skeletalMeshEditorContent, sceneContext_);
-                const int page = std::max(22, RectHeight(detailsList) - 22);
-                const int offset = sceneContext_.SkeletalMeshEditorDetailsScrollOffset() +
-                    (y < detailsThumb.top ? -page : page);
-                static_cast<void>(sceneContext_.SetSkeletalMeshEditorDetailsScrollOffset(
-                    offset, detailsMaxScroll));
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-        }
-        if (const std::optional<SkeletalAssetDocument> document =
-                SkeletalMeshEditorPanelRenderer::LinkedDocumentAt(
-                    *skeletalMeshEditorContent, sceneContext_, x, y);
-            document.has_value()) {
-            const bool skeletonDocument = *document == SkeletalAssetDocument::Skeleton;
-            if (sceneContext_.SwitchSkeletalMeshEditorDocument(skeletonDocument)) {
-                const kb::assets::AssetId assetId = sceneContext_.RequestedSkeletalMeshEditorAssetId();
-                const kb::assets::AssetMetadata* metadata =
-                    sceneContext_.Scene().Assets().Manager().Registry().Find(assetId);
-                if (metadata != nullptr) {
-                    const std::string filename = metadata->virtualPath.filename().string();
-                    static_cast<void>(dockModel_.Commands().SetPanelTitle(
-                        DockPanelKind::SkeletalMeshEditor,
-                        filename.empty() ? metadata->name : filename));
-                }
-            }
-        } else if (const std::optional<SkeletalAssetCommand> command =
-                SkeletalMeshEditorPanelRenderer::CommandAt(
-                    *skeletalMeshEditorContent, sceneContext_, x, y);
-            command.has_value()) {
-            switch (*command) {
-            case SkeletalAssetCommand::Save:
-                static_cast<void>(sceneContext_.SaveSkeletalMeshEditorAsset());
-                break;
-            case SkeletalAssetCommand::Undo:
-                static_cast<void>(sceneContext_.UndoSkeletalMeshEditorAssetEdit());
-                break;
-            case SkeletalAssetCommand::Redo:
-                static_cast<void>(sceneContext_.RedoSkeletalMeshEditorAssetEdit());
-                break;
-            case SkeletalAssetCommand::Reload:
-                if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || EditorChoiceDialog::Show(
-                        mainWindow_, EditorChoiceDialogDescriptor{
-                            .title = std::string{ sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                                ? EditorText("skeletalMeshEditor.reloadSkeletonTitle", "Reload Skeleton")
-                                : EditorText("skeletalMeshEditor.reloadMeshTitle", "Reload Skeletal Mesh") },
-                            .message = std::string{ sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                                ? EditorText("skeletalMeshEditor.reloadSkeleton", "Reload will discard unsaved Skeleton edits.")
-                                : EditorText("skeletalMeshEditor.reloadMesh", "Reload will discard unsaved Skeletal Mesh edits.") },
-                            .supportingText = std::string{ EditorText("common.cannotUndo", "This action cannot be undone.") },
-                            .primaryLabel = std::string{ EditorText("skeletalMeshEditor.reload", "Reload") },
-                            .secondaryLabel = std::string{ EditorText("skeletalMeshEditor.keepEditing", "Keep Editing") },
-                            .icon = HeroIconKind::Skeleton,
-                            .primaryTone = EditorDialogButtonTone::Destructive,
-                        }) == EditorChoiceDialogResult::Primary) {
-                    static_cast<void>(sceneContext_.ReloadSkeletalMeshEditorAsset());
-                }
-                break;
-            case SkeletalAssetCommand::PreviewMesh: {
-                const EditorSkeletalMeshAssetPickerDialog::Result result =
-                    EditorSkeletalMeshAssetPickerDialog::Show(
-                        mainWindow_, MakeEditorDarkTheme(), sceneContext_,
-                        sceneContext_.SkeletalMeshEditorAssetId());
-                if (result.accepted) {
-                    static_cast<void>(sceneContext_.SetSkeletonEditorPreviewMesh(result.assetId));
-                }
-                break;
-            }
-            case SkeletalAssetCommand::AddSocket:
-                if (sceneContext_.AddSkeletonEditorSocket()) {
-                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
-                        SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
-                            *skeletalMeshEditorContent, sceneContext_),
-                        SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
-                            *skeletalMeshEditorContent, sceneContext_)));
-                }
-                break;
-            case SkeletalAssetCommand::DuplicateSocket:
-                if (sceneContext_.DuplicateSkeletonEditorSocket()) {
-                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
-                        SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
-                            *skeletalMeshEditorContent, sceneContext_),
-                        SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
-                            *skeletalMeshEditorContent, sceneContext_)));
-                }
-                break;
-            case SkeletalAssetCommand::DeleteSocket:
-                if (EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
-                        .title = std::string{ EditorText("skeletalMeshEditor.deleteSocketTitle", "Delete Skeleton Socket") },
-                        .message = std::string{ EditorText("skeletalMeshEditor.deleteSocket", "Delete the selected socket from this Skeleton?") },
-                        .supportingText = std::string{ EditorText("common.cannotUndo", "This action cannot be undone.") },
-                        .primaryLabel = std::string{ EditorText("common.delete", "Delete") },
-                        .secondaryLabel = std::string{ EditorText("common.cancel", "Cancel") },
-                        .icon = HeroIconKind::XMark,
-                        .primaryTone = EditorDialogButtonTone::Destructive,
-                    }) == EditorChoiceDialogResult::Primary) {
-                    static_cast<void>(sceneContext_.DeleteSkeletonEditorSocket());
-                }
-                break;
-            case SkeletalAssetCommand::BoundsMode:
-                static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorBoundsMode());
-                break;
-            case SkeletalAssetCommand::ReferencePose:
-                static_cast<void>(sceneContext_.ShowSkeletalMeshEditorReferencePose());
-                break;
-            case SkeletalAssetCommand::Focus:
-                static_cast<void>(sceneContext_.FocusSkeletalMeshEditorPreview());
-                break;
-            }
-        } else if (const std::optional<std::uint8_t> overlay = SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
-                *skeletalMeshEditorContent, sceneContext_, x, y);
-            overlay.has_value()) {
-            AnimationPreviewOverlayState& overlays = sceneContext_.AnimationPreview().Overlays();
-            switch (*overlay) {
-            case 0U: static_cast<void>(overlays.SetBonesVisible(!overlays.BonesVisible())); break;
-            case 1U: static_cast<void>(overlays.SetBoneNamesVisible(!overlays.BoneNamesVisible())); break;
-            case 2U: static_cast<void>(overlays.SetSocketsVisible(!overlays.SocketsVisible())); break;
-            case 3U: static_cast<void>(overlays.SetBoundsVisible(!overlays.BoundsVisible())); break;
-            case 4U: static_cast<void>(overlays.SetLodVisible(!overlays.LodVisible())); break;
-            case 5U: static_cast<void>(overlays.SetNormalsVisible(!overlays.NormalsVisible())); break;
-            default: break;
-            }
-        } else if (const std::optional<SkeletalMeshEditorDetailsHit> hit =
-                       SkeletalMeshEditorPanelRenderer::DetailsHitAt(
-                           *skeletalMeshEditorContent, sceneContext_, x, y);
-                   hit.has_value()) {
-            if (hit->kind == SkeletalMeshEditorDetailsHitKind::Section) {
-                static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorDetailsSection(hit->sectionTitle));
-            } else {
-                const SkeletalMeshEditorDetailsField& field = hit->field;
-                switch (field.action) {
-                case SkeletalMeshEditorDetailsAction::PreviewLod: {
-                    HMENU menu = CreatePopupMenu();
-                    if (menu != nullptr) {
-                        const std::optional<std::uint32_t> forced =
-                            sceneContext_.SkeletalMeshEditorForcedPreviewLod();
-                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (!forced.has_value() ? MF_CHECKED : 0U), 1U,
-                            std::string{ EditorText("skeletalMeshEditor.lodAuto", "Auto") }.c_str());
-                        const std::uint32_t lodCount = sceneContext_.SkeletalMeshEditorLodCount();
-                        for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
-                            const std::string label = EditorLocalization::Format("skeletalMeshEditor.lod", "LOD {index}",
-                                { { "index", std::to_string(lod) } });
-                            kb::editor::AppendMenuUtf8(menu, MF_STRING | (forced == lod ? MF_CHECKED : 0U),
-                                100U + lod, label.c_str());
-                        }
-                        POINT point{ x, y };
-                        ClientToScreen(messageWindow, &point);
-                        SetForegroundWindow(messageWindow);
-                        const UINT choice = TrackPopupMenu(menu,
-                            TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                            point.x, point.y, 0, messageWindow, nullptr);
-                        DestroyMenu(menu);
-                        if (choice == 1U) {
-                            static_cast<void>(sceneContext_.SetSkeletalMeshEditorPreviewLod(std::nullopt));
-                        } else if (choice >= 100U && choice < 100U + lodCount) {
-                            static_cast<void>(sceneContext_.SetSkeletalMeshEditorPreviewLod(choice - 100U));
-                        }
-                    }
-                    break;
-                }
-                case SkeletalMeshEditorDetailsAction::BoundsMode:
-                    static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorBoundsMode());
-                    break;
-                case SkeletalMeshEditorDetailsAction::LodScreenCoverage: {
-                    const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                        mainWindow_, EditorLocalization::Format("skeletalMeshEditor.lodMinScreenCoverage", "LOD {index} Min Screen Coverage",
-                            { { "index", std::to_string(field.lodIndex) } }), field.value);
-                    float parsed = 0.0F;
-                    if (value.has_value() && kb::render::ParseFiniteMaterialFloatToken(*value, parsed)) {
-                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorLodScreenCoverage(field.lodIndex, parsed));
-                    } else if (value.has_value()) {
-                        static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
-                            .title = std::string{ EditorText("skeletalMeshEditor.invalidCoverageTitle", "Invalid LOD Screen Coverage") },
-                            .message = std::string{ EditorText("skeletalMeshEditor.invalidCoverage", "Enter a finite number from 0 to 1.") },
-                            .supportingText = std::string{ EditorText("common.valueNotApplied", "The previous value was not applied.") },
-                            .primaryLabel = std::string{ EditorText("common.ok", "OK") },
-                            .icon = HeroIconKind::AdjustmentsHorizontal,
-                        }));
-                    }
-                    break;
-                }
-                case SkeletalMeshEditorDetailsAction::SectionMaterial: {
-                    const EditorMaterialAssetPickerDialog::Result result =
-                        EditorMaterialAssetPickerDialog::Show(
-                            mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_,
-                            kb::assets::AssetId{ field.assetId }, true);
-                    if (result.accepted) {
-                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorSectionMaterial(
-                            field.lodIndex, field.sectionIndex, result.assetId));
-                    }
-                    break;
-                }
-                case SkeletalMeshEditorDetailsAction::FixedBoundsCenter:
-                case SkeletalMeshEditorDetailsAction::FixedBoundsExtents: {
-                    const bool extents = field.action == SkeletalMeshEditorDetailsAction::FixedBoundsExtents;
-                    const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                        mainWindow_, extents ? EditorText("skeletalMeshEditor.fixedBoundsExtents", "Fixed Bounds Extents (X, Y, Z)")
-                                             : EditorText("skeletalMeshEditor.fixedBoundsCenter", "Fixed Bounds Center (X, Y, Z)"),
-                        TupleEditorValue(field.value));
-                    std::array<float, 3U> parsed{};
-                    if (value.has_value() && kb::render::ParseExactFiniteMaterialFloatTuple(*value, parsed)) {
-                        const kb::scene::Vec3 vector{ parsed[0], parsed[1], parsed[2] };
-                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorFixedBounds(
-                            extents ? std::nullopt : std::optional<kb::scene::Vec3>{ vector },
-                            extents ? std::optional<kb::scene::Vec3>{ vector } : std::nullopt));
-                    } else if (value.has_value()) {
-                        static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
-                            .title = std::string{ EditorText("skeletalMeshEditor.invalidBoundsTitle", "Invalid Fixed Bounds") },
-                            .message = std::string{ EditorText("skeletalMeshEditor.invalidBounds", "Enter three finite values: X, Y, Z.") },
-                            .supportingText = std::string{ EditorText("common.valueNotApplied", "The previous value was not applied.") },
-                            .primaryLabel = std::string{ EditorText("common.ok", "OK") },
-                            .icon = HeroIconKind::AdjustmentsHorizontal,
-                        }));
-                    }
-                    break;
-                }
-                case SkeletalMeshEditorDetailsAction::None:
-                default:
-                    break;
-                }
-            }
-        } else if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(
-                       *skeletalMeshEditorContent, sceneContext_, x, y)) {
-            sceneContext_.FocusSkeletalMeshEditorTreeSearch(true);
-        } else if (const std::optional<kb::scene::SkeletonBoneId> disclosure =
-                       SkeletalMeshEditorPanelRenderer::TreeDisclosureAt(
-                           *skeletalMeshEditorContent, sceneContext_, x, y);
-                   disclosure.has_value()) {
-            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
-            static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorTreeBoneExpanded(*disclosure));
-        } else if (const std::optional<SkeletalMeshEditorTreeRow> row =
-                SkeletalMeshEditorPanelRenderer::TreeRowAt(*skeletalMeshEditorContent, sceneContext_, x, y);
-            row.has_value()) {
-            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
-            if (row->kind == SkeletalMeshEditorTreeItemKind::Bone) {
-                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(row->boneId));
-                diagnostics::EditorLagTrace::Marker(
-                    "skeletal-bone-selection",
-                    "source=tree hit=1 boneId=" + std::to_string(row->boneId));
-            } else {
-                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName));
-            }
-        } else if (const std::optional<kb::scene::SkeletonBoneId> bone =
-                       SkeletalMeshEditorPanelRenderer::BoneAt(*skeletalMeshEditorContent, sceneContext_, x, y);
-                   bone.has_value()) {
-            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
-            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
-            diagnostics::EditorLagTrace::Marker(
-                "skeletal-bone-selection",
-                "source=viewport hit=1 boneId=" + std::to_string(*bone));
-        } else {
-            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
-            static_cast<void>(sceneContext_.ClearSkeletalMeshEditorTreeSelection());
-            diagnostics::EditorLagTrace::Marker(
-                "skeletal-bone-selection", "source=viewport hit=0");
-        }
-        // The viewport is a native GPU child and sits above the invalidated GDI panel. Repainting
-        // the host alone cannot update its selected-bone overlay; request a new GPU composition
-        // for every selection transition, including clearing the selection.
-        sceneViewport_.RequestPresent();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        return;
     }
 
     if (const std::optional<RECT> animationClipEditorContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::AnimationClipEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         animationClipEditorContent.has_value() && PointInRect(*animationClipEditorContent, x, y) &&
         sceneContext_.HasAnimationClipEditorAsset()) {
-        AnimationPreviewTransport& transport = sceneContext_.AnimationPreview().Transport();
-        AnimationClipTimelineState& timeline = sceneContext_.AnimationClipEditorTimeline();
-        if (const std::optional<std::uint8_t> control =
-                AnimationClipEditorPanelRenderer::TransportControlAt(*animationClipEditorContent, x, y);
-            control.has_value()) {
-            switch (*control) {
-            case 0U:
-                if (transport.NormalizedTime() > transport.LoopStartNormalized()) {
-                    static_cast<void>(transport.SetLoopRange(transport.LoopStartNormalized(), transport.NormalizedTime()));
-                }
-                break;
-            case 1U:
-                if (transport.NormalizedTime() < transport.LoopEndNormalized()) {
-                    static_cast<void>(transport.SetLoopRange(transport.NormalizedTime(), transport.LoopEndNormalized()));
-                }
-                break;
-            case 2U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 2.0F)); break;
-            case 3U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 0.5F)); break;
-            case 4U: static_cast<void>(timeline.SetSnappingEnabled(!timeline.SnappingEnabled())); break;
-            case 5U: static_cast<void>(transport.SetLooping(!transport.Loops())); break;
-            case 6U: static_cast<void>(transport.Step(1)); break;
-            case 7U: static_cast<void>(transport.SetPlaying(!transport.IsPlaying())); break;
-            case 8U: static_cast<void>(transport.Step(-1)); break;
-            default: break;
-            }
-        } else if (const std::optional<std::size_t> track = AnimationClipEditorPanelRenderer::TimelineTrackAt(
-                       *animationClipEditorContent, timeline, x, y);
-                   track.has_value()) {
-            static_cast<void>(timeline.SelectTrack(*track));
-            if (const AnimationClipTimelineTrack* selected = timeline.SelectedTrackData();
-                selected != nullptr && selected->boneId != 0U) {
-                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(selected->boneId));
-            }
-        } else if (const std::optional<kb::scene::SkeletonBoneId> bone = AnimationClipEditorPanelRenderer::BoneAt(
-                       *animationClipEditorContent, sceneContext_, x, y);
-                   bone.has_value()) {
-            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
-        } else if (const std::optional<float> time = AnimationClipEditorPanelRenderer::TimelineTimeAt(
-                       *animationClipEditorContent, timeline, x, y);
-                   time.has_value()) {
-            if (KeyDown(VK_SHIFT)) {
-                static_cast<void>(timeline.Pan(*time - (timeline.PanSeconds() + timeline.VisibleDurationSeconds() * 0.5F)));
-            } else {
-                const float snapped = timeline.SnapTime(*time, transport.FrameRate());
-                static_cast<void>(transport.Scrub(snapped / transport.DurationSeconds()));
-            }
+        if (HandleAnimationClipEditorDown(messageWindow, x, y, *animationClipEditorContent)) {
+            return;
         }
-        sceneViewport_.RequestPresent();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        return;
     }
 
     // A click outside the Project Settings panel dismisses its open dropdown,
@@ -1695,417 +2278,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         terrain_material_layer_menu::Close();
     }
     if (panelHit.inInspectorPanel) {
-        const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
-        if (hit.section == InspectorSectionId::UITheme) {
-            const auto id = sceneContext_.AssetBrowser().InspectorAsset();
-            auto data = sceneContext_.ReadUITheme(id);
-            auto& inspector = sceneContext_.Inspector();
-            if (data) {
-                InspectorUIThemeModel::NormalizeSelection(*data, id.value, inspector.themeAssetId, inspector.themeVariant);
-                if (hit.kind == InspectorHitKind::ChoiceField && hit.property == InspectorPropertyId::UIThemeVariant) {
-                    HMENU menu = CreatePopupMenu();
-                    if (!menu) return;
-                    kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant.empty() ? MF_CHECKED : 0), 1, "Base");
-                    for (std::size_t i = 0; i < data->variants.size(); ++i)
-                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (inspector.themeVariant == data->variants[i].name ? MF_CHECKED : 0),
-                            i + 2, data->variants[i].name.c_str());
-                    const auto removeId = static_cast<UINT>(data->variants.size() + 2);
-                    if (!inspector.themeVariant.empty()) kb::editor::AppendMenuUtf8(menu, MF_STRING, removeId, "Remove selected variant");
-                    POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
-                    const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
-                        anchor.x, anchor.y, 0, messageWindow, nullptr);
-                    DestroyMenu(menu);
-                    if (choice == 1) inspector.themeVariant.clear();
-                    else if (choice > 1 && choice < removeId) inspector.themeVariant = data->variants[choice - 2].name;
-                    else if (choice == removeId && !inspector.themeVariant.empty() &&
-                        EditorUIThemeAssets::RemoveVariant(*data, inspector.themeVariant) && sceneContext_.SetUITheme(id, *data))
-                        inspector.themeVariant.clear();
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                const auto rows = InspectorUIThemeModel::Rows(*data, inspector.themeVariant);
-                if (hit.property == InspectorPropertyId::UIThemeField && hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
-                    const auto& row = rows[hit.index];
-                    const auto* descriptor = kb::scene::FindUIComponentProperty(row.key.component, row.key.property);
-                    bool changed = false;
-                    bool handled = true;
-                    if (hit.kind == InspectorHitKind::ColorField && row.color) {
-                        POINT anchor{x, y}; ClientToScreen(messageWindow, &anchor);
-                        const auto color = EditorMaterialColorPickerDialog::Show(mainWindow_, row.label, *row.color, &anchor);
-                        changed = color && InspectorUIThemeModel::EditColor(*data, inspector.themeVariant, row.key, *color);
-                    } else if (hit.kind == InspectorHitKind::TextField && descriptor && descriptor->assetKind) {
-                        const auto picked = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(), sceneContext_,
-                            kb::assets::AssetId{std::stoull(row.value)}, *descriptor->assetKind);
-                        changed = picked.accepted && EditorUIThemeAssets::SetProperty(*data, inspector.themeVariant, {row.key, picked.assetId.value});
-                    } else handled = false;
-                    if (handled) {
-                        if (changed && sceneContext_.SetUITheme(id, *data)) sceneViewport_.RequestPresent();
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                }
-            }
-        }
-        if (hit.kind == InspectorHitKind::ChoiceField) {
-            const auto component = InspectorUIComponentModel::Component(hit.section);
-            if (component) {
-                const auto entity = sceneContext_.SelectedEntity();
-                const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
-                if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
-                    const auto& row = rows[hit.index];
-                    HMENU menu = CreatePopupMenu();
-                    if (menu == nullptr) return;
-                    for (std::size_t index = 0; index < row.choices.size(); ++index) {
-                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (std::stoul(row.value) == index ? MF_CHECKED : 0),
-                            index + 1, std::string{row.choices[index]}.c_str());
-                    }
-                    POINT anchor{x, y};
-                    ClientToScreen(messageWindow, &anchor);
-                    const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
-                        anchor.x, anchor.y, 0, messageWindow, nullptr);
-                    DestroyMenu(menu);
-                    if (choice > 0 && choice <= row.choices.size() &&
-                        sceneContext_.SetUIComponentProperty(entity, *component, row.name, static_cast<std::int32_t>(choice - 1)))
-                        sceneViewport_.RequestPresent();
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-            }
-        }
-        if (hit.kind == InspectorHitKind::ColorField && InspectorSceneColor::IsColorProperty(hit.property)) {
-            // Scene colours are linear; the picker shows and returns sRGB, as Unity's does.
-            const auto entity = sceneContext_.SelectedEntity();
-            if (const auto linear = InspectorSceneColor::Read(sceneContext_, entity, hit.property)) {
-                POINT anchor{x, y};
-                ClientToScreen(messageWindow, &anchor);
-                const std::array<float, 4U> shown{ InspectorSceneColor::LinearToSrgb((*linear)[0]),
-                    InspectorSceneColor::LinearToSrgb((*linear)[1]), InspectorSceneColor::LinearToSrgb((*linear)[2]), 1.0F };
-                if (const auto picked = EditorMaterialColorPickerDialog::Show(mainWindow_, InspectorSceneColor::Label(hit.property), shown, &anchor)) {
-                    const std::array<float, 3U> chosen{ InspectorSceneColor::SrgbToLinear((*picked)[0]),
-                        InspectorSceneColor::SrgbToLinear((*picked)[1]), InspectorSceneColor::SrgbToLinear((*picked)[2]) };
-                    if (InspectorSceneColor::Apply(sceneContext_, entity, hit.property, chosen)) sceneViewport_.RequestPresent();
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (HandleInspectorDown(messageWindow, x, y, panelHit)) {
             return;
         }
-        if (hit.kind == InspectorHitKind::ColorField) {
-            const auto component = InspectorUIComponentModel::Component(hit.section);
-            if (component) {
-                const auto entity = sceneContext_.SelectedEntity();
-                const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
-                if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size() && rows[hit.index].color) {
-                    const auto& row = rows[hit.index];
-                    POINT anchor{x, y};
-                    ClientToScreen(messageWindow, &anchor);
-                    const auto color = EditorMaterialColorPickerDialog::Show(mainWindow_, row.label, row.rgba, &anchor);
-                    if (color && sceneContext_.SetUIColor(entity, *component, row.name, *color))
-                        sceneViewport_.RequestPresent();
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-            }
-        }
-        if (hit.kind == InspectorHitKind::TextField) {
-            const auto component = InspectorUIComponentModel::Component(hit.section);
-            if (component) {
-                const auto entity = sceneContext_.SelectedEntity();
-                const auto rows = InspectorUIComponentModel::Properties(sceneContext_.Scene(), entity, *component);
-                if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
-                    const auto& row = rows[static_cast<std::size_t>(hit.index)];
-                    if (row.onClick) {
-                        const auto picked = EditorUIClickPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
-                            InspectorUIClickHandler::Choices(sceneContext_.Scene(), entity));
-                        if (picked.accepted && sceneContext_.SetUIClickHandler(entity, picked.choice ? &*picked.choice : nullptr))
-                            sceneViewport_.RequestPresent();
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                    const auto* descriptor = kb::scene::FindUIComponentProperty(*component, row.name);
-                    if (descriptor != nullptr && descriptor->assetKind) {
-                        const auto result = EditorUIAssetPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
-                            sceneContext_, kb::assets::AssetId{std::stoull(row.value)}, *descriptor->assetKind);
-                        if (result.accepted) {
-                            static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
-                                row.name, kb::scene::UIComponentPropertyValue{result.assetId.value}));
-                            sceneViewport_.RequestPresent();
-                        }
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                    if (descriptor != nullptr && descriptor->type == kb::scene::UIComponentPropertyType::Entity) {
-                        const auto result = EditorUIEntityPickerDialog::Show(mainWindow_, MakeEditorDarkTheme(),
-                            sceneContext_, entity, *component, row.name, kb::scene::SceneEntity{std::stoull(row.value)});
-                        if (result.accepted) {
-                            static_cast<void>(sceneContext_.SetUIComponentProperty(entity, *component,
-                                row.name, kb::scene::UIComponentPropertyValue{result.entity.Id()}));
-                            sceneViewport_.RequestPresent();
-                        }
-                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                        return;
-                    }
-                }
-            }
-        }
-        if (hit.section == InspectorSectionId::ScenePostProcess
-            && hit.property == InspectorPropertyId::ScenePostProcessProfile) {
-            const EditorPostProcessProfileAssetPickerDialog::Result result =
-                EditorPostProcessProfileAssetPickerDialog::Show(
-                    mainWindow_,
-                    MakeEditorDarkTheme(),
-                    sceneContext_,
-                    kb::assets::AssetId{ kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext_.Scene()) });
-            if (result.accepted) {
-                static_cast<void>(sceneContext_.SetScenePostProcessProfile(result.assetId));
-                sceneViewport_.RequestPresent();
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::SceneAudioRouting
-            && hit.property == InspectorPropertyId::SceneAudioMixerPicker) {
-            const EditorAudioMixerAssetPickerDialog::Result result =
-                EditorAudioMixerAssetPickerDialog::Show(
-                    mainWindow_,
-                    MakeEditorDarkTheme(),
-                    sceneContext_,
-                    kb::assets::AssetId{
-                        kb::scene::SceneAudioMixerAccess::ActiveMixer(sceneContext_.Scene()) });
-            if (const std::optional<InspectorSceneAudioCommand> command =
-                    InspectorSceneAudioInteraction::ResolvePicker(result.accepted, result.assetId)) {
-                static_cast<void>(InspectorSceneAudioInteraction::Apply(sceneContext_, *command));
-                sceneViewport_.RequestPresent();
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::World2DMap &&
-            (hit.property == InspectorPropertyId::World2DMapOpenEditor || hit.property == InspectorPropertyId::World2DMapView)) {
-            HandleWorld2DMapClick(hit.property);
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
-            if (const std::optional<std::filesystem::path> path = EditorTerrainFileDialog::PickHeightImage(mainWindow_, EditorText("fileDialog.importHeightmapTitle", "Import Terrain Heightmap"))) {
-                std::string error;
-                if (sceneContext_.ImportTerrainHeightmap(
-                        sceneContext_.SelectedEntity(), *path,
-                        EditorTerrainService::ToolState().heightmapImport,
-                        &error)) {
-                    sceneContext_.Console().Info("Terrain", "Imported heightmap: " + path->filename().string());
-                    sceneViewport_.RequestPresent();
-                } else {
-                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Heightmap import failed." : error);
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::ParticleEffect &&
-            (hit.property == InspectorPropertyId::ParticleEffectAsset ||
-             hit.property == InspectorPropertyId::ParticleEffectAssetPicker)) {
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const kb::scene::ParticleEffectComponent* particleEffect =
-                sceneContext_.Scene().Components().ParticleEffects().TryGet(entity);
-            if (particleEffect != nullptr) {
-                EditorSceneContext* const persistentSceneContext = &sceneContext_;
-                EditorSceneBgfxViewport* const persistentSceneViewport = &sceneViewport_;
-                const HWND persistentMainWindow = mainWindow_;
-                EditorCrashBreadcrumbs::WriteValue(
-                    "particle_picker", "open entity", entity.Id());
-                static_cast<void>(EditorParticleEffectAssetPickerDialog::Open(
-                    mainWindow_,
-                    MakeEditorDarkTheme(),
-                    sceneContext_,
-                    sceneViewport_,
-                    kb::assets::AssetId{ particleEffect->effectAssetId },
-                    [persistentSceneContext, persistentSceneViewport,
-                     persistentMainWindow, entity](kb::assets::AssetId assetId) {
-                        EditorCrashBreadcrumbs::WriteValue(
-                            "particle_picker", "assign asset", assetId.value);
-                        if (persistentSceneContext->SetParticleEffectAsset(entity, assetId)) {
-                            EditorCrashBreadcrumbs::Write(
-                                "particle_picker", "assignment completed");
-                            persistentSceneViewport->RequestPresent();
-                            InvalidateRect(persistentMainWindow, nullptr, FALSE);
-                        } else {
-                            EditorCrashBreadcrumbs::Write(
-                                "particle_picker", "assignment rejected");
-                        }
-                    }));
-            }
-            EditorWindowInvalidator::InvalidateDockPanel(
-                mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Inspector);
-            EditorWindowInvalidator::InvalidateDockPanel(
-                mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Scene);
-            return;
-        }
-        if (hit.section == InspectorSectionId::Animator &&
-            (hit.property == InspectorPropertyId::AnimatorController ||
-             hit.property == InspectorPropertyId::AnimatorControllerPicker)) {
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const kb::scene::Animator* animator = sceneContext_.Scene().Components().Animators().TryGet(entity);
-            if (animator != nullptr) {
-                const EditorAnimatorControllerAssetPickerDialog::Result result =
-                    EditorAnimatorControllerAssetPickerDialog::Show(
-                        mainWindow_,
-                        MakeEditorDarkTheme(),
-                        sceneContext_,
-                        kb::assets::AssetId{ animator->controllerAssetId });
-                if (result.accepted && sceneContext_.SetAnimatorControllerAsset(entity, result.assetId)) {
-                    sceneViewport_.RequestPresent();
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::SkeletonBinding &&
-            (hit.property == InspectorPropertyId::SkeletonBindingAsset ||
-             hit.property == InspectorPropertyId::SkeletonBindingAssetPicker)) {
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const kb::scene::SkeletonBindingComponent* binding = sceneContext_.Scene().Components().SkeletonBindings().TryGet(entity);
-            if (binding != nullptr) {
-                const EditorSkeletonAssetPickerDialog::Result result = EditorSkeletonAssetPickerDialog::Show(
-                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ binding->skeletonAssetId });
-                if (result.accepted && sceneContext_.SetSkeletonBindingAsset(entity, result.assetId)) {
-                    sceneViewport_.RequestPresent();
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::DeformedGeometry &&
-            (hit.property == InspectorPropertyId::DeformedGeometryMesh ||
-             hit.property == InspectorPropertyId::DeformedGeometryMeshPicker)) {
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
-            if (geometry != nullptr) {
-                const EditorSkeletalMeshAssetPickerDialog::Result result = EditorSkeletalMeshAssetPickerDialog::Show(
-                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ geometry->skeletalMeshAssetId });
-                if (result.accepted && sceneContext_.SetDeformedGeometryMeshAsset(entity, result.assetId)) {
-                    sceneViewport_.RequestPresent();
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::DeformedGeometry) {
-            if (const std::optional<std::uint32_t> slot = DeformedGeometryMaterialSlotForProperty(hit.property)) {
-                const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-                const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
-                if (geometry != nullptr) {
-                    const std::uint64_t current = *slot < geometry->materialSlotOverrideCount
-                        ? geometry->materialSlotAssetIds[*slot]
-                        : 0U;
-                    const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
-                        mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, kb::assets::AssetId{ current }, true);
-                    if (result.accepted && sceneContext_.SetDeformedGeometryMaterialSlotAsset(entity, *slot, result.assetId)) {
-                        sceneViewport_.RequestPresent();
-                    }
-                }
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-        }
-        if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMeshPicker) {
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
-            if (renderer != nullptr) {
-                const EditorMeshAssetPickerDialog::Result result = EditorMeshAssetPickerDialog::Show(
-                    mainWindow_,
-                    MakeEditorDarkTheme(),
-                    sceneContext_,
-                    kb::assets::AssetId{ renderer->meshAssetId });
-                if (result.accepted) {
-                    static_cast<void>(sceneContext_.SetMeshRendererMeshAsset(entity, result.assetId));
-                    sceneViewport_.RequestPresent();
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
-        if (hit.section == InspectorSectionId::Terrain &&
-            hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
-            terrain_material_layer_menu::Close();
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const kb::assets::TerrainAsset* terrain = sceneContext_.TerrainForEditing(entity);
-            if (terrain == nullptr) {
-                sceneContext_.Console().Warning("Terrain", "Terrain asset is unavailable.");
-            } else if (terrain->materialLayers.size() >= kb::assets::TerrainAsset::MaximumMaterialLayers) {
-                sceneContext_.Console().Warning("Terrain", "Terrain supports at most four material layers.");
-            } else {
-                const std::filesystem::path destinationFolder = sceneContext_.AssetBrowser().SelectedFolder();
-                if (sceneContext_.CreateMaterialAsset(destinationFolder)) {
-                    const kb::assets::AssetId materialAssetId = sceneContext_.AssetBrowser().SelectedAsset();
-                    sceneContext_.SelectEntity(entity);
-                    std::string error;
-                    if (!materialAssetId.IsValid() ||
-                        !sceneContext_.AddTerrainMaterialLayer(entity, materialAssetId, &error)) {
-                        sceneContext_.Console().Warning(
-                            "Terrain",
-                            error.empty() ? "The material was created, but its terrain layer could not be added." : error);
-                    } else {
-                        sceneViewport_.RequestPresent();
-                    }
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if (hit.section == InspectorSectionId::Terrain &&
-            hit.property == InspectorPropertyId::TerrainMaterialLayerAdd) {
-            terrain_material_layer_menu::Close();
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
-                mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
-            if (result.accepted) {
-                std::string error;
-                const bool assigned = sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
-                if (!assigned) {
-                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Material layer could not be added." : error);
-                } else {
-                    sceneViewport_.RequestPresent();
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        if ((hit.section == InspectorSectionId::MeshRenderer || hit.section == InspectorSectionId::Terrain)
-            && (hit.property == InspectorPropertyId::MeshRendererMaterialPicker || materialSlotPicker.has_value())) {
-            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
-            if (renderer != nullptr) {
-                const bool overridePicker = materialSlotPicker.has_value();
-                const std::uint32_t slotIndex = materialSlotPicker.value_or(0U);
-                const std::uint64_t current = overridePicker
-                    ? (slotIndex < renderer->materialSlotOverrideCount ? renderer->materialSlotAssetIds[slotIndex] : 0U)
-                    : renderer->materialAssetId;
-                const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
-                    mainWindow_,
-                    MakeEditorDarkTheme(),
-                    sceneContext_,
-                    sceneViewport_,
-                    kb::assets::AssetId{ current });
-                if (result.accepted) {
-                    const bool assigned = overridePicker
-                        ? sceneContext_.SetMeshRendererMaterialSlotAsset(entity, slotIndex, result.assetId)
-                        : sceneContext_.SetMeshRendererMaterialAsset(entity, result.assetId);
-                    if (assigned) {
-                        sceneViewport_.RequestPresent();
-                    }
-                }
-            }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
-        EditorInspectorPointerController inspectorPointer(sceneContext_);
-        static_cast<void>(inspectorPointer.HandlePointerDown(*panelHit.inspectorContent, x, y, sceneViewport_));
-        if (inspectorPointer.ShouldCaptureMouse()) {
-            SetCapture(messageWindow);
-        }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        return;
     }
 
     if (panelHit.inProjectSettingsPanel) {
@@ -2174,143 +2349,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(
             DockPanelKind::BuildGame, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         buildGameContent.has_value()) {
-        if (BuildGamePanelRenderer::HitTestBuildButton(*buildGameContent, x, y)) {
-            if (sceneContext_.BuildGamePackageSnapshot().state == EditorPackageJobState::Running) {
-                sceneContext_.CancelBuildGamePackage();
-            } else {
-                const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, EditorSceneTransition::BuildGame);
-                if (resolution.has_value() && sceneContext_.StartBuildGamePackage(*resolution)) {
-                    static_cast<void>(SetTimer(messageWindow, kEditorPackageStatusTimer, 100U, nullptr));
-                }
-            }
-            EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
-            return;
-        }
-        const BuildGamePanelRenderer::SidebarHit sidebar =
-            BuildGamePanelRenderer::HitTestSidebar(*buildGameContent, x, y);
-        if (sidebar.target >= 0) {
-            if (sceneContext_.SetBuildGameSelectedTarget(sidebar.target)) {
-                EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
-            }
-            return;
-        }
-        if (sidebar.profile >= 0) {
-            if (sceneContext_.SetBuildGameSelectedProfile(sidebar.profile)) {
-                EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
-            }
-            return;
-        }
-        const BuildGamePanelRenderer::RowHit hit =
-            BuildGamePanelRenderer::HitTest(*buildGameContent, sceneContext_, x, y);
-        if (hit.section >= 0 && hit.row < 0) {
-            sceneContext_.ToggleBuildGameSection(hit.section);
-            EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
-            return;
-        }
-        if (hit.section >= 0 && hit.row >= 0) {
-            const BuildGameField field = BuildGamePanelRenderer::FieldForHit(sceneContext_, hit);
-            bool changed = false;
-            switch (field) {
-            case BuildGameField::OutputDirectory: {
-                const std::filesystem::path initial = sceneContext_.BuildGameSettings().For(
-                    sceneContext_.BuildGameTarget()).outputDirectory;
-                if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
-                        mainWindow_, initial, EditorText("fileDialog.selectOutputDirectoryTitle", "Select package output directory"))) {
-                    changed = sceneContext_.SetBuildGameOutputDirectory(*selected);
-                }
-                break;
-            }
-            case BuildGameField::BuildRoot:
-                if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
-                        mainWindow_, sceneContext_.BuildGameSettings().buildRoot, EditorText("fileDialog.selectBuildDirectoryTitle", "Select build directory"))) {
-                    changed = sceneContext_.SetBuildGameBuildRoot(*selected);
-                }
-                break;
-            case BuildGameField::EmsdkRoot:
-                if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
-                        mainWindow_, sceneContext_.BuildGameSettings().emsdkRoot, EditorText("fileDialog.selectEmsdkDirectoryTitle", "Select Emscripten SDK directory"))) {
-                    changed = sceneContext_.SetBuildGameToolchainDirectory(field, *selected);
-                }
-                break;
-            case BuildGameField::ApplicationIcon:
-                if (const auto selected = EditorBuildGameFileDialog::SelectPng(mainWindow_)) {
-                    changed = sceneContext_.ImportBuildGameApplicationIcon(*selected);
-                }
-                break;
-            case BuildGameField::AndroidKeystore:
-                if (const auto selected = EditorBuildGameFileDialog::SelectKeystore(mainWindow_)) {
-                    changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
-                }
-                break;
-            case BuildGameField::LinuxIdentity:
-                if (const auto selected = EditorBuildGameFileDialog::SelectIdentity(mainWindow_)) {
-                    changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
-                }
-                break;
-            case BuildGameField::WindowsCertificateFile:
-                if (const auto selected = EditorBuildGameFileDialog::SelectCertificate(mainWindow_)) {
-                    changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
-                }
-                break;
-            case BuildGameField::LaunchAfterBuild:
-                changed = sceneContext_.ToggleBuildGameLaunchAfterBuild();
-                break;
-            case BuildGameField::StartupMap: {
-                // A list of the project's scenes, like Unreal's Game Default Map, not a free path.
-                const std::vector<std::string> scenes = sceneContext_.ProjectScenePaths();
-                HMENU menu = CreatePopupMenu();
-                if (menu != nullptr) {
-                    if (scenes.empty()) {
-                        kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0U,
-                            EditorText("buildGame.noScenes", "This project has no scenes yet").data());
-                    }
-                    for (std::size_t index = 0; index < scenes.size(); ++index) {
-                        const bool current = scenes[index] == sceneContext_.ProjectConfiguration().defaultMap;
-                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (current ? MF_CHECKED : 0U),
-                            static_cast<UINT_PTR>(index + 1U), scenes[index].c_str());
-                    }
-                    POINT cursor{};
-                    GetCursorPos(&cursor);
-                    const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY,
-                        cursor.x, cursor.y, 0, mainWindow_, nullptr);
-                    DestroyMenu(menu);
-                    if (chosen > 0 && static_cast<std::size_t>(chosen) <= scenes.size()) {
-                        changed = sceneContext_.SetStartupScene(scenes[static_cast<std::size_t>(chosen - 1)]);
-                    }
-                }
-                break;
-            }
-            case BuildGameField::Publisher:
-            case BuildGameField::Version:
-            case BuildGameField::ProductName:
-            case BuildGameField::ExecutableName:
-            case BuildGameField::AndroidApplicationId:
-            case BuildGameField::AndroidVersionCode:
-            case BuildGameField::AndroidLabel:
-            case BuildGameField::AndroidKeyAlias:
-            case BuildGameField::AndroidFormat:
-            case BuildGameField::AndroidBundletool:
-            case BuildGameField::AndroidStorePassword:
-            case BuildGameField::AndroidKeyPassword:
-            case BuildGameField::BuilderExecutable:
-            case BuildGameField::LinuxHost:
-            case BuildGameField::LinuxUser:
-            case BuildGameField::LinuxHostKey:
-            case BuildGameField::LinuxPort:
-            case BuildGameField::LinuxEngineRoot:
-            case BuildGameField::LinuxDisplay:
-            case BuildGameField::CrashReportUrl:
-            case BuildGameField::WindowsCertificateThumbprint:
-            case BuildGameField::WindowsCertificatePassword:
-            case BuildGameField::WindowsTimestampUrl:
-                changed = sceneContext_.BeginBuildGameTextEdit(field);
-                break;
-            case BuildGameField::None:
-            case BuildGameField::ProjectName:
-                break;
-            }
-            if (changed) EditorWindowInvalidator::InvalidatePanel(messageWindow, *buildGameContent);
+        if (HandleBuildGameDown(messageWindow, x, y, *buildGameContent)) {
             return;
         }
     }
