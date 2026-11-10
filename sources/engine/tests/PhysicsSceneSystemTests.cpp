@@ -13,6 +13,7 @@
 #include "engine/library/EngineLibraryCommandBatch.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
@@ -3495,7 +3496,36 @@ void RunTopDownPlayerPresetTest() {
     kb::tests::Require(rig->scene.Runtime().DrainSceneSystemErrors().empty(), "the top-down script runs without errors");
 }
 
+// The project's gravity reaches the live physics world, whether it is set before or after the first step, and the
+// fixed step and time scale reach the scene.
+void RunProjectSimulationSettingsTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
+    const auto heightAfterHalfSecond = [](const kb::project::ProjectSimulationSettings& simulation) {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
+        kb::scene::Scene scene{std::move(descriptor)};
+        kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+        scene.Runtime().ApplyProjectSimulation(simulation);
+        kb::tests::Require(std::fabs(scene.Runtime().FixedStepSettings().fixedDeltaSeconds - 1.0F / static_cast<float>(simulation.fixedStepHz)) < 1e-7F &&
+                scene.Runtime().TimeScale() == simulation.timeScale,
+            "The project's fixed step and time scale must reach the scene runtime");
+        const auto body = scene.Entities().CreateObject({.name = "Faller", .transform = {.localPosition = {0.0F, 100.0F, 0.0F}}});
+        scene.Components().Rigidbodies().Set(body.Entity(), {.bodyType = kb::scene::RigidbodyBodyType::Dynamic});
+        scene.Components().Colliders().Set(body.Entity(), {.boxSize = {1, 1, 1}});
+        for (int frame = 0; frame < 30; ++frame) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        return scene.Transforms().Get(body).worldPosition.y;
+    };
+    const float earth = heightAfterHalfSecond({});
+    const float moon = heightAfterHalfSecond({ .fixedStepHz = 120U, .gravity = { 0.0F, -1.62F, 0.0F }, .timeScale = 0.5F });
+    const float weightless = heightAfterHalfSecond({ .gravity = { 0.0F, 0.0F, 0.0F } });
+    kb::tests::Require(earth < 99.0F && earth > 98.5F, "A scene with the default project gravity must fall at about 9.81 m/s squared");
+    kb::tests::Require(moon > earth + 0.5F && moon < 100.0F - 0.05F, "A lower project gravity must make a body fall more slowly");
+    kb::tests::Require(std::fabs(weightless - 100.0F) < 0.001F, "A project without gravity must leave a body where it is");
+}
+
 void RunPhysicsSceneSystemTests() {
+    RunProjectSimulationSettingsTest();
     RunPhysicsMemoryMeasurementTest();
     RunPhysicsStackAndConnectedBodyRemovalTest();
     RunStaticColliderBatchInvalidationTest();

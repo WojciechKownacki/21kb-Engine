@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <algorithm>
 #include <optional>
@@ -53,6 +54,8 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.physics", "Physics");
     case ProjectSettingsCategory::Lighting:
         return EditorText("projectSettings.category.lighting", "Lighting");
+    case ProjectSettingsCategory::Display:
+        return EditorText("projectSettings.category.display", "Display");
     case ProjectSettingsCategory::EditorGeneral:
         return EditorText("projectSettings.category.editorGeneral", "General");
     case ProjectSettingsCategory::EditorSaving:
@@ -219,6 +222,33 @@ struct TooltipContent {
     }
 }
 
+[[nodiscard]] std::string_view SettingLabel(ProjectSettingsTooltipKind kind) {
+    switch (kind) {
+    case ProjectSettingsTooltipKind::WindowMode:
+        return EditorText("projectSettings.windowMode", "Window Mode");
+    case ProjectSettingsTooltipKind::WindowSize:
+        return EditorText("projectSettings.windowSize", "Window Size");
+    case ProjectSettingsTooltipKind::Resizable:
+        return EditorText("projectSettings.resizable", "Resizable");
+    case ProjectSettingsTooltipKind::VSync:
+        return "VSync";
+    case ProjectSettingsTooltipKind::FrameRateLimit:
+        return EditorText("projectSettings.frameRateLimit", "Frame Rate Limit");
+    case ProjectSettingsTooltipKind::FixedStep:
+        return EditorText("projectSettings.fixedStep", "Fixed Step (Hz)");
+    case ProjectSettingsTooltipKind::Gravity:
+        return EditorText("projectSettings.gravity", "Gravity");
+    case ProjectSettingsTooltipKind::GravityPreset:
+        return EditorText("projectSettings.gravityPreset", "Gravity Preset");
+    case ProjectSettingsTooltipKind::TimeScale:
+        return EditorText("projectSettings.timeScale", "Time Scale");
+    default:
+        return {};
+    }
+}
+
+[[nodiscard]] std::string_view DescriptionFor(ProjectSettingsTooltipKind kind);
+
 [[nodiscard]] TooltipContent TooltipForKind(ProjectSettingsTooltipKind kind) {
     switch (kind) {
     case ProjectSettingsTooltipKind::MappingContext:
@@ -319,6 +349,17 @@ struct TooltipContent {
             EditorText("projectSettings.giQualityMobileTooltip",
             "Phones and tablets use a coarser grid than computers; Medium is the usual choice."),
         };
+    case ProjectSettingsTooltipKind::WindowMode:
+    case ProjectSettingsTooltipKind::WindowSize:
+    case ProjectSettingsTooltipKind::Resizable:
+    case ProjectSettingsTooltipKind::VSync:
+    case ProjectSettingsTooltipKind::FrameRateLimit:
+    case ProjectSettingsTooltipKind::FixedStep:
+    case ProjectSettingsTooltipKind::Gravity:
+    case ProjectSettingsTooltipKind::GravityPreset:
+    case ProjectSettingsTooltipKind::TimeScale:
+        // These settings say all there is to say in their one-line description.
+        return TooltipContent{ SettingLabel(kind), DescriptionFor(kind) };
     case ProjectSettingsTooltipKind::None:
     default:
         return {};
@@ -360,6 +401,23 @@ struct TooltipContent {
         return EditorText("projectSettings.giQualityDescription", "Detail of indirect light on computers.");
     case ProjectSettingsTooltipKind::GiQualityMobile:
         return EditorText("projectSettings.giQualityMobileDescription", "Detail of indirect light on phones and tablets.");
+    case ProjectSettingsTooltipKind::WindowMode:
+        return EditorText("projectSettings.windowModeDescription", "How the game window opens: in a window or borderless fullscreen.");
+    case ProjectSettingsTooltipKind::WindowSize:
+        return EditorText("projectSettings.windowSizeDescription", "Size of the game window when it opens windowed.");
+    case ProjectSettingsTooltipKind::Resizable:
+        return EditorText("projectSettings.resizableDescription", "Lets the player resize the game window.");
+    case ProjectSettingsTooltipKind::VSync:
+        return EditorText("projectSettings.vsyncDescription", "Waits for the display refresh, which avoids tearing.");
+    case ProjectSettingsTooltipKind::FrameRateLimit:
+        return EditorText("projectSettings.frameRateLimitDescription", "Most frames per second the game draws; Off leaves it to VSync.");
+    case ProjectSettingsTooltipKind::FixedStep:
+        return EditorText("projectSettings.fixedStepDescription", "Physics steps per second.");
+    case ProjectSettingsTooltipKind::Gravity:
+        return EditorText("projectSettings.gravityDescription", "Gravity of the scene in metres per second squared.");
+    case ProjectSettingsTooltipKind::TimeScale:
+        return EditorText("projectSettings.timeScaleDescription", "Speed of game time when a scene starts; 1 is normal.");
+    case ProjectSettingsTooltipKind::GravityPreset:
     case ProjectSettingsTooltipKind::None:
     default:
         return {};
@@ -397,9 +455,11 @@ struct SearchableSetting {
         return fromKinds({ Kind::RenderBackend, Kind::LightingPath, Kind::PostProcess, Kind::AntiAliasing, Kind::MsaaSamples,
             Kind::Bloom, Kind::Shadows, Kind::SelectionOutline, Kind::GpuDriven });
     case ProjectSettingsCategory::Physics:
-        return fromKinds({ Kind::PhysicsLayers });
+        return fromKinds({ Kind::PhysicsLayers, Kind::FixedStep, Kind::Gravity, Kind::GravityPreset, Kind::TimeScale });
     case ProjectSettingsCategory::Lighting:
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
+    case ProjectSettingsCategory::Display:
+        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit });
     case ProjectSettingsCategory::EditorGeneral:
         return { { EditorText("editorSettings.language", "Language"),
             EditorText("settings.languageDescription", "Language of the editor's menus and panels.") } };
@@ -556,6 +616,46 @@ void DrawLightingPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, cons
     }
 }
 
+// A value between a minus and a plus button.
+void DrawStepper(HDC dc, const RECT& minus, const RECT& value, const RECT& plus, const EditorTheme& theme, std::string_view text) {
+    DrawOptionButton(dc, minus, theme, "-", false);
+    DrawOptionButton(dc, plus, theme, "+", false);
+    GdiDrawing::DrawSharpFrame(dc, value, Color(theme.chrome), Color(theme.borderPanel));
+    DrawText(dc, GdiDrawing::Inset(value, 2), text, Color(theme.textPrimary), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    using Kind = ProjectSettingsTooltipKind;
+    const kb::project::ProjectDisplaySettings& display = sceneContext.ProjectConfiguration().display;
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
+
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.displaySection", "DISPLAY"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+
+    DrawSetting(dc, rects, rects.displayLabel[0], SettingLabel(Kind::WindowMode), Kind::WindowMode, theme, query);
+    DrawOptionButton(dc, rects.windowModeButton[0], theme, EditorText("projectSettings.windowModeWindowed", "Windowed"), display.windowMode == kb::project::ProjectWindowMode::Windowed);
+    DrawOptionButton(dc, rects.windowModeButton[1], theme, EditorText("projectSettings.windowModeBorderless", "Borderless"), display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen);
+
+    DrawSetting(dc, rects, rects.displayLabel[1], SettingLabel(Kind::WindowSize), Kind::WindowSize, theme, query);
+    for (std::size_t index = 0U; index < kProjectSettingsWindowSizes.size(); ++index) {
+        const ProjectSettingsWindowSize& size = kProjectSettingsWindowSizes[index];
+        const std::string text = std::to_string(size.width) + "x" + std::to_string(size.height);
+        DrawOptionButton(dc, rects.windowSizeButton[index], theme, text, display.windowWidth == size.width && display.windowHeight == size.height);
+    }
+
+    DrawSetting(dc, rects, rects.displayLabel[2], SettingLabel(Kind::Resizable), Kind::Resizable, theme, query);
+    DrawCheckbox(dc, rects.resizableCheckbox, theme, display.resizable);
+    DrawSetting(dc, rects, rects.displayLabel[3], SettingLabel(Kind::VSync), Kind::VSync, theme, query);
+    DrawCheckbox(dc, rects.vsyncCheckbox, theme, display.vsync);
+
+    DrawSetting(dc, rects, rects.displayLabel[4], SettingLabel(Kind::FrameRateLimit), Kind::FrameRateLimit, theme, query);
+    for (std::size_t index = 0U; index < kProjectSettingsFrameRates.size(); ++index) {
+        const std::uint32_t rate = kProjectSettingsFrameRates[index];
+        const std::string text = rate == 0U ? std::string{ EditorText("projectSettings.msaaOff", "Off") } : std::to_string(rate);
+        DrawOptionButton(dc, rects.frameRateButton[index], theme, text, display.frameRateCap == rate);
+    }
+}
+
 void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
     const bool dropdownOpen = sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen();
@@ -563,6 +663,34 @@ void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.physicsSection", "PHYSICS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+
+    // The steppers, then the gravity presets, under the layers row so that its open list can cover them.
+    const kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    char value[32]{};
+    for (int stepper = 0; stepper < 5; ++stepper) {
+        using Kind = ProjectSettingsTooltipKind;
+        const Kind kind = stepper == 0 ? Kind::FixedStep : (stepper == 4 ? Kind::TimeScale : Kind::Gravity);
+        std::string label{ SettingLabel(kind) };
+        if (kind == Kind::Gravity) {
+            label += stepper == 1 ? " X" : (stepper == 2 ? " Y" : " Z");
+        }
+        DrawSetting(dc, rects, rects.stepperLabel[stepper], label, kind, theme, query);
+        if (stepper == 0) {
+            std::snprintf(value, sizeof(value), "%u", simulation.fixedStepHz);
+        } else if (stepper == 4) {
+            std::snprintf(value, sizeof(value), "%.2f", static_cast<double>(simulation.timeScale));
+        } else {
+            std::snprintf(value, sizeof(value), "%.2f", static_cast<double>(simulation.gravity[static_cast<std::size_t>(stepper - 1)]));
+        }
+        DrawStepper(dc, rects.stepperButton[stepper][0], rects.stepperValue[stepper], rects.stepperButton[stepper][1], theme, value);
+    }
+    DrawSetting(dc, rects, rects.gravityPresetLabel, SettingLabel(ProjectSettingsTooltipKind::GravityPreset), ProjectSettingsTooltipKind::GravityPreset, theme, query);
+    for (std::size_t preset = 0U; preset < kProjectSettingsGravityPresets.size(); ++preset) {
+        const std::array<float, 3U>& gravity = kProjectSettingsGravityPresets[preset];
+        std::snprintf(value, sizeof(value), "0, %g, 0", static_cast<double>(gravity[1]));
+        DrawOptionButton(dc, rects.gravityPresetButton[preset], theme, value, simulation.gravity == gravity);
+    }
+
     DrawSetting(dc, rects, rects.mappingLabel, EditorText("projectSettings.physicsLayers", "Collision Layers Asset"), ProjectSettingsTooltipKind::PhysicsLayers, theme, query);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.physicsLayersAsset), settings.physicsLayersAsset.empty(), dropdownOpen);
@@ -604,6 +732,9 @@ void ProjectSettingsPanelRenderer::Paint(
         break;
     case ProjectSettingsCategory::Lighting:
         DrawLightingPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Display:
+        DrawDisplayPage(dc, rects, theme, sceneContext);
         break;
     case ProjectSettingsCategory::EditorGeneral:
     case ProjectSettingsCategory::EditorSaving: {
@@ -689,6 +820,32 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{};
     }
 
+    if (category == ProjectSettingsCategory::Display) {
+        for (int index = 0; index < 2; ++index) {
+            if (PointInRect(rects.windowModeButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::WindowModeOption, .index = index, .rect = rects.windowModeButton[index] };
+            }
+        }
+        for (int index = 0; index < 4; ++index) {
+            if (PointInRect(rects.windowSizeButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::WindowSizeOption, .index = index, .rect = rects.windowSizeButton[index] };
+            }
+        }
+        for (int index = 0; index < 5; ++index) {
+            if (PointInRect(rects.frameRateButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::FrameRateOption, .index = index, .rect = rects.frameRateButton[index] };
+            }
+        }
+        const std::array<std::array<RECT, 2U>, 2U> toggles{ { { rects.resizableCheckbox, rects.displayLabel[2] }, { rects.vsyncCheckbox, rects.displayLabel[3] } } };
+        for (int index = 0; index < 2; ++index) {
+            const std::array<RECT, 2U>& toggle = toggles[static_cast<std::size_t>(index)];
+            if (PointInRect(toggle[0], x, y) || PointInRect(toggle[1], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = index, .rect = toggle[0] };
+            }
+        }
+        return Hit{};
+    }
+
     if (category == ProjectSettingsCategory::Physics) {
         const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
         if (sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen()) {
@@ -702,6 +859,19 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         }
         if (PointInRect(fieldBox, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = fieldBox };
+        }
+        for (int stepper = 0; stepper < 5; ++stepper) {
+            for (int direction = 0; direction < 2; ++direction) {
+                const RECT& button = rects.stepperButton[stepper][direction];
+                if (PointInRect(button, x, y)) {
+                    return Hit{ .kind = ProjectSettingsHitKind::SimulationStepper, .index = stepper * 2 + direction, .rect = button };
+                }
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            if (PointInRect(rects.gravityPresetButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::GravityPresetOption, .index = index, .rect = rects.gravityPresetButton[index] };
+            }
         }
         return Hit{};
     }
@@ -807,8 +977,29 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
         }
     }
 
-    if (category == ProjectSettingsCategory::Physics && (PointInRect(rects.mappingLabel, x, y) || PointInRect(rects.mappingField, x, y))) {
-        return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = rects.mappingField };
+    if (category == ProjectSettingsCategory::Display) {
+        constexpr std::array<ProjectSettingsHitKind, 5> kinds{ ProjectSettingsHitKind::WindowModeOption, ProjectSettingsHitKind::WindowSizeOption,
+            ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::FrameRateOption };
+        for (int row = 0; row < 5; ++row) {
+            if (PointInRect(rects.displayLabel[row], x, y)) {
+                // A toggle says which one it is (0 Resizable, 1 VSync), as when it is clicked.
+                return Hit{ .kind = kinds[static_cast<std::size_t>(row)], .index = row >= 2 && row <= 3 ? row - 2 : -1, .rect = rects.displayLabel[row] };
+            }
+        }
+    }
+
+    if (category == ProjectSettingsCategory::Physics) {
+        if (PointInRect(rects.mappingLabel, x, y) || PointInRect(rects.mappingField, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = rects.mappingField };
+        }
+        for (int stepper = 0; stepper < 5; ++stepper) {
+            if (PointInRect(rects.stepperLabel[stepper], x, y) || PointInRect(rects.stepperValue[stepper], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SimulationStepper, .index = stepper * 2, .rect = rects.stepperLabel[stepper] };
+            }
+        }
+        if (PointInRect(rects.gravityPresetLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::GravityPresetOption, .index = -1, .rect = rects.gravityPresetLabel };
+        }
     }
 
     return direct;

@@ -24,6 +24,15 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     ShadowQualityMobile,
     GiQuality,
     GiQualityMobile,
+    WindowMode,
+    WindowSize,
+    Resizable,
+    VSync,
+    FrameRateLimit,
+    FixedStep,
+    Gravity,
+    GravityPreset,
+    TimeScale,
 };
 
 // Transient UI state for the Project Settings panel: which category is selected

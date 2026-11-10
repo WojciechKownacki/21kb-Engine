@@ -50,6 +50,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pl-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "pl-plugins",
@@ -118,6 +132,20 @@
       "panel": "project_settings",
       "checkpoint": "de-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "de-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -190,6 +218,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fr-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "fr-plugins",
@@ -258,6 +300,20 @@
       "panel": "project_settings",
       "checkpoint": "es-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "es-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -330,6 +386,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "it-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "it-plugins",
@@ -398,6 +468,20 @@
       "panel": "project_settings",
       "checkpoint": "ru-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ru-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -470,6 +554,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ja-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "ja-plugins",
@@ -538,6 +636,20 @@
       "panel": "project_settings",
       "checkpoint": "zh-Hans-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "zh-Hans-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -610,6 +722,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ko-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "ko-plugins",
@@ -678,6 +804,20 @@
       "panel": "project_settings",
       "checkpoint": "pt-PT-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-PT-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -750,6 +890,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-BR-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "pt-BR-plugins",
@@ -818,6 +972,20 @@
       "panel": "project_settings",
       "checkpoint": "nl-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nl-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -890,6 +1058,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "cs-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "cs-plugins",
@@ -958,6 +1140,20 @@
       "panel": "project_settings",
       "checkpoint": "hu-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hu-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -1030,6 +1226,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ro-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "ro-plugins",
@@ -1098,6 +1308,20 @@
       "panel": "project_settings",
       "checkpoint": "uk-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "uk-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -1170,6 +1394,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sv-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "sv-plugins",
@@ -1238,6 +1476,20 @@
       "panel": "project_settings",
       "checkpoint": "tr-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "tr-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -1310,6 +1562,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hi-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "hi-plugins",
@@ -1378,6 +1644,20 @@
       "panel": "project_settings",
       "checkpoint": "el-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "el-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -1450,6 +1730,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "da-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "da-plugins",
@@ -1518,6 +1812,20 @@
       "panel": "project_settings",
       "checkpoint": "nb-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nb-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -1590,6 +1898,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fi-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "fi-plugins",
@@ -1658,6 +1980,20 @@
       "panel": "project_settings",
       "checkpoint": "sk-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sk-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -1730,6 +2066,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "bg-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "bg-plugins",
@@ -1798,6 +2148,20 @@
       "panel": "project_settings",
       "checkpoint": "sr-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sr-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -1870,6 +2234,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hr-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "hr-plugins",
@@ -1938,6 +2316,20 @@
       "panel": "project_settings",
       "checkpoint": "ar-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ar-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -2010,6 +2402,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "id-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "id-plugins",
@@ -2078,6 +2484,20 @@
       "panel": "project_settings",
       "checkpoint": "th-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "th-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",
@@ -2150,6 +2570,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "vi-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "vi-plugins",
@@ -2220,6 +2654,20 @@
       "text_fits": true
     },
     {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ms-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
+    },
+    {
       "op": "capture",
       "panel": "plugins",
       "checkpoint": "ms-plugins",
@@ -2288,6 +2736,20 @@
       "panel": "project_settings",
       "checkpoint": "en-project_settings",
       "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "display"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "en-project_settings_display",
+      "text_fits": true
+    },
+    {
+      "op": "select_project_settings_category",
+      "category": "inputs"
     },
     {
       "op": "capture",

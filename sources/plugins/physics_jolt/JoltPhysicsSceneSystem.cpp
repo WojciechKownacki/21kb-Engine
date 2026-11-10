@@ -1286,6 +1286,13 @@ public:
         return true;
     }
 
+    bool SetGravity(Vec3 gravity) noexcept override {
+        if (!IsFinite(gravity)) return false;
+        JoinStep();
+        physicsSystem_.SetGravity(JPH::Vec3(gravity.x, gravity.y, gravity.z));
+        return true;
+    }
+
     ~Impl() override {
         StopStepDriver();
         if (scene_ && assemblies_) kb::scene::PhysicsAssemblies::UnregisterBackend(*scene_, *assemblies_);

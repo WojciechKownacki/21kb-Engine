@@ -2,6 +2,7 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -27,6 +28,45 @@ inline constexpr std::uint8_t kProjectQualityLevelCount = 5U;
 [[nodiscard]] std::string_view ProjectQualityLevelName(ProjectQualityLevel level) noexcept;
 // The level a name stands for, whatever its letter case; nullopt for anything else.
 [[nodiscard]] std::optional<ProjectQualityLevel> ParseProjectQualityLevel(std::string_view name) noexcept;
+
+enum class ProjectWindowMode : std::uint8_t {
+    Windowed = 0,
+    // A frameless window covering the primary monitor at its native resolution.
+    BorderlessFullscreen,
+};
+
+// Bounds a settings file may use; a value outside them is brought back inside when it is read.
+inline constexpr std::uint32_t kProjectWindowExtentMin = 64U;
+inline constexpr std::uint32_t kProjectWindowExtentMax = 8192U;
+inline constexpr std::uint32_t kProjectFixedStepHzMin = 10U;
+inline constexpr std::uint32_t kProjectFixedStepHzMax = 480U;
+inline constexpr std::uint32_t kProjectFrameRateCapMax = 1000U;
+inline constexpr float kProjectGravityLimit = 1000.0F;
+inline constexpr float kProjectTimeScaleMax = 100.0F;
+
+// How the shipped game opens its window and paces its frames. The defaults are what the game did
+// before these were settings.
+struct ProjectDisplaySettings {
+    std::uint32_t windowWidth = 1280U;
+    std::uint32_t windowHeight = 720U;
+    ProjectWindowMode windowMode = ProjectWindowMode::Windowed;
+    bool resizable = true;
+    bool vsync = true;
+    // Frames per second the game does not exceed; 0 leaves the pace to vsync (or nothing, without it).
+    std::uint32_t frameRateCap = 0U;
+
+    [[nodiscard]] bool operator==(const ProjectDisplaySettings&) const noexcept = default;
+};
+
+// The simulation's pace and gravity: the fixed step the physics advances by (in steps per second), the
+// scene gravity in metres per second squared, and the time scale a scene starts with.
+struct ProjectSimulationSettings {
+    std::uint32_t fixedStepHz = 60U;
+    std::array<float, 3U> gravity{ 0.0F, -9.81F, 0.0F };
+    float timeScale = 1.0F;
+
+    [[nodiscard]] bool operator==(const ProjectSimulationSettings&) const noexcept = default;
+};
 
 // The project's settings, as opposed to its structure. The descriptor answers
 // what a project is made of - engine association, content root, modules, plugins,
@@ -74,12 +114,16 @@ struct ProjectSettings {
     ProjectQualityLevel giQuality = ProjectQualityLevel::Auto;
     ProjectQualityLevel giQualityMobile = ProjectQualityLevel::Auto;
 
+    // Display
+    ProjectDisplaySettings display;
+
     // Input
     bool inputEnabled = true;
     std::string inputMappingContext;
 
-    // Physics
+    // Physics and time
     std::string physicsLayersAsset;
+    ProjectSimulationSettings simulation;
 
     // Crash reports
     // Where a shipped Windows game sends the crash reports its player agreed to

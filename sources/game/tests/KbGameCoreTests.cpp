@@ -30,6 +30,8 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -1342,6 +1344,10 @@ void RunWindowsRuntimeModulePackagingTests() {
     settings.defaultMap = fixture.sceneVirtualPath;
     settings.physicsLayersAsset.clear();
     settings.inputEnabled = false;
+    settings.display.windowWidth = 1920U;
+    settings.display.windowHeight = 1080U;
+    settings.display.frameRateCap = 75U;
+    settings.simulation.fixedStepHz = 90U;
     WriteSettings(fixture.root, settings);
     std::error_code copyError;
     std::filesystem::create_directories(fixture.root / "Binaries", copyError);
@@ -1416,6 +1422,8 @@ void RunWindowsRuntimeModulePackagingTests() {
     Require(kb::game::ReadMountedGameProjectRuntime(
                 pack, sealedRoot, "", runtime, runtimeError),
         "Mounted Windows runtime did not accept its sealed module DLLs");
+    Require(runtime.display == settings.display && runtime.simulation == settings.simulation,
+        "A packaged game must read the display and simulation settings from its cooked manifest");
     Require(
         std::filesystem::path{ runtime.descriptor.plugins[0].binaryPath } ==
             std::filesystem::weakly_canonical(stagedModules / "Binaries" / "custom.dll") &&
@@ -2371,6 +2379,9 @@ void RunSettingsTests() {
     settings.physicsLayersAsset = "/Game/Config/Layers.21kbphysicslayers";
     settings.inputMappingContext = "/Game/Input/Context.21kbinput";
     settings.inputEnabled = false;
+    settings.display = { .windowWidth = 1600U, .windowHeight = 900U, .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen,
+        .resizable = false, .vsync = false, .frameRateCap = 60U };
+    settings.simulation = { .fixedStepHz = 120U, .gravity = { 0.0F, -3.7F, 0.0F }, .timeScale = 0.5F };
     WriteSettings(fixture.root, settings);
 
     std::ostringstream err;
@@ -2389,6 +2400,19 @@ void RunSettingsTests() {
         runtime.inputMappingContext == "/Game/Input/Context.21kbinput",
         "The input mapping context must reach the runtime");
     Require(!runtime.inputEnabled, "An input-disabled project must reach the runtime disabled");
+    Require(
+        runtime.display == settings.display && runtime.simulation == settings.simulation,
+        "The display and simulation settings must reach the runtime");
+    {
+        // Loading the project's scene applies the simulation settings to it.
+        kb::scene::Scene configured;
+        configured.Runtime().ApplyProjectSimulation(runtime.simulation);
+        const kb::scene::SceneRuntimeFixedStepSettings fixedStep = configured.Runtime().FixedStepSettings();
+        const kb::scene::Vec3 gravity = kb::scene::PhysicsBackend::Gravity(configured);
+        Require(
+            fixedStep.fixedDeltaSeconds == 1.0F / 120.0F && configured.Runtime().TimeScale() == 0.5F && gravity.y == -3.7F,
+            "The project's fixed step, time scale and gravity must be applied to the scene");
+    }
     Require(
         runtime.projectRoot == std::filesystem::absolute(fixture.root).lexically_normal(),
         "The project root is the directory holding the descriptor");

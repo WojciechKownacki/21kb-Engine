@@ -40,7 +40,9 @@ public:
         std::uint32_t height,
         bool fullscreen,
         kb::input::Win32InputCollector& inputCollector,
-        bool visible = true);
+        bool visible = true,
+        // A fixed window has no sizing border and no maximize button; fullscreen ignores it.
+        bool resizable = true);
 
     [[nodiscard]] std::uint32_t Width() const noexcept override;
     [[nodiscard]] std::uint32_t Height() const noexcept override;

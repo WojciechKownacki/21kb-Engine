@@ -3,6 +3,8 @@
 #include "engine/ecs/System.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/project/ProjectSettings.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneRuntimeService.hpp"
 #include "scene/SceneState.hpp"
@@ -166,6 +168,14 @@ void SceneRuntime::SynchronizeTransforms() {
 
 void SceneRuntime::SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) noexcept {
     SceneRuntimeService::SetFixedStepSettings(scene_, settings);
+}
+
+void SceneRuntime::ApplyProjectSimulation(const kb::project::ProjectSimulationSettings& settings) noexcept {
+    SceneRuntimeFixedStepSettings fixedStep = FixedStepSettings();
+    fixedStep.fixedDeltaSeconds = 1.0F / static_cast<float>(settings.fixedStepHz);
+    SetFixedStepSettings(fixedStep);
+    SetTimeScale(settings.timeScale);
+    static_cast<void>(PhysicsBackend::SetGravity(scene_, Vec3{ settings.gravity[0], settings.gravity[1], settings.gravity[2] }));
 }
 
 void SceneRuntime::SetScriptFixedDeltaSeconds(float seconds) noexcept {

@@ -24,6 +24,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
+#include "kb/render/scene/SceneLightingQuality.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "TerrainAnalysis.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -215,9 +216,11 @@ struct SceneViewportRenderProfileDesc {
 
 [[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(
     const SceneViewportRenderProfileDesc& renderProfile,
-    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
+    const kb::project::ProjectSettings& project) noexcept {
     kb::render::SceneRenderLightingConfig lighting{};
-    lighting.lightingPath = RenderLightingPath(projectLightingPath);
+    lighting.lightingPath = RenderLightingPath(project.lightingPath);
+    // The shadow and GI quality the project pins, as the game applies it (the editor is a desktop device).
+    kb::render::ApplyProjectLightingQuality(lighting, project.shadowQuality, project.giQuality, false);
     if (lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus) {
         lighting.maxForwardLights = kb::render::kMaxSceneForwardPlusLights;
     }
@@ -796,7 +799,7 @@ void AppendNavigationMesh(
             postProcessSettings = *sceneProfile;
         }
     }
-    kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.ProjectConfiguration().lightingPath);
+    kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.ProjectConfiguration());
     // SceneGBuffer has no MSAA-attachment support, so a multisampled Deferred G-buffer isn't an
     // option today; falling back to Forward is the only way to honor the MSAA request. This is a
     // real cost (per-sample forward shading instead of a single per-pixel deferred resolve), not a

@@ -16,6 +16,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -244,6 +245,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (!ActivateProjectPhysicsLayers(*scene_)) {
         return false;
     }
+    scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
     trace.Phase(phaseStarted, "transition=begin phase=physics-layers");
 
     phaseStarted = std::chrono::steady_clock::now();
@@ -387,6 +389,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     if (!ActivateProjectPhysicsLayers(*nextScene)) {
         return false;
     }
+    nextScene->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
 
     kb::scene::SceneDocumentLoadResult loaded;
     if (worldPartition_.IsOpen()) {

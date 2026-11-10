@@ -18,6 +18,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -418,6 +419,8 @@ bool ReadMountedGameProjectRuntime(
     packaged.lightingPath = manifest.settings.lightingPath;
     packaged.shadowQuality = kMobileDevice ? manifest.settings.shadowQualityMobile : manifest.settings.shadowQuality;
     packaged.giQuality = kMobileDevice ? manifest.settings.giQualityMobile : manifest.settings.giQuality;
+    packaged.display = manifest.settings.display;
+    packaged.simulation = manifest.settings.simulation;
     for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
         if (plugin.enabled && !plugin.name.empty()) {
             packaged.requiredModules.push_back(plugin.name);
@@ -647,6 +650,8 @@ bool ReadGameProjectRuntime(
     runtime.lightingPath = resolved.lightingPath;
     runtime.shadowQuality = kMobileDevice ? resolved.shadowQualityMobile : resolved.shadowQuality;
     runtime.giQuality = kMobileDevice ? resolved.giQualityMobile : resolved.giQuality;
+    runtime.display = resolved.display;
+    runtime.simulation = resolved.simulation;
     runtime.descriptor = std::move(loaded.descriptor);
     return true;
 }
@@ -736,6 +741,7 @@ bool LoadGameProjectScene(
         err << "project physics layers could not be applied: " << runtime.physicsLayersAsset << '\n';
         return false;
     }
+    scene.Runtime().ApplyProjectSimulation(runtime.simulation);
 
     if (!runtime.sceneReference.empty() && runtime.sceneReference.front() == '/') {
         const kb::assets::AssetMetadata* metadata =

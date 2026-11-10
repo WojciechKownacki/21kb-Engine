@@ -861,6 +861,8 @@ public:
     // constructed (layer 0 = "Default", every pair interacts) matches every
     // pre-LIB-129 scene exactly.
     PhysicsLayersAsset physicsLayers;
+    // PhysicsBackend::SetGravity: kept here so a backend that registers later starts with it.
+    Vec3 physicsGravity{ 0.0F, -9.81F, 0.0F };
     // LIB-132: off by default, and never touched by kb_standalone_player's own code path
     // (only the editor's Scene Viewport ever calls PhysicsDebugDraw::SetEnabled/CollectLines)
     // - see PhysicsDebugDraw.hpp's own doc comment for the full "zero release-path impact"

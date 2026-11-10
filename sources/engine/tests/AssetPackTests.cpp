@@ -757,6 +757,25 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
             decoded.auxiliaryFiles.size() == 1U,
         "A runtime manifest changed its project or asset catalogue during the round trip");
 
+    // The window, frame pacing, fixed step, gravity and time scale travel in the manifest; settings that are all
+    // defaults leave the bytes as they always were, and a value outside its bounds is refused.
+    bake::RuntimeAssetManifest configured = first;
+    configured.settings.display = { .windowWidth = 1920U, .windowHeight = 1080U,
+        .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen, .resizable = false, .vsync = false, .frameRateCap = 90U };
+    configured.settings.simulation = { .fixedStepHz = 120U, .gravity = { 0.0F, -1.62F, 0.5F }, .timeScale = 0.5F };
+    std::vector<std::uint8_t> configuredBytes;
+    bake::RuntimeAssetManifest configuredDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(configured, configuredBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            configuredBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(configuredBytes, configuredDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            configuredDecoded.settings == configured.settings,
+        "A runtime manifest lost the display or simulation settings during the round trip");
+    bake::RuntimeAssetManifest outOfBounds = first;
+    outOfBounds.settings.display.windowWidth = 10U;
+    std::vector<std::uint8_t> outOfBoundsBytes;
+    Require(bake::EncodeRuntimeAssetManifest(outOfBounds, outOfBoundsBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a window narrower than the supported minimum");
+
     std::vector<std::uint8_t> unsupported = firstBytes;
     PokeUInt32(unsupported, 8U, bake::kRuntimeAssetManifestVersion + 1U);
     Require(bake::DecodeRuntimeAssetManifest(unsupported, decoded) ==

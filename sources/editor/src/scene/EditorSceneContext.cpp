@@ -415,6 +415,7 @@ EditorSceneContext::EditorSceneContext()
     const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
+    scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
     // Like Unity: the scene that was open when the editor was last closed, else the startup scene.
     std::error_code error;
     currentScenePath_ = ResolveDefaultScenePath();
@@ -3224,6 +3225,27 @@ bool EditorSceneContext::SetProjectQualityLevel(int row, kb::project::ProjectQua
         return false;
     }
     *target = level;
+    const bool saved = SaveProjectConfiguration();
+    if (saved) {
+        MarkSceneRenderDirty();
+    }
+    return saved;
+}
+
+bool EditorSceneContext::SetProjectDisplay(const kb::project::ProjectDisplaySettings& display) {
+    if (projectConfig_.display == display) {
+        return false;
+    }
+    projectConfig_.display = display;
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectSimulation(const kb::project::ProjectSimulationSettings& simulation) {
+    if (projectConfig_.simulation == simulation) {
+        return false;
+    }
+    projectConfig_.simulation = simulation;
+    scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
     return SaveProjectConfiguration();
 }
 

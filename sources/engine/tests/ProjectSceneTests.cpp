@@ -490,6 +490,56 @@ void RunProjectQualitySettingsTest() {
     CleanTempRoot();
 }
 
+// The window, frame pacing, fixed step, gravity and time scale of a project: a settings file written before
+// they existed reads as the behaviour the game always had, the values round-trip, and a value outside its
+// bounds is brought back inside them.
+void RunProjectDisplayAndSimulationSettingsTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    const kb::project::ProjectSettings defaults;
+    Require(defaults.display.windowWidth == 1280U && defaults.display.windowHeight == 720U &&
+            defaults.display.windowMode == kb::project::ProjectWindowMode::Windowed && defaults.display.resizable &&
+            defaults.display.vsync && defaults.display.frameRateCap == 0U &&
+            defaults.simulation.fixedStepHz == 60U && defaults.simulation.gravity[0] == 0.0F &&
+            defaults.simulation.gravity[1] == -9.81F && defaults.simulation.gravity[2] == 0.0F &&
+            defaults.simulation.timeScale == 1.0F,
+        "the defaults of the display and simulation settings must be what the game did before they were settings");
+
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Identity]\nName=Older\n[Project.Rendering]\nShadowQuality=High\n";
+    }
+    const kb::project::ProjectSettingsLoadResult older = kb::project::ProjectSettingsStore::Load(file);
+    Require(older.Succeeded() && older.settings.display == defaults.display && older.settings.simulation == defaults.simulation,
+        "a settings file without the new keys must read as the defaults");
+
+    kb::project::ProjectSettings chosen = older.settings;
+    chosen.display = { .windowWidth = 1920U, .windowHeight = 1080U, .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen,
+        .resizable = false, .vsync = false, .frameRateCap = 144U };
+    chosen.simulation = { .fixedStepHz = 120U, .gravity = { 0.5F, -1.62F, 3.0F }, .timeScale = 0.25F };
+    std::string error;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the display and simulation settings could not be saved");
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
+    Require(reloaded.Succeeded() && reloaded.settings == chosen,
+        "the settings file did not keep the display and simulation settings");
+
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Display]\nWindowWidth=10\nWindowHeight=99999\nWindowMode=Sideways\nFrameRateCap=5000\n"
+                  "[Project.Physics]\nFixedStepHz=1\nGravityX=oops\nGravityY=-2000\n[Project.Time]\nTimeScale=-3\n";
+    }
+    const kb::project::ProjectSettings clamped = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(clamped.display.windowWidth == kb::project::kProjectWindowExtentMin &&
+            clamped.display.windowHeight == kb::project::kProjectWindowExtentMax &&
+            clamped.display.windowMode == kb::project::ProjectWindowMode::Windowed &&
+            clamped.display.frameRateCap == kb::project::kProjectFrameRateCapMax &&
+            clamped.simulation.fixedStepHz == kb::project::kProjectFixedStepHzMin &&
+            clamped.simulation.gravity[0] == 0.0F && clamped.simulation.gravity[1] == -kb::project::kProjectGravityLimit &&
+            clamped.simulation.timeScale == 0.0F,
+        "a value outside its bounds must be brought back inside them and an unreadable one left at its default");
+    CleanTempRoot();
+}
+
 // A project directory deep enough to leave no room for the files that go inside it is refused at
 // the door, with the three numbers the reader needs, instead of failing later inside whichever
 // asset write crosses MAX_PATH first with the operating system's own message.
@@ -1902,6 +1952,7 @@ void RunProjectSceneTests() {
     RunProjectFromNewerEngineIsExplainedTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
+    RunProjectDisplayAndSimulationSettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneAssetUsersTest();
     RunProjectPathBudgetTest();

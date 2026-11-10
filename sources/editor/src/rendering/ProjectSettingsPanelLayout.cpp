@@ -4,6 +4,7 @@
 #include "rendering/GdiDrawing.hpp"
 
 #include <algorithm>
+#include <array>
 
 namespace kb::editor {
 namespace {
@@ -33,6 +34,12 @@ constexpr int kAaButtonWidth = 64;
 constexpr int kQualityLabelWidth = 232;
 constexpr int kQualityButtonWidth = 72;
 constexpr int kQualityButtonGap = 6;
+constexpr int kButtonGap = 6;
+constexpr int kModeButtonWidth = 110;
+constexpr int kSizeButtonWidth = 96;
+constexpr int kStepperButtonWidth = 32;
+constexpr int kStepperValueWidth = 84;
+constexpr int kGravityPresetButtonWidth = 110;
 
 [[nodiscard]] int RowTopAfter(const RECT& row) noexcept {
     return row.bottom + kDescriptionHeight + kRowGap;
@@ -133,6 +140,41 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
             rects.qualityButton[row][level] = RECT{ buttonLeft, rowTop + 3, buttonLeft + buttonWidth, rowTop + kRowHeight - 3 };
         }
     }
+
+    // Pages made of rows: the n-th row under the section header.
+    const auto rowTopAt = [&](int row) noexcept {
+        return sectionTop + kSectionHeaderHeight + kRowGap + row * (kRowHeight + kDescriptionHeight + kRowGap);
+    };
+    // A run of equally wide buttons that starts where a row's label ends.
+    const auto buttonRow = [&](RECT* buttons, int count, int rowTop, int buttonWidth) noexcept {
+        int buttonLeft = left + kLabelWidth;
+        for (int index = 0; index < count; ++index) {
+            buttons[index] = RECT{ buttonLeft, rowTop + 3, buttonLeft + buttonWidth, rowTop + kRowHeight - 3 };
+            buttonLeft += buttonWidth + kButtonGap;
+        }
+    };
+    for (int row = 0; row < 5; ++row) {
+        rects.displayLabel[row] = RECT{ left, rowTopAt(row), left + kLabelWidth, rowTopAt(row) + kRowHeight };
+    }
+    buttonRow(rects.windowModeButton, 2, rowTopAt(0), kModeButtonWidth);
+    buttonRow(rects.windowSizeButton, 4, rowTopAt(1), kSizeButtonWidth);
+    rects.resizableCheckbox = CheckboxForRow(left, rowTopAt(2));
+    rects.vsyncCheckbox = CheckboxForRow(left, rowTopAt(3));
+    buttonRow(rects.frameRateButton, 5, rowTopAt(4), kSizeButtonWidth);
+
+    // Physics page rows 1..4 are the steppers, 5 the gravity presets, 6 the time scale.
+    constexpr std::array<int, 5> kStepperRows{ 1, 2, 3, 4, 6 };
+    for (int stepper = 0; stepper < 5; ++stepper) {
+        const int rowTop = rowTopAt(kStepperRows[static_cast<std::size_t>(stepper)]);
+        rects.stepperLabel[stepper] = RECT{ left, rowTop, left + kLabelWidth, rowTop + kRowHeight };
+        buttonRow(rects.stepperButton[stepper], 1, rowTop, kStepperButtonWidth);
+        const RECT& minus = rects.stepperButton[stepper][0];
+        rects.stepperValue[stepper] = RECT{ minus.right + kButtonGap, minus.top, minus.right + kButtonGap + kStepperValueWidth, minus.bottom };
+        rects.stepperButton[stepper][1] = RECT{ rects.stepperValue[stepper].right + kButtonGap, minus.top,
+            rects.stepperValue[stepper].right + kButtonGap + kStepperButtonWidth, minus.bottom };
+    }
+    rects.gravityPresetLabel = RECT{ left, rowTopAt(5), left + kLabelWidth, rowTopAt(5) + kRowHeight };
+    buttonRow(rects.gravityPresetButton, 3, rowTopAt(5), kGravityPresetButtonWidth);
     return rects;
 }
 

@@ -6,6 +6,9 @@
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -143,8 +146,45 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     }
 }
 
+// The simulation settings after one click of a stepper's minus (direction 0) or plus (1): stepper 0 is the fixed
+// step, 1 to 3 the gravity axes and 4 the time scale. Values stay inside their limits and keep two decimals.
+[[nodiscard]] kb::project::ProjectSimulationSettings SteppedSimulation(
+    kb::project::ProjectSimulationSettings simulation, int stepper, int direction) noexcept {
+    const auto sign = direction == 0 ? -1.0F : 1.0F;
+    const auto stepped = [sign](float value, float increment, float low, float high) noexcept {
+        return std::clamp(std::round((value + sign * increment) * 100.0F) / 100.0F, low, high);
+    };
+    if (stepper == 0) {
+        const std::int64_t hz = static_cast<std::int64_t>(simulation.fixedStepHz) +
+            static_cast<std::int64_t>(sign) * kProjectSettingsFixedStepIncrement;
+        simulation.fixedStepHz = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+            hz, kb::project::kProjectFixedStepHzMin, kb::project::kProjectFixedStepHzMax));
+    } else if (stepper >= 1 && stepper <= 3) {
+        float& axis = simulation.gravity[static_cast<std::size_t>(stepper - 1)];
+        axis = stepped(axis, kProjectSettingsGravityIncrement, -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit);
+    } else if (stepper == 4) {
+        simulation.timeScale = stepped(simulation.timeScale, kProjectSettingsTimeScaleIncrement, 0.0F, kb::project::kProjectTimeScaleMax);
+    }
+    return simulation;
+}
+
 [[nodiscard]] ProjectSettingsTooltipKind TooltipKindForHit(ProjectSettingsPanelRenderer::Hit hit) noexcept {
     switch (hit.kind) {
+    case ProjectSettingsHitKind::WindowModeOption:
+        return ProjectSettingsTooltipKind::WindowMode;
+    case ProjectSettingsHitKind::WindowSizeOption:
+        return ProjectSettingsTooltipKind::WindowSize;
+    case ProjectSettingsHitKind::DisplayToggle:
+        return hit.index == 0 ? ProjectSettingsTooltipKind::Resizable : ProjectSettingsTooltipKind::VSync;
+    case ProjectSettingsHitKind::FrameRateOption:
+        return ProjectSettingsTooltipKind::FrameRateLimit;
+    case ProjectSettingsHitKind::SimulationStepper: {
+        const int stepper = hit.index / 2;
+        return stepper == 0 ? ProjectSettingsTooltipKind::FixedStep
+            : (stepper == 4 ? ProjectSettingsTooltipKind::TimeScale : ProjectSettingsTooltipKind::Gravity);
+    }
+    case ProjectSettingsHitKind::GravityPresetOption:
+        return ProjectSettingsTooltipKind::GravityPreset;
     case ProjectSettingsHitKind::MappingContextField:
         return ProjectSettingsTooltipKind::MappingContext;
     case ProjectSettingsHitKind::PhysicsLayersField:
@@ -239,6 +279,50 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::QualityOption: {
         // A click always lands on a level button here; the label cells only answer hover tooltips.
         static_cast<void>(sceneContext.SetProjectQualityLevel(hit.index / 5, static_cast<kb::project::ProjectQualityLevel>(hit.index % 5)));
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
+    case ProjectSettingsHitKind::WindowModeOption:
+    case ProjectSettingsHitKind::WindowSizeOption:
+    case ProjectSettingsHitKind::DisplayToggle:
+    case ProjectSettingsHitKind::FrameRateOption: {
+        // A click on a label cell only answers the tooltip.
+        kb::project::ProjectDisplaySettings display = sceneContext.ProjectConfiguration().display;
+        if (hit.index >= 0) {
+            switch (hit.kind) {
+            case ProjectSettingsHitKind::WindowModeOption:
+                display.windowMode = hit.index == 0 ? kb::project::ProjectWindowMode::Windowed
+                                                    : kb::project::ProjectWindowMode::BorderlessFullscreen;
+                break;
+            case ProjectSettingsHitKind::WindowSizeOption:
+                display.windowWidth = kProjectSettingsWindowSizes[static_cast<std::size_t>(hit.index)].width;
+                display.windowHeight = kProjectSettingsWindowSizes[static_cast<std::size_t>(hit.index)].height;
+                break;
+            case ProjectSettingsHitKind::DisplayToggle: {
+                bool& flag = hit.index == 0 ? display.resizable : display.vsync;
+                flag = !flag;
+                break;
+            }
+            default:
+                display.frameRateCap = kProjectSettingsFrameRates[static_cast<std::size_t>(hit.index)];
+                break;
+            }
+            static_cast<void>(sceneContext.SetProjectDisplay(display));
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
+    case ProjectSettingsHitKind::SimulationStepper:
+    case ProjectSettingsHitKind::GravityPresetOption: {
+        kb::project::ProjectSimulationSettings simulation = sceneContext.ProjectConfiguration().simulation;
+        if (hit.index >= 0) {
+            if (hit.kind == ProjectSettingsHitKind::GravityPresetOption) {
+                simulation.gravity = kProjectSettingsGravityPresets[static_cast<std::size_t>(hit.index)];
+            } else {
+                simulation = SteppedSimulation(simulation, hit.index / 2, hit.index % 2);
+            }
+            static_cast<void>(sceneContext.SetProjectSimulation(simulation));
+        }
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;
     }

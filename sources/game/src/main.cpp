@@ -59,6 +59,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -72,8 +73,11 @@ struct GameOptions {
     std::filesystem::path projectPath;
     std::filesystem::path networkConfigPath;
     std::string sceneOverride;
+    // The window size the command line asked for; the project's own size applies to a side it left out.
     std::uint32_t width = kDefaultWindowWidth;
     std::uint32_t height = kDefaultWindowHeight;
+    bool widthSet = false;
+    bool heightSet = false;
     bool fullscreen = false;
     bool headless = false;
     std::filesystem::path luaDebugDirectory;
@@ -288,12 +292,14 @@ constexpr std::array<std::wstring_view, 11U> kDevelopmentSwitches{
                 return false;
             }
             explicitWidth = true;
+            options.widthSet = true;
         } else if (HasPrefix(argument, L"--height=")) {
             if (!ParseWindowExtent(argument.substr(9U), options.height)) {
                 std::cerr << "kb_game: --height expects 64..8192 pixels\n";
                 return false;
             }
             explicitHeight = true;
+            options.heightSet = true;
         } else if (argument == L"--fullscreen") {
             options.fullscreen = true;
         } else if (argument == L"--uncapped") {
@@ -417,6 +423,23 @@ constexpr std::array<std::wstring_view, 11U> kDevelopmentSwitches{
     return true;
 }
 
+// Waits for `deadline`: a sleep for most of it, then yields, so a frame cap neither burns a core nor
+// overshoots by a scheduler tick.
+void WaitUntil(std::chrono::steady_clock::time_point deadline) {
+    constexpr auto kSpinWindow = std::chrono::milliseconds(2);
+    for (;;) {
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) {
+            return;
+        }
+        if (remaining > kSpinWindow) {
+            std::this_thread::sleep_for(remaining - kSpinWindow);
+        } else {
+            std::this_thread::yield();
+        }
+    }
+}
+
 [[nodiscard]] std::wstring WindowTitle(const kb::game::GameProjectRuntime& runtime) {
     if (runtime.gameName.empty()) {
         return L"21kb Game";
@@ -491,15 +514,24 @@ int RunGame(const GameOptions& options) {
         return EXIT_FAILURE;
     }
 
+    // The project's window settings, except where the command line chose the size or the headless mode.
+    const kb::project::ProjectDisplaySettings& display = projectRuntime.display;
+    const std::uint32_t windowWidth = options.widthSet ? options.width : display.windowWidth;
+    const std::uint32_t windowHeight = options.heightSet ? options.height : display.windowHeight;
+    const bool fullscreen = options.fullscreen || (!options.headless && !options.widthSet && !options.heightSet &&
+        display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen);
+    const bool uncapped = options.uncapped || options.particleDiagnostics;
+
     kb::input::Win32InputCollector inputCollector;
     kb::game::GameWindow window;
     if (!window.Open(
             WindowTitle(projectRuntime),
-            options.width,
-            options.height,
-            options.fullscreen,
+            windowWidth,
+            windowHeight,
+            fullscreen,
             inputCollector,
-            !options.headless)) {
+            !options.headless,
+            display.resizable)) {
         std::cerr << "kb_game: game window could not be created\n";
         return EXIT_FAILURE;
     }
@@ -507,7 +539,7 @@ int RunGame(const GameOptions& options) {
     kb::render::DisplayConfig displayConfig{};
     displayConfig.enableEditorRendering = false;
     displayConfig.preferredBgfxRendererType = options.rendererType;
-    if (options.uncapped || options.particleDiagnostics) {
+    if (uncapped || !display.vsync) {
         displayConfig.syncMode = kb::render::DisplaySyncMode::Uncapped;
     }
     kb::render::Renderer renderer;
@@ -632,7 +664,7 @@ int RunGame(const GameOptions& options) {
               << " modules=" << scene.ActiveModuleCount()
               << " backend=" << renderer.CapabilityReport().selectedBackendName
               << " resolution=" << window.Width() << 'x' << window.Height()
-              << " sync=" << (options.uncapped || options.particleDiagnostics ? "uncapped" : "vsync")
+              << " sync=" << (displayConfig.syncMode == kb::render::DisplaySyncMode::Uncapped ? "uncapped" : "vsync")
               << " headless=" << options.headless
               << " gpu_vendor=" << renderer.CapabilityReport().vendorId
               << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
@@ -730,6 +762,11 @@ int RunGame(const GameOptions& options) {
     };
     kb::game::RuntimeSceneFrameSync renderSceneSync;
     renderer.PrepareParticleScene(scene);
+    // The project's frame rate cap; a development run that asked for no limit, and an automated headless run, ignore it.
+    const std::chrono::steady_clock::duration frameInterval = display.frameRateCap != 0U && !uncapped && !options.headless
+        ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+              std::chrono::duration<double>(1.0 / static_cast<double>(display.frameRateCap)))
+        : std::chrono::steady_clock::duration::zero();
     auto previousTick = std::chrono::steady_clock::now();
     const auto particleDeadline = previousTick + std::chrono::minutes(2);
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
@@ -1057,6 +1094,9 @@ int RunGame(const GameOptions& options) {
         }
         if (submitted) {
             ++submittedFrames;
+        }
+        if (frameInterval > std::chrono::steady_clock::duration::zero()) {
+            WaitUntil(now + frameInterval);
         }
         ++renderedFrames;
         if (options.frameLimit != 0U && renderedFrames >= options.frameLimit) {

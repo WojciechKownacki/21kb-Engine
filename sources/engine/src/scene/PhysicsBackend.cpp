@@ -23,7 +23,9 @@ namespace {
 } // namespace
 
 void PhysicsBackend::RegisterBackend(Scene& scene, IPhysicsBackend& backend) {
-    SceneAccess::State(scene).physicsBackend = &backend;
+    SceneState& state = SceneAccess::State(scene);
+    state.physicsBackend = &backend;
+    static_cast<void>(backend.SetGravity(state.physicsGravity));
 }
 
 void PhysicsBackend::UnregisterBackend(Scene& scene, IPhysicsBackend& backend) noexcept {
@@ -236,6 +238,16 @@ std::vector<PendingCollisionEvent> PhysicsBackend::DrainPendingCollisionEvents(S
 void PhysicsBackend::DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output) {
     output.clear();
     output.swap(SceneAccess::State(scene).pendingCollisionEvents);
+}
+
+bool PhysicsBackend::SetGravity(Scene& scene, Vec3 gravity) noexcept {
+    SceneAccess::State(scene).physicsGravity = gravity;
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetGravity(gravity);
+}
+
+Vec3 PhysicsBackend::Gravity(Scene& scene) noexcept {
+    return SceneAccess::State(scene).physicsGravity;
 }
 
 bool PhysicsBackend::ConfigureLayers(Scene& scene, const PhysicsLayersAsset& layers) noexcept {

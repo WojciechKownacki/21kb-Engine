@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <filesystem>
 #include <limits>
 #include <new>
@@ -21,9 +22,11 @@ namespace {
 constexpr std::array<std::uint8_t, 8U> kMagic{ '2', '1', 'K', 'B', 'R', 'M', 'F', 0U };
 constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R', 'C', 0U };
 // The word after the version: once reserved and zero, now flags. Bit 0 marks a partial manifest;
-// bit 1 says the tombstone lists follow the auxiliary files.
+// bit 1 says the tombstone lists follow the auxiliary files; bit 2 says the display and simulation
+// settings follow the physics layers asset (settings that are all defaults leave them out).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
+constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -51,6 +54,10 @@ void PutUInt64(std::vector<std::uint8_t>& bytes, std::uint64_t value) {
     for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
         bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
     }
+}
+
+void PutFloat(std::vector<std::uint8_t>& bytes, float value) {
+    PutUInt32(bytes, std::bit_cast<std::uint32_t>(value));
 }
 
 void PutString(std::vector<std::uint8_t>& bytes, std::string_view value) {
@@ -90,6 +97,15 @@ public:
         for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
             value |= static_cast<std::uint64_t>(bytes_[cursor_++]) << shift;
         }
+        return true;
+    }
+
+    [[nodiscard]] bool ReadFloat(float& value) noexcept {
+        std::uint32_t bits = 0U;
+        if (!ReadUInt32(bits)) {
+            return false;
+        }
+        value = std::bit_cast<float>(bits);
         return true;
     }
 
@@ -215,10 +231,30 @@ private:
     const auto validQuality = [](kb::project::ProjectQualityLevel level) noexcept {
         return static_cast<std::uint8_t>(level) < kb::project::kProjectQualityLevelCount;
     };
+    const auto within = [](auto value, auto minimum, auto maximum) noexcept {
+        return value >= minimum && value <= maximum;
+    };
+    const kb::project::ProjectDisplaySettings& display = settings.display;
+    const kb::project::ProjectSimulationSettings& simulation = settings.simulation;
     return static_cast<std::uint32_t>(settings.lightingPath) <=
             static_cast<std::uint32_t>(kb::project::ProjectSceneLightingPath::ForwardPlus) &&
         validQuality(settings.shadowQuality) && validQuality(settings.shadowQualityMobile) &&
-        validQuality(settings.giQuality) && validQuality(settings.giQualityMobile);
+        validQuality(settings.giQuality) && validQuality(settings.giQualityMobile) &&
+        within(display.windowWidth, kb::project::kProjectWindowExtentMin, kb::project::kProjectWindowExtentMax) &&
+        within(display.windowHeight, kb::project::kProjectWindowExtentMin, kb::project::kProjectWindowExtentMax) &&
+        display.windowMode <= kb::project::ProjectWindowMode::BorderlessFullscreen &&
+        display.frameRateCap <= kb::project::kProjectFrameRateCapMax &&
+        within(simulation.fixedStepHz, kb::project::kProjectFixedStepHzMin, kb::project::kProjectFixedStepHzMax) &&
+        within(simulation.gravity[0], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
+        within(simulation.gravity[1], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
+        within(simulation.gravity[2], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
+        within(simulation.timeScale, 0.0F, kb::project::kProjectTimeScaleMax);
+}
+
+// Whether the display and simulation settings differ from their defaults, so they have to be written.
+[[nodiscard]] bool HasRuntimeSettings(const kb::project::ProjectSettings& settings) noexcept {
+    const kb::project::ProjectSettings defaults;
+    return settings.display != defaults.display || settings.simulation != defaults.simulation;
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -422,7 +458,7 @@ void EncodeDescriptor(std::vector<std::uint8_t>& bytes, const kb::project::Proje
     return RuntimeAssetManifestStatus::Success;
 }
 
-void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::ProjectSettings& settings) {
+void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::ProjectSettings& settings, bool runtimeSettings) {
     PutString(bytes, settings.name);
     PutString(bytes, settings.gameName);
     PutString(bytes, settings.category);
@@ -437,9 +473,43 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     PutUInt8(bytes, settings.inputEnabled ? 1U : 0U);
     PutString(bytes, settings.inputMappingContext);
     PutString(bytes, settings.physicsLayersAsset);
+    if (runtimeSettings) {
+        PutUInt32(bytes, settings.display.windowWidth);
+        PutUInt32(bytes, settings.display.windowHeight);
+        PutUInt8(bytes, static_cast<std::uint8_t>(settings.display.windowMode));
+        PutUInt8(bytes, settings.display.resizable ? 1U : 0U);
+        PutUInt8(bytes, settings.display.vsync ? 1U : 0U);
+        PutUInt32(bytes, settings.display.frameRateCap);
+        PutUInt32(bytes, settings.simulation.fixedStepHz);
+        for (const float axis : settings.simulation.gravity) {
+            PutFloat(bytes, axis);
+        }
+        PutFloat(bytes, settings.simulation.timeScale);
+    }
 }
 
-[[nodiscard]] bool DecodeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
+[[nodiscard]] bool DecodeRuntimeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
+    kb::project::ProjectDisplaySettings& display = settings.display;
+    kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    std::uint8_t windowMode = 0U;
+    std::uint8_t resizable = 0U;
+    std::uint8_t vsync = 0U;
+    if (!reader.ReadUInt32(display.windowWidth) || !reader.ReadUInt32(display.windowHeight) ||
+        !reader.ReadUInt8(windowMode) || !reader.ReadUInt8(resizable) || !reader.ReadUInt8(vsync) ||
+        !reader.ReadUInt32(display.frameRateCap) || !reader.ReadUInt32(simulation.fixedStepHz) ||
+        !reader.ReadFloat(simulation.gravity[0]) || !reader.ReadFloat(simulation.gravity[1]) ||
+        !reader.ReadFloat(simulation.gravity[2]) || !reader.ReadFloat(simulation.timeScale) ||
+        windowMode > static_cast<std::uint8_t>(kb::project::ProjectWindowMode::BorderlessFullscreen) ||
+        resizable > 1U || vsync > 1U) {
+        return false;
+    }
+    display.windowMode = static_cast<kb::project::ProjectWindowMode>(windowMode);
+    display.resizable = resizable != 0U;
+    display.vsync = vsync != 0U;
+    return true;
+}
+
+[[nodiscard]] bool DecodeSettings(Reader& reader, kb::project::ProjectSettings& settings, bool runtimeSettings) {
     std::uint32_t lightingPath = 0U;
     std::array<std::uint8_t, 4U> quality{};
     std::uint8_t inputEnabled = 0U;
@@ -463,7 +533,7 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     settings.giQuality = static_cast<kb::project::ProjectQualityLevel>(quality[2]);
     settings.giQualityMobile = static_cast<kb::project::ProjectQualityLevel>(quality[3]);
     settings.inputEnabled = inputEnabled != 0U;
-    return true;
+    return !runtimeSettings || DecodeRuntimeSettings(reader, settings);
 }
 
 } // namespace
@@ -496,11 +566,13 @@ RuntimeAssetManifestStatus EncodeRuntimeAssetManifest(
     PutUInt32(bytes, kRuntimeAssetManifestVersion);
     // Flags. Zero for a complete manifest, which keeps its bytes what they always were.
     const bool tombstones = !canonical.removedAssets.empty() || !canonical.removedAuxiliaryFiles.empty();
-    PutUInt32(bytes, (canonical.partial ? kPartialManifestFlag : 0U) | (tombstones ? kTombstonesManifestFlag : 0U));
+    const bool runtimeSettings = HasRuntimeSettings(canonical.settings);
+    PutUInt32(bytes, (canonical.partial ? kPartialManifestFlag : 0U) | (tombstones ? kTombstonesManifestFlag : 0U) |
+        (runtimeSettings ? kRuntimeSettingsManifestFlag : 0U));
     PutString(bytes, canonical.targetProfileId);
     PutUInt64(bytes, canonical.targetProfileHash);
     EncodeDescriptor(bytes, canonical.descriptor);
-    EncodeSettings(bytes, canonical.settings);
+    EncodeSettings(bytes, canonical.settings, runtimeSettings);
     PutUInt32(bytes, static_cast<std::uint32_t>(canonical.assets.size()));
     for (const RuntimeAssetManifestEntry& asset : canonical.assets) {
         PutUInt64(bytes, asset.id.value);
@@ -571,7 +643,7 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (version != kRuntimeAssetManifestVersion) {
         return RuntimeAssetManifestStatus::UnsupportedVersion;
     }
-    if (!reader.ReadUInt32(reserved) || (reserved & ~(kPartialManifestFlag | kTombstonesManifestFlag)) != 0U ||
+    if (!reader.ReadUInt32(reserved) || (reserved & ~(kPartialManifestFlag | kTombstonesManifestFlag | kRuntimeSettingsManifestFlag)) != 0U ||
         !reader.ReadString(manifest.targetProfileId, kMaxShortStringBytes) ||
         !reader.ReadUInt64(manifest.targetProfileHash)) {
         return RuntimeAssetManifestStatus::Malformed;
@@ -581,7 +653,7 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (descriptorStatus != RuntimeAssetManifestStatus::Success) {
         return descriptorStatus;
     }
-    if (!DecodeSettings(reader, manifest.settings)) {
+    if (!DecodeSettings(reader, manifest.settings, (reserved & kRuntimeSettingsManifestFlag) != 0U)) {
         return RuntimeAssetManifestStatus::Malformed;
     }
 

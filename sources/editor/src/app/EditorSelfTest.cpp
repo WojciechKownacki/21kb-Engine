@@ -384,6 +384,68 @@ void RunProjectSettingsSuite(Report& report) {
     const ProjectSettingsPanelRenderer::Hit labelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, shadowsLabel.x, shadowsLabel.y);
     report.Check(labelHit.kind == ProjectSettingsHitKind::QualityOption && labelHit.index / 5 == 2,
         "A quality row label hit-tests for its tooltip");
+
+    // Display category: window mode, size, the two switches and the frame rate limit.
+    const auto stored = [&context] {
+        return kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+    };
+    const POINT displayCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Display)));
+    report.Check(controller.HandlePointerDown(kContent, displayCategory.x, displayCategory.y), "Clicking the Display category is handled");
+    report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Display), "Display category active after click");
+    const POINT borderless = Center(lightingRects.windowModeButton[1]);
+    const POINT size1080 = Center(lightingRects.windowSizeButton[2]);
+    const POINT vsyncSwitch = Center(lightingRects.vsyncCheckbox);
+    const POINT resizableLabel = Center(lightingRects.displayLabel[2]);
+    const POINT frameCap60 = Center(lightingRects.frameRateButton[2]);
+    report.Check(HitKindAt(context, borderless) == ProjectSettingsHitKind::WindowModeOption &&
+            HitKindAt(context, size1080) == ProjectSettingsHitKind::WindowSizeOption &&
+            HitKindAt(context, vsyncSwitch) == ProjectSettingsHitKind::DisplayToggle &&
+            HitKindAt(context, resizableLabel) == ProjectSettingsHitKind::DisplayToggle &&
+            HitKindAt(context, frameCap60) == ProjectSettingsHitKind::FrameRateOption,
+        "The Display controls hit-test as their own kinds");
+    for (const POINT point : { borderless, size1080, vsyncSwitch, resizableLabel, frameCap60 }) {
+        report.Check(controller.HandlePointerDown(kContent, point.x, point.y), "Clicking a Display control is handled");
+    }
+    const kb::project::ProjectDisplaySettings& display = context.ProjectConfiguration().display;
+    report.Check(display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen && display.windowWidth == 1920U &&
+            display.windowHeight == 1080U && !display.vsync && !display.resizable && display.frameRateCap == 60U,
+        "The Display buttons change the project's display settings");
+    report.Check(stored().Succeeded() && stored().settings.display == display, "Display settings persisted to the settings file");
+    const POINT displayLabel = Center(lightingRects.displayLabel[4]);
+    const ProjectSettingsPanelRenderer::Hit displayLabelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, displayLabel.x, displayLabel.y);
+    report.Check(displayLabelHit.kind == ProjectSettingsHitKind::FrameRateOption && displayLabelHit.index == -1,
+        "A Display row label hit-tests for its tooltip");
+
+    // Physics category: fixed step, gravity and time scale are steppers; the gravity presets set the whole vector.
+    const POINT physicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Physics)));
+    report.Check(controller.HandlePointerDown(kContent, physicsCategory.x, physicsCategory.y), "Clicking the Physics category is handled");
+    const POINT fixedStepPlus = Center(lightingRects.stepperButton[0][1]);
+    const POINT gravityYPlus = Center(lightingRects.stepperButton[2][1]);
+    const POINT timeScaleMinus = Center(lightingRects.stepperButton[4][0]);
+    report.Check(HitKindAt(context, fixedStepPlus) == ProjectSettingsHitKind::SimulationStepper &&
+            HitKindAt(context, Center(lightingRects.gravityPresetButton[1])) == ProjectSettingsHitKind::GravityPresetOption,
+        "The Physics steppers and presets hit-test as their own kinds");
+    for (const POINT point : { fixedStepPlus, gravityYPlus, timeScaleMinus }) {
+        report.Check(controller.HandlePointerDown(kContent, point.x, point.y), "Clicking a Physics stepper is handled");
+    }
+    const kb::project::ProjectSimulationSettings& simulation = context.ProjectConfiguration().simulation;
+    report.Check(simulation.fixedStepHz == 70U && simulation.gravity[0] == 0.0F && simulation.gravity[1] == -9.31F &&
+            simulation.gravity[2] == 0.0F && simulation.timeScale == 0.75F,
+        "The steppers change only the value they belong to");
+    report.Check(stored().Succeeded() && stored().settings.simulation == simulation, "Simulation settings persisted to the settings file");
+    report.Check(std::fabs(context.Scene().Runtime().FixedStepSettings().fixedDeltaSeconds - 1.0F / 70.0F) < 1e-7F &&
+            context.Scene().Runtime().TimeScale() == 0.75F && kb::scene::PhysicsBackend::Gravity(context.Scene()).y == -9.31F,
+        "The open scene takes the simulation settings at once");
+    const POINT moonPreset = Center(lightingRects.gravityPresetButton[1]);
+    report.Check(controller.HandlePointerDown(kContent, moonPreset.x, moonPreset.y), "Clicking a gravity preset is handled");
+    report.Check(simulation.gravity == std::array<float, 3U>{ 0.0F, -1.62F, 0.0F } && simulation.fixedStepHz == 70U,
+        "A gravity preset sets the whole vector and nothing else");
+    const POINT gravityLabel = Center(lightingRects.stepperLabel[2]);
+    const ProjectSettingsPanelRenderer::Hit gravityLabelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, gravityLabel.x, gravityLabel.y);
+    report.Check(gravityLabelHit.kind == ProjectSettingsHitKind::SimulationStepper && gravityLabelHit.index / 2 == 2,
+        "A stepper label hit-tests for its tooltip");
 }
 
 void RunProjectPhysicsLayersRuntimeSuite(Report& report) {

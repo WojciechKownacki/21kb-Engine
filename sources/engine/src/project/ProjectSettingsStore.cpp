@@ -3,6 +3,7 @@
 #include "engine/config/IniDocument.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string_view>
 #include <system_error>
 
@@ -14,8 +15,10 @@ constexpr std::string_view kProduct = "Project.Product";
 constexpr std::string_view kAndroid = "Project.Android";
 constexpr std::string_view kMaps = "Project.Maps";
 constexpr std::string_view kRendering = "Project.Rendering";
+constexpr std::string_view kDisplay = "Project.Display";
 constexpr std::string_view kInput = "Project.Input";
 constexpr std::string_view kPhysics = "Project.Physics";
+constexpr std::string_view kTime = "Project.Time";
 constexpr std::string_view kCrashReports = "Project.CrashReports";
 
 [[nodiscard]] std::string_view LightingPathName(ProjectSceneLightingPath path) noexcept {
@@ -32,6 +35,31 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     if (name == "Deferred") return ProjectSceneLightingPath::Deferred;
     if (name == "ForwardPlus") return ProjectSceneLightingPath::ForwardPlus;
     return fallback;
+}
+
+[[nodiscard]] std::string_view WindowModeName(ProjectWindowMode mode) noexcept {
+    return mode == ProjectWindowMode::BorderlessFullscreen ? "BorderlessFullscreen" : "Windowed";
+}
+
+[[nodiscard]] ProjectWindowMode ParseWindowMode(std::string_view name, ProjectWindowMode fallback) noexcept {
+    if (name == "Windowed") return ProjectWindowMode::Windowed;
+    if (name == "BorderlessFullscreen") return ProjectWindowMode::BorderlessFullscreen;
+    return fallback;
+}
+
+// An integer setting kept inside its bounds; a missing or unreadable key keeps the default.
+[[nodiscard]] std::uint32_t ReadBounded(
+    const config::IniDocument& document, std::string_view section, std::string_view key,
+    std::uint32_t fallback, std::uint32_t minimum, std::uint32_t maximum) {
+    const std::optional<std::int64_t> value = document.GetInt(section, key);
+    return value.has_value()
+        ? static_cast<std::uint32_t>(std::clamp<std::int64_t>(*value, minimum, maximum)) : fallback;
+}
+
+[[nodiscard]] float ReadBoundedFloat(
+    const config::IniDocument& document, std::string_view section, std::string_view key,
+    float fallback, float minimum, float maximum) {
+    return std::clamp(document.GetFloat(section, key).value_or(fallback), minimum, maximum);
 }
 
 [[nodiscard]] std::string ReadString(const config::IniDocument& document, std::string_view section, std::string_view key, std::string fallback) {
@@ -138,9 +166,31 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.shadowQualityMobile = readQuality("ShadowQualityMobile", defaults.shadowQualityMobile);
     result.settings.giQuality = readQuality("GiQuality", defaults.giQuality);
     result.settings.giQualityMobile = readQuality("GiQualityMobile", defaults.giQualityMobile);
+    ProjectDisplaySettings& display = result.settings.display;
+    display.windowWidth = ReadBounded(document, kDisplay, "WindowWidth", defaults.display.windowWidth,
+        kProjectWindowExtentMin, kProjectWindowExtentMax);
+    display.windowHeight = ReadBounded(document, kDisplay, "WindowHeight", defaults.display.windowHeight,
+        kProjectWindowExtentMin, kProjectWindowExtentMax);
+    display.windowMode = ParseWindowMode(
+        ReadString(document, kDisplay, "WindowMode", std::string{WindowModeName(defaults.display.windowMode)}),
+        defaults.display.windowMode);
+    display.resizable = document.GetBool(kDisplay, "Resizable").value_or(defaults.display.resizable);
+    display.vsync = document.GetBool(kDisplay, "VSync").value_or(defaults.display.vsync);
+    display.frameRateCap = ReadBounded(document, kDisplay, "FrameRateCap", defaults.display.frameRateCap,
+        0U, kProjectFrameRateCapMax);
     result.settings.inputEnabled = document.GetBool(kInput, "Enabled").value_or(defaults.inputEnabled);
     result.settings.inputMappingContext = ReadString(document, kInput, "MappingContext", defaults.inputMappingContext);
     result.settings.physicsLayersAsset = ReadString(document, kPhysics, "LayersAsset", defaults.physicsLayersAsset);
+    ProjectSimulationSettings& simulation = result.settings.simulation;
+    simulation.fixedStepHz = ReadBounded(document, kPhysics, "FixedStepHz", defaults.simulation.fixedStepHz,
+        kProjectFixedStepHzMin, kProjectFixedStepHzMax);
+    constexpr std::array<std::string_view, 3U> gravityKeys{ "GravityX", "GravityY", "GravityZ" };
+    for (std::size_t axis = 0U; axis < gravityKeys.size(); ++axis) {
+        simulation.gravity[axis] = ReadBoundedFloat(document, kPhysics, gravityKeys[axis],
+            defaults.simulation.gravity[axis], -kProjectGravityLimit, kProjectGravityLimit);
+    }
+    simulation.timeScale = ReadBoundedFloat(document, kTime, "TimeScale", defaults.simulation.timeScale,
+        0.0F, kProjectTimeScaleMax);
     result.settings.crashReportUploadUrl = ReadString(document, kCrashReports, "UploadUrl", defaults.crashReportUploadUrl);
     return result;
 }
@@ -181,9 +231,20 @@ bool ProjectSettingsStore::Save(
     document.SetString(kRendering, "ShadowQualityMobile", std::string{ProjectQualityLevelName(settings.shadowQualityMobile)});
     document.SetString(kRendering, "GiQuality", std::string{ProjectQualityLevelName(settings.giQuality)});
     document.SetString(kRendering, "GiQualityMobile", std::string{ProjectQualityLevelName(settings.giQualityMobile)});
+    document.SetInt(kDisplay, "WindowWidth", settings.display.windowWidth);
+    document.SetInt(kDisplay, "WindowHeight", settings.display.windowHeight);
+    document.SetString(kDisplay, "WindowMode", std::string{WindowModeName(settings.display.windowMode)});
+    document.SetBool(kDisplay, "Resizable", settings.display.resizable);
+    document.SetBool(kDisplay, "VSync", settings.display.vsync);
+    document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
     document.SetBool(kInput, "Enabled", settings.inputEnabled);
     document.SetString(kInput, "MappingContext", settings.inputMappingContext);
     document.SetString(kPhysics, "LayersAsset", settings.physicsLayersAsset);
+    document.SetInt(kPhysics, "FixedStepHz", settings.simulation.fixedStepHz);
+    document.SetFloat(kPhysics, "GravityX", settings.simulation.gravity[0]);
+    document.SetFloat(kPhysics, "GravityY", settings.simulation.gravity[1]);
+    document.SetFloat(kPhysics, "GravityZ", settings.simulation.gravity[2]);
+    document.SetFloat(kTime, "TimeScale", settings.simulation.timeScale);
     document.SetString(kCrashReports, "UploadUrl", settings.crashReportUploadUrl);
     return document.Save(path, error);
 }

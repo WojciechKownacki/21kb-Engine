@@ -49,6 +49,10 @@ struct GameProjectRuntime {
     // The shadow and global illumination quality the project pins for this device class (Auto keeps the engine's).
     kb::project::ProjectQualityLevel shadowQuality = kb::project::ProjectQualityLevel::Auto;
     kb::project::ProjectQualityLevel giQuality = kb::project::ProjectQualityLevel::Auto;
+    // How the window opens and the frames are paced (read by the Windows player), and the fixed step, gravity and
+    // time scale the scene starts with (applied by LoadGameProjectScene).
+    kb::project::ProjectDisplaySettings display;
+    kb::project::ProjectSimulationSettings simulation;
     std::vector<std::string> requiredModules;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> assetPack;
 

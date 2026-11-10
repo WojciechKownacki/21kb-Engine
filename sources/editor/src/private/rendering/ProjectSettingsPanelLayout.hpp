@@ -58,6 +58,20 @@ struct ProjectSettingsPanelLayoutRects {
     // with one button per level (Auto, Low, Medium, High, Ultra).
     RECT qualityLabel[4]{};
     RECT qualityButton[4][5]{};
+    // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit.
+    RECT displayLabel[5]{};
+    RECT windowModeButton[2]{};
+    RECT windowSizeButton[4]{};
+    RECT resizableCheckbox{};
+    RECT vsyncCheckbox{};
+    RECT frameRateButton[5]{};
+    // Physics page, under the collision layers row: fixed step, gravity X, Y and Z, and time scale are steppers
+    // (a minus button, the value, a plus button); the gravity presets sit between the axes and the time scale.
+    RECT stepperLabel[5]{};
+    RECT stepperValue[5]{};
+    RECT stepperButton[5][2]{};
+    RECT gravityPresetLabel{};
+    RECT gravityPresetButton[3]{};
 };
 
 class ProjectSettingsPanelLayout {
@@ -68,8 +82,8 @@ public:
 
     // The sidebar groups its categories under captions: Project from the first category,
     // Editor from kEditorGroupStart, Plugins from kPluginsGroupStart.
-    static constexpr int kEditorGroupStart = 4;
-    static constexpr int kPluginsGroupStart = 6;
+    static constexpr int kEditorGroupStart = 5;
+    static constexpr int kPluginsGroupStart = 7;
     // A category row in the left sidebar (index 0 is the first category).
     [[nodiscard]] static RECT CategoryRow(const RECT& sidebar, int index) noexcept;
     // The caption above group 0 (Project), 1 (Editor) or 2 (Plugins).

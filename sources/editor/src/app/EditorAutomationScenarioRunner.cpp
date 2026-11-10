@@ -32,6 +32,7 @@
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "rendering/EditorSettingsPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
@@ -2412,6 +2413,8 @@ ReadScriptValue(
             index = 1;
         } else if (*category == "physics") {
             index = 2;
+        } else if (*category == "display") {
+            index = static_cast<int>(ProjectSettingsCategory::Display);
         } else {
             return { false, "unknown project settings category" };
         }

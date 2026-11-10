@@ -25,6 +25,12 @@ class World;
 
 } // namespace kb::ecs
 
+namespace kb::project {
+
+struct ProjectSimulationSettings;
+
+} // namespace kb::project
+
 namespace kb::scene {
 
 class Scene;
@@ -272,6 +278,9 @@ public:
     //    syncing first only avoids that extra resolve cost.
     void SynchronizeTransforms();
     void SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) noexcept;
+    // The project's simulation settings: the fixed step (other fixed-step limits stay), the time scale and
+    // the physics gravity.
+    void ApplyProjectSimulation(const kb::project::ProjectSimulationSettings& settings) noexcept;
     // LIB-093: stamped each frame by ScriptRuntimeSceneSystem so Time.FixedDelta
     // reports the SCRIPT FixedTick step (see SceneState::scriptFixedDeltaSeconds).
     void SetScriptFixedDeltaSeconds(float seconds) noexcept;

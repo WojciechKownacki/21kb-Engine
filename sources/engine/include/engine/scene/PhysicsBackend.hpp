@@ -207,6 +207,13 @@ public:
         return false;
     }
 
+    // The scene gravity in metres per second squared. Called when the backend is registered and whenever
+    // PhysicsBackend::SetGravity changes it. Default: not applied.
+    virtual bool SetGravity(Vec3 gravity) noexcept {
+        static_cast<void>(gravity);
+        return false;
+    }
+
     // LIB-131: a CharacterControllerComponent entity has no Rigidbody - the
     // real backend steps a separate, un-simulated-by-the-rest-of-physics
     // character object for it (JPH::CharacterVirtual, see
@@ -374,6 +381,11 @@ public:
     [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
     // Recycles the caller's completed batch storage; queued events keep their order.
     static void DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output);
+
+    // Stores the scene gravity (default 0, -9.81, 0) and applies it to the registered backend, which also
+    // receives it when it registers later. The return value reflects only the backend applying it.
+    static bool SetGravity(Scene& scene, Vec3 gravity) noexcept;
+    [[nodiscard]] static Vec3 Gravity(Scene& scene) noexcept;
 
     // LIB-129: stores `layers` on the scene (so LayerBit below can resolve
     // names even without a backend) and applies it to the registered

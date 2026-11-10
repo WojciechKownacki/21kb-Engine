@@ -23,7 +23,8 @@ bool GameWindow::Open(
     std::uint32_t height,
     bool fullscreen,
     kb::input::Win32InputCollector& inputCollector,
-    bool visible) {
+    bool visible,
+    bool resizable) {
     if (width == 0U || height == 0U) {
         return false;
     }
@@ -47,7 +48,7 @@ bool GameWindow::Open(
         .right = static_cast<LONG>(width),
         .bottom = static_cast<LONG>(height),
     };
-    DWORD style = WS_OVERLAPPEDWINDOW;
+    DWORD style = resizable ? WS_OVERLAPPEDWINDOW : (WS_OVERLAPPEDWINDOW & ~(WS_THICKFRAME | WS_MAXIMIZEBOX));
     DWORD extendedStyle = visible ? 0U : WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
     int x = CW_USEDEFAULT;
     int y = CW_USEDEFAULT;
