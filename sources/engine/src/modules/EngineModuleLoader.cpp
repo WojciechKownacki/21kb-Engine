@@ -527,7 +527,7 @@ EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
             desc.diagnosticLabel, hold, result)) {
         return result;
     }
-    void* library = LoadNativeLibrary(loadPath, desc.diagnosticLabel, result.errors);
+    void* library = LoadNativeLibrary(loadPath, sourcePath.parent_path(), desc.diagnosticLabel, result.errors);
     hold.Close();
     if (library == nullptr) {
         return result;
@@ -633,15 +633,27 @@ std::filesystem::path EngineModuleLoader::ResolveShadowCopyPath(
 
 void* EngineModuleLoader::LoadNativeLibrary(
     const std::filesystem::path& path,
+    const std::filesystem::path& dependencyDirectory,
     std::string_view diagnosticLabel,
     std::vector<std::string>& errors) {
 #if defined(_WIN32)
+    // The process has one such folder, so whatever the host set comes back after the load.
+    const DWORD previousLength = GetDllDirectoryW(0U, nullptr);
+    std::wstring previous(previousLength, L'\0');
+    if (previousLength > 0U) {
+        previous.resize(GetDllDirectoryW(previousLength, previous.data()));
+    }
+    const bool redirected = !dependencyDirectory.empty() && SetDllDirectoryW(dependencyDirectory.wstring().c_str()) != 0;
     HMODULE library = LoadLibraryW(path.wstring().c_str());
     if (library == nullptr) {
         errors.push_back(NativeLibraryError(diagnosticLabel));
     }
+    if (redirected) {
+        SetDllDirectoryW(previousLength > 0U ? previous.c_str() : nullptr);
+    }
     return reinterpret_cast<void*>(library);
 #else
+    static_cast<void>(dependencyDirectory);
     void* library = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
     if (library == nullptr) {
         errors.push_back(NativeLibraryError(diagnosticLabel));

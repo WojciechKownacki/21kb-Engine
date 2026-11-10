@@ -1206,6 +1206,14 @@ if(TARGET kb_physics_jolt_plugin)
     )
 endif()
 
+# The audio provider needs its spatial runtime library beside it. A test that assembles a package by hand
+# copies it with the providers; an exported game gets it from the packaging tools.
+set(KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS)
+set(KB_EDITOR_TEST_AUDIO_RUNTIME_PROVIDER)
+if(TARGET kb_steam_audio)
+    set(KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS --plugin $<TARGET_FILE:kb_steam_audio>)
+    set(KB_EDITOR_TEST_AUDIO_RUNTIME_PROVIDER "$<TARGET_FILE:kb_steam_audio>;")
+endif()
 if(TARGET kb_audio_miniaudio_plugin)
     add_dependencies(kb_editor kb_audio_miniaudio_plugin)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
@@ -1683,7 +1691,7 @@ if(BUILD_TESTING)
                 --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                 --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
                 --test-root "${CMAKE_BINARY_DIR}/timeline_workflow_tests"
-                --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                 --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                 --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
         set_tests_properties(kb_editor_timeline_workflow_package PROPERTIES
@@ -1695,7 +1703,7 @@ if(BUILD_TESTING)
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                     --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
                     --test-root "${CMAKE_BINARY_DIR}/blend_space_workflow_tests"
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
             set_tests_properties(kb_editor_blend_space_2d_workflow_package PROPERTIES
@@ -1706,7 +1714,7 @@ if(BUILD_TESTING)
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                     --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
                     --test-root "${CMAKE_BINARY_DIR}/gameplay_graph_workflow_tests"
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
             set_tests_properties(kb_editor_gameplay_graph_workflow_package PROPERTIES
@@ -1720,7 +1728,7 @@ if(BUILD_TESTING)
                         --project-tool $<TARGET_FILE:kb_ecs_graph_project_fixture>
                         --engine-root "${CMAKE_SOURCE_DIR}" --shaderc "${_kb_timeline_shaderc}" ${_kb_timeline_runtime_args}
                         --test-root "${CMAKE_BINARY_DIR}/ecs_graph_workflow_tests"
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>)
                 set_tests_properties(kb_editor_ecs_graph_workflow_package PROPERTIES
@@ -1751,7 +1759,7 @@ if(BUILD_TESTING)
             "--test-root" "${CMAKE_BINARY_DIR}/editor_audio_dsp_package_tests"
             "--shaderc" "${_kb_editor_dsp_shaderc}" ${_kb_editor_dsp_runtime_args}
             "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>" ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
             "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
             "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
             "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
@@ -1830,7 +1838,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/import_diagnostics_tests")
@@ -1866,7 +1874,7 @@ if(BUILD_TESTING)
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --renderer-tests $<TARGET_FILE:kb_renderer_tests> --shaderc $<TARGET_FILE:bgfx::shaderc>
                         --scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAnimatorWorkflowScenario.json"
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/retarget_tests")
@@ -1878,7 +1886,7 @@ if(BUILD_TESTING)
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
                         --scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/LuaDebuggerScenario.json"
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/lua_debugger_tests")
@@ -1889,7 +1897,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/advanced_pbr_tests")
@@ -1900,7 +1908,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/lighting_tests")
@@ -1911,7 +1919,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/physics_assembly_tests")
@@ -1922,7 +1930,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/particle_geometry_tests")
@@ -1933,7 +1941,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/map2d_geometry_tests")
@@ -1944,7 +1952,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/rig2d_tests")
@@ -1956,7 +1964,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/spatial_audio_tests")
@@ -1987,7 +1995,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/input_sensors_tests")
@@ -1998,7 +2006,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/csg_tests")
@@ -2012,7 +2020,7 @@ if(BUILD_TESTING)
                         --window-probe $<TARGET_FILE:kb_game_window_tests> --ffmpeg "${KB_FFMPEG_EXECUTABLE}" --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/runtime_ui_tests")
@@ -2024,7 +2032,7 @@ if(BUILD_TESTING)
                         --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                         --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
                         --shaderc $<TARGET_FILE:bgfx::shaderc>
-                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                        --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                         --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                         --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                         --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/particle_authoring_tests")
@@ -2035,7 +2043,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PrefabLifecyclePackagedTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/prefab_lifecycle_tests")
@@ -2045,7 +2053,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DVisualTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/map2d_visual_tests")
@@ -2055,7 +2063,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Camera2DWorkflowTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/camera2d_workflow_tests")
@@ -2065,7 +2073,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PlatformerNavigationTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/platformer_navigation_tests")
@@ -2075,7 +2083,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/TileDataWorkflowTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/tile_data_tests")
@@ -2085,7 +2093,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Player2DWorkflowTests.py"
                     --beginner --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/beginner_workflow_tests")
@@ -2095,7 +2103,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/PlatformerSurfaceTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/platformer_surface_tests")
@@ -2105,7 +2113,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Player2DWorkflowTests.py"
                     --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/player2d_workflow_tests")
@@ -2115,7 +2123,7 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/Player2DWorkflowTests.py"
                     --tile-collisions --editor $<TARGET_FILE:kb_editor> --cli $<TARGET_FILE:kb_cli>
                     --cooker $<TARGET_FILE:kb_cooker> --player $<TARGET_FILE:kb_game>
-                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_physics_jolt_plugin> --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin> --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin> --plugin $<TARGET_FILE:kb_world2d_plugin>
                     --engine-root "${CMAKE_SOURCE_DIR}" --test-root "${CMAKE_BINARY_DIR}/tilephysics_workflow_tests")
@@ -2371,7 +2379,7 @@ if(BUILD_TESTING)
                 "-DEDITOR=$<TARGET_FILE:kb_editor>"
                 "-DCOOKER=$<TARGET_FILE:kb_cooker>"
                 "-DPLAYER=$<TARGET_FILE:kb_game>"
-                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;${KB_EDITOR_TEST_AUDIO_RUNTIME_PROVIDER}$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
                 "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
                 "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
@@ -2382,7 +2390,7 @@ if(BUILD_TESTING)
                 "-DEDITOR=$<TARGET_FILE:kb_editor>"
                 "-DCOOKER=$<TARGET_FILE:kb_cooker>"
                 "-DPLAYER=$<TARGET_FILE:kb_game>"
-                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;${KB_EDITOR_TEST_AUDIO_RUNTIME_PROVIDER}$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
                 "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
                 "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
                 "-DSCENARIO=Map2DComponentScenario.json"
@@ -2396,7 +2404,7 @@ if(BUILD_TESTING)
                 "-DEDITOR=$<TARGET_FILE:kb_editor>"
                 "-DCOOKER=$<TARGET_FILE:kb_cooker>"
                 "-DPLAYER=$<TARGET_FILE:kb_game>"
-                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;${KB_EDITOR_TEST_AUDIO_RUNTIME_PROVIDER}$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
                 "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
                 "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
                 "-DSCENARIO=Sprite2DScenario.json"
@@ -2412,7 +2420,7 @@ if(BUILD_TESTING)
                 "-DEDITOR=$<TARGET_FILE:kb_editor>"
                 "-DCOOKER=$<TARGET_FILE:kb_cooker>"
                 "-DPLAYER=$<TARGET_FILE:kb_game>"
-                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;${KB_EDITOR_TEST_AUDIO_RUNTIME_PROVIDER}$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
                 "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
                 "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
                 "-DSCENARIO=Scene3DParityScenario.json"
@@ -2432,7 +2440,7 @@ if(BUILD_TESTING)
                     --engine-root ${CMAKE_SOURCE_DIR} --test-root ${CMAKE_BINARY_DIR}/native_image_tests
                     --shaderc $<TARGET_FILE:bgfx::shaderc>
                     --plugin $<TARGET_FILE:kb_physics_jolt_plugin>
-                    --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin>
+                    --plugin $<TARGET_FILE:kb_audio_miniaudio_plugin> ${KB_EDITOR_TEST_AUDIO_RUNTIME_ARGS}
                     --plugin $<TARGET_FILE:kb_basic_lighting_plugin>
                     --plugin $<TARGET_FILE:kb_ai_plugin>
                     --plugin $<TARGET_FILE:kb_21kb_particle_plugin>

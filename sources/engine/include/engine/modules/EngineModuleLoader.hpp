@@ -92,8 +92,11 @@ private:
         const std::filesystem::path& shadowCopyDirectory,
         std::string_view shadowCopyDirectoryName,
         std::uint64_t& serial);
+    // Maps `path`. The libraries it depends on are looked for in `dependencyDirectory` too: the
+    // folder of the module itself, which a shadow copy of it has left.
     [[nodiscard]] static void* LoadNativeLibrary(
         const std::filesystem::path& path,
+        const std::filesystem::path& dependencyDirectory,
         std::string_view diagnosticLabel,
         std::vector<std::string>& errors);
 
