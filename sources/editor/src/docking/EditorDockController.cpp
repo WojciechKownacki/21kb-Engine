@@ -98,6 +98,7 @@ bool EditorDockController::CancelDragAndRestore() {
     }
     const bool rearranged = drag_->detached || drag_->manualTabDrag || drag_->kind == DockHitKind::Splitter;
     const std::optional<EditorLayoutPreset> origin = std::move(dragOrigin_);
+    dragOrigin_.reset();
     CancelDrag();
     if (rearranged && origin.has_value() && EditorWorkspaceArrangement::Apply(*dockModel_, *origin)) {
         EditorFloatingWindowSync::Reconcile(*dockModel_, *floatingWindows_);
