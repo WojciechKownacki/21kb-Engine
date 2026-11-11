@@ -74,8 +74,9 @@ struct AudioCaptureLevel {
 // Root mean square and absolute peak of the samples. Non-finite samples count as silence.
 [[nodiscard]] AudioCaptureLevel ComputeAudioCaptureLevel(std::span<const float> samples) noexcept;
 
-// Mono 32-bit float WAV held in memory: the clip plays through the ordinary clip path.
-[[nodiscard]] std::shared_ptr<AudioClipAsset> MakeAudioClipFromPcm(std::span<const float> samples, std::uint32_t sampleRate);
+// 32-bit float WAV held in memory, samples interleaved by channel: the clip plays through the ordinary clip path.
+[[nodiscard]] std::shared_ptr<AudioClipAsset> MakeAudioClipFromPcm(std::span<const float> samples, std::uint32_t sampleRate,
+    std::uint16_t channels = 1U);
 
 // Recent captured samples shared between the device callback thread (one writer) and the scene owner
 // thread (readers). Writing never blocks or allocates. A reader gets the newest samples, oldest first, and

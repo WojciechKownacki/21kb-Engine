@@ -93,8 +93,9 @@ private:
     int height_ = 0;
 };
 
+// A window paints on the thread that created it, so each thread owns the buffers of its windows.
 [[nodiscard]] RetainedBackBuffer& BackBufferFor(HWND window) {
-    static std::vector<std::unique_ptr<RetainedBackBuffer>> buffers;
+    thread_local std::vector<std::unique_ptr<RetainedBackBuffer>> buffers;
     std::erase_if(buffers, [](const std::unique_ptr<RetainedBackBuffer>& buffer) {
         return buffer == nullptr || buffer->Window() == nullptr || IsWindow(buffer->Window()) == 0;
     });

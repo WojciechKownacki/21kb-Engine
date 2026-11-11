@@ -10,10 +10,9 @@ namespace kb::render {
 class RendererSceneLightingConfigResolver {
 public:
     [[nodiscard]] static SceneRenderLightingConfig Resolve(SceneRenderLightingConfig requested, SceneRenderLightingConfig fallback) noexcept;
-    // The scene's post-process profile owns screen-space ambient occlusion:
-    // it switches the renderer's SSAO pass
-    // on or off and sets its intensity and radius.
-    static void ApplyPostProcessAmbientOcclusion(SceneRenderLightingConfig& config, const ScenePostProcessSettings& settings) noexcept;
+    // The scene's post-process profile owns ambient occlusion and turns on reflections,
+    // global illumination and fog over the lighting config's own.
+    static void ApplyPostProcessLighting(SceneRenderLightingConfig& config, const ScenePostProcessSettings& settings) noexcept;
     // Resolve target defaults before submission; explicit profiles also allow desktop previews.
     static void ResolveFogProfile(SceneRenderLightingConfig& config, bgfx::RendererType::Enum backend) noexcept;
     [[nodiscard]] static std::uint32_t ShadowFilterSampleCount(SceneRenderShadowFilter filter) noexcept;

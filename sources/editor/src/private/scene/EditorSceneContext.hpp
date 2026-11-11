@@ -1606,6 +1606,8 @@ private:
     [[nodiscard]] std::vector<std::string> ListedScenesOnDisk() const;
     // Takes the scenes of `before` that are gone out of the package list.
     void DropDeletedBuildScenes(const std::vector<std::string>& before);
+    // Renames the package list's entries for a scene, or every scene under a folder, that moved from `from` to `to`.
+    void RetargetBuildScenes(const std::filesystem::path& from, const std::filesystem::path& to);
     // Records the document the author has open, so reopening the project returns to it.
     void RememberLastOpenMap();
     // The editor's start when no saved scene can be opened: a new, unsaved Untitled scene from Basic.

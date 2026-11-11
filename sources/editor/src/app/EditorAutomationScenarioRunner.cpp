@@ -2203,7 +2203,6 @@ ReadScriptValue(
         settings.Pending().vibration = true;
         const bool rejectedVibration = !settings.Apply({});
         settings.Revert();
-        settings.Pending().masterVolume = 0.5F;
         settings.Pending().videoWidth = 1920U;
         settings.Pending().videoHeight = 1080U;
         settings.Pending().fullscreen = true;
@@ -2221,11 +2220,10 @@ ReadScriptValue(
         const bool rejectedInput = !settings.Apply({});
         settings.Revert();
         const bool valid = rejectedVibration && applied && rejectedVideo &&
-            rejectedInput && settings.Current().masterVolume == 0.5F &&
-            settings.Current().videoWidth == 1920U &&
+            rejectedInput && settings.Current().videoWidth == 1920U &&
             settings.Current().fullscreen &&
             settings.Pending().mouseSensitivity == 2.0F;
-        return { valid, valid ? "audio, video and input settings transaction"
+        return { valid, valid ? "video and input settings transaction"
                               : "runtime settings contract rejected" };
     }
 

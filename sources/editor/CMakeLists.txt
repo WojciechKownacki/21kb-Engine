@@ -1404,6 +1404,7 @@ if(BUILD_TESTING)
     add_executable(kb_editor_particle_bake_host_tests
         tests/EditorParticleBakeHostTests.cpp
         src/console/EditorConsoleState.cpp
+        src/scene/EditorHierarchySearchState.cpp
         src/scene/ParticleEditorBakeHostCommand.cpp
     )
     target_include_directories(kb_editor_particle_bake_host_tests PRIVATE src/private)

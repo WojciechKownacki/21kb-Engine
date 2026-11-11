@@ -2235,23 +2235,23 @@ EditorProtectedScenes EditorSceneContext::ProtectedScenes() const {
 }
 
 bool EditorSceneContext::CommitAssetTextEdit() {
-    // A scene renamed here keeps its place in the package list under its new name.
-    std::string renamedFrom;
-    std::string renamedTo;
+    // A scene renamed here, or the scenes of a renamed folder, keep their place in the package list under the new name.
+    std::filesystem::path renamedFrom;
+    std::filesystem::path renamedTo;
     if (assetBrowser_.TextEditMode() == EditorAssetTextEditMode::RenameAsset) {
         const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetBrowser_.TextEditTargetAsset());
         if (metadata != nullptr && metadata->virtualPath.extension() == ".21kbscene") {
-            renamedFrom = metadata->virtualPath.generic_string();
-            renamedTo = (metadata->virtualPath.parent_path() /
-                (std::string{ assetBrowser_.TextEditValue() } + metadata->virtualPath.extension().string())).generic_string();
+            renamedFrom = metadata->virtualPath;
+            renamedTo = metadata->virtualPath.parent_path() /
+                (std::string{ assetBrowser_.TextEditValue() } + metadata->virtualPath.extension().string());
         }
+    } else if (assetBrowser_.TextEditMode() == EditorAssetTextEditMode::RenameFolder) {
+        renamedFrom = assetBrowser_.TextEditTargetFolder();
+        renamedTo = renamedFrom.parent_path() / std::string{ assetBrowser_.TextEditValue() };
     }
     const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(*scene_, assetBrowser_, ProtectedScenes());
     if (committed && !renamedFrom.empty()) {
-        if (const auto listed = std::ranges::find(projectConfig_.additionalScenes, renamedFrom); listed != projectConfig_.additionalScenes.end()) {
-            *listed = renamedTo;
-            static_cast<void>(SaveProjectConfiguration());
-        }
+        RetargetBuildScenes(renamedFrom, renamedTo);
     }
     if (committed) {
         console_.Info("Assets", "Asset browser text edit committed.");
@@ -2286,6 +2286,23 @@ void EditorSceneContext::DropDeletedBuildScenes(const std::vector<std::string>& 
         }
     }
     if (projectConfig_.additionalScenes.size() != listed) {
+        static_cast<void>(SaveProjectConfiguration());
+    }
+}
+
+void EditorSceneContext::RetargetBuildScenes(const std::filesystem::path& from, const std::filesystem::path& to) {
+    const std::string source = from.generic_string();
+    if (source.empty()) {
+        return;
+    }
+    bool changed = false;
+    for (std::string& scene : projectConfig_.additionalScenes) {
+        if (scene == source || (scene.starts_with(source) && scene.size() > source.size() && scene[source.size()] == '/')) {
+            scene = to.generic_string() + scene.substr(source.size());
+            changed = true;
+        }
+    }
+    if (changed) {
         static_cast<void>(SaveProjectConfiguration());
     }
 }
@@ -2490,8 +2507,11 @@ bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& v
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+    const std::filesystem::path movedFrom = metadata != nullptr ? metadata->virtualPath : std::filesystem::path{};
     const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
+        RetargetBuildScenes(movedFrom, destinationVirtualFolder / movedFrom.filename());
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset move failed."));
@@ -2502,6 +2522,7 @@ bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::fi
 bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
     const bool moved = EditorSceneAssetBrowserCommands::MoveFolderToFolder(*scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
+        RetargetBuildScenes(sourceVirtualFolder, destinationVirtualFolder / sourceVirtualFolder.filename());
         console_.Info("Assets", "Folder moved to " + destinationVirtualFolder.generic_string());
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Folder move failed."));

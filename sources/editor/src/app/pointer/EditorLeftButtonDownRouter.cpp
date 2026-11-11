@@ -583,13 +583,13 @@ bool EditorLeftButtonDownRouter::HandleParticleEditorDown(HWND messageWindow, in
                 gradient.stops[nearest].color = {
                     (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]};
                 editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatGradient(gradient);
+            } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve) {
+                // A curve is edited in its curve view, never as text.
+                return true;
             } else {
-                const bool isCurve = property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve ||
-                    property.label == "Curve" || property.label == "Rate curve";
                 const auto edited = EditorMaterialParameterValueDialog::Show(
                     mainWindow_, property.label, property.value,
-                    isCurve ? EditorText("particleEditor.curveHint", "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3")
-                    : EditorText("materialParameter.valueHint", "Use numbers like: 0.25 or 1 0 0 1"));
+                    EditorText("materialParameter.valueHint", "Use numbers like: 0.25 or 1 0 0 1"));
                 if (!edited.has_value()) return true;
                 editedValue = *edited;
             }

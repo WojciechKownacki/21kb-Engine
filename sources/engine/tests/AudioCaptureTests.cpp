@@ -171,6 +171,16 @@ void RunClipTest() {
     std::memcpy(&channels, bytes.data() + 22U, 2U);
     kb::tests::Require(format == 3U && channels == 1U && ReadU32(bytes, 24U) == kRate && ReadU32(bytes, 40U) == samples.size() * sizeof(float),
         "A captured clip must be mono 32-bit float at the capture rate with its exact length");
+    // Interleaved stereo, as decoded video audio uses.
+    const std::shared_ptr<kb::audio::AudioClipAsset> stereo = kb::audio::MakeAudioClipFromPcm(samples, 48000U, 2U);
+    std::uint16_t blockAlign = 0U;
+    if (stereo != nullptr) {
+        std::memcpy(&channels, stereo->encodedBytes.data() + 22U, 2U);
+        std::memcpy(&blockAlign, stereo->encodedBytes.data() + 32U, 2U);
+    }
+    kb::tests::Require(stereo != nullptr && channels == 2U && blockAlign == 8U && ReadU32(stereo->encodedBytes, 28U) == 384000U &&
+        kb::audio::MakeAudioClipFromPcm(std::vector<float>(3U), 48000U, 2U) == nullptr,
+        "A stereo clip must hold two channels and refuse a partial frame");
 }
 
 void RunFacadeWithoutBackendTest() {

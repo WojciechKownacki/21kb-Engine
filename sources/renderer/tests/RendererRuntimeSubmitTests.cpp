@@ -1986,7 +1986,7 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(!PostProcessProfileAssetLoader::SetField(settings, "fogProfile", "Unknown"),
         "Unknown fog profile was accepted");
     SceneRenderLightingConfig fogConfig{};
-    RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(fogConfig, *loaded);
+    RendererSceneLightingConfigResolver::ApplyPostProcessLighting(fogConfig, *loaded);
     Require(fogConfig.screenSpaceReflectionsEnabled && NearlyEqual(fogConfig.ssrIntensity, 0.6F) &&
             NearlyEqual(fogConfig.ssrMaxDistance, 12.5F),
         "A profile with reflections on must set the lighting config's reflections");
@@ -1995,9 +1995,17 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
         SceneRenderLightingConfig requested{};
         requested.screenSpaceReflectionsEnabled = true;
         requested.ssrMaxDistance = 7.0F;
-        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(requested, ScenePostProcessSettings{});
+        RendererSceneLightingConfigResolver::ApplyPostProcessLighting(requested, ScenePostProcessSettings{});
         Require(requested.screenSpaceReflectionsEnabled && NearlyEqual(requested.ssrMaxDistance, 7.0F),
             "A profile with reflections off must not override the lighting config's reflections");
+    }
+    {
+        SceneRenderLightingConfig requested{};
+        requested.skyReflection = bgfx::TextureHandle{ 7U };
+        requested.skyReflectionMaxMip = 5.0F;
+        const SceneRenderLightingConfig resolved = RendererSceneLightingConfigResolver::Resolve(requested, SceneRenderLightingConfig{});
+        Require(resolved.skyReflection.idx == 7U && NearlyEqual(resolved.skyReflectionMaxMip, 5.0F),
+            "A requested sky reflection must survive lighting config resolution");
     }
     RendererSceneLightingConfigResolver::ResolveFogProfile(fogConfig, bgfx::RendererType::Direct3D11);
     Require(fogConfig.fogProfile == SceneFogProfile::Web && !fogConfig.volumetricFogEnabled &&

@@ -102,8 +102,9 @@ AudioCaptureLevel ComputeAudioCaptureLevel(std::span<const float> samples) noexc
     return { .rms = static_cast<float>(std::sqrt(energy / static_cast<double>(samples.size()))), .peak = peak };
 }
 
-std::shared_ptr<AudioClipAsset> MakeAudioClipFromPcm(std::span<const float> samples, std::uint32_t sampleRate) {
-    if (samples.empty() || sampleRate == 0U || samples.size() > (0xFFFFFFFFU - kWavHeaderBytes) / sizeof(float)) {
+std::shared_ptr<AudioClipAsset> MakeAudioClipFromPcm(std::span<const float> samples, std::uint32_t sampleRate, std::uint16_t channels) {
+    if (samples.empty() || sampleRate == 0U || channels == 0U || samples.size() % channels != 0U ||
+        samples.size() > (0xFFFFFFFFU - kWavHeaderBytes) / sizeof(float)) {
         return nullptr;
     }
     auto clip = std::make_shared<AudioClipAsset>();
@@ -116,10 +117,10 @@ std::shared_ptr<AudioClipAsset> MakeAudioClipFromPcm(std::span<const float> samp
     std::memcpy(bytes.data() + 8U, "WAVEfmt ", 8U);
     PutUInt32(bytes, 16U, 16U);
     PutUInt16(bytes, 20U, kWavFormatFloat);
-    PutUInt16(bytes, 22U, 1U);
+    PutUInt16(bytes, 22U, channels);
     PutUInt32(bytes, 24U, sampleRate);
-    PutUInt32(bytes, 28U, sampleRate * static_cast<std::uint32_t>(sizeof(float)));
-    PutUInt16(bytes, 32U, static_cast<std::uint16_t>(sizeof(float)));
+    PutUInt32(bytes, 28U, sampleRate * channels * static_cast<std::uint32_t>(sizeof(float)));
+    PutUInt16(bytes, 32U, static_cast<std::uint16_t>(channels * sizeof(float)));
     PutUInt16(bytes, 34U, 32U);
     std::memcpy(bytes.data() + 36U, "data", 4U);
     PutUInt32(bytes, 40U, dataBytes);

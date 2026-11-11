@@ -57,10 +57,16 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .volumetricFogEnabled = requested.volumetricFogEnabled != defaultConfig.volumetricFogEnabled ? requested.volumetricFogEnabled : fallback.volumetricFogEnabled,
         .fogAnisotropy = requested.fogAnisotropy != defaultConfig.fogAnisotropy ? requested.fogAnisotropy : fallback.fogAnisotropy,
         .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
+        // The frame's sky cube and probe grid have no default to fall back to.
+        .skyReflection = requested.skyReflection,
+        .skyReflectionMaxMip = requested.skyReflectionMaxMip,
+        .lightProbes = requested.lightProbes,
+        .lightProbeGrid = requested.lightProbeGrid,
+        .lightProbeSize = requested.lightProbeSize,
     };
 }
 
-void RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(
+void RendererSceneLightingConfigResolver::ApplyPostProcessLighting(
     SceneRenderLightingConfig& config, const ScenePostProcessSettings& settings) noexcept {
     config.ambientOcclusionEnabled = settings.ambientOcclusionEnabled;
     config.aoIntensity = settings.ambientOcclusionIntensity;

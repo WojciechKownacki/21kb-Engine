@@ -379,7 +379,7 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls
         return {false, "close retained particle document or preview"};
     if (!context.OpenParticleEditorAsset(assetId) || serialize() != edited)
         return {false, "saved curve/gradient fields lost on reopening"};
-    return {true, "real curve and gradient dialogs; Ctrl+Z/Y/S; full document reload; live preview and close"};
+    return {true, "curve view key and real gradient dialog; Ctrl+Z/Y/S; full document reload; live preview and close"};
 }
 
 EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDebuggerInteraction(

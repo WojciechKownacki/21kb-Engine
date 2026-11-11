@@ -6,6 +6,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/audio/AudioClipAsset.hpp"
+#include "engine/audio/AudioCapture.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include <chrono>
 #include <algorithm>
@@ -70,12 +71,6 @@ UIAccessibilitySpeech Synthesize(std::uint64_t id,std::string text) {
 #endif
     return out;
 }
-std::shared_ptr<kb::audio::AudioClipAsset> Wave(const UIAccessibilitySpeech& speech) {
-    auto clip=std::make_shared<kb::audio::AudioClipAsset>();clip->sourceExtension=".wav";
-    const auto count=static_cast<std::uint32_t>(speech.samples->size()*sizeof(float));auto& b=clip->encodedBytes;b.resize(44+count);
-    auto u16=[&](std::size_t o,std::uint16_t x){std::memcpy(b.data()+o,&x,2);};auto u32=[&](std::size_t o,std::uint32_t x){std::memcpy(b.data()+o,&x,4);};
-    std::memcpy(b.data(),"RIFF",4);u32(4,36+count);std::memcpy(b.data()+8,"WAVEfmt ",8);u32(16,16);u16(20,3);u16(22,static_cast<std::uint16_t>(speech.channels));u32(24,speech.sampleRate);u32(28,speech.sampleRate*speech.channels*4);u16(32,static_cast<std::uint16_t>(speech.channels*4));u16(34,32);std::memcpy(b.data()+36,"data",4);u32(40,count);std::memcpy(b.data()+44,speech.samples->data(),count);return clip;
-}
 void PollSpeech(Scene& scene,SceneUIMediaState& state) {
     if(!state.speechJob.valid()||state.speechJob.wait_for(std::chrono::seconds(0))!=std::future_status::ready)return;
     try{state.speech=state.speechJob.get();}catch(const std::exception& e){state.speech.ready=true;state.speech.error=e.what();state.speech.succeeded=false;}
@@ -83,7 +78,7 @@ void PollSpeech(Scene& scene,SceneUIMediaState& state) {
     // One stable asset slot prevents unbounded decoder-cache growth across focus changes.
     auto& assets=scene.Assets().Manager();const auto id=kb::assets::MakeAssetId("runtime-ui/screen-reader.wav");
     kb::assets::AssetMetadata info;info.id=id;info.type="AudioClip";info.virtualPath="/Runtime/UI/ScreenReader.wav";info.contentHash=speech.id;
-    if(!assets.RegisterGeneratedAsset(std::move(info))||!assets.PublishRuntimeAsset(id,Wave(speech))){speech.succeeded=false;speech.error=assets.LastError();return;}
+    if(!assets.RegisterGeneratedAsset(std::move(info))||!assets.PublishRuntimeAsset(id,kb::audio::MakeAudioClipFromPcm(*speech.samples,speech.sampleRate,static_cast<std::uint16_t>(speech.channels)))){speech.succeeded=false;speech.error=assets.LastError();return;}
     if(state.speechVoice)static_cast<void>(kb::audio::AudioPlayback::StopVoice(scene,state.speechVoice));
     kb::audio::AudioPlayDesc play;play.clipAssetId=id.value;play.spatial=false;play.spatialBlend=0;
     auto result=kb::audio::AudioPlayback::PlayOneShot(scene,play);speech.voiceId=result.voiceId;state.speechVoice=result.voiceId;

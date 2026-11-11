@@ -642,6 +642,23 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(assetB != nullptr && context.DeleteAssetBrowserItem(assetB->id) &&
             project.additionalScenes == std::vector<std::string>{ renamed } && stored().settings.additionalScenes == project.additionalScenes,
         "Deleting a listed scene in Project Files takes it out of the package list");
+    // The scenes of a folder renamed or moved in Project Files follow into the package list.
+    std::error_code folderError;
+    std::filesystem::create_directories(EditorProjectPaths::AssetsRoot() / "Levels", folderError);
+    report.Check(context.SaveCurrentSceneAs(EditorProjectPaths::AssetsRoot() / "Levels" / "LevelA.21kbscene") &&
+            context.OpenScene(tagScenePath, EditorDirtySceneResolution::Discard),
+        "A scene is made in a folder of its own");
+    static_cast<void>(context.Scene().Assets().Discover());
+    report.Check(context.SetProjectBuildScenes({ project.defaultMap, renamed, "/Game/Levels/LevelA.21kbscene" }) &&
+            context.BeginAssetFolderRename("/Game/Levels") && (context.AssetBrowser().SetTextEditValue("Stages"), true) &&
+            context.CommitAssetTextEdit() &&
+            project.additionalScenes == std::vector<std::string>{ renamed, "/Game/Stages/LevelA.21kbscene" } &&
+            stored().settings.additionalScenes == project.additionalScenes,
+        "Renaming a folder in Project Files renames the package list's entries for its scenes");
+    report.Check(context.MoveAssetFolderToFolder("/Game/Stages", "/Game/Scenes") &&
+            project.additionalScenes == std::vector<std::string>{ renamed, "/Game/Scenes/Stages/LevelA.21kbscene" } &&
+            stored().settings.additionalScenes == project.additionalScenes,
+        "Moving a folder in Project Files moves the package list's entries for its scenes");
 }
 
 void RunProjectPhysicsLayersRuntimeSuite(Report& report) {

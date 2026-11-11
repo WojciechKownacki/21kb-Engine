@@ -518,6 +518,24 @@ void RunParticleReportCommandTests() {
     Require(atlas.Succeeded() && std::get<kb::scene::ParticleBillboardOutput>(atlas.asset->emitters[0].output.payload).flipbook.startFrame == 2U &&
         std::get<kb::scene::ParticleBillboardOutput>(atlas.asset->emitters[0].output.payload).flipbook.frameCount == 5U,
         "CLI-authored atlas range must survive save/reload");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx",
+        "--set", "effect.emitter[0].spawn.rate.keyCount=3",
+        "--set", "effect.emitter[0].spawn.rate.key[0].value=10",
+        "--set", "effect.emitter[0].spawn.rate.key[1].time=0.5",
+        "--set", "effect.emitter[0].spawn.rate.key[1].value=20",
+        "--set", "effect.emitter[0].spawn.rate.key[1].easing=Linear",
+        "--set", "effect.emitter[0].spawn.rate.key[1].tangentMode=Auto",
+        "--set", "effect.emitter[0].spawn.rate.key[1].inTangent=0",
+        "--set", "effect.emitter[0].spawn.rate.key[1].outTangent=0",
+        "--set", "effect.emitter[0].spawn.rate.key[2].time=1",
+        "--set", "effect.emitter[0].spawn.rate.key[2].value=30",
+        "--set", "effect.emitter[0].spawn.rate.key[2].easing=Linear"}).exitCode == 0,
+        "CLI must author an Auto-tangent rate curve");
+    const auto tangents = kb::scene::ParticleEffectAssetIO::LoadDetailed(parent / "Sample/Assets/Particles/ReportEffect.kbvfx");
+    Require(tangents.Succeeded() && tangents.asset->emitters[0].spawn.rateOverTime.keyframes.size() == 3U &&
+        std::abs(tangents.asset->emitters[0].spawn.rateOverTime.keyframes[1].inTangent - 20.0F) < 1.0e-4F &&
+        std::abs(tangents.asset->emitters[0].spawn.rateOverTime.keyframes[1].outTangent - 20.0F) < 1.0e-4F,
+        "CLI curve edits must derive Auto tangents as the curve editor does");
     const auto active = reportFor(project);
     const auto* emitters = active.Find("emitters");
     Require(active.Find("provider_available")->AsBool() && active.Find("snapshot_available")->AsBool() &&
@@ -5834,6 +5852,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{argv[1]} == "safe-area") {
         RunSafeAreaCliTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "particle-report") {
+        RunParticleReportCommandTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{argv[1]} == "data-version") {

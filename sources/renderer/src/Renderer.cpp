@@ -1155,14 +1155,14 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         const auto asset = effectiveLightingConfig.ibl.reflectionProbes[index].radianceAssetId;
         if (asset != 0U) frameReferences_.MarkTexture({.sceneId = scene.Id(), .assetId = asset, .colorSpace = RenderTextureColorSpace::Linear});
     }
-    // The resolved profile (or a default the application set with ambient occlusion on) decides
-    // the screen-space ambient occlusion; without either, the lighting config keeps its own.
+    // The resolved profile (or a default the application set with one of them on) decides ambient
+    // occlusion, reflections, global illumination and fog; without either, the lighting config keeps its own.
     if (resolvedPostProcessSettings.has_value()) {
-        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, *resolvedPostProcessSettings);
+        RendererSceneLightingConfigResolver::ApplyPostProcessLighting(effectiveLightingConfig, *resolvedPostProcessSettings);
     } else if (defaultPostProcessSettings_.ambientOcclusionEnabled || defaultPostProcessSettings_.screenSpaceReflectionsEnabled ||
                defaultPostProcessSettings_.fogEnabled ||
                defaultPostProcessSettings_.globalIllumination != ScenePostProcessSettings::GlobalIlluminationMethod::Off) {
-        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, defaultPostProcessSettings_);
+        RendererSceneLightingConfigResolver::ApplyPostProcessLighting(effectiveLightingConfig, defaultPostProcessSettings_);
     }
     RendererSceneLightingConfigResolver::ResolveFogProfile(effectiveLightingConfig, bgfx::getRendererType());
     effectiveLightingConfig.fogBaseHeight -= static_cast<float>(renderScene.RenderOrigin().y);

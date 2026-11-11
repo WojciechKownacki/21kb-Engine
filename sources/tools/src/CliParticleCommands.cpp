@@ -4,12 +4,14 @@
 #include "editor/ParticleAssetGateway.hpp"
 #include "editor/ParticleEditorCommands.hpp"
 #include "engine/assets/AssetFileName.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/platform/FileSystemPath.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 
 #include <charconv>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 // vfx-*: particle effects (.kbvfx) from the command line through the particle editor's own
@@ -78,6 +80,17 @@ using kb::particle_editor::ParticleEditorResult;
         return problem;
     }
     asset = std::move(*parsed.asset);
+    // A key edited as text keeps its old tangents: derive the Auto, Flat and Linear ones again, as the curve editor does.
+    for (kb::scene::ParticleEmitterAsset& emitter : asset.emitters) {
+        kb::math::RecomputeTangents(emitter.spawn.rateOverTime.keyframes);
+        for (kb::scene::ParticleModuleAsset& module : emitter.modules) {
+            if (auto* size = std::get_if<kb::scene::ParticleSizeOverLifeModule>(&module.payload)) {
+                kb::math::RecomputeTangents(size->curve.keyframes);
+            } else if (auto* alpha = std::get_if<kb::scene::ParticleAlphaOverLifeModule>(&module.payload)) {
+                kb::math::RecomputeTangents(alpha->curve.keyframes);
+            }
+        }
+    }
     return {};
 }
 

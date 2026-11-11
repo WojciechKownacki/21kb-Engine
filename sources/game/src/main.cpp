@@ -800,7 +800,7 @@ int RunGame(const GameOptions& options) {
         const double wallFrameMilliseconds = std::chrono::duration<double, std::milli>(now - previousTick).count();
         const float deltaSeconds = !inputReplay.empty() ? inputReplay[renderedFrames].deltaSeconds :
             (options.profileFixedStep || options.particleDiagnostics
-                ? 1.0F / 60.0F : kb::game::RuntimeDeltaSeconds(previousTick, now));
+                ? scene.Runtime().FixedStepSettings().fixedDeltaSeconds : kb::game::RuntimeDeltaSeconds(previousTick, now));
         previousTick = now;
 
         if (!inputReplay.empty()) kb::input::ApplyInputFrame(scene.Input().MutableDeviceState(), inputReplay[renderedFrames]);
