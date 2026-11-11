@@ -23,6 +23,15 @@ inline void ApplyGameProjectLighting(kb::render::Renderer& renderer,
     lighting.maxForwardLights=lighting.lightingPath==kb::render::SceneRenderLightingPath::ClusteredForwardPlus
         ? kb::render::kMaxSceneForwardPlusLights : kb::render::kMaxSceneForwardLights;
     renderer.SetDefaultSceneLightingConfig(lighting);
+    if constexpr (kMobileDevice) {
+        // A scene without a post-process profile uses FXAA instead of TAA on mobile: the temporal resolve and its
+        // motion vectors are two more full-resolution passes. A scene profile keeps its own choice.
+        auto postProcess=renderer.DefaultPostProcessSettings();
+        postProcess.temporalAntiAliasingEnabled=false;
+        postProcess.temporalJitterEnabled=false;
+        postProcess.fxaaEnabled=true;
+        renderer.SetDefaultPostProcessSettings(postProcess);
+    }
     diagnostics << "packaged lighting path=" << static_cast<unsigned>(lighting.lightingPath) << '\n';
 }
 

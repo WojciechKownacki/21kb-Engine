@@ -3,6 +3,7 @@
 #include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <sstream>
@@ -40,8 +41,10 @@ struct PostProcessSubmitSettings {
     float bloomSoftKnee = 0.0F;
     float bloomRadius = 0.0F;
     float historyBlend = 0.0F;
-    float bloomMipCount = 1.0F;
 };
+
+// Share of each bloom mip in the bloom, from mip 0; the shares add up to one.
+constexpr std::array<float, RenderPostProcessTargetBinding::kMaxBloomPyramidMips> kBloomMipWeights{0.42F, 0.26F, 0.16F, 0.09F, 0.05F, 0.02F};
 
 [[nodiscard]] const char* BoolText(bool value) noexcept {
     return value ? "true" : "false";
@@ -63,10 +66,6 @@ struct PostProcessSubmitSettings {
         .bloomSoftKnee = finite(desc.settings.bloomSoftKnee, 1.0F),
         .bloomRadius = finite(desc.settings.bloomRadiusPixels, 65504.0F),
         .historyBlend = std::clamp(desc.settings.temporalHistoryBlend, 0.0F, 1.0F),
-        .bloomMipCount = static_cast<float>(std::clamp<std::uint8_t>(
-            desc.target.bloomMipCount,
-            static_cast<std::uint8_t>(1U),
-            static_cast<std::uint8_t>(RenderPostProcessTargetBinding::kMaxBloomPyramidMips))),
     };
 }
 
@@ -173,6 +172,17 @@ private:
         return desc.target.temporalHistoryTexture;
     }
 
+    // The horizontal blur of mip k lands in the ping pyramid for even k and in the scratch pyramid for odd k, so
+    // an upsample pass reads mip k and the sum of the smaller mips from one texture while writing the other.
+    [[nodiscard]] static bgfx::TextureHandle BloomBlurTexture(const ScenePostProcessSubmitDesc& desc, std::uint8_t mip) noexcept {
+        return mip % 2U == 0U ? desc.target.pingTexture : desc.target.bloomScratchTexture;
+    }
+
+    [[nodiscard]] static bgfx::FrameBufferHandle BloomBlurFrameBuffer(
+        const ScenePostProcessSubmitDesc& desc, std::uint8_t pyramidMip, std::uint8_t level) noexcept {
+        return pyramidMip % 2U == 0U ? desc.target.pingMipFrameBuffers[level] : desc.target.bloomScratchMipFrameBuffers[level];
+    }
+
     void SubmitBloomPyramid(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings, bgfx::TextureHandle postSource) const {
         ConfigureFullscreenView(
             desc.viewIds.postProcessBloomPrefilter,
@@ -184,73 +194,66 @@ private:
         bgfx::setTexture(0, renderer_.sourceSampler_, postSource);
         SubmitFullscreen(desc.viewIds.postProcessBloomPrefilter, renderer_.prefilterProgram_, renderer_.fullscreenVertexBuffer_);
 
-        SubmitBloomMipZeroBlur(desc, settings);
-        SubmitBloomHigherMips(desc, settings);
+        SubmitBloomDownsampleChain(desc, settings);
+        SubmitBloomUpsampleChain(desc, settings);
     }
 
-    void SubmitBloomMipZeroBlur(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings) const {
-        ConfigureFullscreenView(
-            desc.viewIds.postProcessBloomBlurH,
-            desc.target.pingMipFrameBuffers[0],
-            desc.target.bloomMipExtents[0],
-            "KB Post Bloom Blur H");
-        const float blurHParams[4] = {(1.0F / settings.width) * settings.bloomRadius, 0.0F, 0.0F, 0.0F};
-        bgfx::setUniform(renderer_.postParams_, blurHParams);
-        bgfx::setTexture(0, renderer_.sourceSampler_, desc.target.bloomTexture);
-        SubmitFullscreen(desc.viewIds.postProcessBloomBlurH, renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
-
-        ConfigureFullscreenView(
-            desc.viewIds.postProcessBloomBlurV,
-            desc.target.bloomMipFrameBuffers[0],
-            desc.target.bloomMipExtents[0],
-            "KB Post Bloom Blur V");
-        const float blurVParams[4] = {0.0F, (1.0F / settings.height) * settings.bloomRadius, 0.0F, 0.0F};
-        bgfx::setUniform(renderer_.postParams_, blurVParams);
-        bgfx::setTexture(0, renderer_.sourceSampler_, desc.target.pingTexture);
-        SubmitFullscreen(desc.viewIds.postProcessBloomBlurV, renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
-    }
-
-    void SubmitBloomHigherMips(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings) const {
-        for (std::uint8_t mip = 1U; mip < desc.target.bloomMipCount; ++mip) {
-            const std::size_t viewIndex = static_cast<std::size_t>(mip - 1U);
+    // Mip 0 and every smaller mip are blurred horizontally; each smaller mip is a 13-tap downsample of the
+    // previous mip's horizontal blur, written to the bloom pyramid.
+    void SubmitBloomDownsampleChain(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings) const {
+        for (std::uint8_t mip = 0U; mip < desc.target.bloomMipCount; ++mip) {
             const RenderExtent mipExtent = desc.target.bloomMipExtents[mip];
-            const RenderExtent previousMipExtent = desc.target.bloomMipExtents[mip - 1U];
             const float mipWidth = static_cast<float>(std::max(1U, mipExtent.width));
-            const float mipHeight = static_cast<float>(std::max(1U, mipExtent.height));
-            const float previousMipWidth = static_cast<float>(std::max(1U, previousMipExtent.width));
-            const float previousMipHeight = static_cast<float>(std::max(1U, previousMipExtent.height));
-            const float sourceLod = static_cast<float>(mip - 1U);
             const float targetLod = static_cast<float>(mip);
+            if (mip > 0U) {
+                const std::size_t viewIndex = static_cast<std::size_t>(mip - 1U);
+                const RenderExtent previousMipExtent = desc.target.bloomMipExtents[mip - 1U];
+                const float previousMipWidth = static_cast<float>(std::max(1U, previousMipExtent.width));
+                const float previousMipHeight = static_cast<float>(std::max(1U, previousMipExtent.height));
+                ConfigureFullscreenView(
+                    desc.viewIds.postProcessBloomDownsampleViews[viewIndex],
+                    desc.target.bloomMipFrameBuffers[mip],
+                    mipExtent,
+                    "KB Post Bloom Downsample Mip");
+                const float downsampleParams[4] = {(1.0F / previousMipWidth) * settings.bloomRadius,
+                    (1.0F / previousMipHeight) * settings.bloomRadius, static_cast<float>(mip - 1U), 0.0F};
+                bgfx::setUniform(renderer_.postParams_, downsampleParams);
+                bgfx::setTexture(0, renderer_.sourceSampler_, BloomBlurTexture(desc, static_cast<std::uint8_t>(mip - 1U)));
+                SubmitFullscreen(desc.viewIds.postProcessBloomDownsampleViews[viewIndex], renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
+            }
 
-            ConfigureFullscreenView(
-                desc.viewIds.postProcessBloomDownsampleViews[viewIndex],
-                desc.target.bloomScratchMipFrameBuffers[mip],
-                mipExtent,
-                "KB Post Bloom Downsample Mip");
-            const float downsampleParams[4] = {(1.0F / previousMipWidth) * settings.bloomRadius, (1.0F / previousMipHeight) * settings.bloomRadius, sourceLod, 0.0F};
-            bgfx::setUniform(renderer_.postParams_, downsampleParams);
+            const std::uint16_t blurHView = mip == 0U
+                ? desc.viewIds.postProcessBloomBlurH
+                : desc.viewIds.postProcessBloomMipBlurHViews[static_cast<std::size_t>(mip - 1U)];
+            ConfigureFullscreenView(blurHView, BloomBlurFrameBuffer(desc, mip, mip), mipExtent,
+                mip == 0U ? "KB Post Bloom Blur H" : "KB Post Bloom Blur H Mip");
+            const float blurHParams[4] = {(1.0F / mipWidth) * settings.bloomRadius, 0.0F, targetLod, 0.0F};
+            bgfx::setUniform(renderer_.postParams_, blurHParams);
             bgfx::setTexture(0, renderer_.sourceSampler_, desc.target.bloomTexture);
-            SubmitFullscreen(desc.viewIds.postProcessBloomDownsampleViews[viewIndex], renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
+            SubmitFullscreen(blurHView, renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
+        }
+    }
 
-            ConfigureFullscreenView(
-                desc.viewIds.postProcessBloomMipBlurHViews[viewIndex],
-                desc.target.pingMipFrameBuffers[mip],
-                mipExtent,
-                "KB Post Bloom Blur H Mip");
-            const float mipBlurHParams[4] = {(1.0F / mipWidth) * settings.bloomRadius, 0.0F, targetLod, 0.0F};
-            bgfx::setUniform(renderer_.postParams_, mipBlurHParams);
-            bgfx::setTexture(0, renderer_.sourceSampler_, desc.target.bloomScratchTexture);
-            SubmitFullscreen(desc.viewIds.postProcessBloomMipBlurHViews[viewIndex], renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
-
-            ConfigureFullscreenView(
-                desc.viewIds.postProcessBloomMipBlurVViews[viewIndex],
-                desc.target.bloomMipFrameBuffers[mip],
-                mipExtent,
-                "KB Post Bloom Blur V Mip");
-            const float mipBlurVParams[4] = {0.0F, (1.0F / mipHeight) * settings.bloomRadius, targetLod, 0.0F};
-            bgfx::setUniform(renderer_.postParams_, mipBlurVParams);
-            bgfx::setTexture(0, renderer_.sourceSampler_, desc.target.pingTexture);
-            SubmitFullscreen(desc.viewIds.postProcessBloomMipBlurVViews[viewIndex], renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
+    // From the smallest mip back to mip 0, each pass blurs its mip vertically and adds the tent-filtered sum of
+    // the smaller mips, scaled so every mip keeps its share. Mip 0 ends in the bloom texture, which the combine
+    // reads with a single sample.
+    void SubmitBloomUpsampleChain(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings) const {
+        for (std::uint8_t mip = desc.target.bloomMipCount; mip-- > 0U;) {
+            const RenderExtent mipExtent = desc.target.bloomMipExtents[mip];
+            const float mipHeight = static_cast<float>(std::max(1U, mipExtent.height));
+            const bool hasSmallerMips = mip + 1U < desc.target.bloomMipCount;
+            const std::uint16_t view = mip == 0U
+                ? desc.viewIds.postProcessBloomBlurV
+                : desc.viewIds.postProcessBloomMipBlurVViews[static_cast<std::size_t>(mip - 1U)];
+            const bgfx::FrameBufferHandle target = mip == 0U
+                ? desc.target.bloomMipFrameBuffers[0]
+                : BloomBlurFrameBuffer(desc, static_cast<std::uint8_t>(mip - 1U), mip);
+            ConfigureFullscreenView(view, target, mipExtent, mip == 0U ? "KB Post Bloom Blur V" : "KB Post Bloom Upsample Mip");
+            const float upsampleParams[4] = {0.0F, (1.0F / mipHeight) * settings.bloomRadius, static_cast<float>(mip),
+                hasSmallerMips ? kBloomMipWeights[mip + 1U] / kBloomMipWeights[mip] : 0.0F};
+            bgfx::setUniform(renderer_.postParams_, upsampleParams);
+            bgfx::setTexture(0, renderer_.sourceSampler_, BloomBlurTexture(desc, mip));
+            SubmitFullscreen(view, renderer_.blurProgram_, renderer_.fullscreenVertexBuffer_);
         }
     }
 
@@ -260,7 +263,8 @@ private:
             desc.target.combineFrameBuffer,
             desc.target.extent,
             "KB Post HDR Combine");
-        const float combineParams[4] = {settings.bloomEnabled ? settings.bloomStrength : 0.0F, settings.bloomMipCount, 0.0F, 0.0F};
+        // The upsample chain leaves the bloom sum divided by the share of mip 0.
+        const float combineParams[4] = {settings.bloomEnabled ? settings.bloomStrength * kBloomMipWeights[0] : 0.0F, 0.0F, 0.0F, 0.0F};
         bgfx::setUniform(renderer_.postParams_, combineParams);
         const float dofParams[4] = {desc.settings.depthOfFieldFocusDistance, desc.settings.depthOfFieldFocusRange,
             desc.settings.depthOfFieldEnabled ? desc.settings.depthOfFieldMaxRadiusPixels : 0.0F,

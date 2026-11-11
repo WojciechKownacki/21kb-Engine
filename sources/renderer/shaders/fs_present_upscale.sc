@@ -45,7 +45,7 @@ void main()
     vec3 high;
     vec3 display = upscale_edge_aware(v_texcoord0, low, high);
     if (u_displayAntiAliasing.x > 0.5) {
-        display = fxaa_display(v_texcoord0);
+        display = fxaa_display(v_texcoord0, display_sample(v_texcoord0));
     }
     vec2 texel = u_displayAntiAliasing.yz;
     vec3 neighbours = 0.25 * (

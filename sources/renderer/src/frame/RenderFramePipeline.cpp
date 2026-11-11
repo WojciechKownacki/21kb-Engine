@@ -236,14 +236,18 @@ void CopyGraph(RenderPassGraph& graph, RenderViewportPlan& plan) {
             }
         }
     }
+    // The bloom pyramid walks down (downsample, horizontal blur per mip), then back up from the smallest mip
+    // (vertical blur and upsample per mip), ending with the mip 0 pass of the Blur V view.
     const auto blurV = std::ranges::find(plan.viewOrder, plan.viewIds.postProcessBloomBlurV);
     if (blurV != plan.viewOrder.end()) {
-        auto insertAt = std::next(blurV);
+        auto insertAt = blurV;
         for (std::size_t mip = 0; mip < RenderViewportViewIds::kBloomPyramidExtraMipCount; ++mip) {
             insertAt = plan.viewOrder.insert(insertAt, plan.viewIds.postProcessBloomDownsampleViews[mip]);
             insertAt = plan.viewOrder.insert(std::next(insertAt), plan.viewIds.postProcessBloomMipBlurHViews[mip]);
-            insertAt = plan.viewOrder.insert(std::next(insertAt), plan.viewIds.postProcessBloomMipBlurVViews[mip]);
             insertAt = std::next(insertAt);
+        }
+        for (std::size_t mip = RenderViewportViewIds::kBloomPyramidExtraMipCount; mip-- > 0U;) {
+            insertAt = std::next(plan.viewOrder.insert(insertAt, plan.viewIds.postProcessBloomMipBlurVViews[mip]));
         }
     }
     plan.graphValidation = graph.ValidateRequiredPasses();

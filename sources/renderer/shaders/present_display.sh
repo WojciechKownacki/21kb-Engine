@@ -93,25 +93,33 @@ vec3 display_sample(vec2 uv)
     return mix(mix(c00, c10, weight.x), mix(c01, c11, weight.x), weight.y);
 }
 
+// Perceptual luma of the display image at a source texel, for the FXAA edge search: the exposure, vignette,
+// tonemap and encoding of display_transform without the colour grade, from one texel fetch.
+float display_luma(vec2 uv)
+{
+    vec3 hdr = texture2D(s_kbFullscreenColor, uv).rgb * exp2(u_tonemapParams.x) * vignette_factor(uv);
+    // Encoding the luma instead of each channel keeps it one power per texel.
+    return encode_display(vec3_splat(dot(tonemap_display(hdr), vec3(0.299, 0.587, 0.114)))).x;
+}
+
 // FXAA (Lottes) on the display image: edges are found in perceptual luma of the tonemapped, gamma encoded
-// colours and blended there.
-vec3 fxaa_display(vec2 uv)
+// colours and blended there. Pixels below the local contrast threshold keep displayM, the display image at uv,
+// so only edges pay for the blended display samples.
+vec3 fxaa_display(vec2 uv, vec3 displayM)
 {
     vec2 texel = u_displayAntiAliasing.yz;
-    vec3 rgbNW = display_sample(uv + vec2(-1.0, -1.0) * texel);
-    vec3 rgbNE = display_sample(uv + vec2( 1.0, -1.0) * texel);
-    vec3 rgbSW = display_sample(uv + vec2(-1.0,  1.0) * texel);
-    vec3 rgbSE = display_sample(uv + vec2( 1.0,  1.0) * texel);
-    vec3 rgbM = display_sample(uv);
+    float lumaNW = display_luma(uv + vec2(-1.0, -1.0) * texel);
+    float lumaNE = display_luma(uv + vec2( 1.0, -1.0) * texel);
+    float lumaSW = display_luma(uv + vec2(-1.0,  1.0) * texel);
+    float lumaSE = display_luma(uv + vec2( 1.0,  1.0) * texel);
+    float lumaM = display_luma(uv);
 
     vec3 luma = vec3(0.299, 0.587, 0.114);
-    float lumaNW = dot(rgbNW, luma);
-    float lumaNE = dot(rgbNE, luma);
-    float lumaSW = dot(rgbSW, luma);
-    float lumaSE = dot(rgbSE, luma);
-    float lumaM = dot(rgbM, luma);
     float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
     float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+    if (lumaMax - lumaMin < max(0.0312, lumaMax * 0.125)) {
+        return displayM;
+    }
 
     vec2 dir;
     dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));

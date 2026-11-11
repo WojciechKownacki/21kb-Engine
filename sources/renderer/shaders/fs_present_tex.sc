@@ -9,7 +9,7 @@ void main()
     vec4 scene = texture2D(s_kbFullscreenColor, v_texcoord0);
     vec3 display = display_transform(scene.rgb, v_texcoord0);
     if (u_displayAntiAliasing.x > 0.5) {
-        display = fxaa_display(v_texcoord0);
+        display = fxaa_display(v_texcoord0, display);
     }
     // Quantisation dither: half an 8-bit step of
     // interleaved gradient noise hides the banding of smooth light falloff.

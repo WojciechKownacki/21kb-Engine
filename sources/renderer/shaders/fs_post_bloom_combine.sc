@@ -68,26 +68,10 @@ void main()
         }
         scene.rgb = sum / weights;
     }
-    float mipCount = max(u_postParams.y, 1.0);
+    // Mip 0 of the bloom pyramid already holds the upsampled sum of every mip.
     vec3 bloom = vec3_splat(0.0);
     if (u_postParams.x > 0.0) {
-    bloom = texture2DLod(s_bloom, v_texcoord0, 0.0).rgb * 0.42;
-    if (mipCount > 1.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 1.0).rgb * 0.26;
-    }
-    if (mipCount > 2.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 2.0).rgb * 0.16;
-    }
-    if (mipCount > 3.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 3.0).rgb * 0.09;
-    }
-    if (mipCount > 4.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 4.0).rgb * 0.05;
-    }
-    if (mipCount > 5.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 5.0).rgb * 0.02;
-    }
-    bloom *= u_postParams.x;
+        bloom = texture2DLod(s_bloom, v_texcoord0, 0.0).rgb * u_postParams.x;
     }
     // The next target is RGBA16F: keep highlights finite before tone mapping.
     gl_FragColor = vec4(clamp(scene.rgb + bloom, vec3_splat(0.0), vec3_splat(65504.0)), scene.a);
