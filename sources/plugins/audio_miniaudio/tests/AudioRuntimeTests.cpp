@@ -5,6 +5,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioCapture.hpp"
 #include "engine/audio/AudioClipAsset.hpp"
 #include "engine/audio/AudioClipFormats.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
@@ -3631,6 +3632,75 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
 
 } // namespace
 
+// Microphone capture on the null device: no real input is opened. The null device delivers silence in real
+// time, which proves the device, the ring and the clip path; a tone clip proves the recorded clip plays.
+void RunMicrophoneCaptureTest() {
+    struct Context {
+        ma_context native{}; bool ready = false;
+        ~Context() { if (ready) ma_context_uninit(&native); }
+    } context;
+    const ma_backend nullBackend = ma_backend_null;
+    context.ready = ma_context_init(&nullBackend, 1U, nullptr, &context.native) == MA_SUCCESS;
+    Require(context.ready, "Native null audio device context did not initialize");
+
+    kb::scene::Scene scene;
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Capture test backend did not initialize offline");
+    backend.UseCaptureContextForTesting(&context.native);
+    kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+
+    const std::vector<kb::audio::AudioCaptureDeviceInfo> devices = kb::audio::AudioCapture::Devices(scene);
+    Require(!devices.empty() && std::ranges::any_of(devices, [](const auto& device) { return device.isDefault; }),
+        "The null backend did not list a default capture device");
+    Require(kb::audio::AudioCapture::Start(scene, { .deviceName = "No such capture device" }) == kb::audio::AudioCaptureStatus::DeviceNotFound,
+        "A capture device that does not exist was accepted");
+    Require(!kb::audio::AudioCapture::IsCapturing(scene), "A refused capture start left the device running");
+
+    Require(kb::audio::AudioCapture::Start(scene, { .deviceName = devices.front().name }) == kb::audio::AudioCaptureStatus::Success
+            && kb::audio::AudioCapture::IsCapturing(scene),
+        "The null capture device did not start by name");
+    Require(kb::audio::AudioCapture::Start(scene) == kb::audio::AudioCaptureStatus::AlreadyCapturing,
+        "A second capture start was accepted");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (backend.CapturedFramesForTesting() < kb::audio::kAudioCaptureSampleRate / 5U && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    Require(backend.CapturedFramesForTesting() >= kb::audio::kAudioCaptureSampleRate / 5U,
+        "The null capture device delivered no frames at the capture rate");
+    const kb::audio::AudioCaptureLevel level = kb::audio::AudioCapture::Level(scene);
+    Require(level.rms == 0.0F && level.peak == 0.0F, "The null capture device is silent, so its level must be zero");
+
+    const kb::audio::AudioCaptureClip recorded = kb::audio::AudioCapture::RecordToClip(scene, 0.1F);
+    Require(recorded.Succeeded() && recorded.frames == kb::audio::kAudioCaptureSampleRate / 10U
+            && recorded.sampleRate == kb::audio::kAudioCaptureSampleRate,
+        "A recording of a tenth of a second has the wrong length or rate");
+    Require(kb::audio::AudioCapture::PublishClip(scene, recorded) != 0U, "A recorded clip could not be published");
+
+    kb::audio::AudioCapture::Stop(scene);
+    Require(!kb::audio::AudioCapture::IsCapturing(scene) && kb::audio::AudioCapture::RecordToClip(scene, 0.05F).Succeeded(),
+        "A stopped capture lost what it had captured");
+    kb::audio::AudioCapture::Stop(scene);
+
+    // A tone recorded into a clip plays through the ordinary playback path.
+    std::vector<float> tone(kb::audio::kAudioCaptureSampleRate / 4U);
+    for (std::size_t index = 0U; index < tone.size(); ++index) {
+        tone[index] = 0.5F * std::sin(6.2831853F * 440.0F * static_cast<float>(index) / static_cast<float>(kb::audio::kAudioCaptureSampleRate));
+    }
+    const kb::audio::AudioCaptureClip toneClip{ .status = kb::audio::AudioCaptureStatus::Success,
+        .clip = kb::audio::MakeAudioClipFromPcm(tone, kb::audio::kAudioCaptureSampleRate), .frames = tone.size() };
+    const std::uint64_t clipId = kb::audio::AudioCapture::PublishClip(scene, toneClip);
+    Require(clipId != 0U, "A tone clip could not be published");
+    const kb::audio::AudioPlayResult voice = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+        .clipAssetId = clipId, .volume = 1.0F, .spatial = false });
+    Require(voice.Succeeded(), "A recorded clip did not start through the playback backend");
+    const auto pumped = backend.PumpFramesForTesting(2048U);
+    Require(pumped.frames > 0U && pumped.energy > 1.0, "A recorded tone clip played as silence");
+
+    kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+    backend.Shutdown();
+}
+
 int RunTests(int argc, char** argv) {
     std::error_code error;
     std::filesystem::remove_all(TestRoot(), error);
@@ -3684,6 +3754,9 @@ int RunTests(int argc, char** argv) {
         RunSoundStateTest(clipPath);
         RunSpatialDistanceAttenuationOutputTest();
         RunSpatialPanningOutputTest();
+    }
+    if (filter.empty() || filter == "capture") {
+        RunMicrophoneCaptureTest();
     }
     if (filter.empty() || filter == "voice" || filter == "resolver") {
         RunVoiceStateTest(clipPath);

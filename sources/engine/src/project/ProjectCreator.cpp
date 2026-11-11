@@ -24,13 +24,14 @@ namespace {
 #endif
 }
 
-[[nodiscard]] ProjectSettings MakeSettings(std::string_view name) {
+[[nodiscard]] ProjectSettings MakeSettings(std::string_view name, kb::scene::SceneTemplate startupTemplate) {
     ProjectSettings settings;
     settings.name = std::string{ name };
     settings.gameName = settings.name;
     settings.category = "Game";
     settings.description = "21kb project";
     settings.defaultMap = "/Game/Scenes/Main.21kbscene"; // written by Create() below
+    kb::scene::SceneTemplates::ConfigureProjectSettings(startupTemplate, settings);
     return settings;
 }
 
@@ -166,7 +167,7 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
     // A new project starts with the settings file the editor and the game both read,
     // rather than waiting for the editor to seed it on first open.
     std::string settingsError;
-    if (!ProjectSettingsStore::Save(ProjectSettingsStore::FilePath(projectRoot), MakeSettings(name), settingsError)) {
+    if (!ProjectSettingsStore::Save(ProjectSettingsStore::FilePath(projectRoot), MakeSettings(name, startupTemplate), settingsError)) {
         undo();
         return Refuse(descriptorFile, "The project settings could not be written: " + settingsError);
     }
@@ -180,6 +181,12 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
     const kb::assets::AssetId mixerId = kb::assets::MakeAssetId(
         kb::assets::NormalizeAssetPath(std::filesystem::path{ std::string{ kDefaultMixerVirtualPath } }) + ":" +
         kb::audio::kAudioMixerAssetType);
+
+    // A template's scene names files of the project (a character's script and input); they come first.
+    if (std::string files = kb::scene::SceneTemplates::WriteProjectFiles(projectRoot, startupTemplate, descriptor); !files.empty()) {
+        undo();
+        return Refuse(descriptorFile, "The template files could not be written: " + files);
+    }
 
     // The settings name Main.21kbscene as the startup map: it has to exist, or the game and every
     // headless tool start from a scene that is not there.

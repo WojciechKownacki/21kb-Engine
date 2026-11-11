@@ -208,6 +208,8 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_cli_tests COMMAND $<TARGET_FILE:kb_cli_tests>)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)
+    add_test(NAME kb_cli_project_templates COMMAND $<TARGET_FILE:kb_cli_tests> project-templates)
+    set_tests_properties(kb_cli_project_templates PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools TIMEOUT 300)
     if(KB_BUILD_RENDERER)
         find_program(KB_BLENDER_EXECUTABLE NAMES blender)
         find_package(Python3 3.10 COMPONENTS Interpreter QUIET)

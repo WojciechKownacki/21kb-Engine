@@ -248,6 +248,7 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     display.renderScale = ReadBoundedFloat(document, kDisplay, "RenderScale", defaults.display.renderScale,
         kProjectRenderScaleMin, kProjectRenderScaleMax);
     result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
+    result.settings.microphone = document.GetBool(kAudio, "Microphone").value_or(defaults.microphone);
     const std::int64_t tagCount = std::clamp<std::int64_t>(
         document.GetInt(kTags, "Count").value_or(0), 0, static_cast<std::int64_t>(kProjectTagsMax));
     for (std::int64_t index = 0; index < tagCount; ++index) {
@@ -328,6 +329,7 @@ bool ProjectSettingsStore::Save(
     document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
     document.SetFloat(kDisplay, "RenderScale", settings.display.renderScale);
     document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
+    document.SetBool(kAudio, "Microphone", settings.microphone);
     // The tags as a count and one key each; keys a shorter list leaves behind are removed.
     const std::size_t tagCount = std::min(settings.tags.size(), kProjectTagsMax);
     if (tagCount == 0U) {

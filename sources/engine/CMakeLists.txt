@@ -28,6 +28,7 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioMixerAssetIO.hpp
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
+    include/engine/audio/AudioCapture.hpp
     include/engine/audio/AudioDiagnostics.hpp
     include/engine/audio/AudioMetering.hpp
     include/engine/audio/AudioMixerPreview.hpp
@@ -530,6 +531,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptTimelineApi.hpp
     include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptNavigationApi.hpp
+    include/engine/script/ScriptMicrophoneApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptRendererApi.hpp
     include/engine/script/ScriptLifecycle.hpp
@@ -645,6 +647,7 @@ add_library(kb_engine STATIC
     src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/audio/AudioMetering.cpp
+    src/audio/AudioCapture.cpp
     src/audio/AudioMixerPreview.cpp
     src/assets/AssetId.cpp
     src/assets/BuiltInShapes.cpp
@@ -1344,6 +1347,7 @@ add_library(kb_engine STATIC
     src/script/ScriptTimelineApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptNavigationApi.cpp
+    src/script/ScriptMicrophoneApi.cpp
     src/script/ScriptMap2DApi.cpp
     src/script/ScriptPhysics2DApi.cpp
     src/script/ScriptNetApi.cpp
@@ -2168,6 +2172,7 @@ if(BUILD_TESTING)
         tests/ProjectSceneTests.cpp
         tests/PhysicsSceneSystemTests.cpp
         tests/AudioSceneSystemTests.cpp
+        tests/AudioCaptureTests.cpp
         tests/AnimationRuntimeTests.cpp
         tests/SkeletonAssetTests.cpp
         tests/SkeletalMeshAssetTests.cpp

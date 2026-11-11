@@ -255,6 +255,8 @@ struct TooltipContent {
         return EditorText("projectSettings.timeScale", "Time Scale");
     case ProjectSettingsTooltipKind::MasterVolume:
         return EditorText("projectSettings.masterVolume", "Master Volume");
+    case ProjectSettingsTooltipKind::Microphone:
+        return EditorText("projectSettings.microphone", "Microphone");
     case ProjectSettingsTooltipKind::Tags:
         return EditorText("projectSettings.category.tags", "Tags");
     default:
@@ -375,6 +377,7 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::GravityPreset:
     case ProjectSettingsTooltipKind::TimeScale:
     case ProjectSettingsTooltipKind::MasterVolume:
+    case ProjectSettingsTooltipKind::Microphone:
     case ProjectSettingsTooltipKind::Tags:
         // These settings say all there is to say in their one-line description.
         return TooltipContent{ SettingLabel(kind), DescriptionFor(kind) };
@@ -439,6 +442,8 @@ struct TooltipContent {
         return EditorText("projectSettings.timeScaleDescription", "Speed of game time when a scene starts; 1 is normal.");
     case ProjectSettingsTooltipKind::MasterVolume:
         return EditorText("projectSettings.masterVolumeDescription", "Loudness of the whole game; 1 is full volume.");
+    case ProjectSettingsTooltipKind::Microphone:
+        return EditorText("projectSettings.microphoneDescription", "Lets the game record from the microphone; an Android package then asks for the record-audio permission.");
     case ProjectSettingsTooltipKind::Tags:
         return EditorText("projectSettings.tagsDescription", "Tags for objects, shared by every scene, besides the built-in ones.");
     case ProjectSettingsTooltipKind::GravityPreset:
@@ -485,7 +490,7 @@ struct SearchableSetting {
     case ProjectSettingsCategory::Display:
         return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale });
     case ProjectSettingsCategory::Audio:
-        return fromKinds({ Kind::MasterVolume });
+        return fromKinds({ Kind::MasterVolume, Kind::Microphone });
     case ProjectSettingsCategory::Tags:
         return fromKinds({ Kind::Tags });
     case ProjectSettingsCategory::Scenes:
@@ -719,6 +724,8 @@ void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const E
         EditorText("projectSettings.audioSection", "AUDIO"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
     DrawSetting(dc, rects, rects.stepperLabel[5], SettingLabel(ProjectSettingsTooltipKind::MasterVolume), ProjectSettingsTooltipKind::MasterVolume, theme, query);
     DrawStepper(dc, rects.stepperButton[5][0], rects.stepperValue[5], rects.stepperButton[5][1], theme, sceneContext, ProjectSettingsNumber::MasterVolume);
+    DrawSetting(dc, rects, rects.microphoneLabel, SettingLabel(ProjectSettingsTooltipKind::Microphone), ProjectSettingsTooltipKind::Microphone, theme, query);
+    DrawCheckbox(dc, rects.microphoneCheckbox, theme, sceneContext.ProjectConfiguration().microphone);
 }
 
 // The cell that takes the name of a new tag: a hint while it is empty, the text so far with a caret while it is typed.
@@ -1015,6 +1022,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         }
         if (PointInRect(rects.stepperValue[5], x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(ProjectSettingsNumber::MasterVolume), .rect = rects.stepperValue[5] };
+        }
+        if (PointInRect(rects.microphoneCheckbox, x, y) || PointInRect(rects.microphoneLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::MicrophoneToggle, .index = 0, .rect = rects.microphoneCheckbox };
         }
         return Hit{};
     }
@@ -1320,6 +1330,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
 
     if (category == ProjectSettingsCategory::Audio && PointInRect(rects.stepperLabel[5], x, y)) {
         return Hit{ .kind = ProjectSettingsHitKind::MasterVolumeStepper, .index = -1, .rect = rects.stepperLabel[5] };
+    }
+    if (category == ProjectSettingsCategory::Audio && PointInRect(rects.microphoneLabel, x, y)) {
+        return Hit{ .kind = ProjectSettingsHitKind::MicrophoneToggle, .index = -1, .rect = rects.microphoneLabel };
     }
 
     if (category == ProjectSettingsCategory::Physics) {

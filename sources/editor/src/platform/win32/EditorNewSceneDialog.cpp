@@ -185,6 +185,8 @@ private:
         });
         EditorDialogStyle::PaintText(dc, Rect(kPad, 38, client.right - kPad, 58), EditorText("newScene.template", "Template"), primary, 11, FW_SEMIBOLD);
         for (const kb::scene::SceneTemplateInfo& info : kb::scene::SceneTemplates::All()) {
+            // The character and 2D templates belong to a new project; a scene here is Basic or Empty.
+            if (info.kind != kb::scene::SceneTemplate::Basic && info.kind != kb::scene::SceneTemplate::Empty) continue;
             const bool basic = info.kind == kb::scene::SceneTemplate::Basic;
             EditorDialogStyle::PaintListRow(dc, theme, EditorDialogListRowDescriptor{
                 .bounds = CardRect(info.kind),

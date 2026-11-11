@@ -381,6 +381,11 @@ kb_cli component set --project . --entity Sparks --type "Particle Effect" --set 
 - A button that runs a script, and what `validate` says about UI: guide `menus-and-buttons`.
 - Check sound and particles: `kb_cli run --project . --frames 60 --report audio` (or
   `--report particles`).
+- Microphone: `Microphone.Start()` (or `Microphone.Start("Device name")`; `Microphone.Devices()` and
+  `Microphone.Device(i)` list the inputs), then `Microphone.Level()` and `Microphone.Peak()` each frame, and
+  `Microphone.RecordToClip(2.0)` for a clip of the last two seconds, which `Audio.Play` takes. `Microphone.Stop()` ends it.
+  A project that records turns `Microphone` on in Project Settings > Audio; an Android package then declares the
+  permission and the first `Start` asks for it (it answers "being requested" until the user decides).
 )md";
 
 constexpr std::string_view kWaterAndLook = R"md(# Water, sky, fog and post-processing

@@ -319,6 +319,88 @@ function Tick(self, dt)
 end
 )lua";
 
+constexpr std::string_view kFirstPersonCharacterLuaTemplate = R"lua(-- FirstPersonCharacter.lua
+-- Walk with Move, jump with Jump and look around with the pointer. Requires: Character Controller on this object and a
+-- child object named Camera. Input: Move (Axis2D), Jump (Bool).
+-- @expose speed Float = 5.0
+-- @expose jumpSpeed Float = 6.0
+-- @expose lookSpeed Float = 0.12
+-- lookSpeed: degrees of turn per pixel of pointer movement.
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local vars = self.variables
+    local state = states[entity]
+    if state == nil then
+        state = { yaw = 0.0, pitch = 0.0 }
+        states[entity] = state
+    end
+
+    local look = Pointer.Delta()
+    state.yaw = state.yaw + (look.x or 0.0) * vars.lookSpeed
+    state.pitch = math.max(-85.0, math.min(85.0, state.pitch + (look.y or 0.0) * vars.lookSpeed))
+    Transform.SetRotation(entity, 0.0, state.yaw, 0.0)
+    local camera = Transform.FindChild(entity, "Camera")
+    if camera.found then
+        Transform.SetRotation(camera.child, state.pitch, 0.0, 0.0)
+    end
+
+    local move = Input.Vector2("Move")
+    local yaw = math.rad(state.yaw)
+    local ahead = move.y or 0.0
+    local side = move.x or 0.0
+    Physics.CharacterMove(entity,
+        (math.sin(yaw) * ahead + math.cos(yaw) * side) * vars.speed,
+        (math.cos(yaw) * ahead - math.sin(yaw) * side) * vars.speed)
+    if Input.Pressed("Jump") then
+        Physics.CharacterJump(entity, vars.jumpSpeed)
+    end
+end
+)lua";
+
+constexpr std::string_view kThirdPersonCharacterLuaTemplate = R"lua(-- ThirdPersonCharacter.lua
+-- Walk with Move, jump with Jump; the pointer turns the character and tilts the camera behind it. Requires: Character
+-- Controller on this object and a child object named CameraPivot that carries the camera. Input: Move (Axis2D), Jump (Bool).
+-- @expose speed Float = 5.0
+-- @expose jumpSpeed Float = 6.0
+-- @expose lookSpeed Float = 0.12
+-- lookSpeed: degrees of turn per pixel of pointer movement.
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local vars = self.variables
+    local state = states[entity]
+    if state == nil then
+        state = { yaw = 0.0, pitch = 20.0 }
+        states[entity] = state
+    end
+
+    local look = Pointer.Delta()
+    state.yaw = state.yaw + (look.x or 0.0) * vars.lookSpeed
+    state.pitch = math.max(-30.0, math.min(70.0, state.pitch + (look.y or 0.0) * vars.lookSpeed))
+    Transform.SetRotation(entity, 0.0, state.yaw, 0.0)
+    local pivot = Transform.FindChild(entity, "CameraPivot")
+    if pivot.found then
+        Transform.SetRotation(pivot.child, state.pitch, 0.0, 0.0)
+    end
+
+    local move = Input.Vector2("Move")
+    local yaw = math.rad(state.yaw)
+    local ahead = move.y or 0.0
+    local side = move.x or 0.0
+    Physics.CharacterMove(entity,
+        (math.sin(yaw) * ahead + math.cos(yaw) * side) * vars.speed,
+        (math.cos(yaw) * ahead - math.sin(yaw) * side) * vars.speed)
+    if Input.Pressed("Jump") then
+        Physics.CharacterJump(entity, vars.jumpSpeed)
+    end
+end
+)lua";
+
 constexpr std::string_view kPlatformer2DNavigatorLuaTemplate = R"lua(-- Platformer2DNavigator.lua
 -- Drives the native 2D controller along live tilemap routes without changing transforms.
 -- @expose mapName String = "Map"
@@ -491,6 +573,8 @@ constexpr std::string_view kLuarcTemplate = R"json({
 } // namespace
 
 std::string_view ScriptAgentProjectFiles::PresetScript(std::string_view fileName) noexcept {
+    if (fileName == "FirstPersonCharacter.lua") return kFirstPersonCharacterLuaTemplate;
+    if (fileName == "ThirdPersonCharacter.lua") return kThirdPersonCharacterLuaTemplate;
     if (fileName == "Platformer2DNavigator.lua") return kPlatformer2DNavigatorLuaTemplate;
     if (fileName == "Platformer2DPlayer.lua") return kPlatformer2DPlayerLuaTemplate;
     if (fileName == "TopDown2DPlayer.lua") return kTopDown2DPlayerLuaTemplate;

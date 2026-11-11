@@ -209,6 +209,8 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     }
     rects.gravityPresetLabel = RECT{ left, rowTopAt(5), left + kLabelWidth, rowTopAt(5) + kRowHeight };
     buttonRow(rects.gravityPresetButton, 3, rowTopAt(5), kGravityPresetButtonWidth);
+    rects.microphoneLabel = RECT{ left, rowTopAt(1), left + kLabelWidth, rowTopAt(1) + kRowHeight };
+    rects.microphoneCheckbox = CheckboxForRow(left, rowTopAt(1));
     return rects;
 }
 

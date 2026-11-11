@@ -2845,6 +2845,7 @@ void RunPackageContractCheck(
     Require(manifest.settings.display == expected.display, "The manifest does not carry the project's display settings");
     Require(manifest.settings.simulation == expected.simulation, "The manifest does not carry the project's fixed step, gravity and time scale");
     Require(manifest.settings.masterVolume == expected.masterVolume, "The manifest does not carry the project's master volume");
+    Require(manifest.settings.microphone == expected.microphone && expected.microphone, "The manifest does not carry the project's microphone setting");
     Require(manifest.settings.tags == expected.tags, "The manifest does not carry the project's tags");
     Require(manifest.settings.defaultMap == expected.defaultMap && manifest.settings.gameName == expected.gameName,
         "The manifest does not carry the project's startup scene and game name");

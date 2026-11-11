@@ -37,6 +37,7 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     GravityPreset,
     TimeScale,
     MasterVolume,
+    Microphone,
     Tags,
 };
 

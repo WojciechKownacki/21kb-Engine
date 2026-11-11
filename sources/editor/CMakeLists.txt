@@ -472,6 +472,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorDebugLogGate.hpp
     src/private/platform/win32/EditorModalMessageLoop.hpp
     src/private/platform/win32/EditorNewSceneDialog.hpp
+    src/private/platform/win32/EditorProjectTemplateDialog.hpp
     src/private/platform/win32/EditorTextEntryDialog.hpp
     src/private/platform/win32/EditorMap2DForm.hpp
     src/private/platform/win32/EditorMap2DWindow.hpp
@@ -751,6 +752,7 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorMaterialParameterValueDialog.cpp
     src/platform/win32/EditorTagNameDialog.cpp
     src/platform/win32/EditorNewSceneDialog.cpp
+    src/platform/win32/EditorProjectTemplateDialog.cpp
     src/platform/win32/EditorTextEntryDialog.cpp
     src/platform/win32/EditorMap2DForm.cpp
     src/platform/win32/EditorMap2DWindow.cpp

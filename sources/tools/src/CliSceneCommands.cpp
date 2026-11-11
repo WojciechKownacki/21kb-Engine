@@ -513,6 +513,12 @@ int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: " << target.error << '\n';
         return 1;
     }
+    // A character template names a script and input assets of the project; they are written when missing.
+    if (std::string files = kb::scene::SceneTemplates::WriteProjectFiles(projectRoot, *sceneTemplate, loaded.descriptor);
+        !files.empty()) {
+        io.err << "error: " << files << '\n';
+        return 1;
+    }
     if (std::string created = kb::scene::SceneTemplates::WriteSceneFile(target.file, *sceneTemplate, loaded.descriptor);
         !created.empty()) {
         io.err << "error: " << created << '\n';

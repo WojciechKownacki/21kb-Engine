@@ -182,6 +182,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     switch (hit.kind) {
     case ProjectSettingsHitKind::MasterVolumeStepper:
         return ProjectSettingsTooltipKind::MasterVolume;
+    case ProjectSettingsHitKind::MicrophoneToggle:
+        return ProjectSettingsTooltipKind::Microphone;
     case ProjectSettingsHitKind::TagNameField:
         return ProjectSettingsTooltipKind::Tags;
     case ProjectSettingsHitKind::WindowModeOption:
@@ -364,6 +366,12 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::MasterVolumeStepper:
         if (hit.index >= 0) {
             static_cast<void>(sceneContext.SetProjectMasterVolume(SteppedMasterVolume(sceneContext.ProjectConfiguration().masterVolume, hit.index)));
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    case ProjectSettingsHitKind::MicrophoneToggle:
+        if (hit.index >= 0) {
+            static_cast<void>(sceneContext.SetProjectMicrophone(!sceneContext.ProjectConfiguration().microphone));
         }
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;

@@ -74,6 +74,8 @@ struct EditorPackageRequest {
     std::string androidApplicationId;
     std::uint32_t androidVersionCode = 1U;
     std::string androidLabel;
+    // The project records from the microphone: the Android package declares the record-audio permission.
+    bool androidMicrophone = false;
     std::filesystem::path androidKeystore;
     std::string androidKeyAlias;
     std::string androidFormat = "apk";

@@ -1,5 +1,7 @@
 package com.kbengine.runtime;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
@@ -13,6 +15,8 @@ import android.util.Log;
 
 public final class MainActivity extends TextInputActivity {
     private static native void setAudioFocusGranted(boolean granted);
+    private static native void setMicrophonePermission(boolean granted);
+    private static final int REQUEST_MICROPHONE = 4021;
     private AudioManager audioManager;
     private AudioFocusRequest audioRequest;
     private boolean audioEnabled;
@@ -51,6 +55,25 @@ public final class MainActivity extends TextInputActivity {
             if (enabled && resumed) requestAudio();
             else if (!enabled) releaseAudio();
         });
+    }
+
+    // Called from the native owner thread when a script starts the microphone; the answer returns through
+    // setMicrophonePermission. Android refuses a permission the manifest does not declare.
+    public void requestMicrophone() {
+        runOnUiThread(() -> {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                setMicrophonePermission(true);
+            } else {
+                requestPermissions(new String[] { Manifest.permission.RECORD_AUDIO }, REQUEST_MICROPHONE);
+            }
+        });
+    }
+
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code == REQUEST_MICROPHONE) {
+            setMicrophonePermission(results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED);
+        }
     }
 
     @SuppressWarnings("deprecation")

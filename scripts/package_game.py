@@ -1479,6 +1479,8 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         command.append(f"--max-workers={jobs}")
     if args.application_icon is not None:
         command.append(f"-PkbApplicationIcon={args.application_icon}")
+    if getattr(args, "android_microphone", False):
+        command.append("-PkbMicrophone=true")
     if getattr(args, "trust_anchor", None):
         command.append(f"-PkbTrustAnchor={args.trust_anchor}")
     run_checked(
@@ -2492,6 +2494,7 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--android-version-code", type=int, default=1)
     parser.add_argument("--android-min-sdk", type=int, default=23)
     parser.add_argument("--android-target-sdk", type=int, default=36)
+    parser.add_argument("--android-microphone", action="store_true")
     parser.add_argument("--android-keystore", type=Path)
     parser.add_argument("--android-key-alias", default="")
     parser.add_argument("--android-signing-broker", type=Path)

@@ -812,6 +812,20 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
             bake::DecodeRuntimeAssetManifest(everythingBytes, everythingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
             everythingDecoded.settings == everything.settings,
         "A runtime manifest lost a setting when the display, the volume and the tags were written together");
+    // The microphone setting is a flag with no data: it travels only while it is on, and changes the bytes, not their number.
+    bake::RuntimeAssetManifest recording = first;
+    recording.settings.microphone = true;
+    std::vector<std::uint8_t> recordingBytes;
+    bake::RuntimeAssetManifest recordingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(recording, recordingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            recordingBytes.size() == firstBytes.size() && recordingBytes != firstBytes &&
+            bake::DecodeRuntimeAssetManifest(recordingBytes, recordingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            recordingDecoded.settings.microphone && recordingDecoded.settings == recording.settings,
+        "A runtime manifest lost the microphone setting during the round trip");
+    bake::RuntimeAssetManifest silentDecoded{};
+    Require(bake::DecodeRuntimeAssetManifest(firstBytes, silentDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            !silentDecoded.settings.microphone,
+        "A runtime manifest without the microphone flag must read as not recording");
     bake::RuntimeAssetManifest tooLoud = first;
     tooLoud.settings.masterVolume = 1.5F;
     std::vector<std::uint8_t> tooLoudBytes;

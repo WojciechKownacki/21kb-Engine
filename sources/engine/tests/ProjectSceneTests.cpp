@@ -607,9 +607,11 @@ void RunProjectAudioAndTagSettingsTest() {
     }
     const kb::project::ProjectSettings older = kb::project::ProjectSettingsStore::Load(file).settings;
     Require(older.masterVolume == 1.0F && older.tags.empty(), "a settings file without audio or tags must read as the defaults");
+    Require(!defaults.microphone && !older.microphone, "a project must not record from the microphone unless it says so");
 
     kb::project::ProjectSettings chosen = older;
     chosen.masterVolume = 0.35F;
+    chosen.microphone = true;
     Require(kb::project::AddProjectTag(chosen, "  Boss ") && kb::project::AddProjectTag(chosen, "Loot Chest") &&
             !kb::project::AddProjectTag(chosen, "Boss") && !kb::project::AddProjectTag(chosen, "Player") &&
             !kb::project::AddProjectTag(chosen, "") && !kb::project::AddProjectTag(chosen, "a,b") &&
@@ -618,7 +620,12 @@ void RunProjectAudioAndTagSettingsTest() {
     std::string error;
     Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the audio and tag settings could not be saved");
     const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
-    Require(reloaded.Succeeded() && reloaded.settings == chosen, "the settings file did not keep the master volume and the tags");
+    Require(reloaded.Succeeded() && reloaded.settings == chosen && reloaded.settings.microphone,
+        "the settings file did not keep the master volume, the microphone and the tags");
+    chosen.microphone = false;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error) && !kb::project::ProjectSettingsStore::Load(file).settings.microphone,
+        "the settings file did not take the microphone back out");
+    chosen.microphone = true;
 
     Require(kb::project::RemoveProjectTag(chosen, "Boss") && !kb::project::RemoveProjectTag(chosen, "Boss") &&
             chosen.tags == std::vector<std::string>{ "Loot Chest" },

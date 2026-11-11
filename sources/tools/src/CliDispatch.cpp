@@ -31,13 +31,17 @@ Commands:
   commands     List registered commands, availability and MCP tool names as JSON.
   new          Create a project, the same one the Hub creates, in a new or empty
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
-               a template: Basic (camera, sun, sky, floor; default) or Empty.
-                 --parent <dir> --name <Name> [--template Basic|Empty]
+               a template: Basic3D (camera, sun, sky, floor; default; "Basic" works
+               too), Basic2D (orthographic camera, sprite floor), FirstPerson or
+               ThirdPerson (a walking character with its script and input), or Empty.
+                 --parent <dir> --name <Name>
+                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|Empty]
   layout       Save, restore or reset the editor workspace for the next session.
                  list|save|restore|reset --project <dir> [--name <name>]
   scene-new    Create a scene from a template, as File > New Scene does.
                  --project <dir> --name <Name> [--folder Assets/Scenes]
-                 [--template Basic|Empty] [--default yes|no]
+                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|Empty]
+                 [--default yes|no]
                (--default yes makes it the scene the game starts in)
   scene-duplicate Copy a scene under a new name, with an identity of its own, as File >
                Save Scene As does. The scene is --scene, or the one the game starts in.

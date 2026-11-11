@@ -2244,6 +2244,66 @@ void RunProjectileTemplateTests() {
         "LIB-129 CLI failure-path test did not restore the valid production fixture settings");
 }
 
+// Every project template makes a project that loads, validates and runs headless without a diagnostic.
+void RunProjectTemplateTests() {
+    const std::filesystem::path parent = TestRoot() / "project_templates";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    struct Case {
+        const char* option;    // what --template takes
+        const char* canonical; // the name the command reports
+        float gravityY;
+        bool character;
+    };
+    const std::array<Case, 7> cases{ {
+        { "Empty", "Empty", -9.81F, false },
+        { "Basic", "Basic3D", -9.81F, false },
+        { "Basic3D", "Basic3D", -9.81F, false },
+        { "basic2d", "Basic2D", -20.0F, false },
+        { "FirstPerson", "FirstPerson", -15.0F, true },
+        { "ThirdPerson", "ThirdPerson", -15.0F, true },
+        { "firstperson", "FirstPerson", -15.0F, true },
+    } };
+    std::size_t caseIndex = 0U;
+    for (const Case& item : cases) {
+        const std::string name = "Template" + std::to_string(caseIndex++);
+        const CommandRun created = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", name, "--template", item.option });
+        Require(created.exitCode == 0 && Contains(created.output, std::string{ "(template " } + item.canonical + ")"),
+            std::string{ "new --template " } + item.option + " failed: " + created.output);
+        const std::filesystem::path root = parent / name;
+        Require(kb::project::ProjectManager::LoadProject(root / (name + ".21kbproject")).succeeded,
+            std::string{ item.option } + " project did not load");
+        const kb::project::ProjectSettingsLoadResult settings = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root));
+        Require(settings.Succeeded() && std::fabs(settings.settings.simulation.gravity[1] - item.gravityY) < 1.0e-4F,
+            std::string{ item.option } + " project did not take the template's gravity");
+        Require(item.character == !settings.settings.inputMappingContext.empty(),
+            std::string{ item.option } + " project has the wrong input context");
+        const CommandRun validated = Run(&kb::cli::RunValidateCommand, { "--project", root.string() });
+        Require(validated.exitCode == 0, std::string{ item.option } + " project did not validate: " + validated.output);
+        const CommandRun ran = Run(&kb::cli::RunRunCommand,
+            { "--project", root.string(), "--scene", "/Game/Scenes/Main.21kbscene", "--frames", "30" });
+        Require(ran.exitCode == 0 && Contains(ran.output, "done: 30 frames") && Contains(ran.output, ", 0 diagnostics"),
+            std::string{ item.option } + " project did not run without diagnostics: " + ran.output);
+        if (item.character) {
+            // The controller script is a project file the scene's behaviour finds and runs, and it compiles.
+            const std::string script = std::string{ item.canonical } + "Character.lua";
+            Require(std::filesystem::exists(root / "Assets" / "Scripts" / script), std::string{ item.option } + " project has no controller script");
+            const CommandRun compiled = Run(&kb::cli::RunValidateCommand, { "--project", root.string(), "Assets/Scripts/" + script });
+            Require(compiled.exitCode == 0 && Contains(compiled.output, "OK   Assets/Scripts/" + script),
+                script + " did not compile: " + compiled.output);
+            Require(!Contains(ran.output, ", 0 behaviour executions"), std::string{ item.option } + " project never ran its controller script");
+        }
+    }
+    const CommandRun refused = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "T_Unknown", "--template", "Nope" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "Basic3D") && Contains(refused.output, "ThirdPerson"),
+        "new with an unknown template must name the templates");
+    // A character template written into an existing project keeps the project's own script.
+    const std::filesystem::path root = parent / "Template0";
+    const CommandRun walk = Run(&kb::cli::RunSceneNewCommand, { "--project", root.string(), "--name", "Walk", "--template", "FirstPerson" });
+    Require(walk.exitCode == 0 && std::filesystem::exists(root / "Assets" / "Scripts" / "FirstPersonCharacter.lua"),
+        "scene-new --template FirstPerson must write the controller script into the project: " + walk.output);
+}
+
 // `kb_cli new` makes the project the Hub makes, without a window.
 void RunNewCommandTests() {
     const std::filesystem::path parent = TestRoot() / "new_project";
@@ -2324,7 +2384,7 @@ void RunSceneNewCommandTests() {
     const std::string project = root.string();
 
     const CommandRun created = Run(&kb::cli::RunSceneNewCommand, { "--project", project, "--name", "Level1" });
-    Require(created.exitCode == 0 && Contains(created.output, "Scene created: /Game/Scenes/Level1.21kbscene (template Basic)."),
+    Require(created.exitCode == 0 && Contains(created.output, "Scene created: /Game/Scenes/Level1.21kbscene (template Basic3D)."),
         "scene-new did not create the Basic scene: " + created.output);
     kb::scene::Scene level;
     const kb::scene::SceneDocumentLoadResult loaded =
@@ -5783,6 +5843,10 @@ int main(int argc, char** argv) {
 #endif
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "project-templates") {
+        RunProjectTemplateTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "world-memory") {
         RunWorldMemoryCliTests();
         return EXIT_SUCCESS;
@@ -5829,6 +5893,7 @@ int main(int argc, char** argv) {
     RunParticleReportCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();
+    RunProjectTemplateTests();
     RunSceneNewCommandTests();
     RunScriptCommandTests();
     RunEntityComponentCommandTests();

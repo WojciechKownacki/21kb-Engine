@@ -133,6 +133,9 @@ struct ProjectSettings {
     // Audio
     // The master gain of the game, 0 (silent) to 1 (full); it scales every sound after the mixer.
     float masterVolume = 1.0F;
+    // Whether the game records from the microphone. An Android package declares the record-audio permission
+    // only when this is on.
+    bool microphone = false;
 
     // Tags
     // The tags the project defines, in order, besides the built-in ones. Every scene of the project starts

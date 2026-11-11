@@ -85,6 +85,9 @@ struct ProjectSettingsPanelLayoutRects {
     RECT stepperLabel[6]{};
     RECT stepperValue[6]{};
     RECT stepperButton[6][2]{};
+    // Audio page, second row: the microphone checkbox and its label (the first row is the master volume).
+    RECT microphoneLabel{};
+    RECT microphoneCheckbox{};
     RECT gravityPresetLabel{};
     RECT gravityPresetButton[3]{};
 };

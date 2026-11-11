@@ -20,7 +20,7 @@ struct NewProjectResult {
 // Assets/Scenes and Assets/Prefabs folders, the settings file the editor and the game both read, a default
 // audio mixer (Assets/Audio/DefaultMixer.kbmixer: Music, Effects and Voice buses) and the startup scene
 // Assets/Scenes/Main.21kbscene made from `startupTemplate` (Basic: camera, sun, sky and floor) with that
-// mixer active. `name` must be a valid project name (letters, digits, '-' and '_'). The project
+// mixer active; the template also sets the project's settings and writes the files its scene uses. `name` must be a valid project name (letters, digits, '-' and '_'). The project
 // folder must not exist or be empty - nothing the user already has is overwritten - and nothing
 // is left on disk when the project cannot be created.
 class ProjectCreator {

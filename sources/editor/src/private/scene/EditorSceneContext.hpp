@@ -1336,6 +1336,8 @@ public:
     [[nodiscard]] bool SetProjectBuildScenes(std::vector<std::string> scenes);
     // The master volume of the game, 0..1; true when it changed and was saved. The open scene takes it at once.
     [[nodiscard]] bool SetProjectMasterVolume(float volume);
+    // Whether the game records from the microphone; true when it changed and was saved.
+    [[nodiscard]] bool SetProjectMicrophone(bool enabled);
     // Adds a tag to the project's list, which every scene of the project starts from; true when it was new and
     // valid. The open scene defines it at once. Removing one is DeleteSceneTag.
     [[nodiscard]] bool AddProjectTag(std::string_view name);

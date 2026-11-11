@@ -90,6 +90,7 @@ def requestedApplicationLabel = propertyOrEnvironment(
 def requestedMinSdk = providers.gradleProperty("kbMinSdk").orElse("23")
 def requestedTargetSdk = providers.gradleProperty("kbTargetSdk").orElse("36")
 def requestedApplicationIcon = providers.gradleProperty("kbApplicationIcon")
+def microphoneEnabled = providers.gradleProperty("kbMicrophone").orElse("false").get() == "true"
 def requestedLegalAssets = providers.gradleProperty("kbLegalAssets")
 // Release public key and product id the player checks its pack against; written by packaging.
 def requestedTrustAnchor = providers.gradleProperty("kbTrustAnchor")
@@ -139,6 +140,20 @@ if (requestedTargetProfile.isPresent()) {
 }
 
 def generatedRuntimeResources = layout.buildDirectory.get().dir("generated/runtime-resources").asFile
+// The record-audio permission is declared only when the project records from the microphone: the package is built
+// from the source manifest plus that one line.
+File sourceManifest = file("src/main/AndroidManifest.xml")
+File packageManifest = layout.buildDirectory.get().file("generated/manifest/AndroidManifest.xml").asFile
+if (microphoneEnabled) {
+    String manifestText = sourceManifest.getText("UTF-8")
+    String applicationTag = "<application"
+    if (!manifestText.contains(applicationTag)) {
+        throw new GradleException("The Android manifest has no application element to declare the microphone permission before")
+    }
+    packageManifest.parentFile.mkdirs()
+    packageManifest.setText(manifestText.replace(applicationTag,
+        "<uses-permission android:name=\"android.permission.RECORD_AUDIO\" />\n\n    " + applicationTag), "UTF-8")
+}
 String applicationIconResource = "@drawable/kb_launcher"
 if (requestedApplicationIcon.isPresent()) {
     File icon = new File(requestedApplicationIcon.get())
@@ -194,6 +209,12 @@ android {
                     "-DKB_PROJECT_NATIVE_MANIFEST=${projectNativeManifest}"
                 ]
             }
+        }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile(microphoneEnabled ? packageManifest : sourceManifest)
         }
     }
 

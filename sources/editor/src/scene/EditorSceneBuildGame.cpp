@@ -490,6 +490,7 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         request.androidApplicationId = Trimmed(projectConfig_.androidApplicationId);
         request.androidVersionCode = projectConfig_.androidVersionCode;
         request.androidLabel = Trimmed(projectConfig_.androidLabel);
+        request.androidMicrophone = projectConfig_.microphone;
         request.androidKeystore = targetSettings.androidKeystore;
         request.androidKeyAlias = Trimmed(targetSettings.androidKeyAlias);
         request.androidFormat = targetSettings.androidFormat;

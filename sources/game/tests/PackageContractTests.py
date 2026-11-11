@@ -38,7 +38,7 @@ SETTINGS = {
                         'Resizable': '0', 'VSync': '0', 'FrameRateCap': '90'},
     'Project.Physics': {'FixedStepHz': '120', 'GravityY': '-3.7'},
     'Project.Time': {'TimeScale': '0.5'},
-    'Project.Audio': {'MasterVolume': '0.25'},
+    'Project.Audio': {'MasterVolume': '0.25', 'Microphone': '1'},
     'Project.Tags': {'Count': '1', 'Tag0': 'Boss'},
 }
 
@@ -299,7 +299,8 @@ def check_android_apk(args):
     context.run(context.package_command(
         'Android.ASTC.arm64', package,
         '--android-application-id', android['ApplicationId'], '--android-version-code', android['VersionCode'],
-        '--android-label', android['Label'], '--android-min-sdk', '23', '--android-target-sdk', '36'),
+        '--android-label', android['Label'], '--android-min-sdk', '23', '--android-target-sdk', '36',
+        '--android-microphone'),
         timeout=7200, env=env, low_priority=True)
 
     files = {path.name for path in package.iterdir()}
@@ -338,7 +339,8 @@ def check_android_apk(args):
     badging = context.run([package_game._android_tool(build_tools, 'aapt2'), 'dump', 'badging', apk]).stdout
     for needle in (f"package: name='{android['ApplicationId']}'", f"versionCode='{android['VersionCode']}'",
                    f"versionName='{SETTINGS['Project.Product']['Version']}'", "minSdkVersion:'23'", "targetSdkVersion:'36'",
-                   f"application-label:'{android['Label']}'", "native-code: 'arm64-v8a'", 'kb_custom_launcher'):
+                   f"application-label:'{android['Label']}'", "native-code: 'arm64-v8a'", 'kb_custom_launcher',
+                   "uses-permission: name='android.permission.RECORD_AUDIO'"):
         assert needle in badging, (needle, badging[:1500])
     signature = context.run(package_game._apksigner_command(build_tools, ['verify', '--verbose', '--print-certs', apk])).stdout
     assert 'Verifies' in signature and 'CN=Android Debug' in signature, signature

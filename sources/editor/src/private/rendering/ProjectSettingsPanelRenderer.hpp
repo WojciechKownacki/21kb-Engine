@@ -48,6 +48,7 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     BuildSceneRemove,     // Scenes: takes a scene out of the build list (index = position in the list).
     BuildSceneAdd,        // Scenes: the button that offers the project's scenes that are not in the list yet.
     MasterVolumeStepper,  // Audio: index 0 minus, 1 plus; -1 over the label.
+    MicrophoneToggle,     // Audio: the microphone checkbox; -1 over the label.
     TagNameField,         // Tags: the cell that takes the name of a new tag.
     TagAdd,               // Tags: the button that adds the typed tag.
     TagRemove,            // Tags: takes a tag out of the project's list (index = position in the list).

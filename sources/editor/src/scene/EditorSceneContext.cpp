@@ -3335,6 +3335,14 @@ bool EditorSceneContext::SetProjectMasterVolume(float volume) {
     return SaveProjectConfiguration();
 }
 
+bool EditorSceneContext::SetProjectMicrophone(bool enabled) {
+    if (projectConfig_.microphone == enabled) {
+        return false;
+    }
+    projectConfig_.microphone = enabled;
+    return SaveProjectConfiguration();
+}
+
 bool EditorSceneContext::AddProjectTag(std::string_view name) {
     if (!kb::project::AddProjectTag(projectConfig_, name)) {
         return false;

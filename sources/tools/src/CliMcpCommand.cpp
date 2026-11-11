@@ -23,7 +23,7 @@ constexpr std::string_view kProtocolVersion = "2024-11-05";
 constexpr std::string_view kServerVersion = "0.1.0";
 constexpr std::string_view kEntityActions[]{"add", "set", "remove", "rename", "attach", "detach", "show"};
 constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
-constexpr std::string_view kSceneTemplates[]{"Basic", "Empty"};
+constexpr std::string_view kSceneTemplates[]{"Basic3D", "Basic2D", "FirstPerson", "ThirdPerson", "Empty", "Basic"};
 constexpr std::string_view kYesNo[]{"yes", "no"};
 constexpr std::string_view kScriptLanguages[]{"lua", "cpp"};
 constexpr std::string_view kBlendSpaceActions[]{"new", "show", "add", "set", "remove", "sample", "assign"};

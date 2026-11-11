@@ -23,6 +23,15 @@ Runtime logs report focus requests, focus changes, output-route additions and
 removals, suspension/resume, device generation and callback frame counts.
 Failed device transitions produce an error and are retried by the owner thread.
 
+## Microphone
+
+A project that records from the microphone turns on `Microphone` under `[Project.Audio]` in its settings (Project
+Settings > Audio). Only then does the Android package declare `android.permission.RECORD_AUDIO`; `package_game.py` takes
+`--android-microphone` for it and the Gradle property `kbMicrophone` carries it. The activity requests no permission at
+launch: the first `Microphone.Start` asks for it (`MainActivity.requestMicrophone`) and answers "permission is being
+requested" until the user decides, so a script starts again after the answer. A refusal is reported once and the next
+start asks again. The null input device of the audio tests needs no permission.
+
 ## Verification
 
 The native audio runtime suite includes `platform-suspend` for deterministic

@@ -9,16 +9,19 @@
 
 namespace kb::project {
 struct ProjectDescriptor;
+struct ProjectSettings;
 }
 
 namespace kb::scene {
 
 class Scene;
 
-// What a new scene starts with: Basic is a camera, a sun, the sky
-// and a floor, ready to press Play; Empty has nothing. The Hub, `kb_cli new`, `kb_cli scene-new`
-// and the editor's File > New Scene all fill a scene through SceneTemplates::Fill.
-enum class SceneTemplate : std::uint8_t { Basic, Empty };
+// What a new scene (and a new project's startup scene) starts with. Empty has nothing; Basic (named Basic3D, "Basic"
+// still works) is a camera, a sun, the sky and a floor, ready to press Play; Basic2D is an orthographic camera and a
+// sprite floor with a collider; FirstPerson and ThirdPerson are a walking character with its camera, a controller script
+// and the Move and Jump input. The Hub, `kb_cli new`, `kb_cli scene-new` and the editor's File > New Scene all fill a
+// scene through SceneTemplates::Fill; a new project also takes the template's settings and files.
+enum class SceneTemplate : std::uint8_t { Basic, Empty, Basic2D, FirstPerson, ThirdPerson };
 
 struct SceneTemplateInfo {
     SceneTemplate kind{};
@@ -42,6 +45,14 @@ public:
     [[nodiscard]] static std::string_view Name(SceneTemplate kind) noexcept;
     // Case-insensitive ("basic" works); nullopt for an unknown name.
     [[nodiscard]] static std::optional<SceneTemplate> Parse(std::string_view name) noexcept;
+    // The project settings a template starts a project with (a 2D template its gravity, a character template a
+    // snappier fall); `settings` holds the defaults on entry.
+    static void ConfigureProjectSettings(SceneTemplate kind, kb::project::ProjectSettings& settings);
+    // Writes the files the template's objects use into the project at `projectRoot` - a character template's
+    // controller script and its input assets - and keeps what the project already has. Returns why it could not, or
+    // an empty string; a template without files does nothing.
+    [[nodiscard]] static std::string WriteProjectFiles(const std::filesystem::path& projectRoot, SceneTemplate kind,
+        const kb::project::ProjectDescriptor& project);
     // Adds the template's objects to `scene`. Returns why it could not, or an empty string.
     [[nodiscard]] static std::string Fill(Scene& scene, SceneTemplate kind, const kb::project::ProjectDescriptor& project);
     // The new scene `name` in `folder` of the project: `folder` is relative to the project root

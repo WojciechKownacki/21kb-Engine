@@ -11,6 +11,7 @@
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioCapture.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/audio/AudioDiagnostics.hpp"
 #include "engine/input/InputDeviceState.hpp"
@@ -65,6 +66,42 @@ namespace {
 constexpr std::string_view kLogTag = "21kb";
 constexpr std::string_view kPackagedAssetPack = "game.kbpack";
 std::atomic<bool> audioFocusGranted{false};
+// The microphone permission: unknown until a script starts the microphone, then asked (the dialog is open),
+// then the user's answer. A refusal is reported once and the next start asks again.
+enum MicrophoneState : int { kMicrophoneUnknown, kMicrophoneAsked, kMicrophoneGranted, kMicrophoneDenied };
+std::atomic<int> microphoneState{kMicrophoneUnknown};
+android_app* microphoneApp = nullptr;
+
+// Asks the activity for the record-audio permission; false when the Java side cannot be reached.
+bool RequestMicrophonePermission() noexcept {
+    if (microphoneApp == nullptr || microphoneApp->activity == nullptr) return false;
+    JNIEnv* environment = nullptr;
+    if (microphoneApp->activity->vm->GetEnv(reinterpret_cast<void**>(&environment), JNI_VERSION_1_6) != JNI_OK) return false;
+    const auto activityClass = environment->GetObjectClass(microphoneApp->activity->javaGameActivity);
+    const auto request = activityClass == nullptr ? nullptr : environment->GetMethodID(activityClass, "requestMicrophone", "()V");
+    if (request != nullptr) environment->CallVoidMethod(microphoneApp->activity->javaGameActivity, request);
+    const bool exception = environment->ExceptionCheck();
+    if (exception) environment->ExceptionClear();
+    if (activityClass != nullptr) environment->DeleteLocalRef(activityClass);
+    return request != nullptr && !exception;
+}
+
+kb::audio::AudioCapturePermission MicrophonePermission() noexcept {
+    switch (microphoneState.load(std::memory_order_acquire)) {
+    case kMicrophoneGranted:
+        return kb::audio::AudioCapturePermission::Granted;
+    case kMicrophoneDenied:
+        microphoneState.store(kMicrophoneUnknown, std::memory_order_release);
+        return kb::audio::AudioCapturePermission::Denied;
+    case kMicrophoneAsked:
+        return kb::audio::AudioCapturePermission::Pending;
+    default:
+        microphoneState.store(kMicrophoneAsked, std::memory_order_release);
+        if (RequestMicrophonePermission()) return kb::audio::AudioCapturePermission::Pending;
+        microphoneState.store(kMicrophoneUnknown, std::memory_order_release);
+        return kb::audio::AudioCapturePermission::Denied;
+    }
+}
 
 void LogError(std::string_view message) noexcept {
     const std::size_t length =
@@ -412,6 +449,8 @@ public:
         }
         kb::input::InputHaptics::RegisterBackend(*scene_, gamepads_);
         audioEnabled_ = kb::audio::AudioPlayback::HasBackend(*scene_);
+        microphoneApp = &app_;
+        kb::audio::SetAudioCapturePermissionProvider(&MicrophonePermission);
         if (audioEnabled_) {
             ApplyAudioState();
             JNIEnv* environment = nullptr;
@@ -915,6 +954,11 @@ private:
 extern "C" JNIEXPORT void JNICALL
 Java_com_kbengine_runtime_MainActivity_setAudioFocusGranted(JNIEnv*, jclass, jboolean granted) {
     audioFocusGranted.store(granted == JNI_TRUE, std::memory_order_release);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_runtime_MainActivity_setMicrophonePermission(JNIEnv*, jclass, jboolean granted) {
+    microphoneState.store(granted == JNI_TRUE ? kMicrophoneGranted : kMicrophoneDenied, std::memory_order_release);
 }
 
 extern "C" void android_main(android_app* app) {

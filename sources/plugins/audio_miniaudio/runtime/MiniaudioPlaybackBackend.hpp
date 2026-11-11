@@ -1,11 +1,13 @@
 #pragma once
 
 #include "assets/MiniaudioClipResolver.hpp"
+#include "engine/audio/AudioCapture.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/audio/SpatialAudioPlayback.hpp"
 #include "engine/audio/AudioMetering.hpp"
 #include "engine/audio/AudioMixerPreview.hpp"
 #include "playback/MiniaudioVoicePool.hpp"
+#include "runtime/MiniaudioCapture.hpp"
 #include "runtime/MiniaudioEngine.hpp"
 #include "scene/MiniaudioAudioSpace.hpp"
 #include "scene/MiniaudioBusRegistry.hpp"
@@ -14,6 +16,8 @@
 #include "scene/MiniaudioSourceRegistry.hpp"
 
 #include <cstddef>
+#include <span>
+#include <vector>
 #if !defined(NDEBUG)
 #include <thread>
 #endif
@@ -27,7 +31,8 @@ class SceneSystemContext;
 namespace kb::audio_miniaudio {
 
 class MiniaudioPlaybackBackend final : public kb::audio::IAudioPlaybackBackend, public kb::audio::IAudioMeteringBackend,
-    public kb::audio::IAudioMixerPreviewBackend, public kb::audio::IAudioDiagnosticsBackend, public kb::audio::ISpatialAudioPlaybackBackend {
+    public kb::audio::IAudioMixerPreviewBackend, public kb::audio::IAudioDiagnosticsBackend, public kb::audio::ISpatialAudioPlaybackBackend,
+    public kb::audio::IAudioCaptureBackend {
 public:
     MiniaudioPlaybackBackend();
     ~MiniaudioPlaybackBackend() override;
@@ -56,6 +61,12 @@ public:
     [[nodiscard]] bool ResetMeterCapture(kb::scene::Scene& scene) override;
     [[nodiscard]] kb::audio::AudioMeterReport MeterReport(kb::scene::Scene& scene) override;
     [[nodiscard]] bool SynchronizeMixerPreview(kb::scene::Scene& scene) override;
+    // Microphone capture: one input device with its own ring buffer, independent of the playback device.
+    [[nodiscard]] std::vector<kb::audio::AudioCaptureDeviceInfo> CaptureDevices(kb::scene::Scene& scene) override;
+    [[nodiscard]] kb::audio::AudioCaptureStatus StartCapture(kb::scene::Scene& scene, const kb::audio::AudioCaptureDesc& desc) override;
+    void StopCapture(kb::scene::Scene& scene) noexcept override;
+    [[nodiscard]] bool IsCapturing(kb::scene::Scene& scene) noexcept override;
+    [[nodiscard]] std::size_t ReadCaptured(kb::scene::Scene& scene, std::span<float> out) noexcept override;
     // LIB-148: per-voice control forwarded to the one-shot voice pool (scene-agnostic -
     // this backend instance is already scene-bound through its owning scene system).
     [[nodiscard]] bool StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept override;
@@ -81,6 +92,9 @@ public:
     };
 
     [[nodiscard]] kb::audio::AudioDeviceStatus ReinitializeForTesting(kb::scene::Scene& scene, bool forceNoDevice) noexcept;
+    // Captures from an externally owned context (the null backend) instead of the platform's devices.
+    void UseCaptureContextForTesting(ma_context* context) noexcept;
+    [[nodiscard]] std::uint64_t CapturedFramesForTesting() const noexcept;
     [[nodiscard]] kb::audio::AudioPlayResult PlayOneShotForTesting(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc);
     [[nodiscard]] kb::audio::AudioSourceControlResult PlaySourceForTesting(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
     [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlayingForTesting(
@@ -113,6 +127,7 @@ private:
     MiniaudioOcclusionSampler occlusionSampler_;
     MiniaudioSourceRegistry sourceRegistry_;
     MiniaudioVoicePool voicePool_;
+    MiniaudioCapture capture_;
     bool offline_ = false;
     bool metersEnabled_ = false;
 #if !defined(NDEBUG)

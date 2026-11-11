@@ -147,6 +147,23 @@ void FollowWithMapCameras(kb::scene::Scene& scene, const std::filesystem::path& 
 
 } // namespace
 
+bool WritePlayerPresetFiles(kb::scene::Scene& scene, const std::filesystem::path& projectRoot, std::string_view scriptFile,
+    PlayerPresetOutput io) {
+    const std::filesystem::path scriptPath = projectRoot / "Assets" / "Scripts" / std::string{ scriptFile };
+    std::error_code fileError;
+    if (!std::filesystem::exists(scriptPath, fileError)) {
+        std::filesystem::create_directories(scriptPath.parent_path(), fileError);
+        std::ofstream out{ scriptPath, std::ios::binary };
+        out << kb::script::ScriptAgentProjectFiles::PresetScript(scriptFile);
+        if (!out) {
+            io.err << "error: " << scriptPath.generic_string() << " could not be written\n";
+            return false;
+        }
+    }
+    EnsureInput(scene, projectRoot, io);
+    return true;
+}
+
 bool IsPlayerPreset(std::string_view item) noexcept {
     return item == "Platformer Player" || item == "Top Down Player" || item == "Platformer Navigator";
 }
@@ -159,18 +176,7 @@ kb::scene::SceneEntity AddPlayerPreset(kb::scene::Scene& scene, const std::files
     const bool platformer = item != "Top Down Player";
     const std::string_view fileName = navigator ? "Platformer2DNavigator.lua" : box2d ? (platformer ? "Platformer2DBox2DPlayer.lua" : "TopDown2DBox2DPlayer.lua")
                                             : (platformer ? "Platformer2DPlayer.lua" : "TopDown2DPlayer.lua");
-    const std::filesystem::path scriptFile = projectRoot / "Assets" / "Scripts" / std::string{ fileName };
-    std::error_code fileError;
-    if (!std::filesystem::exists(scriptFile, fileError)) {
-        std::filesystem::create_directories(scriptFile.parent_path(), fileError);
-        std::ofstream out{ scriptFile, std::ios::binary };
-        out << kb::script::ScriptAgentProjectFiles::PresetScript(fileName);
-        if (!out) {
-            io.err << "error: " << scriptFile.generic_string() << " could not be written\n";
-            return {};
-        }
-    }
-    EnsureInput(scene, projectRoot, io);
+    if (!WritePlayerPresetFiles(scene, projectRoot, fileName, io)) return {};
     static_cast<void>(scene.Assets().Discover());
     const std::string virtualPath = "/Game/Scripts/" + std::string{ fileName };
     const kb::assets::AssetMetadata* script = scene.Assets().Manager().Registry().FindByPath(virtualPath);
