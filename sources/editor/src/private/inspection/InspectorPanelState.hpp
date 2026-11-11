@@ -107,6 +107,7 @@ enum class InspectorSectionId : std::uint8_t {
     PostProcessAntiAliasing,
     PostProcessVignette,
     PostProcessAmbientOcclusion,
+    PostProcessScreenSpaceReflections,
     PostProcessGlobalIllumination,
     PostProcessFog,
     // The scene's post-process profile, shown on the scene's environment (World Backdrop) object.

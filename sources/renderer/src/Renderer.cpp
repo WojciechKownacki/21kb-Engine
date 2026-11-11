@@ -1152,7 +1152,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     // the screen-space ambient occlusion; without either, the lighting config keeps its own.
     if (resolvedPostProcessSettings.has_value()) {
         RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, *resolvedPostProcessSettings);
-    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled || defaultPostProcessSettings_.fogEnabled ||
+    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled || defaultPostProcessSettings_.screenSpaceReflectionsEnabled ||
+               defaultPostProcessSettings_.fogEnabled ||
                defaultPostProcessSettings_.globalIllumination != ScenePostProcessSettings::GlobalIlluminationMethod::Off) {
         RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, defaultPostProcessSettings_);
     }
@@ -2440,6 +2441,8 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.vignetteIntensity = std::clamp(settings.vignetteIntensity, 0.0F, 1.0F);
     settings.ambientOcclusionIntensity = std::max(settings.ambientOcclusionIntensity, 0.0F);
     settings.ambientOcclusionRadius = std::max(settings.ambientOcclusionRadius, 0.01F);
+    settings.screenSpaceReflectionsIntensity = std::clamp(settings.screenSpaceReflectionsIntensity, 0.0F, 1.0F);
+    settings.screenSpaceReflectionsMaxDistance = std::max(settings.screenSpaceReflectionsMaxDistance, 0.1F);
     defaultPostProcessSettings_ = settings;
     if (std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing); antiAliasing.has_value()) {
         antiAliasing->enabled = settings.temporalAntiAliasingEnabled;

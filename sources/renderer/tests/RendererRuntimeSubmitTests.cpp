@@ -1928,6 +1928,9 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     settings.ambientOcclusionEnabled = true;
     settings.ambientOcclusionIntensity = 1.5F;
     settings.ambientOcclusionRadius = 0.9F;
+    settings.screenSpaceReflectionsEnabled = true;
+    settings.screenSpaceReflectionsIntensity = 0.6F;
+    settings.screenSpaceReflectionsMaxDistance = 12.5F;
     settings.fogEnabled = true;
     settings.fogProfile = SceneFogProfile::Web;
     settings.fogDensity = 0.071F;
@@ -1961,6 +1964,9 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(loaded->ambientOcclusionEnabled && NearlyEqual(loaded->ambientOcclusionIntensity, 1.5F) &&
             NearlyEqual(loaded->ambientOcclusionRadius, 0.9F),
         "PostProcess profile asset round trip lost the ambient occlusion");
+    Require(loaded->screenSpaceReflectionsEnabled && NearlyEqual(loaded->screenSpaceReflectionsIntensity, 0.6F) &&
+            NearlyEqual(loaded->screenSpaceReflectionsMaxDistance, 12.5F),
+        "PostProcess profile asset round trip lost the screen-space reflections");
 
     Require(loaded->fogProfile == SceneFogProfile::Web && loaded->fogEnabled && loaded->volumetricFogEnabled &&
             NearlyEqual(loaded->fogDensity, 0.071F) && NearlyEqual(loaded->fogHeightFalloff, 0.31F) &&
@@ -1970,6 +1976,18 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
         "Unknown fog profile was accepted");
     SceneRenderLightingConfig fogConfig{};
     RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(fogConfig, *loaded);
+    Require(fogConfig.screenSpaceReflectionsEnabled && NearlyEqual(fogConfig.ssrIntensity, 0.6F) &&
+            NearlyEqual(fogConfig.ssrMaxDistance, 12.5F),
+        "A profile with reflections on must set the lighting config's reflections");
+    {
+        // A profile that leaves reflections off keeps what the lighting config asked for.
+        SceneRenderLightingConfig requested{};
+        requested.screenSpaceReflectionsEnabled = true;
+        requested.ssrMaxDistance = 7.0F;
+        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(requested, ScenePostProcessSettings{});
+        Require(requested.screenSpaceReflectionsEnabled && NearlyEqual(requested.ssrMaxDistance, 7.0F),
+            "A profile with reflections off must not override the lighting config's reflections");
+    }
     RendererSceneLightingConfigResolver::ResolveFogProfile(fogConfig, bgfx::RendererType::Direct3D11);
     Require(fogConfig.fogProfile == SceneFogProfile::Web && !fogConfig.volumetricFogEnabled &&
         NearlyEqual(fogConfig.fogDensity, loaded->fogDensity), "Profile application lost its fallback policy");
@@ -1990,6 +2008,10 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
             NearlyEqual(legacy->ambientOcclusionRadius, SceneRenderLightingConfig{}.aoRadius) &&
             NearlyEqual(legacy->ambientOcclusionIntensity, SceneRenderLightingConfig{}.aoIntensity),
         "A profile without the vignette and ambient occlusion keys must keep them off at the renderer's defaults");
+    Require(!legacy->screenSpaceReflectionsEnabled &&
+            NearlyEqual(legacy->screenSpaceReflectionsIntensity, SceneRenderLightingConfig{}.ssrIntensity) &&
+            NearlyEqual(legacy->screenSpaceReflectionsMaxDistance, SceneRenderLightingConfig{}.ssrMaxDistance),
+        "A profile without the reflection keys must keep reflections off at the lighting config's defaults");
     ScenePostProcessSettings edited{};
     Require(PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "0.8") && NearlyEqual(edited.vignetteIntensity, 0.8F) &&
             PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionEnabled", "1") && edited.ambientOcclusionEnabled,
@@ -1997,9 +2019,24 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(!PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "1.5") &&
             !PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionRadius", "0") && NearlyEqual(edited.vignetteIntensity, 0.8F),
         "SetField must refuse a vignette intensity above 1 and a zero occlusion radius");
+    Require(PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsEnabled", "1") && edited.screenSpaceReflectionsEnabled &&
+            PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsIntensity", "0.5") &&
+            NearlyEqual(edited.screenSpaceReflectionsIntensity, 0.5F) &&
+            PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsMaxDistance", "40") &&
+            NearlyEqual(edited.screenSpaceReflectionsMaxDistance, 40.0F),
+        "SetField must take the screen-space reflection fields");
+    Require(!PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsIntensity", "1.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsIntensity", "-0.1") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsMaxDistance", "0") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsMaxDistance", "-3") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsEnabled", "maybe") &&
+            NearlyEqual(edited.screenSpaceReflectionsIntensity, 0.5F) && NearlyEqual(edited.screenSpaceReflectionsMaxDistance, 40.0F),
+        "SetField must refuse a reflection intensity outside 0..1, a non-positive reflection distance and a non-boolean toggle");
     const std::vector<std::string> names = PostProcessProfileAssetLoader::FieldNames();
-    Require(std::ranges::find(names, "vignetteEnabled") != names.end() && std::ranges::find(names, "ambientOcclusionRadius") != names.end(),
-        "FieldNames must list the vignette and ambient occlusion fields");
+    Require(std::ranges::find(names, "vignetteEnabled") != names.end() && std::ranges::find(names, "ambientOcclusionRadius") != names.end() &&
+            std::ranges::find(names, "screenSpaceReflectionsEnabled") != names.end() &&
+            std::ranges::find(names, "screenSpaceReflectionsMaxDistance") != names.end(),
+        "FieldNames must list the vignette, ambient occlusion and screen-space reflection fields");
 
     const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
@@ -7855,8 +7892,42 @@ void RunFogProfilePixelsTest(bgfx::RendererType::Enum backend) {
         bgfx::getRendererName(backend),mean(height),mean(volume),mean(forwardPhase),mean(backwardPhase),mean(high));
 }
 
+// A profile asset saved in a temporary folder, and the per-frame hook that registers it and makes it the
+// scene's active profile on the first frame. It does not rescan the mounts: a rescan drops the materials a test
+// published at runtime.
+struct ScenePostProcessProfileFixture {
+    std::filesystem::path root;
+    std::function<void(kb::scene::Scene&, int)> assign;
+};
+
+[[nodiscard]] ScenePostProcessProfileFixture MakeScenePostProcessProfile(const char* tag, const ScenePostProcessSettings& settings) {
+    ScenePostProcessProfileFixture fixture;
+    fixture.root = std::filesystem::temp_directory_path() / (std::string("21kb_") + tag + "_profile_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::remove_all(fixture.root, error);
+    std::filesystem::create_directories(fixture.root, error);
+    Require(!error, "Profile fixture could not create its profile folder");
+    Require(PostProcessProfileAssetLoader::SaveProfile(fixture.root / "Profile.kbppfx", settings),
+        "Profile fixture could not save its profile");
+    fixture.assign = [root = fixture.root](kb::scene::Scene& scene, int frame) {
+        if (frame != 0) {
+            return;
+        }
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        const kb::assets::AssetId id = kb::assets::MakeAssetId("/Fx/Profile.kbppfx");
+        Require(manager.RegisterLoader(std::make_unique<PostProcessProfileAssetLoader>()) &&
+                manager.RegisterAsset(kb::assets::AssetMetadata{ .id = id, .type = std::string{ kPostProcessProfileAssetType },
+                    .name = "Profile", .virtualPath = "/Fx/Profile.kbppfx", .physicalPath = root / "Profile.kbppfx",
+                    .contentHash = 1U, .runtimeLoadable = true }),
+            "Profile fixture could not register its profile");
+        kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, id.value);
+    };
+    return fixture;
+}
+
 // A glossy floor in front of a lit red wall must show the wall's reflection once screen-space
 // reflections are on: the floor region where the mirror image of the wall appears turns red.
+// The scene's post-process profile turns them on the same way, with its own intensity and distance.
 void RunRendererRendersScreenSpaceReflectionsTest() {
     constexpr std::uint16_t kSize = 128U;
     const std::vector<SsBox> boxes{
@@ -7890,6 +7961,30 @@ void RunRendererRendersScreenSpaceReflectionsTest() {
     const double with = redExcess(on);
     std::fprintf(stderr, "ssr_pixels red_minus_blue without=%.1f with=%.1f%c", without, with, 10);
     Require(with > without + 15.0, "SSR test: the glossy floor must reflect the red wall when screen-space reflections are on");
+
+    // The lighting config stays off; only the scene's profile asks for reflections.
+    const auto viaProfile = [&](float intensity, float maxDistance) {
+        ScenePostProcessSettings profile{};
+        profile.screenSpaceReflectionsEnabled = true;
+        profile.screenSpaceReflectionsIntensity = intensity;
+        profile.screenSpaceReflectionsMaxDistance = maxDistance;
+        const ScenePostProcessProfileFixture fixture = MakeScenePostProcessProfile("ssr", profile);
+        const auto pixels = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, SceneRenderLightingConfig{}, 8, kSize,
+            SceneRenderMeshPassMode::OpaqueOnly, fixture.assign, false, kWallLightIntensity);
+        std::error_code removeError;
+        std::filesystem::remove_all(fixture.root, removeError);
+        return redExcess(pixels);
+    };
+    const SceneRenderLightingConfig defaults{};
+    const double profiled = viaProfile(defaults.ssrIntensity, defaults.ssrMaxDistance);
+    const double faded = viaProfile(0.0F, defaults.ssrMaxDistance);
+    const double shortRange = viaProfile(defaults.ssrIntensity, 0.2F);
+    std::fprintf(stderr, "ssr_profile_pixels red_minus_blue profile=%.1f intensity0=%.1f short_range=%.1f%c",
+        profiled, faded, shortRange, 10);
+    Require(profiled > without + 15.0 && std::abs(profiled - with) < 3.0,
+        "SSR test: a profile with reflections on must draw the reflection the lighting config draws");
+    Require(std::abs(faded - without) < 3.0, "SSR test: a profile with zero reflection intensity must draw no reflection");
+    Require(shortRange < profiled - 10.0, "SSR test: a profile's reflection distance must limit how far a reflection ray travels");
 }
 
 // Missing or invalid history must fall back to the environment without stale reflections.
@@ -7971,34 +8066,17 @@ void RunRendererPostProcessProfileDrivesAmbientOcclusionTest() {
         { { 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F } },
     };
     const SceneRenderLightingConfig lighting{};
-    const std::filesystem::path profileRoot = std::filesystem::temp_directory_path() /
-        ("21kb_ao_profile_" + std::to_string(GetCurrentProcessId()));
-    std::error_code error;
-    std::filesystem::remove_all(profileRoot, error);
-    std::filesystem::create_directories(profileRoot, error);
-    Require(!error, "AO profile test could not create its profile folder");
     ScenePostProcessSettings profile{};
     profile.ambientOcclusionEnabled = true;
     profile.ambientOcclusionIntensity = 1.0F;
     profile.ambientOcclusionRadius = 1.0F;
-    Require(PostProcessProfileAssetLoader::SaveProfile(profileRoot / "Occlusion.kbppfx", profile),
-        "AO profile test could not save its profile");
-    const auto assignProfile = [&](kb::scene::Scene& scene, int frame) {
-        if (frame != 0) {
-            return;
-        }
-        kb::assets::AssetManager& manager = scene.Assets().Manager();
-        Require(manager.RegisterLoader(std::make_unique<PostProcessProfileAssetLoader>()) &&
-                manager.Mounts().Mount("Fx", profileRoot) && manager.DiscoverMountedAssets() >= 1U,
-            "AO profile test could not discover its profile");
-        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Fx/Occlusion.kbppfx");
-        Require(metadata != nullptr, "AO profile test lost its profile metadata");
-        kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, metadata->id.value);
-    };
+    const ScenePostProcessProfileFixture fixture = MakeScenePostProcessProfile("ao", profile);
+    const auto assignProfile = fixture.assign;
     const auto without = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize);
     const auto with = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize,
         SceneRenderMeshPassMode::OpaqueOnly, assignProfile);
-    std::filesystem::remove_all(profileRoot, error);
+    std::error_code error;
+    std::filesystem::remove_all(fixture.root, error);
     const double nearWithout = MeanBrightness(without, kSize, 28, 30, 36, 38);
     const double nearWith = MeanBrightness(with, kSize, 28, 30, 36, 38);
     const double farWithout = MeanBrightness(without, kSize, 4, 44, 12, 52);

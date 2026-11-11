@@ -3922,19 +3922,28 @@ void RunPostProcessCommandTests() {
     const std::string project = NewAuthoringProject("post_process_project");
     const CommandRun created = Run(&kb::cli::RunPostProcessNewCommand, { "--project", project, "--name", "Look",
         "--set", "vignetteEnabled=1", "--set", "vignetteIntensity=0.45", "--set", "ambientOcclusionEnabled=1",
-        "--set", "ambientOcclusionRadius=0.9" });
+        "--set", "ambientOcclusionRadius=0.9", "--set", "screenSpaceReflectionsEnabled=1",
+        "--set", "screenSpaceReflectionsIntensity=0.5", "--set", "screenSpaceReflectionsMaxDistance=12" });
     Require(created.exitCode == 0 && Contains(created.output, "vignetteIntensity 0.45") &&
-            Contains(created.output, "ambientOcclusionEnabled 1") && Contains(created.output, "ambientOcclusionRadius 0.9"),
-        "post-process-new must write the vignette and ambient occlusion fields: " + created.output);
+            Contains(created.output, "ambientOcclusionEnabled 1") && Contains(created.output, "ambientOcclusionRadius 0.9") &&
+            Contains(created.output, "screenSpaceReflectionsEnabled 1") && Contains(created.output, "screenSpaceReflectionsIntensity 0.5") &&
+            Contains(created.output, "screenSpaceReflectionsMaxDistance 12"),
+        "post-process-new must write the vignette, ambient occlusion and reflection fields: " + created.output);
     const std::optional<kb::render::ScenePostProcessSettings> saved = kb::render::PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::path{ project } / "Assets" / "PostProcess" / "Look.kbppfx");
     Require(saved.has_value() && saved->vignetteEnabled && saved->ambientOcclusionEnabled &&
-            std::abs(saved->ambientOcclusionRadius - 0.9F) < 0.0001F,
-        "the profile file did not keep the vignette and ambient occlusion");
+            std::abs(saved->ambientOcclusionRadius - 0.9F) < 0.0001F &&
+            saved->screenSpaceReflectionsEnabled && std::abs(saved->screenSpaceReflectionsIntensity - 0.5F) < 0.0001F &&
+            std::abs(saved->screenSpaceReflectionsMaxDistance - 12.0F) < 0.0001F,
+        "the profile file did not keep the vignette, ambient occlusion and reflections");
     const CommandRun refused = Run(&kb::cli::RunPostProcessSetCommand, { "--project", project,
         "--profile", "/Game/PostProcess/Look.kbppfx", "--set", "vignetteIntensity=2" });
     Require(refused.exitCode != 0 && Contains(refused.output, "vignetteIntensity") && Contains(refused.output, "ambientOcclusionRadius"),
         "a vignette intensity above 1 must be refused with the field list: " + refused.output);
+    const CommandRun refusedReflections = Run(&kb::cli::RunPostProcessSetCommand, { "--project", project,
+        "--profile", "/Game/PostProcess/Look.kbppfx", "--set", "screenSpaceReflectionsMaxDistance=0" });
+    Require(refusedReflections.exitCode != 0 && Contains(refusedReflections.output, "screenSpaceReflectionsMaxDistance"),
+        "a zero reflection distance must be refused with the field list: " + refusedReflections.output);
 }
 
 // import keeps a model's scale and rotation from a preset (import-preset-new) or flags, as the

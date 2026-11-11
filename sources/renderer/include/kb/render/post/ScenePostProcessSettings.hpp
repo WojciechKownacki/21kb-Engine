@@ -45,6 +45,12 @@ struct ScenePostProcessSettings {
     bool ambientOcclusionEnabled = false;
     float ambientOcclusionIntensity = 1.0F;
     float ambientOcclusionRadius = 0.6F;
+    // Screen-space reflections of the lit scene in glossy surfaces. Intensity 0..1 scales the reflected
+    // radiance, max distance (m) is how far a reflection ray travels. Off by default, as a scene without
+    // a profile renders today; the defaults are those of SceneRenderLightingConfig.
+    bool screenSpaceReflectionsEnabled = false;
+    float screenSpaceReflectionsIntensity = 1.0F;
+    float screenSpaceReflectionsMaxDistance = 25.0F;
     // Global illumination (the post-process Global Illumination
     // Method): light bounced off the scene, gathered on screen or traced through the voxel grid
     // around the camera, so a closed room is lit by what its lights reach and not by the sky.

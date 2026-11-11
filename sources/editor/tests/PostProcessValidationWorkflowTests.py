@@ -28,14 +28,17 @@ def main():
     for field, value in [('bloomStrength', '0.25'), ('bloomThreshold', '2'), ('bloomSoftKnee', '0.75'),
                          ('bloomRadiusPixels', '3'), ('outputTransform.gamma', '2.4'),
                          ('outputTransform.autoExposure.brightAdaptationRate', '4'),
-                         ('ambientOcclusionRadius', '0.5'), ('ambientOcclusionIntensity', '2')]:
+                         ('ambientOcclusionRadius', '0.5'), ('ambientOcclusionIntensity', '2'),
+                         ('screenSpaceReflectionsIntensity', '0.5'), ('screenSpaceReflectionsMaxDistance', '12')]:
         run(args.cli, *common, '--set', field + '=' + value)
         assert field + ' ' + value in profile.read_text(encoding='utf-8')
     for field, value in [('fogProfile', 'Unknown'), ('bloomStrength', 'inf'), ('bloomStrength', '-1'), ('bloomThreshold', '-1'),
                          ('bloomSoftKnee', '2'), ('bloomRadiusPixels', '-1'), ('outputTransform.gamma', '0'),
                          ('outputTransform.autoExposure.darkAdaptationRate', '-1'),
                          ('outputTransform.autoExposure.minExposureStops', '100'),
-                         ('ambientOcclusionRadius', '0'), ('ambientOcclusionIntensity', '-1')]:
+                         ('ambientOcclusionRadius', '0'), ('ambientOcclusionIntensity', '-1'),
+                         ('screenSpaceReflectionsIntensity', '2'), ('screenSpaceReflectionsIntensity', '-1'),
+                         ('screenSpaceReflectionsMaxDistance', '0')]:
         before = profile.read_bytes()
         run(args.cli, *common, '--set', field + '=' + value, expected=1)
         assert profile.read_bytes() == before, 'invalid edit changed the saved profile'

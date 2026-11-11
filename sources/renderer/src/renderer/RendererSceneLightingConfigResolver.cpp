@@ -65,6 +65,12 @@ void RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(
     config.ambientOcclusionEnabled = settings.ambientOcclusionEnabled;
     config.aoIntensity = settings.ambientOcclusionIntensity;
     config.aoRadius = settings.ambientOcclusionRadius;
+    // Reflections the profile turns on (Off leaves the lighting config's own, as for global illumination).
+    if (settings.screenSpaceReflectionsEnabled) {
+        config.screenSpaceReflectionsEnabled = true;
+        config.ssrIntensity = settings.screenSpaceReflectionsIntensity;
+        config.ssrMaxDistance = settings.screenSpaceReflectionsMaxDistance;
+    }
     // Global illumination and fog the profile turns on (Off leaves the lighting config's own).
     using Method = ScenePostProcessSettings::GlobalIlluminationMethod;
     if (settings.globalIllumination != Method::Off) {

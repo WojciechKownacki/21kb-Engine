@@ -107,6 +107,8 @@ Commands:
                outputTransform.exposureStops=0, bloomEnabled=0, vignetteEnabled=1,
                vignetteIntensity=0.3, ambientOcclusionEnabled=1,
                ambientOcclusionIntensity=1, ambientOcclusionRadius=0.6,
+               screenSpaceReflectionsEnabled=1, screenSpaceReflectionsIntensity=1,
+               screenSpaceReflectionsMaxDistance=25,
                globalIllumination=Off|ScreenSpace|Voxel, globalIlluminationIntensity=1,
                fogEnabled=1, fogDensity=0.02, fogHeightFalloff=0.2, fogBaseHeight=0,
                fogColor.r=0.6, fogColor.g=0.65, fogColor.b=0.7, volumetricFogEnabled=1,
