@@ -102,7 +102,6 @@ scenario-local aliases.
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
 | `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |
 | `assert_platform_locale` | Verifies the game-facing locale, bounded UTC offset and overflow-safe local-time conversion without system-clock access. |
-| `assert_runtime_settings` | Verifies transactional video and input settings with device-capability validation and revert semantics. |
 | `assert_optional_platform_adapter` | Verifies achievements, cloud save, DLC and user services remain capability-gated and unavailable services fail closed. |
 | `assert_docking_interactions` | none; drives the dock workspace of a hidden editor window with pointer and key messages: tab click, reorder, tear-off into a floating window, grouping by a tab strip, ungrouping at a panel edge, Escape, double-click maximize, the tab menu, middle-click close, the floating close button, the Layout menu panel rows, Settings in its own window, a crowded tab strip and a splitter. Writes `dock-*.bmp` captures of each stage. |
 | `discover_assets` | none |

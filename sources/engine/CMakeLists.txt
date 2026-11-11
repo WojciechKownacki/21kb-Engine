@@ -93,7 +93,6 @@ add_library(kb_engine STATIC
     include/engine/platform/PlatformServices.hpp
     include/engine/platform/UserStorage.hpp
     include/engine/platform/CrashReportConsent.hpp
-    include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
     include/engine/platform/PlatformLocale.hpp
     include/engine/security/Crypto.hpp

@@ -78,9 +78,17 @@ void RunHostBakeCommandTest() {
             console.Count(kb::editor::EditorConsoleLevel::Error) == 0U,
         "production host Bake did not use the project cache root or mutated the source document");
 
-    auto unsupported = working;
-    unsupported.eventBindings.push_back({
-        .sourceEmitterId = unsupported.emitters[0].emitterId,
+    // An external effect target is a supported capability when the referenced effect is registered.
+    auto child = working;
+    child.effectId = 4U;
+    const std::filesystem::path childPath = root / "Assets" / "Child.kbvfx";
+    Require(kb::scene::ParticleEffectAssetIO::Save(childPath, child) &&
+            registry.Upsert({.id = kb::assets::AssetId{4U}, .type = kb::scene::kParticleEffectAssetType,
+                .virtualPath = "/Game/Child.kbvfx", .physicalPath = childPath, .contentHash = 4U}),
+        "host Bake external effect fixture setup failed");
+    auto external = working;
+    external.eventBindings.push_back({
+        .sourceEmitterId = external.emitters[0].emitterId,
         .trigger = kb::scene::ParticleEventTrigger::Death,
         .action = kb::scene::ParticleEventAction::EmitEffectAsset,
         .targetEffect = {.assetId = 4U},
@@ -88,6 +96,17 @@ void RunHostBakeCommandTest() {
         .maxDepth = 1U,
         .perStepBudget = 1U,
     });
+    const auto externalBaked = kb::editor::ParticleEditorBakeHostCommand::Execute(
+        external, owner, registry, root, console);
+    Require(externalBaked.Succeeded() && std::filesystem::is_regular_file(externalBaked.cachePath),
+        "external effect target with a registered effect was rejected by production host Bake");
+
+    // A source module that cannot emit runtime events stays an unsupported capability.
+    auto unsupported = external;
+    unsupported.emitters[0].modules.push_back({.moduleId = 1U, .authoringOrder = 0U,
+        .type = kb::scene::ParticleModuleType::Gravity,
+        .payload = kb::scene::ParticleGravityModule{}});
+    unsupported.eventBindings[0].sourceModuleId = 1U;
     const auto rejected = kb::editor::ParticleEditorBakeHostCommand::Execute(
         unsupported, owner, registry, root, console);
     const kb::editor::EditorConsoleEntry& diagnostic = console.Entries().back();
@@ -95,7 +114,7 @@ void RunHostBakeCommandTest() {
             !rejected.diagnostics.empty() &&
             rejected.diagnostics.front().code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability &&
             diagnostic.level == kb::editor::EditorConsoleLevel::Error &&
-            diagnostic.message.find("effect.eventBinding[0].action") != std::string::npos &&
+            diagnostic.message.find("effect.eventBinding[0].sourceModuleId") != std::string::npos &&
             ReadBytes(sourcePath) == sourceBytes,
         "host Bake did not surface the typed unsupported diagnostic or changed source bytes");
 

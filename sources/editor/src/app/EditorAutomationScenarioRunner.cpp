@@ -93,7 +93,6 @@
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
-#include "engine/platform/SettingsTransaction.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
@@ -2195,36 +2194,6 @@ ReadScriptValue(
             !maximumDate.ToLocalSeconds(locale).has_value();
         return { valid, valid ? "bounded locale, UTC offset and safe date-time"
                               : "platform locale contract rejected" };
-    }
-
-    if (*operation == "assert_runtime_settings") {
-        kb::platform::SettingsTransaction settings{
-            kb::platform::RuntimeSettings{} };
-        settings.Pending().vibration = true;
-        const bool rejectedVibration = !settings.Apply({});
-        settings.Revert();
-        settings.Pending().videoWidth = 1920U;
-        settings.Pending().videoHeight = 1080U;
-        settings.Pending().fullscreen = true;
-        settings.Pending().mouseSensitivity = 2.0F;
-        const bool applied = settings.Apply(
-            { .flags = static_cast<std::uint32_t>(
-                kb::platform::PlatformCapability::Vibration) },
-            { .maximumVideoWidth = 1920U, .maximumVideoHeight = 1080U,
-                .fullscreen = true });
-        settings.Pending().videoWidth = 2560U;
-        const bool rejectedVideo = !settings.Apply(
-            {}, { .maximumVideoWidth = 1920U, .maximumVideoHeight = 1080U });
-        settings.Revert();
-        settings.Pending().mouseSensitivity = 0.0F;
-        const bool rejectedInput = !settings.Apply({});
-        settings.Revert();
-        const bool valid = rejectedVibration && applied && rejectedVideo &&
-            rejectedInput && settings.Current().videoWidth == 1920U &&
-            settings.Current().fullscreen &&
-            settings.Pending().mouseSensitivity == 2.0F;
-        return { valid, valid ? "video and input settings transaction"
-                              : "runtime settings contract rejected" };
     }
 
     if (*operation == "assert_optional_platform_adapter") {
