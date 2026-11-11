@@ -40,6 +40,10 @@ struct PackedSceneLighting {
     // valid, y its last mip.
     bgfx::TextureHandle skyReflection = BGFX_INVALID_HANDLE;
     std::array<float, 4U> skyReflectionParams{};
+    // light_probes.sh: u_lightProbeGrid and u_lightProbeSize (w 1 when the grid replaces the flat ambient).
+    bgfx::TextureHandle lightProbes = BGFX_INVALID_HANDLE;
+    std::array<float, 4U> lightProbeGrid{};
+    std::array<float, 4U> lightProbeSize{};
 };
 
 class SceneLightingPacker {

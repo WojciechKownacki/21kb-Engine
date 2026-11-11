@@ -15,6 +15,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/script/ScriptModule.hpp"
@@ -655,6 +656,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
     ReleaseRenderedSceneResources();
 
     currentScenePath_ = scenePath;
+    kb::scene::SceneLightProbeAccess::AssignBakedGrid(*scene_, scenePath.stem().generic_string());
     RememberLastOpenMap();
     AdoptSceneTagsIntoProject();
     AdvanceSceneDocumentGeneration();

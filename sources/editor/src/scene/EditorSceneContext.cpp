@@ -86,6 +86,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetKind.hpp"
@@ -459,6 +460,7 @@ EditorSceneContext::EditorSceneContext()
     }
     if (loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
+        kb::scene::SceneLightProbeAccess::AssignBakedGrid(*scene_, currentScenePath_.stem().generic_string());
         AdoptSceneTagsIntoProject();
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened the " + std::string{ openedAs } + ": " + currentScenePath_.generic_string());

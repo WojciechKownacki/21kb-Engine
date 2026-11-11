@@ -800,6 +800,8 @@ public:
     // (a spatial, per-camera/per-volume post-process system is explicitly out of scope for
     // this ticket - see ScenePostProcessAccess.hpp's own doc comment).
     std::uint64_t postProcessProfileAssetId = 0U;
+    // SceneLightProbeAccess: the baked probe grid asset (0 = none).
+    std::uint64_t lightProbeGridAssetId = 0U;
     // LIB-147: scene-global active AudioMixer asset id (0 = none) + active snapshot NAME
     // (empty = authored bus volumes) - the ONLY mixer selection a scene carries, mirroring
     // postProcessProfileAssetId's exact scene-global-toggle shape. Content resolution and

@@ -17,6 +17,7 @@
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -794,6 +795,7 @@ bool LoadGameProjectScene(
             return false;
         }
     }
+    kb::scene::SceneLightProbeAccess::AssignBakedGrid(scene, loadedScenePath.stem().generic_string());
 
     kb::scene::SceneInputActivation::Apply(scene);
     if (runtime.inputEnabled && !runtime.inputMappingContext.empty()) {

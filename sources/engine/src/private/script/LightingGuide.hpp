@@ -33,7 +33,7 @@ irradiance, with 0..4 diffuse bounces (`StaticLightmapSettings::bounces`, defaul
 that use the base colour of receivers and shadow casters. HDR encoding is not provided.
 `BakeLightProbes` traces a regular grid of L2 spherical-harmonics probes through the same
 geometry (`ShL2`, `EvaluateShL2Irradiance`, `SampleLightProbeGrid`; a small binary form via
-`SerializeLightProbeGrid`). Nothing relights moving objects from the grid at runtime yet. C++: include `engine/render/StaticLightmapBaker.hpp`,
+`SerializeLightProbeGrid`). C++: include `engine/render/StaticLightmapBaker.hpp`,
 fill world-space `LightmapTriangle` and `LightmapLight` spans, then call
 `BakeStaticLightmap`. Check `Succeeded()` before saving `rgba`.
 `GenerateLightmapUv` charts an unindexed triangle soup into a non-overlapping atlas.
@@ -52,8 +52,12 @@ to that mesh. Baking again replaces the previous result and starts from each rec
 original mesh (BakeSources.kbbake maps generated copies back to it), so edits of the
 source mesh are picked up. The materials set `bakedLightmapUv1`, so the second UV set
 is sampled. The same run writes LightProbes.kblp beside them: probes every
-`--probe-spacing` metres (default 2, 0 writes none) over the static geometry, coarsened
-to stay within `--max-probes`.
+`--probe-spacing` metres (default 2, 0 writes none) over the static geometry plus half a
+cell, coarsened to stay within `--max-probes`. A scene renders with the grid of its own
+name (SceneLightProbeAccess; the game and editor assign it when they open the scene, and
+the cooker packages it with the scene): on the forward path, surfaces without a lightmap
+take their diffuse ambient from the grid instead of the flat ambient. Gathered GI
+(screen-space or voxel) and the deferred path ignore it.
 
 The scene command uses static RGB point/directional lights and mesh shadow
 casters, saves a TGA and material, then assigns it to the receiver:

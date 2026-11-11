@@ -166,6 +166,7 @@ add_library(kb_renderer STATIC
     src/SceneDeferredLightingPass.cpp
     src/scene/SceneBackdropUniforms.cpp
     src/scene/SceneSkyReflection.cpp
+    src/scene/SceneLightProbeTexture.cpp
     src/SceneFramebuffer.cpp
     src/SceneGBuffer.cpp
     src/SceneRenderTarget.cpp
@@ -737,7 +738,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         endif()
         if(_fog_shader_output MATCHES "/fs_mesh_instanced\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
-                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_advanced.sh")
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_advanced.sh"
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/light_probes.sh")
         endif()
         if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND DEPENDS
@@ -1046,6 +1048,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         add_test(NAME kb_renderer_sky_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> sky-reflection)
         set_tests_properties(kb_renderer_sky_reflection PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
+        add_test(NAME kb_renderer_light_probes COMMAND $<TARGET_FILE:kb_renderer_tests> light-probes)
+        set_tests_properties(kb_renderer_light_probes PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu" TIMEOUT 180)
         # Screen-space ambient occlusion, reflections and bounce light, and the voxel grid built from mesh geometry.
         add_test(NAME kb_renderer_screen_space COMMAND $<TARGET_FILE:kb_renderer_tests> screen-space)
         add_test(NAME kb_renderer_graph_compact_gbuffer COMMAND $<TARGET_FILE:kb_renderer_tests> graph-compact-gbuffer)

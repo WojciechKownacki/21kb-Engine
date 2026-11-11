@@ -2095,7 +2095,6 @@ int RunSceneBakeLightingCommand(const ArgumentList& arguments, CommandIo io) {
     if(!session->Save()) {io.err << "error: scene " << session->path.generic_string() << " could not be written\n";return 1;}
     io.out << "baked " << baked.receivers << " receivers (" << baked.texels << " texels, " << baked.generatedMeshes << " generated lightmap UV meshes) with "
         << baked.lights << " static lights and " << baked.probes << " light probes";
-    if(baked.skippedLights!=0) io.out << "; skipped " << baked.skippedLights << " static spot lights (not supported by the lightmap baker)";
     io.out << '\n';
     return 0;
 }

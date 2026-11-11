@@ -17,6 +17,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/ScenePortalVisibility.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -439,6 +440,7 @@ void Renderer::Shutdown() {
     giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
     skyReflection_.Shutdown();
+    lightProbes_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
         deferredLightingPass_.reset();
@@ -1370,6 +1372,17 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         skyReflection_.Update(backdropUniforms, worldBackdropEnvironment, false);
         effectiveLightingConfig.skyReflection = skyReflection_.ReflectionFor(backdropUniforms, worldBackdropEnvironment);
         effectiveLightingConfig.skyReflectionMaxMip = SceneSkyReflection::MaxMip();
+    }
+    {
+        // The scene's baked probe grid, uploaded when it loads or changes.
+        std::shared_ptr<const LightProbeGrid> grid;
+        if (const std::uint64_t gridAssetId = kb::scene::SceneLightProbeAccess::Grid(scene); gridAssetId != 0U) {
+            const kb::assets::AssetHandle<LightProbeGrid> handle =
+                const_cast<kb::scene::Scene&>(scene).Assets().Manager().Load<LightProbeGrid>(kb::assets::AssetId{ gridAssetId });
+            if (handle.IsLoaded()) grid = handle.Shared();
+        }
+        lightProbes_.Update(std::move(grid));
+        lightProbes_.Apply(effectiveLightingConfig, renderScene.RenderOrigin());
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");

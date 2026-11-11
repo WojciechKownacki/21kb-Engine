@@ -252,6 +252,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneLightComponents.hpp
     include/engine/scene/SceneLightingAccess.hpp
     include/engine/scene/ScenePostProcessAccess.hpp
+    include/engine/scene/SceneLightProbeAccess.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
     include/engine/scene/SceneCharacterControllerComponents.hpp
@@ -465,6 +466,8 @@ add_library(kb_engine STATIC
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/StaticLightmapBaker.hpp
     src/render/StaticLightmapBaker.cpp
+    include/engine/render/LightProbeGridAssetLoader.hpp
+    src/render/LightProbeGridAssetLoader.cpp
     include/engine/scene/PhysicsAssembly.hpp
     include/engine/math/Polygon2D.hpp
     include/engine/audio/SpatialAudioPlayback.hpp

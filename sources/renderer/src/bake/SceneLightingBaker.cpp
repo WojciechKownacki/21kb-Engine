@@ -53,11 +53,7 @@ struct Receiver {
     std::uint64_t originalMeshAssetId = 0;
 };
 
-std::string SafeName(std::string_view text) {
-    std::string out;
-    for (const char c : text) out += (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') ? c : '_';
-    return out.empty() ? "Entity" : out;
-}
+std::string SafeName(std::string_view text) { return BakedLightingName(text); }
 
 void Append(std::string& bytes, const void* data, std::size_t size) { bytes.append(static_cast<const char*>(data), size); }
 
@@ -132,7 +128,7 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
     const auto fail = [&](std::string text) { result.error = std::move(text); return result; };
     if (settings.resolution < 16 || settings.resolution > 1024 || settings.bounces > 4) return fail("resolution must be 16..1024 and bounces 0..4");
     const std::string folderName = SafeName(sceneName);
-    const std::string virtualFolder = "/Game/Baked/" + folderName;
+    const std::string virtualFolder = BakedLightingFolder(sceneName);
     kb::render::RuntimeRenderAssetDiscovery discovery;
     discovery.SetDiscoveryEnabled(false);
     discovery.Ensure(scene, 0);
@@ -154,10 +150,11 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
     std::vector<Receiver> receivers;
     std::set<std::string> usedNames;
     const auto albedoOf = [&](std::uint64_t materialAssetId) {
-        if (materialAssetId == 0) return Vec3{ 0.8F, 0.8F, 0.8F };
-        const auto material = assets.Load<kb::render::RenderMaterialAssetData>(kb::assets::AssetId{ materialAssetId });
-        if (!material.IsLoaded()) return Vec3{ 0.8F, 0.8F, 0.8F };
-        const auto& color = material.Shared()->desc.baseColor;
+        // No material is the default one, which is also what a baked receiver without a material is given.
+        const kb::render::RenderMaterialAssetData fallback;
+        const auto material = materialAssetId == 0 ? kb::assets::AssetHandle<kb::render::RenderMaterialAssetData>{}
+            : assets.Load<kb::render::RenderMaterialAssetData>(kb::assets::AssetId{ materialAssetId });
+        const auto& color = material.IsLoaded() ? material.Shared()->desc.baseColor : fallback.desc.baseColor;
         return Vec3{ color[0], color[1], color[2] };
     };
     for (const auto entity : entities) {
@@ -284,6 +281,10 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
                 high = { std::max(high.x, corner.position.x), std::max(high.y, corner.position.y), std::max(high.z, corner.position.z) };
             }
         }
+        // Half a cell of margin keeps the outer probe layers off the surfaces they would otherwise lie in.
+        const float margin = settings.probeSpacing * 0.5F;
+        low = { low.x - margin, low.y - margin, low.z - margin };
+        high = { high.x + margin, high.y + margin, high.z + margin };
         LightProbeSettings probeSettings;
         probeSettings.spacing = settings.probeSpacing; probeSettings.maxProbes = settings.maxProbes;
         probes = BakeLightProbes(surfaces, lights, low, high, probeSettings);
@@ -325,12 +326,12 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
         }
     }
     if (probes.Succeeded()) {
-        const auto probePath = *folder / "LightProbes.kblp";
+        const auto probePath = *assets.Mounts().Resolve(std::filesystem::path{ LightProbeGridVirtualPath(sceneName) });
         const std::string bytes = SerializeLightProbeGrid(probes);
         { std::ofstream out(probePath, std::ios::binary); out.write(bytes.data(), static_cast<std::streamsize>(bytes.size())); if (!out) return fail("cannot write " + probePath.generic_string()); }
         result.probes = static_cast<std::uint32_t>(probes.probes.size());
     } else {
-        std::filesystem::remove(*folder / "LightProbes.kblp", code);
+        std::filesystem::remove(*assets.Mounts().Resolve(std::filesystem::path{ LightProbeGridVirtualPath(sceneName) }), code);
     }
     {
         std::ofstream out(sourcesPath, std::ios::trunc);

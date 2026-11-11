@@ -84,6 +84,10 @@ namespace {
         .volumetricFogEnabled = requested.volumetricFogEnabled != defaultConfig.volumetricFogEnabled ? requested.volumetricFogEnabled : fallback.volumetricFogEnabled,
         .fogAnisotropy = requested.fogAnisotropy != defaultConfig.fogAnisotropy ? requested.fogAnisotropy : fallback.fogAnisotropy,
         .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
+        // The frame's probe grid has no default to fall back to.
+        .lightProbes = requested.lightProbes,
+        .lightProbeGrid = requested.lightProbeGrid,
+        .lightProbeSize = requested.lightProbeSize,
     };
 }
 

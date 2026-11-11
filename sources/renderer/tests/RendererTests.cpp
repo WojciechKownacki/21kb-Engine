@@ -72,6 +72,7 @@ void RunRendererRuntimeSubmitTests();
 void RunRendererStreamingLifetimeTests();
 void RunRendererGiResolveTests();
 void RunRendererSkyReflectionTests();
+void RunRendererLightProbeTests();
 void RunRendererCommandReuseTests();
 void RunRendererTransparentGpuReadbackTests();
 void RunRendererDefaultSubmissionResultTest();
@@ -334,6 +335,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "sky-reflection") {
         kb::render::tests::RunRendererSkyReflectionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "light-probes") {
+        kb::render::tests::RunRendererLightProbeTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-state-rejection") {

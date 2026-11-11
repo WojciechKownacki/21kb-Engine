@@ -1,6 +1,7 @@
 #include "engine/render/StaticLightmapBaker.hpp"
 #include "engine/math/ColorSpace.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -37,7 +38,9 @@ float DirectStrength(const LightmapLight& light,V p,V n,V& direction,float& dist
     distance=std::sqrt(Dot(delta,delta)); direction=Unit(delta);
     float strength=std::max(Dot(n,direction),0.0F)*light.intensity;
     if(light.directional) return strength;
-    const float fade=std::max(1-distance/light.range,0.0F); strength*=fade*fade/std::max(distance*distance,1.0F);
+    // The runtime falloff (fs_mesh_instanced.sc): inverse square, windowed to zero at the range.
+    const float ratio=distance/light.range, window=std::clamp(1-ratio*ratio*ratio*ratio,0.0F,1.0F);
+    strength*=window*window/std::max(distance*distance,0.0001F);
     if(light.spot) {
         const float inner=std::cos(light.innerConeDegrees*0.0174532925F), outer=std::cos(light.outerConeDegrees*0.0174532925F);
         const float ramp=std::clamp((Dot(Unit(light.direction),Mul(direction,-1))-outer)/std::max(inner-outer,0.001F),0.0F,1.0F);
@@ -536,4 +539,12 @@ LightProbeGrid ParseLightProbeGrid(std::string_view bytes) {
     for(auto& probe:grid.probes) for(auto& c:probe.c) { float rgb[3]; get(rgb,sizeof(rgb)); c={rgb[0],rgb[1],rgb[2]}; }
     return grid;
 }
+
+std::string BakedLightingName(std::string_view text) {
+    std::string out;
+    for(const char c:text) out+=(std::isalnum(static_cast<unsigned char>(c))||c=='_'||c=='-')?c:'_';
+    return out.empty()?"Entity":out;
+}
+std::string BakedLightingFolder(std::string_view sceneName) { return "/Game/Baked/"+BakedLightingName(sceneName); }
+std::string LightProbeGridVirtualPath(std::string_view sceneName) { return BakedLightingFolder(sceneName)+"/LightProbes"+std::string{kLightProbeGridExtension}; }
 } // namespace kb::render

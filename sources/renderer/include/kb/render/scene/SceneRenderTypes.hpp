@@ -399,6 +399,11 @@ struct SceneRenderLightingConfig {
     // none, and reflections then use the environment colour.
     bgfx::TextureHandle skyReflection = BGFX_INVALID_HANDLE;
     float skyReflectionMaxMip = 0.0F;
+    // The baked light probe grid (SceneLightProbeTexture, light_probes.sh): its texture, origin and inverse
+    // spacing, and dimensions. Invalid when the scene has none; surfaces then use the flat ambient.
+    bgfx::TextureHandle lightProbes = BGFX_INVALID_HANDLE;
+    std::array<float, 4> lightProbeGrid{};
+    std::array<float, 4> lightProbeSize{};
 };
 
 // Cube shadows of up to 32 lights (point, spot, area and tube) share one depth atlas: face f of light s

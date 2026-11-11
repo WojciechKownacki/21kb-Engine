@@ -2,6 +2,7 @@
 
 #include "scene/lighting/SceneForwardLightSelector.hpp"
 #include "scene/lighting/SceneLightShaderData.hpp"
+#include "kb/render/gi/SceneGiUniforms.hpp"
 
 #include "engine/math/EngineMath.hpp"
 
@@ -174,6 +175,13 @@ PackedSceneLighting SceneLightingPacker::Build(
     lighting.fogColor = {config.fogColor[0], config.fogColor[1], config.fogColor[2], std::clamp(config.fogAnisotropy, -0.9F, 0.9F)};
     lighting.skyReflection = config.skyReflection;
     lighting.skyReflectionParams = { bgfx::isValid(config.skyReflection) ? 1.0F : 0.0F, config.skyReflectionMaxMip, 0.0F, 0.0F };
+    // Gathered real-time GI owns the bounce light, so the baked probes stand aside.
+    if (bgfx::isValid(config.lightProbes) && !UsesGatheredGi(config)) {
+        lighting.lightProbes = config.lightProbes;
+        lighting.lightProbeGrid = config.lightProbeGrid;
+        lighting.lightProbeSize = config.lightProbeSize;
+        lighting.lightProbeSize[3] = 1.0F;
+    }
     stats.submittedEnvironmentLightingCount = config.environmentMode == SceneRenderEnvironmentMode::Disabled ? 0U : 1U;
     stats.environmentLightingMode = static_cast<std::uint32_t>(config.environmentMode) + 1U;
     stats.environmentLightingSampleCount = EnvironmentSampleCount(config.environmentMode);

@@ -232,6 +232,10 @@ private:
     // The sky light's prefiltered cube (sky_reflection.sh) of the forward lighting.
     bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
+    // The baked light probe grid (light_probes.sh) of the forward lighting.
+    bgfx::UniformHandle lightProbeSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle lightProbeGridUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle lightProbeSizeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};

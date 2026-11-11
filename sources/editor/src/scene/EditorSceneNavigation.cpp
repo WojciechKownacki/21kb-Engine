@@ -8,6 +8,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "kb/render/world/NavMeshBakeTool.hpp"
@@ -191,10 +192,8 @@ bool EditorSceneContext::BuildLighting() {
         console_.Error("Lighting", "The scene could not be saved after building lighting.");
         return false;
     }
+    kb::scene::SceneLightProbeAccess::AssignBakedGrid(*scene_, std::string_view{ reinterpret_cast<const char*>(name.data()), name.size() });
     console_.Info("Lighting", "Baked " + std::to_string(baked.receivers) + " static mesh(es) with " + std::to_string(baked.lights) + " static light(s).");
-    if (baked.skippedLights != 0U) {
-        console_.Warning("Lighting", std::to_string(baked.skippedLights) + " static spot light(s) were left out; the lightmap baker supports point and directional lights.");
-    }
     return true;
 }
 

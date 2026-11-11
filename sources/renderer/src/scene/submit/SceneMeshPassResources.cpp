@@ -391,7 +391,10 @@ bool SceneMeshPassResources::Initialize() {
     environmentParamsUniform_ = bgfx::createUniform("u_environmentParams", bgfx::UniformType::Vec4);
     skyReflectionSampler_ = bgfx::createUniform("s_skyReflection", bgfx::UniformType::Sampler);
     skyReflectionParamsUniform_ = bgfx::createUniform("u_skyReflectionParams", bgfx::UniformType::Vec4);
-    shadowViewProjUniform_ = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
+    lightProbeSampler_ = bgfx::createUniform("s_lightProbes", bgfx::UniformType::Sampler);
+    lightProbeGridUniform_ = bgfx::createUniform("u_lightProbeGrid", bgfx::UniformType::Vec4);
+    lightProbeSizeUniform_ = bgfx::createUniform("u_lightProbeSize", bgfx::UniformType::Vec4);
+    shadowViewProjUniform_ =bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
     shadowCascades_.Create();
     pointShadows_.Create();
@@ -515,6 +518,12 @@ void SceneMeshPassResources::Shutdown() {
     if (bgfx::isValid(skyReflectionParamsUniform_)) {
         bgfx::destroy(skyReflectionParamsUniform_);
         skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    for (bgfx::UniformHandle* uniform : { &lightProbeSampler_, &lightProbeGridUniform_, &lightProbeSizeUniform_ }) {
+        if (bgfx::isValid(*uniform)) {
+            bgfx::destroy(*uniform);
+            *uniform = BGFX_INVALID_HANDLE;
+        }
     }
     if (bgfx::isValid(environmentGroundUniform_)) {
         bgfx::destroy(environmentGroundUniform_);
@@ -733,6 +742,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) &&
         bgfx::isValid(skyReflectionSampler_) && bgfx::isValid(skyReflectionParamsUniform_) &&
+        bgfx::isValid(lightProbeSampler_) && bgfx::isValid(lightProbeGridUniform_) && bgfx::isValid(lightProbeSizeUniform_) &&
         bgfx::isValid(shadowViewProjUniform_) &&
         bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
         bgfx::isValid(fallbackWhiteTexture_) &&
@@ -1464,6 +1474,10 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
     if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent) {
         BindSkyReflection(desc.lighting, 12U);
+        bgfx::setTexture(14U, lightProbeSampler_,
+            bgfx::isValid(desc.lighting.lightProbes) ? desc.lighting.lightProbes : fallbackWhite3DTexture_);
+        bgfx::setUniform(lightProbeGridUniform_, desc.lighting.lightProbeGrid.data());
+        bgfx::setUniform(lightProbeSizeUniform_, desc.lighting.lightProbeSize.data());
     }
     bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());

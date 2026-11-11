@@ -96,4 +96,12 @@ struct LightProbeGrid {
 [[nodiscard]] std::string SerializeLightProbeGrid(const LightProbeGrid& grid);
 [[nodiscard]] LightProbeGrid ParseLightProbeGrid(std::string_view bytes);
 
+inline constexpr std::string_view kLightProbeGridAssetType = "LightProbeGrid";
+inline constexpr std::string_view kLightProbeGridExtension = ".kblp";
+// The file-safe form of a name in baked lighting output: anything but letters, digits, '_' and '-' becomes '_'.
+[[nodiscard]] std::string BakedLightingName(std::string_view text);
+// The folder a scene's lighting bake writes to and the probe grid inside it, from the scene file's stem.
+[[nodiscard]] std::string BakedLightingFolder(std::string_view sceneName);
+[[nodiscard]] std::string LightProbeGridVirtualPath(std::string_view sceneName);
+
 } // namespace kb::render

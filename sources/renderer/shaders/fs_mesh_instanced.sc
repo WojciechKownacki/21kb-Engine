@@ -34,6 +34,7 @@ uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
 #include "sky_reflection.sh"
 #include "local_reflection.sh"
+#include "light_probes.sh"
 #include "height_fog.sh"
 uniform vec4 u_shadowParams;
 uniform vec4 u_terrainLayerParams;
@@ -181,7 +182,9 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     float nDotV = max(dot(normal, viewDir), 0.0);
     vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
-    vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
+    // A baked probe grid gives the surroundings' diffuse light where the scene has one.
+    vec3 diffuseLight = u_lightProbeSize.w > 0.5 ? KbLightProbeIrradiance(worldPos, normal) : EnvironmentColor(normal);
+    vec3 diffuseEnv = diffuseLight * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     diffuseEnv *= 1.0 - u_materialOptics.x;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);

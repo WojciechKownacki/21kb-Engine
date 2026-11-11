@@ -56,8 +56,8 @@ void RunBounceTests() {
     settings.bounces = 0;
     const auto direct = kb::render::BakeStaticLightmap(room.floor, room.others, room.lights, settings);
     kb::tests::Require(direct.Succeeded() && direct.shadowedSamples > 0, "direct-only lightmap bake succeeds with shadows");
-    // Golden of the direct pass taken before the bounce pass existed.
-    kb::tests::Require(Fnv(direct.rgba) == 0x29d2a8dc35f9375bULL, "bounces == 0 keeps the direct-only bytes unchanged");
+    // Golden of the direct pass with the runtime light falloff (fs_mesh_instanced.sc).
+    kb::tests::Require(Fnv(direct.rgba) == 0x38baf63a9a4cefe3ULL, "bounces == 0 keeps the direct-only bytes unchanged");
 
     settings.bounces = 1;
     const auto one = kb::render::BakeStaticLightmap(room.floor, room.others, room.lights, settings);

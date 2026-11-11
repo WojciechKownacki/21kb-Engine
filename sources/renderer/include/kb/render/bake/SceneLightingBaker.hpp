@@ -21,7 +21,7 @@ struct SceneLightingBakeSettings {
 struct SceneLightingBakeResult {
     std::string error;
     bool cancelled = false;
-    std::uint32_t receivers = 0, lights = 0, generatedMeshes = 0, skippedLights = 0, probes = 0;
+    std::uint32_t receivers = 0, lights = 0, generatedMeshes = 0, probes = 0;
     std::uint64_t texels = 0;
     [[nodiscard]] bool Succeeded() const noexcept { return error.empty() && !cancelled; }
 };

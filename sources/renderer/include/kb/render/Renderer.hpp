@@ -12,6 +12,7 @@
 #include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/gi/SceneGiResolvePass.hpp"
 #include "kb/render/scene/SceneSkyReflection.hpp"
+#include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
@@ -333,6 +334,7 @@ private:
     SceneGiResolvePass giResolvePass_;
     // Sky light: the backdrop captured and prefiltered for the reflections of the lighting.
     SceneSkyReflection skyReflection_;
+    SceneLightProbeTexture lightProbes_;
     SceneGiVoxelGrid giVoxelGrid_;
     SceneRenderTarget defaultSceneTarget_;
     // G-buffer commands are consumed asynchronously by bgfx. Reusing one allocation for

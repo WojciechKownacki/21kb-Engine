@@ -24,6 +24,8 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
+#include "engine/render/StaticLightmapBaker.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
@@ -10355,6 +10357,70 @@ void RunRendererSkyReflectionTests() {
     renderer.Shutdown();
 #else
     throw std::runtime_error("Sky reflection readback requires a supported native GPU test surface");
+#endif
+}
+
+void RunRendererLightProbeTests() {
+#if defined(_WIN32)
+    // A probe grid baked next to a lit red wall over a white floor; the rendered dynamic sphere is not baked.
+    const auto quad = [](kb::math::Vec3 a, kb::math::Vec3 b, kb::math::Vec3 c, kb::math::Vec3 d, kb::math::Vec3 normal,
+                          kb::math::Vec3 albedo) {
+        const auto corner = [&](kb::math::Vec3 p, float u, float v) {
+            return LightmapVertex{ .position = p, .normal = normal, .u = u, .v = v, .albedo = albedo };
+        };
+        return std::vector<LightmapTriangle>{ { corner(a, 0, 0), corner(b, 1, 0), corner(c, 1, 1) },
+            { corner(a, 0, 0), corner(c, 1, 1), corner(d, 0, 1) } };
+    };
+    const auto wall = quad({ -2, 0, -3 }, { -2, 0, 3 }, { -2, 4, 3 }, { -2, 4, -3 }, { 1, 0, 0 }, { 0.8F, 0.05F, 0.05F });
+    const auto floor = quad({ -3, 0, -3 }, { 3, 0, -3 }, { 3, 0, 3 }, { -3, 0, 3 }, { 0, 1, 0 }, { 0.8F, 0.8F, 0.8F });
+    const std::vector<std::uint8_t> lit(4U * 4U * 4U, 230U);
+    const std::array<BakedLightmapSurface, 2> surfaces{ BakedLightmapSurface{ wall, lit, 4 }, BakedLightmapSurface{ floor, lit, 4 } };
+    LightProbeSettings settings;
+    settings.spacing = 1.0F;
+    const LightProbeGrid grid = BakeLightProbes(surfaces, {}, { -1.5F, 0.5F, -2.5F }, { 2.5F, 3.5F, 2.5F }, settings);
+    Require(grid.Succeeded(), "Light probe test grid could not be baked");
+    const LightProbeGrid parsed = ParseLightProbeGrid(SerializeLightProbeGrid(grid));
+    Require(parsed.Succeeded() && parsed.probes.size() == grid.probes.size(), "Light probe test grid did not survive its file form");
+
+    const auto render = [&](bool withGrid, SceneRenderGlobalIlluminationMode gi) {
+        SsMaterialOptions options;
+        options.sphere = true;
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination = gi;
+        const auto assign = [&](kb::scene::Scene& scene, int frame) {
+            if (frame != 0 || !withGrid) return;
+            const kb::assets::AssetId id = kb::assets::MakeAssetId("ProbeTestGrid");
+            kb::assets::AssetManager& manager = scene.Assets().Manager();
+            Require(manager.RegisterAsset(kb::assets::AssetMetadata{ .id = id, .type = std::string{ kLightProbeGridAssetType },
+                        .name = "LightProbes", .virtualPath = LightProbeGridVirtualPath("ProbeTest"),
+                        .physicalPath = std::filesystem::temp_directory_path() / "ProbeTestGrid.kblp", .contentHash = 1U,
+                        .runtimeLoadable = true }) &&
+                    manager.PublishRuntimeAsset(id, std::make_shared<LightProbeGrid>(parsed)),
+                "Light probe test grid could not be published");
+            kb::scene::SceneLightProbeAccess::AssignBakedGrid(scene, "ProbeTest");
+            Require(kb::scene::SceneLightProbeAccess::Grid(scene) == id.value, "The scene did not find its baked probe grid");
+        };
+        return RenderScreenSpaceScene({ { { 0.0F, 1.2F, 0.0F }, { 1.0F, 1.0F, 1.0F } } }, {}, { 0.0F, 1.2F, -6.0F }, { 0.0F, 1.2F, 0.0F },
+            30.0F, lighting, 4, 64U, SceneRenderMeshPassMode::OpaqueOnly, assign, false, 1.27F, 40.0F, nullptr, {}, 0.05F,
+            bgfx::RendererType::Direct3D11, nullptr, &options);
+    };
+    // Red minus blue over the sphere's wall-facing half (the wall is at -x, on the left of the image).
+    const auto redShift = [](const std::vector<std::uint8_t>& pixels) {
+        double sum = 0.0;
+        for (unsigned y = 26U; y < 38U; ++y) for (unsigned x = 22U; x < 32U; ++x) {
+            const std::size_t at = (static_cast<std::size_t>(y) * 64U + x) * 4U;
+            sum += static_cast<double>(pixels[at]) - static_cast<double>(pixels[at + 2U]);
+        }
+        return sum / 120.0;
+    };
+    const auto without = render(false, SceneRenderGlobalIlluminationMode::Disabled);
+    const auto withProbes = render(true, SceneRenderGlobalIlluminationMode::Disabled);
+    const auto again = render(false, SceneRenderGlobalIlluminationMode::Disabled);
+    std::fprintf(stderr, "light_probe_pixels without=%.3f with=%.3f\n", redShift(without), redShift(withProbes));
+    Require(redShift(withProbes) > redShift(without) + 10.0, "A baked probe grid next to a red wall did not red-shift the dynamic sphere");
+    Require(without == again, "A scene without a probe grid must render the same image every time");
+#else
+    throw std::runtime_error("Light probe readback requires a supported native GPU test surface");
 #endif
 }
 
