@@ -1197,7 +1197,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
 }
 
 // entity attach: hangs an object on a character's socket (or bone) - parented under the
-// character and held there every frame after animation, as Unreal's AttachToComponent.
+// character and held there every frame after animation.
 [[nodiscard]] int EntityAttach(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> name = arguments.Option("--name");
     const std::optional<std::string> characterName = arguments.Option("--to");

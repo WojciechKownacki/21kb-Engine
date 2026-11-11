@@ -1487,7 +1487,7 @@ void RunAssetImportServiceBinaryContainerTest() {
 }
 
 // A model imported with a scale and rotation keeps them in its container, so every load (and a
-// repeated import with the same settings) reproduces them, as a Unity .meta keeps ModelImporter
+// repeated import with the same settings) reproduces them, the way the .meta keeps the import
 // settings; other settings import a separate asset, a texture never carries them, and a scale
 // that is not above zero is refused.
 void RunAssetImportServiceKeepsModelTransformTest() {

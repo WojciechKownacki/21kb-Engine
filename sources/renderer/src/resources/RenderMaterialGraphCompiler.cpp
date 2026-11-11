@@ -481,7 +481,7 @@ struct GraphCodegen {
     std::unordered_set<std::uint32_t> emittedCustomFunctions;
     std::vector<std::pair<std::uint32_t, std::string>> functionDefinitions;
     std::string statements;
-    // Unreal's PixelNormalWS: the surface Normal in world space, emitted once per function.
+    // PixelNormalWS: the surface Normal in world space, emitted once per function.
     std::string pixelNormalTemp;
     // Set while the Normal (or the attribute set that carries it) compiles: PixelNormalWS cannot feed it.
     bool compilingMaterialNormal = false;
@@ -1044,7 +1044,7 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".alphaClipThreshold = 0.5;\n"
         "    " + v + ".specular = 0.5;\n"
         "    " + v + ".tangentOutput = vec3(1.0, 0.0, 0.0);\n"
-        // Unreal's defaults of the Clear Coat pins.
+        // Defaults of the Clear Coat pins.
         "    " + v + ".clearCoat = 1.0;\n"
         "    " + v + ".clearCoatRoughness = 0.1;\n"
         "    " + v + ".pixelDepthOffset = 0.0;\n"
@@ -1177,7 +1177,7 @@ void AppendCustomCodeFunctionDefinitions(
 struct TextureCoordinateHint {
     float uTile = 1.0F;
     float vTile = 1.0F;
-    std::uint32_t set = 0U;  // Unreal's Coordinate Index, UV0..UV7
+    std::uint32_t set = 0U;  // Coordinate Index, UV0..UV7
 };
 
 [[nodiscard]] TextureCoordinateHint ParseTextureCoordinateHint(std::string_view hint) {
@@ -1199,8 +1199,8 @@ struct TextureCoordinateHint {
     return result;
 }
 
-// One octave of Unreal's Noise function in -1..1. Voronoi is the distance to the nearest cell point, brought
-// to -1..1 like Unreal's VoronoiNoise3D_ALU(...).w * 2 - 1; its quality selects the searched neighbourhood.
+// One octave of the Noise function in -1..1. Voronoi is the distance to the nearest cell point, brought
+// to -1..1 as d * 2 - 1; its quality selects the searched neighbourhood.
 [[nodiscard]] std::string NoiseFunctionCall(const RenderMaterialGraphNoiseSettings& noise, const std::string& position) {
     switch (noise.function) {
     case RenderMaterialGraphNoiseFunction::Simplex:
@@ -1217,7 +1217,7 @@ struct TextureCoordinateHint {
 
 // The Voronoi search of one quality level: Quality 1 checks the 2x2x2 cells nearest the point with points
 // jittered within half a cell, 2 the 3x3x3 neighbourhood at 0.75 jitter, 3 at full jitter, 4 the 4x4x4
-// neighbourhood at full jitter (Unreal trades the cell count against jitter the same way).
+// neighbourhood at full jitter (the cell count is traded against jitter).
 [[nodiscard]] std::string VoronoiNoiseFunctionSource(std::uint32_t quality) {
     const int cells = quality == 1U ? 2 : (quality == 4U ? 4 : 3);
     const float jitter = quality == 1U ? 0.5F : (quality == 2U ? 0.75F : 1.0F);
@@ -1247,7 +1247,7 @@ struct TextureCoordinateHint {
     return source;
 }
 
-// Unreal's BlendFunctions on Base (b) and Blend (l). The burn/dodge denominators keep 1e-5 away from zero.
+// BlendFunctions on Base (b) and Blend (l). The burn/dodge denominators keep 1e-5 away from zero.
 [[nodiscard]] std::string BlendFunctionExpression(RenderMaterialGraphNodeKind kind, const std::string& b, const std::string& l) {
     const std::string one = "vec3_splat(1.0)";
     const std::string half = "vec3_splat(0.5)";
@@ -1280,9 +1280,9 @@ struct TextureCoordinateHint {
     }
 }
 
-// Unreal's PixelNormalWS: the material's Normal (tangent space) taken to world space through the pixel's
+// PixelNormalWS: the material's Normal (tangent space) taken to world space through the pixel's
 // tangent basis, the same KbGraphBasis* basis the lighting wrappers shade with; the interpolated vertex
-// normal when nothing drives the Normal. Unreal refuses it inside the Normal and in vertex inputs.
+// normal when nothing drives the Normal. It is refused inside the Normal and in vertex inputs.
 [[nodiscard]] std::string PixelNormalExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     if (cg.context.shaderStage == RenderMaterialGraphShaderStage::Vertex) {
         AddShaderGenerationDiagnostic(cg.diagnostics, node, "value", "PixelNormalWS is a pixel input; it cannot feed World Position Offset, Displacement or Customized UVs.");
@@ -1556,7 +1556,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
             return it->second;
         }
-        // An unconnected side is Unreal's default attribute set.
+        // An unconnected side is the default attribute set.
         const auto attributesOrDefault = [&](const char* pin) {
             if (FindInputLink(cg.graph, node.id, pin) != nullptr) {
                 return CompileInputExpression(cg, node, pin, RenderMaterialGraphPinType::MaterialAttributes, "");
@@ -1857,7 +1857,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         hardness = hardness < 0.0F ? 0.0F : (hardness > 0.999F ? 0.999F : hardness);
         const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
         const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
-        // Unreal's SphereMask: saturate((1 - distance / radius) / (1 - hardness)).
+        // SphereMask: saturate((1 - distance / radius) / (1 - hardness)).
         return "vec4_splat(clamp((1.0 - distance(" + a + ", " + b + ") / " + FloatLiteral(radius) + ") / " +
             FloatLiteral(std::max(1.0F - hardness, 0.00001F)) + ", 0.0, 1.0))";
     }
@@ -1867,7 +1867,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "6500.0") +
             "), 1.0)";
     case RenderMaterialGraphNodeKind::Noise: {
-        // Unreal's Noise (MaterialExpressionNoise): Levels octaves of the chosen function, each LevelScale times
+        // Noise: Levels octaves of the chosen function, each LevelScale times
         // finer and 1/LevelScale as strong, faded by the filter width; turbulence sums |noise|, otherwise the
         // -1..1 sum is brought to 0..1; the result is lerp(OutputMin, OutputMax, sum), broadcast to float4.
         if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
@@ -1908,9 +1908,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return tmp;
     }
     case RenderMaterialGraphNodeKind::WorldAlignedTexture: {
-        // Unreal's WorldAlignedTexture: the texture projected along the world axes, UVs = WorldPosition /
-        // TextureSize, blended by the CheapContrast of |WorldSpaceNormal| per axis. Unreal is Z-up and this
-        // engine is Y-up, so Unreal's Z projection (the "Z Texture", the top) samples along +Y here and the
+        // WorldAlignedTexture: the texture projected along the world axes, UVs = WorldPosition /
+        // TextureSize, blended by the CheapContrast of |WorldSpaceNormal| per axis. This
+        // engine is Y-up, so the Z projection (the "Z Texture", the top) samples along +Y here and the
         // "XY Texture" blends the projections along X and Z.
         if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
             return it->second;
@@ -1947,7 +1947,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return xyz;
     }
     case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping: {
-        // Unreal's ParallaxOcclusionMapping: the height map (channel = setting 0..3, red by default) ray marched
+        // ParallaxOcclusionMapping: the height map (channel = setting 0..3, red by default) ray marched
         // along the tangent-space view from the top layer down, the hit refined between the two layers around it.
         // Outputs the parallax UVs and the depth reached (0..1). Gradients from the input UVs keep the samples in the
         // loop filtered.
@@ -1996,7 +1996,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return v("Result");
     }
     case RenderMaterialGraphNodeKind::FlipBook: {
-        // Unreal's FlipBook: frame floor(frac(phase) * rows * columns), read left to right and top to bottom.
+        // FlipBook: frame floor(frac(phase) * rows * columns), read left to right and top to bottom.
         const std::string id = std::to_string(node.id);
         const std::string grid = "flipBookGrid" + id;
         const std::string frame = "flipBookFrame" + id;
@@ -2009,7 +2009,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             ".x), floor(" + frame + " / " + grid + ".x))) / " + grid + ")";
     }
     case RenderMaterialGraphNodeKind::Checkerboard: {
-        // Unity Shader Graph's Checkerboard: an analytically antialiased checker of Color A and Color B whose
+        // Checkerboard: an analytically antialiased checker of Color A and Color B whose
         // contrast fades out as the UV footprint of a pixel approaches a cell.
         const std::string id = std::to_string(node.id);
         const std::string uv = "checkerUv" + id;
@@ -2027,7 +2027,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             ", vec3_splat(clamp(0.5 + 0.5 * " + blend + ".x * " + blend + ".y * sqrt(clamp(1.1 - max(" + footprint + ".x, " + footprint + ".y), 0.0, 1.0)), 0.0, 1.0)))";
     }
     case RenderMaterialGraphNodeKind::PolarCoordinates: {
-        // Unity Shader Graph's Polar Coordinates: (radius * 2 * Radial Scale, atan2(x, y) / 6.28 * Length Scale).
+        // Polar Coordinates: (radius * 2 * Radial Scale, atan2(x, y) / 6.28 * Length Scale).
         const std::string delta = "polarDelta" + std::to_string(node.id);
         cg.statements += "    vec2 " + delta + " = " + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") + " - " +
             CompileInputExpression(cg, node, "center", RenderMaterialGraphPinType::Float2, "vec2(0.5, 0.5)") + ";\n";
@@ -2036,7 +2036,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "lengthScale", RenderMaterialGraphPinType::Float, "1.0") + ")";
     }
     case RenderMaterialGraphNodeKind::Twirl: {
-        // Unity Shader Graph's Twirl: rotate the UV about Center by Strength * distance, then add Offset.
+        // Twirl: rotate the UV about Center by Strength * distance, then add Offset.
         const std::string id = std::to_string(node.id);
         const std::string center = "twirlCenter" + id;
         const std::string delta = "twirlDelta" + id;
@@ -2048,7 +2048,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             delta + ".y) + " + center + " + " + CompileInputExpression(cg, node, "offset", RenderMaterialGraphPinType::Float2, "vec2(0.0, 0.0)") + ")";
     }
     case RenderMaterialGraphNodeKind::Ellipse: {
-        // Unity Shader Graph's Ellipse: saturate((1 - d) / fwidth(d)), d = |(2 UV - 1) / (Width, Height)|.
+        // Ellipse: saturate((1 - d) / fwidth(d)), d = |(2 UV - 1) / (Width, Height)|.
         const std::string distanceName = "ellipseDistance" + std::to_string(node.id);
         cg.statements += "    float " + distanceName + " = length((" + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
             " * 2.0 - vec2_splat(1.0)) / vec2(" + CompileInputExpression(cg, node, "width", RenderMaterialGraphPinType::Float, "0.5") + ", " +
@@ -2056,7 +2056,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "vec4_splat(clamp((1.0 - " + distanceName + ") / max(fwidth(" + distanceName + "), 0.000001), 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Rectangle: {
-        // Unity Shader Graph's Rectangle: saturate(min(1 - d / fwidth(d))), d = |2 UV - 1| - (Width, Height).
+        // Rectangle: saturate(min(1 - d / fwidth(d))), d = |2 UV - 1| - (Width, Height).
         const std::string distanceName = "rectangleDistance" + std::to_string(node.id);
         cg.statements += "    vec2 " + distanceName + " = abs(" + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
             " * 2.0 - vec2_splat(1.0)) - vec2(" + CompileInputExpression(cg, node, "width", RenderMaterialGraphPinType::Float, "0.5") + ", " +
@@ -2065,7 +2065,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "vec4_splat(clamp(min(" + distanceName + ".x, " + distanceName + ".y), 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::RoundedRectangle: {
-        // Unity Shader Graph's Rounded Rectangle: the rectangle with corners of Radius (clamped to the half sizes).
+        // Rounded Rectangle: the rectangle with corners of Radius (clamped to the half sizes).
         const std::string id = std::to_string(node.id);
         const std::string width = "roundedWidth" + id;
         const std::string height = "roundedHeight" + id;
@@ -2090,7 +2090,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::BlendDarken:
     case RenderMaterialGraphNodeKind::BlendLighten:
     case RenderMaterialGraphNodeKind::BlendDifference: {
-        // Unreal's BlendFunctions (Blend_Overlay, ...): Base and Blend per channel.
+        // BlendFunctions (Blend_Overlay, ...): Base and Blend per channel.
         const std::string id = std::to_string(node.id);
         const std::string base = "blendBase" + id;
         const std::string blend = "blendLayer" + id;
@@ -2099,11 +2099,11 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return BlendFunctionExpression(node.kind, base, blend);
     }
     case RenderMaterialGraphNodeKind::Contrast:
-        // Unity Shader Graph's Contrast: scale around the midpoint pow(0.5, 2.2).
+        // Contrast: scale around the midpoint pow(0.5, 2.2).
         return "((" + CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + " - vec3_splat(0.217637640824031)) * " +
             CompileInputExpression(cg, node, "contrast", RenderMaterialGraphPinType::Float, "1.0") + " + vec3_splat(0.217637640824031))";
     case RenderMaterialGraphNodeKind::HueShift: {
-        // Unreal's HueShift: the colour rotated about the grey axis (1,1,1)/sqrt(3) by Hue Shift Percentage * 2 pi
+        // HueShift: the colour rotated about the grey axis (1,1,1)/sqrt(3) by Hue Shift Percentage * 2 pi
         // (RotateAboutAxis, Rodrigues' rotation).
         const std::string id = std::to_string(node.id);
         const std::string color = "hueColor" + id;
@@ -2114,7 +2114,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             ") + vec3_splat(0.577350269190) * dot(vec3_splat(0.577350269190), " + color + ") * (1.0 - cos(" + angle + ")))";
     }
     case RenderMaterialGraphNodeKind::ChannelMixer: {
-        // Unity Shader Graph's Channel Mixer: each output channel is the dot of the input with its row.
+        // Channel Mixer: each output channel is the dot of the input with its row.
         const std::string input = "mixerInput" + std::to_string(node.id);
         cg.statements += "    vec3 " + input + " = " + CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
         return "vec3(dot(" + input + ", " + CompileInputExpression(cg, node, "red", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + "), dot(" + input + ", " +
@@ -2122,7 +2122,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "blue", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)") + "))";
     }
     case RenderMaterialGraphNodeKind::RemapValueRange: {
-        // Unreal's RemapValueRange: lerp(Target Low, Target High, (Input - Input Low) / (Input High - Input Low)),
+        // RemapValueRange: lerp(Target Low, Target High, (Input - Input Low) / (Input High - Input Low)),
         // unclamped; coincident input bounds keep the guarded denominator of Inverse Lerp.
         const std::string id = std::to_string(node.id);
         const std::string low = "remapInputLow" + id;
@@ -2267,7 +2267,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::If: {
-        // Unreal's If: settings "ConstA ConstB EqualsThreshold" (unconnected A and B; 0 0 0.00001). The A==B input
+        // If: settings "ConstA ConstB EqualsThreshold" (unconnected A and B; 0 0 0.00001). The A==B input
         // is optional: unconnected, A >= B takes A>B.
         const std::vector<float> settings = ParseDefaultNumbers(node.parameter.defaultValueHint);
         const auto setting = [&](std::size_t index, float fallback) { return settings.size() > index ? settings[index] : fallback; };
@@ -2301,14 +2301,14 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const float defaultFraction = values.size() > 0U ? values[0] : 1.0F;
         const std::string color = CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
         const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, FloatLiteral(defaultFraction));
-        // Unreal's Desaturation luminance factors.
+        // Desaturation luminance factors.
         const std::string luma = "dot((" + color + ").rgb, vec3(0.3, 0.59, 0.11))";
         return "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Fresnel: {
         const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
         const float defaultExponent = values.size() > 0U ? std::max(values[0], 0.0001F) : 5.0F;
-        // As Unreal: an unconnected normal is the pixel normal, the view the camera vector, and
+        // An unconnected normal is the pixel normal, the view the camera vector, and
         // the base reflect fraction 0.04.
         const float defaultBase = values.size() > 1U ? values[1] : 0.04F;
         const std::string normal = CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Float3, "ctx.normal");
@@ -3745,7 +3745,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         AttachDiagnosticContext(graph, context, result.diagnostics);
         return result;
     }
-    // Unreal's domain outputs: a Post Process material writes Emissive Color only; a User Interface material its
+    // Domain outputs: a Post Process material writes Emissive Color only; a User Interface material its
     // Final Color (Emissive) and Opacity; a Deferred Decal the surface it lands on, with no vertex, depth or
     // refraction outputs.
     if (requestedDomain != RenderMaterialDomain::Surface) {
@@ -3907,7 +3907,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             usesBlackBody = true;
             break;
         case RenderMaterialGraphNodeKind::Noise:
-            // Unreal's Noise: the value-noise helpers plus the function each node selects; a hint that does
+            // Noise: the value-noise helpers plus the function each node selects; a hint that does
             // not parse is refused when the node's expression is generated.
             usesNoise = true;
             if (const RenderMaterialGraphNoiseSettingsParseResult noise = ParseRenderMaterialGraphNoiseSettings(node.parameter.defaultValueHint);
@@ -4075,10 +4075,10 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += std::string{ TextureSamplerMacro(textureEntries[index].dimension) } + "(" +
             textureEntries[index].samplerName + ", " + std::to_string(stage) + ");\n";
     }
-    // Unreal's Refraction bends the opaque scene seen through a Translucent surface, so that
+    // Refraction bends the opaque scene seen through a Translucent surface, so that
     // material reads the scene-color snapshot like a Scene Color node; other blend modes ignore it.
     const bool usesThinTranslucent = resolvedShadingModel == RenderMaterialShadingModel::ThinTranslucent;
-    // Unreal's Single Layer Water reads the scene behind it (colour and depth) after the opaque scene;
+    // Single Layer Water reads the scene behind it (colour and depth) after the opaque scene;
     // here it draws in the translucent pass, so it needs the Translucent blend mode.
     const bool usesSingleLayerWater = resolvedShadingModel == RenderMaterialShadingModel::SingleLayerWater;
     if (usesSingleLayerWater && resolvedBlendMode != RenderMaterialGraphBlendMode::Translucent) {
@@ -4298,7 +4298,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "}\n\n";
     }
     if (usesSimplexNoise) {
-        // Unreal's Simplex noise computed on the simplex lattice (Gustavson): r^2 = 0.6 falloff, scaled to -1..1.
+        // Simplex noise computed on the simplex lattice (Gustavson): r^2 = 0.6 falloff, scaled to -1..1.
         source += "float kbSimplexNoise(vec3 p) {\n";
         source += "    vec3 s = floor(p + vec3_splat(dot(p, vec3_splat(0.333333333))));\n";
         source += "    vec3 x0 = p - s + vec3_splat(dot(s, vec3_splat(0.166666667)));\n";
@@ -4316,7 +4316,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "}\n\n";
     }
     if (usesGradientNoise) {
-        // Unreal's Gradient noise (GradientNoise3D_ALU): Perlin gradients at the lattice, quintic fade.
+        // Gradient noise (GradientNoise3D_ALU): Perlin gradients at the lattice, quintic fade.
         source += "float kbGradientCorner(vec3 cell, vec3 local, vec3 corner) {\n";
         source += "    return dot(kbHash33(cell + corner) * 2.0 - vec3_splat(1.0), local - corner);\n";
         source += "}\n\n";
@@ -4596,7 +4596,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     reflection.hasPixelDepthOffset = std::any_of(graph.links.begin(), graph.links.end(),
         [](const RenderMaterialGraphLink& link) { return link.toPin == "pixelDepthOffset"; });
     reflection.hasRefraction = usesRefraction;
-    // Unreal's Subsurface Color / Fuzz Color: the colour the model scatters with, given by the graph.
+    // Subsurface Color / Fuzz Color: the colour the model scatters with, given by the graph.
     reflection.writesShadingModelColor =
         (resolvedShadingModel == RenderMaterialShadingModel::Subsurface &&
          std::any_of(graph.links.begin(), graph.links.end(),
@@ -4604,7 +4604,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         (resolvedShadingModel == RenderMaterialShadingModel::Cloth &&
          std::any_of(graph.links.begin(), graph.links.end(),
              [](const RenderMaterialGraphLink& link) { return link.toPin == "fuzzColor"; })) ||
-        // Unreal's Eye: the iris (normal, mask, distance) rides in the same custom data.
+        // Eye: the iris (normal, mask, distance) rides in the same custom data.
         (resolvedShadingModel == RenderMaterialShadingModel::Eye &&
          std::any_of(graph.links.begin(), graph.links.end(), [](const RenderMaterialGraphLink& link) {
              return link.toPin == "irisMask" || link.toPin == "irisDistance" || link.toPin == "irisNormal";
@@ -4839,7 +4839,7 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                 "ParallaxOcclusionMapping node " + std::to_string(node.id) + " needs a height map Texture Object connected to its Heightmap Texture input.");
         }
         if (node.kind == RenderMaterialGraphNodeKind::WorldAlignedTexture && !HasInputLink(graph, node.id, "texture")) {
-            // Unreal reports a missing TextureObject on WorldAlignedTexture; it has no local texture slot.
+            // A missing TextureObject on WorldAlignedTexture is reported; it has no local texture slot.
             AddGraphDiagnostic(
                 diagnostics,
                 RenderMaterialGraphDiagnosticSeverity::Error,

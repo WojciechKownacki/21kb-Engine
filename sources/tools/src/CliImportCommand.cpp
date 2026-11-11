@@ -26,7 +26,7 @@
 
 // import: the editor's Import... (the same AssetImportService and, with the renderer, the same
 // texture and material extraction), with the import dialog's model settings as flags or from an
-// import preset (.kbimportpreset, as an Unreal Interchange pipeline asset). import-preset-new
+// import preset (.kbimportpreset). import-preset-new
 // writes such a preset.
 
 namespace kb::cli {

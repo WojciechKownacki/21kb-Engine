@@ -60,7 +60,7 @@ constexpr std::uint16_t SkyReflectionStart = GiResolveStart + GiResolveMaxViewpo
 constexpr std::uint16_t SkyReflectionViewCount = 6;
 static_assert(SkyReflectionStart >= GiResolveStart + GiResolveMaxViewports, "Sky reflection views overlap the GI resolve views");
 static_assert(SkyReflectionStart + SkyReflectionViewCount <= ScreenCapture, "Sky reflection views overlap the capture view");
-// The Post Process materials of a viewport (Unreal's post-process blendables): four views per viewport index, ordered
+// The Post Process materials of a viewport: four views per viewport index, ordered
 // after the HDR finalize by the pass graph.
 constexpr std::uint16_t PostProcessMaterialStart = SkyReflectionStart + SkyReflectionViewCount;
 constexpr std::uint16_t PostProcessMaterialViewsPerViewport = 4;

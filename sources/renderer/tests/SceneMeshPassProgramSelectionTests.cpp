@@ -416,7 +416,7 @@ void RunSceneMeshPassProgramSelectionTest() {
                 !missingRequiredShadowResolution.fellBackToBuiltin,
             "P0.5: missing WPO/masked ShadowDepth binary must fail closed instead of using position-only/opaque fallback");
 
-        // Unreal's velocity pass runs the material's own shaders for a surface that moves beyond its mesh: the
+        // Velocity pass runs the material's own shaders for a surface that moves beyond its mesh: the
         // WPO graph writes its motion vectors with its cooked MotionVectors program, never the rigid one.
         Require(CookGraphForActiveBackend(wpoShader, cacheRoot.generic_string(), kRenderMaterialGraphMotionVectorsPass),
             "A masked WPO graph must cook its MotionVectors program");

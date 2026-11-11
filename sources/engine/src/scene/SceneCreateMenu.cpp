@@ -75,8 +75,8 @@ constexpr std::array<SceneCreateItem, 24> kItems{ {
     return {};
 }
 
-// The collider Unity gives its primitive of the same shape: a capsule for the cylinder, and a
-// thin box where Unity uses a mesh collider (plane, quad). The cone has no primitive collider.
+// The collider a built-in primitive gets for its shape: a capsule for the cylinder, and a
+// thin box instead of a mesh collider (plane, quad). The cone has no primitive collider.
 [[nodiscard]] std::optional<ColliderComponent> PrimitiveCollider(kb::assets::BuiltInShape shape) noexcept {
     ColliderComponent collider{};
     switch (shape) {
@@ -144,7 +144,7 @@ SceneCreateResult SceneCreateMenu::Create(Scene& scene, std::string_view id, std
     desc.name = std::move(name);
     const std::optional<LightKind> lightKind = LightKindOf(item->id);
     if (lightKind == LightKind::Directional) {
-        // Unity's new Directional Light: the sun from above, at an angle.
+        // The new Directional Light: the sun from above, at an angle.
         desc.transform.localRotation = kb::math::FromEulerDegrees(kb::math::Vec3{ 50.0F, -30.0F, 0.0F });
     }
     const SceneEntity entity = scene.Entities().CreateEntity(std::move(desc));

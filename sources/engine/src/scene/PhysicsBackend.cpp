@@ -80,7 +80,7 @@ bool PhysicsBackend::AddExplosionForce(Scene& scene, SceneEntity entity, float f
     const double dz = position.z - center.z;
     const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
     const double scale = distance < radius ? force * (1.0 - distance / radius) : 0.0;
-    // A body exactly at the center is pushed up, as Unity does.
+    // A body exactly at the center is pushed up.
     const Vec3 push = distance > 1e-6
         ? Vec3{ static_cast<float>(dx / distance * scale), static_cast<float>(dy / distance * scale), static_cast<float>(dz / distance * scale) }
         : Vec3{ 0.0F, static_cast<float>(scale), 0.0F };

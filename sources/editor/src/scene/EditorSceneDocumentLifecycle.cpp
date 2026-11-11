@@ -235,7 +235,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         return false;
     }
     trace.Phase(phaseStarted, "transition=begin phase=pending-plugin-reload");
-    // Like Unity and Unreal, Play runs the scene as it is in the editor, saved or not: the snapshot below
+    // Play runs the scene as it is in the editor, saved or not: the snapshot below
     // brings the edited scene back afterwards, still unsaved when it was.
     playModeDocumentWasDirty_ = sceneDocumentDirty_;
     kb::audio::AudioPlayback::StopAll(*scene_);

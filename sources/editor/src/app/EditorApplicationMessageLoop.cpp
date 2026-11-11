@@ -258,7 +258,7 @@ void InvalidateSceneToolbars(EditorApplicationState& state) {
 }
 
 // The window title names the open scene, with * while it has unsaved changes, and the project,
-// like Unity's "Level1* - MyGame - Unity".
+// as in "Level1* - MyGame".
 void SyncWindowTitle(const EditorApplicationState& state) {
     if (state.window == nullptr) {
         return;

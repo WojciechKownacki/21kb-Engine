@@ -200,7 +200,7 @@ bool AssetFileOperations::DeleteAsset(
         return false;
     }
 
-    // To the Recycle Bin / Trash, where the user can restore it, like Unity and Unreal.
+    // To the Recycle Bin / Trash, where the user can restore it.
     std::string trashError;
     if (!kb::platform::MoveToTrash(physical, trashError)) {
         errorMessage = physical.filename().string() + " could not be deleted: " + trashError;

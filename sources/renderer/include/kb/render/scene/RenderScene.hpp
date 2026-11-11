@@ -233,7 +233,7 @@ struct MeshRenderProxy {
     mutable std::uint64_t instanceLocationVersion = 0;
     // The entity's world transform version the transform pull last applied (EcsRenderSceneSynchronizer::PullTransforms).
     mutable std::uint64_t pulledWorldVersion = 0;
-    // Renderer-derived motion history (Unreal's previous LocalToWorld): the model at the start of the motion
+    // Renderer-derived motion history: the model at the start of the motion
     // frame `previousModelFrame`, recorded by the first transform change in that frame. `spawnMotionFrame` is
     // the frame the proxy was created in, which has no previous model.
     std::array<float, 16> previousModel{};
@@ -359,8 +359,8 @@ public:
     bool SetRenderOrigin(const kb::math::DVec3& origin);
     [[nodiscard]] std::uint64_t AddRenderOriginListener(RenderOriginListener listener);
     void RemoveRenderOriginListener(std::uint64_t listenerId) noexcept;
-    // Motion frames give every mesh its previous-frame model for the motion vector pass (Unreal's velocity
-    // pass). The renderer begins one per rendered frame, before the scene's transforms are synchronized; a
+    // Motion frames give every mesh its previous-frame model for the motion vector pass.
+    // The renderer begins one per rendered frame, before the scene's transforms are synchronized; a
     // proxy that changes its transform within the frame records the model it had when the frame began, a
     // proxy that does not keeps its current model as the previous one. Frames are identified by the
     // renderer's frame index; beginning the current frame again (another viewport) changes nothing.

@@ -282,14 +282,14 @@ void RunValidateCommandTests() {
     Require(bad.exitCode == 1, "validate passed a broken script");
     Require(Contains(bad.output, "FAIL"), "validate did not report FAIL");
 
-    // A script written the Unity way loads, but its callbacks are never called: validate says so.
-    WriteTextFile(TestRoot() / "Assets" / "Logic" / "UnityStyle.lua",
+    // A script using foreign lifecycle callback names loads, but its callbacks are never called: validate says so.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "ForeignStyle.lua",
         "function OnStart(self)\nend\n\nlocal function helper() end\n\nfunction Update(self, dt)\nend\n");
-    const CommandRun unity = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/UnityStyle.lua" });
-    Require(unity.exitCode == 0 && Contains(unity.output, "(2 warnings)") &&
-            Contains(unity.output, "UnityStyle.lua:1: OnStart() is never called - 21kb calls Ready(self, dt)") &&
-            Contains(unity.output, "UnityStyle.lua:6: Update() is never called - 21kb calls Tick(self, dt)"),
-        "validate must name the Unity-style callbacks a script defines: " + unity.output);
+    const CommandRun foreign = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/ForeignStyle.lua" });
+    Require(foreign.exitCode == 0 && Contains(foreign.output, "(2 warnings)") &&
+            Contains(foreign.output, "ForeignStyle.lua:1: OnStart() is never called - 21kb calls Ready(self, dt)") &&
+            Contains(foreign.output, "ForeignStyle.lua:6: Update() is never called - 21kb calls Tick(self, dt)"),
+        "validate must name the foreign callbacks a script defines: " + foreign.output);
     Require(!Contains(good.output, "WARN"), "a script with 21kb hooks must validate without warnings");
 }
 
@@ -2490,7 +2490,7 @@ void RunEntityComponentCommandTests() {
         "--set", "nosuch=1" }).exitCode != 0, "an unknown property must be refused");
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Nobody", "--type", "Camera" }).exitCode != 0,
         "a missing entity must be refused");
-    // Engine shapes exist in every project, like Unreal's /Engine/BasicShapes.
+    // Engine shapes exist in every project.
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
         "--set", "mesh=/Engine/Shapes/Plane" }).exitCode == 0, "an engine shape could not be assigned");
     Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
@@ -2528,7 +2528,7 @@ void RunEntityComponentCommandTests() {
         "--set", "effectAssetId=/Game/NoSuch.kbvfx" }).exitCode != 0, "a missing particle effect must be refused");
     Require(Run(&kb::cli::RunEntityCommand, { "remove", "--project", project, "--name", "Sparks" }).exitCode == 0,
         "entity remove of the effect owner failed");
-    // Procedural sky settings with Unity's Skybox/Procedural ranges.
+    // Procedural sky settings within their ranges.
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "WorldBackdrop",
         "--set", "mode=3", "--set", "sunDisk=1", "--set", "sunSize=0.1", "--set", "skyTint=0.5,0.2,0.1", "--set", "exposure=2" }).exitCode == 0,
         "procedural sky settings could not be written");
@@ -4054,7 +4054,7 @@ void RunMeshLodCommandTests() {
 }
 
 // material-set takes the built-in texture slots by a texture path of the project; material-graph
-// builds Unreal's VectorParameter Color -> Base Color, ScalarParameter Roughness and Metallic
+// builds VectorParameter Color -> Base Color, ScalarParameter Roughness and Metallic
 // graph; material-instance-new/set/show override those parameters and a Mesh Renderer takes the
 // instance as its material.
 void RunMaterialAuthoringCommandTests() {
@@ -4191,8 +4191,8 @@ void RunMaterialAuthoringCommandTests() {
         "the Mesh Renderer did not keep the material instance");
 }
 
-// material-graph builds a graph of the Unreal/Unity utility nodes by their names (Unreal's Blend_Overlay
-// and Noise with its Voronoi function, Unity's Checkerboard); invalid Noise settings are refused by name.
+// material-graph builds a graph of the utility nodes by their names (Blend_Overlay
+// and Noise with its Voronoi function, Checkerboard); invalid Noise settings are refused by name.
 void RunMaterialGraphUtilityNodeCommandTests() {
     const std::string project = NewAuthoringProject("material_graph_utility_project");
     Require(Run(&kb::cli::RunMaterialNewCommand, { "--project", project, "--name", "Stone" }).exitCode == 0, "material-new Stone failed");
@@ -4206,7 +4206,7 @@ void RunMaterialGraphUtilityNodeCommandTests() {
     const CommandRun checker = graph({ "add-node", "--kind", "Checkerboard", "--name", "Checker" });
     Require(checker.exitCode == 0 && Contains(checker.output, "Checkerboard"), "add-node Checkerboard failed: " + checker.output);
     const CommandRun noise = graph({ "add-node", "--kind", "Noise", "--name", "Cells", "--value", "voronoi false 2 3 4 2 0 1" });
-    Require(noise.exitCode == 0, "add-node Noise with Unreal's Voronoi settings failed: " + noise.output);
+    Require(noise.exitCode == 0, "add-node Noise with Voronoi settings failed: " + noise.output);
     const CommandRun blend = graph({ "add-node", "--kind", "Blend_Overlay", "--name", "Mix" });
     Require(blend.exitCode == 0 && Contains(blend.output, "BlendOverlay"), "add-node Blend_Overlay failed: " + blend.output);
     Require(graph({ "connect", "--from", "Checker", "--to", "Mix", "--to-pin", "Base" }).exitCode == 0, "Checkerboard -> Base failed");
@@ -4228,7 +4228,7 @@ void RunMaterialGraphUtilityNodeCommandTests() {
     const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
         saved->graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = 0xC11U });
     Require(compiled.Succeeded() && Contains(compiled.shader.source, "kbVoronoiNoise3(") && Contains(compiled.shader.source, "checkerFootprint"),
-        "the saved graph must compile Unreal's Voronoi and Unity's Checkerboard");
+        "the saved graph must compile Voronoi and Checkerboard");
 }
 #endif
 

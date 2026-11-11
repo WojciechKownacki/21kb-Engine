@@ -1749,7 +1749,7 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
-// Unreal's Material Domain in the Details panel: the production domains are offered, and a Deferred Decal, a Post
+// Material Domain in the Details panel: the production domains are offered, and a Deferred Decal, a Post
 // Process or a User Interface material authored in the editor compiles in its domain.
 void RunMaterialEditorDomainSettingTest() {
     kb::editor::MaterialEditorState materialEditor;
@@ -3801,7 +3801,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     const auto colorProperty = std::ranges::find_if(colorProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
         return property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Color;
     });
-    // As Unreal's Constant4Vector: a colour constant has no range, so HDR and negative values stay.
+    // A colour constant has no range, so HDR and negative values stay.
     kb::editor::tests::Require(colorProperty != colorProperties.end() && !colorProperty->range.has_value(),
         "KBMAT-MAT58: Color constants should expose a typed color property without a clamping range");
     const std::string colorBeforeInvalidEdit = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, colorNodeId)->parameter.defaultValueHint;
@@ -4131,7 +4131,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             textureCoordinateUvProperty != textureCoordinateProperties.end() &&
             textureCoordinateUvProperty->value.text == "1",
         "KBMAT-MAT81: TextureCoordinate UV Set enum should preserve tiling while selecting UV1");
-    // Unreal's Coordinate Index reaches UV7: eight options, UV5 kept in the hint.
+    // Coordinate Index reaches UV7: eight options, UV5 kept in the hint.
     kb::editor::tests::Require(textureCoordinateUvProperty->options.size() == 8U && textureCoordinateUvProperty->options[7].label == "UV7" &&
             materialEditor.SetGraphNodeEnumValue(textureCoordinateNodeId, "uvSet", "5"),
         "TextureCoordinate UV Set should offer UV0..UV7");
@@ -5122,7 +5122,7 @@ void RunMaterialEditorGraphProductGeometryAuditTest() {
                     hit->pin == outputPins[pinIndex],
                 ("KBMAT-MAT90: output pin hit-test mismatch: " + nodeName + "." + outputPins[pinIndex]).c_str());
         }
-        // As in Unreal, a node grows with its pins: each pin keeps a full row, however many there are
+        // A node grows with its pins: each pin keeps a full row, however many there are
         // (Material Output's 28 inputs, the material attribute nodes' 25).
         if (kb::editor::MaterialGraphCanvasPinRowsHeight(kb::editor::BuildMaterialGraphCanvasNode(node)) > 0.0F) {
             for (std::size_t pinIndex = 1U; pinIndex < inputPins.size(); ++pinIndex) {
@@ -7207,9 +7207,9 @@ void RunMaterialGraphTextureSemanticTraversalTest() {
 
 namespace kb::editor::tests {
 
-// The Unreal/Unity utility nodes in the Material Editor palette: each is listed in its category under its
-// name, found by search (Voronoi and Simplex find Unreal's Noise, Triplanar the World Aligned Texture), named
-// in the editor language and created by the Material Editor; Noise exposes Unreal's properties.
+// The utility nodes in the Material Editor palette: each is listed in its category under its
+// name, found by search (Voronoi and Simplex find Noise, Triplanar the World Aligned Texture), named
+// in the editor language and created by the Material Editor; Noise exposes its properties.
 void RunMaterialEditorUtilityNodePaletteTest() {
     using Command = kb::editor::MaterialEditorGraphMenuCommand;
     using Kind = kb::render::RenderMaterialGraphNodeKind;
@@ -7272,9 +7272,9 @@ void RunMaterialEditorUtilityNodePaletteTest() {
             kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateParallaxOcclusionMapping, "pom") &&
             kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateBlendOverlay, "blend") &&
             kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateRemapValueRange, "remap"),
-        "Utility nodes: palette search must find Noise by its functions and the new nodes by their Unreal names");
+        "Utility nodes: palette search must find Noise by its functions and the new nodes by their names");
 
-    // Unreal's Noise details: Function and Turbulence dropdowns, then Scale, Quality, Levels, Level Scale,
+    // Noise details: Function and Turbulence dropdowns, then Scale, Quality, Levels, Level Scale,
     // Output Min and Output Max; edits write the renderer's Noise settings hint.
     std::uint32_t noiseNodeId = 0U;
     kb::editor::tests::Require(editor.AddGraphNode(Kind::Noise, -400, 80, &noiseNodeId), "Utility nodes: the Material Editor must add Noise");
@@ -7290,7 +7290,7 @@ void RunMaterialEditorUtilityNodePaletteTest() {
             findProperty("noise.turbulence") != nullptr && findProperty("noise.scale") != nullptr && findProperty("noise.quality") != nullptr &&
             findProperty("noise.levels") != nullptr && findProperty("noise.levelScale") != nullptr &&
             findProperty("noise.outputMin") != nullptr && findProperty("noise.outputMax") != nullptr,
-        "Utility nodes: Noise must expose Unreal's Function, Turbulence, Scale, Quality, Levels, Level Scale and Output range");
+        "Utility nodes: Noise must expose Function, Turbulence, Scale, Quality, Levels, Level Scale and Output range");
     kb::editor::tests::Require(editor.SetGraphNodeEnumValue(noiseNodeId, "noise.function", "voronoi") &&
             editor.SetGraphNodeEnumValue(noiseNodeId, "noise.turbulence", "false") &&
             editor.SetGraphConstantComponentValue(noiseNodeId, 1U, 3.0F) &&
@@ -7298,7 +7298,7 @@ void RunMaterialEditorUtilityNodePaletteTest() {
         "Utility nodes: Noise properties must be editable");
     const kb::render::RenderMaterialGraphNode* noise = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, noiseNodeId);
     kb::editor::tests::Require(noise != nullptr && noise->parameter.defaultValueHint == "voronoi false 1 3 10 2 -1 1",
-        "Utility nodes: Noise edits must write the settings hint, with Levels clamped to Unreal's 10");
+        "Utility nodes: Noise edits must write the settings hint, with Levels clamped to 10");
 
     std::string error;
     kb::editor::tests::Require(kb::editor::EditorLocalization::SetLanguage("pl", KB_EDITOR_LOCALIZATION_DIR, error),

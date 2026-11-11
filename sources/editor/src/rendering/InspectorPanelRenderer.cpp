@@ -448,7 +448,7 @@ void DrawDivider(HDC dc, int left, int right, int y) {
     const int inset = std::min<int>(10, std::max<int>(0, static_cast<int>(content.right - content.left) / 8));
     const int availableLeft = content.left + inset;
     const int availableRight = content.right - inset;
-    // The full width of the Inspector, as Unity and Unreal place it under the components.
+    // The full width of the Inspector, under the components.
     return Rect(availableLeft, y, std::max(availableLeft, availableRight), y + kAddComponentButtonHeight);
 }
 
@@ -1475,7 +1475,7 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
     return metadata.type == kb::render::kPostProcessProfileAssetType;
 }
 
-// A post-process profile is edited in place, one section per effect as Unity's Volume overrides;
+// A post-process profile is edited in place, one section per effect;
 // every row writes the profile file through the same field names as kb_cli post-process-set.
 void PaintPostProcessProfileAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
@@ -1546,8 +1546,8 @@ void PaintUIThemeAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSce
     }
 }
 
-// The scene's profile on its environment object (the World Backdrop), as Unity shows the global
-// Volume's profile: the profile field (picker) and, with one set, Clear.
+// The scene's profile on its environment object (the World Backdrop):
+// the profile field (picker) and, with one set, Clear.
 [[nodiscard]] int ScenePostProcessRows(const EditorSceneContext& sceneContext) {
     return kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext.Scene()) != 0U ? 2 : 1;
 }
@@ -2002,8 +2002,8 @@ void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& th
     return EditorText("inspector.unknown", "Unknown");
 }
 
-// The rows a backdrop mode uses, shared by painting, section height and hit testing. Like
-// Unity's skybox materials, every mode shows only its own settings.
+// The rows a backdrop mode uses, shared by painting, section height and hit testing.
+// Every mode shows only its own settings.
 [[nodiscard]] std::span<const InspectorPropertyId> WorldBackdropRows(kb::scene::WorldBackdropMode mode) noexcept {
     static constexpr std::array<InspectorPropertyId, 4> kSolidColor{ InspectorPropertyId::WorldBackdropMode,
         InspectorPropertyId::WorldBackdropColor, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };

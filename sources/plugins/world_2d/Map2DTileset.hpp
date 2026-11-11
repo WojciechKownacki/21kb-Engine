@@ -12,7 +12,7 @@
 
 namespace kb::world2d {
 
-// The twelve border pieces of a ground brush, as Remere's Map Editor names them. A piece is drawn
+// The twelve border pieces of a ground brush. A piece is drawn
 // on a tile next to a higher ground: n when that ground lies north of the tile, cnw when it lies
 // only diagonally north-west, dnw when it lies both north and west.
 enum class Map2DBorderPiece : std::uint8_t {

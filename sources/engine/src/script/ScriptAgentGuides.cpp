@@ -177,7 +177,7 @@ kb_cli entity add --project . --name Sword --create Cube
 kb_cli entity attach --project . --name Sword --to Hero --socket weapon_r --scale 0.05,0.8,0.05
 ```
 
-- Clips of another rig (Mixamo, Unreal, Rigify) play too: bones are matched by name and role;
+- Clips of another rig (common rig naming schemes) play too: bones are matched by name and role;
   `animator check --character` shows how many bones follow each clip.
 - Scripts drive animation with `Animator.<Function>(inputs in order)`; the functions are
   `api_reference` topic `Animator`.

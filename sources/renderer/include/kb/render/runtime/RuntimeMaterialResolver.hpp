@@ -103,8 +103,8 @@ public:
     explicit RuntimeMaterialResolver(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
     void SetGraphBuildContext(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
 
-    // An unpackaged project run cooks its graph materials on demand, as Unreal compiles a missing
-    // shader when a material is first drawn: each resolved graph gets its scene passes cooked into
+    // An unpackaged project run cooks its graph materials on demand
+    // when a material is first drawn: each resolved graph gets its scene passes cooked into
     // `cacheRoot` with `toolchain` (a cache hit when nothing changed). Unset, graphs draw only from
     // binaries already cooked by the editor or the packager.
     struct GraphShaderCook {

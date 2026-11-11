@@ -48,7 +48,7 @@ struct FullscreenTexturePassDesc {
     const char* viewName = "KB Fullscreen Texture";
     // 0 = none; 1 = corners fully dark (display composite vignette).
     float vignetteIntensity = 0.0F;
-    // FXAA on the display image, after the tonemap (Unreal's order); `sourceExtent` is then the size of
+    // FXAA on the display image, after the tonemap; `sourceExtent` is then the size of
     // `sourceTexture`, whose texels it filters.
     bool antiAliasing = false;
     RenderExtent sourceExtent{};

@@ -224,7 +224,7 @@ struct SceneRenderMeshInstance {
 };
 
 // The model an instance was drawn with in the previous motion frame, as seen from `motionFrame`: what it
-// recorded when it moved in this frame, its current model otherwise (Unreal's PreviousLocalToWorld).
+// recorded when it moved in this frame, its current model otherwise.
 [[nodiscard]] inline const std::array<float, 16>& SceneRenderPreviousModel(
     const SceneRenderMeshInstance& instance, std::uint64_t motionFrame) noexcept {
     return instance.previousModelFrame != 0U && instance.previousModelFrame == motionFrame

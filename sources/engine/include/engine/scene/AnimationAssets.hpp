@@ -145,7 +145,7 @@ struct AnimatorTransitionCondition {
 
 // A transition from this "state" leaves whichever state the layer is in (but never re-enters
 // its own target): hit reactions, death, a jump. Any-state transitions are checked before the
-// active state's own, as in Unity.
+// active state's own.
 inline constexpr std::string_view kAnimatorAnyState = "*";
 
 struct AnimatorControllerTransition {

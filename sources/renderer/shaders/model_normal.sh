@@ -2,7 +2,7 @@
 #define KB_MODEL_NORMAL_SH
 
 // The world normal of an object-space normal under an affine model matrix: the inverse transpose of its
-// 3x3 part, as Unreal and Unity transform normals, so a non-uniformly scaled object keeps normals
+// 3x3 part, so a non-uniformly scaled object keeps normals
 // perpendicular to its surface. The cofactor matrix is the inverse transpose times the determinant; its sign
 // keeps the normal outward on a mirroring (negative determinant) model.
 vec3 KbModelNormal(mat4 model, vec3 normal)

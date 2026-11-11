@@ -10,7 +10,7 @@
 #include <vector>
 
 // post-process-new / post-process-set: the scene's image settings (tonemapping, exposure, bloom,
-// anti-aliasing) as a profile asset, as a Unity Volume Profile or a Godot Environment resource;
+// anti-aliasing) as a profile asset;
 // scene-post-process gives a scene its profile.
 
 namespace kb::cli {

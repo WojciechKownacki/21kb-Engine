@@ -105,7 +105,7 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
             attenuation *= 1.0 - KbVoxelBlocked(position + normal * (1.1 * u_voxelGrid.w), lightVector,
                 max(lightDistance - 1.5 * u_voxelGrid.w, 0.0));
         }
-        // Same light intensity convention as direct lighting (as in Unity: intensity 1 = albedo).
+        // Same light intensity convention as direct lighting (intensity 1 = albedo).
         sum += colorIntensity.rgb * (colorIntensity.a * attenuation * facing * 3.14159265);
     }
     return sum * 0.31830989;

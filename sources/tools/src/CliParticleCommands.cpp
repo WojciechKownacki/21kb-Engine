@@ -13,7 +13,7 @@
 #include <vector>
 
 // vfx-*: particle effects (.kbvfx) from the command line through the particle editor's own
-// document and commands (Unity: Particle System via script, Unreal: Niagara via Python).
+// document and commands.
 
 namespace kb::cli {
 namespace {

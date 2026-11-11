@@ -17,7 +17,7 @@
 namespace kb::world2d {
 
 // Map editing shared by the World 2D Map Editor window and kb_cli: ground brushes with
-// Remere's-style automatic borders, sprites, eraser and flood fill, every change undoable.
+// Automatic borders, sprites, eraser and flood fill, every change undoable.
 
 // The project folder (under Assets) the Map Editor's palette is made from: every folder in it is a
 // category (Nature, Ground, Buildings...), every PNG sprite sheet in a folder fills its category.
@@ -130,7 +130,7 @@ public:
 
     // Edits record what they change here; null records nothing.
     void SetChangeSet(Map2DChangeSet* changes) noexcept { changes_ = changes; }
-    // Remere's Border Automagic: off, painting leaves the borders around it as they are.
+    // Automatic borders: off, painting leaves the borders around it as they are.
     void SetAutoBorder(bool enabled) noexcept { autoBorder_ = enabled; }
     // Puts a whole tile (or clears it), as paste and delete do; borders are left to the caller.
     void SetTile(std::uint32_t x, std::uint32_t y, std::int32_t z, const std::optional<kb::assets::Map2DTile>& tile);

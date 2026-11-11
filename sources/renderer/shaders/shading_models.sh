@@ -1,10 +1,10 @@
 #ifndef KB_SHADING_MODELS_SH
 #define KB_SHADING_MODELS_SH
 
-// Shading models after Unreal's ShadingModels.ush, shared by deferred lighting and graph forward
+// Shading models shared by deferred lighting and graph forward
 // lighting so a surface looks the same on either path. Needs gbuffer_contract.sh for the model ids.
-// customData0 is the model's strength (Unreal CustomData0: Clear Coat for the clear coat model),
-// customData1 the clear coat roughness (Unreal CustomData1: Clear Coat Roughness).
+// customData0 is the model's strength (Clear Coat for the clear coat model),
+// customData1 the clear coat roughness (Clear Coat Roughness).
 // The caller's lobes follow the engine's light units: a diffuse lobe of albedo / pi, times the light
 // radiance that carries pi (fs_deferred_lighting.sc).
 
@@ -30,7 +30,7 @@ bool KbIsShadingModel(float model, float id)
 
 // One light's response, times N.L, for a surface of the given model. nDotLRaw is the unclamped N.L;
 // diffuseLobe and specularLobe are the default-lit lobes the caller evaluated (zero when N.L <= 0).
-// The colour a model scatters with when the material gives none (Unreal's Subsurface Color /
+// The colour a model scatters with when the material gives none (Subsurface Color /
 // Fuzz Color): the diffuse colour, and the cloth's sheen tint.
 vec3 KbDefaultShadingModelColor(float model, vec3 albedo, float metallic)
 {
@@ -121,7 +121,7 @@ vec3 KbOctDecode(vec2 e)
     return normalize(n);
 }
 
-// Unreal's EyeBxDF: the cornea reflects (the caller's specular lobe on N); the light it lets
+// EyeBxDF: the cornea reflects (the caller's specular lobe on N); the light it lets
 // through (1 - F) lights the sclera by N.L and the iris about its own normal, with a caustic
 // that grows toward the light as the iris lies deeper (Iris Distance) inside the cornea.
 vec3 KbEyeLight(vec3 N, vec3 V, vec3 L, float nDotLRaw, vec3 albedo, float metallic, vec3 specularLobe,

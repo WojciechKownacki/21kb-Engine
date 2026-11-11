@@ -3547,7 +3547,7 @@ void RunComponentInspectorDescCatalogTest() {
     // 117 described fields across 12 components.
     // 3D Radiance Emitter remains a public compatibility alias for Light and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
-    // WorldBackdrop grew eleven procedural sky fields (Unity Skybox/Procedural).
+    // WorldBackdrop grew eleven procedural sky fields.
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.

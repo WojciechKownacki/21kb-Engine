@@ -7,7 +7,7 @@ SAMPLER3D(s_kbFullscreenColorGradeLut, 1);
 uniform vec4 u_tonemapParams;
 uniform vec4 u_colorGradeParams;
 uniform vec4 u_vignetteParams;
-// x: 1 runs FXAA on the display image (after tonemapping, like Unreal), yz: texel size of the source.
+// x: 1 runs FXAA on the display image (after tonemapping), yz: texel size of the source.
 uniform vec4 u_displayAntiAliasing;
 
 vec3 aces_fitted(vec3 color)
@@ -48,8 +48,8 @@ float vignette_factor(vec2 uv)
     return falloff * falloff;
 }
 
-// Display encoding. Gamma 2.2 (the default) is the sRGB transfer curve of the display, as in Unity,
-// Unreal and Godot - a plain 1/2.2 power lifts the darks (#0A0C16 came out as #141418). Any other
+// Display encoding. Gamma 2.2 (the default) is the sRGB transfer curve of the display;
+// a plain 1/2.2 power lifts the darks (#0A0C16 came out as #141418). Any other
 // gamma (1.0 for linear debug views) is a plain power.
 vec3 encode_display(vec3 display)
 {
@@ -92,7 +92,7 @@ vec3 display_sample(vec2 uv)
 }
 
 // FXAA (Lottes) on the display image: edges are found in perceptual luma of the tonemapped, gamma encoded
-// colours and blended there, as Unreal runs FXAA after the tonemapper.
+// colours and blended there.
 vec3 fxaa_display(vec2 uv)
 {
     vec2 texel = u_displayAntiAliasing.yz;

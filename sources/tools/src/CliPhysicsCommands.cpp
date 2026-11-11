@@ -32,7 +32,7 @@ constexpr std::string_view kDefaultLayersAsset = "/Game/Settings/PhysicsLayers.2
 
 } // namespace
 
-// The project's layer collision matrix (Unity's Layer Collision Matrix): the asset named by
+// The project's layer collision matrix: the asset named by
 // ProjectSettings [Physics] LayersAsset, created at kDefaultLayersAsset when the project has none.
 int RunPhysicsLayersCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");

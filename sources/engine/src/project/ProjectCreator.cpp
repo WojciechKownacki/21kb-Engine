@@ -114,7 +114,7 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
         return Refuse(descriptorFile, std::move(budget));
     }
 
-    // Like Unity Hub and Unreal: a project goes into a new or an empty folder, never over files
+    // A project goes into a new or an empty folder, never over files
     // the user already has (an earlier project, its Assets).
     std::error_code error;
     const bool rootExisted = std::filesystem::exists(projectRoot, error);

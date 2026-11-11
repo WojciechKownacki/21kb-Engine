@@ -1842,7 +1842,7 @@ void RunSceneFromNewerEngineIsExplainedTest() {
 }
 
 // v44: the scene's post-process profile is saved with the scene, reloaded into the runtime scene the
-// renderer reads, and captured back, as a Unity global Volume or a Godot WorldEnvironment is.
+// renderer reads, and captured back.
 void RunScenePostProcessProfileDocumentTest() {
     CleanTempRoot();
     const std::filesystem::path sceneFile = TempRoot() / "PostProcessProfile.21kbscene";

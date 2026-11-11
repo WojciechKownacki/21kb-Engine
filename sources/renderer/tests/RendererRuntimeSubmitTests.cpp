@@ -7137,7 +7137,7 @@ struct GiFloorStats {
     addBox({ 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, redId.value); // red wall, floor-side face at x = 2.75
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Point Light", .transform = TransformAt(-1.0F, 5.0F, 0.0F) });
-    // 1.27 in Unity's light convention is the 4 this scene was tuned with before (4 / pi).
+    // 1.27 in the normalized light convention is the 4 this scene was tuned with before (4 / pi).
     scene.Components().Lights().Set(light, kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Point, .intensity = 1.27F, .range = 40.0F, .castsShadow = false });
 
@@ -9831,7 +9831,7 @@ void RunRendererRendersSpotLightShadowTest() {
 // The share of light that survives the plate is measured for four lights (the old limit) and for six; it must
 // not grow when lights are added.
 [[nodiscard]] double PointShadowSurvivingShare(int extraPointLights) {
-    // 0.16 in Unity's light convention is the 0.5 this scene was tuned with before (0.5 / pi).
+    // 0.16 in the normalized light convention is the 0.5 this scene was tuned with before (0.5 / pi).
     ShadowFloorScene scene{ .extraPointLights = extraPointLights, .pointIntensity = 0.16F };
     scene.lightCastsShadow = false;
     const int unshadowed = RenderShadowFloorBrightness(scene);

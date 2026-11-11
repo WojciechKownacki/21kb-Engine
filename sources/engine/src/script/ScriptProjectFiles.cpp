@@ -19,8 +19,8 @@ namespace {
 // as the init-agent documentation describes them, so the script proves scripting works on Play.
 constexpr std::string_view kLuaTemplate =
     "-- Lua behaviour script. 21kb calls these functions on the object it is attached to:\n"
-    "--   Ready(self, dt)  once, when the object starts in Play (Unity: Start, Godot: _ready)\n"
-    "--   Tick(self, dt)   every frame in Play (Unity: Update, Godot: _process); dt is in seconds\n"
+    "--   Ready(self, dt)  once, when the object starts in Play\n"
+    "--   Tick(self, dt)   every frame in Play; dt is in seconds\n"
     "-- Other hooks: Created, Activated, FixedTick, LateTick, Deactivated, Destroyed.\n"
     "-- Log(\"text\") prints to the editor Console.\n"
     "\n"

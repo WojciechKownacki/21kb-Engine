@@ -63,8 +63,8 @@ struct AssetImportChange {
     std::uint64_t newHash = 0U;      // what this import would write (0 for Removed)
 };
 
-// The size and orientation a model is brought in with, as Unity's ModelImporter Scale Factor
-// and Unreal Interchange's Import Uniform Scale / Import Rotation: applied to the mesh data after
+// The size and orientation a model is brought in with: a uniform scale and a rotation,
+// applied to the mesh data after
 // the automatic right- to left-handed conversion. Rotation is engine Euler degrees (Z, then X,
 // then Y, as kb::math::FromEulerDegrees and the Inspector).
 struct AssetMeshImportTransform {

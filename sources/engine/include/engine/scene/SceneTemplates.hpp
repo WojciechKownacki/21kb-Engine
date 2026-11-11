@@ -15,7 +15,7 @@ namespace kb::scene {
 
 class Scene;
 
-// What a new scene starts with, like Unity's New Scene templates: Basic is a camera, a sun, the sky
+// What a new scene starts with: Basic is a camera, a sun, the sky
 // and a floor, ready to press Play; Empty has nothing. The Hub, `kb_cli new`, `kb_cli scene-new`
 // and the editor's File > New Scene all fill a scene through SceneTemplates::Fill.
 enum class SceneTemplate : std::uint8_t { Basic, Empty };

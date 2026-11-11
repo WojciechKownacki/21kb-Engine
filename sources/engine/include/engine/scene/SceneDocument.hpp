@@ -53,9 +53,9 @@ struct SceneDocument {
     //      and load unchanged.
     // v43: WorldBackdropComponent persists the procedural sky settings (sun disc and size,
     //      convergence, atmosphere thickness, sky tint, ground colour, exposure); older files load
-    //      Unity's Skybox/Procedural defaults.
+    //      with the defaults of the procedural sky.
     // v44: the scene's post-process profile (tonemapping, exposure, bloom, anti-aliasing) persists
-    //      with the scene, as a Unity global Volume or a Godot WorldEnvironment does; older files
+    //      with the scene; older files
     //      load with no profile (renderer defaults).
     // v49: SocketAttachment holds an object at a socket or bone of the character above it.
     //      Combatant persists health, mana, resistances, team, senses and ability slots.

@@ -100,7 +100,7 @@ enum class InspectorSectionId : std::uint8_t {
     SocketAttachment,
     Combatant,
     AIBrain,
-    // A post-process profile asset (.kbppfx): one section per effect, as Unity's Volume overrides.
+    // A post-process profile asset (.kbppfx): one section per effect.
     PostProcessTonemap,
     PostProcessExposure,
     PostProcessBloom,

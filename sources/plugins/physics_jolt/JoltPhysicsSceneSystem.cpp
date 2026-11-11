@@ -550,7 +550,7 @@ struct JointRecord {
         if (joint.enableLimit) {
             // Jolt's own documented range: mLimitsMin in [-pi, 0], mLimitsMax in [0, pi]. Jolt
             // measures the angle of body2 (connected) relative to body1 (owner); the component's
-            // limits are the owner's rotation about the axis, as Unity's HingeJoint - so negated.
+            // limits are the owner's rotation about the axis - so negated.
             settings.mLimitsMin = kb::math::Clamp(-JPH::DegreesToRadians(joint.maxLimit), -JPH::JPH_PI, 0.0F);
             settings.mLimitsMax = kb::math::Clamp(-JPH::DegreesToRadians(joint.minLimit), 0.0F, JPH::JPH_PI);
         }
@@ -561,7 +561,7 @@ struct JointRecord {
         JPH::Ref<JPH::Constraint> constraint = settings.Create(body1, body2);
         auto* hinge = static_cast<JPH::HingeConstraint*>(constraint.GetPtr());
         hinge->SetMotorState(JPH::EMotorState::Velocity);
-        // Jolt drives body2 relative to body1; the motor turns the owner (body1), as Unity's.
+        // Jolt drives body2 relative to body1; the motor turns the owner (body1).
         hinge->SetTargetAngularVelocity(-JPH::DegreesToRadians(joint.motor.targetVelocity));
         return constraint;
     }
@@ -649,11 +649,11 @@ struct CharacterRecord {
     float stepOffset = 0.4F;
     float gravityScale = 1.0F;
     bool useGravity = true;
-    // Velocity the character actually moved with in the last step (Unity's
-    // CharacterController.velocity); Jolt's own linear velocity is the requested one.
+    // Velocity the character actually moved with in the last step;
+    // Jolt's own linear velocity is the requested one.
     Vec3 velocity{};
     // The rotation last written back to the Transform: a different one there means a script or
-    // the AI turned the character (as Unity's CharacterController, rotation is the Transform's).
+    // the AI turned the character (the rotation is the Transform's).
     Quat writtenRotation{};
     bool hasWrittenRotation = false;
 };
@@ -1079,7 +1079,7 @@ struct ActiveBodyContact {
     // when the final sub-shape contact disappears.
     std::map<JPH::SubShapeIDPair, ContactPayload> subShapes;
     // Jolt reports OnContactRemoved when both bodies fall asleep while still touching
-    // (ContactListener.h). Like PhysX/Unity, that is no Exit: the pair is kept until a
+    // (ContactListener.h). That is no Exit: the pair is kept until a
     // body wakes up and the contact is either detected again (Stay) or not (Exit).
     // 1 = asleep, 2 = a body woke up last step and the contact was not reported yet.
     std::uint8_t sleeping = 0U;
@@ -1237,7 +1237,7 @@ public:
         }
         physicsSystem_.Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints, broadPhaseLayers_, objectVsBroadPhaseFilter_, objectLayerPairFilter_);
         physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
-        // Unity/UE defaults instead of Jolt's: materials combine by average (Jolt: friction
+        // The engine's defaults instead of Jolt's: materials combine by average (Jolt: friction
         // sqrt(a*b), restitution max), and bodies may sink only 1 mm (Jolt: 2 cm - a 1 cm
         // object would rest fully inside the floor).
         physicsSystem_.SetCombineFriction([](const JPH::Body& a, const JPH::SubShapeID&, const JPH::Body& b, const JPH::SubShapeID&) {
@@ -1504,7 +1504,7 @@ public:
     }
 
     // A Dynamic Rigidbody whose Jolt body is created by the next synchronization (the first
-    // fixed step runs scripts before it, as Start in Unity runs before the first physics step):
+    // fixed step runs scripts before it):
     // the force/impulse is applied to the body as soon as it exists.
     bool AddTorque(SceneEntity entity, Vec3 torque) noexcept override {
         JoinStep();
@@ -1545,7 +1545,7 @@ public:
 
     [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept override {
         JoinStep();
-        // A kinematic body reports the velocity MoveKinematic gives it, as Unity's MovePosition does.
+        // A kinematic body reports the velocity MoveKinematic gives it.
         const BodyRecord* body = FindDynamicBody(entity);
         body = body != nullptr ? body : FindLiveBody(entity, RigidbodyBodyType::Kinematic);
         if (body == nullptr) {
@@ -2225,7 +2225,7 @@ private:
         }
     }
 
-    // Unity's Joint.breakForce: a joint whose constraint force in the last step exceeded its
+    // Break force: a joint whose constraint force in the last step exceeded its
     // break force is removed at once; the engine removes its component after this fixed update
     // (a plugin makes no structural ECS changes), until then it is not rebuilt.
     void BreakOverloadedJoints(SceneSystemContext& context) {
@@ -2340,7 +2340,7 @@ private:
         }
         // A body on a long arm (pendulum) has very different effective masses for rotation and
         // motion: with Jolt's default 10/2 solver steps a hinge limit lets it through by 5 deg and
-        // bounces. Jolt recommends more steps for such constraints - the limit holds as in Unity.
+        // bounces. Jolt recommends more steps for such constraints - the limit then holds.
         constraint->SetNumVelocityStepsOverride(40U);
         constraint->SetNumPositionStepsOverride(10U);
         physicsSystem_.AddConstraint(constraint);
@@ -2546,8 +2546,8 @@ private:
             // Physics.CharacterMove pins do not even accept a Y value).
             const JPH::Vec3 desiredVelocity = ToJolt(record.moveInput);
             JPH::Vec3 horizontalVelocity = desiredVelocity - desiredVelocity.Dot(up) * up;
-            // On walkable ground the move follows the slope keeping its horizontal speed (as
-            // Unity's CharacterController and UE's walking mode); Jolt alone would project it
+            // On walkable ground the move follows the slope keeping its horizontal speed
+            // Jolt alone would project it
             // onto the slope and walk slower uphill.
             if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround) {
                 const JPH::Vec3 groundNormal = SurfaceBelow(*character, characterLayer);
@@ -2613,7 +2613,7 @@ private:
         }
     }
 
-    // Unity's CharacterController contacts, reported by ExtendedUpdate on the main thread:
+    // Character controller contacts, reported by ExtendedUpdate on the main thread:
     // a trigger raises OnTrigger* on both sides, a solid collider raises
     // OnControllerColliderHit on the controller for every step it moves into it.
     bool OnContactValidate(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact) override {
@@ -2817,7 +2817,7 @@ private:
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
-        // No hidden speed cap (Jolt: 500 m/s); angular cap as Unity's default 50 rad/s.
+        // No hidden speed cap (Jolt: 500 m/s); angular cap 50 rad/s.
         bodySettings.mMaxLinearVelocity = 1.0e5F;
         bodySettings.mMaxAngularVelocity = 50.0F;
         bodySettings.mLinearDamping = rigidbody.linearDamping;

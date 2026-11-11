@@ -347,7 +347,7 @@ std::size_t AssetManager::DiscoverMountedAssets() {
     }
     asyncLoads_.clear();
     const std::size_t count = AssetDiscoveryService::DiscoverMountedAssets(mounts_, registry_, loaders_, cache_);
-    // The engine's basic shapes exist in every loose project, like Unreal's /Engine content:
+    // The engine's basic shapes exist in every loose project:
     // /Engine is never a mounted root, so discovery above never removes them.
     for (const BuiltInShapeDesc& shape : BuiltInShapes()) {
         if (registry_.Find(BuiltInShapeId(shape.shape)) == nullptr) {

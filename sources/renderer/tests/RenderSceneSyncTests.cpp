@@ -2912,7 +2912,7 @@ void RunUpdateMeshTransformRefreshesInstanceInPlaceTest() {
     Require(renderScene.DrawGroups()[0].instances.size() == 1U, "Draw group rebuild kept removed instance");
 }
 
-// Unreal's previous LocalToWorld per primitive, which the motion vector pass reads: a proxy records the model it
+// Previous LocalToWorld per primitive, which the motion vector pass reads: a proxy records the model it
 // had when the motion frame began on its first transform change in that frame; a proxy that does not change in
 // a frame has no motion of its own, and a new proxy has none in its first frame.
 void RunRenderSceneRecordsPreviousModelsPerMotionFrameTest() {

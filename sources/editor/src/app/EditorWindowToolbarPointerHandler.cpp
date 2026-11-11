@@ -378,7 +378,7 @@ void ActivatePanel(
                 sceneContext.AgentPanel().FocusInput(true);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {
-            // Like Unity's and Unreal's Help menu: the engine's pages in the browser, and About.
+            // Help menu: the engine's online pages in the browser, and About.
             constexpr const wchar_t* kHelpPages[] = {
                 L"https://github.com/WojciechKownacki/21kb-Engine/tree/1.0/docs",
                 L"https://github.com/WojciechKownacki/21kb-Engine/issues/new",

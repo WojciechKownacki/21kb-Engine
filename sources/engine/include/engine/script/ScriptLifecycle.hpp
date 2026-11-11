@@ -34,8 +34,8 @@ struct LuaGlobalFunction {
 // Every such function in `luaSource`, in source order.
 [[nodiscard]] std::vector<LuaGlobalFunction> FindLuaGlobalFunctions(std::string_view luaSource);
 
-// A global function of a Lua behaviour named after another engine's lifecycle callback - Unity's
-// Start/Update, Godot's _ready/_process, Unreal's BeginPlay - which 21kb never calls. `hook` is the
+// A global function of a Lua behaviour named like a lifecycle callback 21kb does not have, e.g.
+// Start/Update, _ready/_process, BeginPlay - which 21kb never calls. `hook` is the
 // 21kb hook that function meant.
 struct ForeignLifecycleName {
     std::uint32_t line = 0U;

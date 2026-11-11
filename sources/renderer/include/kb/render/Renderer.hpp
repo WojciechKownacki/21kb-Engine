@@ -253,8 +253,8 @@ public:
     [[nodiscard]] RenderEffectHost& RenderEffects();
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
-    // Cook graph materials on demand into the graph shader cache (an unpackaged project run, as
-    // Unreal compiles a missing material shader); std::nullopt draws only already cooked binaries.
+    // Cook graph materials on demand into the graph shader cache (an unpackaged project run).
+    // std::nullopt draws only already cooked binaries.
     void SetGraphShaderCookToolchain(std::optional<RenderMaterialGraphShaderToolchain> toolchain);
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
     [[nodiscard]] bool SetShaderBinaryProvider(
@@ -331,7 +331,7 @@ private:
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
     std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneGiResolvePass giResolvePass_;
-    // Unreal's SkyLight: the backdrop captured and prefiltered for the reflections of the lighting.
+    // Sky light: the backdrop captured and prefiltered for the reflections of the lighting.
     SceneSkyReflection skyReflection_;
     SceneGiVoxelGrid giVoxelGrid_;
     SceneRenderTarget defaultSceneTarget_;

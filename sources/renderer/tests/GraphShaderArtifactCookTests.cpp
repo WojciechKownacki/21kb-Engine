@@ -767,7 +767,7 @@ void RunGraphShaderDeepCacheRootCookTest() {
 #endif
 
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
-// The Unreal/Unity utility nodes added after the first sweep, cooked for every graph pass rather than only
+// The utility nodes added after the first sweep, cooked for every graph pass rather than only
 // BaseOpaque: the shadow, G-buffer and motion-vector wrappers each compile the node in their own context.
 [[nodiscard]] bool SweepsEveryPass(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {

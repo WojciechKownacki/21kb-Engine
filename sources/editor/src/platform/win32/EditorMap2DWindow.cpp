@@ -1192,7 +1192,7 @@ private:
         if (animationEditing_) LayoutAnimationEditor();
     }
 
-    // The palette's type, as Remere's palettes: grounds (with floor tiles), objects, items, or everything.
+    // The palette's type: grounds (with floor tiles), objects, items, or everything.
     [[nodiscard]] static std::vector<std::string> TypeKeys() { return { "grounds", "objects", "items", "all" }; }
 
     [[nodiscard]] bool OfType(const PaletteEntry& entry) const noexcept {
@@ -1466,7 +1466,7 @@ private:
                     "with the ground in the middle. Click a black square, then the edge sprite for it on the left. Done, and paint.") };
         default:
             return { T("map2d.tutorial.5.title", "Automatic edges"),
-                T("map2d.tutorial.5.body", "Auto edges draws where grounds meet for you, as in Remere's Map Editor. Turn it off (A) to "
+                T("map2d.tutorial.5.body", "Auto edges draws where grounds meet for you. Turn it off (A) to "
                     "lay edges by hand. Ctrl+S saves; the scene shows every stroke at once. The ? button brings this tutorial back.") };
         }
     }
@@ -1823,7 +1823,7 @@ private:
             Frame(dc, brushRect, tool_ == Tool::Eraser || Ctrl() ? kWarning : kAccent, 2);
         }
         if (clientBox_) {
-            // What a player sees around the middle of the view, as Remere's client box.
+            // What a player sees around the middle of the view.
             const int centerX = FloorDivide((canvas.left + canvas.right) / 2 - originX, zoom_);
             const int centerY = FloorDivide((canvas.top + canvas.bottom) / 2 - originY, zoom_);
             const int boxX = centerX - static_cast<int>(map_.viewWidth) / 2;
@@ -2406,7 +2406,7 @@ private:
             }
             return visible;
         }
-        // Grounds and objects first, then floor tiles, then items, as one finds them in Remere's palettes.
+        // Grounds and objects first, then floor tiles, then items.
         for (const EntryKind kind : { EntryKind::Ground, EntryKind::Object, EntryKind::Floor, EntryKind::Item }) {
             for (const PaletteEntry& entry : entries_) {
                 if (entry.kind == kind && OfType(entry) && (category_ == kAllCategory || entry.category == category_) && matches(entry)) visible.push_back(&entry);
@@ -2834,7 +2834,7 @@ private:
 
     void Redo() { static_cast<void>(context_.RedoSceneCommand()); Invalidate(); }
 
-    // Remere's Borderize: the edges of an area (the selection, else the whole floor) made again.
+    // Borderize: the edges of an area (the selection, else the whole floor) made again.
     void Borderize(bool wholeMap) {
         BeginChange();
         kb::world2d::Map2DEditor editor = Editor();
@@ -4786,7 +4786,7 @@ private:
         if (key == 'D') fillKey_ = false;
     }
 
-    // Remere's Z / X: the previous or next tile of the palette.
+    // Z / X: the previous or next tile of the palette.
     void NextEntry(int step) {
         const std::vector<const PaletteEntry*> visible = VisibleEntries();
         if (visible.empty()) return;

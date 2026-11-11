@@ -294,7 +294,7 @@ void RunSocketAttachmentTest(const std::filesystem::path& root) {
             !scene.Components().SocketAttachments().Has(loose.Entity()), "Animator.DetachFromSocket API did not remove attachment");
 }
 
-// A Mixamo-named clip on an Unreal-named character twice as tall whose arm bone points another
+// A clip named in one rig scheme on a character named in another, twice as tall whose arm bone points another
 // way at rest: the hips travel twice as far, the arm turns the same way in the world, and a
 // character with too few matching bones is refused with the reason.
 void RunAnimationRetargetTest(const std::filesystem::path& root) {
@@ -307,7 +307,7 @@ void RunAnimationRetargetTest(const std::filesystem::path& root) {
             kb::scene::CanonicalBoneName("RightUpLeg") == "r:thigh" && kb::scene::CanonicalBoneName("thigh.R") == "r:thigh" &&
             kb::scene::CanonicalBoneName("LeftToeBase") == "l:toe" &&
             kb::scene::CanonicalBoneName("spine_01") == kb::scene::CanonicalBoneName("Spine1"),
-        "Bone roles must agree across Mixamo, Unreal, Rigify and 3ds Max names");
+        "Bone roles must agree across the common rig naming schemes");
 
     const auto inverseBindAt = [](kb::scene::Vec3 position) {
         return kb::math::Mat4{ .columns = { { 1.0F, 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F, 0.0F },
@@ -362,7 +362,7 @@ void RunAnimationRetargetTest(const std::filesystem::path& root) {
             retargeted->targetSkeletonCompatibilitySignature == targetSignature && report.mappedBones == 3U &&
             report.unmappedAnimatedBones == std::vector<std::string>{ "mixamorig:Tail" } &&
             std::abs(report.translationScale - 2.0F) < 0.0001F,
-        ("A Mixamo clip did not retarget onto an Unreal-named character: " + error).c_str());
+        ("A clip did not retarget onto a character named in another scheme: " + error).c_str());
     const auto lastKey = [&](kb::scene::SkeletonBoneId bone) -> const kb::scene::LocalTransform* {
         for (const kb::scene::AnimationBoneTrack& track : retargeted->skeletalTracks) {
             if (track.boneId == bone && !track.keyframes.empty()) return &track.keyframes.back().transform;

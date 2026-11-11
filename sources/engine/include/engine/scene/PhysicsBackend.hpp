@@ -108,7 +108,7 @@ public:
     // silent no-op as a successful command for either of those body types.
     virtual bool AddForce(SceneEntity entity, Vec3 force) noexcept = 0;
     virtual bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept = 0;
-    // Continuous world-space torque (Nm), as Unity's Rigidbody.AddTorque.
+    // Continuous world-space torque (Nm).
     virtual bool AddTorque(SceneEntity entity, Vec3 torque) noexcept = 0;
     virtual bool SetVelocity(SceneEntity entity, Vec3 velocity) noexcept = 0;
     [[nodiscard]] virtual PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept = 0;
@@ -286,7 +286,7 @@ enum class PhysicsContactPhase : std::uint8_t {
     Enter,
     Stay,
     Exit,
-    // A character controller hit a solid collider while moving (Unity's OnControllerColliderHit);
+    // A character controller hit a solid collider while moving;
     // queued for the controller only.
     ControllerHit,
 };
@@ -328,7 +328,7 @@ public:
     static bool AddForce(Scene& scene, SceneEntity entity, Vec3 force) noexcept;
     static bool AddImpulse(Scene& scene, SceneEntity entity, Vec3 impulse) noexcept;
     static bool AddTorque(Scene& scene, SceneEntity entity, Vec3 torque) noexcept;
-    // Unity's AddExplosionForce: pushes the body away from `center` with `force` falling off
+    // Explosion force: pushes the body away from `center` with `force` falling off
     // linearly to zero at `radius` (measured to the body's position); a force, or an impulse
     // when `impulse` is set. A body outside the radius gets nothing.
     static bool AddExplosionForce(Scene& scene, SceneEntity entity, float force, Vec3 center, float radius, bool impulse) noexcept;

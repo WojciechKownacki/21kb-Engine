@@ -411,7 +411,7 @@ void EditorLeftButtonDownRouter::HandleWorld2DMapClick(InspectorPropertyId prope
     const std::array<std::pair<std::uint32_t, std::uint32_t>, 6U> sizes{ { { 15U, 11U }, { 15U, 10U }, { 17U, 13U }, { 20U, 15U }, { 24U, 14U }, { 32U, 18U } } };
     for (std::size_t index = 0U; index < sizes.size(); ++index) {
         const std::wstring label = std::to_wstring(sizes[index].first) + L" \u00D7 " + std::to_wstring(sizes[index].second) +
-            (index == 0U ? L" tiles (Tibia client)" : L" tiles");
+            (index == 0U ? L" tiles (default)" : L" tiles");
         AppendMenuW(menu, MF_STRING | (map->viewWidth == sizes[index].first && map->viewHeight == sizes[index].second ? MF_CHECKED : 0U),
             1U + index, label.c_str());
     }
@@ -1518,7 +1518,7 @@ bool EditorLeftButtonDownRouter::HandleInspectorDown(HWND messageWindow, int x, 
         }
     }
     if (hit.kind == InspectorHitKind::ColorField && InspectorSceneColor::IsColorProperty(hit.property)) {
-        // Scene colours are linear; the picker shows and returns sRGB, as Unity's does.
+        // Scene colours are linear; the picker shows and returns sRGB.
         const auto entity = sceneContext_.SelectedEntity();
         if (const auto linear = InspectorSceneColor::Read(sceneContext_, entity, hit.property)) {
             POINT anchor{x, y};
@@ -1937,7 +1937,7 @@ bool EditorLeftButtonDownRouter::HandleBuildGameDown(HWND messageWindow, int x, 
             changed = sceneContext_.ToggleBuildGameLaunchAfterBuild();
             break;
         case BuildGameField::StartupMap: {
-            // A list of the project's scenes, like Unreal's Game Default Map, not a free path.
+            // A list of the project's scenes, not a free path.
             const std::vector<std::string> scenes = sceneContext_.ProjectScenePaths();
             HMENU menu = CreatePopupMenu();
             if (menu != nullptr) {

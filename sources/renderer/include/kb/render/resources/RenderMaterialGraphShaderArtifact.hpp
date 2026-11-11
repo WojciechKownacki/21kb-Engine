@@ -18,7 +18,7 @@ inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 11ULL;
 // Four-target variant of graph deferred shading. Additional model color/iris data is omitted.
 inline constexpr std::string_view kRenderMaterialGraphCompactGBufferPass = "GBufferCompact";
 
-// The scene pass that writes motion vectors with the graph's own program (Unreal's velocity pass).
+// The scene pass that writes motion vectors with the graph's own program.
 inline constexpr std::string_view kRenderMaterialGraphMotionVectorsPass = "MotionVectors";
 // A Post Process material's fullscreen pass (the post-process chain, before the tonemap).
 inline constexpr std::string_view kRenderMaterialGraphPostProcessPass = "PostProcess";
@@ -143,7 +143,7 @@ struct RenderMaterialGraphShaderManifest {
 // Whether the motion vector pass must run the graph's own program: the graph moves its surface beyond the
 // rigid mesh (world position offset, displacement), moves its depth (pixel depth offset) or clips it
 // (Masked). Any other opaque graph moves exactly like its mesh and draws with the builtin program; a
-// translucent graph writes no motion vectors. Unreal's velocity pass uses the material's shaders in the
+// translucent graph writes no motion vectors. The pass uses the material's shaders in the
 // same cases.
 [[nodiscard]] bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflection& reflection) noexcept;
 // Whether a scene cook produces `pass` (one of kRenderMaterialGraphScenePasses) for a graph.

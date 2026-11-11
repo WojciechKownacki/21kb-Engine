@@ -28,8 +28,8 @@ class SceneMeshCoverageProbe;
 class ParticleGpuRenderer;
 class RenderScene;
 
-// The post-process chain targets the scene's Post Process materials draw through (Unreal's post-process blendables,
-// before the tonemap): one view per material, ping-ponging between the two colour targets.
+// The post-process chain targets the scene's Post Process materials draw through,
+// before the tonemap: one view per material, ping-ponging between the two colour targets.
 struct ScenePostProcessMaterialChainDesc {
     std::array<std::uint16_t, 4U> views{};
     std::array<bgfx::FrameBufferHandle, 2U> frameBuffers{ { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE } };

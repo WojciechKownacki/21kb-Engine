@@ -390,7 +390,7 @@ class RenderMaterialGraphPinSchema final {
             visitor("value", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::Noise:
-            // Unreal's Noise: Position (kept as "value" for saved graphs) and Filter Width.
+            // Noise: Position (kept as "value" for saved graphs) and Filter Width.
             visitor("value", Direction::Input);
             visitor("filterWidth", Direction::Input);
             visitor("value", Direction::Output);

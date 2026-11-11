@@ -502,7 +502,7 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
         return FallbackTangentForNormal(vertex.nx, vertex.ny, vertex.nz);
     }
     // The bitangent cross(normal, tangent) * w points up the image (toward smaller V), where a
-    // normal map's +Y points (OpenGL convention: glTF, Unity, Godot); accum.bitangent follows
+    // normal map's +Y points (OpenGL convention, as in glTF); accum.bitangent follows
     // growing V, which runs down the image. With w taken along accum.bitangent bumps came out as dimples.
     const float handedness = Dot(Cross(normal, tangent), accum.bitangent) > 0.0F ? -1.0F : 1.0F;
     return { tangent.x, tangent.y, tangent.z, handedness };

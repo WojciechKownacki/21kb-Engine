@@ -378,7 +378,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
             "PhysicsBackend::AddImpulse must reject live non-Dynamic bodies rather than report Jolt's no-op as applied");
         kb::tests::Require(!kb::scene::PhysicsBackend::SetVelocity(scene, unsupported, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
             "PhysicsBackend::SetVelocity must reject a body whose velocity is not a Dynamic simulation result");
-        // A Kinematic body reports the velocity MoveKinematic gives it (Unity's MovePosition).
+        // A Kinematic body reports the velocity MoveKinematic gives it.
         kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, unsupported).found == (unsupported == kinematic.Entity()),
             "PhysicsBackend::GetVelocity must report found=false for a Static body and the velocity of a Kinematic one");
         kb::tests::Require(!kb::scene::PhysicsBackend::SetAngularVelocity(scene, unsupported, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }),
@@ -441,7 +441,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
     scene.Components().Rigidbodies().Set(beforeFirstSync.Entity(), kb::scene::RigidbodyComponent{});
     scene.Components().Colliders().Set(beforeFirstSync.Entity(), kb::scene::ColliderComponent{});
-    // Force and impulse wait for the body (Unity's Start runs before the first physics step);
+    // Force and impulse wait for the body;
     // every other control still needs the live body.
     kb::tests::Require(kb::scene::PhysicsBackend::AddForce(scene, beforeFirstSync.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }) &&
             kb::scene::PhysicsBackend::AddImpulse(scene, beforeFirstSync.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
@@ -2171,7 +2171,7 @@ void RunPhysicsPersistentSleeperTransitionTest() {
     std::filesystem::remove(path, error);
 }
 
-// Unity-like contact semantics: no hidden damping, and a pair that falls asleep while
+// Contact semantics: no hidden damping, and a pair that falls asleep while
 // touching stays in contact (no Exit) until a body wakes up and really leaves.
 void RunPhysicsSleepingContactAndDampingTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
@@ -2238,7 +2238,7 @@ void RunPhysicsSleepingContactAndDampingTest() {
     run(30);
     kb::tests::Require(count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Exit) == 1, "A woken occupant leaving the trigger must Exit once");
 
-    // Unity CharacterController: walks through a trigger (OnTrigger* on both sides), then
+    // Character controller: walks through a trigger (OnTrigger* on both sides), then
     // stops at a wall (OnControllerColliderHit each step, velocity reads the real motion).
     const auto walker = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Walker", .transform = kb::scene::TransformComponent{.localPosition = {60.0F, 1.0F, 20.0F}}});
     scene.Components().CharacterControllers().Set(walker.Entity(), kb::scene::CharacterControllerComponent{.useGravity = false});
@@ -2267,10 +2267,10 @@ void RunPhysicsSleepingContactAndDampingTest() {
     kb::tests::Require(dampedSpeed < 2.0F, "Linear damping 1 must slow the body down");
 }
 
-// Physics comparison scene (Unity/UE defaults): a push queued before the body exists, no hidden
+// Physics comparison scene (default physics values): a push queued before the body exists, no hidden
 // speed cap, a 1 cm sphere resting on the floor, materials combined by average, hinge limits in
-// Unity's direction and a character keeping its horizontal speed up a slope.
-void RunPhysicsUnityDefaultsTest() {
+// the expected direction and a character keeping its horizontal speed up a slope.
+void RunPhysicsDefaultValuesTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
     }
@@ -2322,7 +2322,7 @@ void RunPhysicsUnityDefaultsTest() {
         if (step == 90) {
             // 60 steps at 3 m/s horizontally up 30 deg: 3 tan30 = 1.73 m (projected onto the slope: 1.5 m).
             kb::tests::Require(scene.Transforms().Get(climber).localPosition.y - climbStart > 1.62F,
-                "A character walking up a 30 deg slope must keep its horizontal speed as in Unity and UE");
+                "A character walking up a 30 deg slope must keep its horizontal speed");
         }
         static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
         if (step == 0) {
@@ -2340,12 +2340,12 @@ void RunPhysicsUnityDefaultsTest() {
         "Restitution 1 on a restitution 0 floor must combine by average (0.5), not max");
     const kb::scene::Vec3 swing = scene.Transforms().Get(pendulum).localPosition;
     kb::tests::Require(swing.y < 4.03F && swing.y > 3.97F,
-        "A hinge limited to 0..30 deg must let the body swing down to 30 deg as in Unity");
+        "A hinge limited to 0..30 deg must let the body swing down to 30 deg");
     static_cast<void>(floor);
 }
 
 // Torque, explosion, hinge motor, distance spring and joint breaking (physics comparison F07, F28, F30,
-// F34, F35): the values Unity and UE give.
+// F34, F35): the expected values.
 void RunPhysicsTorqueJointDriveTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
@@ -2397,7 +2397,7 @@ void RunPhysicsTorqueJointDriveTest() {
         }
         if (step == 119) {
             kb::tests::Require(std::abs(kb::scene::PhysicsBackend::GetAngularVelocity(scene, motorized.Entity()).value.y - 1.5708F) < 0.02F,
-                "A hinge motor at 90 deg/s must turn the body at +1.57 rad/s about the axis, as Unity's");
+                "A hinge motor at 90 deg/s must turn the body at +1.57 rad/s about the axis.");
         }
     }
     kb::tests::Require(std::abs(kb::scene::PhysicsBackend::GetVelocity(scene, blasted.Entity()).value.z - 10.0F * (1.0F - 1.0F / 3.0F)) < 0.01F,
@@ -3563,7 +3563,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
     RunPhysicsSleepingContactAndDampingTest();
-    RunPhysicsUnityDefaultsTest();
+    RunPhysicsDefaultValuesTest();
     RunPhysicsTorqueJointDriveTest();
     RunPhysicsPipelinedStepEquivalenceTest();
 }

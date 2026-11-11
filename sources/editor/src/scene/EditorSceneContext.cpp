@@ -435,7 +435,7 @@ EditorSceneContext::EditorSceneContext()
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
     scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
     ApplyProjectAudioAndTags(*scene_);
-    // Like Unity: the scene that was open when the editor was last closed, else the startup scene.
+    // The scene that was open when the editor was last closed, else the startup scene.
     std::error_code error;
     currentScenePath_ = ResolveDefaultScenePath();
     std::string_view openedAs = "startup scene";

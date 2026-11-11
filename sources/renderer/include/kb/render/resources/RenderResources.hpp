@@ -60,7 +60,7 @@ struct RenderStaticMeshVertexP3N3T4UV2 {
     float g = 1.0F;
     float b = 1.0F;
     float a = 1.0F;
-    // UV2..UV7 (u2, v2, u3, v3, ...) as half floats, Unreal's default UV precision; 0 when the source has none.
+    // UV2..UV7 (u2, v2, u3, v3, ...) as half floats; 0 when the source has none.
     std::uint16_t uv2to7[12]{};
 };
 
@@ -446,12 +446,12 @@ struct RenderMaterialGraphProgramBinding {
     bool writesShadingModelColor = false;
     // The material's Max World Position Offset Displacement: the bounds margin of its objects.
     float boundsMargin = 0.0F;
-    // Unreal's Post Process domain: the material draws in the post-process chain, not in the scene passes.
+    // Post Process domain: the material draws in the post-process chain, not in the scene passes.
     bool postProcessDomain = false;
-    // Unreal's Deferred Decal domain: the material decorates the opaque surfaces inside its box, drawn with the box's
+    // Deferred Decal domain: the material decorates the opaque surfaces inside its box, drawn with the box's
     // back faces behind them in the transparent pass.
     bool decalDomain = false;
-    // Unreal's User Interface domain: the material draws a UI image's rectangle (ScreenUIComposite).
+    // User Interface domain: the material draws a UI image's rectangle (ScreenUIComposite).
     bool userInterfaceDomain = false;
 };
 

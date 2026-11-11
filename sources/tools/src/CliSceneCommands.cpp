@@ -416,8 +416,8 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 }
 
 #if KB_CLI_RENDERER
-// The scene's image settings: the post-process profile the renderer applies to it (as a Unity
-// global Volume's profile or a Godot WorldEnvironment's Environment), or none for the defaults.
+// The scene's image settings: the post-process profile the renderer applies to it,
+// or none for the defaults.
 int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     const std::optional<std::string> profile = arguments.Option("--profile");

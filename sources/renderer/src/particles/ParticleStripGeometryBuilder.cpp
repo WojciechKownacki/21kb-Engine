@@ -101,7 +101,7 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
         trailHistoryBackendEpoch_ = snapshot.BackendEpoch();
     }
 
-    // One camera-facing strip through `count` points (Unity's LineRenderer/TrailRenderer, Niagara's ribbon):
+    // One camera-facing strip through `count` points:
     // consecutive segments share their two vertices, each turned across the tangent at that point, so the
     // strip has no gaps or overlaps at the joints. U runs along the strip (0 at its oldest point, 1 at its
     // newest), V across it. A strip that does not fit the budget is dropped whole (count - 1 segments).

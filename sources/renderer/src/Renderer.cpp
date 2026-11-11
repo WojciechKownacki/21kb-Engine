@@ -1362,7 +1362,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         }
     }
     {
-        // Reflections of the sky the camera sees (Unreal's SkyLight, Unity's skybox reflections): the
+        // Reflections of the sky the camera sees: the
         // backdrop is captured over a few frames; until then the lighting uses the environment colour.
         const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
             worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
@@ -1594,7 +1594,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         const SceneRenderPassSubmitStats* gbufferPassStats = lastScenePassSubmitStats_.empty()
             ? nullptr
             : &lastScenePassSubmitStats_.back();
-        // Unreal's custom data (Subsurface Color / Fuzz Color) only in frames drawing a material that
+        // Custom data (Subsurface Color / Fuzz Color) only in frames drawing a material that
         // writes it: the G-buffer view then renders into the framebuffer with the fifth target.
         bgfx::TextureHandle customDataTexture = BGFX_INVALID_HANDLE;
         if (gbufferPassStats != nullptr && gbufferPassStats->stats.shadingModelColorDrawCallCount > 0U) {

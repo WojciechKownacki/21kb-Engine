@@ -606,7 +606,7 @@ inline bool MaterialEditorPanelIsTexturePreviewNode(kb::render::RenderMaterialGr
 
 inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGraphNode& node) {
     SIZE size = MaterialEditorPanelGraphNodeSize(node.kind);
-    // The node grows with its pin rows (Unreal): the canvas that places and hit-tests the pins owns the rule.
+    // The node grows with its pin rows: the canvas that places and hit-tests the pins owns the rule.
     size.cy = std::max(size.cy, static_cast<LONG>(std::lround(MaterialGraphCanvasPinRowsHeight(BuildMaterialGraphCanvasNode(node)))));
     return size;
 }
@@ -3615,7 +3615,7 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
         haystack += " pixel position viewport pixel screen pixel absolute coordinate coordinates fragcoord";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateNoise) {
-        // Unreal's Noise functions, so typing Voronoi or Simplex finds the node that has them.
+        // Noise functions, so typing Voronoi or Simplex finds the node that has them.
         haystack += " simplex gradient perlin value voronoi cellular worley turbulence fractal levels octaves";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture) {

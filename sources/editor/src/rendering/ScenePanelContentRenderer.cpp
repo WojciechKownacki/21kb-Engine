@@ -783,8 +783,8 @@ void AppendNavigationMesh(
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
     postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled =
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
-    // The scene's post-process profile shows in the edit-mode viewport too, as Unity's Scene view
-    // shows the global Volume. Edit mode renders on events, so its temporal parts follow the rule
+    // The scene's post-process profile shows in the edit-mode viewport too.
+    // Edit mode renders on events, so its temporal parts follow the rule
     // above: temporal anti-aliasing becomes FXAA, and auto exposure meters the scene's light each
     // frame (no GPU readback that lags a frame behind, no adaptation over time).
     if (!continuousRuntimeFrames) {

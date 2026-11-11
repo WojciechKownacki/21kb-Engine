@@ -205,7 +205,7 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
         appendImageAsset(element.sprite->spriteAssetId, ImageKind::Sprite);
     }
     if (element.image.has_value() && element.image->materialAssetId != 0U) {
-        // Unreal's UI material: the material draws the image's rectangle, its Texture Coordinate spanning it.
+        // UI material: the material draws the image's rectangle, its Texture Coordinate spanning it.
         AppendQuad(element, elementRect, elementRect, 0.0F, 0.0F, 1.0F, 1.0F,
                    ScreenUITextureKey{.source = ScreenUITextureSource::Material, .assetId = element.image->materialAssetId},
                    ImageStyle(element, element.image->color, elementRect));

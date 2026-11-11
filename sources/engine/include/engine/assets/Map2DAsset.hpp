@@ -152,7 +152,7 @@ struct Map2DAsset {
     float tileSize = 1.0F;
     float floorHeight = 3.0F;
     Map2DOrientation orientation = Map2DOrientation::Flat;
-    // The tiles a player sees at once (Remere's client box): what a 2D camera frames.
+    // The tiles a player sees at once (the client box): what a 2D camera frames.
     std::uint32_t viewWidth = 15U;
     std::uint32_t viewHeight = 11U;
     // A dark quad under the whole map, so its extent shows before anything is painted.

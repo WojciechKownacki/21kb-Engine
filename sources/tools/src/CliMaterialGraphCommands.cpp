@@ -81,7 +81,7 @@ struct LoadedProject {
     return nullptr;
 }
 
-// Unreal's names for the common nodes, beside the engine's own kind names.
+// Names for the common nodes, beside the engine's own kind names.
 [[nodiscard]] std::optional<kb::render::RenderMaterialGraphNodeKind> ParseKind(std::string_view text) {
     if (const std::optional<kb::render::RenderMaterialGraphNodeKind> kind = kb::render::ParseRenderMaterialGraphNodeKind(text)) {
         return kind;
@@ -159,7 +159,7 @@ struct LoadedProject {
     return text.str();
 }
 
-// The parameters a material exposes (Unreal's parameter list): name, id and type.
+// The parameters a material exposes: name, id and type.
 struct ExposedParameter {
     std::string displayName;
     std::string stableId;
@@ -221,7 +221,7 @@ struct ExposedParameter {
 }
 
 // Problems the editor's Save reports: a document that would not load again refuses the write;
-// graph and shader-generation errors are reported with it (Unreal saves such a material too,
+// graph and shader-generation errors are reported with it (such a material is saved too,
 // and the editor shows the same errors).
 struct MaterialCheck {
     bool loads = true;
@@ -336,7 +336,7 @@ void PrintGraph(const kb::render::RenderMaterialAssetData& asset, const std::str
         return "node " + NodeLabel(node) + " has no value to set";
     }
     if (node.kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
-        // Unreal's Noise settings: "<function> <turbulence> <scale> <quality> <levels> <level scale> <min> <max>".
+        // Noise settings: "<function> <turbulence> <scale> <quality> <levels> <level scale> <min> <max>".
         if (const kb::render::RenderMaterialGraphNoiseSettingsParseResult noise = kb::render::ParseRenderMaterialGraphNoiseSettings(text);
             !noise.settings.has_value()) {
             return "node " + NodeLabel(node) + ": " + noise.error;

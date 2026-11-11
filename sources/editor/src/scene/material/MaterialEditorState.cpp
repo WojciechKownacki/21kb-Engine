@@ -16,8 +16,8 @@
 namespace kb::editor {
 namespace {
 
-// Unreal's Noise properties edited as numbers: Scale, Quality, Levels, Level Scale, Output Min, Output Max.
-// Quality and Levels are whole numbers in Unreal's ranges; the hint is owned by the renderer's Noise settings.
+// Noise properties edited as numbers: Scale, Quality, Levels, Level Scale, Output Min, Output Max.
+// Quality and Levels are whole numbers in the Noise ranges; the hint is owned by the renderer's Noise settings.
 struct NoiseNumericProperty {
     std::string_view stableId;
     float rangeMin = 0.0F;
@@ -1614,7 +1614,7 @@ std::vector<MaterialEditorGraphNodeProperty> MaterialEditorState::GraphNodePrope
         }
     }
     if (node->kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
-        // Unreal's Noise details: Function, Turbulence, then the numeric settings.
+        // Noise details: Function, Turbulence, then the numeric settings.
         if (const kb::render::RenderMaterialGraphNoiseSettingsParseResult noise =
                 kb::render::ParseRenderMaterialGraphNoiseSettings(node->parameter.defaultValueHint);
             noise.settings.has_value()) {
@@ -1743,7 +1743,7 @@ std::vector<MaterialEditorGraphNodeProperty> MaterialEditorState::MaterialSettin
     properties.push_back(makeRow("material.shadingModel", EditorText("materialEditor.setting.shadingModel", "Shading Model"),
         workingCopy_->graph.shadingModel));
     properties.push_back(makeRow("material.blendMode", EditorText("materialEditor.setting.blendMode", "Blend Mode"), workingCopy_->graph.blendMode));
-    // Typed in (TextField): Unreal's Max World Position Offset Displacement.
+    // Typed in (TextField): Max World Position Offset Displacement.
     char margin[32];
     std::snprintf(margin, sizeof(margin), "%g", workingCopy_->graph.maxWorldPositionOffsetDisplacement);
     properties.push_back(MaterialEditorGraphNodeProperty{

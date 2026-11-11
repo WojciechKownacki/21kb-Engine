@@ -35,8 +35,8 @@ struct ScenePostProcessSettings {
             .enabled = true,
         },
     };
-    // Darkens the image toward its corners in the final composite, as Unity's and Unreal's
-    // Vignette do. Intensity 0..1: how dark the corners get.
+    // Darkens the image toward its corners in the final composite.
+    // Intensity 0..1: how dark the corners get.
     bool vignetteEnabled = false;
     float vignetteIntensity = 0.3F;
     // Screen-space ambient occlusion of the indirect light (the renderer's SSAO pass in the

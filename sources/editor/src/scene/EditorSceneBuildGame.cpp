@@ -406,7 +406,7 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         console_.Error("Packaging", problem);
         return false;
     }
-    // Like Unity's Build: Save writes the edited scene first, Don't Save packages the saved one.
+    // Save writes the edited scene first, Don't Save packages the saved one.
     if (dirtyResolution == EditorDirtySceneResolution::Save && !SaveDirtySceneDocument("building the game")) {
         return false;
     }

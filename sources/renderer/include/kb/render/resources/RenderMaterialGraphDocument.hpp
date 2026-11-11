@@ -465,7 +465,7 @@ struct RenderMaterialGraphDocument {
     std::string materialDomain = "surface";
     std::string shadingModel = "defaultLit";
     std::string blendMode = "opaque";
-    // Unreal's Max World Position Offset Displacement: how far (world units) the graph's World
+    // Max World Position Offset Displacement: how far (world units) the graph's World
     // Position Offset may move a vertex; culling grows the bounds of its objects by it.
     float maxWorldPositionOffsetDisplacement = 0.0F;
     std::string storageModel = "inline-kbmat";
@@ -643,10 +643,10 @@ struct RenderMaterialGraphReflection {
     bool hasCustomizedUv0 = false;
     bool hasDisplacement = false;
     bool hasTangentOutput = false;
-    // Unreal's Pixel Depth Offset: the depth-writing passes push the fragment's depth away from the
+    // Pixel Depth Offset: the depth-writing passes push the fragment's depth away from the
     // camera (gl_FragDepth), so the wrapper writes depth only when the graph drives it.
     bool hasPixelDepthOffset = false;
-    // Unreal's Refraction on a Translucent material: the forward wrapper shows the opaque scene
+    // Refraction on a Translucent material: the forward wrapper shows the opaque scene
     // behind the surface bent by the index of refraction (reads the scene-color snapshot).
     bool hasRefraction = false;
     // The graph gives its model's scattering colour (Subsurface Color / Fuzz Color): the G-buffer
@@ -655,7 +655,7 @@ struct RenderMaterialGraphReflection {
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
     // key. Declared models without production shader branches fail compilation instead of falling back.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
-    // Unreal's Material Domain: the pass the graph is drawn in (a Surface draws the scene passes, a Post Process
+    // Material Domain: the pass the graph is drawn in (a Surface draws the scene passes, a Post Process
     // material the post-process chain).
     RenderMaterialDomain domain = RenderMaterialDomain::Surface;
     // MAT-38: resolved blend mode. Masked makes the fragment wrapper clip on alphaClipThreshold; the
@@ -736,7 +736,7 @@ struct RenderMaterialGraphMaterialTypeBuildResult {
     [[nodiscard]] bool Succeeded() const noexcept;
 };
 
-// Unreal's Noise node functions. Unreal's texture-based Simplex is computed here (no lookup texture).
+// Noise node functions. Simplex is computed here (no lookup texture).
 enum class RenderMaterialGraphNoiseFunction : std::uint8_t {
     Simplex,
     Gradient,
@@ -744,7 +744,7 @@ enum class RenderMaterialGraphNoiseFunction : std::uint8_t {
     Voronoi,
 };
 
-// The Noise node's properties, with Unreal's UMaterialExpressionNoise defaults. Stored in the node's value
+// The Noise node's properties, with their defaults. Stored in the node's value
 // hint as "<function> <turbulence> <scale> <quality> <levels> <levelScale> <outputMin> <outputMax>".
 struct RenderMaterialGraphNoiseSettings {
     RenderMaterialGraphNoiseFunction function = RenderMaterialGraphNoiseFunction::Simplex;
@@ -764,8 +764,8 @@ struct RenderMaterialGraphNoiseSettingsParseResult {
 
 [[nodiscard]] std::string_view RenderMaterialGraphNoiseFunctionName(RenderMaterialGraphNoiseFunction function) noexcept;
 [[nodiscard]] std::optional<RenderMaterialGraphNoiseFunction> ParseRenderMaterialGraphNoiseFunction(std::string_view text) noexcept;
-// An empty hint is Unreal's defaults; missing trailing fields keep their defaults. Unknown functions, non-boolean
-// turbulence, non-finite numbers and values outside Unreal's ranges (Quality 1-4, Levels 1-10, Scale and
+// An empty hint is the defaults; missing trailing fields keep their defaults. Unknown functions, non-boolean
+// turbulence, non-finite numbers and values outside the ranges (Quality 1-4, Levels 1-10, Scale and
 // Level Scale above zero) are refused with the offending token in `error`.
 [[nodiscard]] RenderMaterialGraphNoiseSettingsParseResult ParseRenderMaterialGraphNoiseSettings(std::string_view hint);
 [[nodiscard]] std::string RenderMaterialGraphNoiseSettingsHint(const RenderMaterialGraphNoiseSettings& settings);

@@ -126,7 +126,7 @@ int main() {
     Require(grass.Border(Map2DBorderPiece::S) == 17U && grass.Border(Map2DBorderPiece::CornerSE) == 16U &&
             grass.Border(Map2DBorderPiece::N) == 33U && grass.Border(Map2DBorderPiece::CornerNW) == 34U &&
             grass.Border(Map2DBorderPiece::DiagonalNW) == 19U && grass.Border(Map2DBorderPiece::DiagonalSE) == 28U,
-        "island and hole blocks must fill the RME border pieces");
+        "island and hole blocks must fill the border pieces");
     grass.tiles = { 25U };
     tileset.grounds.push_back(grass);
     tileset.grounds.push_back(kb::world2d::Map2DGroundBrush{ .name = "Dirt", .zOrder = 10, .texture = "/Game/Sprites/ground.png", .cellSize = 32U, .tiles = { 8U } });
@@ -140,7 +140,7 @@ int main() {
     const kb::world2d::Map2DGroundBrush* dirtBrush = library.Find("Dirt");
     Require(grassBrush != nullptr && dirtBrush != nullptr, "the library must find the project's brushes");
 
-    // Grass on an empty map borders onto the void around it, like Remere's Map Editor.
+    // Grass on an empty map borders onto the void around it.
     {
         Map2DAsset map = kb::assets::MakeEmptyMap2DAsset(12U, 12U);
         kb::world2d::Map2DEditor editor{ map, library, assets };

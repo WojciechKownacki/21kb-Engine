@@ -16,7 +16,7 @@ struct EditorLanguage {
     std::string_view englishName;
 };
 
-// The editor's own text in the user's language, like Unreal's LOCTEXT: every line of the interface
+// The editor's own text in the user's language: every line of the interface
 // names a key and its English text - `EditorText("files.rename", "Rename")` - and the catalog of the
 // chosen language gives the translation. English is the source and needs no catalog; a key a
 // catalog does not have shows its English text. Catalogs are the engine's .kbloc files
@@ -31,7 +31,7 @@ public:
     // The operating system's interface language when it is one of Languages(), else English.
     [[nodiscard]] static std::string_view SystemLanguage();
 
-    // The user's choice from Editor Settings, kept for every project like Unity's and Unreal's editor
+    // The user's choice from Editor Settings, kept for every project as the editor
     // language: %LOCALAPPDATA%/21kb/EditorPreferences.ini (Linux: $XDG_CONFIG_HOME/21kb). Before a
     // choice is made: SystemLanguage().
     [[nodiscard]] static std::string PreferredLanguage();

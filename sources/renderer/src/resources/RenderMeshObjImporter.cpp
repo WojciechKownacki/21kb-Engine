@@ -96,8 +96,8 @@ struct ObjImportContext {
     return (stream >> x >> y >> z) && ParseFloat(x, output.x) && ParseFloat(y, output.y) && ParseFloat(z, output.z);
 }
 
-// OBJ counts V from the bottom of the image; 21kb samples V from its top (D3D, Vulkan, glTF,
-// Unreal), so V is flipped on import - without it a texture lay upside down on the model.
+// OBJ counts V from the bottom of the image; 21kb samples V from its top (D3D, Vulkan, glTF),
+// so V is flipped on import - without it a texture lay upside down on the model.
 [[nodiscard]] bool ParseTexCoordLine(std::string_view rest, Vec2& output) {
     std::istringstream stream{ std::string{ rest } };
     std::string x;

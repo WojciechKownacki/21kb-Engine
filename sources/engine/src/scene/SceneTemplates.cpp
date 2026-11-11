@@ -73,7 +73,7 @@ std::string SceneTemplates::Fill(Scene& scene, SceneTemplate kind, const kb::pro
     }
 
     // The camera stands behind the middle of the scene and looks along +Z, the engine's forward:
-    // the floor and the sky's horizon are in the shot, as in Unity's new scene.
+    // the floor and the sky's horizon are in the shot.
     const SceneCreateResult camera = SceneCreateMenu::Create(scene, "Camera", "Main Camera", project);
     if (!camera.entity.IsValid()) {
         return "Basic template: " + camera.error;
@@ -83,7 +83,7 @@ std::string SceneTemplates::Fill(Scene& scene, SceneTemplate kind, const kb::pro
         transform.localPosition = Vec3{ 0.0F, 2.0F, -8.0F };
         scene.Transforms().Set(camera.entity, transform);
     }
-    // Unity's Main Camera carries the listener; without one a new scene plays no sound.
+    // The Main Camera carries the listener; without one a new scene plays no sound.
     if (const SceneComponentKind* listener = SceneComponentAuthoring::Find("AudioListener");
         listener != nullptr && SceneComponentAuthoring::PluginEnabled(project, *listener)) {
         static_cast<void>(SceneComponentAuthoring::Add(scene, camera.entity, "AudioListener", project));

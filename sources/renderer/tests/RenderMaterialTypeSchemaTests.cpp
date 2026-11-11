@@ -695,7 +695,7 @@ void RunMaterialPassPolicyAppliesMaterialRenderStateTest() {
         "KBMAT-MAT79: alpha translucency must map to bgfx alpha blend and hide the surface behind by its opacity");
     Require((additiveState & BGFX_STATE_BLEND_MASK) == BGFX_STATE_BLEND_FUNC_SEPARATE(
             BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
-        "KBMAT-MAT79: additive translucency must add light by its opacity (Unity/Godot SrcAlpha, One) and hide the surface behind by it");
+        "KBMAT-MAT79: additive translucency must add light by its opacity (SrcAlpha, One) and hide the surface behind by it");
     Require((alphaState & BGFX_STATE_BLEND_MASK) != (additiveState & BGFX_STATE_BLEND_MASK),
         "KBMAT-MAT79: distinct translucency blend modes must produce distinct render state");
 
@@ -1750,7 +1750,7 @@ void RunMaterialGraphEveryShaderNodeKindHasCodegenTest() {
             subject.parameter.textureRole = "baseColor";  // a texture parameter must declare its role
         }
         graph.nodes.push_back(subject);
-        // A texture input (WorldAlignedTexture's TextureObject) is required, as in Unreal: feed it a Texture Object.
+        // A texture input (WorldAlignedTexture's TextureObject) is required: feed it a Texture Object.
         for (const std::string& inPin : RenderMaterialGraphNodeInputPinNames(kind)) {
             if (RenderMaterialGraphPinDataType(kind, inPin, false) == RenderMaterialGraphPinType::Texture2D) {
                 RenderMaterialGraphNode textureObject{ .id = 5U, .kind = RenderMaterialGraphNodeKind::TextureObject };
@@ -2699,7 +2699,7 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     Require(mathResult.Succeeded(), "KBMAT-GRAPH-0202: Math graph should compile to shader source");
     Require(mathResult.shader.source.find(" - ") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit Subtract expression");
-    // Divide is a plain a / b as in Unreal: a guard on |b| would flip the sign of a negative divisor.
+    // Divide is a plain a / b: a guard on |b| would flip the sign of a negative divisor.
     Require(mathResult.shader.source.find(" / ") != std::string::npos &&
             mathResult.shader.source.find("/ max(abs(") == std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit a sign-preserving Divide expression");
@@ -4590,7 +4590,7 @@ void RunMaterialDomainGatingTest() {
             !production[static_cast<std::size_t>(RenderMaterialDomain::Volume)],
         "KBMAT-MAT34: Surface, Post Process, Deferred Decal and User Interface are production; Light Function and Volume are not");
 
-    // Unreal's Post Process material: Emissive Color only, drawn in its own pass and in no scene pass.
+    // Post Process material: Emissive Color only, drawn in its own pass and in no scene pass.
     RenderMaterialGraphDocument postGraph = MakeDefaultRenderMaterialGraphDocument();
     postGraph.materialDomain = "postProcess";
     postGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0 1" } });
@@ -4610,7 +4610,7 @@ void RunMaterialDomainGatingTest() {
     Require(!refusedPost.Succeeded() && outputDiag != nullptr && outputDiag->message.find("MaterialDomainOutputRefused") != std::string::npos,
         "Post Process domain: Base Color must be refused by name");
 
-    // Unreal's Deferred Decal: the surface outputs only; a vertex output is refused by name.
+    // Deferred Decal: the surface outputs only; a vertex output is refused by name.
     RenderMaterialGraphDocument decalGraph = surfaceGraph;
     decalGraph.materialDomain = "deferredDecal";
     decalGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0" } });
@@ -4620,7 +4620,7 @@ void RunMaterialDomainGatingTest() {
     Require(!refusedDecal.Succeeded() && decalDiag != nullptr && decalDiag->message.find("MaterialDomainOutputRefused") != std::string::npos,
         "Deferred Decal domain: World Position Offset must be refused by name");
 
-    // Unreal's User Interface material: Final Color (Emissive) and Opacity only.
+    // User Interface material: Final Color (Emissive) and Opacity only.
     RenderMaterialGraphDocument uiGraph = surfaceGraph;
     uiGraph.materialDomain = "userInterface";
     const RenderMaterialGraphCompileResult refusedUi = CompileRenderMaterialGraphToShaderSource(uiGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0345U });
@@ -4699,7 +4699,7 @@ void RunMaterialShadingModelGatingTest() {
             "KBMAT-MAT37: the model must use the standard forward lighting call");
     }
 
-    // Thin Translucent and Single Layer Water read the scene behind them, so, like Unreal, they need the
+    // Thin Translucent and Single Layer Water read the scene behind them, so they need the
     // Translucent blend mode: Opaque is refused by name, Translucent gets the model's own composition.
     for (const auto& [model, marker] : std::initializer_list<std::pair<RenderMaterialShadingModel, const char*>>{
              { RenderMaterialShadingModel::ThinTranslucent, "kbThinSpecular" },
@@ -4722,7 +4722,7 @@ void RunMaterialShadingModelGatingTest() {
             "KBMAT-MAT37: thin translucent / water must compose the scene behind in its own branch");
     }
 
-    // Unreal's Subsurface Color / Fuzz Color: the model's scattering colour from the graph, written to the
+    // Subsurface Color / Fuzz Color: the model's scattering colour from the graph, written to the
     // G-buffer's fifth target and lit with directly in the forward pass; other models ignore the pins.
     for (const auto& [model, pin, field] : std::initializer_list<std::tuple<const char*, const char*, const char*>>{
              { "subsurface", "subsurfaceColor", "surface.subsurfaceColor" }, { "cloth", "fuzzColor", "surface.fuzzColor" } }) {
@@ -4758,7 +4758,7 @@ void RunMaterialShadingModelGatingTest() {
             "Ordinary graphs must not cook a redundant compact variant");
     }
 
-    // Unreal's Eye: Iris Mask, Iris Distance and Iris Normal ride in the fifth target (octahedral
+    // Eye: Iris Mask, Iris Distance and Iris Normal ride in the fifth target (octahedral
     // normal, mask, distance); the forward pass lights the iris with them directly.
     RenderMaterialGraphDocument eyeGraph = litGraph;
     eyeGraph.shadingModel = "eye";
@@ -4838,7 +4838,7 @@ void RunMaterialGraphBlendModeTest() {
     const std::optional<RenderMaterialAssetData> parsed = RenderMaterialAssetParser::Parse(input);
     Require(parsed.has_value() && parsed->graph.blendMode == "additive", "KBMAT-MAT38: graphBlendMode must parse into the graph document");
 
-    // Unreal's Max World Position Offset Displacement: saved with the graph, and it grows the culling
+    // Max World Position Offset Displacement: saved with the graph, and it grows the culling
     // bounds of the objects drawn with the material.
     std::istringstream marginInput{
         "version 1\n"
@@ -5165,9 +5165,9 @@ void RunMaterialGraphProgramBindingIdentityKeyTest() {
         "KBMAT-MAT66: Blend/render-state changes must produce distinct pipeline-state keys");
 }
 
-// The Unreal/Unity utility nodes: names parse (Unreal's Blend_* asset names too), every pin has a stable id,
-// a graph of all of them round-trips through the material file, and the Noise settings parse with Unreal's
-// defaults and refuse what Unreal's property ranges refuse.
+// The utility nodes: names parse (the Blend_* asset names too), every pin has a stable id,
+// a graph of all of them round-trips through the material file, and the Noise settings parse with their
+// defaults and refuse what the property ranges refuse.
 void RunMaterialUtilityNodesSchemaTest() {
     const std::array<RenderMaterialGraphNodeKind, 22U> kinds{
         RenderMaterialGraphNodeKind::WorldAlignedTexture, RenderMaterialGraphNodeKind::FlipBook, RenderMaterialGraphNodeKind::Checkerboard,
@@ -5199,7 +5199,7 @@ void RunMaterialUtilityNodesSchemaTest() {
     Require(ParseRenderMaterialGraphNodeKind("Blend_Overlay") == RenderMaterialGraphNodeKind::BlendOverlay &&
             ParseRenderMaterialGraphNodeKind("Blend_LinearLight") == RenderMaterialGraphNodeKind::BlendLinearLight &&
             ParseRenderMaterialGraphNodeKind("Triplanar") == RenderMaterialGraphNodeKind::WorldAlignedTexture,
-        "Utility nodes: Unreal's BlendFunctions asset names must parse");
+        "Utility nodes: BlendFunctions asset names must parse");
     RenderMaterialGraphNode noise{ .id = nextId++, .kind = RenderMaterialGraphNodeKind::Noise };
     noise.parameter.defaultValueHint = "voronoi false 2 3 4 2.5 0 1";
     graph.nodes.push_back(noise);
@@ -5226,7 +5226,7 @@ void RunMaterialUtilityNodesSchemaTest() {
             defaults.settings->turbulence && defaults.settings->scale == 1.0F && defaults.settings->quality == 1U &&
             defaults.settings->levels == 6U && defaults.settings->levelScale == 2.0F &&
             defaults.settings->outputMin == -1.0F && defaults.settings->outputMax == 1.0F,
-        "Utility nodes: an empty Noise hint must be Unreal's defaults");
+        "Utility nodes: an empty Noise hint must be the defaults");
     const RenderMaterialGraphNoiseSettingsParseResult voronoi = ParseRenderMaterialGraphNoiseSettings("voronoi false 2 3 4 2.5 0 1");
     Require(voronoi.settings.has_value() && RenderMaterialGraphNoiseSettingsHint(*voronoi.settings) == "voronoi false 2 3 4 2.5 0 1",
         "Utility nodes: Noise settings must round-trip through their hint");
@@ -5289,7 +5289,7 @@ void RunMaterialVertexDomainOutputCodegenTest() {
     Require(RenderMaterialGraphVariantKey(baseResult.shader) != RenderMaterialGraphVariantKey(displacementResult.shader),
         "KBMAT-MAT67: Displacement must participate in graph variant identity");
     const std::string displacedFragment = BuildGraphFragmentWrapperSource(displacementResult.shader, "BaseOpaque");
-    // Unreal keeps the vertex normals under Displacement/WPO; a derivative normal would facet curved surfaces.
+    // The vertex normals are kept under Displacement/WPO; a derivative normal would facet curved surfaces.
     Require(displacedFragment.find("dFdx(v_worldPos)") == std::string::npos &&
             displacedFragment.find("vec3 basisNormal = normalize(v_normal);") != std::string::npos,
         "KBMAT-MAT67: DefaultLit fragment wrapper must shade a displaced surface with the per-pixel normalized vertex normal");

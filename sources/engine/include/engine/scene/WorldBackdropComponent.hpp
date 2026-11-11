@@ -18,7 +18,7 @@ enum class WorldBackdropMode : std::uint8_t {
     ProceduralSky,
 };
 
-// The procedural sky's sun disc, as Unity's Skybox/Procedural offers it.
+// The procedural sky's sun disc.
 enum class WorldBackdropSunDisk : std::uint8_t {
     None,
     Simple,
@@ -39,7 +39,7 @@ struct WorldBackdropComponent {
     float gradientExponent = 1.0F;
     std::int32_t priority = 0;
     bool enabled = true;
-    // ProceduralSky settings with the defaults and ranges of Unity's Skybox/Procedural material.
+    // ProceduralSky settings with their defaults and ranges.
     // Colours are linear, like every other colour of the component.
     WorldBackdropSunDisk sunDisk = WorldBackdropSunDisk::HighQuality;
     float sunSize = 0.04F;              // 0..1

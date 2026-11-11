@@ -169,7 +169,7 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
             ++failures;
             continue;
         }
-        // Loads fine, but a Unity- or Godot-style callback is never called: say so instead of a bare OK.
+        // Loads fine, but a callback named for another lifecycle is never called: say so instead of a bare OK.
         const std::vector<kb::script::ForeignLifecycleName> foreign = kb::script::FindForeignLifecycleNames(source);
         io.out << "OK   " << positional;
         if (!foreign.empty()) {

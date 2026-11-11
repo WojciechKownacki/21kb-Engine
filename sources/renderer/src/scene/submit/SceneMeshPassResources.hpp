@@ -21,7 +21,7 @@
 
 namespace kb::render {
 
-// What the motion vector pass draws with besides the meshes (Unreal's velocity pass).
+// What the motion vector pass draws with besides the meshes.
 struct SceneMotionVectorFrame {
     // The jitter-free view-projections of the previous frame and of this one; the pass rasterizes with this
     // frame's jittered view (the prepass depth) and writes motion between these.
@@ -59,7 +59,7 @@ struct SceneMeshPassBindDesc {
     std::array<float, 4> renderOriginOffset{};
 };
 
-// One post-process material over the view (Unreal's post-process blendable, before the tonemap): its PostProcess
+// One post-process material over the view (before the tonemap): its PostProcess
 // program reads `input` as Scene Color and `depth` as Scene Depth. With `uiVertices` it is a User Interface material
 // drawing those screen UI triangles with its UserInterface program, alpha blended.
 struct SceneMeshScreenMaterialDesc {

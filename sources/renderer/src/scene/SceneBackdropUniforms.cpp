@@ -10,7 +10,7 @@ SceneBackdropUniformValues BuildSceneBackdropUniforms(
     const SceneRenderWorldBackdrop* backdrop, bool environmentAvailable, const RenderScene& renderScene) noexcept {
     SceneBackdropUniformValues values{};
     if (backdrop != nullptr && backdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky) {
-        // Unity's Skybox/Procedural model reuses the gradient slots: horizon = ground colour + sun disc,
+        // Skybox/Procedural model reuses the gradient slots: horizon = ground colour + sun disc,
         // zenith = sky tint + exposure, params = sun size, convergence, atmosphere thickness.
         values.horizon = { backdrop->groundColor[0], backdrop->groundColor[1], backdrop->groundColor[2],
             static_cast<float>(backdrop->sunDisk) };
@@ -23,7 +23,7 @@ SceneBackdropUniformValues BuildSceneBackdropUniforms(
     } else if (backdrop != nullptr && backdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap && environmentAvailable) {
         values.params = { 2.0F, 0.0F, 0.0F, 0.0F };
     }
-    // The sky's sun is the brightest directional light, as Unity's Sun Source defaults to.
+    // The sky's sun is the brightest directional light.
     float brightestSun = 0.0F;
     for (const auto& [entityId, proxy] : renderScene.LightProxies()) {
         static_cast<void>(entityId);

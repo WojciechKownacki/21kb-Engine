@@ -712,7 +712,7 @@ void AddArtifactDiagnostic(
     });
 }
 
-// Unreal's Pixel Depth Offset: the depth the pass writes moves away from the viewer by
+// Pixel Depth Offset: the depth the pass writes moves away from the viewer by
 // surface.pixelDepthOffset metres (never toward it) - along the view ray of a perspective view, along
 // the view axis of an orthographic one (a directional light's shadow cascade). The shadow pass pushes
 // the caster by the same amount, so the pushed surface the lighting reconstructs does not shadow
@@ -737,7 +737,7 @@ void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
     wrapper += "    gl_FragDepth = kbPdoDepth;\n";
 }
 
-// Unreal's Refraction (Index of Refraction mode) on a Translucent surface: the opaque scene behind it
+// Refraction (Index of Refraction mode) on a Translucent surface: the opaque scene behind it
 // is read from the scene-color snapshot at an offset along the view-space normal, scaled by (IOR - 1)
 // and the projection, toward the middle of a convex surface when IOR > 1 like a lens; the lit surface
 // then covers it by its opacity. The fragment writes alpha 1, so the alpha blend keeps its colour.
@@ -765,7 +765,7 @@ void AppendMaterialGraphRefraction(std::string& wrapper, const std::string& norm
     wrapper += "    gl_FragColor = vec4(mix(kbBehind, " + litColor + ", clamp(surface.alpha, 0.0, 1.0)), 1.0);\n";
 }
 
-// Unreal's Thin Translucent: the scene behind passes coloured by Transmittance Color where the
+// Thin Translucent: the scene behind passes coloured by Transmittance Color where the
 // surface does not cover it, the diffuse light is scaled by the opacity and the specular reflection
 // stays whole, as on clear glass. The specular is the lighting of the same surface with no albedo.
 // The fragment writes alpha 1 over the scene copy, so the alpha blend keeps its colour.
@@ -779,7 +779,7 @@ void AppendMaterialGraphThinTranslucent(std::string& wrapper, const RenderMateri
     wrapper += "    gl_FragColor = vec4(kbBehind * surface.transmittanceColor * (1.0 - kbThinCoverage) + kbThinDiffuse * kbThinCoverage + kbThinSpecular + surface.emissive, 1.0);\n";
 }
 
-// Unreal's Single Layer Water: the scene behind is dimmed by the water between the surface and it,
+// Single Layer Water: the scene behind is dimmed by the water between the surface and it,
 // exp(-(absorption + scattering) * thickness) times Color Scale Behind Water; the water scatters the
 // sky and the sun (Henyey-Greenstein phase of Phase G) in proportion scattering / extinction; the
 // surface reflects on top. Thickness comes from the opaque scene depth behind, along the view ray.
@@ -796,7 +796,7 @@ void AppendMaterialGraphSingleLayerWater(std::string& wrapper, const RenderMater
     wrapper += "    vec4 kbWaterBehindView = mul(u_invProj, vec4(0.0, 0.0, kbWaterDeviceDepth, 1.0));\n";
     wrapper += "    vec4 kbWaterSurfaceView = mul(u_view, vec4(v_worldPos, 1.0));\n";
     if (shader.reflection.hasRefraction) {
-        // Like Unreal: a refracted sample that lands on something in front of the water falls back to
+        // A refracted sample that lands on something in front of the water falls back to
         // the scene straight behind.
         wrapper += "    if ((kbWaterBehindView.z / kbWaterBehindView.w) / kbWaterSurfaceView.z < 1.0) {\n";
         wrapper += "        kbBehindUv = ctx.screenPosition;\n";
@@ -831,7 +831,7 @@ std::string_view GraphShadingModelColorField(const RenderMaterialGraphShaderSour
     return shader.reflection.shadingModel == RenderMaterialShadingModel::Cloth ? "surface.fuzzColor" : "surface.subsurfaceColor";
 }
 
-// The shading basis of a pixel, like Unreal's: the interpolated vertex normal renormalized per pixel. World
+// The shading basis of a pixel: the interpolated vertex normal renormalized per pixel. World
 // Position Offset and Displacement move the geometry but keep the vertex normals (a material that bends the
 // surface supplies its own normal); a normal rebuilt from screen derivatives of the position would be the flat
 // normal of each triangle and facet every curved surface.
@@ -1089,7 +1089,7 @@ namespace {
     return MaterialGraphUsesExtraUvs(shader) || MaterialGraphIsDecal(shader) ? ", v_uv23, v_uv45, v_uv67" : "";
 }
 
-// Unreal's Deferred Decal: the opaque surface under this pixel (the scene depth) in the space of the decal's
+// Deferred Decal: the opaque surface under this pixel (the scene depth) in the space of the decal's
 // box (v_uv23/45/67 hold the rows of its inverse transform). Only what lies inside the unit box is decorated;
 // the decal projects along the box's Y axis, its X and Z span the texture.
 void AppendMaterialGraphDecalProjection(std::string& wrapper) {
@@ -1178,7 +1178,7 @@ void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass, b
         shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
 }
 
-// Unreal's velocity pass with the material's own shaders: the surface the base pass kept - clipped by a
+// Velocity pass with the material's own shaders: the surface the base pass kept - clipped by a
 // Masked material, at the depth its Pixel Depth Offset wrote - writes the motion between the positions its
 // vertex shader produces for this frame and for the previous one (BuildGraphVertexWrapperSource).
 std::string BuildGraphMotionVectorFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader) {
@@ -1258,9 +1258,9 @@ bool RenderMaterialGraphRequiresGeneratedVertexShader(const RenderMaterialGraphR
 
 namespace {
 
-// Unreal's post-process material: the graph evaluated for every pixel of the view with Scene Color / Scene Depth
+// Post-process material: the graph evaluated for every pixel of the view with Scene Color / Scene Depth
 // reading the chain's input (s_kbSceneColor at stage 4, s_kbSceneDepth at 5); its Emissive Color replaces the
-// colour. Unreal's User Interface material: the graph evaluated over a widget's rectangle (Texture Coordinate
+// colour. User Interface material: the graph evaluated over a widget's rectangle (Texture Coordinate
 // spans it); its Final Color (Emissive) and Opacity, times the widget's colour, are blended over the UI.
 std::string BuildGraphScreenFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader, bool userInterface) {
     std::string wrapper;
@@ -1428,12 +1428,12 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
             if (!compactGBufferPass && shader.reflection.writesShadingModelColor && shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
-                // Unreal's Eye: the iris (octahedral world normal, mask, distance) in the fifth target.
+                // Eye: the iris (octahedral world normal, mask, distance) in the fifth target.
                 wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
                 wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) kbIrisNormal = -kbIrisNormal;\n";
                 wrapper += "    gl_FragData[4] = vec4(KbOctEncode(kbIrisNormal) * 0.5 + 0.5, clamp(surface.irisMask, 0.0, 1.0), clamp(surface.irisDistance, 0.0, 1.0));\n";
             } else if (!compactGBufferPass && shader.reflection.writesShadingModelColor) {
-                // Unreal's custom data: the model colour (alpha 1 = given) in the fifth target, which the
+                // Custom data: the model colour (alpha 1 = given) in the fifth target, which the
                 // G-buffer carries in frames that draw such a material.
                 wrapper += "    gl_FragData[4] = vec4(clamp(" + std::string{ GraphShadingModelColorField(shader) } +
                     ", vec3_splat(0.0), vec3_splat(1.0)), 1.0);\n";
@@ -1466,7 +1466,7 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    float specular = clamp(surface.specular, 0.0, 1.0);\n";
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
             if (shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
-                // Unreal's Eye in the forward pass: the iris normal in world space, as the G-buffer stores it.
+                // Eye in the forward pass: the iris normal in world space, as the G-buffer stores it.
                 wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
                 wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) kbIrisNormal = -kbIrisNormal;\n";
                 wrapper += "    vec3 lighting = KbEvaluateForwardLightingFull(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
@@ -1577,7 +1577,7 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     // MAT-67/#54: the instanced mesh vertex shader with graph vertex-domain outputs applied before
     // projection/rasterization. WPO and displacement move real geometry; CustomizedUV0 rewrites the
     // interpolated UV that fragment TextureSample nodes read. Mirrors vs_mesh_instanced.sc.
-    // The motion vector pass evaluates the graph twice, like Unreal's velocity pass runs the material's
+    // The motion vector pass evaluates the graph twice, as the velocity pass runs the material's
     // vertex factory with the previous frame's parameters: at this frame's material time with the current
     // model, and at the previous frame's time with the previous model (motion_vectors.sh).
     const bool motionVectors = pass == kRenderMaterialGraphMotionVectorsPass;

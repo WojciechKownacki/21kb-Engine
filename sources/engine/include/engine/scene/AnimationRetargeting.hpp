@@ -12,7 +12,7 @@
 namespace kb::scene {
 
 // A bone's role whatever tool named it: the side ("l"/"r") and the body part, with the common
-// synonyms of Mixamo, Unreal, Unity and Blender/Rigify folded together - "mixamorig:LeftForeArm",
+// synonyms of the usual rig naming schemes folded together - "LeftForeArm",
 // "lowerarm_l" and "forearm.L" are all "l:forearm"; "Hips" and "pelvis" are both "hips".
 [[nodiscard]] std::string CanonicalBoneName(std::string_view name);
 

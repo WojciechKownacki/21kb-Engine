@@ -97,7 +97,7 @@ Commands:
                its material: component set ... --set material=<path>.kbmatinst)
   post-process-new Create a post-process profile: the image settings (tonemapping,
                exposure, bloom, anti-aliasing, vignette, ambient occlusion) a scene
-               can use, as a Unity Volume Profile. Existing files are never overwritten.
+               can use. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/PostProcess]
                  [--set field=value ...]
   post-process-set Change values of a post-process profile.
@@ -170,7 +170,7 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                (draws it with its skeleton), component add --type Animator and
                component set --type Animator --set controller=<.kbanimcontroller>.
                Its clips may come from another character, even one rigged and named another
-               way (Mixamo, Unreal, Blender/Rigify): bones are matched by name and role and the
+               way: bones are matched by name and role and the
                motion is retargeted; check --character shows how many bones follow each clip.
   skeleton     Read a character's bones and edit its sockets (named grip points on a bone).
                  show --project <dir> --skeleton <.kbskeleton | .kbskeletalmesh>
@@ -258,8 +258,8 @@ R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - bru
                  --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path; --project is needed for /Game paths.
 )"
 R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
-               Map component and Map Editor window do - grounds with automatic borders (Remere's Map
-               Editor style), sprites as items or grounds, floors -50..50, a Map Camera for Play.
+               Map component and Map Editor window do - grounds with automatic borders,
+               sprites as items or grounds, floors -50..50, a Map Camera for Play.
                  new --project <dir> --name <Entity> [--scene <path>] [--size 64x64]
                      [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
                  ground new --project <dir> --name Grass --texture "/Game/2D Map Sprites/terrain.png"
@@ -396,8 +396,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  [--preset /Game/<path>.kbimportpreset] [--scale <factor>]
                  [--rotation x,y,z (degrees)] [--import-materials yes|no]
                  [--import-textures yes|no] [--skeletal auto|yes|no]
-               (a model keeps its scale and rotation in its import, as Unity's
-               Scale Factor; flags override the preset. --skeletal auto, the default,
+               (a model keeps its scale and rotation in its import;
+               flags override the preset. --skeletal auto, the default,
                imports a skinned model - or an armature with animations and no mesh -
                as a character: Skeleton, Skeletal Mesh and one Animation Clip per
                source animation, named after it, all listed with '+'; FBX, glTF and

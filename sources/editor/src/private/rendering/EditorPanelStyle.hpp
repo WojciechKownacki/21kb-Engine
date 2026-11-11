@@ -42,8 +42,8 @@ constexpr int kDividerHeight = 1;
 constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
 
-// Where every Inspector row's label column ends: 45% of the row, the label/value split of Unity's
-// and Godot's inspectors, so long names ("Atmosphere Thickness", "Sun Size Convergence") fit at
+// Where every Inspector row's label column ends: 45% of the row,
+// so long names ("Atmosphere Thickness", "Sun Size Convergence") fit at
 // the usual panel width instead of being cut.
 [[nodiscard]] inline int InspectorLabelColumnRight(RECT row) noexcept {
     return row.left + (row.right - row.left) * 45 / 100;

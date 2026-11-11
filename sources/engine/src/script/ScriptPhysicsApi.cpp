@@ -237,7 +237,7 @@ ScriptFunctionCallResult OverlapShapeResult(const ScriptFunctionCallContext& con
     if (!IsFinite(center) || !IsValidQueryShape(shape)) {
         return Error("overlap center or shape is invalid");
     }
-    // Every overlapping collider (Unity's OverlapSphere returns them all): `count` of them and
+    // Every overlapping collider: `count` of them and
     // the one at `skip` (0 = first), as World.FindAllByTag pages through tagged entities.
     std::array<kb::scene::PhysicsOverlapResult, 256U> storage{};
     kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> overlaps(storage);

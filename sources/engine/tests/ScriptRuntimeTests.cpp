@@ -7304,7 +7304,7 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     kb::tests::Require(overlapSphere.Output("overlapping")->AsBool() && overlapSphere.Output("entity")->AsUInt64() == object.Entity().Id(),
         "Physics.OverlapSphere with a matching layerMask must overlap the known entity");
     kb::tests::Require(overlapSphere.Output("count")->AsInt() == 2,
-        "Physics.OverlapSphere must count every overlapping collider (Unity returns them all)");
+        "Physics.OverlapSphere must count every overlapping collider");
     std::vector<kb::script::ScriptFunctionArgument> secondOverlapArgs = matchedOverlapSphereArgs;
     secondOverlapArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ 1 } });
     kb::tests::Require(host.Functions().Call("Physics.OverlapSphere", secondOverlapArgs, context).Output("entity")->AsUInt64() == secondOverlap.Id(),
@@ -13471,7 +13471,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 } else if (componentName == "Detail Switch" && property.name == "demoteCoverage") {
                     validValue = kb::script::ScriptValue{ 0.4F };
                 } else if (componentName == "WorldBackdrop" && property.name == "sunSize") {
-                    validValue = kb::script::ScriptValue{ 0.5F }; // Unity's Sun Size range is 0..1
+                    validValue = kb::script::ScriptValue{ 0.5F }; // the Sun Size range is 0..1
                 } else {
                     validValue = kb::script::ScriptValue{ 2.5F };
                 }

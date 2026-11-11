@@ -12,9 +12,9 @@ namespace kb::editor {
 class EditorSceneContext;
 
 // Every colour of a scene component in the Inspector (Light, Camera clear colour, World
-// Backdrop, Ambient Radiance) is one row with a swatch, edited with the colour picker, as in
-// Unity. Component colours are linear; the swatch and the picker show them in sRGB, as Unity's
-// inspector does in a linear project.
+// Backdrop, Ambient Radiance) is one row with a swatch, edited with the colour picker.
+// Component colours are linear; the swatch and the picker show them in sRGB, also in a
+// linear project.
 class InspectorSceneColor {
 public:
     InspectorSceneColor() = delete;

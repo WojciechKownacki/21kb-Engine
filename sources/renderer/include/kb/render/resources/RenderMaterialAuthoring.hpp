@@ -41,7 +41,7 @@ void EnsureEditableRenderMaterialGraph(RenderMaterialGraphDocument& graph);
 [[nodiscard]] std::optional<RenderMaterialParameterRange> RenderMaterialGraphConstantRange(const RenderMaterialGraphNode& node) noexcept;
 void ClampRenderMaterialGraphConstantValues(const RenderMaterialGraphNode& node, std::array<float, 4U>& values) noexcept;
 
-// Promote to Parameter (Unreal's Convert to Parameter): a constant becomes the parameter node of
+// Promote to Parameter: a constant becomes the parameter node of
 // its type and keeps its value and links.
 [[nodiscard]] std::optional<RenderMaterialGraphNodeKind> RenderMaterialGraphPromotedParameterKind(RenderMaterialGraphNodeKind sourceKind) noexcept;
 [[nodiscard]] std::string RenderMaterialGraphPromotedSourceOutputPin(RenderMaterialGraphNodeKind sourceKind);

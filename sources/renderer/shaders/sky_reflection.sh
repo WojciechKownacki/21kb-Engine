@@ -1,7 +1,7 @@
 #ifndef KB_SKY_REFLECTION_SH
 #define KB_SKY_REFLECTION_SH
 
-// Reflection of the surroundings (Unreal's SkyLight): the captured sky, prefiltered by roughness
+// Reflection of the surroundings (the sky light): the captured sky, prefiltered by roughness
 // (SceneSkyReflection), when the scene has one; otherwise the environment colour the caller gives.
 // The includer declares s_skyReflection, the prefiltered cube map, at its own sampler stage.
 uniform vec4 u_skyReflectionParams; // x: 1 when the sky reflection is ready, y: its last mip

@@ -488,7 +488,7 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "Sobol") || EqualsIgnoreCase(text, "Sobol2D") || EqualsIgnoreCase(text, "LowDiscrepancy")) {
         return RenderMaterialGraphNodeKind::Sobol;
     }
-    // Unreal's material functions keep their asset names (Blend_Overlay, ...) as accepted spellings.
+    // Material functions keep their asset names (Blend_Overlay, ...) as accepted spellings.
     if (EqualsIgnoreCase(text, "WorldAlignedTexture") || EqualsIgnoreCase(text, "Triplanar")) {
         return RenderMaterialGraphNodeKind::WorldAlignedTexture;
     }

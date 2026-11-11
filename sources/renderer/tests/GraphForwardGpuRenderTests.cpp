@@ -1590,7 +1590,7 @@ void RunDeferredGBufferCompactSubsurfaceGpuTest() {
     std::filesystem::remove_all(cacheDir,error);
 }
 
-// Unreal's Fuzz Color: the graph's colour reaches the cloth sheen through the G-buffer custom data
+// Fuzz Color: the graph's colour reaches the cloth sheen through the G-buffer custom data
 // target, and only through it.
 void RunDeferredGBufferFuzzColorGpuTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_fuzz_color";
@@ -1658,7 +1658,7 @@ void RunDeferredGBufferFuzzColorGpuTest() {
     std::filesystem::remove_all(cacheDir, error);
 }
 
-// Unreal's Eye: the iris lights about its own normal (Iris Normal), which reaches deferred lighting
+// Eye: the iris lights about its own normal (Iris Normal), which reaches deferred lighting
 // through the G-buffer custom data target; without the iris the eye lights like its sclera.
 void RunDeferredGBufferEyeIrisGpuTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_eye_iris";
@@ -2151,7 +2151,7 @@ void RunForwardGraphNormalMapLightingTest() {
         std::to_string(positiveXScaleZero.r) + "," + std::to_string(positiveXScaleZero.g) + "," +
         std::to_string(positiveXScaleZero.b) + ")";
     // The 8-bit "flat" texel (128) leans 0.4 % towards +X, which the grazing +X light (intensity 1
-    // in Unity's convention, i.e. albedo-bright when head-on) shows as up to ~8/255.
+    // in the normalized convention, i.e. albedo-bright when head-on) shows as up to ~8/255.
     Require(SimilarProbe(flat, positiveXScaleZero, 12U), scaleZeroFailure.c_str());
 
     bgfx::destroy(positiveXTexture);
@@ -5184,7 +5184,7 @@ void RunForwardGraphWorldSpaceNodesTest() {
 
 // MAT-50: the Noise node must produce real spatial variation on the GPU. World position (scaled up so the
 // harness quad spans several noise cells) feeds Noise -> baseColor (unlit); pixels sampled across the surface
-// must span a meaningful brightness range, proving the noise field (Unreal's default Simplex) varies per fragment.
+// must span a meaningful brightness range, proving the noise field (the default Simplex) varies per fragment.
 void RunForwardGraphNoiseRendersTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_noise";
     std::error_code error;
@@ -5211,7 +5211,7 @@ void RunForwardGraphNoiseRendersTest() {
 
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x5100U });
     Require(compiled.Succeeded(), "KBMAT-MAT50: noise graph must compile");
-    Require(compiled.shader.source.find("kbSimplexNoise(") != std::string::npos, "KBMAT-MAT50: Noise node must call Unreal's default Simplex function");
+    Require(compiled.shader.source.find("kbSimplexNoise(") != std::string::npos, "KBMAT-MAT50: Noise node must call the default Simplex function");
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
     Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: noise graph must cook");
 
@@ -5399,7 +5399,7 @@ void RunForwardGraphMaterialParameterCollectionRendersTest() {
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// The motion vector pass (Unreal's velocity pass), the TAA reactive mask and FXAA after the tonemap, drawn with
+// The motion vector pass, the TAA reactive mask and FXAA after the tonemap, drawn with
 // the production shaders on a real device.
 
 using MotionMatrix = std::array<float, 16U>;
@@ -5663,7 +5663,7 @@ private:
     return " (got " + std::to_string(pixel[0]) + ", " + std::to_string(pixel[1]) + ", b=" + std::to_string(pixel[2]) + ")";
 }
 
-// Unreal's previous LocalToWorld: a moving car writes its own motion, not the camera's. The rigid motion vector
+// Previous LocalToWorld: a moving car writes its own motion, not the camera's. The rigid motion vector
 // program draws each instance's previous model from the rows its draw uploaded (indexed by instance), and a
 // draw without rows has no motion of its own. The pass rasterizes with the jittered prepass camera and still
 // writes jitter-free motion.
@@ -5726,7 +5726,7 @@ void RunMotionVectorPreviousModelGpuTest() {
     std::filesystem::remove_all(cacheDir, error);
 }
 
-// Unreal renders velocity with a near-or-equal depth test against the prepass depth: a far moving surface hidden
+// Velocity uses a near-or-equal depth test against the prepass depth: a far moving surface hidden
 // behind a near one writes nothing there, at any distance (the old 0.002 depth tolerance let far surfaces
 // through in reversed Z), while it still writes where it is visible.
 void RunMotionVectorOcclusionGpuTest() {
@@ -5805,7 +5805,7 @@ void RunMotionVectorOcclusionGpuTest() {
     return compiled.shader;
 }
 
-// Unreal's velocity pass runs the material's vertex shader with the previous frame's parameters: a world
+// Velocity pass runs the material's vertex shader with the previous frame's parameters: a world
 // position offset animated by time writes the motion between the offset at the previous frame's time and at
 // this frame's, though the object itself stands still. A graph that neither moves, offsets nor clips its surface
 // draws with the rigid program and has no MotionVectors cook.
@@ -6060,7 +6060,7 @@ private:
     bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
 };
 
-// FSR2's auto-reactive mask / Unreal's Responsive AA: the scene colour alpha is the share of the opaque surface
+// Reactive rejection: the scene colour alpha is the share of the opaque surface
 // still visible through translucency, and the TAA resolve trusts the history only by it. A pixel a translucent
 // layer fully covers resolves to the current frame; an opaque pixel keeps blending its history.
 void RunTemporalResolveReactiveAlphaGpuTest() {
@@ -6168,7 +6168,7 @@ void RunTranslucentBlendVisibleShareGpuTest() {
     std::filesystem::remove_all(cacheDir, error);
 }
 
-// Unreal runs FXAA after the tonemapper: it finds and blends edges in the display image. Across a 64:0 HDR edge
+// FXAA runs after the tonemapper: it finds and blends edges in the display image. Across a 64:0 HDR edge
 // the display values are about 1 and 0, so FXAA leaves an edge pixel in between; blending the HDR values
 // before the tonemap would leave it saturated at the bright side.
 void RunFxaaAfterTonemapGpuTest() {
@@ -6217,7 +6217,7 @@ void RunFxaaAfterTonemapGpuTest() {
     harness.Shutdown();
 }
 
-// Unreal keeps a surface's interpolated vertex normal, renormalized per pixel, under World Position Offset.
+// A surface keeps its interpolated vertex normal, renormalized per pixel, under World Position Offset.
 // The lit wrapper used to rebuild the normal from screen derivatives of the position whenever WPO or
 // Displacement was connected - the flat normal of each triangle - so a sphere shaded in facets. The editor's
 // preview sphere is drawn by the graph's own vertex shader, lit from +X with WPO = 0 (the geometry does not
@@ -6331,7 +6331,7 @@ void RunForwardGraphPixelNormalSmoothSphereTest() {
     harness.Shutdown();
 }
 
-// The Unreal/Unity utility nodes, each evaluated on the GPU and read back against the node's formula computed
+// The utility nodes, each evaluated on the GPU and read back against the node's formula computed
 // here: an unlit graph routes the node into Base Color (a scalar through Multiply), the harness triangle's
 // UV is (x + 0.5, y + 0.5) / 64 and its world position (clip x, clip y, 0) with normal +Z.
 struct UtilityNodeExpectation {
@@ -6400,7 +6400,7 @@ struct UtilityNodeCase {
     return graph;
 }
 
-[[nodiscard]] std::array<float, 3U> UnrealBlendReference(RenderMaterialGraphNodeKind kind, std::array<float, 3U> base, std::array<float, 3U> blend) {
+[[nodiscard]] std::array<float, 3U> BlendReference(RenderMaterialGraphNodeKind kind, std::array<float, 3U> base, std::array<float, 3U> blend) {
     std::array<float, 3U> result{};
     for (std::size_t c = 0U; c < 3U; ++c) {
         const float b = base[c];
@@ -6424,7 +6424,7 @@ struct UtilityNodeCase {
     return result;
 }
 
-// Unreal's Value noise at a lattice point is the lattice hash itself (the fade weights are 0).
+// Value noise at a lattice point is the lattice hash itself (the fade weights are 0).
 [[nodiscard]] float ValueNoiseLatticeReference(float x, float y, float z) {
     float px = x * 0.3183099F + 0.1F;
     float py = y * 0.3183099F + 0.1F;
@@ -6443,7 +6443,7 @@ struct UtilityNodeCase {
     const std::array<float, 3U> blend{ 0.7F, 0.2F, 0.5F };
     for (const K kind : { K::BlendOverlay, K::BlendScreen, K::BlendSoftLight, K::BlendHardLight, K::BlendLinearLight,
              K::BlendColorBurn, K::BlendColorDodge, K::BlendDarken, K::BlendLighten, K::BlendDifference }) {
-        std::array<float, 3U> expected = UnrealBlendReference(kind, base, blend);
+        std::array<float, 3U> expected = BlendReference(kind, base, blend);
         for (float& channel : expected) {
             channel = Saturate01(channel);
         }
@@ -6487,7 +6487,7 @@ struct UtilityNodeCase {
             .sourceMarker = "0.577350269190",
         });
     }
-    // Unreal's If: A==B is optional (unconnected, A >= B takes A>B); unconnected A and B are the node's ConstA, ConstB.
+    // If: A==B is optional (unconnected, A >= B takes A>B); unconnected A and B are the node's ConstA, ConstB.
     cases.push_back(UtilityNodeCase{
         .name = "If without A==B",
         .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::If }, "value",
@@ -6558,7 +6558,7 @@ struct UtilityNodeCase {
         .sourceMarker = "flipBookFrame2",
     });
     {
-        // Unity's antialiased checker at a footprint of 2/64 UV per pixel (Frequency 2).
+        // Antialiased checker at a footprint of 2/64 UV per pixel (Frequency 2).
         const auto checker = [](std::uint32_t px, std::uint32_t py) {
             const float footprint = 2.0F / 64.0F;
             const auto axis = [footprint](float uv) {
@@ -6675,7 +6675,7 @@ void RunForwardGraphUtilityNodeFormulasTest() {
     harness.Shutdown();
 }
 
-// Unreal's ParallaxOcclusionMapping on the harness triangle (world position (clip x, clip y, 0), normal +Z,
+// ParallaxOcclusionMapping on the harness triangle (world position (clip x, clip y, 0), normal +Z,
 // camera at (0, 0, 1)): a white height map is the surface itself and keeps the UVs; a black one is a full layer
 // deep, so the march runs to the bottom and shifts the UVs by -view.xy / view.z * Height Ratio, along x by
 // clip x * ratio. The parallax UVs drive Base Color.
@@ -6742,9 +6742,9 @@ void RunForwardGraphParallaxOcclusionMappingTest() {
     harness.Shutdown();
 }
 
-// Unreal's WorldAlignedTexture on the harness triangle (world position (clip x, clip y, 0), normal +Z): a
+// WorldAlignedTexture on the harness triangle (world position (clip x, clip y, 0), normal +Z): a
 // 2x2 point-sampled texture (red, green / blue, white) of Texture Size 2. Facing +Z the XY Texture is the
-// projection along Z, UV (x, -y) / 2; turned to face +Y (this engine's up, Unreal's Z) the Z Texture is the
+// projection along Z, UV (x, -y) / 2; turned to face +Y (this engine's up) the Z Texture is the
 // top projection, UV (x, z) / 2, with the world position lifted to z = 0.25 to stay off the texel border.
 void RunForwardGraphWorldAlignedTextureTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "world_aligned_texture";
@@ -6824,7 +6824,7 @@ void RunForwardGraphWorldAlignedTextureTest() {
         bgfx::destroy(program);
     }
 
-    // Without a Texture Object the node is refused by name, as Unreal reports the missing input.
+    // Without a Texture Object the node is refused by name.
     RenderMaterialGraphDocument missing = MakeDefaultRenderMaterialGraphDocument();
     missing.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = K::WorldAlignedTexture });
     missing.links.push_back(MakeLink(K::WorldAlignedTexture, 3U, "xyzTexture", K::MaterialOutput, 1U, "baseColor"));
@@ -6836,7 +6836,7 @@ void RunForwardGraphWorldAlignedTextureTest() {
     harness.Shutdown();
 }
 
-// Unreal's Noise functions on the GPU over a moving position: each stays within Output Min..Max and varies.
+// Noise functions on the GPU over a moving position: each stays within Output Min..Max and varies.
 void RunForwardGraphNoiseFunctionsTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "noise_functions";
     std::error_code error;
@@ -6853,7 +6853,7 @@ void RunForwardGraphNoiseFunctionsTest() {
         Require(false, "Noise functions: A real GPU device is required to prove the noise functions");
         return;
     }
-    // One level each (a sum of several levels may leave the range, as in Unreal); Output 0.25..0.75 reads 64..191.
+    // One level each (a sum of several levels may leave the range); Output 0.25..0.75 reads 64..191.
     const std::array<const char*, 6U> hints{
         "simplex true 4 1 1 2 0.25 0.75",
         "simplex false 4 1 1 2 0.25 0.75",
@@ -6896,7 +6896,7 @@ void RunForwardGraphNoiseFunctionsTest() {
     harness.Shutdown();
 }
 
-// Unreal's Post Process material: the graph's own fullscreen pass, Scene Color reading the chain's input. Scene Color
+// Post Process material: the graph's own fullscreen pass, Scene Color reading the chain's input. Scene Color
 // x 0.5 over an input of (0.8, 0.4, 0.2) gives (0.4, 0.2, 0.1) on every pixel.
 void RunPostProcessMaterialPassTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "post_process_material";
@@ -6956,7 +6956,7 @@ void RunPostProcessMaterialPassTest() {
     harness.Shutdown();
 }
 
-// Unreal's User Interface material: a widget quad from (16, 16) to (48, 48) of a 64 x 64 UI; the graph's Texture
+// User Interface material: a widget quad from (16, 16) to (48, 48) of a 64 x 64 UI; the graph's Texture
 // Coordinate spans the quad, Final Color (Emissive) = (u, v, 0) and Opacity 0.5, times the widget colour.
 void RunUserInterfaceMaterialTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "user_interface_material";
@@ -7031,7 +7031,7 @@ void RunUserInterfaceMaterialTest() {
     harness.Shutdown();
 }
 
-// Unreal's Deferred Decal: a unit box (scaled 0.5, its Y axis turned to +Z) drawn by its back faces over a
+// Deferred Decal: a unit box (scaled 0.5, its Y axis turned to +Z) drawn by its back faces over a
 // surface at depth 0.5 (z = 0, seen from +Z): the pixels whose surface lies inside the box show the decal with
 // the box's X and Z as its texture coordinates; a surface behind the box (depth 1) is left alone.
 void RunDeferredDecalMaterialTest() {
@@ -7109,7 +7109,7 @@ void RunDeferredDecalMaterialTest() {
     harness.Shutdown();
 }
 
-// Unreal's Texture Coordinate with Coordinate Index 3: a sphere whose UV3 is (0.25, 0.75) on every vertex (half
+// Texture Coordinate with Coordinate Index 3: a sphere whose UV3 is (0.25, 0.75) on every vertex (half
 // floats in the vertex); the graph's vertex shader passes UV2..UV7 and the node reads UV3, so Base Color is
 // (0.25, 0.75, 0).
 void RunForwardGraphExtraUvSetsTest() {
@@ -7163,7 +7163,7 @@ void RunForwardGraphExtraUvSetsTest() {
     harness.Shutdown();
 }
 
-// Unreal and Unity transform normals by the inverse transpose of the model matrix. A sphere scaled 1 x 4 x 1
+// Normals transform by the inverse transpose of the model matrix. A sphere scaled 1 x 4 x 1
 // is an ellipsoid whose normal at the sphere point s is normalize(s.x, s.y / 4, s.z); the model matrix itself
 // would give normalize(s.x, 4 s.y, s.z), tilted towards the long axis, and the side light would fall off.
 // The ellipsoid lit from +X is compared with an unscaled sphere at the point that has the same normal.
@@ -7255,9 +7255,9 @@ void RunForwardGraphNonUniformScaleNormalTest() {
     harness.Shutdown();
 }
 
-// Unreal's PixelNormalWS is the material's Normal in world space. On the harness triangle (normal +Z,
+// PixelNormalWS is the material's Normal in world space. On the harness triangle (normal +Z,
 // tangent +X, bitangent +Y) a tangent-space Normal of (0.6, 0, 0.8) is the world normal (0.6, 0, 0.8);
-// without a Normal it is the vertex normal. Unreal refuses it inside the Normal and in vertex inputs.
+// without a Normal it is the vertex normal. It is refused inside the Normal and in vertex inputs.
 void RunForwardGraphPixelNormalWorldSpaceTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "pixel_normal_ws";
     std::error_code error;
@@ -7306,14 +7306,14 @@ void RunForwardGraphPixelNormalWorldSpaceTest() {
     const RenderMaterialGraphCompileResult refused = CompileRenderMaterialGraphToShaderSource(circular, RenderMaterialGraphBuildContext{ .assetId = 0xA610U });
     Require(!refused.Succeeded() && !refused.diagnostics.empty() &&
             refused.diagnostics.front().message.find("Cannot use PixelNormalWS as input to Normal") != std::string::npos,
-        "PixelNormalWS: feeding the Normal must be refused as in Unreal");
+        "PixelNormalWS: feeding the Normal must be refused");
     RenderMaterialGraphDocument vertex = MakeDefaultRenderMaterialGraphDocument();
     vertex.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelNormalWS });
     vertex.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelNormalWS, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "worldPositionOffset"));
     const RenderMaterialGraphCompileResult vertexRefused = CompileRenderMaterialGraphToShaderSource(vertex, RenderMaterialGraphBuildContext{ .assetId = 0xA611U });
     Require(!vertexRefused.Succeeded() && !vertexRefused.diagnostics.empty() &&
             vertexRefused.diagnostics.front().message.find("PixelNormalWS is a pixel input") != std::string::npos,
-        "PixelNormalWS: feeding World Position Offset must be refused as in Unreal");
+        "PixelNormalWS: feeding World Position Offset must be refused");
 }
 #endif
 

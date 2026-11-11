@@ -7,8 +7,8 @@
 
 namespace kb::render {
 
-// The one generator of primitive geometry: the engine's built-in shapes (/Engine/Shapes, sized like
-// Unity's primitives) and the editor's material/animation preview meshes are both built here.
+// The one generator of primitive geometry: the engine's built-in shapes (/Engine/Shapes)
+// and the editor's material/animation preview meshes are both built here.
 // Left-handed, Y up; a triangle's front face is the side its Cross(b - a, c - a) normal points to.
 class ShapeMeshes {
 public:

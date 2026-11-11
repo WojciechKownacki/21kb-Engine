@@ -120,7 +120,7 @@ enum class MotionPreviousModelUpload : std::uint8_t {
     Unavailable,
 };
 
-// Unreal's previous LocalToWorld per primitive: the previous models of a draw whose instances moved this frame,
+// Previous LocalToWorld per primitive: the previous models of a draw whose instances moved this frame,
 // one row per submitted instance in instance order (the vertex stage indexes them by gl_InstanceID).
 [[nodiscard]] MotionPreviousModelUpload UploadMotionPreviousModels(
     const SceneMotionVectorFrame& motion,

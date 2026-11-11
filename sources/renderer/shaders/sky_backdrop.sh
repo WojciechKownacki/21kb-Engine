@@ -16,7 +16,7 @@ uniform vec4 u_deferredBackdropParams;
 uniform vec4 u_deferredBackdropSun;
 uniform vec4 u_deferredBackdropSunColor;
 
-// Procedural sky after Unity's Skybox/Procedural (O'Neil, GPU Gems 2, ch. 16).
+// Procedural sky (O'Neil, GPU Gems 2, ch. 16).
 float KbSkyScale(float inCos)
 {
     float x = 1.0 - inCos;

@@ -3136,7 +3136,7 @@ void RunUIComponentAuthoringTest() {
         kb::scene::FindUIComponentProperty(UIComponentType::Image, "imageAssetId");
     const kb::scene::UIComponentPropertyDescriptor* fontAsset =
         kb::scene::FindUIComponentProperty(UIComponentType::Text, "fontAssetId");
-    // Unreal's UI material: an Image draws with a material of the User Interface domain.
+    // UI material: an Image draws with a material of the User Interface domain.
     const kb::scene::UIComponentPropertyDescriptor* imageMaterial =
         kb::scene::FindUIComponentProperty(UIComponentType::Image, "materialAssetId");
     kb::editor::tests::Require(imageMaterial != nullptr && imageMaterial->assetKind == kb::assets::AssetKind::Material &&
