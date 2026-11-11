@@ -290,6 +290,10 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
 // its palettes at 14 and 15.
 constexpr std::uint8_t kMotionPreviousModelStage = 15U;
 constexpr std::uint8_t kSkinnedMotionPreviousModelStage = 13U;
+// The skinning palettes (vertex stage) share their stage with the fragment shaders' terrain layer weights,
+// which a skinned mesh never uses; stage 14 stays with the light probe atlas, 13 with the previous models.
+constexpr std::uint8_t kSkinningPaletteStage = 15U;
+constexpr std::uint8_t kPreviousSkinningPaletteStage = 14U;
 
 [[nodiscard]] std::vector<std::uint8_t> ReadShaderBinaryFile(const std::filesystem::path& path) {
     std::ifstream file{ path, std::ios::binary | std::ios::ate };
@@ -392,7 +396,7 @@ bool SceneMeshPassResources::Initialize() {
     skyReflectionSampler_ = bgfx::createUniform("s_skyReflection", bgfx::UniformType::Sampler);
     skyReflectionParamsUniform_ = bgfx::createUniform("u_skyReflectionParams", bgfx::UniformType::Vec4);
     lightProbes_.Create("s_lightProbes");
-    shadowViewProjUniform_ =bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
+    shadowViewProjUniform_ = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
     shadowCascades_.Create();
     pointShadows_.Create();
@@ -1280,7 +1284,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             static_cast<float>(desc.command.currentSkinningPalette.matrixCount),
             0.0F,
         };
-        bgfx::setTexture(14U, skinningPaletteSampler_, paletteTexture,
+        bgfx::setTexture(kSkinningPaletteStage, skinningPaletteSampler_, paletteTexture,
             BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
         bgfx::setUniform(skinningPaletteInfoUniform_, paletteInfo.data());
@@ -1299,7 +1303,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
                 static_cast<float>(desc.command.previousSkinningPalette.matrixCount),
                 0.0F,
             };
-            bgfx::setTexture(15U, previousSkinningPaletteSampler_, previousPaletteTexture,
+            bgfx::setTexture(kPreviousSkinningPaletteStage, previousSkinningPaletteSampler_, previousPaletteTexture,
                 BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
             bgfx::setUniform(previousSkinningPaletteInfoUniform_, previousPaletteInfo.data());
@@ -1337,10 +1341,12 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             0.0F,
             0.0F,
         };
-        bgfx::setTexture(
-            15U,
-            terrainLayerWeightSampler_,
-            terrainLayerEnabled ? mesh->terrainLayerWeightTexture : fallbackWhiteTexture_);
+        if (!skinned) {
+            bgfx::setTexture(
+                15U,
+                terrainLayerWeightSampler_,
+                terrainLayerEnabled ? mesh->terrainLayerWeightTexture : fallbackWhiteTexture_);
+        }
         bgfx::setUniform(terrainLayerParamsUniform_, terrainLayerParams.data());
     }
     bgfx::setUniform(fogParamsUniform_, desc.lighting.fogParams.data());

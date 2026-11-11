@@ -616,13 +616,13 @@ public:
         bgfx::setViewFrameBuffer(0U, fb_);
         bgfx::setViewRect(0U, 0U, 0U, 64U, 64U);
         bgfx::setViewClear(0U, BGFX_CLEAR_COLOR, 0x000000ffU, 1.0F, 0U);
-        bgfx::setTexture(14U, paletteSampler, paletteTexture,
+        bgfx::setTexture(15U, paletteSampler, paletteTexture,
             BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
         bgfx::setUniform(paletteInfo, info.data());
         bgfx::setUniform(shadowViewProjection, identity.data());
         if (motionVectors) {
-            bgfx::setTexture(15U, previousPaletteSampler, previousPaletteTexture,
+            bgfx::setTexture(14U, previousPaletteSampler, previousPaletteTexture,
                 BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
             bgfx::setUniform(previousPaletteInfo, info.data());

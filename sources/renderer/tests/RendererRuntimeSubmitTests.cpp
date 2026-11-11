@@ -16,6 +16,10 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -7237,6 +7241,8 @@ struct SsMaterialOptions {
     std::vector<SsSolidTexture> solidTextures;
     bool cameraInside=false;
     std::optional<RenderMaterialGraphDocument> graph;
+    // Draws the boxes as the one-bone skinned form of the sphere (needs `sphere`), in the rest pose.
+    bool skinnedSphere = false;
 };
 
 void WriteMaterialSphereObj(const std::filesystem::path& path) {
@@ -7258,6 +7264,49 @@ void WriteMaterialSphereObj(const std::filesystem::path& path) {
         if(ring+1<rings) face(c,d,b);
     }
     Require(out.good(),"Material sphere fixture write failed");
+}
+
+// The sphere of WriteMaterialSphereObj as a skeletal mesh on a one-bone skeleton; returns the mesh asset id.
+[[nodiscard]] std::uint64_t PublishSkinnedMaterialSphere(kb::scene::Scene& scene, std::uint64_t& skeletonId, std::uint64_t& signature) {
+    constexpr unsigned rings=32, slices=64;
+    auto skeleton = std::make_shared<kb::scene::SkeletonAsset>();
+    skeleton->bones.push_back({ .id = 1U, .name = "Root" });
+    signature = kb::scene::SkeletonCompatibilitySignature(*skeleton);
+    const kb::assets::AssetId skeletonAssetId = kb::assets::MakeAssetId("SsSkinnedSphereSkeleton");
+    const kb::assets::AssetId meshAssetId = kb::assets::MakeAssetId("SsSkinnedSphereMesh");
+    auto mesh = std::make_shared<kb::scene::SkeletalMeshAsset>();
+    mesh->skeletonAssetId = skeletonAssetId.value;
+    mesh->skeletonCompatibilitySignature = signature;
+    mesh->conservativeBounds = { .center = { 0.0F, 0.0F, 0.0F }, .extents = { 1.0F, 1.0F, 1.0F } };
+    mesh->fixedBounds = mesh->conservativeBounds;
+    kb::scene::SkeletalMeshLod lod;
+    for(unsigned ring=0;ring<=rings;++ring) for(unsigned slice=0;slice<=slices;++slice) {
+        const double theta=3.141592653589793*ring/rings, phi=6.283185307179586*slice/slices;
+        const kb::math::Vec3 point{ static_cast<float>(std::sin(theta)*std::cos(phi)), static_cast<float>(std::cos(theta)),
+            static_cast<float>(std::sin(theta)*std::sin(phi)) };
+        lod.vertices.push_back({ .position = point, .normal = point,
+            .uv = { static_cast<float>(double(slice)/slices), static_cast<float>(double(ring)/rings) } });
+    }
+    const auto triangle=[&](unsigned a,unsigned b,unsigned c) { lod.indices.insert(lod.indices.end(), { a, b, c }); };
+    for(unsigned ring=0;ring<rings;++ring) for(unsigned slice=0;slice<slices;++slice) {
+        const unsigned a=ring*(slices+1)+slice,b=a+slices+1,c=a+1,d=b+1;
+        if(ring>0) triangle(a,c,b);
+        if(ring+1<rings) triangle(c,d,b);
+    }
+    lod.sections.push_back({ .indexCount = static_cast<std::uint32_t>(lod.indices.size()), .boneMap = { 1U } });
+    lod.requiredBones = { 1U };
+    kb::scene::BuildSkeletalMeshLodBoneBounds(lod);
+    mesh->lods.push_back(std::move(lod));
+    Require(kb::scene::ValidateSkeletalMeshAsset(*mesh).valid, "Skinned sphere fixture is not a valid skeletal mesh");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterAsset({ .id = skeletonAssetId, .type = kb::scene::kSkeletonAssetType, .name = "SsSkinnedSphereSkeleton",
+                .virtualPath = "/Game/SsSkinnedSphere.kbskeleton", .runtimeLoadable = true }) &&
+            manager.RegisterAsset({ .id = meshAssetId, .type = kb::scene::kSkeletalMeshAssetType, .name = "SsSkinnedSphereMesh",
+                .virtualPath = "/Game/SsSkinnedSphere.kbskeletalmesh", .runtimeLoadable = true }) &&
+            manager.PublishRuntimeAsset(skeletonAssetId, skeleton) && manager.PublishRuntimeAsset(meshAssetId, mesh),
+        "Skinned sphere fixture could not be published");
+    skeletonId = skeletonAssetId.value;
+    return meshAssetId.value;
 }
 
 [[nodiscard]] std::vector<std::uint8_t> RenderScreenSpaceScene(
@@ -7327,17 +7376,28 @@ void WriteMaterialSphereObj(const std::filesystem::path& path) {
     const std::uint64_t blend = publishMaterial("SsBlend", { 1.0F, 1.0F, 1.0F }, 0.9F, RenderMaterialAlphaMode::Blend);
     const std::uint64_t red = publishMaterial("SsRed", { 0.8F, 0.05F, 0.05F }, 0.9F);
     const std::uint64_t glossy = publishMaterial("SsGlossy", { 0.9F, 0.9F, 0.9F }, glossyRoughness);
+    const bool skinnedSphere = materialOptions && materialOptions->skinnedSphere;
+    std::uint64_t skeletonId = 0U, skeletonSignature = 0U, skinnedMeshId = 0U;
+    if (skinnedSphere) skinnedMeshId = PublishSkinnedMaterialSphere(scene, skeletonId, skeletonSignature);
     for (const SsBox& box : boxes) {
         const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Box",
             .transform = kb::scene::TransformComponent{ .localPosition = box.position, .localScale = box.scale },
         });
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
-            .meshAssetId = meshId.value,
+            .meshAssetId = skinnedSphere ? skinnedMeshId : meshId.value,
             .materialAssetId = box.material == SsMaterial::Red ? red : box.material == SsMaterial::Glossy ? glossy
                 : box.material == SsMaterial::Blend ? blend : 0U,
             .castsShadow = false });
+        if (skinnedSphere) {
+            Require(scene.Components().SkeletonBindings().Set(entity, { .skeletonAssetId = skeletonId,
+                        .skeletonCompatibilitySignature = skeletonSignature, .enabled = true }) &&
+                    scene.Components().DeformedGeometries().Set(entity, { .skeletalMeshAssetId = skinnedMeshId,
+                        .fixedBounds = true, .castsShadow = false, .enabled = true }),
+                "Screen-space test could not skin its sphere");
+        }
     }
+    if (skinnedSphere) static_cast<void>(scene.Runtime().Update(0.0F));
     for (const kb::scene::Vec3& position : pointLights) {
         const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Point Light", .transform = TransformAt(position.x, position.y, position.z) });
@@ -10382,9 +10442,10 @@ void RunRendererLightProbeTests() {
     const LightProbeGrid parsed = ParseLightProbeGrid(SerializeLightProbeGrid(grid));
     Require(parsed.Succeeded() && parsed.probes.size() == grid.probes.size(), "Light probe test grid did not survive its file form");
 
-    const auto render = [&](bool withGrid, SceneRenderLightingPath path, bool reflections = false, SceneRenderSubmitStats* statsOut = nullptr) {
+    const auto render = [&](bool withGrid, SceneRenderLightingPath path, bool reflections = false, SceneRenderSubmitStats* statsOut = nullptr, bool skinned = false) {
         SsMaterialOptions options;
         options.sphere = true;
+        options.skinnedSphere = skinned;
         SceneRenderLightingConfig lighting{};
         lighting.lightingPath = path;
         lighting.screenSpaceReflectionsEnabled = reflections;
@@ -10427,6 +10488,34 @@ void RunRendererLightProbeTests() {
         Require(without == again, "A scene without a probe grid must render the same image every time");
     }
     Require(drawCalls[1] > drawCalls[0], "The deferred case did not run the G-buffer and lighting passes");
+    // A skinned sphere in the forward passes reads its palette and the grid in one draw: the grid must not take
+    // the palette's stage, so the sphere keeps its shape and still takes the wall's light.
+    {
+        const auto silhouette = [](const std::vector<std::uint8_t>& pixels) {
+            std::vector<bool> mask(pixels.size() / 4U);
+            for (std::size_t at = 0U; at < mask.size(); ++at) mask[at] = pixels[at * 4U] + pixels[at * 4U + 1U] + pixels[at * 4U + 2U] > 0;
+            return mask;
+        };
+        const auto differing = [](const std::vector<bool>& a, const std::vector<bool>& b) {
+            std::size_t count = 0U;
+            for (std::size_t at = 0U; at < a.size(); ++at) count += a[at] != b[at] ? 1U : 0U;
+            return count;
+        };
+        const auto rigid = silhouette(render(false, SceneRenderLightingPath::Forward));
+        const auto skinnedWithout = render(false, SceneRenderLightingPath::Forward, false, nullptr, true);
+        const auto skinnedWith = render(true, SceneRenderLightingPath::Forward, false, nullptr, true);
+        const std::size_t covered = static_cast<std::size_t>(std::count(rigid.begin(), rigid.end(), true));
+        std::fprintf(stderr, "light_probe_skinned covered=%zu rigidDiff=%zu gridDiff=%zu without=%.3f with=%.3f\n", covered,
+            differing(rigid, silhouette(skinnedWith)), differing(silhouette(skinnedWithout), silhouette(skinnedWith)),
+            redShift(skinnedWithout), redShift(skinnedWith));
+        Require(covered > 500U, "The rigid sphere of the skinned probe test did not draw");
+        Require(differing(rigid, silhouette(skinnedWithout)) <= 8U && differing(rigid, silhouette(skinnedWith)) <= 8U,
+            "A skinned sphere in the rest pose did not cover the pixels of the rigid sphere");
+        Require(silhouette(skinnedWithout) == silhouette(skinnedWith),
+            "A baked probe grid changed the shape of a skinned mesh in the forward passes");
+        Require(redShift(skinnedWith) > redShift(skinnedWithout) + 10.0,
+            "A skinned mesh in the forward passes did not take the baked probe light");
+    }
     // Screen-space reflections keep the stage the deferred pass would give the grid: the grid stands aside.
     const auto reflectionsWithout = render(false, SceneRenderLightingPath::Deferred, true);
     Require(reflectionsWithout == render(true, SceneRenderLightingPath::Deferred, true),
