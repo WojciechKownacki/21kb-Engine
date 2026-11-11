@@ -241,7 +241,9 @@ void main()
     }
     vec2 materialUv = v_texcoord0 * u_materialUvTransform.xy + u_materialUvTransform.zw;
     vec4 albedo = texture2D(s_albedo, materialUv) * v_color0;
-    if (u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 && albedo.a < u_materialParams.w) {
+    // One per-fragment compare: some ES drivers skip a discard whose test is nested in uniform-only branches.
+    float alphaCutoff = u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 ? u_materialParams.w : 0.0;
+    if (albedo.a < alphaCutoff) {
         discard;
     }
 
