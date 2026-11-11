@@ -102,13 +102,15 @@ public:
                     << " bloom=" << BoolText(settings.bloomEnabled);
             WriteRendererDebugLog("aa_trace", message.str());
         }
+        // The anti-aliased image is the output when nothing combines into it: the material chain and the display
+        // composite read it in place, as they read the combine target otherwise, so no pass copies it.
         if (!settings.bloomEnabled && !desc.settings.depthOfFieldEnabled && !settings.motionBlurEnabled) {
-            return SubmitWithoutBloom(desc, postSource);
+            return postSource;
         }
 
         if (settings.bloomEnabled) SubmitBloomPyramid(desc, settings, postSource);
         SubmitBloomCombine(desc, settings, postSource);
-        return SubmitFinalize(desc, desc.target.combineTexture);
+        return desc.target.combineTexture;
     }
 
 private:
@@ -169,30 +171,6 @@ private:
         bgfx::setTexture(2, renderer_.velocitySampler_, desc.target.motionVectorTexture);
         SubmitFullscreen(desc.viewIds.postProcessTaaResolve, renderer_.taaResolveProgram_, renderer_.fullscreenVertexBuffer_);
         return desc.target.temporalHistoryTexture;
-    }
-
-    [[nodiscard]] bgfx::TextureHandle SubmitWithoutBloom(const ScenePostProcessSubmitDesc& desc, bgfx::TextureHandle postSource) const {
-        ConfigureFullscreenView(
-            desc.viewIds.postProcessBloomPrefilter,
-            desc.target.bloomFrameBuffer,
-            desc.target.extent,
-            "KB Post Bloom Prefilter Disabled");
-        ConfigureFullscreenView(
-            desc.viewIds.postProcessBloomBlurH,
-            desc.target.pingFrameBuffer,
-            desc.target.extent,
-            "KB Post Bloom Blur H Disabled");
-        ConfigureFullscreenView(
-            desc.viewIds.postProcessBloomBlurV,
-            desc.target.bloomFrameBuffer,
-            desc.target.extent,
-            "KB Post Bloom Blur V Disabled");
-        ConfigureFullscreenView(
-            desc.viewIds.postProcessHdrCombine,
-            desc.target.combineFrameBuffer,
-            desc.target.extent,
-            "KB Post HDR Combine Disabled");
-        return SubmitFinalize(desc, postSource);
     }
 
     void SubmitBloomPyramid(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings, bgfx::TextureHandle postSource) const {
@@ -304,21 +282,6 @@ private:
         bgfx::setTexture(2, renderer_.depthSampler_, bgfx::isValid(desc.sceneDepth) ? desc.sceneDepth : postSource);
         bgfx::setTexture(3, renderer_.velocitySampler_, settings.motionBlurEnabled ? desc.target.motionVectorTexture : postSource);
         SubmitFullscreen(desc.viewIds.postProcessHdrCombine, renderer_.combineProgram_, renderer_.fullscreenVertexBuffer_);
-    }
-
-    [[nodiscard]] bgfx::TextureHandle SubmitFinalize(const ScenePostProcessSubmitDesc& desc, bgfx::TextureHandle sourceTexture) const {
-        ConfigureFullscreenView(
-            desc.viewIds.postProcessHdrFinalize,
-            desc.target.finalFrameBuffer,
-            desc.target.extent,
-            "KB Post HDR Finalize");
-        const float finalizeParams[4] = {0.0F, 0.0F, 0.0F, 0.0F};
-        bgfx::setUniform(renderer_.postParams_, finalizeParams);
-        bgfx::setUniform(renderer_.motionBlurParamsUniform_, finalizeParams);
-        bgfx::setTexture(0, renderer_.sourceSampler_, sourceTexture);
-        bgfx::setTexture(1, renderer_.bloomSampler_, desc.target.bloomTexture);
-        SubmitFullscreen(desc.viewIds.postProcessHdrFinalize, renderer_.combineProgram_, renderer_.fullscreenVertexBuffer_);
-        return desc.target.finalTexture;
     }
 
     const ScenePostProcessRenderer& renderer_;

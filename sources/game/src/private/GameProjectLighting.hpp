@@ -8,9 +8,11 @@
 
 namespace kb::game {
 
-// Apply after renderer initialization, including surface/context recreation.
+// Apply after renderer initialization, including surface/context recreation. The project's render scale is
+// applied here too, so packaged hosts draw the 3D scene at the share of the surface the project chose.
 inline void ApplyGameProjectLighting(kb::render::Renderer& renderer,
     const GameProjectRuntime& project, std::ostream& diagnostics) {
+    renderer.SetRenderScale(project.display.renderScale);
     auto lighting=renderer.DefaultSceneLightingConfig();
     switch(project.lightingPath) {
     case kb::project::ProjectSceneLightingPath::Forward: lighting.lightingPath=kb::render::SceneRenderLightingPath::Forward; break;
