@@ -22,8 +22,14 @@ public:
     void Pause() noexcept;
     void Resume() noexcept;
 
+    // Whether the keyboard and mouse belong to the game: the Game View is where the press last landed.
+    // Stopping hands them back to the editor.
+    [[nodiscard]] bool GameHasInput() const noexcept;
+    void SetGameHasInput(bool hasInput) noexcept;
+
 private:
     EditorPlayMode mode_ = EditorPlayMode::Stopped;
+    bool gameHasInput_ = false;
     std::uint64_t generation_ = 0;
 };
 

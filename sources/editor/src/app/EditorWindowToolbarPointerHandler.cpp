@@ -419,8 +419,8 @@ void OpenSettingsPanel(
                 return true;
             }
             EditorConfiguration configuration = sceneContext.EditorConfig();
-            if (*row < 3) {
-                configuration.play.target = static_cast<EditorPlayTarget>(*row);
+            if (*row < static_cast<int>(kEditorPlayTargetMenuOrder.size())) {
+                configuration.play.target = kEditorPlayTargetMenuOrder[static_cast<std::size_t>(*row)];
             } else {
                 configuration.play.startPaused = !configuration.play.startPaused;
             }

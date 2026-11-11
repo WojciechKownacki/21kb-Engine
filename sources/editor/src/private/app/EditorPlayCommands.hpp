@@ -15,8 +15,9 @@ namespace kb::editor {
 #if defined(_WIN32)
 
 // What the Play button and Ctrl+P do, so both follow the options under the arrow beside Play:
-// the scene in the Scene View, the Scene View filling the editor while the game runs, or the
-// project in the game's own program from its startup scene.
+// the scene in the Game View (opened beside the Scene View, with the keyboard and mouse going to the game),
+// in the Scene View, the Scene View filling the editor while the game runs, or the project in the game's own
+// program from its startup scene.
 class EditorPlayCommands {
 public:
     EditorPlayCommands() = delete;

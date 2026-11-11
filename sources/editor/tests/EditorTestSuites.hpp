@@ -16,6 +16,7 @@ void RunEditorSceneAudioInspectorTests();
 void RunEditorCommandStackTests();
 void RunEditorPlayModeSceneSessionTests();
 void RunEditorViewportPreviewTests();
+void RunEditorGameViewTests();
 void RunEditorMaterialGraphCookServiceTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();

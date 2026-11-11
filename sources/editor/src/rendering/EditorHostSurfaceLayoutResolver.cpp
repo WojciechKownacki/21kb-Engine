@@ -1,6 +1,7 @@
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 
 #if defined(_WIN32)
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -93,6 +94,16 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
                 .viewportKey = panelLayout.panelId,
                 .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId), sceneContext).renderArea,
             });
+            continue;
+        }
+        if (panel->kind == DockPanelKind::Game) {
+            if (GamePanelContentRenderer::ShowsGame(sceneContext)) {
+                layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                    .viewportKey = panelLayout.panelId,
+                    .bounds = GamePanelContentRenderer::Resolve(
+                        content, GamePanelContentRenderer::ListOpen(sceneContext, panelLayout.panelId)).renderArea,
+                });
+            }
             continue;
         }
         if (panel->kind == DockPanelKind::SkeletalMeshEditor &&

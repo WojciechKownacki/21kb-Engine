@@ -7,6 +7,8 @@
 #include "inspection/ui/InspectorUIThemeModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
+#include "scene/EditorGameView.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
 #include "app/EditorStartupSplashChecks.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
@@ -6327,6 +6329,92 @@ ReadScriptValue(
         return { state.automation.CaptureSceneViewport(*checkpoint), "scene:" + *checkpoint };
     }
 
+    if (*operation == "set_play_target") {
+        // Where Play runs the game, kept in the editor settings like the options under the arrow beside Play.
+        const auto target = StringMember(step, "target", error);
+        if (!target) return { false, error };
+        EditorConfiguration configuration = state.context.EditorConfig();
+        if (*target == "game_view") configuration.play.target = EditorPlayTarget::GameView;
+        else if (*target == "scene_view") configuration.play.target = EditorPlayTarget::SceneView;
+        else return { false, "target must be game_view or scene_view" };
+        return { state.context.SaveEditorConfig(std::move(configuration)), "play target " + *target };
+    }
+
+    if (*operation == "set_game_view_resolution") {
+        const auto name = StringMember(step, "resolution", error);
+        if (!name) return { false, error };
+        const std::optional<EditorGameViewResolution> resolution = EditorGameView::FromName(*name);
+        if (!resolution.has_value()) return { false, "unknown Game View resolution " + *name };
+        EditorConfiguration configuration = state.context.EditorConfig();
+        configuration.play.gameViewResolution = *resolution;
+        return { state.context.SaveEditorConfig(std::move(configuration)), "game view resolution " + *name };
+    }
+
+    if (*operation == "capture_game_view") {
+        // The Game View's picture while the game runs, read back at its render resolution.
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        const double areaWidth = NumberMember(step, "area_width", error, false).value_or(640.0);
+        const double areaHeight = NumberMember(step, "area_height", error, false).value_or(360.0);
+        if (!error.empty()) return { false, error };
+        return { state.automation.CaptureGameView(*checkpoint, static_cast<int>(areaWidth), static_cast<int>(areaHeight)),
+            "game view:" + *checkpoint };
+    }
+
+    if (*operation == "assert_game_view_settings") {
+        const double areaWidth = NumberMember(step, "area_width", error, false).value_or(640.0);
+        const double areaHeight = NumberMember(step, "area_height", error, false).value_or(360.0);
+        if (!error.empty()) return { false, error };
+        const auto result = state.automation.VerifyGameViewSettings(static_cast<int>(areaWidth), static_cast<int>(areaHeight));
+        return { result.first, result.second };
+    }
+
+    if (*operation == "assert_game_view_layout") {
+        // The picture the Game View shows in an area below its bar: the size it renders at, where it sits
+        // (relative to the area) and the scale the bar reads. Every expectation given must hold.
+        const double areaWidth = NumberMember(step, "area_width", error).value_or(0.0);
+        const double areaHeight = NumberMember(step, "area_height", error).value_or(0.0);
+        if (!error.empty() || areaWidth < 1.0 || areaHeight < 1.0) return { false, error.empty() ? "the area must not be empty" : error };
+        const RECT content{ 0, -GamePanelContentRenderer::ToolbarHeight, static_cast<LONG>(areaWidth), static_cast<LONG>(areaHeight) };
+        const GameViewRects rects = GamePanelContentRenderer::Resolve(content, false);
+        const GameViewPicture picture = GamePanelContentRenderer::ResolvePicture(rects.renderArea, state.context);
+        const std::string scale = EditorGameView::FormatScale(
+            static_cast<std::uint32_t>(picture.destination.right - picture.destination.left), picture.renderWidth);
+        std::ostringstream report;
+        report << "render " << picture.renderWidth << "x" << picture.renderHeight << ", picture (" << picture.destination.left << ","
+               << picture.destination.top << ")-(" << picture.destination.right << "," << picture.destination.bottom << "), scale " << scale;
+        bool ok = true;
+        const auto check = [&](const char* key, double actual) {
+            if (const auto expected = NumberMember(step, key, error, false); expected.has_value() && std::abs(*expected - actual) > 1.0) {
+                report << "; " << key << " expected " << *expected;
+                ok = false;
+            }
+        };
+        check("render_width", picture.renderWidth);
+        check("render_height", picture.renderHeight);
+        check("left", picture.destination.left);
+        check("top", picture.destination.top);
+        check("right", picture.destination.right);
+        check("bottom", picture.destination.bottom);
+        if (const auto expectedScale = StringMember(step, "scale", error, false); expectedScale.has_value() && *expectedScale != scale) {
+            report << "; scale expected " << *expectedScale;
+            ok = false;
+        }
+        return { ok && error.empty(), error.empty() ? report.str() : error };
+    }
+
+    if (*operation == "assert_capture_size") {
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const auto width = UInt32Member(step, "width", error);
+        const auto height = UInt32Member(step, "height", error);
+        if (!checkpoint || !width || !height) return { false, error };
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap captured((state.automation.ArtifactRoot() / "screenshots" / (*checkpoint + ".png")).wstring().c_str());
+        if (captured.GetLastStatus() != Gdiplus::Ok) return { false, "capture is not readable" };
+        return { captured.GetWidth() == *width && captured.GetHeight() == *height,
+            "capture is " + std::to_string(captured.GetWidth()) + "x" + std::to_string(captured.GetHeight()) };
+    }
+
     if (*operation == "assert_capture_color_difference") {
         // Pixels that differ between two captures and show `color` in `with`: what drawing one
         // thing (such as the cell grid) added to an otherwise identical frame.
@@ -6372,6 +6460,7 @@ ReadScriptValue(
         const auto checkpoint = StringMember(step, "checkpoint", error);
         const auto* color = Member(step, "color", JsonValue::Kind::Array, error);
         const auto minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        const auto maximum = UInt32Member(step, "max_pixels", error, false);
         const auto tolerance = NumberMember(step, "tolerance", error, false).value_or(16.0);
         if (!checkpoint || !color || color->Size() != 3U || !error.empty()) return {false, "color must be [r, g, b]"};
         HeroIconGdiplusRuntime::EnsureStarted();
@@ -6385,7 +6474,9 @@ ReadScriptValue(
                 std::fabs(pixel.GetG() - color->At(1)->AsNumber()) <= tolerance &&
                 std::fabs(pixel.GetB() - color->At(2)->AsNumber()) <= tolerance) ++matching;
         }
-        return {matching >= minimum, "matching pixels: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) + ")"};
+        return {matching >= minimum && (!maximum.has_value() || matching <= *maximum),
+            "matching pixels: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) +
+            (maximum.has_value() ? ", maximum " + std::to_string(*maximum) : std::string{}) + ")"};
     }
 
     if (*operation == "capture_runtime") {

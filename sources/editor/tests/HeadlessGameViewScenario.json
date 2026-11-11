@@ -1,0 +1,62 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "new_scene" },
+    { "op": "create_entity", "id": "camera", "name": "GameCamera" },
+    { "op": "set_entity_position", "entity": "camera", "x": 0, "y": 0, "z": -5 },
+    { "op": "add_component", "entity": "camera", "component": "Camera" },
+    { "op": "set_property", "entity": "camera", "component": "Camera", "property": "primary", "value": true },
+    { "op": "set_property", "entity": "camera", "component": "Camera", "property": "clearColor.x", "value": 0.0 },
+    { "op": "set_property", "entity": "camera", "component": "Camera", "property": "clearColor.y", "value": 0.0 },
+    { "op": "set_property", "entity": "camera", "component": "Camera", "property": "clearColor.z", "value": 1.0 },
+    { "op": "save_scene", "path": "Assets/Scenes/GameView.21kbscene" },
+    { "op": "capture", "panel": "game", "checkpoint": "game-panel-stopped", "width": 900, "height": 700, "text_fits": true },
+
+    { "op": "set_play_target", "target": "game_view" },
+    { "op": "set_game_view_resolution", "resolution": "FreeAspect" },
+    { "op": "play" },
+    { "op": "assert_game_view_settings", "area_width": 640, "area_height": 360 },
+    { "op": "capture", "panel": "game", "checkpoint": "game-panel-playing", "width": 900, "height": 700, "text_fits": true },
+
+    { "op": "assert_game_view_layout", "area_width": 640, "area_height": 360, "render_width": 640, "render_height": 360, "left": 0, "top": 0, "right": 640, "bottom": 360, "scale": "1.00x" },
+    { "op": "capture_game_view", "checkpoint": "game-free", "area_width": 640, "area_height": 360 },
+    { "op": "assert_capture_size", "checkpoint": "game-free", "width": 640, "height": 360 },
+    { "op": "assert_capture_color", "checkpoint": "game-free", "color": [0, 0, 255], "tolerance": 60, "min_pixels": 227000 },
+
+    { "op": "set_game_view_resolution", "resolution": "Project" },
+    { "op": "assert_game_view_layout", "area_width": 640, "area_height": 360, "render_width": 1280, "render_height": 720, "left": 0, "top": 0, "right": 640, "bottom": 360, "scale": "0.50x" },
+
+    { "op": "set_game_view_resolution", "resolution": "Landscape16x9" },
+    { "op": "assert_game_view_layout", "area_width": 640, "area_height": 360, "render_width": 1920, "render_height": 1080, "left": 0, "top": 0, "right": 640, "bottom": 360, "scale": "0.33x" },
+    { "op": "capture_game_view", "checkpoint": "game-16x9", "area_width": 640, "area_height": 360 },
+    { "op": "assert_capture_size", "checkpoint": "game-16x9", "width": 1920, "height": 1080 },
+    { "op": "assert_capture_color", "checkpoint": "game-16x9", "color": [0, 0, 255], "tolerance": 60, "min_pixels": 2050000 },
+
+    { "op": "set_game_view_resolution", "resolution": "Portrait9x16" },
+    { "op": "assert_game_view_layout", "area_width": 640, "area_height": 360, "render_width": 1080, "render_height": 1920, "left": 219, "top": 0, "right": 422, "bottom": 360, "scale": "0.19x" },
+    { "op": "capture_game_view", "checkpoint": "game-9x16", "area_width": 640, "area_height": 360 },
+    { "op": "assert_capture_size", "checkpoint": "game-9x16", "width": 1080, "height": 1920 },
+    { "op": "assert_capture_color", "checkpoint": "game-9x16", "color": [0, 0, 255], "tolerance": 60, "min_pixels": 2050000 },
+    { "op": "assert_game_view_settings", "area_width": 640, "area_height": 360 },
+
+    { "op": "set_game_view_resolution", "resolution": "PhoneLandscape" },
+    { "op": "assert_game_view_layout", "area_width": 640, "area_height": 360, "render_width": 2340, "render_height": 1080, "left": 0, "top": 33, "right": 640, "bottom": 328, "scale": "0.27x" },
+
+    { "op": "set_game_view_resolution", "resolution": "Tablet4x3" },
+    { "op": "assert_game_view_layout", "area_width": 640, "area_height": 360, "render_width": 2048, "render_height": 1536, "left": 80, "top": 0, "right": 560, "bottom": 360, "scale": "0.23x" },
+
+    { "op": "set_game_view_resolution", "resolution": "Tablet16x10" },
+    { "op": "assert_game_view_layout", "area_width": 640, "area_height": 360, "render_width": 1920, "render_height": 1200, "left": 32, "top": 0, "right": 608, "bottom": 360, "scale": "0.30x" },
+
+    { "op": "set_game_view_resolution", "resolution": "FreeAspect" },
+    { "op": "assert_game_view_layout", "area_width": 400, "area_height": 300, "render_width": 400, "render_height": 300, "left": 0, "top": 0, "right": 400, "bottom": 300, "scale": "1.00x" },
+    { "op": "stop" },
+
+    { "op": "set_play_target", "target": "scene_view" },
+    { "op": "play" },
+    { "op": "assert_game_view_settings", "area_width": 640, "area_height": 360 },
+    { "op": "stop" },
+    { "op": "set_play_target", "target": "game_view" },
+    { "op": "assert_no_errors" }
+  ]
+}

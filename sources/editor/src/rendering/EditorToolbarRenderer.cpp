@@ -299,8 +299,8 @@ struct DropdownRowView {
     if (openMenu == EditorMenuCommand::PlayOptions) {
         const EditorPlayPreferences& play = interaction.PlayMenuPreferences();
         view.enabled = interaction.PlayMenuCanChange();
-        if (fixedRow < 3) {
-            view.selected = static_cast<int>(play.target) == fixedRow;
+        if (fixedRow < static_cast<int>(kEditorPlayTargetMenuOrder.size())) {
+            view.selected = play.target == kEditorPlayTargetMenuOrder[static_cast<std::size_t>(fixedRow)];
         } else if (play.startPaused) {
             view.icon = HeroIconKind::Check;
         }

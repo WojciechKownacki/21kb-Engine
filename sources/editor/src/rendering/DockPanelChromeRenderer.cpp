@@ -40,6 +40,9 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     case DockPanelKind::Scene:
         icon = HeroIconKind::Cube;
         return true;
+    case DockPanelKind::Game:
+        icon = HeroIconKind::Monitor;
+        return true;
     case DockPanelKind::Inspector:
         icon = HeroIconKind::AdjustmentsHorizontal;
         return true;

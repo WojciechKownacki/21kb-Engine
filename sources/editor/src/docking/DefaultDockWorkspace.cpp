@@ -11,6 +11,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     switch (kind) {
     case DockPanelKind::Hierarchy: return std::string{ EditorText("panel.hierarchy", "Hierarchy") };
     case DockPanelKind::Scene: return std::string{ EditorText("panel.scene", "Scene View") };
+    case DockPanelKind::Game: return std::string{ EditorText("panel.game", "Game View") };
     case DockPanelKind::Inspector: return std::string{ EditorText("panel.inspector", "Inspector") };
     case DockPanelKind::Assets: return std::string{ EditorText("panel.assets", "Project Files") };
     case DockPanelKind::Console: return std::string{ EditorText("panel.console", "Console") };
@@ -40,6 +41,8 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
 // Each panel starts with its own title; Editor Settings gives them the new one when the language changes.
 std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
     return {
+        // Closed until Play opens it, then docked as a tab beside the Scene View.
+        DockPanel{ .id = 25, .kind = DockPanelKind::Game, .title = PanelTitle(DockPanelKind::Game), .area = DockArea::Center, .visible = false, .detachable = false, .floatingRect = DockRect{ 128, 128, 720, 520 } },
         DockPanel{ .id = 24, .kind = DockPanelKind::StaticMeshEditor, .title = PanelTitle(DockPanelKind::StaticMeshEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 160, 152, 860, 620 } },
         DockPanel{ .id = 22, .kind = DockPanelKind::GameplayGraphEditor, .title = PanelTitle(DockPanelKind::GameplayGraphEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 760 } },
         DockPanel{ .id = 21, .kind = DockPanelKind::BlendSpace2DEditor, .title = PanelTitle(DockPanelKind::BlendSpace2DEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },

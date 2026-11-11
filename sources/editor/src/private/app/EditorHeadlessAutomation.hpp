@@ -201,6 +201,12 @@ public:
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
+    // The Game View's picture while the game runs: the game camera at the chosen resolution, with the
+    // panel's render area (below its bar) `areaWidth` x `areaHeight`, read back to a PNG.
+    [[nodiscard]] bool CaptureGameView(std::string_view checkpoint, int areaWidth, int areaHeight);
+    // Checks the settings the Game View hands the renderer for that area: the game camera, no editor overlay of
+    // any kind, the project's render scale. The text says what was found.
+    [[nodiscard]] std::pair<bool, std::string> VerifyGameViewSettings(int areaWidth, int areaHeight);
     // The "What to show" window of the profiler, and the profiler's counters and graph laid over an
     // earlier scene viewport capture.
     [[nodiscard]] kb::render::SceneRenderSubmitStats SceneSubmitStats() const;
@@ -233,7 +239,8 @@ public:
 
 private:
     // Requests a screen capture, renders with `render` until it completes, validates the PNG.
-    [[nodiscard]] bool CaptureScene(std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render);
+    [[nodiscard]] bool CaptureScene(std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render,
+        bool requireNonUniform = true);
 
     struct Impl;
 

@@ -976,6 +976,14 @@ EditorSceneBgfxViewport::PresentSettings ScenePanelContentRenderer::BuildSetting
         SceneViewportToolbarRenderer::Resolve(content,state,sceneContext), content);
 }
 
+EditorSceneBgfxViewport::PresentSettings ScenePanelContentRenderer::BuildGameSettings(
+    const RECT& content, const RECT& renderArea, const DockPanel& panel, const EditorViewportPreviewState& picture,
+    const EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings) {
+    SceneViewportToolbarRects sceneRects{};
+    sceneRects.renderArea = renderArea;
+    return BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, picture, renderBackendSettings, sceneRects, content);
+}
+
 void ScenePanelContentRenderer::PresentViewport(
     EditorSceneBgfxViewport& sceneViewport,
     HWND sceneViewportHost,

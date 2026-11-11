@@ -131,6 +131,7 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportSelectionController.cpp
     src/app/scene_viewport/EditorSceneViewportSelectionInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
+    src/app/game_view/EditorGameViewPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorCurveEditorPointerHandler.cpp
     src/app/EditorWindowPointerHandler.cpp
@@ -423,6 +424,9 @@ add_executable(kb_editor WIN32
     src/private/app/scene_viewport/EditorSceneViewportSelectionInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportSelectionTypes.hpp
     src/private/app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp
+    src/private/app/game_view/EditorGameViewPointerController.hpp
+    src/private/rendering/GamePanelContentRenderer.hpp
+    src/private/scene/EditorGameView.hpp
     src/private/app/scene_viewport/EditorSceneViewportTypes.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
@@ -925,6 +929,7 @@ add_executable(kb_editor WIN32
     src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp
     src/rendering/SceneViewportToolbarDropdownOverlayWindow.cpp
     src/rendering/ScenePanelContentRenderer.cpp
+    src/rendering/GamePanelContentRenderer.cpp
     src/rendering/SvgGraphicsPathBuilder.cpp
     src/rendering/SvgPathArcConverter.cpp
     src/rendering/SvgPathArcMath.cpp
@@ -1045,6 +1050,7 @@ add_executable(kb_editor WIN32
     src/settings/EditorPanelSessionText.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
+    src/scene/EditorGameView.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
@@ -1431,6 +1437,7 @@ if(BUILD_TESTING)
         tests/EditorAudioMixerRuntimeTests.cpp
         tests/EditorSceneAudioInspectorTests.cpp
         tests/EditorViewportPreviewTests.cpp
+        tests/EditorGameViewTests.cpp
         tests/EditorMaterialGraphCookServiceTests.cpp
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
@@ -1578,6 +1585,8 @@ if(BUILD_TESTING)
           src/scene/EditorScenePrefabActions.cpp
           src/scene/EditorViewportCameraState.cpp
           src/scene/EditorViewportPreviewState.cpp
+          src/scene/EditorGameView.cpp
+          src/rendering/EditorSceneViewportGeometry.cpp
           src/scene/EditorAnimationPreviewScene.cpp
           src/scene/EditorPreviewStudio.cpp
           src/scene/StaticMeshEditorSession.cpp
@@ -2277,6 +2286,15 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Navigation")
     set_tests_properties(kb_editor_navigation_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;navigation" TIMEOUT 180)
+    # The Game View while Play runs: the game camera at each resolution choice, the letterboxed picture and its
+    # scale, no editor overlay, and the editor settings that keep the choice.
+    add_test(NAME kb_editor_game_view_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessGameViewScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Game-View")
+    set_tests_properties(kb_editor_game_view_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;rendering" TIMEOUT 180)
     # File > New Scene: templates, refused names, startup scene, reopening the last scene, Play without saving.
     add_test(NAME kb_editor_new_scene_headless
         COMMAND $<TARGET_FILE:kb_editor>

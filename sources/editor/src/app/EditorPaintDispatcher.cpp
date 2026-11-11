@@ -9,6 +9,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewPresentSettings.hpp"
@@ -147,6 +148,14 @@ void AppendMaterialPreviewLayout(
                     .viewportKey = panelLayout.panelId,
                     .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId), sceneContext).renderArea,
                 });
+            } else if (panel->kind == DockPanelKind::Game) {
+                if (GamePanelContentRenderer::ShowsGame(sceneContext)) {
+                    layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                        .viewportKey = panelLayout.panelId,
+                        .bounds = GamePanelContentRenderer::Resolve(
+                            content, GamePanelContentRenderer::ListOpen(sceneContext, panelLayout.panelId)).renderArea,
+                    });
+                }
             } else if (panel->kind == DockPanelKind::SkeletalMeshEditor && sceneContext.HasSkeletalMeshEditorAsset()) {
                 layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                     .viewportKey = panelLayout.panelId,
@@ -298,6 +307,9 @@ void AppendMaterialPreviewLayout(
             }
             if (panel->kind == DockPanelKind::Scene) {
                 scenePresented = PresentScenePanel(sceneViewport, mainWindow, *panel, content, sceneContext, renderBackendSettings) || scenePresented;
+            } else if (panel->kind == DockPanelKind::Game) {
+                scenePresented = GamePanelContentRenderer::PresentViewport(
+                    sceneViewport, mainWindow, content, *panel, sceneContext, renderBackendSettings) || scenePresented;
             } else if (panel->kind == DockPanelKind::SkeletalMeshEditor) {
                 documentPresented = SkeletalMeshEditorPanelRenderer::PresentViewport(
                     sceneViewport, mainWindow, content, *panel, sceneContext,

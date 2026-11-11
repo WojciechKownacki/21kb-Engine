@@ -31,6 +31,7 @@
 #include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/StaticMeshEditorPanel.hpp"
 #include "rendering/StaticMeshEditorViewport.hpp"
@@ -446,6 +447,9 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::Scene:
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);
+        break;
+    case DockPanelKind::Game:
+        GamePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::ProjectSettings:
         ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);

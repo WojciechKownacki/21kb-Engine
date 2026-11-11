@@ -136,6 +136,7 @@ public:
     }
 
     [[nodiscard]] EditorPlayMode Mode() const noexcept { return playMode_.Mode(); }
+    [[nodiscard]] bool GameHasInput() const noexcept { return playMode_.GameHasInput(); }
     [[nodiscard]] EditorDockModel& Dock() noexcept { return dockModel_; }
     [[nodiscard]] EditorFloatingWindowManager& FloatingWindows() noexcept { return floatingWindows_; }
     [[nodiscard]] const EditorDockController& DockController() const noexcept { return dockController_; }

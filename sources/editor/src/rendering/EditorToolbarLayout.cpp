@@ -48,7 +48,7 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 
 // How many of those rows each menu actually shows. Layout and the recent projects count
 // zero here, and Scene only its actions: the rest comes from the project, not the build.
-constexpr std::array<int, 11> kDropdownRowCounts{ 5, 6, 0, 7, 12, 4, 7, 6, 0, 4, 1 };
+constexpr std::array<int, 11> kDropdownRowCounts{ 5, 6, 0, 7, 12, 4, 7, 6, 0, 5, 1 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -557,7 +557,8 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
         return rows[static_cast<std::size_t>(row)];
     }
     case EditorMenuCommand::PlayOptions: {
-        const std::array<std::string_view, 4> rows{
+        const std::array<std::string_view, 5> rows{
+            EditorText("menu.play.gameView", "In the Game View"),
             EditorText("menu.play.sceneView", "In the Scene View"),
             EditorText("menu.play.maximized", "Maximized Scene View"),
             EditorText("menu.play.standalone", "In Its Own Window"),
@@ -640,7 +641,8 @@ std::string_view EditorToolbarLayout::DropdownDescription(EditorMenuCommand menu
             EditorText("menu.detail.deleteScene", "Goes to the Recycle Bin"),
         });
     case EditorMenuCommand::PlayOptions:
-        return pick(std::array<std::string_view, 4>{
+        return pick(std::array<std::string_view, 5>{
+            EditorText("menu.detail.playGameView", "What the player sees, at a resolution you choose"),
             EditorText("menu.detail.playSceneView", "The open scene, inside the editor"),
             EditorText("menu.detail.playMaximized", "Scene View fills the editor while playing"),
             EditorText("menu.detail.playStandalone", "From the startup scene, like the finished game"),
@@ -682,7 +684,7 @@ HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) 
         return pick(std::array{ HeroIconKind::Plus, HeroIconKind::Folder, HeroIconKind::Duplicate,
             HeroIconKind::Pencil, HeroIconKind::Save, HeroIconKind::Trash });
     case EditorMenuCommand::PlayOptions:
-        return pick(std::array{ HeroIconKind::Monitor, HeroIconKind::Scale, HeroIconKind::Gamepad2, HeroIconKind::Pause });
+        return pick(std::array{ HeroIconKind::Play, HeroIconKind::Monitor, HeroIconKind::Scale, HeroIconKind::Gamepad2, HeroIconKind::Pause });
     case EditorMenuCommand::Publish:
         return HeroIconKind::AdjustmentsHorizontal;
     case EditorMenuCommand::Layout:
@@ -736,7 +738,7 @@ bool EditorToolbarLayout::DropdownStartsGroup(EditorMenuCommand menu, int row, i
     case EditorMenuCommand::RecentProjects:
         return row == 1;
     case EditorMenuCommand::PlayOptions:
-        return row == 3;
+        return row == 4;
     case EditorMenuCommand::Publish:
         return row == rowCount - 1;
     default:
@@ -749,7 +751,7 @@ bool EditorToolbarLayout::DropdownHasHeading(EditorMenuCommand menu, int row, in
         return row == 0 || row == 3;
     }
     if (menu == EditorMenuCommand::PlayOptions) {
-        return row == 0 || row == 3;
+        return row == 0 || row == 4;
     }
     if (menu == EditorMenuCommand::Publish) {
         return row == 0 && rowCount > 1;

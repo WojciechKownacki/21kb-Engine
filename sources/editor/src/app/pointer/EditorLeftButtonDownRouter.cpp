@@ -33,6 +33,7 @@
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/editor_settings/EditorSettingsPointerController.hpp"
+#include "app/game_view/EditorGameViewPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
@@ -2017,6 +2018,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
     if (messageWindow == mainWindow_) {
         const DockLayout layout = DockMainLayoutResolver::Resolve(mainWindow_, dockModel_, metrics_);
+        // The keyboard and mouse go to the running game while the press lands in the Game View, and back to the
+        // editor when it lands anywhere else.
+        bool pressInGameView = false;
+        for (const DockPanelLayout& panelLayout : layout.panels) {
+            const DockPanel* panel = dockModel_.Queries().FindPanel(panelLayout.panelId);
+            pressInGameView = pressInGameView ||
+                (panelLayout.active && panel != nullptr && panel->kind == DockPanelKind::Game && panelLayout.frame.Contains(x, y));
+        }
+        playMode_.SetGameHasInput(pressInGameView);
         if (const DockPanelLayout* closeTab = TabCloseHit(layout, x, y); closeTab != nullptr) {
             if (EditorPanelCloser::Close(messageWindow, closeTab->panelId, dockModel_, floatingWindows_, sceneContext_)) {
                 sceneViewport_.RequestPresent();
@@ -2144,6 +2154,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         animationClipEditorContent.has_value() && PointInRect(*animationClipEditorContent, x, y) &&
         sceneContext_.HasAnimationClipEditorAsset()) {
         if (HandleAnimationClipEditorDown(messageWindow, x, y, *animationClipEditorContent)) {
+            return;
+        }
+    }
+
+    // The Game View's resolution button and its list.
+    if (const std::optional<EditorResolvedPanelContent> gamePanel = EditorPanelContentResolver::ResolvePanel(
+            DockPanelKind::Game, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        gamePanel.has_value() && PointInRect(gamePanel->content, x, y)) {
+        if (EditorGameViewPointerController{ sceneContext_, sceneViewport_ }.HandlePointerDown(*gamePanel, x, y)) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }
     }

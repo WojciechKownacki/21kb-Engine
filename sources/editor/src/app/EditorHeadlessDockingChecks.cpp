@@ -7,6 +7,7 @@
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
 #include <algorithm>
@@ -153,6 +154,50 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
     }
     const std::string defaultTree = dock.Commands().SerializeWorkspace();
     capture(main, "dock-default");
+
+    // Play opens the Game View as a tab beside the Scene View and brings it forward; Stop brings the Scene View back.
+    {
+        const EditorToolbarRects transport = EditorToolbarRenderer::ResolveToolbar(ToRect(editor.Layout().toolbar));
+        expect(!tabOf(DockPanelKind::Game).has_value(), "the Game View starts closed");
+        editor.Click(main, Center(transport.playButton));
+        const auto game = tabOf(DockPanelKind::Game);
+        const auto sceneTab = tabOf(DockPanelKind::Scene);
+        expect(editor.Mode() == EditorPlayMode::Playing, "Play starts the game");
+        expect(game.has_value() && sceneTab.has_value() && game->leafId == sceneTab->leafId, "Play opens the Game View beside the Scene View");
+        expect(editor.ActivePanel(DockPanelKind::Game).has_value(), "Play brings the Game View forward");
+        expect(editor.GameHasInput(), "Play gives the keyboard and mouse to the game");
+        if (game.has_value()) {
+            // The resolution list opens from the bar, and a choice in it is kept in the editor settings.
+            const RECT gameContent = ToRect(game->content);
+            const GameViewRects closed = GamePanelContentRenderer::Resolve(gameContent, false);
+            editor.Click(main, Center(closed.resolutionButton));
+            expect(sceneContext.ViewportPreview(game->panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::GameResolution,
+                "the resolution button opens the list");
+            const GameViewRects listed = GamePanelContentRenderer::Resolve(gameContent, true);
+            editor.Click(main, Center(listed.items[static_cast<std::size_t>(EditorGameViewResolution::Portrait9x16)]));
+            expect(sceneContext.EditorConfig().play.gameViewResolution == EditorGameViewResolution::Portrait9x16,
+                "a choice in the list sets the Game View resolution");
+            expect(sceneContext.ViewportPreview(game->panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::None,
+                "a choice puts the list away");
+            EditorConfiguration restored = sceneContext.EditorConfig();
+            restored.play.gameViewResolution = EditorGameViewResolution::FreeAspect;
+            expect(sceneContext.SaveEditorConfig(std::move(restored)), "the Game View resolution is saved");
+            // A press elsewhere in the editor takes the input back; a press on the picture gives it to the game again.
+            if (const auto inspector = tabOf(DockPanelKind::Inspector); inspector.has_value()) {
+                editor.Click(main, Center(ToRect(inspector->content)));
+                expect(!editor.GameHasInput(), "a press outside the Game View takes the input back");
+            }
+            editor.Click(main, Center(GamePanelContentRenderer::Resolve(gameContent, false).renderArea));
+            expect(editor.GameHasInput(), "a press on the Game View gives the input to the game");
+        }
+        editor.Click(main, Center(transport.stopButton));
+        expect(!editor.GameHasInput(), "Stop gives the input back to the editor");
+        expect(editor.Mode() == EditorPlayMode::Stopped, "Stop ends the game");
+        expect(editor.ActivePanel(DockPanelKind::Scene).has_value(), "Stop brings the Scene View back");
+        // The later checks start from the default arrangement.
+        dock.Commands().ResetWorkspace();
+    }
+
     const kb::scene::SceneEntity selectedAtStart = sceneContext.SelectedEntity();
 
     // A click on a tab brings its panel forward.

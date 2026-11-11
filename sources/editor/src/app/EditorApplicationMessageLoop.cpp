@@ -35,6 +35,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
@@ -429,6 +430,9 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         const RECT content = ToRect(panelLayout.content);
         if (panel->kind == DockPanelKind::Scene) {
             scenePresented = PresentScenePanel(state, state.window, *panel, content, refreshToolbar) || scenePresented;
+        } else if (panel->kind == DockPanelKind::Game) {
+            scenePresented = GamePanelContentRenderer::PresentViewport(
+                state.sceneViewport, state.window, content, *panel, state.sceneContext, state.renderBackendSettings) || scenePresented;
         } else if (panel->kind == DockPanelKind::SkeletalMeshEditor) {
             documentPresented = SkeletalMeshEditorPanelRenderer::PresentViewport(
                 state.sceneViewport, state.window, content, *panel,
@@ -842,9 +846,27 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
     return mainPresented || floatingPresented;
 }
 
+// Where the pointer is mapped to the game's picture: the Game View when Play runs there, the Scene View otherwise.
+[[nodiscard]] bool PlayInGameView(const EditorApplicationState& state) noexcept {
+    return state.sceneContext.EditorConfig().play.target == EditorPlayTarget::GameView;
+}
+
+// The keyboard, mouse and gamepad reach the game while its picture has the focus. Played in the Game View, a press
+// anywhere else in the editor takes the input back until the Game View is clicked again.
+void CollectPlayModeInput(EditorApplicationState& state) {
+    if (!PlayInGameView(state) || state.playMode.GameHasInput()) {
+        state.inputCollector.Collect(state.sceneContext.Scene(), state.window);
+        return;
+    }
+    kb::input::InputDeviceState& input = state.sceneContext.Scene().Input().MutableDeviceState();
+    input.Reset();
+    input.SetHasFocus(false);
+}
+
 void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     HWND coordinateWindow = state.window;
     std::optional<EditorResolvedPanelContent> scenePanel;
+    const DockPanelKind viewKind = PlayInGameView(state) ? DockPanelKind::Game : DockPanelKind::Scene;
 
     POINT cursor{};
     if (GetCursorPos(&cursor) != 0) {
@@ -854,7 +876,7 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
             : nullptr;
         if (rootWindow != nullptr && rootWindow != state.window) {
             scenePanel = EditorPanelContentResolver::ResolvePanel(
-                DockPanelKind::Scene,
+                viewKind,
                 rootWindow,
                 state.window,
                 state.dockModel,
@@ -868,7 +890,7 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     if (!scenePanel.has_value()) {
         coordinateWindow = state.window;
         scenePanel = EditorPanelContentResolver::ResolvePanel(
-            DockPanelKind::Scene,
+            viewKind,
             state.window,
             state.window,
             state.dockModel,
@@ -877,6 +899,19 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     }
     if (!scenePanel.has_value()) {
         state.inputCollector.ClearPointerViewport();
+        return;
+    }
+
+    if (viewKind == DockPanelKind::Game) {
+        // The picture sits inside the panel with bars around it, so the pointer is mapped through the picture.
+        const GameViewRects rects = GamePanelContentRenderer::Resolve(
+            scenePanel->content, GamePanelContentRenderer::ListOpen(state.sceneContext, scenePanel->panelId));
+        const GameViewPicture picture = GamePanelContentRenderer::ResolvePicture(rects.renderArea, state.sceneContext);
+        if (picture.destination.right <= picture.destination.left || picture.destination.bottom <= picture.destination.top) {
+            state.inputCollector.ClearPointerViewport();
+            return;
+        }
+        state.inputCollector.ConfigurePointerViewport(coordinateWindow, picture.destination, picture.renderWidth, picture.renderHeight);
         return;
     }
 
@@ -1402,7 +1437,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const auto pointerStart = std::chrono::steady_clock::now();
     ConfigurePlayModePointerViewport(state);
     const auto collectStart = std::chrono::steady_clock::now();
-    state.inputCollector.Collect(state.sceneContext.Scene(), state.window);
+    CollectPlayModeInput(state);
     const auto runtimeStart = std::chrono::steady_clock::now();
     state.sceneViewport.PrepareParticleScene(state.sceneContext.Scene());
     const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);

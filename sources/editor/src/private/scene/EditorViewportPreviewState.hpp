@@ -42,6 +42,8 @@ enum class EditorViewportToolbarDropdown : std::uint8_t {
     GridSpacing,
     SnapStep,
     RotationSnap,
+    // The Game View's list of resolutions.
+    GameResolution,
 };
 
 struct EditorViewportSafeArea {
