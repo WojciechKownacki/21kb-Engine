@@ -1,9 +1,9 @@
 #ifndef KB_SKY_BACKDROP_SH
 #define KB_SKY_BACKDROP_SH
 
-// The world backdrop behind the scene: what the deferred lighting draws where nothing was drawn,
-// and what the sky light captures for reflections (fs_sky_capture.sc). One definition, so a
-// reflection shows the sky the camera sees. The includer declares s_deferredBackdropEnvironment
+// The world backdrop behind the scene: what the deferred lighting and the forward backdrop pass
+// (fs_sky_backdrop.sc) draw where nothing was drawn, and what the sky light captures for reflections
+// (fs_sky_capture.sc). One definition for every path. The includer declares s_deferredBackdropEnvironment
 // (the equirectangular environment map) before including this file.
 // x: 1 vertical gradient, 2 equirectangular environment map, 3 procedural sky.
 // Gradient: horizon/zenith colours, y = horizon offset (sine of the elevation), z = exponent.

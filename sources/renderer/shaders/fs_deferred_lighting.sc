@@ -416,6 +416,9 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
 
     fogged = true;
     worldPos = ReconstructWorldPosition(uv, depth);
+    if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_BAKED_LIGHTING) < 0.5) {
+        return surface.rgb;
+    }
     vec3 viewDir = normalize(u_deferredCameraPosition.xyz - worldPos);
 
     float shadowVisible = 1.0;

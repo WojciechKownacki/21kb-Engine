@@ -57,6 +57,8 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_leui_rect.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_lit.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_deferred_lighting.sc", .stage = ShaderStage::Fragment},
+    // The world backdrop of the forward path.
+    ShaderManifestEntry{.name = "fs_sky_backdrop.sc", .stage = ShaderStage::Fragment},
     // Optional: without it (no Metal variant is generated on Windows hosts) screen-space GI stays off.
     ShaderManifestEntry{.name = "fs_ssgi_resolve.sc", .stage = ShaderStage::Fragment, .required = false},
     // Optional likewise: without them (no Metal variant is generated on Windows hosts) reflections keep
@@ -105,6 +107,7 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "vs_mesh_skinned_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh_skinned_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_present.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_sky_backdrop.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_decal.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_strip.sc", .stage = ShaderStage::Vertex},

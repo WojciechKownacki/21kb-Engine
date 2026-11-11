@@ -11,6 +11,7 @@
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 #include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/gi/SceneGiResolvePass.hpp"
+#include "kb/render/scene/SceneSkyBackdropPass.hpp"
 #include "kb/render/scene/SceneSkyReflection.hpp"
 #include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
@@ -340,6 +341,8 @@ private:
     SceneGiResolvePass giResolvePass_;
     // Sky light: the backdrop captured and prefiltered for the reflections of the lighting.
     SceneSkyReflection skyReflection_;
+    // The backdrop of the forward path, drawn after its opaque geometry.
+    SceneSkyBackdropPass skyBackdropPass_;
     SceneLightProbeTexture lightProbes_;
     SceneGiVoxelGrid giVoxelGrid_;
     SceneRenderTarget defaultSceneTarget_;

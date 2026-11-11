@@ -166,6 +166,7 @@ add_library(kb_renderer STATIC
     src/SceneDeferredLightingPass.cpp
     src/scene/SceneBackdropUniforms.cpp
     src/scene/SceneSkyReflection.cpp
+    src/scene/SceneSkyBackdropPass.cpp
     src/scene/SceneLightProbeTexture.cpp
     src/SceneFramebuffer.cpp
     src/SceneGBuffer.cpp
@@ -512,6 +513,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_leui_rect.sc
     fs_lit.sc
     fs_deferred_lighting.sc
+    fs_sky_backdrop.sc
     fs_mesh.sc
     fs_mesh_gbuffer_instanced.sc
     fs_mesh_instanced.sc
@@ -545,6 +547,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh_skinned_instanced.sc
     vs_mesh_skinned_motion_vectors_instanced.sc
     vs_present.sc
+    vs_sky_backdrop.sc
     vs_particle_decal.sc
     vs_particle_instanced.sc
     vs_particle_strip.sc
@@ -586,6 +589,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_sky_backdrop.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_strip.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_decal.sc
@@ -648,6 +652,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_ssgi_resolve.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_backdrop.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_capture.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc

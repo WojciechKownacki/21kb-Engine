@@ -122,9 +122,16 @@ bool MeshPipelinePassPolicy::UsesDisabledAlphaBlend(const RenderMaterialResource
 
 bool MeshPipelinePassPolicy::UsesAdvancedBuiltinPbr(const RenderMaterialResource* material) noexcept {
     return material != nullptr && !material->graphProgram.active &&
-        (material->bakedLightmap || material->sheenColor[0] > 0.0F || material->sheenColor[1] > 0.0F || material->sheenColor[2] > 0.0F ||
+        (material->sheenColor[0] > 0.0F || material->sheenColor[1] > 0.0F || material->sheenColor[2] > 0.0F ||
          material->sheenRoughnessFactor > 0.0F || material->transmissionFactor > 0.0F || material->thicknessFactor > 0.0F ||
          material->anisotropyStrength > 0.0F || material->anisotropyRotation != 0.0F);
+}
+
+bool MeshPipelinePassPolicy::SamplesSceneColor(const RenderMaterialResource* material, bool graphProgram) noexcept {
+    if (material == nullptr) {
+        return false;
+    }
+    return graphProgram ? material->graphProgram.usesSceneColor : material->transmissionFactor > 0.0F;
 }
 
 namespace {

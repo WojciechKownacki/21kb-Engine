@@ -441,6 +441,7 @@ void Renderer::Shutdown() {
     giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
     skyReflection_.Shutdown();
+    skyBackdropPass_.Shutdown();
     lightProbes_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
@@ -1189,12 +1190,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             .colorSpace = RenderTextureColorSpace::Linear,
         });
     }
-    const bool backdropRequiresDeferredPass = worldBackdrop.has_value() &&
-        (worldBackdrop->mode == SceneRenderWorldBackdropMode::VerticalGradient ||
-         worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky ||
-         worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap);
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
-        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass ||
+        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal ||
         // Screen-space GI, ambient occlusion and reflections read the G-buffer, so they imply the deferred path.
         // Fog is applied by the deferred lighting pass too: without this a profile that turns fog on would be
         // ignored without a word on the forward path.
@@ -1368,11 +1365,12 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             worldBackdropEnvironment = texture->texture;
         }
     }
+    // The sky behind the scene, for the forward backdrop pass and the sky light.
+    const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
+        worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
     {
         // Reflections of the sky the camera sees: the
         // backdrop is captured over a few frames; until then the lighting uses the environment colour.
-        const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
-            worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
         // vs_present.sc already turns the OpenGL rows around, so the faces need no flip of their own.
         skyReflection_.Update(backdropUniforms, worldBackdropEnvironment, false);
         effectiveLightingConfig.skyReflection = skyReflection_.ReflectionFor(backdropUniforms, worldBackdropEnvironment);
@@ -1723,14 +1721,27 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             MeshPassType::BaseOpaque,
             shadowBinding.HasAny() ? &shadowBinding : nullptr);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport opaque pass end");
+        // The backdrop after the opaque geometry (the opaque view is sequential): only pixels left at the far plane
+        // run its shader. The deferred lighting draws the same backdrop on its background pixels.
+        if (backdropUniforms.HasSky() && sceneCamera != nullptr) {
+            if (!skyBackdropPass_.Initialize() ||
+                !skyBackdropPass_.Submit(viewportPlan.viewIds.opaqueScene, backdropUniforms, worldBackdropEnvironment, sceneCamera)) {
+                lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Error,
+                    .kind = SceneRenderDiagnosticKind::SkyBackdropUnavailable,
+                    .instanceCount = 1U,
+                });
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport forward sky backdrop unavailable");
+            }
+        }
     }
     if (desc.meshPassMode != SceneRenderMeshPassMode::OpaqueOnly) {
         const bool terrainLayersOnly = desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTerrainLayers;
-        if (!terrainLayersOnly && bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
-            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit begin");
-            bgfx::blit(viewportPlan.viewIds.transparentScene, bgfx::TextureRegion{ .handle = desc.postProcess.pingTexture }, bgfx::TextureRegion{ .handle = desc.target.colorTexture });
+        // The transparent draws that sample the scene colour read a copy of it in the post-process ping texture.
+        const bool sceneColorCopyAvailable = !terrainLayersOnly && bgfx::isValid(desc.target.colorTexture) &&
+            bgfx::isValid(desc.postProcess.pingTexture);
+        if (sceneColorCopyAvailable) {
             sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
-            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit end");
         }
         if (sceneCamera != nullptr) {
             // The lighting view is unused by the forward path and binds no scene depth in the deferred one.
@@ -1758,6 +1769,11 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             MeshPassType::BaseTransparent,
             shadowBinding.HasAny() ? &shadowBinding : nullptr,
             terrainLayersOnly);
+        if (sceneColorCopyAvailable && sceneRenderer_->LastSubmitStats().sceneColorReadDrawCallCount != 0U) {
+            // Copied only when a draw of the frame samples it. The blits of a view run before its draws.
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit");
+            bgfx::blit(viewportPlan.viewIds.transparentScene, bgfx::TextureRegion{ .handle = desc.postProcess.pingTexture }, bgfx::TextureRegion{ .handle = desc.target.colorTexture });
+        }
         if (!terrainLayersOnly && sceneRenderer_->LastSubmitStats().failedParticleBatchCount == 0U) {
             const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
             if (particleSnapshot != nullptr) {

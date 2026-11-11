@@ -8,8 +8,8 @@ namespace kb::render {
 
 class RenderScene;
 
-// The u_deferredBackdrop* uniforms of sky_backdrop.sh: what the deferred lighting draws behind the
-// scene and what the sky light captures for reflections, from one source.
+// The u_deferredBackdrop* uniforms of sky_backdrop.sh: what the deferred lighting and the forward
+// backdrop pass draw behind the scene and what the sky light captures for reflections, from one source.
 struct SceneBackdropUniformValues {
     // x: 1 vertical gradient, 2 equirectangular environment map, 3 procedural sky (0 none).
     std::array<float, 4> horizon{};

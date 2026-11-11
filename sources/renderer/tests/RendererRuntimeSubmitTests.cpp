@@ -10707,7 +10707,7 @@ void RunRendererLightProbeTests() {
         }
         return sum / 120.0;
     };
-    // The forward path, and the deferred lighting pass that the project default and every sky backdrop select.
+    // The forward path, and the deferred lighting pass that the desktop project default selects.
     std::array<std::uint32_t, 2> drawCalls{};
     for (const SceneRenderLightingPath path : { SceneRenderLightingPath::Forward, SceneRenderLightingPath::Deferred }) {
         SceneRenderSubmitStats stats{};

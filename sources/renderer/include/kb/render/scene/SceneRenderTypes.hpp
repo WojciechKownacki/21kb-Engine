@@ -487,6 +487,9 @@ struct SceneRenderSubmitStats {
     std::uint32_t submittedDrawCallCount = 0;
     // G-buffer draws that write model color/layer data to the optional fifth target.
     std::uint32_t shadingModelColorDrawCallCount = 0;
+    // Transparent draws whose material samples the scene colour behind it (refraction, transmission): the frame
+    // copies the scene colour only when there is one.
+    std::uint32_t sceneColorReadDrawCallCount = 0;
     // Motion vector instances drawn with an uploaded previous model (draws with an instance that moved).
     std::uint32_t motionVectorMovedInstanceCount = 0;
     std::uint32_t droppedInstanceCount = 0;
@@ -666,6 +669,8 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     GiBoundingBoxFallback,
     MaterialShadingFallback,
     ReflectionProbeUnavailable,
+    // The forward path could not draw the world backdrop (no shader variant or no transient vertices).
+    SkyBackdropUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -727,6 +732,7 @@ struct SceneRenderDiagnostics {
     lhs.submittedDrawGroupCount += rhs.submittedDrawGroupCount;
     lhs.submittedDrawCallCount += rhs.submittedDrawCallCount;
     lhs.shadingModelColorDrawCallCount += rhs.shadingModelColorDrawCallCount;
+    lhs.sceneColorReadDrawCallCount += rhs.sceneColorReadDrawCallCount;
     lhs.motionVectorMovedInstanceCount += rhs.motionVectorMovedInstanceCount;
     lhs.droppedInstanceCount += rhs.droppedInstanceCount;
     lhs.meshPipelineCommandCount += rhs.meshPipelineCommandCount;

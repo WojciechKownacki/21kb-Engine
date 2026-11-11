@@ -186,6 +186,8 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "GI uses solid bounds for meshes without CPU triangles; prepare a mesh GI proxy";
     case render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected:
         return "GPU particle update rejected";
+    case render::SceneRenderDiagnosticKind::SkyBackdropUnavailable:
+        return "sky backdrop unavailable on the forward path";
     }
     return "unknown render diagnostic";
 }
