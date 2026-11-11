@@ -4,6 +4,7 @@
 #include "ParticleRuntimeDiagnostics.hpp"
 #include "GameScriptLog.hpp"
 #include "GameRuntimeDiagnostics.hpp"
+#include "LoadingScreen.hpp"
 #include "kb/net/SceneClient.hpp"
 
 #include "engine/input/InputHaptics.hpp"
@@ -48,6 +49,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -95,6 +97,8 @@ struct GameOptions {
     std::int32_t rendererType = -1;
     std::filesystem::path screenshotPath;
     std::uint32_t screenshotFrame = 0U;
+    // Where the run writes the frames the loading screen drew, as JSON.
+    std::filesystem::path loadingReportPath;
     // 0 runs until the player closes the window; a positive value bounds the
     // run so an automated check can drive the real executable to completion.
     std::uint32_t frameLimit = 0U;
@@ -120,6 +124,7 @@ Usage: kb_game [options]
   --uncapped                        no frame rate limit
   --screenshot-file=<file.png>      write frame --screenshot-frame as PNG (the file must not exist)
   --screenshot-frame=<n>            which frame to capture (within --frames)
+  --loading-report=<file.json>      write the progress of every loading screen frame as JSON
   --profile-file=<file>             per-frame timings (needs --frames=1..120000)
   --input-replay=<file>             replay recorded input and time (needs --headless --frames)
   --profile-fixed-step              fixed time step while profiling (needs --headless)
@@ -129,6 +134,15 @@ Usage: kb_game [options]
   --renderer=d3d11|d3d12|vulkan|opengl  graphics backend (default: the platform's)
   --help                            this text
 )";
+
+// The launch screen's background colour as 0xRRGGBB, the colour the window shows before its first frame.
+[[nodiscard]] std::uint32_t SplashBackgroundRgb(const kb::project::ProjectSplashSettings& splash) noexcept {
+    std::uint32_t rgb = 0U;
+    for (const float channel : splash.backgroundColor) {
+        rgb = (rgb << 8U) | static_cast<std::uint32_t>(std::lround(std::clamp(channel, 0.0F, 1.0F) * 255.0F));
+    }
+    return rgb;
+}
 
 struct GameFrameProfile {
     double wallFrameMilliseconds = 0.0;
@@ -197,7 +211,7 @@ std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::Wor
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 11U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 12U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
@@ -207,6 +221,7 @@ constexpr std::array<std::wstring_view, 11U> kDevelopmentSwitches{
     L"--profile-file=",
     L"--screenshot-file=",
     L"--screenshot-frame=",
+    L"--loading-report=",
     L"--renderer=",
     L"--input-replay=",
 };
@@ -336,6 +351,12 @@ constexpr std::array<std::wstring_view, 11U> kDevelopmentSwitches{
                 std::cerr << "kb_game: --screenshot-frame expects a positive frame count\n";
                 return false;
             }
+        } else if (HasPrefix(argument, L"--loading-report=")) {
+            if (argument.size() == 17U) {
+                std::cerr << "kb_game: --loading-report requires a path\n";
+                return false;
+            }
+            options.loadingReportPath = std::filesystem::path{std::wstring{argument.substr(17U)}};
         } else if (HasPrefix(argument, L"--renderer=")) {
             const auto value = argument.substr(11U);
             if (value == L"d3d11") options.rendererType = bgfx::RendererType::Direct3D11;
@@ -531,7 +552,8 @@ int RunGame(const GameOptions& options) {
             fullscreen,
             inputCollector,
             !options.headless,
-            display.resizable)) {
+            display.resizable,
+            SplashBackgroundRgb(display.splash))) {
         std::cerr << "kb_game: game window could not be created\n";
         return EXIT_FAILURE;
     }
@@ -595,6 +617,13 @@ int RunGame(const GameOptions& options) {
         renderer.SetDefaultSceneLightingConfig(lighting);
     }
 
+    // The loading screen is the first thing the window shows; the project's scene loads behind it.
+    kb::game::LoadingScreen loadingScreen;
+    if (!loadingScreen.Initialize(projectRuntime, std::cerr)) {
+        return EXIT_FAILURE;
+    }
+    loadingScreen.Report(renderer, 0.0F);
+
     const std::filesystem::path userStorageRoot = GameUserStorageRoot(projectRuntime);
     kb::script::ScriptModuleOptions scriptOptions;
     scriptOptions.runtimeOptions.userStorageRoot = userStorageRoot;
@@ -638,6 +667,10 @@ int RunGame(const GameOptions& options) {
             .runtimeModuleRoot = projectRuntime.projectRoot,
         });
     }
+    // The startup load and every later scene change report to the same screen.
+    scene.LoadedContent().SetLoadProgressObserver([&loadingScreen, &renderer](float fraction) {
+        loadingScreen.Report(renderer, fraction);
+    });
     if (!LoadGameProjectScene(projectRuntime, scene, scenePath, discoveredAssets, std::cerr)) {
         return EXIT_FAILURE;
     }
@@ -765,6 +798,8 @@ int RunGame(const GameOptions& options) {
         ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
               std::chrono::duration<double>(1.0 / static_cast<double>(display.frameRateCap)))
         : std::chrono::steady_clock::duration::zero();
+    // How many loading screen frames were drawn when the first frame of the scene was.
+    std::optional<std::size_t> loadingFramesBeforeScene;
     auto previousTick = std::chrono::steady_clock::now();
     const auto particleDeadline = previousTick + std::chrono::minutes(2);
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
@@ -788,6 +823,10 @@ int RunGame(const GameOptions& options) {
         std::uint32_t resizedHeight = 0U;
         if (window.ConsumeResize(resizedWidth, resizedHeight)) {
             renderer.OnResize(resizedWidth, resizedHeight);
+        }
+        // A load that has finished is held for the project's minimum display time before the scene shows.
+        if (loadingScreen.PresentHeld(renderer)) {
+            continue;
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -826,6 +865,9 @@ int RunGame(const GameOptions& options) {
             break;
         }
         const bool submitted = renderSceneSync.Submit(scene, renderer);
+        if (submitted && !loadingFramesBeforeScene.has_value()) {
+            loadingFramesBeforeScene = loadingScreen.DrawnFrames().size();
+        }
         const auto& renderStats = renderer.LastSceneSubmitStats();
         const bool renderErrors = renderer.LastSceneDiagnostics().HasErrors() ||
             renderStats.HasMissingResources() || renderStats.droppedInstanceCount != 0U;
@@ -1130,7 +1172,29 @@ int RunGame(const GameOptions& options) {
     network.reset();
     kb::input::InputHaptics::UnregisterBackend(scene, hapticsBackend);
     renderer.ReleaseScene(scene);
+    loadingScreen.Release(renderer);
     renderer.Shutdown();
+    if (!options.loadingReportPath.empty()) {
+        using kb::core::JsonValue;
+        JsonValue frames = JsonValue::MakeArray();
+        for (const kb::game::LoadingScreen::DrawnFrame& drawn : loadingScreen.DrawnFrames()) {
+            JsonValue frame = JsonValue::MakeObject();
+            frame.Set("progress", JsonValue::MakeNumber(drawn.progress));
+            frame.Set("held", JsonValue::MakeBool(drawn.held));
+            frames.Append(std::move(frame));
+        }
+        JsonValue report = JsonValue::MakeObject();
+        report.Set("loading_frames", std::move(frames));
+        report.Set("loading_frames_before_first_scene_frame",
+            JsonValue::MakeNumber(static_cast<double>(loadingFramesBeforeScene.value_or(0U))));
+        report.Set("scene_frames", JsonValue::MakeNumber(renderedFrames));
+        std::ofstream reportOutput(options.loadingReportPath, std::ios::trunc);
+        reportOutput << report.Dump() << '\n';
+        if (!reportOutput) {
+            std::cerr << "kb_game: loading report could not be written\n";
+            runtimeClean = false;
+        }
+    }
     if (!options.screenshotPath.empty()) {
         std::error_code error;
         const auto size = std::filesystem::file_size(options.screenshotPath, error);

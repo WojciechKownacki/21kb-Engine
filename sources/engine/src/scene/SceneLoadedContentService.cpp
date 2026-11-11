@@ -86,13 +86,50 @@ void QueueLifecycleEvent(SceneState& state, std::string name, std::uint64_t scen
     });
 }
 
+// Reports a load that replaces the scene to its observer: 0 when it starts and, whichever way it ends, 1.
+class ReplacingLoadProgress {
+public:
+    ReplacingLoadProgress(Scene& scene, bool replacing) noexcept : scene_(scene), replacing_(replacing) {
+        Report(0.0F);
+    }
+    ~ReplacingLoadProgress() {
+        Report(1.0F);
+    }
+    ReplacingLoadProgress(const ReplacingLoadProgress&) = delete;
+    ReplacingLoadProgress& operator=(const ReplacingLoadProgress&) = delete;
+
+    void Report(float fraction) {
+        if (replacing_) {
+            SceneLoadedContentService::ReportLoadProgress(scene_, fraction);
+        }
+    }
+
+private:
+    Scene& scene_;
+    bool replacing_;
+};
+
 } // namespace
 
+void SceneLoadedContentService::SetLoadProgressObserver(Scene& scene, SceneLoadProgressObserver observer) {
+    SceneAccess::State(scene).loadProgressObserver = std::move(observer);
+}
+
+void SceneLoadedContentService::ReportLoadProgress(Scene& scene, float fraction) {
+    const SceneState& state = SceneAccess::State(scene);
+    if (state.loadProgressObserver) {
+        state.loadProgressObserver(std::clamp(fraction, 0.0F, 1.0F));
+    }
+}
+
 std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesystem::path& path, bool additive) {
+    ReplacingLoadProgress progress{ scene, !additive };
     const SceneDocumentLoadResult loaded = LoadSceneDocument(scene, path);
     if (!loaded.succeeded) {
         return 0U;
     }
+    // The document is read; what is left is placing it in the scene.
+    progress.Report(0.5F);
 
     SceneState& state = SceneAccess::State(scene);
     // LIB-073: the document read from disk (above) succeeded, so an actual

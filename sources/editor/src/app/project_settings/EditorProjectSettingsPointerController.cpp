@@ -193,7 +193,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::WindowSizeOption:
         return ProjectSettingsTooltipKind::WindowSize;
     case ProjectSettingsHitKind::DisplayToggle:
-        return hit.index == 0 ? ProjectSettingsTooltipKind::Resizable : ProjectSettingsTooltipKind::VSync;
+        return hit.index == 0 ? ProjectSettingsTooltipKind::Resizable
+            : hit.index == 1 ? ProjectSettingsTooltipKind::VSync : ProjectSettingsTooltipKind::None;
     case ProjectSettingsHitKind::FrameRateOption:
         return ProjectSettingsTooltipKind::FrameRateLimit;
     case ProjectSettingsHitKind::AndroidGraphicsApiOption:
@@ -441,7 +442,10 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::WindowSizeOption:
     case ProjectSettingsHitKind::DisplayToggle:
     case ProjectSettingsHitKind::FrameRateOption:
-    case ProjectSettingsHitKind::AndroidGraphicsApiOption: {
+    case ProjectSettingsHitKind::AndroidGraphicsApiOption:
+    case ProjectSettingsHitKind::SplashScaleOption:
+    case ProjectSettingsHitKind::SplashColorOption:
+    case ProjectSettingsHitKind::SplashMinimumOption: {
         // A click on a label cell only answers the tooltip.
         kb::project::ProjectDisplaySettings display = sceneContext.ProjectConfiguration().display;
         if (hit.index >= 0) {
@@ -455,10 +459,19 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
                 display.windowHeight = kProjectSettingsWindowSizes[static_cast<std::size_t>(hit.index)].height;
                 break;
             case ProjectSettingsHitKind::DisplayToggle: {
-                bool& flag = hit.index == 0 ? display.resizable : display.vsync;
+                bool& flag = hit.index == 0 ? display.resizable : hit.index == 1 ? display.vsync : display.splash.showProgress;
                 flag = !flag;
                 break;
             }
+            case ProjectSettingsHitKind::SplashScaleOption:
+                display.splash.scale = static_cast<kb::project::ProjectSplashScale>(hit.index);
+                break;
+            case ProjectSettingsHitKind::SplashColorOption:
+                display.splash.backgroundColor = kProjectSettingsSplashColors[static_cast<std::size_t>(hit.index)];
+                break;
+            case ProjectSettingsHitKind::SplashMinimumOption:
+                display.splash.minimumDisplayMilliseconds = kProjectSettingsSplashMinimumTimes[static_cast<std::size_t>(hit.index)];
+                break;
             case ProjectSettingsHitKind::AndroidGraphicsApiOption:
                 display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(hit.index);
                 break;

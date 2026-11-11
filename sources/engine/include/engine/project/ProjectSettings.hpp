@@ -61,6 +61,34 @@ enum class ProjectAndroidGraphicsApi : std::uint8_t {
 
 inline constexpr std::uint8_t kProjectAndroidGraphicsApiCount = 3U;
 
+// How the launch screen fits its image into the window.
+enum class ProjectSplashScale : std::uint8_t {
+    // The whole image, in proportion, inside the window.
+    Fit = 0,
+    // The image in proportion, covering the whole window.
+    Fill,
+    // The image at its own size in the middle of the window.
+    Center,
+};
+
+inline constexpr std::uint8_t kProjectSplashScaleCount = 3U;
+inline constexpr std::uint32_t kProjectSplashMinimumMillisecondsMax = 60'000U;
+
+// The screen a shipped game shows while its scene loads: at startup, and again whenever a script changes scene.
+struct ProjectSplashSettings {
+    // Project asset path of the image ("/Game/..."); empty shows the engine's own mark.
+    std::string image;
+    // Colour behind the image, red, green and blue from 0 to 1.
+    std::array<float, 3U> backgroundColor{ 0.06F, 0.07F, 0.09F };
+    ProjectSplashScale scale = ProjectSplashScale::Fit;
+    // The least time the screen stays up once shown, in milliseconds. 0 hides it as soon as the scene is ready.
+    std::uint32_t minimumDisplayMilliseconds = 0U;
+    // Whether a bar under the image shows how far the load has got.
+    bool showProgress = true;
+
+    [[nodiscard]] bool operator==(const ProjectSplashSettings&) const noexcept = default;
+};
+
 // How the shipped game opens its window and paces its frames. The defaults are what the game did
 // before these were settings.
 struct ProjectDisplaySettings {
@@ -76,6 +104,7 @@ struct ProjectDisplaySettings {
     float renderScale = 1.0F;
     // The graphics API of the Android package; the other platforms ignore it.
     ProjectAndroidGraphicsApi androidGraphicsApi = ProjectAndroidGraphicsApi::Auto;
+    ProjectSplashSettings splash;
 
     [[nodiscard]] bool operator==(const ProjectDisplaySettings&) const noexcept = default;
 };

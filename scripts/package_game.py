@@ -1481,6 +1481,8 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         command.append(f"-PkbApplicationIcon={args.application_icon}")
     if getattr(args, "android_microphone", False):
         command.append("-PkbMicrophone=true")
+    if getattr(args, "android_splash_background", None):
+        command.append(f"-PkbSplashBackground=#{args.android_splash_background}")
     if getattr(args, "trust_anchor", None):
         command.append(f"-PkbTrustAnchor={args.trust_anchor}")
     run_checked(
@@ -2451,6 +2453,13 @@ def _receipt(
     }
 
 
+def _splash_background_color(value: str) -> str:
+    """Six hex digits (RRGGBB) naming the launch screen background colour."""
+    if re.fullmatch(r"[0-9A-Fa-f]{6}", value) is None:
+        raise argparse.ArgumentTypeError("expected six hex digits (RRGGBB)")
+    return value.upper()
+
+
 def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, required=True)
@@ -2495,6 +2504,7 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--android-min-sdk", type=int, default=23)
     parser.add_argument("--android-target-sdk", type=int, default=36)
     parser.add_argument("--android-microphone", action="store_true")
+    parser.add_argument("--android-splash-background", type=_splash_background_color)
     parser.add_argument("--android-keystore", type=Path)
     parser.add_argument("--android-key-alias", default="")
     parser.add_argument("--android-signing-broker", type=Path)

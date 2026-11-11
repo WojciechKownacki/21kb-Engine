@@ -30,6 +30,8 @@ public:
     // Destroys the loaded content's root (cascades to its whole hierarchy,
     // per LIB-070's finding) and removes its record. False if `id` names
     // no current record — never throws on a stale/unknown id.
+    static void SetLoadProgressObserver(Scene& scene, SceneLoadProgressObserver observer);
+    static void ReportLoadProgress(Scene& scene, float fraction);
     [[nodiscard]] static bool Unload(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::uint64_t Find(const Scene& scene, std::string_view name) noexcept;
     [[nodiscard]] static bool Exists(const Scene& scene, std::uint64_t id) noexcept;

@@ -612,6 +612,7 @@ public:
     std::vector<LoadedSceneRecord> loadedScenes;
     std::uint64_t nextLoadedSceneId = 1U;
     std::uint64_t activeLoadedSceneId = 0U;
+    std::function<void(float)> loadProgressObserver;
     // LIB-073: scene lifecycle notifications (SceneLoading/SceneLoaded/
     // SceneActivated/SceneUnloading/SceneUnloaded) queued by
     // SceneLoadedContentService — an "unambiguous command deferred to a

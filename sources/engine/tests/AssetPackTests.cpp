@@ -852,6 +852,37 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     std::vector<std::uint8_t> unknownApiBytes;
     Require(bake::EncodeRuntimeAssetManifest(unknownApi, unknownApiBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
         "A runtime manifest accepted an Android graphics API it does not know");
+    // The launch screen travels on its own flag, only while it differs from the defaults.
+    bake::RuntimeAssetManifest launch = first;
+    launch.settings.display.splash = { .image = "/Game/Branding/Logo.png", .backgroundColor = { 0.1F, 0.2F, 0.3F },
+        .scale = kb::project::ProjectSplashScale::Center, .minimumDisplayMilliseconds = 2000U, .showProgress = false };
+    std::vector<std::uint8_t> launchBytes;
+    bake::RuntimeAssetManifest launchDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(launch, launchBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            launchBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(launchBytes, launchDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            launchDecoded.settings == launch.settings &&
+            launchDecoded.settings.display.splash.image == "/Game/Branding/Logo.png" &&
+            launchDecoded.settings.display.splash.scale == kb::project::ProjectSplashScale::Center &&
+            launchDecoded.settings.display.splash.minimumDisplayMilliseconds == 2000U &&
+            !launchDecoded.settings.display.splash.showProgress,
+        "A runtime manifest lost the launch screen during the round trip");
+    bake::RuntimeAssetManifest launchEverything = glesEverything;
+    launchEverything.settings.display.splash = launch.settings.display.splash;
+    std::vector<std::uint8_t> launchEverythingBytes;
+    bake::RuntimeAssetManifest launchEverythingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(launchEverything, launchEverythingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            bake::DecodeRuntimeAssetManifest(launchEverythingBytes, launchEverythingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            launchEverythingDecoded.settings == launchEverything.settings,
+        "A runtime manifest lost a setting when the launch screen was written with the others");
+    bake::RuntimeAssetManifest badScale = first;
+    badScale.settings.display.splash.scale = static_cast<kb::project::ProjectSplashScale>(kb::project::kProjectSplashScaleCount);
+    bake::RuntimeAssetManifest badColor = first;
+    badColor.settings.display.splash.backgroundColor[1] = 1.5F;
+    std::vector<std::uint8_t> badLaunchBytes;
+    Require(bake::EncodeRuntimeAssetManifest(badScale, badLaunchBytes) == bake::RuntimeAssetManifestStatus::InvalidProject &&
+            bake::EncodeRuntimeAssetManifest(badColor, badLaunchBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a launch screen scale it does not know or a background colour outside 0 to 1");
     bake::RuntimeAssetManifest tooLoud = first;
     tooLoud.settings.masterVolume = 1.5F;
     std::vector<std::uint8_t> tooLoudBytes;

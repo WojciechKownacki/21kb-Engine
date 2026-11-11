@@ -129,6 +129,42 @@ void RunSingleRootNonAdditiveSceneOwnershipTest() {
     std::filesystem::remove(path);
 }
 
+// A load that replaces the scene reports its progress to the scene's observer: from 0 as it starts, through the
+// stage in between, to 1 -- also when it fails. An additive load, which streams content in beside the scene, reports nothing.
+void RunSceneLoadProgressObserverTest() {
+    using namespace kb::scene;
+    Scene source;
+    static_cast<void>(source.Entities().CreateObject(SceneObjectDesc{ .name = "Progress root" }));
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_load_progress_test.21kbscene";
+    kb::tests::Require(SceneDocumentService::Save(SceneDocumentService::Capture(source, "Progress world"), path),
+        "Load progress fixture could not be saved");
+
+    Scene target;
+    std::vector<float> reported;
+    target.LoadedContent().SetLoadProgressObserver([&reported](float fraction) { reported.push_back(fraction); });
+    kb::tests::Require(target.LoadedContent().Load(path, false) != 0U,
+        "Load progress fixture could not be loaded");
+    kb::tests::Require(reported.size() == 3U && reported.front() == 0.0F && reported.back() == 1.0F &&
+            reported[1] > 0.0F && reported[1] < 1.0F,
+        "A replacing load must report its start, a stage in between and its end");
+    reported.clear();
+    kb::tests::Require(target.LoadedContent().Load(std::filesystem::temp_directory_path() / "21kb_load_progress_missing.21kbscene", false) == 0U &&
+            reported.size() == 2U && reported.front() == 0.0F && reported.back() == 1.0F,
+        "A replacing load that fails must still report its end so a loading screen goes away");
+    reported.clear();
+    kb::tests::Require(target.LoadedContent().Load(path, true) != 0U && reported.empty(),
+        "An additive load must not report progress");
+    target.LoadedContent().ReportLoadProgress(7.0F);
+    target.LoadedContent().ReportLoadProgress(-1.0F);
+    kb::tests::Require(reported.size() == 2U && reported[0] == 1.0F && reported[1] == 0.0F,
+        "A reported fraction must be kept within 0 and 1");
+    target.LoadedContent().SetLoadProgressObserver({});
+    reported.clear();
+    kb::tests::Require(target.LoadedContent().Load(path, false) != 0U && reported.empty(),
+        "A scene with no observer must load without reporting");
+    std::filesystem::remove(path);
+}
+
 void RunLargeNonAdditiveSceneRootOwnershipTest(bool reportTiming = false) {
     using namespace kb::scene;
     constexpr std::size_t kSceneRoots = 2'048U;
@@ -583,6 +619,33 @@ void RunProjectDisplayAndSimulationSettingsTest() {
             clamped.simulation.gravity[0] == 0.0F && clamped.simulation.gravity[1] == -kb::project::kProjectGravityLimit &&
             clamped.simulation.timeScale == 0.0F,
         "a value outside its bounds must be brought back inside them and an unreadable one left at its default");
+
+    // The launch screen: shown by default with the engine's mark on a dark background and no minimum time; every
+    // choice round-trips, and a value outside its bounds is brought back inside them.
+    Require(defaults.display.splash.image.empty() && defaults.display.splash.scale == kb::project::ProjectSplashScale::Fit &&
+            defaults.display.splash.minimumDisplayMilliseconds == 0U && defaults.display.splash.showProgress,
+        "the launch screen must default to the engine mark, fitted, with no minimum time and a progress bar");
+    kb::project::ProjectSettings splashChosen = defaults;
+    splashChosen.display.splash = { .image = "/Game/Branding/Logo.png", .backgroundColor = { 0.25F, 0.5F, 0.75F },
+        .scale = kb::project::ProjectSplashScale::Fill, .minimumDisplayMilliseconds = 1500U, .showProgress = false };
+    Require(kb::project::ProjectSettingsStore::Save(file, splashChosen, error) &&
+            kb::project::ProjectSettingsStore::Load(file).settings == splashChosen,
+        "the settings file did not keep the launch screen");
+    splashChosen.display.splash.scale = kb::project::ProjectSplashScale::Center;
+    Require(kb::project::ProjectSettingsStore::Save(file, splashChosen, error) &&
+            kb::project::ProjectSettingsStore::Load(file).settings.display.splash.scale == kb::project::ProjectSplashScale::Center,
+        "the settings file did not keep the centered launch screen scale");
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Display]\nSplashScale=Stretched\nSplashMinimumMilliseconds=99999999\nSplashBackgroundRed=7\n"
+                  "SplashBackgroundGreen=-1\nSplashProgress=false\n";
+    }
+    const kb::project::ProjectSplashSettings splashClamped = kb::project::ProjectSettingsStore::Load(file).settings.display.splash;
+    Require(splashClamped.scale == kb::project::ProjectSplashScale::Fit &&
+            splashClamped.minimumDisplayMilliseconds == kb::project::kProjectSplashMinimumMillisecondsMax &&
+            splashClamped.backgroundColor[0] == 1.0F && splashClamped.backgroundColor[1] == 0.0F &&
+            splashClamped.backgroundColor[2] == defaults.display.splash.backgroundColor[2] && !splashClamped.showProgress,
+        "a launch screen value outside its bounds must be brought back inside them and an unknown scale left at its default");
     CleanTempRoot();
 }
 
@@ -2122,6 +2185,7 @@ void RunLargeNonAdditiveSceneTransitionBenchmark() {
 void RunProjectSceneTests() {
     RunSceneAssetIntegrityBlockReadTest();
     RunSingleRootNonAdditiveSceneOwnershipTest();
+    RunSceneLoadProgressObserverTest();
     RunMultiRootSceneUnloadOwnershipTest();
     RunLargeNonAdditiveSceneRootOwnershipTest();
     RunIniDocumentRoundTripTest();

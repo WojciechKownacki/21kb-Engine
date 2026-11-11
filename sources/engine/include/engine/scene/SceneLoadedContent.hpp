@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,11 @@ namespace kb::scene {
 class Scene;
 
 enum class SceneLoadStatus : std::uint8_t { Unknown, Loading, Creating, Ready, Unloading, Failed, Cancelled };
+
+// Told how far a load that replaces the scene has got: 0 as it starts, rising as its stages finish, 1 once it has
+// ended, successfully or not. A host shows its loading screen from it. It runs on the thread that loads and must
+// not throw.
+using SceneLoadProgressObserver = std::function<void(float)>;
 
 struct SceneStreamingSettings {
     std::size_t maxPendingLoads = 8U;
@@ -90,6 +96,11 @@ public:
     [[nodiscard]] std::string Error(std::uint64_t id) const;
     void ConfigureStreaming(SceneStreamingSettings settings);
     [[nodiscard]] SceneStreamingStats StreamingStats() const noexcept;
+    // One observer per scene; an empty one removes it. Scene.Load without `additive` reports to it, and so does
+    // a host that loads its startup scene by other means, through ReportLoadProgress.
+    void SetLoadProgressObserver(SceneLoadProgressObserver observer);
+    // Passes `fraction`, kept within 0 to 1, to the observer, if there is one.
+    void ReportLoadProgress(float fraction);
     [[nodiscard]] bool Unload(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t Find(std::string_view name) const noexcept;
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;

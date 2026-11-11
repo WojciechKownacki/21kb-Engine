@@ -7,6 +7,7 @@
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptModule.hpp"
@@ -72,6 +73,15 @@ bool PackagedGameRuntime::Initialize(
         return false;
     }
 
+    // The loading screen is the first frame; the modules and the scene load behind it.
+    auto loadingScreen = std::make_unique<LoadingScreen>();
+    if (!loadingScreen->Initialize(project, diagnostics)) {
+        return false;
+    }
+    activeRenderer_ = &renderer;
+    loadingScreen->Report(renderer, 0.0F);
+    loadingScreen_ = std::move(loadingScreen);
+
     PackagedRuntimeModules staticModules{};
     std::string moduleError;
     if (!CreatePackagedRuntimeModules(
@@ -86,6 +96,12 @@ bool PackagedGameRuntime::Initialize(
         std::move(staticModules.modules),
         kb::ecs::WorldConfig{},
         kb::scene::SceneMode::Runtime);
+    // The startup load and every later scene change report to the same screen.
+    scene->LoadedContent().SetLoadProgressObserver([this](float fraction) {
+        if (loadingScreen_ != nullptr && activeRenderer_ != nullptr) {
+            loadingScreen_->Report(*activeRenderer_, fraction);
+        }
+    });
     scriptActive_ = scene->IsModuleActive("Script");
     if (scriptActive_ &&
         (script_ == nullptr || !script_->Succeeded() || script_->Host() == nullptr)) {
@@ -138,6 +154,14 @@ bool PackagedGameRuntime::Tick(
     }
     if (!runtimeClean_ || scene_ == nullptr || scene_->Runtime().ShouldQuit()) {
         return false;
+    }
+    activeRenderer_ = &renderer;
+    // A load that has finished is held for the project's minimum display time before the scene shows.
+    if (loadingScreen_ != nullptr && loadingScreen_->PresentHeld(renderer)) {
+        if (frameSubmitted != nullptr) {
+            *frameSubmitted = true;
+        }
+        return true;
     }
     static_cast<void>(scene_->UI().SetViewport(
         static_cast<float>(renderer.BackbufferWidth()),
@@ -192,6 +216,9 @@ void PackagedGameRuntime::ReleaseRenderResources(kb::render::Renderer& renderer)
     if (scene_ != nullptr && renderer.IsInitialized()) {
         renderer.ReleaseScene(*scene_);
     }
+    if (loadingScreen_ != nullptr) {
+        loadingScreen_->Release(renderer);
+    }
     renderSceneSync_.Reset();
     lightingApplied_ = false;
 }
@@ -214,6 +241,8 @@ bool PackagedGameRuntime::Shutdown(
     ReleaseRenderResources(renderer);
     network_.reset();
     scene_.reset();
+    loadingScreen_.reset();
+    activeRenderer_ = nullptr;
     networkStarted_ = 0U;
     ticked_ = false;
     script_ = nullptr;

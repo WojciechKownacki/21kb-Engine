@@ -71,6 +71,22 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     return fallback;
 }
 
+[[nodiscard]] std::string_view SplashScaleName(ProjectSplashScale scale) noexcept {
+    switch (scale) {
+    case ProjectSplashScale::Fill: return "Fill";
+    case ProjectSplashScale::Center: return "Center";
+    case ProjectSplashScale::Fit:
+    default: return "Fit";
+    }
+}
+
+[[nodiscard]] ProjectSplashScale ParseSplashScale(std::string_view name, ProjectSplashScale fallback) noexcept {
+    if (name == "Fit") return ProjectSplashScale::Fit;
+    if (name == "Fill") return ProjectSplashScale::Fill;
+    if (name == "Center") return ProjectSplashScale::Center;
+    return fallback;
+}
+
 // An integer setting kept inside its bounds; a missing or unreadable key keeps the default.
 [[nodiscard]] std::uint32_t ReadBounded(
     const config::IniDocument& document, std::string_view section, std::string_view key,
@@ -268,6 +284,19 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     display.androidGraphicsApi = ParseAndroidGraphicsApi(
         ReadString(document, kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(defaults.display.androidGraphicsApi)}),
         defaults.display.androidGraphicsApi);
+    ProjectSplashSettings& splash = display.splash;
+    splash.image = ReadString(document, kDisplay, "SplashImage", defaults.display.splash.image);
+    constexpr std::array<std::string_view, 3U> splashColorKeys{ "SplashBackgroundRed", "SplashBackgroundGreen", "SplashBackgroundBlue" };
+    for (std::size_t channel = 0U; channel < splashColorKeys.size(); ++channel) {
+        splash.backgroundColor[channel] = ReadBoundedFloat(document, kDisplay, splashColorKeys[channel],
+            defaults.display.splash.backgroundColor[channel], 0.0F, 1.0F);
+    }
+    splash.scale = ParseSplashScale(
+        ReadString(document, kDisplay, "SplashScale", std::string{SplashScaleName(defaults.display.splash.scale)}),
+        defaults.display.splash.scale);
+    splash.minimumDisplayMilliseconds = ReadBounded(document, kDisplay, "SplashMinimumMilliseconds",
+        defaults.display.splash.minimumDisplayMilliseconds, 0U, kProjectSplashMinimumMillisecondsMax);
+    splash.showProgress = document.GetBool(kDisplay, "SplashProgress").value_or(defaults.display.splash.showProgress);
     result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
     result.settings.microphone = document.GetBool(kAudio, "Microphone").value_or(defaults.microphone);
     const std::int64_t tagCount = std::clamp<std::int64_t>(
@@ -350,6 +379,14 @@ bool ProjectSettingsStore::Save(
     document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
     document.SetFloat(kDisplay, "RenderScale", settings.display.renderScale);
     document.SetString(kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(settings.display.androidGraphicsApi)});
+    document.SetString(kDisplay, "SplashImage", settings.display.splash.image);
+    constexpr std::array<std::string_view, 3U> splashColorKeys{ "SplashBackgroundRed", "SplashBackgroundGreen", "SplashBackgroundBlue" };
+    for (std::size_t channel = 0U; channel < splashColorKeys.size(); ++channel) {
+        document.SetFloat(kDisplay, splashColorKeys[channel], settings.display.splash.backgroundColor[channel]);
+    }
+    document.SetString(kDisplay, "SplashScale", std::string{SplashScaleName(settings.display.splash.scale)});
+    document.SetInt(kDisplay, "SplashMinimumMilliseconds", settings.display.splash.minimumDisplayMilliseconds);
+    document.SetBool(kDisplay, "SplashProgress", settings.display.splash.showProgress);
     document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
     document.SetBool(kAudio, "Microphone", settings.microphone);
     // The tags as a count and one key each; keys a shorter list leaves behind are removed.

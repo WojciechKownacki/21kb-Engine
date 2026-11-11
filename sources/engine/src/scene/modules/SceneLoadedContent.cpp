@@ -43,6 +43,13 @@ SceneLoadStatus SceneLoadedContent::Status(std::uint64_t id) const noexcept { re
 std::string SceneLoadedContent::Error(std::uint64_t id) const { return SceneStreamingService::Error(scene_, id); }
 void SceneLoadedContent::ConfigureStreaming(SceneStreamingSettings settings) { SceneStreamingService::Configure(scene_, settings); }
 SceneStreamingStats SceneLoadedContent::StreamingStats() const noexcept { return SceneStreamingService::Stats(scene_); }
+void SceneLoadedContent::SetLoadProgressObserver(SceneLoadProgressObserver observer) {
+    SceneLoadedContentService::SetLoadProgressObserver(scene_, std::move(observer));
+}
+
+void SceneLoadedContent::ReportLoadProgress(float fraction) {
+    SceneLoadedContentService::ReportLoadProgress(scene_, fraction);
+}
 
 bool SceneLoadedContent::Unload(std::uint64_t id) noexcept {
     return SceneLoadedContentService::Unload(scene_, id);

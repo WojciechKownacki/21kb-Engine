@@ -16,6 +16,7 @@
 #include "engine/security/ReleaseManifest.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -712,6 +713,8 @@ bool LoadGameProjectScene(
     std::filesystem::path& loadedScenePath,
     std::size_t& discoveredAssets,
     std::ostream& err) {
+    // The stages of the load, reported to the scene's load observer as they finish so a loading screen can follow.
+    scene.LoadedContent().ReportLoadProgress(0.0F);
     for (const std::string& warning : scene.ModuleWarnings()) {
         err << "module warning: " << warning << '\n';
     }
@@ -730,6 +733,7 @@ bool LoadGameProjectScene(
     if (!RegisterGameAssetLoaders(scene, err)) {
         return false;
     }
+    scene.LoadedContent().ReportLoadProgress(0.1F);
     if (runtime.IsPackaged()) {
         if (!scene.Assets().Manager().MountRuntimePack(runtime.assetPack)) {
             err << "runtime package registry could not be mounted: "
@@ -744,6 +748,7 @@ bool LoadGameProjectScene(
         }
         discoveredAssets = scene.Assets().Discover();
     }
+    scene.LoadedContent().ReportLoadProgress(0.3F);
     if (!runtime.physicsLayersAsset.empty() &&
         !kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, runtime.physicsLayersAsset)) {
         err << "project physics layers could not be applied: " << runtime.physicsLayersAsset << '\n';
@@ -753,6 +758,7 @@ bool LoadGameProjectScene(
     // The master gain, and the tags every scene of the project starts from, before any scene is loaded.
     static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, runtime.masterVolume));
     static_cast<void>(scene.Tags().SetProjectDefinitions(runtime.tags));
+    scene.LoadedContent().ReportLoadProgress(0.4F);
 
     if (!runtime.sceneReference.empty() && runtime.sceneReference.front() == '/') {
         const kb::assets::AssetMetadata* metadata =
@@ -763,6 +769,8 @@ bool LoadGameProjectScene(
         }
         const kb::assets::AssetHandle<kb::scene::SceneDocument> document =
             scene.Assets().Manager().Load<kb::scene::SceneDocument>(metadata->id);
+        // The document is read and decoded; what is left is placing it in the scene.
+        scene.LoadedContent().ReportLoadProgress(0.6F);
         if (!document.IsLoaded() ||
             !kb::scene::SceneDocumentService::LoadIntoScene(scene, *document)) {
             err << "project scene could not be loaded: " << runtime.sceneReference;
@@ -773,6 +781,7 @@ bool LoadGameProjectScene(
             err << '\n';
             return false;
         }
+        scene.LoadedContent().ReportLoadProgress(0.9F);
         // Instantiation has transferred the scene data to its runtime owners.
         // Retain the decoded document only while an external handle still needs it,
         // matching the lifetime of documents loaded by scene streaming.
@@ -808,6 +817,7 @@ bool LoadGameProjectScene(
             return false;
         }
     }
+    scene.LoadedContent().ReportLoadProgress(1.0F);
     return true;
 }
 

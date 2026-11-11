@@ -35,7 +35,8 @@ SETTINGS = {
     'Project.Android': {'ApplicationId': 'com.kbengine.packagesample', 'VersionCode': '7', 'Label': 'Package Sample'},
     'Project.BuildScenes': {'Count': '1', 'Scene0': '/Game/Scenes/Second.21kbscene'},
     'Project.Display': {'WindowWidth': '1600', 'WindowHeight': '900', 'WindowMode': 'BorderlessFullscreen',
-                        'Resizable': '0', 'VSync': '0', 'FrameRateCap': '90'},
+                        'Resizable': '0', 'VSync': '0', 'FrameRateCap': '90', 'SplashImage': '/Game/Textures/Splash.21kb',
+                        'SplashScale': 'Fill', 'SplashMinimumMilliseconds': '250', 'SplashBackgroundRed': '0.5'},
     'Project.Physics': {'FixedStepHz': '120', 'GravityY': '-3.7'},
     'Project.Time': {'TimeScale': '0.5'},
     'Project.Audio': {'MasterVolume': '0.25', 'Microphone': '1'},
@@ -123,6 +124,10 @@ class Context:
         source = self.root / 'Swatch.png'
         source.write_bytes(png(16, 16, (200, 60, 30, 255)))
         self.run([cli, 'import', '--project', self.project, '--destination', '/Game/Textures', source])
+        # The launch screen image is named by the settings only, so nothing else makes the cook keep it.
+        splash = self.root / 'Splash.png'
+        splash.write_bytes(png(32, 16, (20, 40, 90, 255)))
+        self.run([cli, 'import', '--project', self.project, '--destination', '/Game/Textures', splash])
         # Only what the startup scene reaches is cooked, so the texture hangs on a material on a cube.
         self.run([cli, 'material-new', '--project', self.project, '--name', 'Swatch',
                   '--set', 'Base Color Texture=/Game/Textures/Swatch.21kb'])

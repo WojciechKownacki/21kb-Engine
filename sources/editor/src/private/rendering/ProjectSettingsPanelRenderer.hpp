@@ -42,6 +42,9 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     DisplayToggle,        // Display: Resizable (0) or VSync (1).
     FrameRateOption,      // Display: one of the frame rate limits; -1 over the label.
     AndroidGraphicsApiOption, // Display: Auto (0), Vulkan (1) or OpenGL ES (2); -1 over the label.
+    SplashScaleOption,    // Display: how the launch screen image fits: Fit (0), Fill (1) or Center (2); -1 over the label.
+    SplashColorOption,    // Display: one of the launch screen background colours; -1 over the label.
+    SplashMinimumOption,  // Display: one of the launch screen minimum display times; -1 over the label.
     SimulationStepper,    // Physics: index = stepper * 2 + (0 minus, 1 plus); stepper 0 fixed step, 1..3 gravity, 4 time scale. -1 over a label.
     GravityPresetOption,  // Physics: one of the gravity presets; -1 over the label.
     NumberField,          // A value cell that takes a typed number (index = ProjectSettingsNumber); -1 over its label.
@@ -93,6 +96,11 @@ inline constexpr std::array<ProjectSettingsWindowSize, 4U> kProjectSettingsWindo
     { 1280U, 720U }, { 1600U, 900U }, { 1920U, 1080U }, { 2560U, 1440U } } };
 // 0 is "no limit".
 inline constexpr std::array<std::uint32_t, 5U> kProjectSettingsFrameRates{ 0U, 30U, 60U, 120U, 144U };
+// The launch screen background colours and the minimum display times (milliseconds) the Display page offers.
+inline constexpr std::array<std::array<float, 3U>, 6U> kProjectSettingsSplashColors{ {
+    { 0.06F, 0.07F, 0.09F }, { 0.0F, 0.0F, 0.0F }, { 1.0F, 1.0F, 1.0F },
+    { 0.10F, 0.20F, 0.45F }, { 0.10F, 0.30F, 0.20F }, { 0.45F, 0.12F, 0.15F } } };
+inline constexpr std::array<std::uint32_t, 5U> kProjectSettingsSplashMinimumTimes{ 0U, 500U, 1000U, 2000U, 3000U };
 // Earth, the Moon and none.
 inline constexpr std::array<std::array<float, 3U>, 3U> kProjectSettingsGravityPresets{ {
     { 0.0F, -9.81F, 0.0F }, { 0.0F, -1.62F, 0.0F }, { 0.0F, 0.0F, 0.0F } } };

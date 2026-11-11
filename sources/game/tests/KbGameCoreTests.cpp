@@ -2991,6 +2991,16 @@ void RunPackageContractCheck(
         Require(!sourceFormat || baked, "The package ships a source image or model that was not cooked");
     }
     Require(textures != 0U, "The package holds no cooked texture");
+    // The launch screen image is named by the settings alone, so only the cook's own roots keep it: it must be there, cooked.
+    const std::string& splashImage = manifest.settings.display.splash.image;
+    if (!splashImage.empty()) {
+        const auto splash = std::ranges::find(manifest.assets, splashImage, &bake::RuntimeAssetManifestEntry::virtualPath);
+        Require(splash != manifest.assets.end() &&
+                std::ranges::any_of(splash->artifacts, [](const bake::RuntimeArtifactReference& artifact) {
+                    return artifact.encoding == bake::RuntimeArtifactEncoding::BakedTexture;
+                }),
+            "The package does not hold the launch screen image as a cooked texture");
+    }
     // The engine's own shaders are auxiliary files: /Engine/Shaders/<platform>/<backend>/<name>.bin.
     constexpr std::string_view kShaderRoot = "/Engine/Shaders/";
     for (const bake::RuntimeAuxiliaryFileEntry& file : manifest.auxiliaryFiles) {

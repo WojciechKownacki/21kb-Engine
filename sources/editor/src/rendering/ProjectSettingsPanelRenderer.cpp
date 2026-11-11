@@ -539,6 +539,13 @@ void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const REC
     DrawText(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled), 11);
 }
 
+// The label of a setting that has no tooltip or description line of its own.
+void DrawPlainSetting(HDC dc, const RECT& label, std::string_view text, const EditorTheme& theme) {
+    const RECT room{ label.left, label.top, label.right - 8, label.bottom };
+    DrawText(dc, room, text, Color(theme.textSecondary),
+        EditorDialogStyle::FittingSize(dc, text, static_cast<int>(room.right - room.left), 12, FW_NORMAL), FW_NORMAL);
+}
+
 void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const EditorProjectSettingsState& state) {
     const TooltipContent tooltip = TooltipForKind(state.TooltipKind());
     if (tooltip.title.empty()) {
@@ -726,6 +733,27 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
     DrawOptionButton(dc, rects.androidGraphicsApiButton[0], theme, EditorText("projectSettings.backendAuto", "Auto"), display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Auto);
     DrawOptionButton(dc, rects.androidGraphicsApiButton[1], theme, "Vulkan", display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Vulkan);
     DrawOptionButton(dc, rects.androidGraphicsApiButton[2], theme, "OpenGL ES", display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::OpenGLES);
+
+    // The launch screen a shipped game shows while its scene loads.
+    const kb::project::ProjectSplashSettings& splash = display.splash;
+    DrawPlainSetting(dc, rects.displayLabel[7], EditorText("projectSettings.splashScale", "Launch Screen Scale"), theme);
+    DrawOptionButton(dc, rects.splashScaleButton[0], theme, EditorText("projectSettings.splashScaleFit", "Fit"), splash.scale == kb::project::ProjectSplashScale::Fit);
+    DrawOptionButton(dc, rects.splashScaleButton[1], theme, EditorText("projectSettings.splashScaleFill", "Fill"), splash.scale == kb::project::ProjectSplashScale::Fill);
+    DrawOptionButton(dc, rects.splashScaleButton[2], theme, EditorText("projectSettings.splashScaleCenter", "Center"), splash.scale == kb::project::ProjectSplashScale::Center);
+    DrawPlainSetting(dc, rects.displayLabel[8], EditorText("projectSettings.splashBackground", "Launch Screen Background"), theme);
+    for (std::size_t index = 0U; index < kProjectSettingsSplashColors.size(); ++index) {
+        const std::array<float, 3U>& color = kProjectSettingsSplashColors[index];
+        const COLORREF fill = RGB(std::lround(color[0] * 255.0F), std::lround(color[1] * 255.0F), std::lround(color[2] * 255.0F));
+        GdiDrawing::DrawSharpFrame(dc, rects.splashColorButton[index], fill,
+            Color(splash.backgroundColor == color ? theme.accent : theme.borderPanel));
+    }
+    DrawPlainSetting(dc, rects.displayLabel[9], EditorText("projectSettings.splashMinimumTime", "Launch Screen Minimum Time (ms)"), theme);
+    for (std::size_t index = 0U; index < kProjectSettingsSplashMinimumTimes.size(); ++index) {
+        const std::uint32_t milliseconds = kProjectSettingsSplashMinimumTimes[index];
+        DrawOptionButton(dc, rects.splashMinimumButton[index], theme, std::to_string(milliseconds), splash.minimumDisplayMilliseconds == milliseconds);
+    }
+    DrawPlainSetting(dc, rects.displayLabel[10], EditorText("projectSettings.splashProgress", "Launch Screen Progress Bar"), theme);
+    DrawCheckbox(dc, rects.splashProgressCheckbox, theme, splash.showProgress);
 }
 
 void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -1008,6 +1036,24 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
             if (PointInRect(rects.frameRateButton[index], x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::FrameRateOption, .index = index, .rect = rects.frameRateButton[index] };
             }
+        }
+        for (int index = 0; index < 3; ++index) {
+            if (PointInRect(rects.splashScaleButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SplashScaleOption, .index = index, .rect = rects.splashScaleButton[index] };
+            }
+        }
+        for (int index = 0; index < 6; ++index) {
+            if (PointInRect(rects.splashColorButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SplashColorOption, .index = index, .rect = rects.splashColorButton[index] };
+            }
+        }
+        for (int index = 0; index < 5; ++index) {
+            if (PointInRect(rects.splashMinimumButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SplashMinimumOption, .index = index, .rect = rects.splashMinimumButton[index] };
+            }
+        }
+        if (PointInRect(rects.splashProgressCheckbox, x, y) || PointInRect(rects.displayLabel[10], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = 2, .rect = rects.splashProgressCheckbox };
         }
         const std::array<std::pair<const RECT*, ProjectSettingsNumber>, 4U> cells{ {
             { &rects.windowWidthValue, ProjectSettingsNumber::WindowWidth },
@@ -1337,6 +1383,16 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
         }
         if (PointInRect(rects.displayLabel[6], x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::AndroidGraphicsApiOption, .index = -1, .rect = rects.displayLabel[6] };
+        }
+        constexpr std::array<ProjectSettingsHitKind, 3> splashKinds{ ProjectSettingsHitKind::SplashScaleOption,
+            ProjectSettingsHitKind::SplashColorOption, ProjectSettingsHitKind::SplashMinimumOption };
+        for (std::size_t row = 0U; row < splashKinds.size(); ++row) {
+            if (PointInRect(rects.displayLabel[7U + row], x, y)) {
+                return Hit{ .kind = splashKinds[row], .index = -1, .rect = rects.displayLabel[7U + row] };
+            }
+        }
+        if (PointInRect(rects.displayLabel[10], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = 2, .rect = rects.displayLabel[10] };
         }
         for (int row = 0; row < 5; ++row) {
             if (PointInRect(rects.displayLabel[row], x, y)) {

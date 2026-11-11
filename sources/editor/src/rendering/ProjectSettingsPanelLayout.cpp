@@ -161,11 +161,15 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
             buttonLeft += buttonWidth + kButtonGap;
         }
     };
-    for (int row = 0; row < 7; ++row) {
+    for (int row = 0; row < 11; ++row) {
         rects.displayLabel[row] = RECT{ left, rowTopAt(row), left + kLabelWidth, rowTopAt(row) + kRowHeight };
     }
     buttonRow(rects.windowModeButton, 2, rowTopAt(0), kModeButtonWidth);
     buttonRow(rects.androidGraphicsApiButton, 3, rowTopAt(6), kModeButtonWidth);
+    buttonRow(rects.splashScaleButton, 3, rowTopAt(7), kModeButtonWidth);
+    buttonRow(rects.splashColorButton, 6, rowTopAt(8), kRateButtonWidth);
+    buttonRow(rects.splashMinimumButton, 5, rowTopAt(9), kRateButtonWidth);
+    rects.splashProgressCheckbox = CheckboxForRow(left, rowTopAt(10));
     buttonRow(rects.windowSizeButton, 4, rowTopAt(1), kSizeButtonWidth);
     rects.resizableCheckbox = CheckboxForRow(left, rowTopAt(2));
     rects.vsyncCheckbox = CheckboxForRow(left, rowTopAt(3));

@@ -17,6 +17,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <string>
 #include <system_error>
@@ -491,6 +492,12 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         request.androidVersionCode = projectConfig_.androidVersionCode;
         request.androidLabel = Trimmed(projectConfig_.androidLabel);
         request.androidMicrophone = projectConfig_.microphone;
+        for (const float channel : projectConfig_.display.splash.backgroundColor) {
+            static constexpr char kHex[] = "0123456789ABCDEF";
+            const auto value = static_cast<unsigned>(std::lround(std::clamp(channel, 0.0F, 1.0F) * 255.0F));
+            request.androidSplashBackground += kHex[value >> 4U];
+            request.androidSplashBackground += kHex[value & 15U];
+        }
         request.androidKeystore = targetSettings.androidKeystore;
         request.androidKeyAlias = Trimmed(targetSettings.androidKeyAlias);
         request.androidFormat = targetSettings.androidFormat;

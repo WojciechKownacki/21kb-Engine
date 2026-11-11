@@ -442,6 +442,7 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
         appendText(L"--android-version-code", std::to_string(request.androidVersionCode));
         appendText(L"--android-label", request.androidLabel);
         if (request.androidMicrophone) arguments.emplace_back(L"--android-microphone");
+        if (!request.androidSplashBackground.empty()) appendText(L"--android-splash-background", request.androidSplashBackground);
         appendText(L"--android-format", request.androidFormat);
         if (request.androidFormat == "aab") append(L"--android-bundletool", request.androidBundletool);
         appendText(L"--android-min-sdk", "23");

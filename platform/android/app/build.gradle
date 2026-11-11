@@ -140,6 +140,15 @@ if (requestedTargetProfile.isPresent()) {
 }
 
 def generatedRuntimeResources = layout.buildDirectory.get().dir("generated/runtime-resources").asFile
+// The window shows the launch screen's background colour from the first moment, so the handover to the loading
+// screen the game draws does not flash another colour.
+def splashBackground = providers.gradleProperty("kbSplashBackground").orElse("#0F1217").get().trim()
+if (!(splashBackground ==~ /#[0-9A-Fa-f]{6}/)) {
+    throw new GradleException("kbSplashBackground must be a #RRGGBB colour")
+}
+File splashColors = new File(generatedRuntimeResources, "values/kb_splash.xml")
+splashColors.parentFile.mkdirs()
+splashColors.setText("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n    <color name=\"kb_splash_background\">${splashBackground}</color>\n</resources>\n", "UTF-8")
 // The record-audio permission is declared only when the project records from the microphone: the package is built
 // from the source manifest plus that one line.
 File sourceManifest = file("src/main/AndroidManifest.xml")

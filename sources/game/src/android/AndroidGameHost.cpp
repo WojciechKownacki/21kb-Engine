@@ -1,5 +1,6 @@
 #include "GameProjectRuntime.hpp"
 #include "GameProjectLighting.hpp"
+#include "LoadingScreen.hpp"
 #include "AndroidGraphicsApi.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
@@ -11,6 +12,7 @@
 #include "AndroidWindowInsets.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/audio/AudioCapture.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -480,19 +482,15 @@ public:
             }
             return false;
         }
-        std::filesystem::path scenePath;
-        std::size_t discoveredAssets = 0U;
-        if (!kb::game::LoadGameProjectScene(
-                projectRuntime_, *scene_, scenePath, discoveredAssets, projectError)) {
+        // The window shows the launch screen's colour until the renderer is up. The scene loads once it is, behind the
+        // loading screen, which every later scene change reports to as well.
+        if (!loadingScreen_.Initialize(projectRuntime_, projectError)) {
             LogError(projectError.str());
             return false;
         }
-        std::ostringstream ready;
-        ready << "Android project loaded: scene=" << scenePath.generic_string()
-              << " entities=" << scene_->Entities().Count()
-              << " assets=" << discoveredAssets
-              << " modules=" << scene_->ActiveModuleCount();
-        LogInfo(ready.str());
+        scene_->LoadedContent().SetLoadProgressObserver([this](float fraction) {
+            if (renderer_.IsInitialized()) loadingScreen_.Report(renderer_, fraction);
+        });
 
         app_.userData = this;
         app_.onAppCmd = &AndroidGameHost::OnAppCommand;
@@ -835,11 +833,36 @@ private:
         }
     }
 
+    // Loads the project's startup scene behind the loading screen; the first frame the renderer can draw.
+    [[nodiscard]] bool LoadStartupScene() {
+        loadingScreen_.Report(renderer_, 0.0F);
+        std::filesystem::path scenePath;
+        std::size_t discoveredAssets = 0U;
+        std::ostringstream projectError;
+        if (!kb::game::LoadGameProjectScene(
+                projectRuntime_, *scene_, scenePath, discoveredAssets, projectError)) {
+            LogError(projectError.str());
+            failed_ = true;
+            return false;
+        }
+        std::ostringstream ready;
+        ready << "Android project loaded: scene=" << scenePath.generic_string()
+              << " entities=" << scene_->Entities().Count()
+              << " assets=" << discoveredAssets
+              << " modules=" << scene_->ActiveModuleCount();
+        LogInfo(ready.str());
+        startupSceneLoaded_ = true;
+        return true;
+    }
+
     void RenderFrame() {
         if (scene_ == nullptr) {
             failed_ = true;
             return;
         }
+        if (!startupSceneLoaded_ && !LoadStartupScene()) return;
+        // A load that has finished is held for the project's minimum display time before the scene shows.
+        if (loadingScreen_.PresentHeld(renderer_)) return;
         const auto now = std::chrono::steady_clock::now();
         const float deltaSeconds = tickClockReady_
             ? kb::game::RuntimeDeltaSeconds(previousTick_, now)
@@ -960,6 +983,7 @@ private:
             if (scene_ != nullptr) {
                 renderer_.ReleaseScene(*scene_);
             }
+            loadingScreen_.Release(renderer_);
             renderer_.Shutdown();
             const auto resources = renderer_.RuntimeResourceStats();
             std::ostringstream message;
@@ -1021,6 +1045,8 @@ private:
     AndroidRenderSurface surface_;
     kb::render::Renderer renderer_;
     kb::game::RuntimeSceneFrameSync renderSceneSync_;
+    kb::game::LoadingScreen loadingScreen_;
+    bool startupSceneLoaded_ = false;
     std::string storageRoot_;
     std::string targetProfileId_;
     bool resumed_ = false;

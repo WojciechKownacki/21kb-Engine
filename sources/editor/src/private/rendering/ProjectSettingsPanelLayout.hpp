@@ -60,8 +60,12 @@ struct ProjectSettingsPanelLayoutRects {
     RECT qualityLabel[4]{};
     RECT qualityButton[4][5]{};
     // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit, render scale,
-    // Android graphics API.
-    RECT displayLabel[7]{};
+    // Android graphics API, then the launch screen: image scale, background colour, minimum time, progress bar.
+    RECT displayLabel[11]{};
+    RECT splashScaleButton[3]{};
+    RECT splashColorButton[6]{};
+    RECT splashMinimumButton[5]{};
+    RECT splashProgressCheckbox{};
     RECT windowModeButton[2]{};
     RECT androidGraphicsApiButton[3]{};
     RECT windowSizeButton[4]{};

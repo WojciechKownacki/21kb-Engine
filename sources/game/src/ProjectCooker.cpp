@@ -1676,7 +1676,8 @@ struct LinkedNativeModule {
     }
     if ((settings.inputEnabled &&
             !addRoot("input mapping context", settings.inputMappingContext, false, "InputMappingContext")) ||
-        !addRoot("physics layers asset", settings.physicsLayersAsset, false, "PhysicsLayers")) {
+        !addRoot("physics layers asset", settings.physicsLayersAsset, false, "PhysicsLayers") ||
+        !addRoot("launch screen image", settings.display.splash.image, false, "")) {
         return false;
     }
 

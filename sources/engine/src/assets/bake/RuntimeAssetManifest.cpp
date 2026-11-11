@@ -28,7 +28,8 @@ constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R
 // master volume follows them and bit 4 that the project's tag list does (each left out while it is the default);
 // bit 5 says the display render scale follows the tags (left out at 1); bit 6 says the project records from the
 // microphone and carries no data (left out while it is off); bit 7 says the Android graphics API follows the
-// render scale as one byte (left out while it is Auto).
+// render scale as one byte (left out while it is Auto); bit 8 says the launch screen settings follow (left out while
+// they are all defaults).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
 constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
@@ -37,8 +38,9 @@ constexpr std::uint32_t kTagsManifestFlag = 16U;
 constexpr std::uint32_t kRenderScaleManifestFlag = 32U;
 constexpr std::uint32_t kMicrophoneManifestFlag = 64U;
 constexpr std::uint32_t kAndroidGraphicsApiManifestFlag = 128U;
+constexpr std::uint32_t kSplashManifestFlag = 256U;
 constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag |
-    kRenderScaleManifestFlag | kMicrophoneManifestFlag | kAndroidGraphicsApiManifestFlag;
+    kRenderScaleManifestFlag | kMicrophoneManifestFlag | kAndroidGraphicsApiManifestFlag | kSplashManifestFlag;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -226,7 +228,7 @@ private:
 }
 
 [[nodiscard]] bool IsValidSettings(const kb::project::ProjectSettings& settings) noexcept {
-    const std::array<std::string_view, 7U> shortStrings{
+    const std::array<std::string_view, 8U> shortStrings{
         settings.name,
         settings.gameName,
         settings.category,
@@ -234,6 +236,7 @@ private:
         settings.lastOpenMap,
         settings.inputMappingContext,
         settings.physicsLayersAsset,
+        settings.display.splash.image,
     };
     if (std::ranges::any_of(shortStrings, [](std::string_view value) {
             return value.size() > kMaxPathBytes || !IsCleanText(value);
@@ -258,6 +261,9 @@ private:
         display.frameRateCap <= kb::project::kProjectFrameRateCapMax &&
         within(display.renderScale, kb::project::kProjectRenderScaleMin, kb::project::kProjectRenderScaleMax) &&
         static_cast<std::uint8_t>(display.androidGraphicsApi) < kb::project::kProjectAndroidGraphicsApiCount &&
+        static_cast<std::uint8_t>(display.splash.scale) < kb::project::kProjectSplashScaleCount &&
+        display.splash.minimumDisplayMilliseconds <= kb::project::kProjectSplashMinimumMillisecondsMax &&
+        std::ranges::all_of(display.splash.backgroundColor, [&within](float channel) { return within(channel, 0.0F, 1.0F); }) &&
         within(simulation.fixedStepHz, kb::project::kProjectFixedStepHzMin, kb::project::kProjectFixedStepHzMax) &&
         within(simulation.gravity[0], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
         within(simulation.gravity[1], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
@@ -277,7 +283,8 @@ private:
         (!settings.tags.empty() ? kTagsManifestFlag : 0U) |
         (settings.display.renderScale != defaults.display.renderScale ? kRenderScaleManifestFlag : 0U) |
         (settings.microphone != defaults.microphone ? kMicrophoneManifestFlag : 0U) |
-        (settings.display.androidGraphicsApi != defaults.display.androidGraphicsApi ? kAndroidGraphicsApiManifestFlag : 0U);
+        (settings.display.androidGraphicsApi != defaults.display.androidGraphicsApi ? kAndroidGraphicsApiManifestFlag : 0U) |
+        (settings.display.splash != defaults.display.splash ? kSplashManifestFlag : 0U);
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -524,6 +531,16 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     if ((flags & kAndroidGraphicsApiManifestFlag) != 0U) {
         PutUInt8(bytes, static_cast<std::uint8_t>(settings.display.androidGraphicsApi));
     }
+    if ((flags & kSplashManifestFlag) != 0U) {
+        const kb::project::ProjectSplashSettings& splash = settings.display.splash;
+        PutString(bytes, splash.image);
+        for (const float channel : splash.backgroundColor) {
+            PutFloat(bytes, channel);
+        }
+        PutUInt8(bytes, static_cast<std::uint8_t>(splash.scale));
+        PutUInt32(bytes, splash.minimumDisplayMilliseconds);
+        PutUInt8(bytes, splash.showProgress ? 1U : 0U);
+    }
 }
 
 [[nodiscard]] bool DecodeRuntimeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
@@ -553,6 +570,20 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         return false;
     }
     display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(api);
+    return true;
+}
+
+[[nodiscard]] bool DecodeSplash(Reader& reader, kb::project::ProjectSplashSettings& splash) {
+    std::uint8_t scale = 0U;
+    std::uint8_t showProgress = 0U;
+    if (!reader.ReadString(splash.image, kMaxPathBytes) || !reader.ReadFloat(splash.backgroundColor[0]) ||
+        !reader.ReadFloat(splash.backgroundColor[1]) || !reader.ReadFloat(splash.backgroundColor[2]) ||
+        !reader.ReadUInt8(scale) || scale >= kb::project::kProjectSplashScaleCount ||
+        !reader.ReadUInt32(splash.minimumDisplayMilliseconds) || !reader.ReadUInt8(showProgress) || showProgress > 1U) {
+        return false;
+    }
+    splash.scale = static_cast<kb::project::ProjectSplashScale>(scale);
+    splash.showProgress = showProgress != 0U;
     return true;
 }
 
@@ -594,7 +625,8 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         ((flags & kTagsManifestFlag) == 0U || DecodeTags(reader, settings.tags)) &&
         ((flags & kRenderScaleManifestFlag) == 0U || reader.ReadFloat(settings.display.renderScale)) &&
         ((flags & kMicrophoneManifestFlag) == 0U || (settings.microphone = true)) &&
-        ((flags & kAndroidGraphicsApiManifestFlag) == 0U || DecodeAndroidGraphicsApi(reader, settings.display));
+        ((flags & kAndroidGraphicsApiManifestFlag) == 0U || DecodeAndroidGraphicsApi(reader, settings.display)) &&
+        ((flags & kSplashManifestFlag) == 0U || DecodeSplash(reader, settings.display.splash));
 }
 
 } // namespace

@@ -15,6 +15,10 @@ GameWindow::~GameWindow() {
         UnregisterClassW(kWindowClassName, GetModuleHandleW(nullptr));
         windowClass_ = 0U;
     }
+    if (backgroundBrush_ != nullptr) {
+        DeleteObject(backgroundBrush_);
+        backgroundBrush_ = nullptr;
+    }
 }
 
 bool GameWindow::Open(
@@ -24,7 +28,8 @@ bool GameWindow::Open(
     bool fullscreen,
     kb::input::Win32InputCollector& inputCollector,
     bool visible,
-    bool resizable) {
+    bool resizable,
+    std::uint32_t backgroundRgb) {
     if (width == 0U || height == 0U) {
         return false;
     }
@@ -37,6 +42,8 @@ bool GameWindow::Open(
     windowClass.hInstance = GetModuleHandleW(nullptr);
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     windowClass.lpszClassName = kWindowClassName;
+    backgroundBrush_ = CreateSolidBrush(RGB((backgroundRgb >> 16U) & 0xFFU, (backgroundRgb >> 8U) & 0xFFU, backgroundRgb & 0xFFU));
+    windowClass.hbrBackground = backgroundBrush_;
     windowClass_ = RegisterClassExW(&windowClass);
     if (windowClass_ == 0U) {
         return false;
