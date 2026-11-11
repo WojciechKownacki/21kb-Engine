@@ -31,6 +31,7 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     Resizable,
     VSync,
     FrameRateLimit,
+    RenderScale,
     FixedStep,
     Gravity,
     GravityPreset,

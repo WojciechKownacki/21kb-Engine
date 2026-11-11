@@ -36,7 +36,9 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
         (!present.settings.postProcessEnabled && present.settings.lightingConfig.lightingPath != render::SceneRenderLightingPath::Deferred)
             ? present.settings.msaaSamples
             : 0U;
-    if (!EnsureSessionTargets(session, present.renderWidth, present.renderHeight, present.settings.postProcessEnabled, sceneMsaaSamples)) {
+    const render::RenderExtent sceneExtent = render::Renderer::ScaledRenderExtent(
+        render::RenderExtent{present.renderWidth, present.renderHeight}, present.settings.renderScale);
+    if (!EnsureSessionTargets(session, sceneExtent.width, sceneExtent.height, present.settings.postProcessEnabled, sceneMsaaSamples)) {
         return false;
     }
 
@@ -77,7 +79,8 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
     const HostSurface& surface,
     const ViewportSession& session,
     bool clearTarget) {
-    const render::RenderExtent renderExtent{present.renderWidth, present.renderHeight};
+    const render::RenderExtent fullExtent{present.renderWidth, present.renderHeight};
+    const render::RenderExtent renderExtent = render::Renderer::ScaledRenderExtent(fullExtent, present.settings.renderScale);
     const render::RenderExtent surfaceExtent{RectWidth(surface.rect), RectHeight(surface.rect)};
     const SceneViewportSceneSyncDecision sync = SceneViewportSceneSyncPolicy::Resolve(
         session.submittedSceneRevision,
@@ -117,6 +120,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
             .enabled = present.settings.presentToHost,
             .clearTarget = clearTarget,
         },
+        .upscaledExtent = renderExtent == fullExtent ? render::RenderExtent{} : fullExtent,
         .cameraOverride = present.settings.cameraOverride,
         .cameraOverrideEye = present.settings.cameraOverrideEye,
         .overlayOrigin = present.settings.overlayOrigin,

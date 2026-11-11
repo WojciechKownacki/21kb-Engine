@@ -42,6 +42,8 @@ inline constexpr std::uint32_t kProjectWindowExtentMax = 8192U;
 inline constexpr std::uint32_t kProjectFixedStepHzMin = 10U;
 inline constexpr std::uint32_t kProjectFixedStepHzMax = 480U;
 inline constexpr std::uint32_t kProjectFrameRateCapMax = 1000U;
+inline constexpr float kProjectRenderScaleMin = 0.5F;
+inline constexpr float kProjectRenderScaleMax = 1.0F;
 inline constexpr float kProjectGravityLimit = 1000.0F;
 inline constexpr float kProjectTimeScaleMax = 100.0F;
 // Most scenes a project lists for its package besides the startup scene.
@@ -59,6 +61,9 @@ struct ProjectDisplaySettings {
     bool vsync = true;
     // Frames per second the game does not exceed; 0 leaves the pace to vsync (or nothing, without it).
     std::uint32_t frameRateCap = 0U;
+    // Fraction of the output resolution the 3D scene renders at before it is upscaled; the UI stays at
+    // full resolution. 1 renders at the output resolution with no upscale pass.
+    float renderScale = 1.0F;
 
     [[nodiscard]] bool operator==(const ProjectDisplaySettings&) const noexcept = default;
 };

@@ -34,6 +34,7 @@ struct PostProcessSubmitSettings {
     float height = 1.0F;
     bool bloomEnabled = false;
     bool taaEnabled = false;
+    bool motionBlurEnabled = false;
     float bloomStrength = 0.0F;
     float bloomThreshold = 0.0F;
     float bloomSoftKnee = 0.0F;
@@ -55,6 +56,8 @@ struct PostProcessSubmitSettings {
         .height = static_cast<float>(std::max(1U, desc.target.extent.height)),
         .bloomEnabled = desc.settings.bloomEnabled && desc.settings.bloomStrength > 0.0F,
         .taaEnabled = desc.settings.temporalAntiAliasingEnabled && bgfx::isValid(desc.sceneDepth) && desc.temporal.IsValid(),
+        .motionBlurEnabled = desc.settings.motionBlurEnabled && desc.settings.motionBlurIntensity > 0.0F &&
+            bgfx::isValid(desc.sceneDepth) && desc.temporal.IsValid(),
         .bloomStrength = finite(desc.settings.bloomStrength, 65504.0F),
         .bloomThreshold = finite(desc.settings.bloomThreshold, 65504.0F),
         .bloomSoftKnee = finite(desc.settings.bloomSoftKnee, 1.0F),
@@ -99,7 +102,7 @@ public:
                     << " bloom=" << BoolText(settings.bloomEnabled);
             WriteRendererDebugLog("aa_trace", message.str());
         }
-        if (!settings.bloomEnabled && !desc.settings.depthOfFieldEnabled) {
+        if (!settings.bloomEnabled && !desc.settings.depthOfFieldEnabled && !settings.motionBlurEnabled) {
             return SubmitWithoutBloom(desc, postSource);
         }
 
@@ -110,7 +113,8 @@ public:
 
 private:
     [[nodiscard]] bgfx::TextureHandle SubmitAntiAliasing(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings) const {
-        if (settings.taaEnabled) {
+        // Motion vectors feed the TAA resolve and the motion blur of the HDR combine pass.
+        if (settings.taaEnabled || settings.motionBlurEnabled) {
             ConfigureFullscreenView(
                 desc.viewIds.postProcessMotionVectors,
                 desc.target.motionVectorFrameBuffer,
@@ -286,9 +290,19 @@ private:
         bgfx::setUniform(renderer_.dofParamsUniform_, dofParams);
         bgfx::setUniform(renderer_.dofViewDepthPlaneUniform_, desc.temporal.viewDepthPlane.data());
         bgfx::setUniform(renderer_.inverseViewProjectionUniform_, desc.temporal.inverseCurrentViewProjection.data());
+        // The longest blur is a fraction of the image width, so it covers the same share of the screen at any size.
+        const float motionBlurParams[4] = {
+            settings.motionBlurEnabled ? std::clamp(desc.settings.motionBlurIntensity, 0.0F, 1.0F) : 0.0F,
+            static_cast<float>(std::clamp(desc.settings.motionBlurSamples, ScenePostProcessSettings::kMotionBlurSamplesMin,
+                ScenePostProcessSettings::kMotionBlurSamplesMax)),
+            std::max(4.0F, settings.width * 0.04F),
+            0.0F,
+        };
+        bgfx::setUniform(renderer_.motionBlurParamsUniform_, motionBlurParams);
         bgfx::setTexture(0, renderer_.sourceSampler_, postSource);
         bgfx::setTexture(1, renderer_.bloomSampler_, desc.target.bloomTexture);
         bgfx::setTexture(2, renderer_.depthSampler_, bgfx::isValid(desc.sceneDepth) ? desc.sceneDepth : postSource);
+        bgfx::setTexture(3, renderer_.velocitySampler_, settings.motionBlurEnabled ? desc.target.motionVectorTexture : postSource);
         SubmitFullscreen(desc.viewIds.postProcessHdrCombine, renderer_.combineProgram_, renderer_.fullscreenVertexBuffer_);
     }
 
@@ -300,6 +314,7 @@ private:
             "KB Post HDR Finalize");
         const float finalizeParams[4] = {0.0F, 0.0F, 0.0F, 0.0F};
         bgfx::setUniform(renderer_.postParams_, finalizeParams);
+        bgfx::setUniform(renderer_.motionBlurParamsUniform_, finalizeParams);
         bgfx::setTexture(0, renderer_.sourceSampler_, sourceTexture);
         bgfx::setTexture(1, renderer_.bloomSampler_, desc.target.bloomTexture);
         SubmitFullscreen(desc.viewIds.postProcessHdrFinalize, renderer_.combineProgram_, renderer_.fullscreenVertexBuffer_);

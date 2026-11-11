@@ -116,7 +116,7 @@ float ResolveFullscreenTextureExposureStops(const FullscreenTextureOutputTransfo
 
 bool FullscreenTexturePassDesc::IsValid() const noexcept {
     return bgfx::isValid(sourceTexture) && extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) &&
-        (!antiAliasing || sourceExtent.IsValid());
+        ((!antiAliasing && !upscale) || sourceExtent.IsValid());
 }
 
 bool FullscreenTexturePass::Initialize() {
@@ -125,6 +125,7 @@ bool FullscreenTexturePass::Initialize() {
     }
 
     program_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_present_tex.sc");
+    upscaleProgram_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_present_upscale.sc");
     colorSampler_ = bgfx::createUniform("s_kbFullscreenColor", bgfx::UniformType::Sampler);
     colorGradeSampler_ = bgfx::createUniform("s_kbFullscreenColorGradeLut", bgfx::UniformType::Sampler);
     tonemapParams_ = bgfx::createUniform("u_tonemapParams", bgfx::UniformType::Vec4);
@@ -174,6 +175,10 @@ void FullscreenTexturePass::Shutdown() noexcept {
     if (bgfx::isValid(program_)) {
         bgfx::destroy(program_);
         program_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(upscaleProgram_)) {
+        bgfx::destroy(upscaleProgram_);
+        upscaleProgram_ = BGFX_INVALID_HANDLE;
     }
 }
 
@@ -238,17 +243,20 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
     };
     bgfx::setUniform(colorGradeParams_, colorGradeParams);
     bgfx::setUniform(vignetteParams_, vignetteParams);
+    const bool sourceTexels = desc.antiAliasing || desc.upscale;
+    constexpr float kUpscaleSharpening = 0.25F;
     const float displayAntiAliasing[4] = {
         desc.antiAliasing ? 1.0F : 0.0F,
-        desc.antiAliasing ? 1.0F / static_cast<float>(desc.sourceExtent.width) : 0.0F,
-        desc.antiAliasing ? 1.0F / static_cast<float>(desc.sourceExtent.height) : 0.0F,
-        0.0F,
+        sourceTexels ? 1.0F / static_cast<float>(desc.sourceExtent.width) : 0.0F,
+        sourceTexels ? 1.0F / static_cast<float>(desc.sourceExtent.height) : 0.0F,
+        desc.upscale ? kUpscaleSharpening : 0.0F,
     };
     bgfx::setUniform(displayAntiAliasing_, displayAntiAliasing);
     bgfx::setTexture(0, colorSampler_, desc.sourceTexture);
     bgfx::setTexture(1, colorGradeSampler_, neutralColorGradeLut_);
     bgfx::setVertexBuffer(0, &vertices);
-    bgfx::submit(desc.viewId, program_);
+    // A backend without the upscaling program (see ShaderManifest) reads the source bilinearly.
+    bgfx::submit(desc.viewId, desc.upscale && bgfx::isValid(upscaleProgram_) ? upscaleProgram_ : program_);
     return true;
 }
 

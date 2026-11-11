@@ -44,6 +44,8 @@ public:
     struct PresentSettings {
         std::uint32_t renderWidth = 0;
         std::uint32_t renderHeight = 0;
+        // Fraction of renderWidth x renderHeight the 3D scene renders at before it is upscaled (Play view).
+        float renderScale = 1.0F;
         EditorViewportFitMode fitMode = EditorViewportFitMode::Fit;
         EditorViewportSafeArea safeArea{};
         std::optional<render::SceneRenderCamera> cameraOverride{};

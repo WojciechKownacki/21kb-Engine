@@ -6,7 +6,10 @@ $input v_texcoord0
 SAMPLER2D(s_source, 0);
 SAMPLER2D(s_bloom, 1);
 SAMPLER2D(s_depth, 2);
+SAMPLER2D(s_velocity, 3);
 uniform vec4 u_postParams;
+// x: shutter fraction of the frame (0 leaves motion blur off), y: samples, z: longest blur in pixels.
+uniform vec4 u_motionBlurParams;
 uniform vec4 u_dofParams; // focus distance, full-blur distance from focus, maximum radius, homogeneous depth
 uniform vec4 u_dofViewDepthPlane;
 uniform mat4 u_inverseViewProjection;
@@ -24,6 +27,28 @@ float KbFocusDepth(vec2 uv)
 void main()
 {
     vec4 scene = texture2D(s_source, v_texcoord0);
+    if (u_motionBlurParams.x > 0.0) {
+        // Average the image along the pixel's screen motion over the open shutter. The motion is
+        // clamped to a longest length, so a fast camera turn does not smear the whole screen.
+        vec2 motion = texture2DLod(s_velocity, v_texcoord0, 0.0).xy * u_motionBlurParams.x;
+        float lengthPixels = length(motion / u_viewTexel.xy);
+        if (lengthPixels > u_motionBlurParams.z) {
+            motion *= u_motionBlurParams.z / lengthPixels;
+        }
+        if (lengthPixels > 0.5) {
+            float samples = u_motionBlurParams.y;
+            vec3 sum = scene.rgb;
+            float weights = 1.0;
+            for (int sampleIndex = 0; sampleIndex < 16; ++sampleIndex) {
+                if (float(sampleIndex) >= samples) break;
+                float t = (float(sampleIndex) + 0.5) / samples - 0.5;
+                vec2 uv = clamp(v_texcoord0 - motion * t, vec2_splat(0.0), vec2_splat(1.0));
+                sum += texture2DLod(s_source, uv, 0.0).rgb;
+                weights += 1.0;
+            }
+            scene.rgb = sum / weights;
+        }
+    }
     if (u_dofParams.z > 0.0) {
         float centerDepth = KbFocusDepth(v_texcoord0);
         float radius = clamp(abs(centerDepth - u_dofParams.x) / max(u_dofParams.y,0.0001),0.0,1.0) * u_dofParams.z;

@@ -52,6 +52,9 @@ struct FullscreenTexturePassDesc {
     // `sourceTexture`, whose texels it filters.
     bool antiAliasing = false;
     RenderExtent sourceExtent{};
+    // The source was rendered below the output resolution: an edge-aware, lightly sharpened upscale
+    // (fs_present_upscale.sc) replaces the plain bilinear read; `sourceExtent` is then the source size.
+    bool upscale = false;
     // Display output has opaque alpha; ordinary texture copies preserve source alpha.
     bool forceOpaqueAlpha = false;
 
@@ -73,6 +76,7 @@ public:
 
 private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle upscaleProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorGradeSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle tonemapParams_ = BGFX_INVALID_HANDLE;

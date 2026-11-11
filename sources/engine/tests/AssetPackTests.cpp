@@ -770,6 +770,21 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
             bake::DecodeRuntimeAssetManifest(configuredBytes, configuredDecoded) == bake::RuntimeAssetManifestStatus::Success &&
             configuredDecoded.settings == configured.settings,
         "A runtime manifest lost the display or simulation settings during the round trip");
+    // The render scale travels on its own flag, only while it differs from 1, and a scale below 0.5 is refused.
+    bake::RuntimeAssetManifest scaled = first;
+    scaled.settings.display.renderScale = 0.5F;
+    std::vector<std::uint8_t> scaledBytes;
+    bake::RuntimeAssetManifest scaledDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(scaled, scaledBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            scaledBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(scaledBytes, scaledDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            scaledDecoded.settings == scaled.settings && scaledDecoded.settings.display.renderScale == 0.5F,
+        "A runtime manifest lost the render scale during the round trip");
+    bake::RuntimeAssetManifest tooSmall = first;
+    tooSmall.settings.display.renderScale = 0.25F;
+    std::vector<std::uint8_t> tooSmallBytes;
+    Require(bake::EncodeRuntimeAssetManifest(tooSmall, tooSmallBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a render scale below 0.5");
     bake::RuntimeAssetManifest outOfBounds = first;
     outOfBounds.settings.display.windowWidth = 10U;
     std::vector<std::uint8_t> outOfBoundsBytes;

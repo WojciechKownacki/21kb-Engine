@@ -188,6 +188,9 @@ struct RenderSceneSubmitDesc {
     RenderSceneTargetBinding target{};
     RenderPostProcessTargetBinding postProcess{};
     RenderFinalCompositeTargetBinding finalComposite{};
+    // Set when the scene renders at a reduced render scale: the full-resolution size the screen UI lays out
+    // in and the final composite upscales the scene to. Empty renders and lays out at target.viewport.extent.
+    RenderExtent upscaledExtent{};
     // A world-space camera (view in world coordinates); the renderer makes it relative to its render origin.
     std::optional<SceneRenderCamera> cameraOverride{};
     // The double-precision world position of cameraOverride's eye. Far from the origin the view matrix alone carries

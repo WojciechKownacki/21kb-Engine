@@ -55,6 +55,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -537,10 +538,11 @@ bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSc
     if (!frameActive_) {
         return false;
     }
-    const RenderExtent extent{ BackbufferWidth(), BackbufferHeight() };
-    if (!extent.IsValid()) {
+    const RenderExtent outputExtent{ BackbufferWidth(), BackbufferHeight() };
+    if (!outputExtent.IsValid()) {
         return false;
     }
+    const RenderExtent extent = ScaledRenderExtent(outputExtent, renderScale_);
     if (!defaultSceneTarget_.Ensure(SceneRenderTargetDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
@@ -571,9 +573,10 @@ bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSc
         .postProcess = defaultPostProcessTargets_.Binding(),
         .finalComposite = RenderFinalCompositeTargetBinding{
             .frameBuffer = BGFX_INVALID_HANDLE,
-            .extent = extent,
+            .extent = outputExtent,
             .enabled = true,
         },
+        .upscaledExtent = extent == outputExtent ? RenderExtent{} : outputExtent,
         .drawBudget = defaultSceneDrawBudget_,
         .lightingConfig = defaultSceneLightingConfig_,
         .dirtySceneEntityIds = synchronization.dirtySceneEntityIds,
@@ -941,6 +944,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     if (desc.screenUIEnabled) {
         PublishUIImageAlpha(const_cast<kb::scene::Scene&>(scene));
     }
+    // A scene rendered at a reduced render scale still lays its UI out at the full output size.
+    const RenderExtent uiExtent = desc.upscaledExtent.IsValid() ? desc.upscaledExtent : desc.target.viewport.extent;
     kb::scene::SceneUIFrame& screenUIFrame = screenUIFrameScratch_;
     screenUIFrame.viewportSize = {};
     screenUIFrame.elements.clear();
@@ -948,7 +953,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
     // than discarding its result, also skips the layout pass the frame would have cost.
     if (desc.screenUIEnabled &&
-        !scene.UI().BuildFrame(static_cast<float>(width), static_cast<float>(height), screenUIFrame)) {
+        !scene.UI().BuildFrame(static_cast<float>(uiExtent.width), static_cast<float>(uiExtent.height), screenUIFrame)) {
         // A widget the author can fix must not cost the whole frame. The UI layer is dropped,
         // the 3D scene still renders, and the refusal is published by name with the offending
         // entity so it is diagnosable instead of appearing as a dead renderer.
@@ -1498,6 +1503,11 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         (resolvedPostProcessSettings.has_value()
                 ? resolvedPostProcessSettings->temporalJitterEnabled
                 : defaultPostProcessSettings_.temporalJitterEnabled);
+    // Motion blur reads the camera motion since the previous frame, so it keeps the temporal history as TAA does.
+    const bool motionHistoryEnabled = temporalAntiAliasingEnabled || (desc.postProcessEnabled &&
+        (resolvedPostProcessSettings.has_value()
+                ? resolvedPostProcessSettings->motionBlurEnabled
+                : defaultPostProcessSettings_.motionBlurEnabled));
     {
         auto& history = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
         const auto* cameraProxy = desc.cameraOverride.has_value() ? nullptr :
@@ -1515,7 +1525,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             frameIndex, desc.resetTemporalHistory);
         if (desc.resetTemporalHistory || history.sceneId != scene.Id() ||
             history.cameraEntityId != cameraEntityId || history.cameraOverride != desc.cameraOverride.has_value() ||
-            history.orthographic != orthographic || !history.taaEnabled || !temporalAntiAliasingEnabled ||
+            history.orthographic != orthographic || !history.taaEnabled || !motionHistoryEnabled ||
             history.historyFrame + 1U != frameIndex) {
             history.hasHistory = false;
         }
@@ -1523,7 +1533,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         history.cameraEntityId = cameraEntityId;
         history.cameraOverride = desc.cameraOverride.has_value();
         history.orthographic = orthographic;
-        history.taaEnabled = temporalAntiAliasingEnabled;
+        history.taaEnabled = motionHistoryEnabled;
     }
     {
         std::ostringstream message;
@@ -2001,7 +2011,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 .input = scenePostProcessOutput,
                 .depth = sampledSceneDesc.SceneOverlayDepthTexture(),
             });
-            if (postProcessOutput.temporalAntiAliasingEnabled && overlayCamera != nullptr &&
+            if ((postProcessOutput.temporalAntiAliasingEnabled || postProcessOutput.postProcessSettings.motionBlurEnabled) &&
+                overlayCamera != nullptr &&
                 bgfx::isValid(sampledSceneDesc.postProcess.motionVectorFrameBuffer) &&
                 bgfx::isValid(sampledSceneDesc.SceneOverlayDepthTexture())) {
                 sceneRenderer_->SetMotionVectorViewProjections(currentUnjitteredViewProjection, previousMotionViewProjection);
@@ -2456,6 +2467,9 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.ambientOcclusionRadius = std::max(settings.ambientOcclusionRadius, 0.01F);
     settings.screenSpaceReflectionsIntensity = std::clamp(settings.screenSpaceReflectionsIntensity, 0.0F, 1.0F);
     settings.screenSpaceReflectionsMaxDistance = std::max(settings.screenSpaceReflectionsMaxDistance, 0.1F);
+    settings.motionBlurIntensity = std::clamp(settings.motionBlurIntensity, 0.0F, 1.0F);
+    settings.motionBlurSamples = std::clamp(settings.motionBlurSamples, ScenePostProcessSettings::kMotionBlurSamplesMin,
+        ScenePostProcessSettings::kMotionBlurSamplesMax);
     defaultPostProcessSettings_ = settings;
     if (std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing); antiAliasing.has_value()) {
         antiAliasing->enabled = settings.temporalAntiAliasingEnabled;
@@ -2499,6 +2513,25 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
 
 ScenePostProcessSettings Renderer::DefaultPostProcessSettings() const noexcept {
     return defaultPostProcessSettings_;
+}
+
+void Renderer::SetRenderScale(float scale) noexcept {
+    renderScale_ = std::isfinite(scale) ? std::clamp(scale, 0.5F, 1.0F) : 1.0F;
+}
+
+float Renderer::RenderScale() const noexcept {
+    return renderScale_;
+}
+
+RenderExtent Renderer::ScaledRenderExtent(RenderExtent extent, float scale) noexcept {
+    const float clamped = std::isfinite(scale) ? std::clamp(scale, 0.5F, 1.0F) : 1.0F;
+    if (clamped >= 1.0F) {
+        return extent;
+    }
+    const auto side = [clamped](std::uint32_t value) {
+        return std::max(1U, static_cast<std::uint32_t>(std::lround(static_cast<float>(value) * clamped)));
+    };
+    return RenderExtent{ side(extent.width), side(extent.height) };
 }
 
 bool Renderer::ConfigurePostProcessChain(const PostProcessChainDesc& desc) {

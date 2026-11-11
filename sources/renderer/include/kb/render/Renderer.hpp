@@ -264,6 +264,12 @@ public:
     void SetFrameDeltaSeconds(float seconds) noexcept;
     [[nodiscard]] float FrameDeltaSeconds() const noexcept;
     void SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept;
+    // Fraction (0.5..1) of the backbuffer the runtime scene renders at before it is upscaled; 1 keeps
+    // the full-resolution path with no upscale pass.
+    void SetRenderScale(float scale) noexcept;
+    [[nodiscard]] float RenderScale() const noexcept;
+    // `extent` scaled by `scale` (clamped to 0.5..1), each side at least one pixel.
+    [[nodiscard]] static RenderExtent ScaledRenderExtent(RenderExtent extent, float scale) noexcept;
     [[nodiscard]] ScenePostProcessSettings DefaultPostProcessSettings() const noexcept;
     [[nodiscard]] bool ConfigurePostProcessChain(const PostProcessChainDesc& desc);
     [[nodiscard]] bool AddPostProcessPass(PostProcessPass pass);
@@ -387,6 +393,7 @@ private:
     SceneRenderDrawBudget defaultSceneDrawBudget_{};
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
     ScenePostProcessSettings defaultPostProcessSettings_{};
+    float renderScale_ = 1.0F;
     std::optional<SceneRenderLightingPath> lastRuntimeMaterialLightingPath_;
     std::optional<SceneRenderDebugView> lastRuntimeMaterialDebugView_;
     std::optional<RenderMaterialGraphQualityLevel> lastRuntimeMaterialQualityLevel_;

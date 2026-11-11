@@ -1937,6 +1937,9 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     settings.screenSpaceReflectionsEnabled = true;
     settings.screenSpaceReflectionsIntensity = 0.6F;
     settings.screenSpaceReflectionsMaxDistance = 12.5F;
+    settings.motionBlurEnabled = true;
+    settings.motionBlurIntensity = 0.75F;
+    settings.motionBlurSamples = 12U;
     settings.fogEnabled = true;
     settings.fogProfile = SceneFogProfile::Web;
     settings.fogDensity = 0.071F;
@@ -1973,6 +1976,8 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(loaded->screenSpaceReflectionsEnabled && NearlyEqual(loaded->screenSpaceReflectionsIntensity, 0.6F) &&
             NearlyEqual(loaded->screenSpaceReflectionsMaxDistance, 12.5F),
         "PostProcess profile asset round trip lost the screen-space reflections");
+    Require(loaded->motionBlurEnabled && NearlyEqual(loaded->motionBlurIntensity, 0.75F) && loaded->motionBlurSamples == 12U,
+        "PostProcess profile asset round trip lost the motion blur");
 
     Require(loaded->fogProfile == SceneFogProfile::Web && loaded->fogEnabled && loaded->volumetricFogEnabled &&
             NearlyEqual(loaded->fogDensity, 0.071F) && NearlyEqual(loaded->fogHeightFalloff, 0.31F) &&
@@ -2018,6 +2023,8 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
             NearlyEqual(legacy->screenSpaceReflectionsIntensity, SceneRenderLightingConfig{}.ssrIntensity) &&
             NearlyEqual(legacy->screenSpaceReflectionsMaxDistance, SceneRenderLightingConfig{}.ssrMaxDistance),
         "A profile without the reflection keys must keep reflections off at the lighting config's defaults");
+    Require(!legacy->motionBlurEnabled && NearlyEqual(legacy->motionBlurIntensity, 0.5F) && legacy->motionBlurSamples == 8U,
+        "A profile without the motion blur keys must keep motion blur off at its defaults");
     ScenePostProcessSettings edited{};
     Require(PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "0.8") && NearlyEqual(edited.vignetteIntensity, 0.8F) &&
             PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionEnabled", "1") && edited.ambientOcclusionEnabled,
@@ -2038,11 +2045,25 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
             !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsEnabled", "maybe") &&
             NearlyEqual(edited.screenSpaceReflectionsIntensity, 0.5F) && NearlyEqual(edited.screenSpaceReflectionsMaxDistance, 40.0F),
         "SetField must refuse a reflection intensity outside 0..1, a non-positive reflection distance and a non-boolean toggle");
+    Require(PostProcessProfileAssetLoader::SetField(edited, "motionBlurEnabled", "1") && edited.motionBlurEnabled &&
+            PostProcessProfileAssetLoader::SetField(edited, "motionBlurIntensity", "0.25") && NearlyEqual(edited.motionBlurIntensity, 0.25F) &&
+            PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "16") && edited.motionBlurSamples == 16U &&
+            PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "4") && edited.motionBlurSamples == 4U,
+        "SetField must take the motion blur fields");
+    Require(!PostProcessProfileAssetLoader::SetField(edited, "motionBlurIntensity", "1.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurIntensity", "-0.1") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "3") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "17") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "8.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurEnabled", "maybe") &&
+            NearlyEqual(edited.motionBlurIntensity, 0.25F) && edited.motionBlurSamples == 4U,
+        "SetField must refuse a shutter outside 0..1, samples outside 4..16 or fractional, and a non-boolean toggle");
     const std::vector<std::string> names = PostProcessProfileAssetLoader::FieldNames();
     Require(std::ranges::find(names, "vignetteEnabled") != names.end() && std::ranges::find(names, "ambientOcclusionRadius") != names.end() &&
             std::ranges::find(names, "screenSpaceReflectionsEnabled") != names.end() &&
-            std::ranges::find(names, "screenSpaceReflectionsMaxDistance") != names.end(),
-        "FieldNames must list the vignette, ambient occlusion and screen-space reflection fields");
+            std::ranges::find(names, "screenSpaceReflectionsMaxDistance") != names.end() &&
+            std::ranges::find(names, "motionBlurEnabled") != names.end() && std::ranges::find(names, "motionBlurSamples") != names.end(),
+        "FieldNames must list the vignette, ambient occlusion, screen-space reflection and motion blur fields");
 
     const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
@@ -8227,6 +8248,209 @@ void RunBloomOutputProfilePixelsTest() {
     renderer.Shutdown();
 }
 
+// A lit triangle rendered through the full scene, post-process and display composite path into a 64x64
+// output. `sceneExtent` is the size of the scene and post-process targets; below the output size the frame
+// takes the reduced render scale path (upscaledExtent). `moveX` moves the triangle (or, with `moveCamera`,
+// the camera the other way) by that much each frame.
+struct PostProcessedTriangleCapture {
+    std::vector<std::uint8_t> pixels;
+    RenderExtent sceneTargetExtent{};
+    RenderExtent postTargetExtent{};
+};
+
+[[nodiscard]] PostProcessedTriangleCapture RenderPostProcessedTriangle(
+    const ScenePostProcessSettings& settings, RenderExtent sceneExtent, float moveX, const char* tag, bool moveCamera = false) {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        (std::string("21kb_post_triangle_") + tag + "_" + std::to_string(GetCurrentProcessId()));
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(fixture.scene, true);
+    const auto placeAt = [&](float x) {
+        kb::scene::TransformComponent transform = TransformAt(x, 0.0F, 0.0F);
+        transform.localScale = { 8.0F, 8.0F, 8.0F };
+        fixture.scene.Transforms().Set(fixture.entity, transform);
+    };
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Post-processed triangle test could not create a hidden native surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Post-processed triangle test renderer did not initialize");
+    PostProcessedTriangleCapture capture;
+    {
+        SceneRenderTarget sceneTarget;
+        ScenePostProcessTargets postTargets;
+        FinalCompositeReadbackTarget output;
+        Require(sceneTarget.Ensure(SceneRenderTargetDesc{ .extent = sceneExtent }) &&
+                postTargets.Ensure(ScenePostProcessTargetsDesc{ .extent = sceneExtent }) && output.Initialize(),
+            "Post-processed triangle test could not allocate its targets");
+        capture.sceneTargetExtent = RenderExtent{ sceneExtent.width, sceneExtent.height };
+        capture.postTargetExtent = postTargets.Extent();
+        const RenderExtent outputExtent{ NativeTestSurface::kExtent, NativeTestSurface::kExtent };
+        SceneRenderCamera camera{};
+        bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, 3.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.05F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+        RenderSceneSubmitDesc desc{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = sceneTarget.FrameBuffer(),
+                .colorTexture = sceneTarget.ColorTexture(),
+                .resolvedColorTexture = sceneTarget.ResolvedColorTexture(),
+                .depthTexture = sceneTarget.DepthTextureSampled() ? sceneTarget.DepthTexture() : bgfx::TextureHandle{ bgfx::kInvalidHandle },
+                .viewport = RenderViewportDesc{ .id = RenderViewportId{ 1U }, .extent = sceneExtent, .viewportIndex = 0U },
+                .msaaSamples = sceneTarget.MsaaSamples(),
+                .colorFormat = sceneTarget.ColorSelection().format,
+            },
+            .postProcess = postTargets.Binding(),
+            .finalComposite = output.Binding(),
+            .upscaledExtent = sceneExtent == outputExtent ? RenderExtent{} : outputExtent,
+            .cameraOverride = camera,
+            .postProcessSettings = settings,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .screenUIEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = true,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < 6; ++frame) {
+            const float shift = -0.9F + moveX * static_cast<float>(frame);
+            placeAt(moveCamera ? 0.0F : shift);
+            if (moveCamera) {
+                bx::mtxLookAt(camera.view.data(), bx::Vec3{ -shift, 0.0F, 3.0F }, bx::Vec3{ -shift, 0.0F, 0.0F });
+                desc.cameraOverride = camera;
+            }
+            SubmitLifecycleFrame(renderer, fixture.scene, desc, "Post-processed triangle test did not submit a frame");
+        }
+        capture.pixels = output.ReadPixels();
+    }
+    renderer.Shutdown();
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    return capture;
+}
+
+[[nodiscard]] ScenePostProcessSettings PlainPostProcessSettings() {
+    ScenePostProcessSettings settings{};
+    settings.bloomEnabled = false;
+    settings.temporalAntiAliasingEnabled = false;
+    settings.temporalJitterEnabled = false;
+    settings.fxaaEnabled = false;
+    settings.outputTransform.autoExposure.enabled = false;
+    return settings;
+}
+
+[[nodiscard]] int CapturedLuminance(const std::vector<std::uint8_t>& pixels, std::uint32_t x, std::uint32_t y) {
+    const std::size_t offset = (static_cast<std::size_t>(y) * NativeTestSurface::kExtent + x) * 4U;
+    return static_cast<int>(pixels[offset]) + pixels[offset + 1U] + pixels[offset + 2U];
+}
+
+// Pixels between 15% and 85% of the brightest: the soft border a blur leaves around a hard edge.
+[[nodiscard]] int CountPartialPixels(const std::vector<std::uint8_t>& pixels) {
+    int brightest = 0;
+    for (std::uint32_t y = 0; y < NativeTestSurface::kExtent; ++y)
+        for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) brightest = std::max(brightest, CapturedLuminance(pixels, x, y));
+    int partial = 0;
+    for (std::uint32_t y = 0; y < NativeTestSurface::kExtent; ++y) {
+        for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) {
+            const int value = CapturedLuminance(pixels, x, y);
+            if (value * 100 > brightest * 15 && value * 100 < brightest * 85) ++partial;
+        }
+    }
+    return partial;
+}
+
+// Lit pixels of the row through the triangle's middle.
+[[nodiscard]] int LitRowWidth(const std::vector<std::uint8_t>& pixels, std::uint32_t y) {
+    int lit = 0;
+    for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) lit += CapturedLuminance(pixels, x, y) > 24 ? 1 : 0;
+    return lit;
+}
+
+// A triangle moving across the screen leaves a soft trail along its motion only with motion blur on; a still
+// one stays sharp, and the trail is no longer than the clamped blur length.
+void RunRendererMotionBlurSmearsMovingObjectsTest() {
+    const RenderExtent full{ NativeTestSurface::kExtent, NativeTestSurface::kExtent };
+    ScenePostProcessSettings off = PlainPostProcessSettings();
+    ScenePostProcessSettings on = off;
+    on.motionBlurEnabled = true;
+    on.motionBlurIntensity = 1.0F;
+    on.motionBlurSamples = 12U;
+    // The camera pans, so the triangle sweeps across the screen.
+    const auto movingOff = RenderPostProcessedTriangle(off, full, 0.3F, "blur_off", true);
+    const auto movingOn = RenderPostProcessedTriangle(on, full, 0.3F, "blur_on", true);
+    const auto stillOn = RenderPostProcessedTriangle(on, full, 0.0F, "blur_still", true);
+    const auto stillOff = RenderPostProcessedTriangle(off, full, 0.0F, "blur_still_off", true);
+    const int partialOff = CountPartialPixels(movingOff.pixels);
+    const int partialOn = CountPartialPixels(movingOn.pixels);
+    const int partialStill = CountPartialPixels(stillOn.pixels);
+    const int partialStillOff = CountPartialPixels(stillOff.pixels);
+    const std::uint32_t row = NativeTestSurface::kExtent / 2U;
+    const int widthOff = LitRowWidth(movingOff.pixels, row);
+    const int widthOn = LitRowWidth(movingOn.pixels, row);
+    std::fprintf(stderr, "motion_blur_pixels partial off=%d on=%d still=%d still_off=%d row_width off=%d on=%d%c",
+        partialOff, partialOn, partialStill, partialStillOff, widthOff, widthOn, 10);
+    Require(widthOff > 8, "Motion blur test: the triangle must be drawn");
+    Require(partialOn > partialOff + 20, "Motion blur test: a moving object must blur with motion blur on");
+    Require(std::abs(partialStill - partialStillOff) <= 4, "Motion blur test: a still object must stay sharp with motion blur on");
+    // The trail grows the lit row by at most the longest blur (4 pixels at this size) and a pixel of filtering.
+    Require(widthOn <= widthOff + 6, "Motion blur test: the blur length must be clamped");
+}
+
+// At render scale 0.5 the scene and post-process targets are half the output size and the display composite
+// upscales the scene to the full output: the triangle lands where the full-resolution frame draws it.
+void RunRendererRenderScaleUpscalesSceneTest() {
+    const RenderExtent full{ NativeTestSurface::kExtent, NativeTestSurface::kExtent };
+    Require(Renderer::ScaledRenderExtent(full, 1.0F) == full && Renderer::ScaledRenderExtent(full, 2.0F) == full,
+        "Render scale 1 (and above) must keep the output extent");
+    const RenderExtent half = Renderer::ScaledRenderExtent(full, 0.5F);
+    Require(half == RenderExtent{ full.width / 2U, full.height / 2U } && Renderer::ScaledRenderExtent(full, 0.1F) == half &&
+            Renderer::ScaledRenderExtent(RenderExtent{ 1U, 1U }, 0.5F) == RenderExtent{ 1U, 1U },
+        "Render scale must halve the extent at 0.5, clamp below it and keep at least one pixel");
+    {
+        Renderer renderer;
+        Require(renderer.RenderScale() == 1.0F, "The renderer must default to render scale 1");
+        renderer.SetRenderScale(0.25F);
+        Require(renderer.RenderScale() == 0.5F, "SetRenderScale must clamp to 0.5");
+        renderer.SetRenderScale(std::numeric_limits<float>::quiet_NaN());
+        Require(renderer.RenderScale() == 1.0F, "SetRenderScale must reject a non-finite scale");
+    }
+    const ScenePostProcessSettings settings = PlainPostProcessSettings();
+    const auto fullFrame = RenderPostProcessedTriangle(settings, full, 0.0F, "scale_full");
+    const auto halfFrame = RenderPostProcessedTriangle(settings, half, 0.0F, "scale_half");
+    Require(fullFrame.postTargetExtent == full && halfFrame.postTargetExtent == half && halfFrame.sceneTargetExtent == half,
+        "Render scale test: the scene and post-process targets must be the scaled size");
+    const auto coverage = [](const std::vector<std::uint8_t>& pixels, double& centreX, double& centreY) {
+        int count = 0;
+        centreX = 0.0;
+        centreY = 0.0;
+        for (std::uint32_t y = 0; y < NativeTestSurface::kExtent; ++y) {
+            for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) {
+                if (CapturedLuminance(pixels, x, y) > 24) {
+                    ++count;
+                    centreX += x;
+                    centreY += y;
+                }
+            }
+        }
+        if (count > 0) {
+            centreX /= count;
+            centreY /= count;
+        }
+        return count;
+    };
+    double fullX = 0.0, fullY = 0.0, halfX = 0.0, halfY = 0.0;
+    const int fullCount = coverage(fullFrame.pixels, fullX, fullY);
+    const int halfCount = coverage(halfFrame.pixels, halfX, halfY);
+    std::fprintf(stderr, "render_scale_pixels full=%d (%.1f,%.1f) half=%d (%.1f,%.1f)%c",
+        fullCount, fullX, fullY, halfCount, halfX, halfY, 10);
+    Require(fullCount > 40, "Render scale test: the full-resolution frame must draw the triangle");
+    Require(std::abs(halfCount - fullCount) * 5 < fullCount, "Render scale test: the upscaled triangle must cover the full output area");
+    Require(std::abs(halfX - fullX) < 1.5 && std::abs(halfY - fullY) < 1.5,
+        "Render scale test: the upscaled triangle must land where the full-resolution one does");
+}
+
 void RunRendererVignetteDarkensFinalCompositeCornersTest() {
     NativeTestSurface surface;
     Require(surface.IsValid(), "Vignette test could not create a hidden native surface");
@@ -12012,6 +12236,8 @@ void RunRendererPostProcessProfileAuthoringTests() {
     RunRendererPostProcessProfileDrivesAmbientOcclusionTest();
     RunBloomOutputProfilePixelsTest();
     RunRendererVignetteDarkensFinalCompositeCornersTest();
+    RunRendererMotionBlurSmearsMovingObjectsTest();
+    RunRendererRenderScaleUpscalesSceneTest();
 #endif
 }
 

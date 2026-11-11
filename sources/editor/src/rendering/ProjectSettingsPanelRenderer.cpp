@@ -243,6 +243,8 @@ struct TooltipContent {
         return "VSync";
     case ProjectSettingsTooltipKind::FrameRateLimit:
         return EditorText("projectSettings.frameRateLimit", "Frame Rate Limit");
+    case ProjectSettingsTooltipKind::RenderScale:
+        return EditorText("projectSettings.renderScale", "Render Scale");
     case ProjectSettingsTooltipKind::FixedStep:
         return EditorText("projectSettings.fixedStep", "Fixed Step (Hz)");
     case ProjectSettingsTooltipKind::Gravity:
@@ -367,6 +369,7 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::Resizable:
     case ProjectSettingsTooltipKind::VSync:
     case ProjectSettingsTooltipKind::FrameRateLimit:
+    case ProjectSettingsTooltipKind::RenderScale:
     case ProjectSettingsTooltipKind::FixedStep:
     case ProjectSettingsTooltipKind::Gravity:
     case ProjectSettingsTooltipKind::GravityPreset:
@@ -426,6 +429,8 @@ struct TooltipContent {
         return EditorText("projectSettings.vsyncDescription", "Waits for the display refresh, which avoids tearing.");
     case ProjectSettingsTooltipKind::FrameRateLimit:
         return EditorText("projectSettings.frameRateLimitDescription", "Most frames per second the game draws; Off leaves it to VSync.");
+    case ProjectSettingsTooltipKind::RenderScale:
+        return EditorText("projectSettings.renderScaleDescription", "Share of the screen resolution the 3D scene renders at (0.5 to 1); the interface stays sharp.");
     case ProjectSettingsTooltipKind::FixedStep:
         return EditorText("projectSettings.fixedStepDescription", "Physics steps per second.");
     case ProjectSettingsTooltipKind::Gravity:
@@ -478,7 +483,7 @@ struct SearchableSetting {
     case ProjectSettingsCategory::Lighting:
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
     case ProjectSettingsCategory::Display:
-        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit });
+        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale });
     case ProjectSettingsCategory::Audio:
         return fromKinds({ Kind::MasterVolume });
     case ProjectSettingsCategory::Tags:
@@ -702,6 +707,9 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
         DrawOptionButton(dc, rects.frameRateButton[index], theme, text, display.frameRateCap == rate);
     }
     DrawNumberCell(dc, rects.frameRateValue, theme, sceneContext, ProjectSettingsNumber::FrameRateCap);
+
+    DrawSetting(dc, rects, rects.displayLabel[5], SettingLabel(Kind::RenderScale), Kind::RenderScale, theme, query);
+    DrawNumberCell(dc, rects.renderScaleValue, theme, sceneContext, ProjectSettingsNumber::RenderScale);
 }
 
 void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -979,10 +987,11 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::FrameRateOption, .index = index, .rect = rects.frameRateButton[index] };
             }
         }
-        const std::array<std::pair<const RECT*, ProjectSettingsNumber>, 3U> cells{ {
+        const std::array<std::pair<const RECT*, ProjectSettingsNumber>, 4U> cells{ {
             { &rects.windowWidthValue, ProjectSettingsNumber::WindowWidth },
             { &rects.windowHeightValue, ProjectSettingsNumber::WindowHeight },
-            { &rects.frameRateValue, ProjectSettingsNumber::FrameRateCap } } };
+            { &rects.frameRateValue, ProjectSettingsNumber::FrameRateCap },
+            { &rects.renderScaleValue, ProjectSettingsNumber::RenderScale } } };
         for (const auto& [cell, number] : cells) {
             if (PointInRect(*cell, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(number), .rect = *cell };
@@ -1134,6 +1143,8 @@ ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSe
         return { static_cast<double>(kb::project::kProjectWindowExtentMin), static_cast<double>(kb::project::kProjectWindowExtentMax), true };
     case ProjectSettingsNumber::MasterVolume:
         return { 0.0, 1.0, false };
+    case ProjectSettingsNumber::RenderScale:
+        return { static_cast<double>(kb::project::kProjectRenderScaleMin), static_cast<double>(kb::project::kProjectRenderScaleMax), false };
     case ProjectSettingsNumber::FrameRateCap:
     case ProjectSettingsNumber::Count:
     default:
@@ -1167,6 +1178,9 @@ std::string ProjectSettingsPanelRenderer::NumberText(const kb::project::ProjectS
         break;
     case ProjectSettingsNumber::MasterVolume:
         std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.masterVolume));
+        break;
+    case ProjectSettingsNumber::RenderScale:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.display.renderScale));
         break;
     case ProjectSettingsNumber::Count:
     default:
@@ -1203,6 +1217,9 @@ kb::project::ProjectSettings ProjectSettingsPanelRenderer::WithNumber(
         break;
     case ProjectSettingsNumber::MasterVolume:
         settings.masterVolume = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::RenderScale:
+        settings.display.renderScale = static_cast<float>(value);
         break;
     case ProjectSettingsNumber::Count:
     default:
@@ -1290,6 +1307,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
     if (category == ProjectSettingsCategory::Display) {
         constexpr std::array<ProjectSettingsHitKind, 5> kinds{ ProjectSettingsHitKind::WindowModeOption, ProjectSettingsHitKind::WindowSizeOption,
             ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::FrameRateOption };
+        if (PointInRect(rects.displayLabel[5], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(ProjectSettingsNumber::RenderScale), .rect = rects.renderScaleValue };
+        }
         for (int row = 0; row < 5; ++row) {
             if (PointInRect(rects.displayLabel[row], x, y)) {
                 // A toggle says which one it is (0 Resizable, 1 VSync), as when it is clicked.

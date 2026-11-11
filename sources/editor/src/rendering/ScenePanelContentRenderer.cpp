@@ -792,6 +792,7 @@ void AppendNavigationMesh(
             sceneProfile->fxaaEnabled = sceneProfile->fxaaEnabled || sceneProfile->temporalAntiAliasingEnabled;
             sceneProfile->temporalAntiAliasingEnabled = false;
             sceneProfile->temporalJitterEnabled = false;
+            sceneProfile->motionBlurEnabled = false;
             sceneProfile->outputTransform.autoExposure.temporalAdaptationEnabled = false;
             if (sceneProfile->autoExposureMetering == kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::HdrColor) {
                 sceneProfile->autoExposureMetering = kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::SceneLighting;
@@ -868,6 +869,8 @@ void AppendNavigationMesh(
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
+        // Play renders at the project's render scale; edit mode stays at full resolution.
+        .renderScale = continuousRuntimeFrames ? sceneContext.ProjectConfiguration().display.renderScale : 1.0F,
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
         .cameraOverride = presentPrimarySceneCamera

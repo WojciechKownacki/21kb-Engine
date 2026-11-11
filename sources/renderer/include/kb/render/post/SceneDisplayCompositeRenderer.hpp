@@ -25,6 +25,8 @@ struct SceneDisplayCompositeDesc {
     // FXAA on the display image (FullscreenTexturePassDesc::antiAliasing); `hdrExtent` is the size of hdrColor.
     bool antiAliasing = false;
     RenderExtent hdrExtent{};
+    // hdrColor was rendered below the output resolution (FullscreenTexturePassDesc::upscale).
+    bool upscale = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

@@ -14,6 +14,8 @@ struct ScenePostProcessSettings {
         SceneLighting,
         Manual,
     };
+    static constexpr std::uint32_t kMotionBlurSamplesMin = 4U;
+    static constexpr std::uint32_t kMotionBlurSamplesMax = 16U;
 
     bool bloomEnabled = true;
     float bloomStrength = 0.05F;
@@ -51,6 +53,11 @@ struct ScenePostProcessSettings {
     bool screenSpaceReflectionsEnabled = false;
     float screenSpaceReflectionsIntensity = 1.0F;
     float screenSpaceReflectionsMaxDistance = 25.0F;
+    // Camera and object motion blur along the motion vectors. Intensity 0..1 is the fraction of the
+    // frame the shutter stays open, samples (4..16) the taps along each pixel's motion. Off by default.
+    bool motionBlurEnabled = false;
+    float motionBlurIntensity = 0.5F;
+    std::uint32_t motionBlurSamples = 8U;
     // Global illumination (the post-process Global Illumination
     // Method): light bounced off the scene, gathered on screen or traced through the voxel grid
     // around the camera, so a closed room is lit by what its lights reach and not by the sky.

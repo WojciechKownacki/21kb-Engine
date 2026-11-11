@@ -245,6 +245,8 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     display.vsync = document.GetBool(kDisplay, "VSync").value_or(defaults.display.vsync);
     display.frameRateCap = ReadBounded(document, kDisplay, "FrameRateCap", defaults.display.frameRateCap,
         0U, kProjectFrameRateCapMax);
+    display.renderScale = ReadBoundedFloat(document, kDisplay, "RenderScale", defaults.display.renderScale,
+        kProjectRenderScaleMin, kProjectRenderScaleMax);
     result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
     const std::int64_t tagCount = std::clamp<std::int64_t>(
         document.GetInt(kTags, "Count").value_or(0), 0, static_cast<std::int64_t>(kProjectTagsMax));
@@ -324,6 +326,7 @@ bool ProjectSettingsStore::Save(
     document.SetBool(kDisplay, "Resizable", settings.display.resizable);
     document.SetBool(kDisplay, "VSync", settings.display.vsync);
     document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
+    document.SetFloat(kDisplay, "RenderScale", settings.display.renderScale);
     document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
     // The tags as a count and one key each; keys a shorter list leaves behind are removed.
     const std::size_t tagCount = std::min(settings.tags.size(), kProjectTagsMax);

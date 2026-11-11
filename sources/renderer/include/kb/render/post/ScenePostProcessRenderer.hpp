@@ -73,6 +73,7 @@ private:
     bgfx::UniformHandle temporalParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle dofParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle dofViewDepthPlaneUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionBlurParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout fullscreenLayout_{};
     bgfx::VertexBufferHandle fullscreenVertexBuffer_ = BGFX_INVALID_HANDLE;
 };

@@ -3923,19 +3923,22 @@ void RunPostProcessCommandTests() {
     const CommandRun created = Run(&kb::cli::RunPostProcessNewCommand, { "--project", project, "--name", "Look",
         "--set", "vignetteEnabled=1", "--set", "vignetteIntensity=0.45", "--set", "ambientOcclusionEnabled=1",
         "--set", "ambientOcclusionRadius=0.9", "--set", "screenSpaceReflectionsEnabled=1",
-        "--set", "screenSpaceReflectionsIntensity=0.5", "--set", "screenSpaceReflectionsMaxDistance=12" });
+        "--set", "screenSpaceReflectionsIntensity=0.5", "--set", "screenSpaceReflectionsMaxDistance=12",
+        "--set", "motionBlurEnabled=1", "--set", "motionBlurIntensity=0.75", "--set", "motionBlurSamples=12" });
     Require(created.exitCode == 0 && Contains(created.output, "vignetteIntensity 0.45") &&
             Contains(created.output, "ambientOcclusionEnabled 1") && Contains(created.output, "ambientOcclusionRadius 0.9") &&
             Contains(created.output, "screenSpaceReflectionsEnabled 1") && Contains(created.output, "screenSpaceReflectionsIntensity 0.5") &&
-            Contains(created.output, "screenSpaceReflectionsMaxDistance 12"),
-        "post-process-new must write the vignette, ambient occlusion and reflection fields: " + created.output);
+            Contains(created.output, "screenSpaceReflectionsMaxDistance 12") && Contains(created.output, "motionBlurEnabled 1") &&
+            Contains(created.output, "motionBlurIntensity 0.75") && Contains(created.output, "motionBlurSamples 12"),
+        "post-process-new must write the vignette, ambient occlusion, reflection and motion blur fields: " + created.output);
     const std::optional<kb::render::ScenePostProcessSettings> saved = kb::render::PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::path{ project } / "Assets" / "PostProcess" / "Look.kbppfx");
     Require(saved.has_value() && saved->vignetteEnabled && saved->ambientOcclusionEnabled &&
             std::abs(saved->ambientOcclusionRadius - 0.9F) < 0.0001F &&
             saved->screenSpaceReflectionsEnabled && std::abs(saved->screenSpaceReflectionsIntensity - 0.5F) < 0.0001F &&
-            std::abs(saved->screenSpaceReflectionsMaxDistance - 12.0F) < 0.0001F,
-        "the profile file did not keep the vignette, ambient occlusion and reflections");
+            std::abs(saved->screenSpaceReflectionsMaxDistance - 12.0F) < 0.0001F &&
+            saved->motionBlurEnabled && std::abs(saved->motionBlurIntensity - 0.75F) < 0.0001F && saved->motionBlurSamples == 12U,
+        "the profile file did not keep the vignette, ambient occlusion, reflections and motion blur");
     const CommandRun refused = Run(&kb::cli::RunPostProcessSetCommand, { "--project", project,
         "--profile", "/Game/PostProcess/Look.kbppfx", "--set", "vignetteIntensity=2" });
     Require(refused.exitCode != 0 && Contains(refused.output, "vignetteIntensity") && Contains(refused.output, "ambientOcclusionRadius"),

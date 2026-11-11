@@ -637,6 +637,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_tex.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_upscale.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_strip.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_decal.sc
@@ -730,6 +731,10 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         if(_fog_shader_output MATCHES "/fs_post_bloom_combine\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/screen_uv.sh")
+        endif()
+        if(_fog_shader_output MATCHES "/fs_present_(tex|upscale)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/present_display.sh")
         endif()
         if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND

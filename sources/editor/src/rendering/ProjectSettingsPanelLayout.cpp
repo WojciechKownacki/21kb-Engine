@@ -160,7 +160,7 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
             buttonLeft += buttonWidth + kButtonGap;
         }
     };
-    for (int row = 0; row < 5; ++row) {
+    for (int row = 0; row < 6; ++row) {
         rects.displayLabel[row] = RECT{ left, rowTopAt(row), left + kLabelWidth, rowTopAt(row) + kRowHeight };
     }
     buttonRow(rects.windowModeButton, 2, rowTopAt(0), kModeButtonWidth);
@@ -181,6 +181,7 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.windowHeightValue = RECT{ rects.windowWidthValue.right + kButtonGap, rects.windowWidthValue.top,
         rects.windowWidthValue.right + kButtonGap + kNumberCellWidth, rects.windowWidthValue.bottom };
     rects.frameRateValue = numberCell(rects.frameRateButton[4], rowTopAt(4));
+    rects.renderScaleValue = RECT{ left + kLabelWidth, rowTopAt(5) + 3, left + kLabelWidth + kNumberCellWidth, rowTopAt(5) + kRowHeight - 3 };
 
     // Scenes page: the explanation, the add button, then the list down to the bottom of the pane.
     rects.scenesIntro = RECT{ left, rects.sectionHeader.bottom + kRowGap, right, rects.sectionHeader.bottom + kRowGap + kDescriptionHeight };

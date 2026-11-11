@@ -62,6 +62,7 @@ bool RendererFinalCompositeSubmitter::Submit(
         // tonemap) is not.
         .antiAliasing = postProcessOutput.fxaaEnabled && !postProcessOutput.temporalAntiAliasingEnabled,
         .postProcessExtent = postProcessOutput.extent,
+        .upscale = desc.upscaledExtent.IsValid(),
     });
 }
 

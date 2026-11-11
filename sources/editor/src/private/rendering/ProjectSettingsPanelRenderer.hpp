@@ -111,6 +111,7 @@ enum class ProjectSettingsNumber : int {
     WindowHeight,
     FrameRateCap,
     MasterVolume,
+    RenderScale,
     Count,
 };
 // What a number setting accepts: whole numbers or not, and the bounds a typed value is clamped to.

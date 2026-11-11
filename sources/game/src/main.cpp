@@ -584,6 +584,7 @@ int RunGame(const GameOptions& options) {
         std::cerr << "kb_game: renderer initialization failed\n";
         return EXIT_FAILURE;
     }
+    renderer.SetRenderScale(display.renderScale);
     {
         auto lighting = renderer.DefaultSceneLightingConfig();
         switch (projectRuntime.lightingPath) {

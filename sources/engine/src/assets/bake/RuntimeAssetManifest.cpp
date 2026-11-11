@@ -25,13 +25,16 @@ constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R
 // The word after the version: once reserved and zero, now flags. Bit 0 marks a partial manifest;
 // bit 1 says the tombstone lists follow the auxiliary files; bit 2 says the display and simulation
 // settings follow the physics layers asset (settings that are all defaults leave them out); bit 3 says the
-// master volume follows them and bit 4 that the project's tag list does (each left out while it is the default).
+// master volume follows them and bit 4 that the project's tag list does (each left out while it is the default);
+// bit 5 says the display render scale follows the tags (left out at 1).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
 constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
 constexpr std::uint32_t kMasterVolumeManifestFlag = 8U;
 constexpr std::uint32_t kTagsManifestFlag = 16U;
-constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag;
+constexpr std::uint32_t kRenderScaleManifestFlag = 32U;
+constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag |
+    kRenderScaleManifestFlag;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -249,6 +252,7 @@ private:
         within(display.windowHeight, kb::project::kProjectWindowExtentMin, kb::project::kProjectWindowExtentMax) &&
         display.windowMode <= kb::project::ProjectWindowMode::BorderlessFullscreen &&
         display.frameRateCap <= kb::project::kProjectFrameRateCapMax &&
+        within(display.renderScale, kb::project::kProjectRenderScaleMin, kb::project::kProjectRenderScaleMax) &&
         within(simulation.fixedStepHz, kb::project::kProjectFixedStepHzMin, kb::project::kProjectFixedStepHzMax) &&
         within(simulation.gravity[0], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
         within(simulation.gravity[1], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
@@ -265,7 +269,8 @@ private:
     const kb::project::ProjectSettings defaults;
     return ((settings.display != defaults.display || settings.simulation != defaults.simulation) ? kRuntimeSettingsManifestFlag : 0U) |
         (settings.masterVolume != defaults.masterVolume ? kMasterVolumeManifestFlag : 0U) |
-        (!settings.tags.empty() ? kTagsManifestFlag : 0U);
+        (!settings.tags.empty() ? kTagsManifestFlag : 0U) |
+        (settings.display.renderScale != defaults.display.renderScale ? kRenderScaleManifestFlag : 0U);
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -506,6 +511,9 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
             PutString(bytes, tag);
         }
     }
+    if ((flags & kRenderScaleManifestFlag) != 0U) {
+        PutFloat(bytes, settings.display.renderScale);
+    }
 }
 
 [[nodiscard]] bool DecodeRuntimeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
@@ -564,7 +572,8 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     settings.inputEnabled = inputEnabled != 0U;
     return ((flags & kRuntimeSettingsManifestFlag) == 0U || DecodeRuntimeSettings(reader, settings)) &&
         ((flags & kMasterVolumeManifestFlag) == 0U || reader.ReadFloat(settings.masterVolume)) &&
-        ((flags & kTagsManifestFlag) == 0U || DecodeTags(reader, settings.tags));
+        ((flags & kTagsManifestFlag) == 0U || DecodeTags(reader, settings.tags)) &&
+        ((flags & kRenderScaleManifestFlag) == 0U || reader.ReadFloat(settings.display.renderScale));
 }
 
 } // namespace

@@ -58,8 +58,8 @@ struct ProjectSettingsPanelLayoutRects {
     // with one button per level (Auto, Low, Medium, High, Ultra).
     RECT qualityLabel[4]{};
     RECT qualityButton[4][5]{};
-    // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit.
-    RECT displayLabel[5]{};
+    // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit, render scale.
+    RECT displayLabel[6]{};
     RECT windowModeButton[2]{};
     RECT windowSizeButton[4]{};
     RECT resizableCheckbox{};
@@ -69,6 +69,7 @@ struct ProjectSettingsPanelLayoutRects {
     RECT windowWidthValue{};
     RECT windowHeightValue{};
     RECT frameRateValue{};
+    RECT renderScaleValue{};
     // Scenes page: a line of explanation, the button that adds a scene, and the area the build list fills
     // (one row per scene, each with a move up and a remove button).
     RECT scenesIntro{};

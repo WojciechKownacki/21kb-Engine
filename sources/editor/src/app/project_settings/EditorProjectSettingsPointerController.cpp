@@ -216,6 +216,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
             return ProjectSettingsTooltipKind::FrameRateLimit;
         case ProjectSettingsNumber::MasterVolume:
             return ProjectSettingsTooltipKind::MasterVolume;
+        case ProjectSettingsNumber::RenderScale:
+            return ProjectSettingsTooltipKind::RenderScale;
         case ProjectSettingsNumber::Count:
         default:
             return ProjectSettingsTooltipKind::None;
