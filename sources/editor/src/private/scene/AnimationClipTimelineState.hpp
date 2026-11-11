@@ -31,11 +31,17 @@ struct AnimationClipTimelineTrack {
     kb::scene::SkeletonBoneId boneId = 0U;
     std::string label;
     std::vector<AnimationClipTimelineKey> keys;
+    // The clip curve a Curve track shows.
+    std::string curveName;
 };
 
 class AnimationClipTimelineState {
 public:
     void SetClip(const kb::scene::AnimationClip& clip) {
+        // An edit of the same clip keeps the selected track.
+        const AnimationClipTimelineTrack* previous = SelectedTrackData();
+        const auto previousKind = previous != nullptr ? previous->kind : AnimationClipTimelineTrackKind::Bone;
+        const std::string previousLabel = previous != nullptr ? previous->label : std::string{};
         durationSeconds_ = clip.durationSeconds;
         tracks_.clear();
         tracks_.reserve(
@@ -61,7 +67,7 @@ public:
         for (const kb::scene::AnimationCurveTrack& source : clip.curves) {
             tracks_.push_back({ AnimationClipTimelineTrackKind::Curve, 0U,
                 EditorLocalization::Format("animationClipEditor.track.curve", "Curve {name}", { { "name", source.name } }),
-                CurveKeys(source) });
+                CurveKeys(source), source.name });
         }
         if (!clip.events.empty()) {
             std::vector<AnimationClipTimelineKey> keys;
@@ -90,6 +96,12 @@ public:
             return lhs.label < rhs.label;
         });
         selectedTrack_ = tracks_.empty() ? kNoTrack : 0U;
+        if (!previousLabel.empty()) {
+            const auto kept = std::find_if(tracks_.begin(), tracks_.end(), [&](const AnimationClipTimelineTrack& track) {
+                return track.kind == previousKind && track.label == previousLabel;
+            });
+            if (kept != tracks_.end()) selectedTrack_ = static_cast<std::size_t>(kept - tracks_.begin());
+        }
     }
 
     [[nodiscard]] float DurationSeconds() const noexcept { return durationSeconds_; }
@@ -177,7 +189,7 @@ private:
     [[nodiscard]] static std::vector<AnimationClipTimelineKey> CurveKeys(const kb::scene::AnimationCurveTrack& source) {
         std::vector<AnimationClipTimelineKey> keys;
         keys.reserve(source.keyframes.size());
-        for (const kb::scene::AnimationCurveKeyframe& key : source.keyframes) keys.push_back({ key.timeSeconds, 0U });
+        for (const kb::scene::AnimationCurveKeyframe& key : source.keyframes) keys.push_back({ key.time, 0U });
         SortKeys(keys);
         return keys;
     }

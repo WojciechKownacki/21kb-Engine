@@ -3,6 +3,7 @@
 
 #if defined(_WIN32)
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/CurveEditorRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/HeroIconKind.hpp"
@@ -252,33 +253,6 @@ void DrawRecipeTile(HDC dc, const RECT& rect, const kb::assets::AssetMetadata& r
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-void DrawCurvePreview(HDC dc, const RECT& rect, const kb::math::Curve& curve) {
-    FillRound(dc, rect, RGB(18, 20, 24), kStudioBorder, 4.0F);
-    if (curve.keyframes.size() < 2U || rect.right - rect.left < 4) return;
-    HeroIconGdiplusRuntime::EnsureStarted();
-    Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Gdiplus::Pen pen(Gdip(kStudioGold), 1.6F);
-    float minValue = curve.keyframes.front().value;
-    float maxValue = minValue;
-    for (const auto& key : curve.keyframes) {
-        minValue = std::min(minValue, key.value);
-        maxValue = std::max(maxValue, key.value);
-    }
-    const float span = std::max(0.0001F, maxValue - minValue);
-    const float width = static_cast<float>(rect.right - rect.left - 4);
-    const float height = static_cast<float>(rect.bottom - rect.top - 4);
-    Gdiplus::PointF previous{};
-    for (std::size_t index = 0U; index < curve.keyframes.size(); ++index) {
-        const float x = static_cast<float>(rect.left + 2) + curve.keyframes[index].time * width;
-        const float y = static_cast<float>(rect.bottom - 2) -
-            ((curve.keyframes[index].value - minValue) / span) * height;
-        const Gdiplus::PointF point{x, y};
-        if (index != 0U) graphics.DrawLine(&pen, previous, point);
-        previous = point;
-    }
-}
-
 void DrawColorSwatch(HDC dc, const RECT& rect, const kb::math::Color& color) {
     FillRound(dc, rect, RGB(18, 20, 24), kStudioBorder, 4.0F);
     if (rect.right - rect.left < 4 || rect.bottom - rect.top < 4) return;
@@ -391,7 +365,7 @@ void DrawProperty(HDC dc, const ParticleEditorPropertyRowLayout& row,
         return;
     }
     if (property.widget == ParticleEditorPropertyWidget::Curve)
-        DrawCurvePreview(dc, row.curvePreview, property.curve);
+        return; // drawn by the curve view
     else if (property.widget == ParticleEditorPropertyWidget::Gradient)
         DrawGradientPreview(dc, row.curvePreview, property.gradient);
     else if (property.widget == ParticleEditorPropertyWidget::Color) {
@@ -534,8 +508,17 @@ void ParticleEditorPanelRenderer::Paint(
     }
     DrawSectionHeader(dc, layout.propertyHeader, theme, EditorText("particleEditor.emitterSettings", "Emitter Settings"), HeroIconKind::AdjustmentsHorizontal,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Settings));
-    for (std::size_t index = 0U; index < layout.propertyRowCount; ++index)
+    for (std::size_t index = 0U; index < layout.propertyRowCount; ++index) {
         DrawProperty(dc, layout.propertyRows[index], inspector.properties[index], theme);
+        const RECT& curveRect = layout.propertyRows[index].curvePreview;
+        if (inspector.properties[index].widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve &&
+            curveRect.right > curveRect.left) {
+            const CurveEditorState view = sceneContext.ParticleCurveEditorView(index, inspector.properties[index].curve,
+                { static_cast<float>(curveRect.left), static_cast<float>(curveRect.top),
+                  static_cast<float>(curveRect.right), static_cast<float>(curveRect.bottom) });
+            CurveEditorRenderer::Paint(dc, curveRect, view, theme);
+        }
+    }
     const std::string recipeCount = std::to_string(recipes.size());
     DrawSectionHeader(dc, layout.recipeHeader, theme, EditorText("particleEditor.recipes", "Recipes"), HeroIconKind::ListBullet,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Recipes), recipeCount);

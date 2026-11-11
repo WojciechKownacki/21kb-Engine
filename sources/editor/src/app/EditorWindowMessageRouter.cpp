@@ -4,6 +4,7 @@
 #include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCurveEditorPointerHandler.hpp"
 #include "app/EditorEditCommandInputHandler.hpp"
 #include "app/EditorSceneFileCommands.hpp"
 #include "app/EditorWindowInvalidator.hpp"
@@ -752,6 +753,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (EditorCurveEditorPointerHandler{ context_ }.HandleKey(messageWindow, wparam)) return 0;
         if (wparam == VK_ESCAPE && context_.dockController.CancelDragAndRestore()) {
             context_.sceneViewport.RequestPresent();
             InvalidateRect(context_.mainWindow, nullptr, FALSE);

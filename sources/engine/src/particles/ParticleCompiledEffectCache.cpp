@@ -28,6 +28,8 @@ void WriteColor(std::vector<std::uint8_t>& bytes, kb::math::Color value) {
 }
 void WriteCurveKey(std::vector<std::uint8_t>& bytes, const ParticleCompiledCurveKey& key) {
     WriteFloat(bytes, key.time); WriteFloat(bytes, key.value); WriteUInt8(bytes, static_cast<std::uint8_t>(key.easing));
+    WriteUInt8(bytes, static_cast<std::uint8_t>(key.tangentMode)); WriteFloat(bytes, key.inTangent);
+    WriteFloat(bytes, key.outTangent);
 }
 void WriteCurve(std::vector<std::uint8_t>& bytes, const ParticleCompiledCurve& curve) {
     WriteUInt8(bytes, curve.keyCount);
@@ -181,8 +183,12 @@ class Reader {
     bool Color(kb::math::Color& value) { return F(value.r) && F(value.g) && F(value.b) && F(value.a); }
     bool CurveKey(ParticleCompiledCurveKey& value) {
         std::uint8_t easing = 0U;
-        if (!F(value.time) || !F(value.value) || !U8(easing) || easing > static_cast<std::uint8_t>(kb::math::Easing::InOutBounce)) return false;
-        value.easing = static_cast<kb::math::Easing>(easing); return true;
+        std::uint8_t mode = 0U;
+        if (!F(value.time) || !F(value.value) || !U8(easing) || easing > static_cast<std::uint8_t>(kb::math::Easing::InOutBounce) ||
+            !U8(mode) || mode > static_cast<std::uint8_t>(kb::math::CurveTangentMode::Free) || !F(value.inTangent) ||
+            !F(value.outTangent)) return false;
+        value.easing = static_cast<kb::math::Easing>(easing);
+        value.tangentMode = static_cast<kb::math::CurveTangentMode>(mode); return true;
     }
     bool Curve(ParticleCompiledCurve& value) {
         if (!U8(value.keyCount) || value.keyCount > kb::scene::kParticleEffectMaxCurveKeys) return false;

@@ -679,25 +679,76 @@ float Evaluate(Easing easing, float t) noexcept {
     return t;
 }
 
-float Evaluate(const Curve& curve, float t) noexcept {
-    if (curve.keyframes.empty()) {
+float Evaluate(std::span<const CurveKeyframe> keyframes, float t) noexcept {
+    if (keyframes.empty()) {
         return 0.0F;
     }
-    if (curve.keyframes.size() == 1U || t <= curve.keyframes.front().time) {
-        return curve.keyframes.front().value;
+    if (keyframes.size() == 1U || t <= keyframes.front().time) {
+        return keyframes.front().value;
     }
-    if (t >= curve.keyframes.back().time) {
-        return curve.keyframes.back().value;
+    if (t >= keyframes.back().time) {
+        return keyframes.back().value;
     }
-    for (std::size_t i = 0U; i + 1U < curve.keyframes.size(); ++i) {
-        const CurveKeyframe& a = curve.keyframes[i];
-        const CurveKeyframe& b = curve.keyframes[i + 1U];
+    for (std::size_t i = 0U; i + 1U < keyframes.size(); ++i) {
+        const CurveKeyframe& a = keyframes[i];
+        const CurveKeyframe& b = keyframes[i + 1U];
         if (t <= b.time) {
             const float localT = InverseLerp(a.time, b.time, t);
-            return Lerp(a.value, b.value, Evaluate(a.easing, localT));
+            switch (a.tangentMode) {
+            case CurveTangentMode::Easing:
+                return Lerp(a.value, b.value, Evaluate(a.easing, localT));
+            case CurveTangentMode::Constant:
+                return t < b.time ? a.value : b.value;
+            default: {
+                // Cubic Hermite basis over the segment; tangents are per time unit.
+                const float span = b.time - a.time;
+                const float s2 = localT * localT;
+                const float s3 = s2 * localT;
+                const float h00 = 2.0F * s3 - 3.0F * s2 + 1.0F;
+                const float h10 = s3 - 2.0F * s2 + localT;
+                const float h01 = -2.0F * s3 + 3.0F * s2;
+                const float h11 = s3 - s2;
+                return h00 * a.value + h10 * span * a.outTangent + h01 * b.value + h11 * span * b.inTangent;
+            }
+            }
         }
     }
-    return curve.keyframes.back().value;
+    return keyframes.back().value;
+}
+
+float Evaluate(const Curve& curve, float t) noexcept {
+    return Evaluate(std::span<const CurveKeyframe>{curve.keyframes}, t);
+}
+
+void RecomputeTangents(std::span<CurveKeyframe> keyframes) noexcept {
+    const auto slope = [](const CurveKeyframe& from, const CurveKeyframe& to) noexcept {
+        const float span = to.time - from.time;
+        return span > 0.0F ? (to.value - from.value) / span : 0.0F;
+    };
+    for (std::size_t i = 0U; i < keyframes.size(); ++i) {
+        CurveKeyframe& key = keyframes[i];
+        const bool hasPrevious = i > 0U;
+        const bool hasNext = i + 1U < keyframes.size();
+        switch (key.tangentMode) {
+        case CurveTangentMode::Flat:
+            key.inTangent = 0.0F;
+            key.outTangent = 0.0F;
+            break;
+        case CurveTangentMode::Linear:
+            key.inTangent = hasPrevious ? slope(keyframes[i - 1U], key) : 0.0F;
+            key.outTangent = hasNext ? slope(key, keyframes[i + 1U]) : 0.0F;
+            break;
+        case CurveTangentMode::Auto: {
+            // Smooth through both neighbours; end keys stay flat.
+            const float smooth = hasPrevious && hasNext ? slope(keyframes[i - 1U], keyframes[i + 1U]) : 0.0F;
+            key.inTangent = smooth;
+            key.outTangent = smooth;
+            break;
+        }
+        default:
+            break;
+        }
+    }
 }
 
 Color Evaluate(const Gradient& gradient, float t) noexcept {
@@ -729,6 +780,9 @@ Color Evaluate(const Gradient& gradient, float t) noexcept {
 namespace {
 
 constexpr std::uint32_t kCurveMagic = 0x4B435256U; // "KCRV"
+// Version 2 adds tangentMode(1) + inTangent(4) + outTangent(4) per keyframe.
+constexpr std::uint32_t kCurveMagicV2 = 0x4B435632U; // "KCV2"
+constexpr std::size_t kCurveKeyframeBytesV2 = 18U;
 constexpr std::uint32_t kGradientMagic = 0x4B475244U; // "KGRD"
 
 // LIB-053: the exact on-disk size of one element, used to reject a
@@ -790,13 +844,21 @@ void AppendFloat(std::vector<std::uint8_t>& bytes, float value) {
 } // namespace
 
 std::vector<std::uint8_t> Serialize(const Curve& curve) {
+    // Curves without tangent data keep writing version 1, byte for byte.
+    const bool hasTangents = std::any_of(curve.keyframes.begin(), curve.keyframes.end(),
+        [](const CurveKeyframe& keyframe) { return keyframe.tangentMode != CurveTangentMode::Easing; });
     std::vector<std::uint8_t> bytes;
-    AppendUInt32(bytes, kCurveMagic);
+    AppendUInt32(bytes, hasTangents ? kCurveMagicV2 : kCurveMagic);
     AppendUInt32(bytes, static_cast<std::uint32_t>(curve.keyframes.size()));
     for (const CurveKeyframe& keyframe : curve.keyframes) {
         AppendFloat(bytes, keyframe.time);
         AppendFloat(bytes, keyframe.value);
         bytes.push_back(static_cast<std::uint8_t>(keyframe.easing));
+        if (hasTangents) {
+            bytes.push_back(static_cast<std::uint8_t>(keyframe.tangentMode));
+            AppendFloat(bytes, keyframe.inTangent);
+            AppendFloat(bytes, keyframe.outTangent);
+        }
     }
     return bytes;
 }
@@ -805,15 +867,16 @@ bool Deserialize(std::span<const std::uint8_t> bytes, Curve& outCurve) {
     std::size_t offset = 0U;
     std::uint32_t magic = 0U;
     std::uint32_t count = 0U;
-    if (!ReadUInt32(bytes, offset, magic) || magic != kCurveMagic || !ReadUInt32(bytes, offset, count)) {
+    if (!ReadUInt32(bytes, offset, magic) || (magic != kCurveMagic && magic != kCurveMagicV2) || !ReadUInt32(bytes, offset, count)) {
         return false;
     }
+    const bool hasTangents = magic == kCurveMagicV2;
     // LIB-053: reject a count the payload cannot back BEFORE reserving, so a
     // tiny hostile file cannot force a huge allocation. The per-element
     // reads in the loop below already catch a truncated payload, but only
     // after reserve(count) has already tried to allocate for the fabricated
     // count — this guard is what makes the reserve safe.
-    if (!PayloadHoldsElements(bytes, offset, count, kCurveKeyframeBytes)) {
+    if (!PayloadHoldsElements(bytes, offset, count, hasTangents ? kCurveKeyframeBytesV2 : kCurveKeyframeBytes)) {
         return false;
     }
     std::vector<CurveKeyframe> keyframes;
@@ -826,6 +889,14 @@ bool Deserialize(std::span<const std::uint8_t> bytes, Curve& outCurve) {
             return false;
         }
         keyframe.easing = static_cast<Easing>(easingOrdinal);
+        if (hasTangents) {
+            std::uint8_t modeOrdinal = 0U;
+            if (!ReadUInt8(bytes, offset, modeOrdinal) || modeOrdinal > static_cast<std::uint8_t>(CurveTangentMode::Free) ||
+                !ReadFloat(bytes, offset, keyframe.inTangent) || !ReadFloat(bytes, offset, keyframe.outTangent)) {
+                return false;
+            }
+            keyframe.tangentMode = static_cast<CurveTangentMode>(modeOrdinal);
+        }
         keyframes.push_back(keyframe);
     }
     outCurve.keyframes = std::move(keyframes);

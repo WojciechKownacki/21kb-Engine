@@ -1291,35 +1291,11 @@ kb::particles::ParticleRuntimeStatus CpuParticleBackend::PrewarmInstance(std::ui
 }
 
 float CpuParticleBackend::EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept {
-    if (emitter.rateKeyCount == 0U) return 0.0F;
-    if (emitter.rateKeyCount == 1U || timeSeconds <= emitter.rateKeys[0].time) return emitter.rateKeys[0].value;
-    const CompiledCurveKey& last = emitter.rateKeys[emitter.rateKeyCount - 1U];
-    if (timeSeconds >= last.time) return last.value;
-    for (std::uint8_t index = 0U; index + 1U < emitter.rateKeyCount; ++index) {
-        const CompiledCurveKey& from = emitter.rateKeys[index];
-        const CompiledCurveKey& to = emitter.rateKeys[index + 1U];
-        if (timeSeconds <= to.time) {
-            const float alpha = (timeSeconds - from.time) / (to.time - from.time);
-            const float eased = kb::math::Evaluate(from.easing, alpha);
-            return from.value + (to.value - from.value) * eased;
-        }
-    }
-    return last.value;
+    return kb::math::Evaluate(std::span<const CompiledCurveKey>{emitter.rateKeys.data(), emitter.rateKeyCount}, timeSeconds);
 }
 
 float CpuParticleBackend::EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept {
-    if (curve.keyCount == 1U || normalizedAge <= curve.keys[0].time) return curve.keys[0].value;
-    const CompiledCurveKey& last = curve.keys[curve.keyCount - 1U];
-    if (normalizedAge >= last.time) return last.value;
-    for (std::uint8_t index = 0U; index + 1U < curve.keyCount; ++index) {
-        const CompiledCurveKey& from = curve.keys[index];
-        const CompiledCurveKey& to = curve.keys[index + 1U];
-        if (normalizedAge <= to.time) {
-            const float alpha = (normalizedAge - from.time) / (to.time - from.time);
-            return kb::math::Lerp(from.value, to.value, kb::math::Evaluate(from.easing, alpha));
-        }
-    }
-    return last.value;
+    return kb::math::Evaluate(std::span<const CompiledCurveKey>{curve.keys.data(), curve.keyCount}, normalizedAge);
 }
 
 kb::math::Color CpuParticleBackend::EvaluateGradient(

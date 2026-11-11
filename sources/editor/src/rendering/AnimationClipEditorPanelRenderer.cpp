@@ -4,6 +4,7 @@
 #if defined(_WIN32)
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/CurveEditorRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -189,6 +190,11 @@ void AnimationClipEditorPanelRenderer::Paint(
     const RECT viewport{ content.left, content.top + kHeaderHeight, content.right, content.bottom - timelineHeight };
     PaintTimeline(dc, RECT{ content.left, viewport.bottom, content.right, content.bottom },
         sceneContext.AnimationClipEditorTimeline(), theme);
+    if (const std::optional<RECT> curveRect = CurveViewRect(content, sceneContext.AnimationClipEditorTimeline())) {
+        const std::optional<CurveEditorState> view = sceneContext.AnimationClipCurveEditorView({ static_cast<float>(curveRect->left),
+            static_cast<float>(curveRect->top), static_cast<float>(curveRect->right), static_cast<float>(curveRect->bottom) });
+        if (view.has_value()) CurveEditorRenderer::Paint(dc, *curveRect, *view, theme);
+    }
     if (sceneViewport == nullptr) return;
     const std::uint64_t revision = sceneContext.AnimationClipEditorPreviewRevision();
     EditorSceneBgfxViewport::PresentSettings settings{};
@@ -237,6 +243,16 @@ std::optional<float> AnimationClipEditorPanelRenderer::TimelineTimeAt(
     const int width = std::max(1, static_cast<int>(content.right) - tracksLeft - 1);
     const float normalized = std::clamp(static_cast<float>(x - tracksLeft) / static_cast<float>(width), 0.0F, 1.0F);
     return timeline.PanSeconds() + normalized * timeline.VisibleDurationSeconds();
+}
+
+std::optional<RECT> AnimationClipEditorPanelRenderer::CurveViewRect(
+    const RECT& content, const AnimationClipTimelineState& timeline) noexcept {
+    const AnimationClipTimelineTrack* selected = timeline.SelectedTrackData();
+    if (selected == nullptr || selected->kind != AnimationClipTimelineTrackKind::Curve) return std::nullopt;
+    const int timelineHeight = std::clamp((static_cast<int>(content.bottom) - static_cast<int>(content.top)) / 3, 150, 300);
+    const int outlinerWidth = std::clamp((static_cast<int>(content.right) - static_cast<int>(content.left)) / 4, 180, 320);
+    constexpr int kTimelineHeaderHeight = 24;
+    return RECT{ content.left + outlinerWidth, content.bottom - timelineHeight + kTimelineHeaderHeight, content.right, content.bottom };
 }
 
 std::optional<kb::scene::SkeletonBoneId> AnimationClipEditorPanelRenderer::BoneAt(

@@ -3326,14 +3326,7 @@ std::optional<float> SceneAnimatorService::Curve(const Scene& scene, SceneEntity
             if (track == motion.clip->curves.end()) return 0.0F;
             found = true;
             const float sampleTime = static_cast<float>(time * MotionPhaseScale(state, motion));
-            const auto& keys = track->keyframes;
-            if (sampleTime <= keys.front().timeSeconds) return keys.front().value;
-            if (sampleTime >= keys.back().timeSeconds) return keys.back().value;
-            const auto upper = std::upper_bound(keys.begin(), keys.end(), sampleTime,
-                [](float value, const AnimationCurveKeyframe& key) { return value < key.timeSeconds; });
-            const auto& before = *(upper - 1);
-            return std::lerp(before.value, upper->value,
-                (sampleTime - before.timeSeconds) / (upper->timeSeconds - before.timeSeconds));
+            return kb::math::Evaluate(std::span<const AnimationCurveKeyframe>{track->keyframes}, sampleTime);
         };
         float result = 0.0F;
         for (std::size_t i = 0; i < blend.count; ++i) result += sampleMotion(blend.values[i].sample)*blend.values[i].weight;

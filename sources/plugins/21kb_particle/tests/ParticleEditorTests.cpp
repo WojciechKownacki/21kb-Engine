@@ -441,6 +441,16 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(ParticleEmitterInspectorModel::ParseGradient(gradientRow->value, parsedGradient) &&
             parsedGradient.stops.size() == 2U && parsedGradient.stops[0].color.r == 1.0F,
         "ColorOverLife gradient text did not round-trip through ParseGradient");
+    kb::math::Curve tangentCurve;
+    tangentCurve.keyframes = {{.time = 0.0F, .value = 1.0F},
+        {.time = 1.0F, .value = 0.5F, .tangentMode = kb::math::CurveTangentMode::Free, .inTangent = -0.25F, .outTangent = 2.0F}};
+    kb::math::Curve parsedTangentCurve;
+    Require(ParticleEmitterInspectorModel::ParseCurve(ParticleEmitterInspectorModel::FormatCurve(tangentCurve), parsedTangentCurve) &&
+            parsedTangentCurve.keyframes.size() == 2U &&
+            parsedTangentCurve.keyframes[0].tangentMode == kb::math::CurveTangentMode::Easing &&
+            parsedTangentCurve.keyframes[1].tangentMode == kb::math::CurveTangentMode::Free &&
+            parsedTangentCurve.keyframes[1].inTangent == -0.25F && parsedTangentCurve.keyframes[1].outTangent == 2.0F,
+        "curve text with tangents did not round-trip through FormatCurve/ParseCurve");
     // Copy payloads before Apply replaces the document asset and invalidates iterators.
     auto editedGradient = std::get<kb::scene::ParticleColorOverLifeModule>(color->payload);
     auto editedCurve = std::get<kb::scene::ParticleSizeOverLifeModule>(sizeModule->payload);

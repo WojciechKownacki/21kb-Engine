@@ -307,6 +307,14 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls
         const auto point = Center(geometry.propertyRows[index].curvePreview);
         const auto hit = ParticleEditorPanelLayoutResolver::HitTest(geometry, point.x, point.y);
         if (hit.action != ParticleEditorPanelAction::EditProperty || hit.propertyIndex != index) return false;
+        if (widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve) {
+            // The curve view adds a key on the curve with Ctrl+click.
+            const auto keyCount = [&] { return context.ParticleEditorWorkingAsset()->emitters.front().spawn.rateOverTime.keyframes.size(); };
+            const std::size_t before = keyCount();
+            EditorScriptedKeyScope control(VK_CONTROL);
+            editor.Click(editor.Window(), point);
+            return keyCount() == before + 1U;
+        }
         particleDialogSeen = false;
         const HHOOK hook = SetWindowsHookExW(WH_CBT, ParticleDialogInput, nullptr, GetCurrentThreadId());
         if (!hook) return false;
@@ -315,9 +323,7 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyParticleControls
         return particleDialogSeen;
     };
     static_cast<void>(context.SelectParticleEditorEmitter(emitter));
-    if (!editProperty(kb::particle_editor::ParticleEditorPropertyWidget::Curve)) return {false, "real curve dialog"};
-    if (context.ParticleEditorWorkingAsset()->emitters.front().spawn.rateOverTime.keyframes.size() != 3U)
-        return {false, "curve control did not change keys"};
+    if (!editProperty(kb::particle_editor::ParticleEditorPropertyWidget::Curve)) return {false, "curve view did not add a key"};
     const auto beforeGradient = serialize();
     static_cast<void>(context.SelectParticleEditorModule(emitter, color));
     if (!editProperty(kb::particle_editor::ParticleEditorPropertyWidget::Gradient)) return {false, "real gradient picker"};

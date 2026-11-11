@@ -54,6 +54,7 @@
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
+#include "curves/CurveEditorInteraction.hpp"
 #include "scene/TimelineEditorDocumentState.hpp"
 #include "engine/scene/BlendSpace2D.hpp"
 #include "scene/EditorTimelinePreviewSession.hpp"
@@ -813,6 +814,18 @@ public:
     [[nodiscard]] bool SaveAnimationClipEditorAsset();
     [[nodiscard]] std::vector<kb::assets::AssetId> AnimationClipEditorCompatiblePreviewMeshes();
     [[nodiscard]] bool SetAnimationClipEditorPreviewMesh(kb::assets::AssetId meshId);
+    // Shared curve view: bound to the selected clip Curve track or a particle curve property.
+    [[nodiscard]] CurveEditorState& CurveEditor() noexcept { return curveEditor_; }
+    [[nodiscard]] const CurveEditorState& CurveEditor() const noexcept { return curveEditor_; }
+    [[nodiscard]] CurveEditorInteraction& CurveEditorInput() noexcept { return curveEditorInput_; }
+    [[nodiscard]] bool BindAnimationClipCurveEditor();
+    [[nodiscard]] bool BindParticleCurveEditor(std::size_t propertyIndex);
+    [[nodiscard]] std::optional<std::size_t> ParticleCurveEditorProperty() const noexcept;
+    [[nodiscard]] bool ApplyCurveEditorResult(const CurveEditorResult& result);
+    // What to draw: the bound view (window and selection kept) or a framed one, showing the document's keys.
+    [[nodiscard]] std::optional<CurveEditorState> AnimationClipCurveEditorView(const CurveEditorViewport& viewport) const;
+    [[nodiscard]] CurveEditorState ParticleCurveEditorView(
+        std::size_t propertyIndex, const kb::math::Curve& curve, const CurveEditorViewport& viewport) const;
     // Interactive opens are staged through AssetManager's worker so the Win32
     // double-click handler never parses a Skeletal Mesh on the message thread.
     // OpenSkeletalMeshEditorAsset intentionally remains synchronous for headless
@@ -1662,6 +1675,11 @@ private:
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
+    CurveEditorState curveEditor_;
+    CurveEditorInteraction curveEditorInput_;
+    std::string curveEditorClipCurve_;
+    std::optional<std::size_t> curveEditorParticleProperty_;
+    bool curveEditorCoalesce_ = false;
     TimelineEditorDocumentState timelineEditorDocument_;
     std::unique_ptr<BlendSpace2DEditorState> blendSpaceEditor_;
     std::unique_ptr<GameplayGraphEditorState> gameplayGraphEditor_;

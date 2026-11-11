@@ -5,9 +5,12 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace kb::tests {
 namespace {
@@ -710,6 +713,128 @@ void RunCurveAndGradientTest() {
     }
 }
 
+// Cubic Hermite tangents on curve keys: every tangent mode, version 1 data, and a round trip with tangents.
+void RunCurveTangentTest() {
+    using kb::math::Curve;
+    using kb::math::CurveKeyframe;
+    using kb::math::CurveTangentMode;
+    using kb::math::Easing;
+    const auto near = [](float a, float b) { return std::abs(a - b) <= 1.0e-5F; };
+
+    // Hermite: value 0 -> 1 over 2 s with outgoing slope 1 and incoming slope 0.
+    Curve hermite;
+    hermite.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 0.0F, .tangentMode = CurveTangentMode::Free, .inTangent = 0.0F, .outTangent = 1.0F },
+        CurveKeyframe{ .time = 2.0F, .value = 1.0F, .tangentMode = CurveTangentMode::Free, .inTangent = 0.0F, .outTangent = 0.0F },
+    };
+    // s = 0.5: h00 = 0.5, h10 = 0.125, h01 = 0.5, h11 = -0.125; span 2 -> 0.125 * 2 * 1 + 0.5 = 0.75.
+    kb::tests::Require(near(kb::math::Evaluate(hermite, 1.0F), 0.75F), "Hermite segment must use the outgoing tangent scaled by the segment length");
+    kb::tests::Require(kb::math::Evaluate(hermite, 0.0F) == 0.0F && kb::math::Evaluate(hermite, 2.0F) == 1.0F, "Hermite segment must pass through both keys");
+
+    // Flat: zero tangents give smoothstep.
+    Curve flat;
+    flat.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 0.0F, .tangentMode = CurveTangentMode::Flat, .inTangent = 5.0F, .outTangent = 5.0F },
+        CurveKeyframe{ .time = 1.0F, .value = 1.0F, .tangentMode = CurveTangentMode::Flat, .inTangent = 5.0F, .outTangent = 5.0F },
+    };
+    kb::math::RecomputeTangents(flat.keyframes);
+    kb::tests::Require(flat.keyframes[0].outTangent == 0.0F && flat.keyframes[1].inTangent == 0.0F, "Flat keys must get zero tangents");
+    kb::tests::Require(near(kb::math::Evaluate(flat, 0.25F), 0.15625F), "Flat tangents must evaluate as smoothstep");
+
+    // Linear: tangents follow the neighbouring segments, so the segment is a straight line.
+    Curve linear;
+    linear.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 0.0F, .tangentMode = CurveTangentMode::Linear },
+        CurveKeyframe{ .time = 2.0F, .value = 4.0F, .tangentMode = CurveTangentMode::Linear },
+    };
+    kb::math::RecomputeTangents(linear.keyframes);
+    kb::tests::Require(linear.keyframes[0].outTangent == 2.0F && linear.keyframes[1].inTangent == 2.0F, "Linear keys must take the segment slope");
+    kb::tests::Require(near(kb::math::Evaluate(linear, 0.5F), 1.0F) && near(kb::math::Evaluate(linear, 1.5F), 3.0F), "Linear tangents must evaluate as a straight line");
+
+    // Auto: an inner key takes the slope between its neighbours, end keys stay flat.
+    Curve automatic;
+    automatic.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 0.0F, .tangentMode = CurveTangentMode::Auto },
+        CurveKeyframe{ .time = 1.0F, .value = 1.0F, .tangentMode = CurveTangentMode::Auto },
+        CurveKeyframe{ .time = 2.0F, .value = 4.0F, .tangentMode = CurveTangentMode::Auto },
+    };
+    kb::math::RecomputeTangents(automatic.keyframes);
+    kb::tests::Require(automatic.keyframes[1].inTangent == 2.0F && automatic.keyframes[1].outTangent == 2.0F &&
+            automatic.keyframes[0].outTangent == 0.0F && automatic.keyframes[2].inTangent == 0.0F,
+        "Auto keys must be smooth through their neighbours and flat at the ends");
+
+    // Constant: the value holds until the next key.
+    Curve step;
+    step.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 1.0F, .tangentMode = CurveTangentMode::Constant },
+        CurveKeyframe{ .time = 1.0F, .value = 3.0F, .tangentMode = CurveTangentMode::Constant },
+    };
+    kb::tests::Require(kb::math::Evaluate(step, 0.999F) == 1.0F && kb::math::Evaluate(step, 1.0F) == 3.0F, "Constant keys must hold their value until the next key");
+
+    // Free: authored tangents survive a recompute.
+    Curve freeCurve = hermite;
+    kb::math::RecomputeTangents(freeCurve.keyframes);
+    kb::tests::Require(freeCurve.keyframes[0].outTangent == 1.0F, "Free keys must keep their authored tangents");
+
+    // Version 1 bytes (time, value, easing per key) load unchanged and evaluate bit-identically.
+    Curve eased;
+    eased.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 2.0F, .easing = Easing::InOutCubic },
+        CurveKeyframe{ .time = 1.0F, .value = 6.0F, .easing = Easing::OutQuad },
+        CurveKeyframe{ .time = 3.0F, .value = -1.0F },
+    };
+    std::vector<std::uint8_t> legacyBytes;
+    const auto append = [&legacyBytes](const void* data, std::size_t size) {
+        const auto* bytes = static_cast<const std::uint8_t*>(data);
+        legacyBytes.insert(legacyBytes.end(), bytes, bytes + size);
+    };
+    const std::uint32_t legacyMagic = 0x4B435256U;
+    const std::uint32_t legacyCount = 3U;
+    append(&legacyMagic, 4U);
+    append(&legacyCount, 4U);
+    for (const CurveKeyframe& key : eased.keyframes) {
+        append(&key.time, 4U);
+        append(&key.value, 4U);
+        const auto easing = static_cast<std::uint8_t>(key.easing);
+        append(&easing, 1U);
+    }
+    kb::tests::Require(kb::math::Serialize(eased) == legacyBytes, "Curves without tangent data must keep writing version 1 bytes");
+    Curve legacy;
+    kb::tests::Require(kb::math::Deserialize(legacyBytes, legacy) && legacy.keyframes.size() == 3U &&
+            legacy.keyframes[0].tangentMode == CurveTangentMode::Easing, "Version 1 curve bytes must load with easing keys");
+    for (float t = -0.5F; t <= 3.5F; t += 0.0625F) {
+        const float expected = kb::math::Evaluate(eased, t);
+        const float loaded = kb::math::Evaluate(legacy, t);
+        kb::tests::Require(std::memcmp(&expected, &loaded, sizeof(float)) == 0, "A version 1 curve must evaluate bit-identically after loading");
+    }
+    // The pre-tangent formula, written out: Lerp(a, b, Evaluate(easing, InverseLerp(...))).
+    const float reference = kb::math::Lerp(2.0F, 6.0F, kb::math::Evaluate(Easing::InOutCubic, 0.3F));
+    const float evaluated = kb::math::Evaluate(legacy, 0.3F);
+    kb::tests::Require(std::memcmp(&reference, &evaluated, sizeof(float)) == 0, "Easing keys must evaluate exactly as before tangents existed");
+
+    // Round trip with tangents writes version 2 and keeps every field.
+    Curve mixed = automatic;
+    mixed.keyframes[1].tangentMode = CurveTangentMode::Free;
+    mixed.keyframes[1].inTangent = -0.25F;
+    mixed.keyframes[1].outTangent = 3.5F;
+    mixed.keyframes[2].easing = Easing::OutBounce;
+    const std::vector<std::uint8_t> mixedBytes = kb::math::Serialize(mixed);
+    Curve mixedLoaded;
+    kb::tests::Require(mixedBytes.size() == 8U + 3U * 18U && kb::math::Deserialize(mixedBytes, mixedLoaded), "A curve with tangents must round trip as version 2");
+    bool same = mixedLoaded.keyframes.size() == mixed.keyframes.size();
+    for (std::size_t index = 0U; same && index < mixed.keyframes.size(); ++index) {
+        const CurveKeyframe& a = mixed.keyframes[index];
+        const CurveKeyframe& b = mixedLoaded.keyframes[index];
+        same = a.time == b.time && a.value == b.value && a.easing == b.easing && a.tangentMode == b.tangentMode &&
+            a.inTangent == b.inTangent && a.outTangent == b.outTangent;
+    }
+    kb::tests::Require(same, "Every tangent field must survive a round trip");
+    std::vector<std::uint8_t> badMode = mixedBytes;
+    badMode[8U + 9U] = 0xFFU;
+    Curve badModeResult;
+    kb::tests::Require(!kb::math::Deserialize(badMode, badModeResult), "An unknown tangent mode must be rejected");
+}
+
 // LIB-054: NaN/infinity/zero-length contract audit — proves the
 // documented behavior at each declaration is what the code actually
 // does, for both halves of the contract: honest NaN propagation by
@@ -1104,6 +1229,7 @@ void RunEngineMathTests() {
     RunRandomStreamTest();
     RunEasingTest();
     RunCurveAndGradientTest();
+    RunCurveTangentTest();
     RunNaNInfinityZeroLengthContractTest();
     RunVectorPropertyTest();
     RunQuaternionPropertyTest();

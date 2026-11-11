@@ -60,10 +60,8 @@ struct AnimationMorphTrack {
     std::vector<AnimationMorphKeyframe> keyframes;
 };
 
-struct AnimationCurveKeyframe {
-    float timeSeconds = 0.0F;
-    float value = 0.0F;
-};
+// Curve channels use the shared curve keyframe; time is in seconds.
+using AnimationCurveKeyframe = kb::math::CurveKeyframe;
 
 struct AnimationCurveTrack {
     std::string name;

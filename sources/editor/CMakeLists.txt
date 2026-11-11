@@ -132,6 +132,7 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportSelectionInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
+    src/app/EditorCurveEditorPointerHandler.cpp
     src/app/EditorWindowPointerHandler.cpp
     src/app/StaticMeshEditorPointerController.cpp
     src/app/EditorWindowToolbarPointerHandler.cpp
@@ -428,6 +429,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowMessageContext.hpp
     src/private/app/EditorWindowMessageRouter.hpp
     src/private/app/EditorWindowPointerMessageDispatcher.hpp
+    src/private/app/EditorCurveEditorPointerHandler.hpp
     src/private/app/EditorWindowPointerHandler.hpp
     src/private/app/EditorWindowToolbarPointerHandler.hpp
     src/private/app/EditorWindowInvalidator.hpp
@@ -848,6 +850,8 @@ add_executable(kb_editor WIN32
     src/private/rendering/ParticleEditorPanelLayout.hpp
     src/rendering/ParticleEditorPanelLayout.cpp
     src/rendering/AnimationClipEditorPanelRenderer.cpp
+    src/private/rendering/CurveEditorRenderer.hpp
+    src/rendering/CurveEditorRenderer.cpp
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/TimelineEditorPanel.cpp
     src/rendering/BlendSpace2DEditorPanel.cpp
@@ -988,6 +992,9 @@ add_executable(kb_editor WIN32
     src/private/inspection/ui/InspectorUIThemeModel.hpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
+    src/scene/EditorCurveEditorHost.cpp
+    src/private/curves/CurveEditorState.hpp
+    src/private/curves/CurveEditorInteraction.hpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
     src/scene/ParticleEditorBakeHostCommand.cpp
     src/scene/EditorSceneDocumentLifecycle.cpp

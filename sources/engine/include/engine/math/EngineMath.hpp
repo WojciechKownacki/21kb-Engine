@@ -929,18 +929,39 @@ struct RayPlaneIntersection {
 // rather than extrapolating — the same "don't silently guess past defined
 // data" rule InverseLerp/Lerp already apply to their own t.
 
+// How a keyframe shapes the segment to the next keyframe. Easing keeps the
+// per-segment Easing (keys without tangent data); every other mode is a cubic
+// Hermite segment through outTangent of this key and inTangent of the next.
+// Auto, Flat and Linear tangents are derived by RecomputeTangents; Free keeps
+// both tangents as authored; Constant holds the value until the next key.
+enum class CurveTangentMode : std::uint8_t {
+    Easing = 0,
+    Auto,
+    Flat,
+    Linear,
+    Constant,
+    Free,
+};
+
 struct CurveKeyframe {
     float time = 0.0F;
     float value = 0.0F;
     // Interpolation used between THIS keyframe and the next one.
     Easing easing = Easing::Linear;
+    CurveTangentMode tangentMode = CurveTangentMode::Easing;
+    // Slopes in value per time unit.
+    float inTangent = 0.0F;
+    float outTangent = 0.0F;
 };
 
 struct Curve {
     std::vector<CurveKeyframe> keyframes;
 };
 
+[[nodiscard]] float Evaluate(std::span<const CurveKeyframe> keyframes, float t) noexcept;
 [[nodiscard]] float Evaluate(const Curve& curve, float t) noexcept;
+// Rewrites the tangents of Auto, Flat and Linear keys from their neighbours.
+void RecomputeTangents(std::span<CurveKeyframe> keyframes) noexcept;
 
 struct GradientStop {
     float time = 0.0F;

@@ -681,7 +681,7 @@ void RunAnimationRuntimeTests() {
         { .morphTarget = "Smile", .keyframes = { { .timeSeconds = 0.0F, .weight = 0.0F }, { .timeSeconds = 1.0F, .weight = 1.0F } } },
     };
     skeletalClip.curves = {
-        { .name = "FootPlant", .keyframes = { { .timeSeconds = 0.0F, .value = 0.0F }, { .timeSeconds = 1.0F, .value = 1.0F } } },
+        { .name = "FootPlant", .keyframes = { { .time = 0.0F, .value = 0.0F }, { .time = 1.0F, .value = 1.0F } } },
     };
     skeletalClip.rootMotionMode = kb::scene::AnimationRootMotionMode::ExtractFromBone;
     skeletalClip.rootMotionBoneId = 101U;
@@ -700,8 +700,21 @@ void RunAnimationRuntimeTests() {
             loadedSkeletalClip->rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone &&
             loadedSkeletalClip->rootMotionBoneId == 101U,
         "Skeletal AnimationClip round trip lost canonical bindings");
+    {
+        kb::scene::AnimationClip tangentClip = skeletalClip;
+        tangentClip.curves[0].keyframes[1].tangentMode = kb::math::CurveTangentMode::Free;
+        tangentClip.curves[0].keyframes[1].inTangent = 0.5F;
+        tangentClip.curves[0].keyframes[1].outTangent = -1.0F;
+        const auto tangentClipPath = root / "CurveTangents.kbanim";
+        const auto loadedTangentClip = kb::scene::AnimationAssetIO::SaveClip(tangentClipPath, tangentClip)
+            ? kb::scene::AnimationAssetIO::LoadClip(tangentClipPath) : std::nullopt;
+        Require(loadedTangentClip.has_value() && loadedTangentClip->curves[0].keyframes[1].tangentMode == kb::math::CurveTangentMode::Free &&
+                loadedTangentClip->curves[0].keyframes[1].inTangent == 0.5F && loadedTangentClip->curves[0].keyframes[1].outTangent == -1.0F &&
+                loadedTangentClip->curves[0].keyframes[0].tangentMode == kb::math::CurveTangentMode::Easing,
+            "AnimationClip curve tangents did not round trip");
+    }
     std::string legacySkeletalText = ReadTextFile(skeletalClipPath);
-    const std::string currentSkeletalHeader = "21kb AnimationClip 2";
+    const std::string currentSkeletalHeader = "21kb AnimationClip 3";
     const std::size_t currentSkeletalHeaderOffset =
         legacySkeletalText.find(currentSkeletalHeader);
     const std::string currentSkeletalTrack = "skeletalTrack 101 4";
@@ -2062,7 +2075,7 @@ end
             } },
         };
         instanceClip.curves = {{ .name = "FootPlant", .keyframes = {
-            {.timeSeconds = 0.0F, .value = 0.0F}, {.timeSeconds = 1.0F, .value = 4.0F}
+            {.time = 0.0F, .value = 0.0F}, {.time = 1.0F, .value = 4.0F}
         } }};
         instanceClip.rootMotionMode =
             kb::scene::AnimationRootMotionMode::ExtractFromBone;

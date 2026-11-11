@@ -1,6 +1,7 @@
 #include "app/EditorWindowPointerMessageDispatcher.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCurveEditorPointerHandler.hpp"
 #include "app/EditorWindowPointerHandler.hpp"
 
 namespace kb::editor {
@@ -24,6 +25,9 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
         context_.metrics,
     };
 
+    if (message != WM_SETCURSOR && EditorCurveEditorPointerHandler{ context_ }.HandlePointer(messageWindow, message, wparam, lparam)) {
+        return 0;
+    }
     switch (message) {
     case WM_LBUTTONDOWN:
         return pointerHandler.HandleLeftButtonDown(messageWindow, lparam);

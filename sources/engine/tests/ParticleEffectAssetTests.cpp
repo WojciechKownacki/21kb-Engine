@@ -212,6 +212,26 @@ void RunSpinSchemaTest() {
     Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "a reversed spin range passed validation");
 }
 
+// Curve keys with tangents round trip; keys without tangent data write no tangent properties.
+void RunCurveTangentSchemaTest() {
+    using namespace kb::scene;
+    ParticleEffectAsset asset = MakeComprehensiveAsset();
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    const std::optional<std::string> plain = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(plain.has_value() && plain->find("tangentMode") == std::string::npos, "keys without tangents must not write tangent properties");
+    kb::math::CurveKeyframe& key = asset.emitters[0].spawn.rateOverTime.keyframes[0];
+    key.tangentMode = kb::math::CurveTangentMode::Free;
+    key.inTangent = -2.5F;
+    key.outTangent = 4.0F;
+    const std::optional<std::string> encoded = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(encoded.has_value(), "an asset with curve tangents did not serialize");
+    const ParticleEffectLoadResult decoded = ParticleEffectAssetIO::Parse(*encoded);
+    Require(decoded.Succeeded(), "an asset with curve tangents did not parse");
+    const kb::math::CurveKeyframe& loaded = decoded.asset->emitters[0].spawn.rateOverTime.keyframes[0];
+    Require(loaded.tangentMode == kb::math::CurveTangentMode::Free && loaded.inTangent == -2.5F && loaded.outTangent == 4.0F,
+            "curve tangents did not round-trip");
+}
+
 void RunFlipbookRangeSchemaTest() {
     using namespace kb::scene;
     auto asset = MakeComprehensiveAsset();
@@ -1288,6 +1308,7 @@ int main() {
         RunCanonicalGoldenTest();
         RunComprehensiveSchemaTest();
         RunSpinSchemaTest();
+        RunCurveTangentSchemaTest();
         RunFlipbookRangeSchemaTest();
         RunScreenDepthCollisionSchemaTest();
         RunMotionAndOutputSchemaTest();

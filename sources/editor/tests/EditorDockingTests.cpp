@@ -16,6 +16,7 @@
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
+#include "curves/CurveEditorInteraction.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAutosaveState.hpp"
@@ -1344,7 +1345,7 @@ void RunAnimationClipTimelineStateTest() {
         { .boneId = 10U, .keyframes = {{ .timeSeconds = 1.0F }} },
     };
     clip.morphTracks = {{ .morphTarget = "Smile", .keyframes = {{ .timeSeconds = 0.25F }} }};
-    clip.curves = {{ .name = "FootPlant", .keyframes = {{ .timeSeconds = 1.25F }} }};
+    clip.curves = {{ .name = "FootPlant", .keyframes = {{ .time = 1.25F }} }};
     clip.events = {{ .timeSeconds = 1.75F, .id = 4U }, { .timeSeconds = 0.75F, .id = 2U }};
     clip.rootMotionMode = kb::scene::AnimationRootMotionMode::ExtractFromBone;
     clip.rootMotionBoneId = 20U;
@@ -1398,6 +1399,87 @@ void RunAnimationClipEditorDocumentStateTest() {
         "Animation Clip document should undo grouped edits and reject invalid event times");
     kb::editor::tests::Require(document.MarkSaved() && !document.Dirty() && !document.CanUndo() && !document.CanRedo(),
         "Animation Clip document save should establish a clean history baseline");
+}
+
+void RunCurveEditorStateTest() {
+    using kb::math::CurveTangentMode;
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 1.0F;
+    clip.curves = {{ .name = "Weight", .keyframes = {{ .time = 0.0F, .value = 0.0F }, { .time = 1.0F, .value = 1.0F }} }};
+    kb::editor::AnimationClipEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 7U }, clip);
+    kb::editor::CurveEditorState state;
+    kb::editor::CurveEditorInteraction input;
+    state.SetTimeLimits(0.0F, 1.0F);
+    state.SetViewport({ 0.0F, 0.0F, 400.0F, 200.0F });
+    state.SetCurve(kb::math::Curve{ document.WorkingCopy()->curves[0].keyframes });
+    // The host side of an edit: one undo group per gesture, the view's keys stored on every change.
+    const auto apply = [&](const kb::editor::CurveEditorResult& result) {
+        if (result.editBegin) document.BeginGroup();
+        bool stored = !result.edited || document.SetCurveKeyframes("Weight", state.Curve().keyframes);
+        if (result.editEnd) document.EndGroup();
+        return stored;
+    };
+    const auto keys = [&]() -> const std::vector<kb::math::CurveKeyframe>& { return document.WorkingCopy()->curves[0].keyframes; };
+
+    // Double-click adds a smooth key on the curve.
+    const kb::editor::CurveEditorResult added = input.DoubleClick(state, state.XAt(0.5F), 0.0F);
+    kb::editor::tests::Require(added.editBegin && added.edited && added.editEnd && apply(added) && keys().size() == 3U &&
+            state.Selected() == std::optional<std::size_t>{ 1U } && keys()[1].tangentMode == CurveTangentMode::Auto &&
+            std::fabs(keys()[1].value - 0.5F) < 1.0e-5F,
+        "Curve view should add an Auto key on the curve and store it");
+
+    // Dragging with Shift keeps the axis the pointer moved along most; the whole drag is one undo step.
+    const float keyX = state.XAt(keys()[1].time);
+    const float keyY = state.YAt(keys()[1].value);
+    kb::editor::tests::Require(input.PointerDown(state, keyX, keyY, false, false).redraw && input.Dragging(), "Curve view should start dragging a key");
+    const kb::editor::CurveEditorResult firstMove = input.PointerMove(state, keyX + 40.0F, keyY + 10.0F, true);
+    const kb::editor::CurveEditorResult secondMove = input.PointerMove(state, keyX + 80.0F, keyY + 15.0F, true);
+    const kb::editor::CurveEditorResult released = input.PointerUp();
+    kb::editor::tests::Require(firstMove.editBegin && firstMove.edited && apply(firstMove) && !secondMove.editBegin && secondMove.edited &&
+            apply(secondMove) && released.editEnd && !released.edited && apply(released) && !input.Dragging(),
+        "Curve view drag should open one edit, store every move and close it on release");
+    kb::editor::tests::Require(keys()[1].time > 0.5F && std::fabs(keys()[1].value - 0.5F) < 1.0e-5F,
+        "Shift should constrain a mostly horizontal key drag to the time axis");
+
+    // Undo restores the key before the drag, redo brings the drag back.
+    kb::editor::tests::Require(document.Undo() && std::fabs(keys()[1].time - 0.5F) < 1.0e-5F, "Undo should restore the key before the drag");
+    state.SetCurve(kb::math::Curve{ keys() });
+    kb::editor::tests::Require(state.Curve().keyframes[1].time == keys()[1].time && state.Selected() == std::optional<std::size_t>{ 1U },
+        "The view should follow the document after undo and keep its selection");
+    kb::editor::tests::Require(document.Redo() && keys()[1].time > 0.5F, "Redo should restore the dragged key");
+    state.SetCurve(kb::math::Curve{ keys() });
+
+    // Tangent mode from the context menu, then a tangent handle drag makes the key Free.
+    const kb::editor::CurveEditorResult flat = kb::editor::CurveEditorInteraction::SetTangentMode(state, CurveTangentMode::Flat);
+    kb::editor::tests::Require(flat.edited && apply(flat) && keys()[1].tangentMode == CurveTangentMode::Flat &&
+            keys()[1].inTangent == 0.0F && keys()[1].outTangent == 0.0F,
+        "Curve view should change the selected key's tangent mode");
+    const auto handle = state.HandlePosition(1U, true);
+    kb::editor::tests::Require(state.HitTest(handle.first, handle.second).handle == kb::editor::CurveEditorHandle::OutTangent,
+        "Curve view should hit the selected key's tangent handle");
+    static_cast<void>(input.PointerDown(state, handle.first, handle.second, false, false));
+    const kb::editor::CurveEditorResult tangent = input.PointerMove(state, handle.first, handle.second - 20.0F, false);
+    kb::editor::tests::Require(tangent.edited && apply(tangent) && apply(input.PointerUp()) &&
+            keys()[1].tangentMode == CurveTangentMode::Free && keys()[1].outTangent > 0.0F && keys()[1].inTangent == keys()[1].outTangent,
+        "Dragging a tangent handle should make the key Free with aligned tangents");
+
+    // Delete removes the selected key; undo brings it back.
+    const kb::editor::CurveEditorResult removed = kb::editor::CurveEditorInteraction::Key(state, kb::editor::CurveEditorKey::Delete);
+    kb::editor::tests::Require(removed.edited && apply(removed) && keys().size() == 2U && !state.Selected().has_value(),
+        "Delete should remove the selected key");
+    kb::editor::tests::Require(document.Undo() && keys().size() == 3U && keys()[1].tangentMode == CurveTangentMode::Free,
+        "Undo should restore a deleted key with its tangents");
+
+    // View: frame all, zoom and pan never edit the curve.
+    kb::editor::tests::Require(!kb::editor::CurveEditorInteraction::Key(state, kb::editor::CurveEditorKey::FrameAll).edited &&
+            kb::editor::CurveEditorInteraction::Wheel(state, 200.0F, 100.0F, 120, false).redraw &&
+            kb::editor::CurveEditorInteraction::Wheel(state, 200.0F, 100.0F, 120, true).redraw,
+        "Frame all and wheel zoom should change only the view");
+    input.MiddleDown(10.0F, 10.0F);
+    kb::editor::tests::Require(input.MiddleMove(state, 30.0F, 10.0F).redraw && !input.MiddleMove(state, 30.0F, 10.0F).edited,
+        "Middle drag should pan the view");
+    input.MiddleUp();
 }
 
 void RunAutosaveStateTest() {
@@ -1554,6 +1636,7 @@ void RunEditorDockingTests() {
     RunSkeletonEditorDocumentStateTest();
     RunAnimationClipTimelineStateTest();
     RunAnimationClipEditorDocumentStateTest();
+    RunCurveEditorStateTest();
     RunAutosaveStateTest();
     RunSharedEditorRowComponentLayoutTest();
     RunTabClickIsDockInteractionTest();

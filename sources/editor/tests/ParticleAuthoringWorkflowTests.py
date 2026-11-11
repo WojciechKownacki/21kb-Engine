@@ -47,16 +47,17 @@ def main():
     project = root / 'GUI/workspace'
     effect = project / 'Assets/Vfx/NewParticleEffect.kbvfx'
     before = effect.read_text(encoding='utf-8')
-    assert 'effect.emitter[0].spawn.rate.keyCount 3' in before
-    assert 'effect.emitter[0].spawn.rate.key[1].value 96' in before
+    # The curve view added one smooth key to the single-key default rate curve.
+    assert 'effect.emitter[0].spawn.rate.keyCount 2' in before
+    assert 'effect.emitter[0].spawn.rate.key[1].tangentMode Auto' in before
+    valueLine = next(line for line in before.splitlines() if line.startswith('effect.emitter[0].spawn.rate.key[1].value '))
     assert before.strip() in run(args.cli, 'vfx-show', '--project', project,
         '--effect', '/Game/Vfx/NewParticleEffect.kbvfx')
     # Edit one curve field through the CLI; every other serialized parameter must survive.
     run(args.cli, 'vfx-set', '--project', project, '--effect', '/Game/Vfx/NewParticleEffect.kbvfx',
         '--set', 'effect.emitter[0].spawn.rate.key[1].value=72')
     after = effect.read_text(encoding='utf-8')
-    assert after == before.replace('effect.emitter[0].spawn.rate.key[1].value 96',
-                                    'effect.emitter[0].spawn.rate.key[1].value 72')
+    assert after == before.replace(valueLine, 'effect.emitter[0].spawn.rate.key[1].value 72')
     blendLine = next(line for line in after.splitlines() if line.startswith('effect.emitter[0].output.blend '))
     for blend in ('Opaque', 'Alpha', 'Add', 'Multiply', 'Subtract', 'Premultiplied'):
         run(args.cli, 'vfx-set', '--project', project, '--effect', '/Game/Vfx/NewParticleEffect.kbvfx',
