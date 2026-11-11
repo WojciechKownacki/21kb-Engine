@@ -31,6 +31,7 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     switch (path) {
     case ProjectSceneLightingPath::Deferred: return "Deferred";
     case ProjectSceneLightingPath::ForwardPlus: return "ForwardPlus";
+    case ProjectSceneLightingPath::Auto: return "Auto";
     case ProjectSceneLightingPath::Forward:
     default: return "Forward";
     }
@@ -40,6 +41,7 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     if (name == "Forward") return ProjectSceneLightingPath::Forward;
     if (name == "Deferred") return ProjectSceneLightingPath::Deferred;
     if (name == "ForwardPlus") return ProjectSceneLightingPath::ForwardPlus;
+    if (name == "Auto") return ProjectSceneLightingPath::Auto;
     return fallback;
 }
 

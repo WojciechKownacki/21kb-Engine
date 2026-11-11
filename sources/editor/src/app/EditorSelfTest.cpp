@@ -223,6 +223,7 @@ struct ProjectSettingsClickPoints {
     POINT optionRow1{}; // First named option inside the open dropdown.
     POINT checkbox{};   // Enabled checkbox.
     POINT vulkanBackend{};
+    POINT autoLightingPath{};
     POINT forwardPlusLightingPath{};
     POINT deferredLightingPath{};
     POINT postProcessToggle{};
@@ -244,6 +245,7 @@ struct ProjectSettingsClickPoints {
         .optionRow1 = Center(ProjectSettingsPanelLayout::OptionRow(fieldBox, 1)),
         .checkbox = Center(rects.enabledCheckbox),
         .vulkanBackend = Center(rects.backendVulkanButton),
+        .autoLightingPath = Center(rects.lightingPathAutoButton),
         .forwardPlusLightingPath = Center(rects.lightingPathForwardPlusButton),
         .deferredLightingPath = Center(rects.lightingPathDeferredButton),
         .postProcessToggle = Center(rects.postProcessCheckbox),
@@ -356,6 +358,16 @@ void RunProjectSettingsSuite(Report& report) {
         report.Check(stored.Succeeded() && stored.found &&
                 stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::Deferred,
             "Deferred lighting path persisted to the settings file");
+    }
+    report.Check(HitKindAt(context, click.autoLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Auto lighting path point hit-tests as LightingPathOption");
+    report.Check(controller.HandlePointerDown(kContent, click.autoLightingPath.x, click.autoLightingPath.y), "Clicking Auto lighting path is handled");
+    report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::Auto, "Project lighting path changed to Auto");
+    {
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found &&
+                stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::Auto,
+            "Auto lighting path persisted to the settings file");
     }
 
     // Lighting category: shadow and global illumination quality, desktop and mobile, one level button each.

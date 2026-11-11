@@ -249,7 +249,7 @@ private:
     const kb::project::ProjectDisplaySettings& display = settings.display;
     const kb::project::ProjectSimulationSettings& simulation = settings.simulation;
     return static_cast<std::uint32_t>(settings.lightingPath) <=
-            static_cast<std::uint32_t>(kb::project::ProjectSceneLightingPath::ForwardPlus) &&
+            static_cast<std::uint32_t>(kb::project::ProjectSceneLightingPath::Auto) &&
         validQuality(settings.shadowQuality) && validQuality(settings.shadowQualityMobile) &&
         validQuality(settings.giQuality) && validQuality(settings.giQualityMobile) &&
         within(display.windowWidth, kb::project::kProjectWindowExtentMin, kb::project::kProjectWindowExtentMax) &&

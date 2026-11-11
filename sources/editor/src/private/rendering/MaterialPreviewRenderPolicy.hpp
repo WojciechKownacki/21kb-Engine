@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/post/ScenePostProcessSettings.hpp"
+#include "kb/render/scene/SceneLightingQuality.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
@@ -13,15 +14,7 @@ public:
 
     [[nodiscard]] static kb::render::SceneRenderLightingPath SceneLightingPath(
         kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
-        switch (projectLightingPath) {
-        case kb::project::ProjectSceneLightingPath::Deferred:
-            return kb::render::SceneRenderLightingPath::Deferred;
-        case kb::project::ProjectSceneLightingPath::ForwardPlus:
-            return kb::render::SceneRenderLightingPath::ClusteredForwardPlus;
-        case kb::project::ProjectSceneLightingPath::Forward:
-        default:
-            return kb::render::SceneRenderLightingPath::Forward;
-        }
+        return kb::render::ProjectLightingPath(projectLightingPath, false);
     }
 
     [[nodiscard]] static kb::render::SceneRenderLightingConfig NeutralPbrLightingConfig(

@@ -558,6 +558,18 @@ void RunLightingQuality() {
         "Auto quality on a phone must be the phone's Medium");
     Require(!handheldAuto.pointShadowCubeEnabled && handheldAuto.pointShadowMaxLights == 4U && !handheldMedium.pointShadowCubeEnabled,
         "A phone must draw no cube shadows and shadows for at most four lights");
+    // Auto lighting is Deferred on a computer and Forward on a phone; a named path is drawn as written on both.
+    using ProjectPath = kb::project::ProjectSceneLightingPath;
+    using RenderPath = kb::render::SceneRenderLightingPath;
+    Require(kb::render::ProjectLightingPath(ProjectPath::Auto, false) == RenderPath::Deferred &&
+            kb::render::ProjectLightingPath(ProjectPath::Auto, true) == RenderPath::Forward,
+        "Auto lighting must be Deferred on a computer and Forward on a phone");
+    for (const bool mobile : { false, true }) {
+        Require(kb::render::ProjectLightingPath(ProjectPath::Forward, mobile) == RenderPath::Forward &&
+                kb::render::ProjectLightingPath(ProjectPath::Deferred, mobile) == RenderPath::Deferred &&
+                kb::render::ProjectLightingPath(ProjectPath::ForwardPlus, mobile) == RenderPath::ClusteredForwardPlus,
+            "A named lighting path must be drawn as the project wrote it");
+    }
 
     const std::array levels{ Level::Low, Level::Medium, Level::High, Level::Ultra };
     for (const bool mobile : { false, true }) {

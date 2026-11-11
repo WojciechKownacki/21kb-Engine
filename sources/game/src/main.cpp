@@ -587,11 +587,7 @@ int RunGame(const GameOptions& options) {
     renderer.SetRenderScale(display.renderScale);
     {
         auto lighting = renderer.DefaultSceneLightingConfig();
-        switch (projectRuntime.lightingPath) {
-        case kb::project::ProjectSceneLightingPath::Forward: lighting.lightingPath = kb::render::SceneRenderLightingPath::Forward; break;
-        case kb::project::ProjectSceneLightingPath::ForwardPlus: lighting.lightingPath = kb::render::SceneRenderLightingPath::ClusteredForwardPlus; break;
-        case kb::project::ProjectSceneLightingPath::Deferred: lighting.lightingPath = kb::render::SceneRenderLightingPath::Deferred; break;
-        }
+        lighting.lightingPath = kb::render::ProjectLightingPath(projectRuntime.lightingPath, kb::game::kMobileDevice);
         if (options.profileLighting) lighting.lightingPath = *options.profileLighting;
         kb::render::ApplyProjectLightingQuality(lighting, projectRuntime.shadowQuality, projectRuntime.giQuality, kb::game::kMobileDevice);
         lighting.maxForwardLights = lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus

@@ -8,6 +8,20 @@
 
 namespace kb::render {
 
+// The lighting path a project's setting means on a phone or tablet (mobile) or on a computer: a named path as
+// the project wrote it, Auto as the device's own.
+[[nodiscard]] inline SceneRenderLightingPath ProjectLightingPath(project::ProjectSceneLightingPath path, bool mobile) noexcept {
+    switch (project::ResolveProjectSceneLightingPath(path, mobile)) {
+    case project::ProjectSceneLightingPath::Deferred:
+        return SceneRenderLightingPath::Deferred;
+    case project::ProjectSceneLightingPath::ForwardPlus:
+        return SceneRenderLightingPath::ClusteredForwardPlus;
+    case project::ProjectSceneLightingPath::Forward:
+    default:
+        return SceneRenderLightingPath::Forward;
+    }
+}
+
 // The shadow and global illumination detail a project pins for one device class. Auto leaves a computer's
 // lighting config as the engine and the scene chose it, and picks Medium on a phone or tablet, so a handheld
 // never starts at desktop detail. Every other level overwrites the settings that decide what shadows and

@@ -97,7 +97,8 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
 
     const int lightingPathRowTop = RowTopAfter(rects.backendLabel);
     rects.lightingPathLabel = RECT{ left, lightingPathRowTop, left + kLabelWidth, lightingPathRowTop + kRowHeight };
-    rects.lightingPathForwardButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathAutoButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathForwardButton = RECT{ rects.lightingPathAutoButton.right + 6, lightingPathRowTop + 3, rects.lightingPathAutoButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
     rects.lightingPathForwardPlusButton = RECT{ rects.lightingPathForwardButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
     rects.lightingPathDeferredButton = RECT{ rects.lightingPathForwardPlusButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardPlusButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
 
@@ -259,10 +260,12 @@ RECT ProjectSettingsPanelLayout::BackendOptionButton(const ProjectSettingsPanelL
 RECT ProjectSettingsPanelLayout::LightingPathOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {
     switch (index) {
     case 0:
-        return rects.lightingPathForwardButton;
+        return rects.lightingPathAutoButton;
     case 1:
-        return rects.lightingPathForwardPlusButton;
+        return rects.lightingPathForwardButton;
     case 2:
+        return rects.lightingPathForwardPlusButton;
+    case 3:
         return rects.lightingPathDeferredButton;
     default:
         return {};

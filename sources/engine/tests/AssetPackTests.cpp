@@ -693,6 +693,7 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     first.settings.name = "CookedProject";
     first.settings.gameName = "Cooked Game";
     first.settings.defaultMap = "/Game/Scenes/Main.21kbscene";
+    first.settings.lightingPath = kb::project::ProjectSceneLightingPath::Auto;
     first.settings.shadowQuality = kb::project::ProjectQualityLevel::High;
     first.settings.shadowQualityMobile = kb::project::ProjectQualityLevel::Low;
     first.settings.giQuality = kb::project::ProjectQualityLevel::Ultra;

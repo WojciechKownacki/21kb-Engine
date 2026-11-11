@@ -205,23 +205,11 @@ struct SceneViewportRenderProfileDesc {
     return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
 }
 
-[[nodiscard]] kb::render::SceneRenderLightingPath RenderLightingPath(kb::project::ProjectSceneLightingPath path) noexcept {
-    switch (path) {
-    case kb::project::ProjectSceneLightingPath::Deferred:
-        return kb::render::SceneRenderLightingPath::Deferred;
-    case kb::project::ProjectSceneLightingPath::ForwardPlus:
-        return kb::render::SceneRenderLightingPath::ClusteredForwardPlus;
-    case kb::project::ProjectSceneLightingPath::Forward:
-    default:
-        return kb::render::SceneRenderLightingPath::Forward;
-    }
-}
-
 [[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(
     const SceneViewportRenderProfileDesc& renderProfile,
     const kb::project::ProjectSettings& project) noexcept {
     kb::render::SceneRenderLightingConfig lighting{};
-    lighting.lightingPath = RenderLightingPath(project.lightingPath);
+    lighting.lightingPath = kb::render::ProjectLightingPath(project.lightingPath, false);
     // The shadow and GI quality the project pins, as the game applies it (the editor is a desktop device).
     kb::render::ApplyProjectLightingQuality(lighting, project.shadowQuality, project.giQuality, false);
     if (lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus) {

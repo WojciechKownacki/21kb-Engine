@@ -14,11 +14,7 @@ inline void ApplyGameProjectLighting(kb::render::Renderer& renderer,
     const GameProjectRuntime& project, std::ostream& diagnostics) {
     renderer.SetRenderScale(project.display.renderScale);
     auto lighting=renderer.DefaultSceneLightingConfig();
-    switch(project.lightingPath) {
-    case kb::project::ProjectSceneLightingPath::Forward: lighting.lightingPath=kb::render::SceneRenderLightingPath::Forward; break;
-    case kb::project::ProjectSceneLightingPath::ForwardPlus: lighting.lightingPath=kb::render::SceneRenderLightingPath::ClusteredForwardPlus; break;
-    case kb::project::ProjectSceneLightingPath::Deferred: lighting.lightingPath=kb::render::SceneRenderLightingPath::Deferred; break;
-    }
+    lighting.lightingPath=kb::render::ProjectLightingPath(project.lightingPath,kMobileDevice);
     kb::render::ApplyProjectLightingQuality(lighting,project.shadowQuality,project.giQuality,kMobileDevice);
     lighting.maxForwardLights=lighting.lightingPath==kb::render::SceneRenderLightingPath::ClusteredForwardPlus
         ? kb::render::kMaxSceneForwardPlusLights : kb::render::kMaxSceneForwardLights;

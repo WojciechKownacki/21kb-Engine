@@ -45,7 +45,7 @@ struct GameProjectRuntime {
     std::string physicsLayersAsset;
     std::string inputMappingContext;
     bool inputEnabled = true;
-    kb::project::ProjectSceneLightingPath lightingPath = kb::project::ProjectSceneLightingPath::Deferred;
+    kb::project::ProjectSceneLightingPath lightingPath = kb::project::ProjectSceneLightingPath::Auto;
     // The shadow and global illumination quality the project pins for this device class (Auto keeps the engine's).
     kb::project::ProjectQualityLevel shadowQuality = kb::project::ProjectQualityLevel::Auto;
     kb::project::ProjectQualityLevel giQuality = kb::project::ProjectQualityLevel::Auto;

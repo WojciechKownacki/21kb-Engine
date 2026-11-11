@@ -297,7 +297,8 @@ struct TooltipContent {
         return TooltipContent{
             EditorText("projectSettings.lightingPath", "Lighting Path"),
             EditorText("projectSettings.lightingPathTooltip",
-            "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass."),
+            "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass. "
+            "Auto uses Deferred on computers and Forward on phones and tablets."),
         };
     case ProjectSettingsTooltipKind::PostProcess:
         return TooltipContent{
@@ -617,6 +618,7 @@ void DrawGraphicsPage(
 
     DrawSetting(dc, rects, rects.lightingPathLabel, EditorText("projectSettings.lightingPath", "Lighting Path"), Kind::LightingPath, theme, query);
     const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.ProjectConfiguration().lightingPath;
+    DrawOptionButton(dc, rects.lightingPathAutoButton, theme, EditorText("projectSettings.lightingAuto", "Auto"), lightingPath == kb::project::ProjectSceneLightingPath::Auto);
     DrawOptionButton(dc, rects.lightingPathForwardButton, theme, EditorText("projectSettings.lightingForward", "Forward"), lightingPath == kb::project::ProjectSceneLightingPath::Forward);
     DrawOptionButton(dc, rects.lightingPathForwardPlusButton, theme, EditorText("projectSettings.lightingForwardPlus", "Forward+"), lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
     DrawOptionButton(dc, rects.lightingPathDeferredButton, theme, EditorText("projectSettings.lightingDeferred", "Deferred"), lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
@@ -946,7 +948,7 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = index, .rect = button };
             }
         }
-        for (int index = 0; index < 3; ++index) {
+        for (int index = 0; index < 4; ++index) {
             const RECT button = ProjectSettingsPanelLayout::LightingPathOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::LightingPathOption, .index = index, .rect = button };

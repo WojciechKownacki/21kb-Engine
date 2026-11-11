@@ -30,6 +30,7 @@ struct ProjectSettingsPanelLayoutRects {
     RECT backendDx12Button{};
     RECT backendVulkanButton{};
     RECT lightingPathLabel{};
+    RECT lightingPathAutoButton{};
     RECT lightingPathForwardButton{};
     RECT lightingPathForwardPlusButton{};
     RECT lightingPathDeferredButton{};

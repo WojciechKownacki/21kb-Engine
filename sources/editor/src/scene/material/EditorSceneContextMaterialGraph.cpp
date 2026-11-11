@@ -359,7 +359,7 @@ struct MaterialGraphContextMenuKeyboardRow {
 
 [[nodiscard]] kb::render::RenderMaterialGraphShadingPath MaterialGraphShadingPathForProject(
     kb::project::ProjectSceneLightingPath path) noexcept {
-    switch (path) {
+    switch (kb::project::ResolveProjectSceneLightingPath(path, false)) {
     case kb::project::ProjectSceneLightingPath::Deferred:
         return kb::render::RenderMaterialGraphShadingPath::Deferred;
     case kb::project::ProjectSceneLightingPath::ForwardPlus:

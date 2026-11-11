@@ -131,8 +131,9 @@ struct ProjectSettings {
     std::string lastOpenMap;
 
     // Rendering
-    // Deferred by default: any number of lights, GI, fog and contact shadows.
-    ProjectSceneLightingPath lightingPath = ProjectSceneLightingPath::Deferred;
+    // Auto by default: Deferred (any number of lights, GI, fog and contact shadows) on computers, Forward on
+    // phones and tablets.
+    ProjectSceneLightingPath lightingPath = ProjectSceneLightingPath::Auto;
     // Shadow and global illumination quality, for computers and for phones and tablets.
     ProjectQualityLevel shadowQuality = ProjectQualityLevel::Auto;
     ProjectQualityLevel shadowQualityMobile = ProjectQualityLevel::Auto;

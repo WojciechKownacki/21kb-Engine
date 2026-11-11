@@ -491,6 +491,40 @@ void RunProjectQualitySettingsTest() {
     CleanTempRoot();
 }
 
+// The lighting path a project asks for: a project that never chose one leaves it to the platform (Auto), every
+// path round-trips through the settings file, and Auto becomes Deferred on a computer and Forward on a handheld
+// while a named path is used as written on both.
+void RunProjectLightingPathTest() {
+    using Path = kb::project::ProjectSceneLightingPath;
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    Require(kb::project::ProjectSettings{}.lightingPath == Path::Auto, "a new project must leave the lighting path to the platform");
+    for (const Path path : { Path::Auto, Path::Forward, Path::Deferred, Path::ForwardPlus }) {
+        kb::project::ProjectSettings chosen;
+        chosen.lightingPath = path;
+        std::string error;
+        Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the lighting path could not be saved");
+        const kb::project::ProjectSettingsLoadResult loaded = kb::project::ProjectSettingsStore::Load(file);
+        Require(loaded.Succeeded() && loaded.settings.lightingPath == path, "the settings file did not keep the lighting path");
+    }
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Rendering]\nLightingPath=Sideways\n";
+    }
+    Require(kb::project::ProjectSettingsStore::Load(file).settings.lightingPath == Path::Auto,
+        "a misspelled lighting path must fall back to the default");
+    Require(kb::project::ResolveProjectSceneLightingPath(Path::Auto, false) == Path::Deferred,
+        "Auto must be Deferred on a computer");
+    Require(kb::project::ResolveProjectSceneLightingPath(Path::Auto, true) == Path::Forward,
+        "Auto must be Forward on a phone or tablet");
+    for (const Path path : { Path::Forward, Path::Deferred, Path::ForwardPlus }) {
+        Require(kb::project::ResolveProjectSceneLightingPath(path, false) == path &&
+                kb::project::ResolveProjectSceneLightingPath(path, true) == path,
+            "a named lighting path must be used as written");
+    }
+    CleanTempRoot();
+}
+
 // The window, frame pacing, fixed step, gravity and time scale of a project: a settings file written before
 // they existed reads as the behaviour the game always had, the values round-trip, and a value outside its
 // bounds is brought back inside them.
@@ -2096,6 +2130,7 @@ void RunProjectSceneTests() {
     RunProjectFromNewerEngineIsExplainedTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
+    RunProjectLightingPathTest();
     RunProjectDisplayAndSimulationSettingsTest();
     RunProjectBuildScenesTest();
     RunProjectAudioAndTagSettingsTest();
