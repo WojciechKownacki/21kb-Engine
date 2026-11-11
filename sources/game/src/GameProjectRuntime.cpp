@@ -45,6 +45,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <ostream>
@@ -806,6 +807,23 @@ bool LoadGameProjectScene(
         }
     }
     return true;
+}
+
+void DescribeAppliedProjectSettings(
+    const GameProjectRuntime& runtime,
+    kb::scene::Scene& scene,
+    std::ostream& out) {
+    const kb::scene::Vec3 gravity = kb::scene::PhysicsBackend::Gravity(scene);
+    const float fixedDelta = scene.Runtime().FixedStepSettings().fixedDeltaSeconds;
+    out << "kb_game: settings window="
+        << (runtime.display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen ? "borderless" : "windowed")
+        << " resizable=" << runtime.display.resizable
+        << " frame_cap=" << runtime.display.frameRateCap
+        << " fixed_step_hz=" << std::lround(1.0F / fixedDelta)
+        << " time_scale=" << scene.Runtime().TimeScale()
+        << " gravity=" << gravity.x << ',' << gravity.y << ',' << gravity.z
+        << " master_volume=" << kb::audio::AudioPlayback::MasterVolume(scene)
+        << " tags=" << scene.Tags().ProjectDefinitions().size() << '\n';
 }
 
 } // namespace kb::game

@@ -737,5 +737,23 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_mods_package PROPERTIES
             LABELS "game;runtime;packaging;mods" TIMEOUT 600)
+        # A project from ProjectCreator, packaged by the Build Game script for Windows and for Android, and the
+        # package held to the project's settings. The APK test is skipped (exit code 77) when the Android
+        # toolchain is incomplete; it builds the native host with Gradle, so it takes long on a cold build.
+        add_dependencies(kb_game_tests kb_game_core_tests kb_runtime_asset_pack_validator)
+        function(kb_add_package_contract_test name mode timeout)
+            add_test(NAME ${name} COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/PackageContractTests.py" ${mode}
+                "--cli" "$<TARGET_FILE:kb_cli>"
+                "--checker" "$<TARGET_FILE:kb_game_core_tests>"
+                "--engine-root" "${CMAKE_SOURCE_DIR}"
+                "--build-root" "${CMAKE_BINARY_DIR}"
+                "--test-root" "${CMAKE_BINARY_DIR}/package_contract_tests")
+            set_tests_properties(${name} PROPERTIES
+                LABELS "game;runtime;packaging" TIMEOUT ${timeout} SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+        endfunction()
+        kb_add_package_contract_test(kb_package_windows windows 900)
+        kb_add_package_contract_test(kb_package_android_cook android-cook 600)
+        kb_add_package_contract_test(kb_package_android_apk android-apk 7200)
     endif()
 endif()

@@ -109,6 +109,11 @@ endif()
 if(ANDROID AND KB_BUILD_ANDROID_HOST AND NOT ANDROID_ABI STREQUAL "arm64-v8a")
     message(FATAL_ERROR "The packaged Android game host requires ANDROID_ABI=arm64-v8a")
 endif()
+if(ANDROID AND KB_BUILD_ANDROID_HOST)
+    # The package ships this library: its assertion messages and debug information must not name the
+    # folders of the machine that built it.
+    add_compile_options(-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
+endif()
 if(EMSCRIPTEN AND NOT KB_WEB_RENDERER MATCHES "^(WEBGL|WEBGPU)$")
     message(FATAL_ERROR "KB_WEB_RENDERER must be WEBGL or WEBGPU")
 endif()
@@ -734,13 +739,24 @@ endif()
 # symbol store outside the shipped folder. /DEBUG turns off the Release reference
 # and folding optimisations, so they are named again.
 if(MSVC)
+    # The shipped images must not name the machine that built them: the linker records the full path of the PDB,
+    # and __FILE__ in the assertion messages of third-party code (and of the renderer, which compiles bgfx's
+    # inline readers) expands to the full source path.
+    file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}" _kb_native_source_root)
+    foreach(_kb_trimmed_target IN ITEMS flecs_static bx bimg bimg_decode bgfx kb_renderer)
+        if(TARGET ${_kb_trimmed_target})
+            target_compile_options(${_kb_trimmed_target} PRIVATE "/d1trimfile:${_kb_native_source_root}")
+        endif()
+    endforeach()
     foreach(_kb_shipped_target IN ITEMS
             kb_game kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin
             kb_21kb_particle_plugin kb_ai_plugin kb_world2d_plugin kb_crash_reporting_test_helper)
         if(TARGET ${_kb_shipped_target})
             get_target_property(_kb_shipped_type ${_kb_shipped_target} TYPE)
             if(_kb_shipped_type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
+                target_compile_options(${_kb_shipped_target} PRIVATE "/d1trimfile:${_kb_native_source_root}")
                 target_link_options(${_kb_shipped_target} PRIVATE
+                    "/PDBALTPATH:$<TARGET_PDB_FILE_NAME:${_kb_shipped_target}>"
                     "$<$<CONFIG:Release>:/DEBUG:FULL;/OPT:REF;/OPT:ICF>")
             endif()
         endif()

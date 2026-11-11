@@ -189,4 +189,12 @@ void ReportRuntimePackageRefusal(
     std::size_t& discoveredAssets,
     std::ostream& err);
 
+// One line stating the project settings in effect once the scene is loaded: the window and frame cap
+// the host was given, and the fixed step, time scale, gravity, master volume and tag count read back
+// from the scene.
+void DescribeAppliedProjectSettings(
+    const GameProjectRuntime& runtime,
+    kb::scene::Scene& scene,
+    std::ostream& out);
+
 } // namespace kb::game

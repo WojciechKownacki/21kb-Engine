@@ -668,6 +668,7 @@ int RunGame(const GameOptions& options) {
               << " headless=" << options.headless
               << " gpu_vendor=" << renderer.CapabilityReport().vendorId
               << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
+    kb::game::DescribeAppliedProjectSettings(projectRuntime, scene, std::cout);
     std::cout.flush();
 
     // A packaged game that sends crash reports asks the player first, on the first launch, and keeps the
