@@ -24,6 +24,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 
 namespace kb::render {
@@ -48,6 +49,8 @@ struct Receiver {
     StaticLightmapResult baked;
     kb::render::RenderMaterialAssetData material;
     std::uint64_t meshAssetId = 0;
+    // The mesh the entity used before any bake (it differs from meshAssetId once a UV copy is generated).
+    std::uint64_t originalMeshAssetId = 0;
 };
 
 std::string SafeName(std::string_view text) {
@@ -137,6 +140,11 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
     const auto folder = assets.Mounts().Resolve(std::filesystem::path{ virtualFolder });
     if (!folder.has_value()) return fail("the project content is not mounted as /Game");
     scene.Runtime().SynchronizeTransforms();
+    // Generated UV copies are written next to the lightmaps; this file maps each one back to its source mesh,
+    // so a re-bake starts from the source and picks up later edits of it.
+    const auto sourcesPath = *folder / "BakeSources.kbbake";
+    std::map<std::uint64_t, std::uint64_t> sourceOfGenerated;
+    { std::ifstream in(sourcesPath); std::uint64_t generated = 0, original = 0; while (in >> generated >> original) sourceOfGenerated[generated] = original; }
 
     std::vector<kb::scene::SceneEntity> entities;
     for (const auto root : scene.Hierarchy().RootEntities()) Collect(scene, root, entities);
@@ -160,20 +168,22 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
         if (std::max({ std::abs(position.x), std::abs(position.y), std::abs(position.z) }) > 1000000.0) return fail("bake geometry exceeds supported world bounds");
         const Vec3 translation{ static_cast<float>(position.x), static_cast<float>(position.y), static_cast<float>(position.z) };
         if (const auto* light = scene.Components().Lights().TryGet(entity); light != nullptr && light->mobility == kb::scene::LightMobility::Static) {
-            if (light->kind == kb::scene::LightKind::Spot) { ++result.skippedLights; }
-            else if ((light->kind != kb::scene::LightKind::Point && light->kind != kb::scene::LightKind::Directional) || light->useColorTemperature) {
-                return fail("lightmap supports static point/directional lights with RGB colour");
-            } else {
-                lights.push_back({ .position = translation, .direction = kb::math::Rotate(transform->worldRotation, Vec3{ 0, 0, 1 }),
-                    .color = light->color, .intensity = light->intensity, .range = light->range,
-                    .directional = light->kind == kb::scene::LightKind::Directional, .castsShadow = light->castsShadow });
+            if ((light->kind != kb::scene::LightKind::Point && light->kind != kb::scene::LightKind::Directional && light->kind != kb::scene::LightKind::Spot) ||
+                light->useColorTemperature) {
+                return fail("lightmap supports static point/spot/directional lights with RGB colour");
             }
+            lights.push_back({ .position = translation, .direction = kb::math::Rotate(transform->worldRotation, Vec3{ 0, 0, 1 }),
+                .color = light->color, .intensity = light->intensity, .range = light->range,
+                .directional = light->kind == kb::scene::LightKind::Directional, .castsShadow = light->castsShadow,
+                .spot = light->kind == kb::scene::LightKind::Spot, .innerConeDegrees = light->innerConeDegrees, .outerConeDegrees = light->outerConeDegrees });
         }
         const auto* mesh = scene.Components().MeshRenderers().TryGet(entity);
         if (mesh == nullptr || mesh->shadowOnly || mesh->transient) continue;
         const bool isReceiver = mesh->mobility == kb::scene::MeshMobility::Static;
         if (!isReceiver && !mesh->castsShadow) continue;
-        const auto source = assets.Load<kb::render::RenderMeshAssetData>(kb::assets::AssetId{ mesh->meshAssetId });
+        const auto generatedFrom = sourceOfGenerated.find(mesh->meshAssetId);
+        const std::uint64_t sourceMeshId = isReceiver && generatedFrom != sourceOfGenerated.end() ? generatedFrom->second : mesh->meshAssetId;
+        const auto source = assets.Load<kb::render::RenderMeshAssetData>(kb::assets::AssetId{ sourceMeshId });
         if (!source.IsLoaded()) { if (isReceiver) return fail("static bake mesh cannot be loaded"); continue; }
         const auto& data = *source.Shared();
         if (transform->worldScale.x == 0 || transform->worldScale.y == 0 || transform->worldScale.z == 0) {
@@ -187,7 +197,7 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
             receiver.entity = entity;
             receiver.name = SafeName(scene.Entities().Name(entity));
             for (int suffix = 2; !usedNames.insert(receiver.name).second; ++suffix) receiver.name = SafeName(scene.Entities().Name(entity)) + "_" + std::to_string(suffix);
-            receiver.meshAssetId = mesh->meshAssetId;
+            receiver.meshAssetId = receiver.originalMeshAssetId = sourceMeshId;
             if (mesh->materialAssetId != 0) {
                 const auto original = assets.Load<kb::render::RenderMaterialAssetData>(kb::assets::AssetId{ mesh->materialAssetId });
                 if (!original.IsLoaded()) return fail("receiver material cannot be loaded for " + receiver.name);
@@ -239,7 +249,7 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
         }
     }
     if (receivers.empty()) return fail("no static mesh renderer to bake; set a mesh renderer's mobility to Static");
-    if (lights.empty()) return fail("no static point/directional light to bake");
+    if (lights.empty()) return fail("no static point, spot or directional light to bake");
     result.lights = static_cast<std::uint32_t>(lights.size());
 
     // Phase 1: everything that can fail or be cancelled, without touching the project.
@@ -261,6 +271,23 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
         bake.bounces = settings.bounces;
         receiver.baked = BakeStaticLightmap(receiver.world, occluders, lights, bake);
         if (!receiver.baked.Succeeded()) return fail(receiver.name + ": " + receiver.baked.error);
+    }
+    LightProbeGrid probes;
+    if (settings.probeSpacing > 0.0F) {
+        // Probes cover the static geometry; its lightmaps carry the bounced light the probe rays pick up.
+        std::vector<BakedLightmapSurface> surfaces;
+        Vec3 low{ 1e30F, 1e30F, 1e30F }, high{ -1e30F, -1e30F, -1e30F };
+        for (const Receiver& receiver : receivers) {
+            surfaces.push_back({ receiver.world, receiver.baked.rgba, settings.resolution });
+            for (const auto& triangle : receiver.world) for (const auto& corner : triangle) {
+                low = { std::min(low.x, corner.position.x), std::min(low.y, corner.position.y), std::min(low.z, corner.position.z) };
+                high = { std::max(high.x, corner.position.x), std::max(high.y, corner.position.y), std::max(high.z, corner.position.z) };
+            }
+        }
+        LightProbeSettings probeSettings;
+        probeSettings.spacing = settings.probeSpacing; probeSettings.maxProbes = settings.maxProbes;
+        probes = BakeLightProbes(surfaces, lights, low, high, probeSettings);
+        if (!probes.Succeeded()) return fail("light probes: " + probes.error);
     }
     if (progress && !progress(1.0F, "write")) { result.cancelled = true; return result; }
 
@@ -296,6 +323,21 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
             receiver.meshAssetId = imported.items.front().id.value;
             ++result.generatedMeshes;
         }
+    }
+    if (probes.Succeeded()) {
+        const auto probePath = *folder / "LightProbes.kblp";
+        const std::string bytes = SerializeLightProbeGrid(probes);
+        { std::ofstream out(probePath, std::ios::binary); out.write(bytes.data(), static_cast<std::streamsize>(bytes.size())); if (!out) return fail("cannot write " + probePath.generic_string()); }
+        result.probes = static_cast<std::uint32_t>(probes.probes.size());
+    } else {
+        std::filesystem::remove(*folder / "LightProbes.kblp", code);
+    }
+    {
+        std::ofstream out(sourcesPath, std::ios::trunc);
+        for (const Receiver& receiver : receivers) if (receiver.generate) out << receiver.meshAssetId << ' ' << receiver.originalMeshAssetId << '\n';
+        out.close();
+        if (!out) return fail("cannot write " + sourcesPath.generic_string());
+        if (result.generatedMeshes == 0) std::filesystem::remove(sourcesPath, code);
     }
     static_cast<void>(assets.DiscoverMountedAssets());
     for (const Receiver& receiver : receivers) {

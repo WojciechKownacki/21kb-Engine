@@ -4,6 +4,7 @@
 #include "engine/render/StaticLightmapBaker.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -107,10 +108,81 @@ void RunGeneratedUvTests() {
     const auto baked = kb::render::BakeStaticLightmap(cube, cube, lights, { .resolution = 128 });
     kb::tests::Require(baked.Succeeded() && baked.coveredTexels > 12U * 20U, "the generated atlas bakes without an overlap error");
 }
+// Quad corners a (0,0), b (1,0), c (0,1), d (1,1) as two triangles with matching UVs.
+std::vector<LightmapTriangle> Quad(kb::math::Vec3 a, kb::math::Vec3 b, kb::math::Vec3 c, kb::math::Vec3 d, kb::math::Vec3 normal, kb::math::Vec3 albedo) {
+    const LightmapVertex va{ a, normal, 0, 0, albedo }, vb{ b, normal, 1, 0, albedo }, vc{ c, normal, 0, 1, albedo }, vd{ d, normal, 1, 1, albedo };
+    return { Triangle(va, vb, vc), Triangle(vb, vd, vc) };
+}
+
+void RunSpotLightTests() {
+    const auto floor = Quad({ -4, 0, -4 }, { 4, 0, -4 }, { -4, 0, 4 }, { 4, 0, 4 }, { 0, 1, 0 }, { 0.5F, 0.5F, 0.5F });
+    LightmapLight spot{ .position = { 0, 4, 0 }, .direction = { 0, -1, 0 }, .intensity = 40, .range = 30, .spot = true, .innerConeDegrees = 10, .outerConeDegrees = 20 };
+    kb::render::StaticLightmapSettings settings;
+    settings.resolution = 32; settings.bounces = 0;
+    const std::array spotLights{ spot };
+    const auto lit = kb::render::BakeStaticLightmap(floor, {}, spotLights, settings);
+    const auto green = [](const kb::render::StaticLightmapResult& result, std::size_t x, std::size_t y) { return result.rgba[(y * 32U + x) * 4U + 1U]; };
+    kb::tests::Require(lit.Succeeded() && green(lit, 16, 16) > 200 && green(lit, 28, 16) < 70, "a spot light lights the floor inside its cone and not outside");
+    spot.spot = false;
+    const std::array pointLights{ spot };
+    const auto point = kb::render::BakeStaticLightmap(floor, {}, pointLights, settings);
+    kb::tests::Require(point.Succeeded() && green(point, 28, 16) > 150, "the same light without a cone reaches the outside texel");
+    spot.spot = true; spot.outerConeDegrees = 5;
+    const std::array bad{ spot };
+    kb::tests::Require(!kb::render::BakeStaticLightmap(floor, {}, bad, settings).Succeeded(), "a spot with an outer angle below the inner one is rejected");
+}
+
+void RunLightProbeTests() {
+    kb::render::ShL2 sh;
+    kb::render::AddShL2Direction(sh, { 0, 1, 0 }, { 1, 1, 1 });
+    kb::tests::Require(sh.c[1].x > 0.4F && std::abs(sh.c[2].x) < 1.0e-5F && std::abs(sh.c[3].x) < 1.0e-5F,
+        "light from +y projects onto the band-1 y coefficient");
+    kb::tests::Require(kb::render::EvaluateShL2Irradiance(sh, { 0, 1, 0 }).x > kb::render::EvaluateShL2Irradiance(sh, { 1, 0, 0 }).x &&
+        kb::render::EvaluateShL2Irradiance(sh, { 1, 0, 0 }).x > kb::render::EvaluateShL2Irradiance(sh, { 0, -1, 0 }).x,
+        "SH irradiance is largest facing the light and smallest facing away");
+
+    // Gray floor and left wall, red right wall, one light; every surface is a receiver with its own lightmap.
+    const kb::math::Vec3 gray{ 0.6F, 0.6F, 0.6F }, red{ 0.8F, 0.05F, 0.05F };
+    const auto floor = Quad({ -4, 0, -4 }, { 4, 0, -4 }, { -4, 0, 4 }, { 4, 0, 4 }, { 0, 1, 0 }, gray);
+    const auto left = Quad({ -4, 0, -4 }, { -4, 0, 4 }, { -4, 4, -4 }, { -4, 4, 4 }, { 1, 0, 0 }, gray);
+    const auto right = Quad({ 4, 0, 4 }, { 4, 0, -4 }, { 4, 4, 4 }, { 4, 4, -4 }, { -1, 0, 0 }, red);
+    const std::array lights{ LightmapLight{ .position = { 0, 3, 0 }, .intensity = 40, .range = 30 } };
+    kb::render::StaticLightmapSettings settings;
+    settings.resolution = 32; settings.bounces = 1;
+    std::vector<LightmapTriangle> everything;
+    for (const auto* part : { &floor, &left, &right }) everything.insert(everything.end(), part->begin(), part->end());
+    std::array<kb::render::StaticLightmapResult, 3> maps;
+    std::array<kb::render::BakedLightmapSurface, 3> surfaces;
+    const std::vector<LightmapTriangle>* parts[]{ &floor, &left, &right };
+    for (std::size_t i = 0; i < 3; ++i) {
+        maps[i] = kb::render::BakeStaticLightmap(*parts[i], everything, lights, settings);
+        surfaces[i] = { *parts[i], maps[i].rgba, settings.resolution };
+    }
+    kb::tests::Require(maps[0].Succeeded() && maps[1].Succeeded() && maps[2].Succeeded(), "probe test room bakes");
+    const auto grid = kb::render::BakeLightProbes(surfaces, lights, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 3 });
+    kb::tests::Require(grid.Succeeded() && grid.dimensions[0] == 3 && grid.dimensions[1] == 1 && grid.dimensions[2] == 3 && grid.probes.size() == 9U,
+        "a probe grid covers the bounds at the requested spacing");
+    const auto again = kb::render::BakeLightProbes(surfaces, lights, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 3 });
+    kb::tests::Require(kb::render::SerializeLightProbeGrid(grid) == kb::render::SerializeLightProbeGrid(again), "probe baking is deterministic");
+    const auto parsed = kb::render::ParseLightProbeGrid(kb::render::SerializeLightProbeGrid(grid));
+    kb::tests::Require(parsed.Succeeded() && kb::render::SerializeLightProbeGrid(parsed) == kb::render::SerializeLightProbeGrid(grid), "a probe grid survives its binary form");
+    kb::tests::Require(!kb::render::ParseLightProbeGrid(kb::render::SerializeLightProbeGrid(grid).substr(0, 40)).Succeeded(), "a truncated probe grid is rejected");
+    const auto nearRed = kb::render::EvaluateShL2Irradiance(kb::render::SampleLightProbeGrid(grid, { 3, 0.5F, 0 }), { 1, 0, 0 });
+    const auto nearGray = kb::render::EvaluateShL2Irradiance(kb::render::SampleLightProbeGrid(grid, { -3, 0.5F, 0 }), { -1, 0, 0 });
+    kb::tests::Require(nearRed.x > 1.5F * nearRed.z, "a probe facing the red wall receives red-shifted light");
+    kb::tests::Require(std::abs(nearGray.x - nearGray.z) < 0.05F * nearGray.x + 1.0e-4F, "a probe facing the gray wall stays neutral");
+    const auto leftProbe = kb::render::SampleLightProbeGrid(grid, { 0, 0.5F, 0 }), rightProbe = kb::render::SampleLightProbeGrid(grid, { 3, 0.5F, 0 });
+    const auto middle = kb::render::SampleLightProbeGrid(grid, { 1.5F, 0.5F, 0 });
+    kb::tests::Require(std::abs(middle.c[0].x - 0.5F * (leftProbe.c[0].x + rightProbe.c[0].x)) < 1.0e-4F, "sampling between probes blends them linearly");
+    const auto coarse = kb::render::BakeLightProbes(surfaces, lights, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 0.2F, .maxProbes = 20 });
+    kb::tests::Require(coarse.Succeeded() && coarse.probes.size() <= 20U, "the probe count is capped by coarsening the spacing");
+}
 } // namespace
 
 void RunStaticLightmapBakerTests() {
     RunBounceTests();
     RunGeneratedUvTests();
+    RunSpotLightTests();
+    RunLightProbeTests();
 }
 } // namespace kb::tests

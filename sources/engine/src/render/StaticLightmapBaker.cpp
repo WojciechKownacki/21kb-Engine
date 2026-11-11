@@ -2,6 +2,7 @@
 #include "engine/math/ColorSpace.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <map>
 
@@ -21,6 +22,36 @@ bool Hit(V p,V d,float limit,const LightmapTriangle& t) {
     const float u=Dot(s,h)*inverse; if(u<0||u>1) return false;
     const V q=Cross(s,e1); const float v=Dot(d,q)*inverse; if(v<0||u+v>1) return false;
     const float distance=Dot(e2,q)*inverse; return distance>0.00001F&&distance<limit;
+}
+
+bool ValidLight(const LightmapLight& light) {
+    return !(!Finite(light.position)||!Finite(light.direction)||!Finite(light.color)||
+        !std::isfinite(light.intensity)||light.intensity<0||!std::isfinite(light.range)||light.range<=0||
+        light.color.x<0||light.color.y<0||light.color.z<0||((light.directional||light.spot)&&Dot(light.direction,light.direction)<1.0e-12F)||
+        (light.spot&&(!std::isfinite(light.innerConeDegrees)||!std::isfinite(light.outerConeDegrees)||light.innerConeDegrees<0||light.outerConeDegrees<light.innerConeDegrees||light.outerConeDegrees>89)));
+}
+
+// Cosine-weighted strength of one light at p with normal n, before the shadow test; `direction` points at the light.
+float DirectStrength(const LightmapLight& light,V p,V n,V& direction,float& distance) {
+    const V delta=light.directional?Mul(Unit(light.direction),-1):Sub(light.position,p);
+    distance=std::sqrt(Dot(delta,delta)); direction=Unit(delta);
+    float strength=std::max(Dot(n,direction),0.0F)*light.intensity;
+    if(light.directional) return strength;
+    const float fade=std::max(1-distance/light.range,0.0F); strength*=fade*fade/std::max(distance*distance,1.0F);
+    if(light.spot) {
+        const float inner=std::cos(light.innerConeDegrees*0.0174532925F), outer=std::cos(light.outerConeDegrees*0.0174532925F);
+        const float ramp=std::clamp((Dot(Unit(light.direction),Mul(direction,-1))-outer)/std::max(inner-outer,0.001F),0.0F,1.0F);
+        strength*=ramp*ramp;
+    }
+    return strength;
+}
+
+// Van der Corput radical inverse in [0,1): with the index as the other axis it gives a fixed Hammersley point set.
+float RadicalInverse(unsigned bits) {
+    bits=(bits<<16)|(bits>>16); bits=((bits&0x55555555U)<<1)|((bits&0xAAAAAAAAU)>>1);
+    bits=((bits&0x33333333U)<<2)|((bits&0xCCCCCCCCU)>>2); bits=((bits&0x0F0F0F0FU)<<4)|((bits&0xF0F0F0F0U)>>4);
+    bits=((bits&0x00FF00FFU)<<8)|((bits&0xFF00FF00U)>>8);
+    return static_cast<float>(bits)*2.3283064365386963e-10F;
 }
 
 constexpr unsigned kBounceRays=128;
@@ -116,10 +147,7 @@ StaticLightmapResult BakeStaticLightmap(std::span<const LightmapTriangle> receiv
         if(!Finite(v.position)||!Finite(v.normal)||!std::isfinite(v.u)||!std::isfinite(v.v)) return fail("non-finite lightmap geometry");
     for(const auto& t:receiver) for(const auto& v:t) if(v.u<0||v.u>1||v.v<0||v.v>1||Dot(v.normal,v.normal)<1.0e-12F)
         return fail("receiver requires normals and UV0 in [0,1]");
-    for(const auto& light:lights) if(!Finite(light.position)||!Finite(light.direction)||!Finite(light.color)||
-        !std::isfinite(light.intensity)||light.intensity<0||!std::isfinite(light.range)||light.range<=0||
-        light.color.x<0||light.color.y<0||light.color.z<0||(light.directional&&Dot(light.direction,light.direction)<1.0e-12F))
-        return fail("invalid lightmap light");
+    for(const auto& light:lights) if(!ValidLight(light)) return fail("invalid lightmap light");
     result.rgba.resize(size*size*4,0);
     std::vector<int> owners(size*size,-1);
     struct Texel { V position{},normal{},direct{}; };
@@ -158,10 +186,7 @@ StaticLightmapResult BakeStaticLightmap(std::span<const LightmapTriangle> receiv
             const V n=Unit(Add(Add(Mul(t[0].normal,a),Mul(t[1].normal,b)),Mul(t[2].normal,c)));
             V irradiance{settings.ambient,settings.ambient,settings.ambient};
             for(const auto& light:lights) {
-                const V delta=light.directional?Mul(Unit(light.direction),-1):Sub(light.position,p);
-                const float distance=std::sqrt(Dot(delta,delta)); const V direction=Unit(delta);
-                float strength=std::max(Dot(n,direction),0.0F)*light.intensity;
-                if(!light.directional) { const float fade=std::max(1-distance/light.range,0.0F);strength*=fade*fade/std::max(distance*distance,1.0F); }
+                V direction; float distance=0; const float strength=DirectStrength(light,p,n,direction,distance);
                 if(strength<=0) continue;
                 if(light.castsShadow&&std::any_of(occluders.begin(),occluders.end(),[&](const auto& blocker) {
                     return Hit(Add(p,Mul(n,settings.rayBias)),direction,light.directional?1.0e20F:distance-settings.rayBias,blocker);
@@ -182,10 +207,7 @@ StaticLightmapResult BakeStaticLightmap(std::span<const LightmapTriangle> receiv
         const auto directAt=[&](V p,V n) {
             V sum{settings.ambient,settings.ambient,settings.ambient};
             for(const auto& light:lights) {
-                const V delta=light.directional?Mul(Unit(light.direction),-1):Sub(light.position,p);
-                const float distance=std::sqrt(Dot(delta,delta)); const V direction=Unit(delta);
-                float strength=std::max(Dot(n,direction),0.0F)*light.intensity;
-                if(!light.directional) { const float fade=std::max(1-distance/light.range,0.0F);strength*=fade*fade/std::max(distance*distance,1.0F); }
+                V direction; float distance=0; const float strength=DirectStrength(light,p,n,direction,distance);
                 if(strength<=0) continue;
                 float t=0,b1=0,b2=0; int blocker=-1;
                 if(light.castsShadow&&bvh.Nearest(Add(p,Mul(n,settings.rayBias)),direction,light.directional?1.0e20F:distance-settings.rayBias,t,blocker,b1,b2)) continue;
@@ -205,10 +227,7 @@ StaticLightmapResult BakeStaticLightmap(std::span<const LightmapTriangle> receiv
                 V gathered{0,0,0};
                 for(unsigned ray=0;ray<kBounceRays;++ray) {
                     // Hammersley points mapped to a cosine-weighted hemisphere: fixed set, so the bake is deterministic.
-                    unsigned bits=ray; bits=(bits<<16)|(bits>>16); bits=((bits&0x55555555U)<<1)|((bits&0xAAAAAAAAU)>>1);
-                    bits=((bits&0x33333333U)<<2)|((bits&0xCCCCCCCCU)>>2); bits=((bits&0x0F0F0F0FU)<<4)|((bits&0xF0F0F0F0U)>>4);
-                    bits=((bits&0x00FF00FFU)<<8)|((bits&0xFF00FF00U)>>8);
-                    const float radius2=(static_cast<float>(ray)+0.5F)/static_cast<float>(kBounceRays), angle=6.28318530718F*(static_cast<float>(bits)*2.3283064365386963e-10F);
+                    const float radius2=(static_cast<float>(ray)+0.5F)/static_cast<float>(kBounceRays), angle=6.28318530718F*RadicalInverse(ray);
                     const float radius=std::sqrt(radius2), up=std::sqrt(1-radius2);
                     const V direction=Add(Add(Mul(tangent,radius*std::cos(angle)),Mul(bitangent,radius*std::sin(angle))),Mul(texel.normal,up));
                     float distance=0,b1=0,b2=0; int hit=-1;
@@ -364,5 +383,157 @@ LightmapUvLayout GenerateLightmapUv(std::span<const LightmapTriangle> triangles,
         layout.uv[static_cast<std::size_t>(tri)*6+static_cast<std::size_t>(k)*2+1]=(chart.y+(Dot(p,chart.bitangent)-chart.minY)*scale)/static_cast<float>(resolution);
     }
     return layout;
+}
+namespace {
+constexpr unsigned kProbeRays=256;
+constexpr float kPi=3.14159265359F;
+// Real SH basis of a unit direction, band order L00, L1-1, L10, L11, L2-2, L2-1, L20, L21, L22.
+std::array<float,9> ShBasis(V d) {
+    return {0.282095F,0.488603F*d.y,0.488603F*d.z,0.488603F*d.x,1.092548F*d.x*d.y,1.092548F*d.y*d.z,
+        0.315392F*(3*d.z*d.z-1),1.092548F*d.x*d.z,0.546274F*(d.x*d.x-d.y*d.y)};
+}
+}
+
+void AddShL2Direction(ShL2& sh,V fromDirection,V radiance) {
+    const auto basis=ShBasis(fromDirection);
+    for(std::size_t i=0;i<9;++i) sh.c[i]=Add(sh.c[i],Mul(radiance,basis[i]));
+}
+
+V EvaluateShL2Irradiance(const ShL2& sh,V normal) {
+    // Cosine lobe weights per band (pi, 2pi/3, pi/4) over pi: the lightmap units carry no 1/pi.
+    static constexpr float weight[9]{1.0F,2.0F/3,2.0F/3,2.0F/3,0.25F,0.25F,0.25F,0.25F,0.25F};
+    const auto basis=ShBasis(Unit(normal)); V sum{0,0,0};
+    for(std::size_t i=0;i<9;++i) sum=Add(sum,Mul(sh.c[i],weight[i]*basis[i]));
+    return sum;
+}
+
+LightProbeGrid BakeLightProbes(std::span<const BakedLightmapSurface> surfaces,std::span<const LightmapLight> lights,
+    V boundsMin,V boundsMax,const LightProbeSettings& settings) {
+    LightProbeGrid grid;
+    const auto fail=[&](const char* error) { grid.error=error; grid.probes.clear(); return grid; };
+    if(surfaces.empty()||!Finite(boundsMin)||!Finite(boundsMax)||boundsMax.x<boundsMin.x||boundsMax.y<boundsMin.y||boundsMax.z<boundsMin.z||
+        !std::isfinite(settings.spacing)||settings.spacing<0.05F||settings.maxProbes==0||settings.maxProbes>65536||
+        !std::isfinite(settings.ambient)||settings.ambient<0||!std::isfinite(settings.rayBias)||settings.rayBias<=0||lights.size()>256)
+        return fail("invalid light probe settings or bounds");
+    std::vector<LightmapTriangle> geometry; std::vector<std::uint32_t> owner;
+    for(std::size_t s=0;s<surfaces.size();++s) {
+        const auto& surface=surfaces[s];
+        if(surface.triangles.empty()||surface.resolution<4||surface.rgba.size()!=static_cast<std::size_t>(surface.resolution)*surface.resolution*4) return fail("invalid light probe surface");
+        for(const auto& t:surface.triangles) for(const auto& v:t) if(!Finite(v.position)||!Finite(v.normal)||!std::isfinite(v.u)||!std::isfinite(v.v)) return fail("non-finite light probe geometry");
+        geometry.insert(geometry.end(),surface.triangles.begin(),surface.triangles.end());
+        owner.insert(owner.end(),surface.triangles.size(),static_cast<std::uint32_t>(s));
+    }
+    for(const auto& light:lights) if(!ValidLight(light)) return fail("invalid lightmap light");
+    // Coarsen the spacing until the grid fits the probe budget.
+    float spacing=settings.spacing; std::array<std::uint32_t,3> dims{};
+    for(;;) {
+        const V extent=Sub(boundsMax,boundsMin); const float length[]{extent.x,extent.y,extent.z}; double count=1;
+        for(int axis=0;axis<3;++axis) { dims[static_cast<std::size_t>(axis)]=static_cast<std::uint32_t>(std::floor(length[axis]/spacing))+1U; count*=dims[static_cast<std::size_t>(axis)]; }
+        if(count<=settings.maxProbes) break;
+        spacing*=1.25F;
+    }
+    grid.origin=boundsMin; grid.spacing=spacing; grid.dimensions=dims;
+    const std::size_t total=static_cast<std::size_t>(dims[0])*dims[1]*dims[2];
+    grid.probes.assign(total,ShL2{});
+    Bvh bvh; bvh.Build(geometry);
+    std::vector<char> valid(total,1); std::size_t remaining=0;
+    const auto linear=[](std::uint8_t byte) { return kb::math::SrgbToLinear(static_cast<float>(byte)/255.0F); };
+    for(std::size_t index=0;index<total;++index) {
+        const std::size_t x=index%dims[0], y=(index/dims[0])%dims[1], z=index/(static_cast<std::size_t>(dims[0])*dims[1]);
+        const V p{boundsMin.x+static_cast<float>(x)*spacing,boundsMin.y+static_cast<float>(y)*spacing,boundsMin.z+static_cast<float>(z)*spacing};
+        ShL2& sh=grid.probes[index]; unsigned backHits=0;
+        for(unsigned ray=0;ray<kProbeRays;++ray) {
+            // Fixed Hammersley set over the sphere (equal-area in z), so the bake is deterministic.
+            const float h=1-2*(static_cast<float>(ray)+0.5F)/static_cast<float>(kProbeRays), r=std::sqrt(std::max(1-h*h,0.0F)), angle=2*kPi*RadicalInverse(ray);
+            const V direction{r*std::cos(angle),h,r*std::sin(angle)};
+            V radiance{settings.ambient,settings.ambient,settings.ambient};
+            float distance=0,b1=0,b2=0; int hit=-1;
+            if(bvh.Nearest(p,direction,1.0e20F,distance,hit,b1,b2)) {
+                const auto& t=geometry[static_cast<std::size_t>(hit)]; const float b0=1-b1-b2;
+                const V normal=Add(Add(Mul(t[0].normal,b0),Mul(t[1].normal,b1)),Mul(t[2].normal,b2));
+                if(Dot(normal,direction)>0) { ++backHits; continue; }
+                const auto& surface=surfaces[owner[static_cast<std::size_t>(hit)]]; const auto size=static_cast<std::size_t>(surface.resolution);
+                const float hitU=t[0].u*b0+t[1].u*b1+t[2].u*b2, hitV=t[0].v*b0+t[1].v*b1+t[2].v*b2;
+                const auto tx=std::min(static_cast<std::size_t>(std::max(hitU,0.0F)*static_cast<float>(size)),size-1);
+                const auto ty=std::min(static_cast<std::size_t>(std::max(hitV,0.0F)*static_cast<float>(size)),size-1);
+                const std::uint8_t* texel=surface.rgba.data()+(ty*size+tx)*4; const V albedo=Mean(t);
+                radiance={linear(texel[0])*albedo.x,linear(texel[1])*albedo.y,linear(texel[2])*albedo.z};
+            }
+            AddShL2Direction(sh,direction,Mul(radiance,4*kPi/static_cast<float>(kProbeRays)));
+        }
+        if(backHits*4>kProbeRays) { valid[index]=0; ++remaining; continue; }
+        for(const auto& light:lights) {
+            // Light that reaches the probe unobstructed arrives from one direction: the cosine is left to the lookup.
+            const V toward=light.directional?Mul(Unit(light.direction),-1):Unit(Sub(light.position,p));
+            V direction; float distance=0; const float strength=DirectStrength(light,p,toward,direction,distance);
+            if(strength<=0) continue;
+            float blockerDistance=0,u=0,v=0; int blocker=-1;
+            if(light.castsShadow&&bvh.Nearest(p,direction,light.directional?1.0e20F:distance-settings.rayBias,blockerDistance,blocker,u,v)) continue;
+            AddShL2Direction(sh,direction,Mul(light.color,kPi*strength));
+        }
+    }
+    grid.invalidProbes=static_cast<std::uint32_t>(remaining);
+    if(remaining==total) return fail("every light probe lies inside geometry");
+    // Probes inside geometry take the mean of their valid neighbours, growing inwards one layer per pass.
+    for(std::size_t pass=0;pass<static_cast<std::size_t>(dims[0])+dims[1]+dims[2]&&remaining>0;++pass) {
+        auto filled=valid; std::vector<std::pair<std::size_t,ShL2>> updates;
+        for(std::size_t index=0;index<total;++index) {
+            if(valid[index]) continue;
+            const std::size_t x=index%dims[0], y=(index/dims[0])%dims[1], z=index/(static_cast<std::size_t>(dims[0])*dims[1]);
+            const std::size_t neighbours[6]{x>0?index-1:total,x+1<dims[0]?index+1:total,y>0?index-dims[0]:total,y+1<dims[1]?index+dims[0]:total,
+                z>0?index-static_cast<std::size_t>(dims[0])*dims[1]:total,z+1<dims[2]?index+static_cast<std::size_t>(dims[0])*dims[1]:total};
+            ShL2 sum{}; float count=0;
+            for(const auto other:neighbours) if(other<total&&valid[other]) { for(std::size_t i=0;i<9;++i) sum.c[i]=Add(sum.c[i],grid.probes[other].c[i]); ++count; }
+            if(count>0) { for(auto& c:sum.c) c=Mul(c,1.0F/count); updates.emplace_back(index,sum); }
+        }
+        for(const auto& [index,sh] : updates) { grid.probes[index]=sh; filled[index]=1; --remaining; }
+        valid.swap(filled);
+    }
+    return grid;
+}
+
+ShL2 SampleLightProbeGrid(const LightProbeGrid& grid,V position) {
+    ShL2 result{};
+    if(!grid.Succeeded()) return result;
+    std::size_t base[3],next[3]; float fraction[3]; const float local[]{position.x-grid.origin.x,position.y-grid.origin.y,position.z-grid.origin.z};
+    for(std::size_t axis=0;axis<3;++axis) {
+        const float maximum=static_cast<float>(grid.dimensions[axis]-1), cell=std::clamp(local[axis]/grid.spacing,0.0F,maximum);
+        base[axis]=std::min(static_cast<std::size_t>(cell),static_cast<std::size_t>(grid.dimensions[axis]-1)); next[axis]=std::min(base[axis]+1,static_cast<std::size_t>(grid.dimensions[axis]-1));
+        fraction[axis]=cell-static_cast<float>(base[axis]);
+    }
+    for(unsigned corner=0;corner<8;++corner) {
+        const std::size_t x=(corner&1U)?next[0]:base[0], y=(corner&2U)?next[1]:base[1], z=(corner&4U)?next[2]:base[2];
+        const float weight=((corner&1U)?fraction[0]:1-fraction[0])*((corner&2U)?fraction[1]:1-fraction[1])*((corner&4U)?fraction[2]:1-fraction[2]);
+        const ShL2& probe=grid.probes[(z*grid.dimensions[1]+y)*grid.dimensions[0]+x];
+        for(std::size_t i=0;i<9;++i) result.c[i]=Add(result.c[i],Mul(probe.c[i],weight));
+    }
+    return result;
+}
+
+std::string SerializeLightProbeGrid(const LightProbeGrid& grid) {
+    std::string bytes("KBLP",4);
+    const auto put=[&](const void* data,std::size_t size) { bytes.append(static_cast<const char*>(data),size); };
+    const std::uint32_t version=1; put(&version,4);
+    const float header[]{grid.origin.x,grid.origin.y,grid.origin.z,grid.spacing}; put(header,sizeof(header));
+    put(grid.dimensions.data(),sizeof(std::uint32_t)*3);
+    for(const auto& probe:grid.probes) for(const auto& c:probe.c) { const float rgb[]{c.x,c.y,c.z}; put(rgb,sizeof(rgb)); }
+    return bytes;
+}
+
+LightProbeGrid ParseLightProbeGrid(std::string_view bytes) {
+    LightProbeGrid grid;
+    const auto fail=[&](const char* error) { grid.error=error; grid.probes.clear(); return grid; };
+    std::size_t at=0;
+    const auto get=[&](void* data,std::size_t size) { if(bytes.size()-at<size) return false; std::memcpy(data,bytes.data()+at,size); at+=size; return true; };
+    char magic[4]{}; std::uint32_t version=0; float header[4]{};
+    if(!get(magic,4)||std::string_view(magic,4)!="KBLP"||!get(&version,4)||version!=1||!get(header,sizeof(header))||!get(grid.dimensions.data(),sizeof(std::uint32_t)*3))
+        return fail("not a light probe grid");
+    double total=1; for(const auto d:grid.dimensions) total*=d;
+    if(total<1||total>1048576.0||!std::isfinite(header[0])||!std::isfinite(header[1])||!std::isfinite(header[2])||!std::isfinite(header[3])||header[3]<=0||
+        bytes.size()-at!=static_cast<std::size_t>(total)*27*sizeof(float)) return fail("corrupt light probe grid");
+    grid.origin={header[0],header[1],header[2]}; grid.spacing=header[3];
+    grid.probes.resize(static_cast<std::size_t>(total));
+    for(auto& probe:grid.probes) for(auto& c:probe.c) { float rgb[3]; get(rgb,sizeof(rgb)); c={rgb[0],rgb[1],rgb[2]}; }
+    return grid;
 }
 } // namespace kb::render

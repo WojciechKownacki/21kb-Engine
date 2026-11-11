@@ -2078,16 +2078,23 @@ int RunSceneBakeLightingCommand(const ArgumentList& arguments, CommandIo io) {
         if(error!=std::errc{}||end!=text->data()+text->size()||out<low||out>high) {io.err << "error: " << name << " must be " << low << ".." << high << '\n';return false;}
         return true;
     };
-    unsigned resolution=settings.resolution,bounces=settings.bounces;
-    if(!number("--resolution",16,1024,resolution)||!number("--bounces",0,4,bounces)) return 1;
-    settings.resolution=static_cast<std::uint16_t>(resolution);settings.bounces=static_cast<std::uint8_t>(bounces);
+    unsigned resolution=settings.resolution,bounces=settings.bounces,maxProbes=settings.maxProbes;
+    if(!number("--resolution",16,1024,resolution)||!number("--bounces",0,4,bounces)||!number("--max-probes",1,65536,maxProbes)) return 1;
+    settings.resolution=static_cast<std::uint16_t>(resolution);settings.bounces=static_cast<std::uint8_t>(bounces);settings.maxProbes=maxProbes;
+    if(const auto text=arguments.Option("--probe-spacing")) {
+        // Metres between light probes; 0 bakes none.
+        const auto [end,error]=std::from_chars(text->data(),text->data()+text->size(),settings.probeSpacing);
+        if(error!=std::errc{}||end!=text->data()+text->size()||!(settings.probeSpacing==0.0F||(settings.probeSpacing>=0.05F&&settings.probeSpacing<=1000.0F))) {
+            io.err << "error: --probe-spacing must be 0 or 0.05..1000 metres\n";return 1;
+        }
+    }
     const SceneSessionPtr session=OpenScene(arguments,io);if(!session) return 1;
     const auto sceneName=session->path.stem().generic_u8string();
     const auto baked=kb::render::BakeSceneLighting(*session->scene,std::string_view{reinterpret_cast<const char*>(sceneName.data()),sceneName.size()},settings);
     if(!baked.Succeeded()) {io.err << "error: " << baked.error << '\n';return 1;}
     if(!session->Save()) {io.err << "error: scene " << session->path.generic_string() << " could not be written\n";return 1;}
     io.out << "baked " << baked.receivers << " receivers (" << baked.texels << " texels, " << baked.generatedMeshes << " generated lightmap UV meshes) with "
-        << baked.lights << " static lights";
+        << baked.lights << " static lights and " << baked.probes << " light probes";
     if(baked.skippedLights!=0) io.out << "; skipped " << baked.skippedLights << " static spot lights (not supported by the lightmap baker)";
     io.out << '\n';
     return 0;

@@ -48,7 +48,7 @@ Commands:
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts]
   scene-lightmap Bake static diffuse lighting and ray shadows into a UV0 texture.
-  scene-bake-lighting Bake the whole scene: static lights, bounces and generated lightmap UVs.
+  scene-bake-lighting Bake the whole scene: static lights, bounces, generated lightmap UVs and light probes.
   material-new Create a material, as the editor's Create > Material does, with
                its values set at once. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/Materials]
