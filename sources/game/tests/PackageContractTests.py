@@ -42,11 +42,6 @@ SETTINGS = {
     'Project.Tags': {'Count': '1', 'Tag0': 'Boss'},
 }
 
-# CpuParticleBackend::Step accepts only a 1/60 s step, so a project with another fixed step gets this one
-# error from the particle provider, which every new project lists, and no particle simulation. Until that is
-# lifted the run may carry exactly this error and no other.
-KNOWN_PARTICLE_STEP_ERROR = 'particle CPU backend rejected the authoritative fixed step'
-
 # Everything a Windows package holds besides Licenses/: no editor, no tool, no source asset, no project file.
 WINDOWS_FILES = {
     f'{GAME_NAME}.exe', 'Game.kbpack', 'release.kbmanifest', 'sbom.cdx.json', 'THIRD_PARTY_NOTICES.txt',
@@ -232,11 +227,7 @@ def check_windows(args):
     assert applied.groups() == ('borderless', '0', '90', '120', '0.5', '0,-3.7,0', '0.25', '1'), applied.groups()
     final = re.search(r'kb_game: frames=30 shutdown=clean rendered=30 .* errors=(\d+)', output)
     assert final, output
-    known = result.stderr.count(KNOWN_PARTICLE_STEP_ERROR)
-    other = [line for line in result.stderr.splitlines() if line.strip() and KNOWN_PARTICLE_STEP_ERROR not in line]
-    assert not other and int(final.group(1)) == known and result.returncode == (1 if known else 0), (result.returncode, result.stderr)
-    if known:
-        print('KNOWN-DEFECT: ' + KNOWN_PARTICLE_STEP_ERROR + ' (fixed step 120 Hz)')
+    assert int(final.group(1)) == 0 and result.returncode == 0 and not result.stderr.strip(), (result.returncode, result.stderr)
 
     # The same project with a window, a vsync and a resizable window: only the settings differ in the pack.
     patch_ini(context.ini, {'Project.Display': {'WindowMode': 'Windowed', 'Resizable': '1', 'VSync': '1'}})

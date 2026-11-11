@@ -66,9 +66,20 @@ public:
         std::uint32_t maxParticlesOverride,
         bool followTransform,
         const kb::scene::WorldTransform& ownerTransform) noexcept override;
+    // One simulation step of every effect. Effects always advance at this length, whatever fixed step the
+    // scene runs at; ParticleSceneSystem turns scene time into steps of it.
+    static constexpr float kStepSeconds =
+        1.0F / static_cast<float>(kb::scene::kParticleEffectFixedStepsPerSecond);
+    // Runs one particle step (fixedDeltaSeconds must be kStepSeconds). stepIndex counts the steps taken
+    // since the particle clock started and sets the GPU simulation time; the two-argument form uses the
+    // scene's own fixed step index.
     [[nodiscard]] kb::particles::ParticleRuntimeResult Step(
         kb::scene::Scene& scene,
         float fixedDeltaSeconds);
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Step(
+        kb::scene::Scene& scene,
+        float fixedDeltaSeconds,
+        std::uint64_t stepIndex);
     // Moves the simulation space to `origin` (ParticlePlayback::SimulationOrigin): live particles, owner
     // transforms and queued events keep their world positions. Step follows the scene's origin by itself.
     void FollowSimulationOrigin(const kb::math::DVec3& origin) noexcept;

@@ -745,8 +745,15 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Emit(
 kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     kb::scene::Scene& scene,
     float fixedDeltaSeconds) {
+    return Step(scene, fixedDeltaSeconds, scene.Runtime().FixedStepIndex() + 1U);
+}
+
+kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
+    kb::scene::Scene& scene,
+    float fixedDeltaSeconds,
+    std::uint64_t stepIndex) {
     if (!warmedUp_ || !std::isfinite(fixedDeltaSeconds) ||
-        std::abs(fixedDeltaSeconds - kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds) > 0.0000001F) {
+        std::abs(fixedDeltaSeconds - kStepSeconds) > 0.0000001F) {
         return Result(kb::particles::ParticleRuntimeStatus::InvalidRequest);
     }
     FollowSimulationOrigin(kb::particles::ParticlePlayback::SimulationOrigin(scene));
@@ -781,7 +788,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     BeginEventStep();
     gpuScene_ = &scene;
     collisionScene_ = &scene;
-    gpuSimTime_ = static_cast<double>(scene.Runtime().FixedStepIndex() + 1U) * static_cast<double>(fixedDeltaSeconds);
+    gpuSimTime_ = static_cast<double>(stepIndex) * static_cast<double>(fixedDeltaSeconds);
     ReleaseDueGpuEvents();
     std::uint32_t remainingSpawnBudget = kb::scene::kParticleEffectMaxSpawnsPerStep;
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
