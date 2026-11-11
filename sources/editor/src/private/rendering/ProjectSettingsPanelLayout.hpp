@@ -60,12 +60,14 @@ struct ProjectSettingsPanelLayoutRects {
     RECT qualityLabel[4]{};
     RECT qualityButton[4][5]{};
     // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit, render scale,
-    // Android graphics API, then the launch screen: image scale, background colour, minimum time, progress bar.
-    RECT displayLabel[11]{};
+    // Android graphics API, then the launch screen: image scale, background colour, minimum time, progress bar, image.
+    RECT displayLabel[12]{};
     RECT splashScaleButton[3]{};
     RECT splashColorButton[6]{};
     RECT splashMinimumButton[5]{};
     RECT splashProgressCheckbox{};
+    // The launch screen image row cell (its selector lives inset within).
+    RECT splashImageField{};
     RECT windowModeButton[2]{};
     RECT androidGraphicsApiButton[3]{};
     RECT windowSizeButton[4]{};
@@ -118,6 +120,8 @@ public:
 
     // The visible Mapping Context selector box, inset within its row cell.
     [[nodiscard]] static RECT MappingFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept;
+    // The visible launch screen image selector box on the Display page, inset within its row cell.
+    [[nodiscard]] static RECT SplashImageFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept;
 
     // A row inside the open Mapping Context dropdown list, stacked under the box.
     [[nodiscard]] static RECT OptionRow(const RECT& fieldBox, int index) noexcept;

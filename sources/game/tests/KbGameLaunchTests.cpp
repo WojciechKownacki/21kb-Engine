@@ -392,6 +392,12 @@ struct LoadingRun {
     for (std::size_t at = json.find("\"held\":true"); at != std::string::npos; at = json.find("\"held\":true", at + 1U)) {
         ++held;
     }
+    // The finished load draws its scene hidden behind the screen, in two frames at least, before the scene shows.
+    std::size_t prewarmed = 0U;
+    for (std::size_t at = json.find("\"prewarm\":true"); at != std::string::npos; at = json.find("\"prewarm\":true", at + 1U)) {
+        ++prewarmed;
+    }
+    Require(prewarmed >= 2U, "the loading screen did not draw the loaded scene behind it before the scene showed");
     return LoadingRun{ .frames = progress.size(), .heldFrames = held };
 }
 
@@ -692,7 +698,11 @@ end
         const std::vector<double> beforeScene = ReportedNumbers(json, "loading_frames_before_first_scene_frame");
         Require(beforeScene.size() == 1U && static_cast<std::size_t>(beforeScene.front()) == progress.size(),
             "the scene appeared before the loading screen had drawn the frames of a scene change");
-        const auto startupEnd = std::ranges::find(progress, 1.0);
+        // The startup load ends with its full-bar frames (the scene drawn behind the screen).
+        auto startupEnd = std::ranges::find(progress, 1.0);
+        while (startupEnd != progress.end() && std::next(startupEnd) != progress.end() && *std::next(startupEnd) == 1.0) {
+            ++startupEnd;
+        }
         Require(startupEnd != progress.end() && std::next(startupEnd) != progress.end(),
             "the loading screen did not come back when a script changed scene");
         const std::size_t startup = static_cast<std::size_t>(startupEnd - progress.begin()) + 1U;
@@ -701,6 +711,11 @@ end
         for (std::size_t index = startup + 1U; index < progress.size(); ++index) {
             Require(progress[index] >= progress[index - 1U], "the loading screen bar went backwards during a scene change");
         }
+        std::size_t prewarmed = 0U;
+        for (std::size_t at = json.find("\"prewarm\":true"); at != std::string::npos; at = json.find("\"prewarm\":true", at + 1U)) {
+            ++prewarmed;
+        }
+        Require(prewarmed >= 4U, "a scene change did not draw the new scene behind the loading screen before it showed");
         Require(Contains(change.output, "frames=4 shutdown=clean"), "kb_game did not keep running after a script changed scene");
     }
 

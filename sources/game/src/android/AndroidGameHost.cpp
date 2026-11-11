@@ -489,7 +489,7 @@ public:
             return false;
         }
         scene_->LoadedContent().SetLoadProgressObserver([this](float fraction) {
-            if (renderer_.IsInitialized()) loadingScreen_.Report(renderer_, fraction);
+            if (renderer_.IsInitialized()) loadingScreen_.Report(renderer_, fraction, scene_.get());
         });
 
         app_.userData = this;
@@ -835,7 +835,7 @@ private:
 
     // Loads the project's startup scene behind the loading screen; the first frame the renderer can draw.
     [[nodiscard]] bool LoadStartupScene() {
-        loadingScreen_.Report(renderer_, 0.0F);
+        loadingScreen_.Report(renderer_, 0.0F, scene_.get());
         std::filesystem::path scenePath;
         std::size_t discoveredAssets = 0U;
         std::ostringstream projectError;

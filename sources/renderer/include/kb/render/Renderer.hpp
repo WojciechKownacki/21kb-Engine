@@ -189,6 +189,10 @@ public:
     // The caller preserves pre-update changes and reconciles topology separately
     // from this runtime tick's transform/proxy updates.
     [[nodiscard]] bool SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization);
+    // Submits `scene` like SubmitRuntimeScene and, in the same frame, draws `prewarmed` into the runtime scene targets
+    // without showing it (no post-process or composite to the screen). Every program, pipeline state and GPU resource
+    // the draws of `prewarmed` need is created then, so its first visible frame does not stall creating them.
+    [[nodiscard]] bool SubmitRuntimeSceneWithPrewarm(const kb::scene::Scene& scene, const kb::scene::Scene& prewarmed);
     [[nodiscard]] bool SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc);
     struct SceneFrameSubmission {
         const kb::scene::Scene* scene = nullptr;
@@ -299,6 +303,9 @@ public:
     [[nodiscard]] const RenderOriginPolicy& CurrentRenderOriginPolicy() const noexcept;
 
 private:
+    // The submit of a runtime scene to the screen through the default scene and post-process targets; nothing when
+    // no frame is active or the targets cannot be made.
+    [[nodiscard]] std::optional<RenderSceneSubmitDesc> RuntimeSceneSubmitDesc(const RuntimeSceneSynchronization& synchronization);
     // Moves the scene's render origin to the viewing camera when it went too far, re-expresses the submit's
     // world-space camera and overlays in render space, then submits.
     [[nodiscard]] bool SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);

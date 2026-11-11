@@ -79,7 +79,7 @@ bool PackagedGameRuntime::Initialize(
         return false;
     }
     activeRenderer_ = &renderer;
-    loadingScreen->Report(renderer, 0.0F);
+    loadingScreen->Report(renderer, 0.0F, nullptr);
     loadingScreen_ = std::move(loadingScreen);
 
     PackagedRuntimeModules staticModules{};
@@ -97,9 +97,9 @@ bool PackagedGameRuntime::Initialize(
         kb::ecs::WorldConfig{},
         kb::scene::SceneMode::Runtime);
     // The startup load and every later scene change report to the same screen.
-    scene->LoadedContent().SetLoadProgressObserver([this](float fraction) {
+    scene->LoadedContent().SetLoadProgressObserver([this, loaded = scene.get()](float fraction) {
         if (loadingScreen_ != nullptr && activeRenderer_ != nullptr) {
-            loadingScreen_->Report(*activeRenderer_, fraction);
+            loadingScreen_->Report(*activeRenderer_, fraction, loaded);
         }
     });
     scriptActive_ = scene->IsModuleActive("Script");

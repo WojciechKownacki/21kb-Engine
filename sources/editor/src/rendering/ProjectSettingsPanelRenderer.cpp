@@ -246,6 +246,16 @@ struct TooltipContent {
         return EditorText("projectSettings.renderScale", "Render Scale");
     case ProjectSettingsTooltipKind::AndroidGraphicsApi:
         return EditorText("projectSettings.androidGraphicsApi", "Android Graphics API");
+    case ProjectSettingsTooltipKind::SplashImage:
+        return EditorText("projectSettings.splashImage", "Launch Screen Image");
+    case ProjectSettingsTooltipKind::SplashScale:
+        return EditorText("projectSettings.splashScale", "Launch Screen Scale");
+    case ProjectSettingsTooltipKind::SplashBackground:
+        return EditorText("projectSettings.splashBackground", "Launch Screen Background");
+    case ProjectSettingsTooltipKind::SplashMinimumTime:
+        return EditorText("projectSettings.splashMinimumTime", "Launch Screen Minimum Time (ms)");
+    case ProjectSettingsTooltipKind::SplashProgress:
+        return EditorText("projectSettings.splashProgress", "Launch Screen Progress Bar");
     case ProjectSettingsTooltipKind::FixedStep:
         return EditorText("projectSettings.fixedStep", "Fixed Step (Hz)");
     case ProjectSettingsTooltipKind::Gravity:
@@ -375,6 +385,11 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::FrameRateLimit:
     case ProjectSettingsTooltipKind::RenderScale:
     case ProjectSettingsTooltipKind::AndroidGraphicsApi:
+    case ProjectSettingsTooltipKind::SplashImage:
+    case ProjectSettingsTooltipKind::SplashScale:
+    case ProjectSettingsTooltipKind::SplashBackground:
+    case ProjectSettingsTooltipKind::SplashMinimumTime:
+    case ProjectSettingsTooltipKind::SplashProgress:
     case ProjectSettingsTooltipKind::FixedStep:
     case ProjectSettingsTooltipKind::Gravity:
     case ProjectSettingsTooltipKind::GravityPreset:
@@ -439,6 +454,16 @@ struct TooltipContent {
         return EditorText("projectSettings.renderScaleDescription", "Share of the screen resolution the 3D scene renders at (0.5 to 1); the interface stays sharp.");
     case ProjectSettingsTooltipKind::AndroidGraphicsApi:
         return EditorText("projectSettings.androidGraphicsApiDescription", "Graphics API of the Android package. Auto uses Vulkan where available; if the device cannot start the chosen API, the other one runs.");
+    case ProjectSettingsTooltipKind::SplashImage:
+        return EditorText("projectSettings.splashImageDescription", "Picture the game shows while a scene loads; none shows the engine's mark.");
+    case ProjectSettingsTooltipKind::SplashScale:
+        return EditorText("projectSettings.splashScaleDescription", "How the picture fits the screen: whole, filling it, or at its own size.");
+    case ProjectSettingsTooltipKind::SplashBackground:
+        return EditorText("projectSettings.splashBackgroundDescription", "Colour around the picture, also on Android before the engine starts.");
+    case ProjectSettingsTooltipKind::SplashMinimumTime:
+        return EditorText("projectSettings.splashMinimumTimeDescription", "Shortest time the launch screen stays up, even when the scene loads faster.");
+    case ProjectSettingsTooltipKind::SplashProgress:
+        return EditorText("projectSettings.splashProgressDescription", "Shows a bar under the picture that follows the load.");
     case ProjectSettingsTooltipKind::FixedStep:
         return EditorText("projectSettings.fixedStepDescription", "Physics steps per second.");
     case ProjectSettingsTooltipKind::Gravity:
@@ -493,7 +518,8 @@ struct SearchableSetting {
     case ProjectSettingsCategory::Lighting:
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
     case ProjectSettingsCategory::Display:
-        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale, Kind::AndroidGraphicsApi });
+        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale, Kind::AndroidGraphicsApi,
+            Kind::SplashScale, Kind::SplashBackground, Kind::SplashMinimumTime, Kind::SplashProgress, Kind::SplashImage });
     case ProjectSettingsCategory::Audio:
         return fromKinds({ Kind::MasterVolume, Kind::Microphone });
     case ProjectSettingsCategory::Tags:
@@ -537,13 +563,6 @@ void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const REC
     DrawText(dc, room, text, Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled),
         EditorDialogStyle::FittingSize(dc, text, static_cast<int>(room.right - room.left), 12, weight), weight);
     DrawText(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled), 11);
-}
-
-// The label of a setting that has no tooltip or description line of its own.
-void DrawPlainSetting(HDC dc, const RECT& label, std::string_view text, const EditorTheme& theme) {
-    const RECT room{ label.left, label.top, label.right - 8, label.bottom };
-    DrawText(dc, room, text, Color(theme.textSecondary),
-        EditorDialogStyle::FittingSize(dc, text, static_cast<int>(room.right - room.left), 12, FW_NORMAL), FW_NORMAL);
 }
 
 void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const EditorProjectSettingsState& state) {
@@ -736,24 +755,32 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
 
     // The launch screen a shipped game shows while its scene loads.
     const kb::project::ProjectSplashSettings& splash = display.splash;
-    DrawPlainSetting(dc, rects.displayLabel[7], EditorText("projectSettings.splashScale", "Launch Screen Scale"), theme);
+    DrawSetting(dc, rects, rects.displayLabel[7], SettingLabel(Kind::SplashScale), Kind::SplashScale, theme, query);
     DrawOptionButton(dc, rects.splashScaleButton[0], theme, EditorText("projectSettings.splashScaleFit", "Fit"), splash.scale == kb::project::ProjectSplashScale::Fit);
     DrawOptionButton(dc, rects.splashScaleButton[1], theme, EditorText("projectSettings.splashScaleFill", "Fill"), splash.scale == kb::project::ProjectSplashScale::Fill);
     DrawOptionButton(dc, rects.splashScaleButton[2], theme, EditorText("projectSettings.splashScaleCenter", "Center"), splash.scale == kb::project::ProjectSplashScale::Center);
-    DrawPlainSetting(dc, rects.displayLabel[8], EditorText("projectSettings.splashBackground", "Launch Screen Background"), theme);
+    DrawSetting(dc, rects, rects.displayLabel[8], SettingLabel(Kind::SplashBackground), Kind::SplashBackground, theme, query);
     for (std::size_t index = 0U; index < kProjectSettingsSplashColors.size(); ++index) {
         const std::array<float, 3U>& color = kProjectSettingsSplashColors[index];
         const COLORREF fill = RGB(std::lround(color[0] * 255.0F), std::lround(color[1] * 255.0F), std::lround(color[2] * 255.0F));
         GdiDrawing::DrawSharpFrame(dc, rects.splashColorButton[index], fill,
             Color(splash.backgroundColor == color ? theme.accent : theme.borderPanel));
     }
-    DrawPlainSetting(dc, rects.displayLabel[9], EditorText("projectSettings.splashMinimumTime", "Launch Screen Minimum Time (ms)"), theme);
+    DrawSetting(dc, rects, rects.displayLabel[9], SettingLabel(Kind::SplashMinimumTime), Kind::SplashMinimumTime, theme, query);
     for (std::size_t index = 0U; index < kProjectSettingsSplashMinimumTimes.size(); ++index) {
         const std::uint32_t milliseconds = kProjectSettingsSplashMinimumTimes[index];
         DrawOptionButton(dc, rects.splashMinimumButton[index], theme, std::to_string(milliseconds), splash.minimumDisplayMilliseconds == milliseconds);
     }
-    DrawPlainSetting(dc, rects.displayLabel[10], EditorText("projectSettings.splashProgress", "Launch Screen Progress Bar"), theme);
+    DrawSetting(dc, rects, rects.displayLabel[10], SettingLabel(Kind::SplashProgress), Kind::SplashProgress, theme, query);
     DrawCheckbox(dc, rects.splashProgressCheckbox, theme, splash.showProgress);
+    // The image row last, so that its open list covers what is under it.
+    DrawSetting(dc, rects, rects.displayLabel[11], SettingLabel(Kind::SplashImage), Kind::SplashImage, theme, query);
+    const RECT imageBox = ProjectSettingsPanelLayout::SplashImageFieldBox(rects);
+    const bool imageListOpen = sceneContext.ProjectSettings().IsSplashImageDropdownOpen();
+    DrawSelectorBox(dc, imageBox, theme, MappingContextDisplayName(splash.image), splash.image.empty(), imageListOpen);
+    if (imageListOpen) {
+        DrawDropdownList(dc, imageBox, theme, sceneContext.ProjectSplashImageOptions(), splash.image, sceneContext.ProjectSettings().HoveredOption());
+    }
 }
 
 void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -1017,6 +1044,19 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
     }
 
     if (category == ProjectSettingsCategory::Display) {
+        const RECT imageBox = ProjectSettingsPanelLayout::SplashImageFieldBox(rects);
+        if (sceneContext.ProjectSettings().IsSplashImageDropdownOpen()) {
+            const std::vector<std::string> options = sceneContext.ProjectSplashImageOptions();
+            for (std::size_t index = 0; index < options.size(); ++index) {
+                const RECT row = ProjectSettingsPanelLayout::OptionRow(imageBox, static_cast<int>(index));
+                if (PointInRect(row, x, y)) {
+                    return Hit{ .kind = ProjectSettingsHitKind::SplashImageOption, .index = static_cast<int>(index), .rect = row };
+                }
+            }
+        }
+        if (PointInRect(imageBox, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::SplashImageField, .index = -1, .rect = imageBox };
+        }
         for (int index = 0; index < 2; ++index) {
             if (PointInRect(rects.windowModeButton[index], x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::WindowModeOption, .index = index, .rect = rects.windowModeButton[index] };
@@ -1336,7 +1376,8 @@ std::optional<int> ProjectSettingsPanelRenderer::FirstMatchingCategory(std::stri
 
 ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
     const Hit direct = HitTest(content, sceneContext, x, y);
-    if (direct.kind != ProjectSettingsHitKind::None && direct.kind != ProjectSettingsHitKind::CategoryItem && direct.kind != ProjectSettingsHitKind::MappingContextOption && direct.kind != ProjectSettingsHitKind::PhysicsLayersOption) {
+    if (direct.kind != ProjectSettingsHitKind::None && direct.kind != ProjectSettingsHitKind::CategoryItem && direct.kind != ProjectSettingsHitKind::MappingContextOption && direct.kind != ProjectSettingsHitKind::PhysicsLayersOption &&
+        direct.kind != ProjectSettingsHitKind::SplashImageOption) {
         return direct;
     }
 
@@ -1393,6 +1434,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
         }
         if (PointInRect(rects.displayLabel[10], x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = 2, .rect = rects.displayLabel[10] };
+        }
+        if (PointInRect(rects.displayLabel[11], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::SplashImageField, .index = -1, .rect = rects.splashImageField };
         }
         for (int row = 0; row < 5; ++row) {
             if (PointInRect(rects.displayLabel[row], x, y)) {

@@ -3455,6 +3455,17 @@ std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() 
     return options;
 }
 
+std::vector<std::string> EditorSceneContext::ProjectSplashImageOptions() const {
+    std::vector<std::string> options{ std::string{} };
+    for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
+        if (metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture") {
+            options.push_back(kb::assets::NormalizeAssetPath(metadata.virtualPath));
+        }
+    }
+    std::sort(options.begin() + 1, options.end());
+    return options;
+}
+
 bool EditorSceneContext::SetProjectPhysicsLayersAsset(std::string virtualPath) {
     if (projectConfig_.physicsLayersAsset == virtualPath) {
         return false;

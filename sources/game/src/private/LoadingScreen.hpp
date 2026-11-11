@@ -37,10 +37,12 @@ public:
     // from its folder when the game runs from one; the engine's own mark is shown when it names none.
     [[nodiscard]] bool Initialize(const GameProjectRuntime& project, std::ostream& err);
 
-    // Follows a load: `fraction` is how far it has got, from 0 to 1. The first report of a load shows the screen and
-    // each report draws one frame of it. After the report of 1 the screen stays up until the minimum display time
+    // Follows the load of `loading` (none before the scene exists): `fraction` is how far it has got, from 0 to 1.
+    // The first report of a load shows the screen and each report draws one frame of it. The report of 1 draws two
+    // frames with the loaded scene drawn hidden behind the screen, so its programs and pipeline states are made
+    // before it shows. After it the screen stays up, still drawing the scene hidden, until the minimum display time
     // has passed, drawn by PresentHeld.
-    void Report(kb::render::Renderer& renderer, float fraction);
+    void Report(kb::render::Renderer& renderer, float fraction, const kb::scene::Scene* loading);
 
     // True while a finished load is still being held for the minimum display time. Draws the screen in place of
     // the game's frame then; the host skips its own frame when this returns true.
@@ -53,18 +55,22 @@ public:
     struct DrawnFrame {
         float progress = 0.0F;
         bool held = false;
+        // The loaded scene was drawn hidden behind the screen in this frame.
+        bool prewarm = false;
     };
     [[nodiscard]] const std::vector<DrawnFrame>& DrawnFrames() const noexcept { return drawn_; }
     [[nodiscard]] bool Showing() const noexcept { return showing_; }
 
 private:
-    bool Draw(kb::render::Renderer& renderer, float progress, bool held);
+    bool Draw(kb::render::Renderer& renderer, float progress, bool held, const kb::scene::Scene* prewarmed);
 
     std::unique_ptr<kb::scene::Scene> scene_;
     RuntimeSceneFrameSync sync_;
     kb::project::ProjectSplashSettings settings_;
     kb::scene::SceneEntity fill_{};
     kb::scene::SceneEntity track_{};
+    // The scene a finished load placed, drawn hidden behind the screen while it stays up.
+    const kb::scene::Scene* prewarmed_ = nullptr;
     bool showing_ = false;
     bool finished_ = false;
     float progress_ = 0.0F;

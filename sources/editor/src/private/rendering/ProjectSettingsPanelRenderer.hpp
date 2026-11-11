@@ -45,6 +45,8 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     SplashScaleOption,    // Display: how the launch screen image fits: Fit (0), Fill (1) or Center (2); -1 over the label.
     SplashColorOption,    // Display: one of the launch screen background colours; -1 over the label.
     SplashMinimumOption,  // Display: one of the launch screen minimum display times; -1 over the label.
+    SplashImageField,     // Display: the closed launch screen image selector (click toggles its list); also its label.
+    SplashImageOption,    // Display: a row inside the open image list (see Hit::index).
     SimulationStepper,    // Physics: index = stepper * 2 + (0 minus, 1 plus); stepper 0 fixed step, 1..3 gravity, 4 time scale. -1 over a label.
     GravityPresetOption,  // Physics: one of the gravity presets; -1 over the label.
     NumberField,          // A value cell that takes a typed number (index = ProjectSettingsNumber); -1 over its label.

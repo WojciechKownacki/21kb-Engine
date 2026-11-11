@@ -536,28 +536,53 @@ bool Renderer::SubmitScene(const kb::scene::Scene& scene) {
 }
 
 bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization) {
-    if (!frameActive_) {
+    const std::optional<RenderSceneSubmitDesc> desc = RuntimeSceneSubmitDesc(synchronization);
+    return desc.has_value() && SubmitScene(scene, *desc);
+}
+
+bool Renderer::SubmitRuntimeSceneWithPrewarm(const kb::scene::Scene& scene, const kb::scene::Scene& prewarmed) {
+    const std::optional<RenderSceneSubmitDesc> desc = RuntimeSceneSubmitDesc({});
+    if (!desc.has_value()) {
         return false;
+    }
+    // The same scene targets as the visible frames, so the pipeline states made match theirs (formats and sample
+    // count), in a viewport of its own. Its views follow every view of the screen's viewport, so it reuses the shared
+    // targets only after the screen has been composited from them. Without a final composite nothing of it reaches
+    // the screen and no post-process history is written.
+    RenderSceneSubmitDesc hidden = *desc;
+    hidden.target.viewport.id = RenderViewportId{ 2U };
+    hidden.target.viewport.viewportIndex = 1U;
+    hidden.finalComposite.enabled = false;
+    const std::array<SceneFrameSubmission, 2U> submissions{
+        SceneFrameSubmission{ .scene = &scene, .desc = *desc },
+        SceneFrameSubmission{ .scene = &prewarmed, .desc = hidden },
+    };
+    return SubmitScenes(submissions);
+}
+
+std::optional<RenderSceneSubmitDesc> Renderer::RuntimeSceneSubmitDesc(const RuntimeSceneSynchronization& synchronization) {
+    if (!frameActive_) {
+        return std::nullopt;
     }
     const RenderExtent outputExtent{ BackbufferWidth(), BackbufferHeight() };
     if (!outputExtent.IsValid()) {
-        return false;
+        return std::nullopt;
     }
     const RenderExtent extent = ScaledRenderExtent(outputExtent, renderScale_);
     if (!defaultSceneTarget_.Ensure(SceneRenderTargetDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return false;
+        return std::nullopt;
     }
     if (!defaultPostProcessTargets_.Ensure(ScenePostProcessTargetsDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return false;
+        return std::nullopt;
     }
 
-    const RenderSceneSubmitDesc desc{
+    return RenderSceneSubmitDesc{
         .target = RenderSceneTargetBinding{
             .frameBuffer = defaultSceneTarget_.FrameBuffer(),
             .colorTexture = defaultSceneTarget_.ColorTexture(),
@@ -585,7 +610,6 @@ bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSc
         .structuralSync = synchronization.structuralSync,
         .transformAffineSync = !synchronization.fullSync,
     };
-    return SubmitScene(scene, desc);
 }
 
 bool Renderer::SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc) {

@@ -1329,6 +1329,8 @@ public:
 
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
     [[nodiscard]] std::vector<std::string> ProjectPhysicsLayersAssetOptions() const;
+    // The images the launch screen can show: none (the engine's mark) first, then the project's textures.
+    [[nodiscard]] std::vector<std::string> ProjectSplashImageOptions() const;
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
     [[nodiscard]] bool ToggleProjectInputEnabled();
     [[nodiscard]] bool SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path);

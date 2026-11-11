@@ -229,7 +229,7 @@ bool LoadingScreen::Initialize(const GameProjectRuntime& project, std::ostream& 
     return true;
 }
 
-bool LoadingScreen::Draw(kb::render::Renderer& renderer, float progress, bool held) {
+bool LoadingScreen::Draw(kb::render::Renderer& renderer, float progress, bool held, const kb::scene::Scene* prewarmed) {
     if (scene_ == nullptr) {
         return false;
     }
@@ -244,15 +244,17 @@ bool LoadingScreen::Draw(kb::render::Renderer& renderer, float progress, bool he
     if (!renderer.BeginFrame()) {
         return false;
     }
-    const bool submitted = sync_.Submit(*scene_, renderer);
+    const bool submitted = prewarmed != nullptr
+        ? renderer.SubmitRuntimeSceneWithPrewarm(*scene_, *prewarmed)
+        : sync_.Submit(*scene_, renderer);
     renderer.EndFrame();
     if (submitted) {
-        drawn_.push_back(DrawnFrame{ .progress = progress, .held = held });
+        drawn_.push_back(DrawnFrame{ .progress = progress, .held = held, .prewarm = prewarmed != nullptr });
     }
     return submitted;
 }
 
-void LoadingScreen::Report(kb::render::Renderer& renderer, float fraction) {
+void LoadingScreen::Report(kb::render::Renderer& renderer, float fraction, const kb::scene::Scene* loading) {
     if (scene_ == nullptr) {
         return;
     }
@@ -265,8 +267,17 @@ void LoadingScreen::Report(kb::render::Renderer& renderer, float fraction) {
         shownAt_ = std::chrono::steady_clock::now();
     }
     progress_ = std::max(progress_, fraction);
-    static_cast<void>(Draw(renderer, progress_, false));
     finished_ = fraction >= 1.0F;
+    if (!finished_ || loading == nullptr) {
+        static_cast<void>(Draw(renderer, progress_, false, nullptr));
+        return;
+    }
+    // The load is done: from now until the screen goes away its scene is drawn behind it, so the programs, pipeline
+    // states and GPU resources its first frame needs are made while the screen is still up and stay in use. The
+    // second frame waits for the renderer to finish the first, which keeps that wait on the loading screen too.
+    prewarmed_ = loading;
+    static_cast<void>(Draw(renderer, progress_, false, prewarmed_));
+    static_cast<void>(Draw(renderer, progress_, false, prewarmed_));
 }
 
 bool LoadingScreen::PresentHeld(kb::render::Renderer& renderer) {
@@ -276,9 +287,10 @@ bool LoadingScreen::PresentHeld(kb::render::Renderer& renderer) {
     const auto held = std::chrono::steady_clock::now() - shownAt_;
     if (held >= std::chrono::milliseconds(settings_.minimumDisplayMilliseconds)) {
         showing_ = false;
+        prewarmed_ = nullptr;
         return false;
     }
-    static_cast<void>(Draw(renderer, 1.0F, true));
+    static_cast<void>(Draw(renderer, 1.0F, true, prewarmed_));
     return true;
 }
 

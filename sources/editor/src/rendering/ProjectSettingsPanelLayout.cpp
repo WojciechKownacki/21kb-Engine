@@ -161,7 +161,7 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
             buttonLeft += buttonWidth + kButtonGap;
         }
     };
-    for (int row = 0; row < 11; ++row) {
+    for (int row = 0; row < 12; ++row) {
         rects.displayLabel[row] = RECT{ left, rowTopAt(row), left + kLabelWidth, rowTopAt(row) + kRowHeight };
     }
     buttonRow(rects.windowModeButton, 2, rowTopAt(0), kModeButtonWidth);
@@ -170,6 +170,7 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     buttonRow(rects.splashColorButton, 6, rowTopAt(8), kRateButtonWidth);
     buttonRow(rects.splashMinimumButton, 5, rowTopAt(9), kRateButtonWidth);
     rects.splashProgressCheckbox = CheckboxForRow(left, rowTopAt(10));
+    rects.splashImageField = RECT{ left + kLabelWidth, rowTopAt(11), right, rowTopAt(11) + kRowHeight };
     buttonRow(rects.windowSizeButton, 4, rowTopAt(1), kSizeButtonWidth);
     rects.resizableCheckbox = CheckboxForRow(left, rowTopAt(2));
     rects.vsyncCheckbox = CheckboxForRow(left, rowTopAt(3));
@@ -237,6 +238,10 @@ RECT ProjectSettingsPanelLayout::DescriptionRect(const ProjectSettingsPanelLayou
 
 RECT ProjectSettingsPanelLayout::MappingFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept {
     return GdiDrawing::Inset(rects.mappingField, 4);
+}
+
+RECT ProjectSettingsPanelLayout::SplashImageFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept {
+    return GdiDrawing::Inset(rects.splashImageField, 4);
 }
 
 RECT ProjectSettingsPanelLayout::OptionRow(const RECT& fieldBox, int index) noexcept {

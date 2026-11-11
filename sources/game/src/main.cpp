@@ -622,7 +622,7 @@ int RunGame(const GameOptions& options) {
     if (!loadingScreen.Initialize(projectRuntime, std::cerr)) {
         return EXIT_FAILURE;
     }
-    loadingScreen.Report(renderer, 0.0F);
+    loadingScreen.Report(renderer, 0.0F, nullptr);
 
     const std::filesystem::path userStorageRoot = GameUserStorageRoot(projectRuntime);
     kb::script::ScriptModuleOptions scriptOptions;
@@ -668,8 +668,8 @@ int RunGame(const GameOptions& options) {
         });
     }
     // The startup load and every later scene change report to the same screen.
-    scene.LoadedContent().SetLoadProgressObserver([&loadingScreen, &renderer](float fraction) {
-        loadingScreen.Report(renderer, fraction);
+    scene.LoadedContent().SetLoadProgressObserver([&loadingScreen, &renderer, &scene](float fraction) {
+        loadingScreen.Report(renderer, fraction, &scene);
     });
     if (!LoadGameProjectScene(projectRuntime, scene, scenePath, discoveredAssets, std::cerr)) {
         return EXIT_FAILURE;
@@ -1181,6 +1181,7 @@ int RunGame(const GameOptions& options) {
             JsonValue frame = JsonValue::MakeObject();
             frame.Set("progress", JsonValue::MakeNumber(drawn.progress));
             frame.Set("held", JsonValue::MakeBool(drawn.held));
+            frame.Set("prewarm", JsonValue::MakeBool(drawn.prewarm));
             frames.Append(std::move(frame));
         }
         JsonValue report = JsonValue::MakeObject();

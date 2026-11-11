@@ -33,6 +33,11 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     FrameRateLimit,
     RenderScale,
     AndroidGraphicsApi,
+    SplashImage,
+    SplashScale,
+    SplashBackground,
+    SplashMinimumTime,
+    SplashProgress,
     FixedStep,
     Gravity,
     GravityPreset,
@@ -66,6 +71,7 @@ public:
         selectedCategory_ = category;
         mappingContextDropdownOpen_ = false; // Closing a stale dropdown on switch.
         physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
         EndNumberEdit();
         firstVisibleScene_ = 0;
         hoveredOption_ = -1;
@@ -94,6 +100,7 @@ public:
     void BeginNumberEdit(int number, std::string text) {
         mappingContextDropdownOpen_ = false;
         physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
         search_.Focus(false);
         editedNumber_ = number;
         numberEdit_.SetQuery(std::move(text));
@@ -124,6 +131,7 @@ public:
     void ToggleMappingContextDropdown() noexcept {
         mappingContextDropdownOpen_ = !mappingContextDropdownOpen_;
         physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
         hoveredOption_ = -1;
     }
 
@@ -134,14 +142,28 @@ public:
     void TogglePhysicsLayersDropdown() noexcept {
         physicsLayersDropdownOpen_ = !physicsLayersDropdownOpen_;
         mappingContextDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
+        hoveredOption_ = -1;
+    }
+
+    // The list of the project's images for the launch screen on the Display page.
+    [[nodiscard]] bool IsSplashImageDropdownOpen() const noexcept {
+        return splashImageDropdownOpen_;
+    }
+
+    void ToggleSplashImageDropdown() noexcept {
+        splashImageDropdownOpen_ = !splashImageDropdownOpen_;
+        mappingContextDropdownOpen_ = false;
+        physicsLayersDropdownOpen_ = false;
         hoveredOption_ = -1;
     }
 
     // Returns true when a dropdown was actually open (so the caller can repaint).
     bool CloseDropdowns() noexcept {
-        const bool wasOpen = mappingContextDropdownOpen_ || physicsLayersDropdownOpen_;
+        const bool wasOpen = mappingContextDropdownOpen_ || physicsLayersDropdownOpen_ || splashImageDropdownOpen_;
         mappingContextDropdownOpen_ = false;
         physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
         hoveredOption_ = -1;
         return wasOpen;
     }
@@ -194,6 +216,7 @@ private:
     int selectedCategory_ = 0;
     bool mappingContextDropdownOpen_ = false;
     bool physicsLayersDropdownOpen_ = false;
+    bool splashImageDropdownOpen_ = false;
     int hoveredOption_ = -1;
     ProjectSettingsTooltipKind tooltipKind_ = ProjectSettingsTooltipKind::None;
     int tooltipX_ = 0;

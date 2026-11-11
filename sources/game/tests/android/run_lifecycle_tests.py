@@ -140,6 +140,8 @@ def main():
         adb("shell", "wm", user_rotation, "lock", str(rotation))
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
+            # Some window managers drop a lock that arrives right after the fixed-to-user-rotation change; repeat it.
+            adb("shell", "wm", user_rotation, "lock", str(rotation))
             if re.search(r"\bmRotation=" + str(rotation) + r"\b", display_state()):
                 return
             time.sleep(0.25)

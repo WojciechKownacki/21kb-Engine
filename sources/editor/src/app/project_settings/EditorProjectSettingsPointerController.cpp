@@ -194,11 +194,19 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         return ProjectSettingsTooltipKind::WindowSize;
     case ProjectSettingsHitKind::DisplayToggle:
         return hit.index == 0 ? ProjectSettingsTooltipKind::Resizable
-            : hit.index == 1 ? ProjectSettingsTooltipKind::VSync : ProjectSettingsTooltipKind::None;
+            : hit.index == 1 ? ProjectSettingsTooltipKind::VSync : ProjectSettingsTooltipKind::SplashProgress;
     case ProjectSettingsHitKind::FrameRateOption:
         return ProjectSettingsTooltipKind::FrameRateLimit;
     case ProjectSettingsHitKind::AndroidGraphicsApiOption:
         return ProjectSettingsTooltipKind::AndroidGraphicsApi;
+    case ProjectSettingsHitKind::SplashImageField:
+        return ProjectSettingsTooltipKind::SplashImage;
+    case ProjectSettingsHitKind::SplashScaleOption:
+        return ProjectSettingsTooltipKind::SplashScale;
+    case ProjectSettingsHitKind::SplashColorOption:
+        return ProjectSettingsTooltipKind::SplashBackground;
+    case ProjectSettingsHitKind::SplashMinimumOption:
+        return ProjectSettingsTooltipKind::SplashMinimumTime;
     case ProjectSettingsHitKind::SimulationStepper: {
         const int stepper = hit.index / 2;
         return stepper == 0 ? ProjectSettingsTooltipKind::FixedStep
@@ -251,6 +259,7 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::CategoryItem:
     case ProjectSettingsHitKind::MappingContextOption:
     case ProjectSettingsHitKind::PhysicsLayersOption:
+    case ProjectSettingsHitKind::SplashImageOption:
     case ProjectSettingsHitKind::SearchField:
     case ProjectSettingsHitKind::BuildSceneMoveUp:
     case ProjectSettingsHitKind::BuildSceneRemove:
@@ -406,6 +415,19 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
                              sceneContext.SetProjectPhysicsLayersAsset(options[static_cast<std::size_t>(hit.index)]);
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         static_cast<void>(changed);
+        return true;
+    }
+    case ProjectSettingsHitKind::SplashImageField:
+        sceneContext.ProjectSettings().ToggleSplashImageDropdown();
+        return true;
+    case ProjectSettingsHitKind::SplashImageOption: {
+        const std::vector<std::string> options = sceneContext.ProjectSplashImageOptions();
+        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < options.size()) {
+            kb::project::ProjectDisplaySettings display = sceneContext.ProjectConfiguration().display;
+            display.splash.image = options[static_cast<std::size_t>(hit.index)];
+            static_cast<void>(sceneContext.SetProjectDisplay(display));
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;
     }
     case ProjectSettingsHitKind::EnabledCheckbox: {
@@ -621,10 +643,12 @@ bool EditorProjectSettingsPointerController::UpdateHover(const RECT& content, in
     bool changed = false;
     const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::TooltipHitTest(content, sceneContext_, x, y);
     changed = sceneContext_.ProjectSettings().SetTooltip(TooltipKindForHit(hit), x, y) || changed;
-    if (!sceneContext_.ProjectSettings().IsMappingContextDropdownOpen() && !sceneContext_.ProjectSettings().IsPhysicsLayersDropdownOpen()) {
+    if (!sceneContext_.ProjectSettings().IsMappingContextDropdownOpen() && !sceneContext_.ProjectSettings().IsPhysicsLayersDropdownOpen() &&
+        !sceneContext_.ProjectSettings().IsSplashImageDropdownOpen()) {
         return sceneContext_.ProjectSettings().SetHoveredOption(-1) || changed;
     }
-    const int hovered = (hit.kind == ProjectSettingsHitKind::MappingContextOption || hit.kind == ProjectSettingsHitKind::PhysicsLayersOption) ? hit.index : -1;
+    const int hovered = (hit.kind == ProjectSettingsHitKind::MappingContextOption || hit.kind == ProjectSettingsHitKind::PhysicsLayersOption ||
+        hit.kind == ProjectSettingsHitKind::SplashImageOption) ? hit.index : -1;
     return sceneContext_.ProjectSettings().SetHoveredOption(hovered) || changed;
 }
 

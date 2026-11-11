@@ -433,6 +433,22 @@ void RunProjectSettingsSuite(Report& report) {
     const ProjectSettingsPanelRenderer::Hit displayLabelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, displayLabel.x, displayLabel.y);
     report.Check(displayLabelHit.kind == ProjectSettingsHitKind::FrameRateOption && displayLabelHit.index == -1,
         "A Display row label hit-tests for its tooltip");
+    const POINT splashLabel = Center(lightingRects.displayLabel[8]);
+    report.Check(ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, splashLabel.x, splashLabel.y).kind ==
+            ProjectSettingsHitKind::SplashColorOption,
+        "A launch screen row label hit-tests for its tooltip");
+    // The launch screen image: its selector opens the list of the project's images, whose first row is none.
+    const RECT splashImageBox = ProjectSettingsPanelLayout::SplashImageFieldBox(lightingRects);
+    const POINT splashImage = Center(splashImageBox);
+    report.Check(HitKindAt(context, splashImage) == ProjectSettingsHitKind::SplashImageField &&
+            controller.HandlePointerDown(kContent, splashImage.x, splashImage.y) &&
+            context.ProjectSettings().IsSplashImageDropdownOpen(),
+        "The launch screen image selector opens its list");
+    const POINT noImage = Center(ProjectSettingsPanelLayout::OptionRow(splashImageBox, 0));
+    report.Check(HitKindAt(context, noImage) == ProjectSettingsHitKind::SplashImageOption &&
+            controller.HandlePointerDown(kContent, noImage.x, noImage.y) &&
+            !context.ProjectSettings().IsSplashImageDropdownOpen() && context.ProjectConfiguration().display.splash.image.empty(),
+        "Choosing no launch screen image keeps the engine's mark");
 
     // Physics category: fixed step, gravity and time scale are steppers; the gravity presets set the whole vector.
     const POINT physicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
