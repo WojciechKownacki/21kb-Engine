@@ -36,6 +36,7 @@ void RunBlendSpace2DRuntimeTests();
 void RunLocalizationTests();
 void RunUITextLineBreakingTests();
 void RunUIThemeTests();
+void RunVideoMediaConversionTests();
 void RunCrashReportConsentTests();
 void RunNavigationRuntimeTests();
 void RunNavigationMeshTests();

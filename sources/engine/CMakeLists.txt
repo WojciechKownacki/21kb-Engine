@@ -953,6 +953,7 @@ add_library(kb_engine STATIC
     src/script/ScriptUIMediaApi.cpp
     src/scene/SceneUIMedia.cpp
     src/scene/SceneVideoPlayers.cpp
+    src/scene/VideoMediaConversion.cpp
     src/scene/SceneUI.cpp
     src/scene/ui/SceneUIDependencies.cpp
     src/scene/ui/SceneUIHierarchyPresets.cpp
@@ -1894,6 +1895,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(kb_engine PRIVATE rt)
 endif()
 
+if(ANDROID)
+    # UI video decodes through the NDK media extractor and codec.
+    target_sources(kb_engine PRIVATE src/scene/AndroidVideoSource.cpp)
+    target_link_libraries(kb_engine PRIVATE mediandk)
+endif()
+
 if(KB_ENGINE_ENABLE_NATIVE_AVX2)
     if(MSVC)
         target_compile_options(kb_engine PUBLIC /arch:AVX2)
@@ -2172,6 +2179,7 @@ if(BUILD_TESTING)
         tests/SceneBehaviourVariableTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
+        tests/VideoMediaConversionTests.cpp
         tests/UITextLineBreakingTests.cpp
         tests/UIThemeTests.cpp
         tests/CrashReportConsentTests.cpp
@@ -2227,6 +2235,8 @@ if(BUILD_TESTING)
     add_test(NAME kb_engine_input_sensors COMMAND $<TARGET_FILE:kb_engine_tests> input)
     set_tests_properties(kb_engine_input_sensors PROPERTIES TIMEOUT 60 LABELS "engine;input")
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    add_test(NAME kb_engine_video_conversion COMMAND $<TARGET_FILE:kb_engine_tests> video-conversion)
+    set_tests_properties(kb_engine_video_conversion PROPERTIES TIMEOUT 60 LABELS "engine;video")
     if(WIN32)
         add_executable(kb_win32_clipboard_tests tests/Win32ClipboardTests.cpp)
         target_link_libraries(kb_win32_clipboard_tests PRIVATE kb_engine)

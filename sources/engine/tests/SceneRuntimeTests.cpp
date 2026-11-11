@@ -178,6 +178,8 @@ bool RunSuite(std::string_view suite) {
     } else if (suite == "ui-text-layout") {
         kb::tests::RunUITextLineBreakingTests();
         kb::tests::RunUIThemeTests();
+    } else if (suite == "video-conversion") {
+        kb::tests::RunVideoMediaConversionTests();
     } else if (suite == "crash-consent") {
         kb::tests::RunCrashReportConsentTests();
     } else if (suite == "navigation-runtime") {
@@ -219,6 +221,7 @@ void RunAllSuites() {
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
     kb::tests::RunUIThemeTests();
+    kb::tests::RunVideoMediaConversionTests();
     kb::tests::RunSceneSystemTests();
     kb::tests::RunScenePrefabTests();
     kb::tests::RunProjectSceneTests();

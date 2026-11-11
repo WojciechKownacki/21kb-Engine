@@ -21,6 +21,9 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <wrl/client.h>
+#elif defined(__ANDROID__)
+#include "scene/AndroidVideoSource.hpp"
+#include <memory>
 #endif
 namespace kb::scene {
 class VideoDecoder {
@@ -69,6 +72,13 @@ private:
         for(std::uint32_t y=0;y<height;++y){const BYTE* row=bytes+static_cast<std::ptrdiff_t>(y)*pitch;auto* dst=image->rgba.data()+static_cast<std::size_t>(y)*width*4;for(std::uint32_t x=0;x<width;++x){dst[x*4]=row[x*4+2];dst[x*4+1]=row[x*4+1];dst[x*4+2]=row[x*4];dst[x*4+3]=255;}}
         if(locked2)two->Unlock2D();else buffer->Unlock();frame=std::move(image);videoTime=pts;return true;
     }
+#elif defined(__ANDROID__)
+private:
+    std::unique_ptr<AndroidVideoSource> source;
+    DecodedPicture pending,staged;
+    bool hasPending=false,hasStaged=false,eof=false;
+    bool AdvanceTo(double,std::size_t,std::string&);
+    bool Publish(std::string&);
 #endif
 };
 #ifdef _WIN32
@@ -113,10 +123,40 @@ bool VideoDecoder::Advance(double seconds,std::string& error){
     }
     error="UI video exceeds the 64 decoded frames per update budget";return false;
 }
+#elif defined(__ANDROID__)
+bool VideoDecoder::Open(std::span<const std::byte> bytes,std::string& error) {
+    source=std::make_unique<AndroidVideoSource>();if(!source->Open(bytes,error))return false;
+    duration=source->duration;width=source->width;height=source->height;
+    const auto pcmBytes=source->audio.size()*sizeof(float);
+    audio=std::make_shared<kb::audio::AudioClipAsset>();audio->sourceExtension=".wav";auto& b=audio->encodedBytes;b.resize(44+pcmBytes);auto u16=[&](std::size_t o,std::uint16_t v){std::memcpy(b.data()+o,&v,2);};auto u32=[&](std::size_t o,std::uint32_t v){std::memcpy(b.data()+o,&v,4);};std::memcpy(b.data(),"RIFF",4);u32(4,static_cast<std::uint32_t>(36+pcmBytes));std::memcpy(b.data()+8,"WAVEfmt ",8);u32(16,16);u16(20,3);u16(22,2);u32(24,48000);u32(28,384000);u16(32,8);u16(34,32);std::memcpy(b.data()+36,"data",4);u32(40,static_cast<std::uint32_t>(pcmBytes));std::memcpy(b.data()+44,source->audio.data(),pcmBytes);
+    source->audio=std::vector<float>{};
+    if(!Advance(0,error))return false;if(!frame){error="UI video has no decodable frame";return false;}return true;
+}
+// After a seek the decoder restarts at a sync sample, so catching up to the target may need a whole group of pictures.
+bool VideoDecoder::Seek(double seconds,std::string& error){if(!source->Seek(seconds,error))return false;hasPending=hasStaged=eof=false;return AdvanceTo(seconds,1024,error);}
+bool VideoDecoder::Advance(double seconds,std::string& error){return AdvanceTo(seconds,64,error);}
+// Only the newest picture at or before `seconds` is color converted; earlier ones are dropped as raw buffers.
+bool VideoDecoder::AdvanceTo(double seconds,std::size_t limit,std::string& error){
+    for(std::size_t budget=0;budget<limit;++budget){
+        if(hasPending){if(pending.time>seconds&&(frame||hasStaged))return Publish(error);std::swap(staged,pending);hasStaged=true;hasPending=false;}
+        if(eof)return Publish(error);
+        bool end=false;if(!source->NextPicture(pending,end,error))return false;
+        if(end)eof=true;else hasPending=true;
+    }
+    error="UI video exceeds the "+std::to_string(limit)+" decoded frames per update budget";return false;
+}
+bool VideoDecoder::Publish(std::string& error){
+    if(!hasStaged)return true;hasStaged=false;
+    if(!frame){width=staged.layout.width;height=staged.layout.height;if(width>1920||height>1080){error="UI video exceeds the 1920x1080 frame budget";return false;}}
+    else if(staged.layout.width!=width||staged.layout.height!=height){error="video format changes during playback are unsupported";return false;}
+    auto image=std::make_shared<DynamicImageAsset>();image->width=width;image->height=height;image->revision=revision+1;image->rgba.resize(static_cast<std::size_t>(width)*height*4);
+    if(!ConvertYuvToRgba(staged.layout,staged.bytes,image->rgba.data())){error="video frame buffer is truncated";return false;}
+    revision=image->revision;frame=std::move(image);videoTime=staged.time;return true;
+}
 #else
-bool VideoDecoder::Open(std::span<const std::byte>,std::string& error){error="UI video decoding requires Windows Media Foundation";return false;}
-bool VideoDecoder::Seek(double,std::string& error){error="UI video decoding requires Windows Media Foundation";return false;}
-bool VideoDecoder::Advance(double,std::string& error){error="UI video decoding requires Windows Media Foundation";return false;}
+bool VideoDecoder::Open(std::span<const std::byte>,std::string& error){error="UI video decoding requires Windows or Android";return false;}
+bool VideoDecoder::Seek(double,std::string& error){error="UI video decoding requires Windows or Android";return false;}
+bool VideoDecoder::Advance(double,std::string& error){error="UI video decoding requires Windows or Android";return false;}
 #endif
 namespace {
 UIVideoRecord* Find(SceneUIMediaState& state,SceneEntity owner){const auto it=std::find_if(state.videos.begin(),state.videos.end(),[&](const auto& p){return p.owner==owner;});return it==state.videos.end()?nullptr:&*it;}
