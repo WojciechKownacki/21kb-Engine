@@ -216,6 +216,26 @@ end
     focus = {key: [detail(name, box) for name in ('nearFocus', 'farFocus')] for key, box in [('near', near), ('far', far)]}
     assert focus['near'][0] > focus['near'][1] * 1.5 and focus['far'][1] > focus['far'][0] * 1.5, focus
     (root / 'observations.json').write_text(json.dumps(dict(probes=observations, focus=focus), indent=2), encoding='utf-8')
+    # Scene-wide bake: a static floor (a cube: no usable lightmap UV, so one is generated), a static lamp
+    # and a movable wall that only bounces light.
+    entity('WideFloor', 'Cube', '0,-3.5,3', '14,1,14')
+    component('WideFloor', 'MeshRenderer', 'mobility=1')
+    entity('WideLamp', 'Point Light', '3,1,3')
+    component('WideLamp', 'Light', 'mobility=1', 'intensity=10', 'range=15')
+    entity('BounceWall', 'Cube', '5,0,3', '0.3,8,8')
+    wide_texture = project / 'Assets/Baked/Main/WideFloor.tga'
+    wide = cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert re.search(r'baked 1 receivers \((\d+) texels, 1 generated', wide) and wide_texture.is_file(), wide
+    assert 'bakedLightmapUv1 true' in (project / 'Assets/Baked/Main/WideFloor.kbmat').read_text()
+    first_wide = wide_texture.read_bytes()
+    # Baking again overwrites the previous bake; the generated mesh is reused.
+    assert ', 0 generated' in cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide, 'A repeated bake must reproduce the same lightmap'
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '0')
+    assert wide_texture.read_bytes() != first_wide, 'The bounce must change the lightmap'
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide
+    cli('scene-bake-lighting', '--project', project, '--bounces', '5', expected=1)
     run(args.player, '--project=' + str(next(project.glob('*.21kbproject'))), '--headless', '--frames=120', '--uncapped',
         '--width=640', '--height=360', '--profile-fixed-step', '--profile-file=' + str(root / 'source.csv'), '--screenshot-frame=120', '--screenshot-file=' + str(root / 'source.png'))
     package = root / 'Package'
@@ -237,6 +257,12 @@ end
     # than demanding lossless identity from an explicitly lossy texture codec.
     average = sum(abs(a-b) for row1,row2 in zip(source,cooked) for p,q in zip(row1,row2) for a,b in zip(p[:3],q[:3])) / (640*360*3)
     assert average < 2, average
+
+    def brightness(image, cx, cy):
+        return sum(sum(image[y][x][:3]) for y in range(cy - 2, cy + 3) for x in range(cx - 2, cx + 3)) / 75
+    # The packaged scene-wide bake lights the floor near the lamp and leaves its far corner dark.
+    lit, dark = brightness(cooked, 420, 313), brightness(cooked, 110, 330)
+    assert lit > dark + 40 and abs(lit - brightness(source, 420, 313)) < 12, (lit, dark)
     (root / 'result.json').write_text(json.dumps(dict(result='PASS', probes=observations, focus=focus,
         bakedTexels=int(match[1]), occludedSamples=int(match[2]), sourceUnavailable=True, cookedMeanError=average), indent=2), encoding='utf-8')
     print(root)

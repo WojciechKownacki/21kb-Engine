@@ -3155,3 +3155,5 @@ text "inspector.postProcess.screenSpaceReflections" "Odbicia w przestrzeni ekran
 text "inspector.postProcess.screenSpaceReflectionsEnabled" "Odbicia w przestrzeni ekranu"
 text "inspector.postProcess.screenSpaceReflectionsIntensity" "Natężenie"
 text "inspector.postProcess.screenSpaceReflectionsMaxDistance" "Maks. odległość (m)"
+text "menu.world.buildLighting" "Zbuduj oświetlenie"
+text "menu.detail.buildLighting" "Wypieka światło i odbicia do map oświetlenia"

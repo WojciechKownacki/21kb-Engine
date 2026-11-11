@@ -51,6 +51,7 @@ namespace kb::cli {
 [[nodiscard]] int RunSceneDuplicateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneLightmapCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneBakeLightingCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialShowCommand(const ArgumentList& arguments, CommandIo io);

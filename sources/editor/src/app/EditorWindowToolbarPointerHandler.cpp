@@ -449,6 +449,9 @@ void ActivatePanel(
                 sceneContext.Console().Info("Navigation", sceneContext.Navigation().Visible() ? "Navigation mesh shown." : "Navigation mesh hidden.");
                 changed = true;
                 break;
+            case 11:
+                changed = sceneContext.BuildLighting();
+                break;
             default:
                 break;
             }

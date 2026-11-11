@@ -34,7 +34,7 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 
 // How many of those rows each menu actually shows. Layout counts zero here: its
 // length comes from the project, not from the build.
-constexpr std::array<int, 6> kDropdownRowCounts{ 5, 3, 0, 7, 11, 4 };
+constexpr std::array<int, 6> kDropdownRowCounts{ 5, 3, 0, 7, 12, 4 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -386,7 +386,7 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
         return rows[static_cast<std::size_t>(row)];
     }
     case EditorMenuCommand::World: {
-        const std::array<std::string_view, 11> rows{
+        const std::array<std::string_view, 12> rows{
             EditorText("menu.world.loadCellsNearCamera", "Load Cells Near Camera"),
             EditorText("menu.world.loadAllCells", "Load All Cells"),
             EditorText("menu.world.unloadAllCells", "Unload All Cells"),
@@ -398,6 +398,7 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
             EditorText("menu.world.toggleSelectionAlwaysLoaded", "Toggle Selection Always Loaded"),
             EditorText("menu.world.bakeNavigationMesh", "Bake Navigation Mesh"),
             EditorText("menu.world.toggleNavigationMesh", "Show or Hide Navigation Mesh"),
+            EditorText("menu.world.buildLighting", "Build Lighting"),
         };
         return rows[static_cast<std::size_t>(row)];
     }
@@ -435,7 +436,7 @@ HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) 
         return pick(std::array{ HeroIconKind::Camera, HeroIconKind::Download, HeroIconKind::Upload,
             HeroIconKind::WrenchScrewdriver, HeroIconKind::Grid, HeroIconKind::Map,
             HeroIconKind::Plus, HeroIconKind::Layers, HeroIconKind::LockClosed,
-            HeroIconKind::Navigation, HeroIconKind::Eye });
+            HeroIconKind::Navigation, HeroIconKind::Eye, HeroIconKind::Bolt });
     case EditorMenuCommand::Help:
         return pick(std::array{ HeroIconKind::BookOpen, HeroIconKind::Flag, HeroIconKind::DocumentText, HeroIconKind::Info });
     case EditorMenuCommand::Layout:

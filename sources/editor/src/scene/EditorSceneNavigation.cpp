@@ -11,6 +11,7 @@
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "kb/render/world/NavMeshBakeTool.hpp"
+#include "kb/render/bake/SceneLightingBaker.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -154,6 +155,46 @@ bool EditorSceneContext::BakeNavigation() {
         std::to_string(settings.profiles.size()) + " agent profile(s) from " + std::to_string(baked.geometry.meshes) + " mesh(es) and " +
         std::to_string(baked.geometry.colliders) + " collider(s) in " + std::to_string(static_cast<long long>(baked.stats.milliseconds)) +
         " ms into " + navPath.generic_string() + ".");
+    return true;
+}
+
+bool EditorSceneContext::BuildLighting() {
+    if (playModeSceneSession_.Active()) {
+        console_.Warning("Lighting", "Stop play mode before building lighting.");
+        return false;
+    }
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
+    if (worldPartition_.IsOpen()) {
+        console_.Warning("Lighting", "Building lighting works on a single scene, not on an open world.");
+        return false;
+    }
+    if (!SaveDirtySceneDocument("building lighting")) {
+        return false;
+    }
+    console_.Info("Lighting", "Building lighting...");
+    const std::u8string name = currentScenePath_.stem().generic_u8string();
+    const kb::render::SceneLightingBakeResult baked = kb::render::BakeSceneLighting(*scene_,
+        std::string_view{ reinterpret_cast<const char*>(name.data()), name.size() }, {},
+        [this](float fraction, std::string_view stage) {
+            console_.Info("Lighting", std::to_string(static_cast<int>(fraction * 100.0F)) + "% " + std::string{ stage });
+            return true;
+        });
+    if (!baked.Succeeded()) {
+        console_.Error("Lighting", "Lighting build failed: " + baked.error);
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    MarkSceneDocumentDirty();
+    if (!SaveCurrentScene()) {
+        console_.Error("Lighting", "The scene could not be saved after building lighting.");
+        return false;
+    }
+    console_.Info("Lighting", "Baked " + std::to_string(baked.receivers) + " static mesh(es) with " + std::to_string(baked.lights) + " static light(s).");
+    if (baked.skippedLights != 0U) {
+        console_.Warning("Lighting", std::to_string(baked.skippedLights) + " static spot light(s) were left out; the lightmap baker supports point and directional lights.");
+    }
     return true;
 }
 

@@ -369,6 +369,8 @@ public:
     // with a Navigation Mesh ContentInstance; for a world, enables navigation in the world file
     // and builds the world, which bakes one navigation mesh per cell.
     [[nodiscard]] bool BakeNavigation();
+    // Bakes the open scene's static lights and bounces into lightmaps (the scene is saved first and again after).
+    [[nodiscard]] bool BuildLighting();
     [[nodiscard]] EditorNavigation& Navigation() noexcept;
     [[nodiscard]] const EditorNavigation& Navigation() const noexcept;
     // Shows or hides the outline of the baked navigation mesh in the scene view.

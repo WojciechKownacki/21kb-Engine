@@ -292,7 +292,7 @@ void main()
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
     if (u_materialFlags.w > 0.5) {
-        lighting = albedo.rgb * texture2D(s_emissive, materialUv).rgb;
+        lighting = albedo.rgb * texture2D(s_emissive, u_materialFlags.w > 1.5 ? v_shadowFlags.zw : materialUv).rgb;
         emissive = vec3_splat(0.0);
     }
     // Opaque and masked surfaces cover what is behind them (the scene colour alpha is 1, SceneColorAlphaPolicy);

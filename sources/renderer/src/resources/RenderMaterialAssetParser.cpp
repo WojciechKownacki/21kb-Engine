@@ -181,6 +181,7 @@ void AttachContext(RenderMaterialAssetParseResult& result, const RenderMaterialA
         keyword == "decalBlendMode" ||
         keyword == "layerBlendMode" ||
         keyword == "bakedLightmap" ||
+        keyword == "bakedLightmapUv1" ||
         keyword == "doubleSided";
 }
 

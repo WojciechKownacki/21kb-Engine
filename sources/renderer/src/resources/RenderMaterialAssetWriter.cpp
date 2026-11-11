@@ -706,6 +706,7 @@ bool RenderMaterialAssetWriter::Save(const std::filesystem::path& path, const Re
 void RenderMaterialAssetWriter::Write(std::ostream& output, const RenderMaterialAssetData& asset) {
     output << "# KB material\n";
     if (asset.desc.bakedLightmap) output << "bakedLightmap true\n";
+    if (asset.desc.bakedLightmapUv1) output << "bakedLightmapUv1 true\n";
     output << "version " << (asset.documentVersion == 0U ? kRenderMaterialAssetDocumentVersion : asset.documentVersion) << '\n';
     output << "materialType " << (asset.materialType.empty() ? kRenderMaterialAssetBuiltInPbrType : asset.materialType) << '\n';
     output << "materialTypeVersion " << (asset.materialTypeVersion == 0U ? kRenderMaterialAssetBuiltInPbrTypeVersion : asset.materialTypeVersion) << '\n';

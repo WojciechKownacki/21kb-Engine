@@ -2198,6 +2198,7 @@ if(BUILD_TESTING)
         tests/EngineModuleTests.cpp
         tests/EngineLibraryTests.cpp
         tests/EngineMathTests.cpp
+        tests/StaticLightmapBakerTests.cpp
         tests/SecurityTests.cpp
     )
 
@@ -2218,6 +2219,8 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_engine_module_abi_current COMMAND $<TARGET_FILE:kb_engine_tests> engine-module)
     set_tests_properties(kb_engine_module_abi_current PROPERTIES TIMEOUT 60 LABELS "engine;module;abi")
+    add_test(NAME kb_engine_lightmap_bake COMMAND $<TARGET_FILE:kb_engine_tests> lightmap-bake)
+    set_tests_properties(kb_engine_lightmap_bake PROPERTIES TIMEOUT 120 LABELS "engine;lightmap;bake")
     add_test(NAME kb_engine_input_sensors COMMAND $<TARGET_FILE:kb_engine_tests> input)
     set_tests_properties(kb_engine_input_sensors PROPERTIES TIMEOUT 60 LABELS "engine;input")
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)

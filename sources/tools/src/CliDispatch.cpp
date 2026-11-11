@@ -48,6 +48,7 @@ Commands:
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts]
   scene-lightmap Bake static diffuse lighting and ray shadows into a UV0 texture.
+  scene-bake-lighting Bake the whole scene: static lights, bounces and generated lightmap UVs.
   material-new Create a material, as the editor's Create > Material does, with
                its values set at once. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/Materials]
@@ -748,6 +749,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}},
     {"mesh-lod", &RunMeshLodCommand, CliCommandKind::Normal, true, {}},
     {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
+    {"scene-bake-lighting", &RunSceneBakeLightingCommand, CliCommandKind::Normal, true, {}},
     {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
     {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}},
@@ -768,6 +770,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"terrain", nullptr, CliCommandKind::Normal, false, {}},
     {"mesh-lod", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
+    {"scene-bake-lighting", nullptr, CliCommandKind::Normal, false, {}},
     {"material-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-set", nullptr, CliCommandKind::Normal, false, {}},
     {"material-show", nullptr, CliCommandKind::Normal, false, {}},

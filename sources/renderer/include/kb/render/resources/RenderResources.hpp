@@ -336,6 +336,7 @@ struct RenderMaterialDesc {
     bool writesDepth = true;
     // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
     bool bakedLightmap = false;
+    bool bakedLightmapUv1 = false; // sample the baked texture with the second UV set
     bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
@@ -487,6 +488,7 @@ struct RenderMaterialResource {
     bool writesDepth = true;
     // Emissive texture stores baked diffuse irradiance in sRGB, sampled in UV0.
     bool bakedLightmap = false;
+    bool bakedLightmapUv1 = false; // sample the baked texture with the second UV set
     bool pointSampling = false;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;

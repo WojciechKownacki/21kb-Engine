@@ -27,6 +27,7 @@ void RunInputTests();
 void RunEngineModuleTests();
 void RunEngineLibraryTests();
 void RunEngineMathTests();
+void RunStaticLightmapBakerTests();
 void RunAnimationRuntimeTests();
 void RunSkeletonAssetTests();
 void RunSkeletalMeshAssetTests();

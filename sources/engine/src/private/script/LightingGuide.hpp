@@ -29,10 +29,25 @@ kb_cli component set --project . --entity LocalReflection --type RegionShape --s
 
 Static diffuse lightmaps use a unique UV0 atlas. The CPU baker performs direct
 point/directional lighting and hard shadow rays, pads islands, and returns sRGB
-irradiance. No indirect bounce, HDR encoding, UV unwrapping or moving-object
-relighting is provided. C++: include `engine/render/StaticLightmapBaker.hpp`,
+irradiance, with 0..4 diffuse bounces (`StaticLightmapSettings::bounces`, default 1)
+that use the base colour of receivers and shadow casters. HDR encoding and
+moving-object relighting are not provided. C++: include `engine/render/StaticLightmapBaker.hpp`,
 fill world-space `LightmapTriangle` and `LightmapLight` spans, then call
 `BakeStaticLightmap`. Check `Succeeded()` before saving `rgba`.
+`GenerateLightmapUv` charts an unindexed triangle soup into a non-overlapping atlas.
+
+The whole scene bakes with one command, or Build Lighting in the World menu of the editor:
+
+```text
+kb_cli scene-bake-lighting --project . --scene /Game/Scenes/Main.21kbscene --resolution 128 --bounces 1
+```
+
+Every Static mesh renderer is a receiver and every Static point/directional light
+is used (static spot lights are skipped and reported). Each receiver gets a texture and
+material under /Game/Baked/<scene>; a receiver whose second UV set is missing or
+overlaps gets a generated lightmap UV mesh beside them, and its renderer is switched
+to that mesh. Baking again replaces the previous result. The materials set
+`bakedLightmapUv1`, so the second UV set is sampled.
 
 The scene command uses static RGB point/directional lights and mesh shadow
 casters, saves a TGA and material, then assigns it to the receiver:

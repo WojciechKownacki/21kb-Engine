@@ -161,6 +161,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunEngineLibraryTests();
     } else if (suite == "engine-math") {
         kb::tests::RunEngineMathTests();
+    } else if (suite == "lightmap-bake") {
+        kb::tests::RunStaticLightmapBakerTests();
     } else if (suite == "animation-runtime") {
         kb::tests::RunAnimationRuntimeTests();
     } else if (suite == "skeleton-assets") {
@@ -227,6 +229,7 @@ void RunAllSuites() {
     kb::tests::RunEngineModuleTests();
     kb::tests::RunEngineLibraryTests();
     kb::tests::RunEngineMathTests();
+    kb::tests::RunStaticLightmapBakerTests();
     kb::tests::RunAnimationRuntimeTests();
     kb::tests::RunSkeletonAssetTests();
     kb::tests::RunSkeletalMeshAssetTests();
