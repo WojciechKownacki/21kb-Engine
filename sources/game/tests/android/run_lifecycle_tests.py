@@ -15,7 +15,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
-from png_readback import read_png
+from device_screen import capture as capture_screen, default_display
 
 
 def main():
@@ -34,7 +34,7 @@ def main():
     def save():
         (args.output / "result.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    def adb(*command, binary=False):
+    def adb(*command, binary=False, check=True):
         result = subprocess.run([str(args.adb), "-s", args.serial, *map(str, command)],
             capture_output=True, timeout=120, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         report["commands"].append(dict(args=list(map(str, command)), exitCode=result.returncode,
@@ -42,7 +42,7 @@ def main():
         if command[:2] in (("shell", "am"), ("install", "-r")):
             report["commands"][-1]["stdout"] = result.stdout.decode(errors="replace")
         save()
-        if result.returncode:
+        if result.returncode and check:
             raise RuntimeError("Device command failed: " + str(command))
         return result.stdout if binary else result.stdout.decode(errors="replace")
 
@@ -81,9 +81,7 @@ def main():
 
     def capture(label, reference=None):
         time.sleep(3)
-        path = args.output / (label + ".png")
-        path.write_bytes(adb("exec-out", "screencap", "-p", binary=True))
-        pixels = read_png(path)
+        pixels = capture_screen(adb, args.output / (label + ".png"), display)
         if args.storage_flow:
             # Android system insets move the canvas origin. Locate the fixture's
             # blue button in the actual framebuffer before dispatching touch.
@@ -112,15 +110,37 @@ def main():
                 raise RuntimeError("Recreated scene differs from its initial frame")
         return pixels
 
+    def trim(level):
+        # Android 15 can count the process as foreground for a moment after HOME and refuses background levels then.
+        deadline = time.monotonic() + 15
+        while True:
+            adb("shell", "am", "send-trim-memory", args.application_id, level, check=False)
+            command = report["commands"][-1]
+            output = command.get("stdout", "") + command["stderr"]
+            if "foreground process" not in output or time.monotonic() > deadline:
+                break
+            time.sleep(0.5)
+        if command["exitCode"] or "Error" in output or "Exception" in output:
+            raise RuntimeError(output)
+
     rotation_policy = None
     stay_awake = None
+    display = None
+    user_rotation = fix_rotation = None
+
+    def display_state():
+        # The window manager lists every display; the app runs on the default display 0.
+        state = re.search(r"^  Display: mDisplayId=0\b(.*?)(?=^  Display: mDisplayId=|\Z)",
+            adb("shell", "dumpsys", "window", "displays"), re.S | re.M)
+        if not state:
+            raise RuntimeError("The window manager did not list the default display")
+        return state[1]
 
     def rotate(rotation):
-        adb("shell", "wm", "set-user-rotation", "lock", str(rotation))
+        adb("shell", "wm", user_rotation, "lock", str(rotation))
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            state = adb("shell", "dumpsys", "window", "displays")
-            if re.search(r"mDisplayInfo=.*?\brotation " + str(rotation) + r",", state):
+            if re.search(r"\bmRotation=" + str(rotation) + r"\b", display_state()):
                 return
             time.sleep(0.25)
         raise RuntimeError("Display did not adopt the requested rotation")
@@ -134,15 +154,26 @@ def main():
         adb("shell", "am", "force-stop", args.application_id)
         adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")
         adb("shell", "wm", "dismiss-keyguard")
+        display = default_display(adb)
         if args.rotation:
-            state = adb("shell", "dumpsys", "window", "displays")
+            # Newer Android versions drop the set- prefix of both commands (fixed-to-user-rotation also prints its value).
+            commands = adb("shell", "wm", "help", check=False)
+            def command_named(*names):
+                found = next((name for name in names if re.search(r"^\s*" + name + r"\b", commands, re.M)), None)
+                if found is None:
+                    raise RuntimeError("The window manager has no " + names[0] + " command")
+                return found
+            user_rotation = command_named("user-rotation", "set-user-rotation")
+            fix_rotation = command_named("fixed-to-user-rotation", "set-fix-to-user-rotation")
+            state = display_state()
             policy = re.search(r"mUserRotationMode=USER_ROTATION_(FREE|LOCKED) mUserRotation=ROTATION_(\d+)", state)
             fixed = re.search(r"mFixedToUserRotation=(true|false)", state)
             if not policy or not fixed:
                 raise RuntimeError("Cannot save the existing display rotation policy")
             rotation_policy = ("free" if policy[1] == "FREE" else "lock", int(policy[2]) // 90,
+                adb("shell", "wm", fix_rotation).strip() if fix_rotation == "fixed-to-user-rotation" else
                 "enabled" if fixed[1] == "true" else "disabled")
-            adb("shell", "wm", "set-fix-to-user-rotation", "enabled")
+            adb("shell", "wm", fix_rotation, "enabled")
             rotate(1)
         pid = launch()
         wait_log(pid, r"lifecycle frame-presented generation=1\b")
@@ -161,14 +192,14 @@ def main():
             capture("reverse-landscape", reference)
             rotate(1)
             capture("landscape-restored", reference)
-        for cycle in range(2):
+        # A process does not return to a lower trim level on Android 15, not even in the foreground, and a new
+        # level must exceed the current one: each cycle sends a higher background level.
+        for cycle, level in enumerate(("MODERATE", "COMPLETE")):
             previous = max(map(int, re.findall(r"lifecycle frame-presented generation=(\d+)", logs(pid))))
             adb("shell", "input", "keyevent", "KEYCODE_HOME")
             time.sleep(1)
             pressure_count = logs(pid).count("lifecycle memory-pressure:")
-            output = adb("shell", "am", "send-trim-memory", args.application_id, "COMPLETE")
-            if "Error" in output:
-                raise RuntimeError(output)
+            trim(level)
             wait_log(pid, r"lifecycle memory-pressure:", pressure_count + 1)
             wait_log(pid, r"lifecycle renderer-released generation=" + str(previous) + r" meshes=0 materials=0 textures=0")
             if launch() != pid:
@@ -197,16 +228,17 @@ def main():
             try:
                 if rotation_policy is not None:
                     mode, rotation, fixed = rotation_policy
-                    adb("shell", "wm", "set-user-rotation", "lock", str(rotation))
+                    adb("shell", "wm", user_rotation, "lock", str(rotation))
                     if mode == "free":
-                        adb("shell", "wm", "set-user-rotation", "free")
-                    adb("shell", "wm", "set-fix-to-user-rotation", fixed)
-                    state = adb("shell", "dumpsys", "window", "displays")
+                        adb("shell", "wm", user_rotation, "free")
+                    adb("shell", "wm", fix_rotation, fixed)
+                    state = display_state()
                     expected_mode = "FREE" if mode == "free" else "LOCKED"
-                    expected_fixed = "true" if fixed == "enabled" else "false"
+                    restored_fixed = adb("shell", "wm", fix_rotation).strip() == fixed \
+                        if fix_rotation == "fixed-to-user-rotation" else \
+                        "mFixedToUserRotation=" + ("true" if fixed == "enabled" else "false") in state
                     if not re.search(r"mUserRotationMode=USER_ROTATION_" + expected_mode +
-                            r" mUserRotation=ROTATION_" + str(rotation * 90) + r"\b", state) or \
-                            "mFixedToUserRotation=" + expected_fixed not in state:
+                            r" mUserRotation=ROTATION_" + str(rotation * 90) + r"\b", state) or not restored_fixed:
                         raise RuntimeError("Display rotation policy was not restored")
                     report["restoredRotationPolicy"] = True
             finally:

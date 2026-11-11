@@ -9354,6 +9354,8 @@ VK_DESTROY
 			return result;
 		}
 
+		m_surfaceTransform = surfaceCapabilities.currentTransform;
+
 		const uint32_t minSwapBufferCount = bx::max<uint32_t>(surfaceCapabilities.minImageCount, 2);
 		const uint32_t maxSwapBufferCount = surfaceCapabilities.maxImageCount == 0
 			? kMaxBackBuffers
@@ -10085,8 +10087,15 @@ VK_DESTROY
 				m_needToRecreateSwapchain = true;
 				return false;
 
-			case VK_ERROR_OUT_OF_DATE_KHR:
 			case VK_SUBOPTIMAL_KHR:
+				if (isSuboptimalOnlyByTransform() )
+				{
+					break;
+				}
+				m_needToRecreateSwapchain = true;
+				return false;
+
+			case VK_ERROR_OUT_OF_DATE_KHR:
 				m_needToRecreateSwapchain = true;
 				return false;
 
@@ -10197,8 +10206,11 @@ VK_DESTROY
 				m_needToRecreateSwapchain = true;
 				break;
 
-			case VK_ERROR_OUT_OF_DATE_KHR:
 			case VK_SUBOPTIMAL_KHR:
+				m_needToRecreateSwapchain = !isSuboptimalOnlyByTransform();
+				break;
+
+			case VK_ERROR_OUT_OF_DATE_KHR:
 				m_needToRecreateSwapchain = true;
 				break;
 
@@ -10211,6 +10223,23 @@ VK_DESTROY
 			m_needPresent = false;
 			m_lastImageRenderedSemaphore = VK_NULL_HANDLE;
 		}
+	}
+
+	bool SwapChainVK::isSuboptimalOnlyByTransform()
+	{
+		// Android reports VK_SUBOPTIMAL_KHR on every acquire and present while the display is rotated against the
+		// identity pre-transform the swapchain is created with; the compositor rotates the images then. A new
+		// swapchain would be just as suboptimal, so it is kept until the surface transform itself changes.
+		if (!BX_ENABLED(BX_PLATFORM_ANDROID) )
+		{
+			return false;
+		}
+
+		VkSurfaceCapabilitiesKHR surfaceCapabilities;
+		return VK_SUCCESS == vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_renderVK->m_physicalDevice, m_surface, &surfaceCapabilities)
+			&& surfaceCapabilities.currentTransform == m_surfaceTransform
+			&& VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR != m_surfaceTransform
+			;
 	}
 
 	void SwapChainVK::transitionImage(VkCommandBuffer _commandBuffer)

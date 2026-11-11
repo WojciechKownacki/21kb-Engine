@@ -57,6 +57,14 @@ public:
     [[nodiscard]] bool Submit(const SceneDeferredLightingPassDesc& desc, SceneRenderSubmitStats& stats) const;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
+    // Lighting draws submitted since start, and the bindings of the stage that reflections and baked probes share
+    // (SceneGiUniforms::kLitStage) in them. bgfx accepts one texture per stage and draw, so both grow alike.
+    struct SharedStageBindings {
+        std::uint64_t draws = 0U;
+        std::uint64_t bindings = 0U;
+    };
+    [[nodiscard]] static SharedStageBindings LitStageBindings() noexcept;
+
 private:
     mutable SceneLightGridResources lightGrid_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;

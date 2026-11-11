@@ -11,6 +11,7 @@
 #include "renderer/SceneClearColor.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <sstream>
@@ -43,6 +44,9 @@ struct PosTexVertex {
         0.0F, 0.0F, 0.0F, 1.0F,
     };
 }
+
+std::atomic<std::uint64_t> litStageDraws{ 0U };
+std::atomic<std::uint64_t> litStageBindings{ 0U };
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -513,10 +517,12 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         bgfx::isValid(lighting.skyReflection) ? lighting.skyReflection : fallbackSkyReflection_);
     // Adds the bounce light the resolve pass accumulated up to the previous frame; without one
     // (first frame, resize) the shader skips it rather than reading an undefined texture.
-    giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
+    const bool reflectionsBound = giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
     // A frame with the baked grid has no screen-space reflections (UsesBakedLightProbes), so the grid takes their stage.
-    lightProbes_.Set(lighting.lightProbes, lighting.lightProbeGrid, lighting.lightProbeSize, SceneGiUniforms::kLitStage,
-        BGFX_INVALID_HANDLE);
+    const bool probesBound = lightProbes_.Set(lighting.lightProbes, lighting.lightProbeGrid, lighting.lightProbeSize,
+        SceneGiUniforms::kLitStage, BGFX_INVALID_HANDLE);
+    litStageDraws.fetch_add(1U, std::memory_order_relaxed);
+    litStageBindings.fetch_add((reflectionsBound ? 1U : 0U) + (probesBound ? 1U : 0U), std::memory_order_relaxed);
     {
         const SceneRenderLightingConfig& config = desc.lightingConfig;
         // Volumetric fog is marched over the first 100 m.
@@ -567,6 +573,10 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(backdropEnvironmentSampler_) && bgfx::isValid(fallbackShadowTexture_) &&
         bgfx::isValid(fallbackBackdropEnvironmentTexture_) && bgfx::isValid(skyReflectionSampler_) &&
         bgfx::isValid(skyReflectionParamsUniform_) && bgfx::isValid(fallbackSkyReflection_) && localReflections_.IsInitialized();
+}
+
+SceneDeferredLightingPass::SharedStageBindings SceneDeferredLightingPass::LitStageBindings() noexcept {
+    return { litStageDraws.load(std::memory_order_relaxed), litStageBindings.load(std::memory_order_relaxed) };
 }
 
 } // namespace kb::render

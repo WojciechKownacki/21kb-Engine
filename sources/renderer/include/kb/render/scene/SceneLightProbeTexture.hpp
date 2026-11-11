@@ -50,8 +50,9 @@ public:
     void Destroy() noexcept;
     [[nodiscard]] bool IsValid() const noexcept;
     // Sets the uniforms (w of `size` is 1 when the grid is used) and binds `texture` at `stage`, or
-    // `fallback` where the frame has none. With neither the stage stays as the caller bound it.
-    void Set(bgfx::TextureHandle texture, const std::array<float, 4>& grid, const std::array<float, 4>& size,
+    // `fallback` where the frame has none. With neither the stage stays as the caller bound it; returns
+    // whether the stage was bound.
+    bool Set(bgfx::TextureHandle texture, const std::array<float, 4>& grid, const std::array<float, 4>& size,
         std::uint8_t stage, bgfx::TextureHandle fallback) const;
 
 private:

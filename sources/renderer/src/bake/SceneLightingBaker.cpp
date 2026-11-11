@@ -122,6 +122,18 @@ bool WriteTga(const std::filesystem::path& path, std::uint16_t size, const std::
 }
 } // namespace
 
+bool IsBakeReceiverMaterial(const RenderMaterialAssetData& m) noexcept {
+    // Loading gives every material at least the default graph, a lone output node without links.
+    const bool defaultGraph = m.graph.links.empty() &&
+        (m.graph.nodes.empty() || (m.graph.nodes.size() == 1U && m.graph.nodes.front().kind == RenderMaterialGraphNodeKind::MaterialOutput));
+    return m.materialType == "builtin.pbr" && defaultGraph && m.desc.metallicFactor == 0 &&
+        m.desc.alphaMode == RenderMaterialAlphaMode::Opaque && m.desc.transmissionFactor == 0 && m.desc.emissiveTextureAssetId == 0 &&
+        m.emissiveTexturePath.empty() && m.desc.normalTextureAssetId == 0 && m.normalTexturePath.empty() && m.desc.occlusionTextureAssetId == 0 &&
+        m.occlusionTexturePath.empty() && m.desc.clearcoatFactor == 0 && m.desc.anisotropyStrength == 0 && m.desc.sheenColor[0] == 0 &&
+        m.desc.sheenColor[1] == 0 && m.desc.sheenColor[2] == 0 &&
+        !(m.desc.emissiveStrength > 0 && (m.desc.emissiveColor[0] != 0 || m.desc.emissiveColor[1] != 0 || m.desc.emissiveColor[2] != 0));
+}
+
 SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_view sceneName,
     const SceneLightingBakeSettings& settings, const SceneLightingBakeProgress& progress) {
     SceneLightingBakeResult result;
@@ -201,12 +213,7 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
                 receiver.material = *original.Shared();
                 const auto& m = receiver.material;
                 // A previous bake of this entity is allowed: its material only adds the lightmap.
-                if (!m.desc.bakedLightmapUv1 && (m.materialType != "builtin.pbr" || !m.graph.nodes.empty() || m.desc.metallicFactor != 0 ||
-                    m.desc.alphaMode != kb::render::RenderMaterialAlphaMode::Opaque || m.desc.transmissionFactor != 0 || m.desc.emissiveTextureAssetId != 0 ||
-                    !m.emissiveTexturePath.empty() || m.desc.normalTextureAssetId != 0 || !m.normalTexturePath.empty() || m.desc.occlusionTextureAssetId != 0 ||
-                    !m.occlusionTexturePath.empty() || m.desc.clearcoatFactor != 0 || m.desc.anisotropyStrength != 0 || m.desc.sheenColor[0] != 0 ||
-                    m.desc.sheenColor[1] != 0 || m.desc.sheenColor[2] != 0 ||
-                    (m.desc.emissiveStrength > 0 && (m.desc.emissiveColor[0] != 0 || m.desc.emissiveColor[1] != 0 || m.desc.emissiveColor[2] != 0)))) {
+                if (!m.desc.bakedLightmapUv1 && !IsBakeReceiverMaterial(m)) {
                     return fail("bake receiver " + receiver.name + " must use opaque matte builtin PBR without emission or normal maps");
                 }
             }

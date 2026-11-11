@@ -258,6 +258,18 @@ end
     cli('entity', 'remove', '--project', project, '--name', 'WideSpot')
     cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
     assert wide_texture.read_bytes() == first_wide
+    # A plain colour material made by `entity add --color` (default graph) is a valid receiver of both bakes.
+    cli('entity', 'add', '--project', project, '--name', 'ColorBoard', '--create', 'Quad', '--position', '-5,-2.9,-4', '--color', '#3366FF')
+    assert 'baked' in cli('scene-lightmap', '--project', project, '--entity', 'ColorBoard', '--out', '/Game/Lighting/ColorBoard.tga', '--resolution', '32')
+    cli('entity', 'remove', '--project', project, '--name', 'ColorBoard')
+    cli('entity', 'add', '--project', project, '--name', 'ColorPillar', '--create', 'Cube', '--position', '-5,-2.5,-4', '--scale', '0.5,1,0.5',
+        '--color', '#3366FF')
+    component('ColorPillar', 'MeshRenderer', 'mobility=1')
+    colored = cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert 'baked 2 receivers' in colored and (project / 'Assets/Baked/Main/ColorPillar.tga').is_file(), colored
+    cli('entity', 'remove', '--project', project, '--name', 'ColorPillar')
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide
     # A re-bake starts from the original mesh: replacing the source model in place changes the lightmap.
     def plate(path, half):
         # The two triangles share UV space, so the plate has no usable lightmap UV and gets a generated one.

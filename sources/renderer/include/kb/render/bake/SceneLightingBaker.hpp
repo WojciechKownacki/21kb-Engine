@@ -9,6 +9,8 @@ namespace kb::scene { class Scene; }
 
 namespace kb::render {
 
+struct RenderMaterialAssetData;
+
 struct SceneLightingBakeSettings {
     std::uint16_t resolution = 128;
     std::uint8_t bounces = 1;
@@ -28,6 +30,10 @@ struct SceneLightingBakeResult {
 
 // Called between receivers with the finished share (0..1) and a short stage name; returning false cancels.
 using SceneLightingBakeProgress = std::function<bool(float fraction, std::string_view stage)>;
+
+// Whether a material can receive a baked lightmap: opaque matte builtin PBR without emission, normal, occlusion
+// or layered lobes. Its graph may only be the default one (a lone output node, as plain colour materials carry).
+[[nodiscard]] bool IsBakeReceiverMaterial(const RenderMaterialAssetData& material) noexcept;
 
 // Bakes every active Static mesh renderer of the scene against its Static point/spot/directional lights:
 // one lightmap texture + material per receiver under /Game/Baked/<sceneName>, and a generated

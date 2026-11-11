@@ -40,8 +40,9 @@ public:
     void Destroy() noexcept;
     [[nodiscard]] bool IsValid() const noexcept;
     // `binding` may be null; `unavailableTexture` stands in for the textures then. Each effect's
-    // intensity is zero unless it is enabled, which switches its shader path off.
-    void Set(const SceneGiBinding* binding, const SceneRenderLightingConfig& config,
+    // intensity is zero unless it is enabled, which switches its shader path off. A frame lit by the baked
+    // probes leaves kLitStage to them (UsesBakedLightProbes); returns whether kLitStage was bound.
+    bool Set(const SceneGiBinding* binding, const SceneRenderLightingConfig& config,
         const std::array<float, 16>& viewProjection, bgfx::TextureHandle unavailableTexture) const;
 
 private:

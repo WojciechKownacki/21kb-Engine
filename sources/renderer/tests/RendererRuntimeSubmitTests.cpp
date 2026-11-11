@@ -10712,7 +10712,14 @@ void RunRendererLightProbeTests() {
     for (const SceneRenderLightingPath path : { SceneRenderLightingPath::Forward, SceneRenderLightingPath::Deferred }) {
         SceneRenderSubmitStats stats{};
         const auto without = render(false, path);
+        const auto before = SceneDeferredLightingPass::LitStageBindings();
         const auto withProbes = render(true, path, false, &stats);
+        const auto after = SceneDeferredLightingPass::LitStageBindings();
+        if (path == SceneRenderLightingPath::Deferred) {
+            // The grid and the reflections share one stage: each lighting draw binds it exactly once.
+            Require(after.draws > before.draws && after.bindings - before.bindings == after.draws - before.draws,
+                "A deferred frame with the baked grid must bind the shared reflection/probe stage once per draw");
+        }
         const auto again = render(false, path);
         drawCalls[path == SceneRenderLightingPath::Deferred ? 1U : 0U] = stats.submittedDrawCallCount;
         std::fprintf(stderr, "light_probe_pixels path=%u without=%.3f with=%.3f\n", static_cast<unsigned>(path), redShift(without), redShift(withProbes));
@@ -10750,8 +10757,13 @@ void RunRendererLightProbeTests() {
     }
     // Screen-space reflections keep the stage the deferred pass would give the grid: the grid stands aside.
     const auto reflectionsWithout = render(false, SceneRenderLightingPath::Deferred, true);
+    const auto reflectionsBefore = SceneDeferredLightingPass::LitStageBindings();
     Require(reflectionsWithout == render(true, SceneRenderLightingPath::Deferred, true),
         "A deferred frame with screen-space reflections must not use the probe grid");
+    const auto reflectionsAfter = SceneDeferredLightingPass::LitStageBindings();
+    Require(reflectionsAfter.draws > reflectionsBefore.draws &&
+            reflectionsAfter.bindings - reflectionsBefore.bindings == reflectionsAfter.draws - reflectionsBefore.draws,
+        "A deferred frame with reflections and a baked grid must bind the shared stage once per draw");
 #else
     throw std::runtime_error("Light probe readback requires a supported native GPU test surface");
 #endif

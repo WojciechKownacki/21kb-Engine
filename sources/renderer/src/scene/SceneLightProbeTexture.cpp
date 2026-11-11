@@ -97,7 +97,7 @@ bool LightProbeUniforms::IsValid() const noexcept {
     return bgfx::isValid(sampler_) && bgfx::isValid(grid_) && bgfx::isValid(size_);
 }
 
-void LightProbeUniforms::Set(bgfx::TextureHandle texture, const std::array<float, 4>& grid, const std::array<float, 4>& size,
+bool LightProbeUniforms::Set(bgfx::TextureHandle texture, const std::array<float, 4>& grid, const std::array<float, 4>& size,
     std::uint8_t stage, bgfx::TextureHandle fallback) const {
     bgfx::setUniform(grid_, grid.data());
     bgfx::setUniform(size_, size.data());
@@ -105,6 +105,7 @@ void LightProbeUniforms::Set(bgfx::TextureHandle texture, const std::array<float
     if (bgfx::isValid(bound)) {
         bgfx::setTexture(stage, sampler_, bound);
     }
+    return bgfx::isValid(bound);
 }
 
 } // namespace kb::render

@@ -13,7 +13,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
-from png_readback import read_png
+from device_screen import capture as capture_screen, default_display
 
 
 def main():
@@ -28,11 +28,12 @@ def main():
     stay_awake = None
     pid = None
     competitor = "com.kbengine.controllertests"
+    competitor_service = None
 
     def save():
         (args.output / "result.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    def adb(*parts, binary=False):
+    def adb(*parts, binary=False, check=True):
         result = subprocess.run([str(args.adb), "-s", args.serial, *map(str, parts)], capture_output=True,
             timeout=120, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         report["commands"].append(dict(args=list(map(str, parts)), exitCode=result.returncode,
@@ -40,7 +41,7 @@ def main():
         if parts[:2] == ("shell", "am") or parts[0] == "install":
             report["commands"][-1]["stdout"] = result.stdout.decode(errors="replace")
         save()
-        if result.returncode: raise RuntimeError("Device command failed: " + str(parts) + result.stderr.decode(errors="replace"))
+        if result.returncode and check: raise RuntimeError("Device command failed: " + str(parts) + result.stderr.decode(errors="replace"))
         return result.stdout if binary else result.stdout.decode(errors="replace")
 
     def focus(operation, gain=2):
@@ -106,9 +107,7 @@ def main():
             if "first-frame=rendered" in log and re.search(r"audio platform resumed[^\r\n]+status=3\b", log): break
             if time.monotonic() >= deadline: raise RuntimeError("Native output did not acquire audio focus")
             time.sleep(0.25)
-        screenshot = args.output / "initial.png"
-        screenshot.write_bytes(adb("exec-out", "screencap", "-p", binary=True))
-        pixels = read_png(screenshot)
+        pixels = capture_screen(adb, args.output / "initial.png", default_display(adb))
         blue = [(x, y) for y in range(0, len(pixels), 2) for x in range(0, len(pixels[0]), 2)
             if pixels[y][x][2] > pixels[y][x][0] + 50 and pixels[y][x][2] > pixels[y][x][1] + 50]
         if not blue: raise RuntimeError("Audio transport button is missing")
@@ -118,6 +117,17 @@ def main():
         click(1)
         baseline = wait("native output after touch", playing)
         if baseline["backend"] == "Null": raise RuntimeError("A null backend is not physical output")
+        # Apps targeting Android 15 get audio focus only as the top app or with a foreground service; a top activity
+        # would pause the app under test, so the competitor holds a foreground service. Shell starts of a
+        # foreground service from the background need a temporary power exemption from Android 12 on.
+        api = int(report["api"])
+        if api >= 31: adb("shell", "cmd", "deviceidle", "tempwhitelist", "-d", "300000", competitor)
+        competitor_service = competitor + "/.AudioFocusService"
+        adb("shell", "am", "start-foreground-service" if api >= 26 else "startservice", "-n", competitor_service)
+        deadline = time.monotonic() + 10
+        while "isForeground=true" not in adb("shell", "dumpsys", "activity", "services", competitor_service):
+            if time.monotonic() >= deadline: raise RuntimeError("The competing focus client did not enter the foreground")
+            time.sleep(0.25)
         for gain in (2, 3):
             focus("request", gain)
             suspended = wait("OS focus suspension " + str(gain), lambda s: s["status"] == 4 and not s["available"])
@@ -161,7 +171,15 @@ def main():
     finally:
         try:
             try:
-                focus("release")
+                try:
+                    focus("release")
+                finally:
+                    if competitor_service is not None:
+                        # stopservice exits non-zero and reports on stderr even after it stopped the service.
+                        adb("shell", "am", "stopservice", "-n", competitor_service, check=False)
+                        if "Service stopped" not in report["commands"][-1]["stderr"]:
+                            raise RuntimeError("The competing focus service did not stop")
+                        if int(report["api"]) >= 31: adb("shell", "cmd", "deviceidle", "tempwhitelist", "-r", competitor)
             finally:
                 try:
                     adb("shell", "am", "force-stop", args.application_id)

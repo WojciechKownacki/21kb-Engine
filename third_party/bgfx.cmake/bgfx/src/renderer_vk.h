@@ -816,6 +816,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 
 		bool acquire(VkCommandBuffer _commandBuffer, bool _block = true);
 		void present();
+		bool isSuboptimalOnlyByTransform();
 
 		void transitionImage(VkCommandBuffer _commandBuffer);
 
@@ -857,6 +858,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 		bool m_needPresent;
 		bool m_needToRecreateSwapchain;
 		bool m_needToRecreateSurface;
+		VkSurfaceTransformFlagBitsKHR m_surfaceTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
 		TextureVK   m_backBufferDepthStencil;
 		VkImageView m_backBufferDepthStencilImageView;

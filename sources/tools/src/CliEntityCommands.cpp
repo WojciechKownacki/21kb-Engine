@@ -1987,13 +1987,7 @@ int RunSceneLightmapCommand(const ArgumentList& arguments, CommandIo io) {
         const auto original=assets.Load<kb::render::RenderMaterialAssetData>(kb::assets::AssetId{receiverMesh->materialAssetId});
         if(!original.IsLoaded()) {io.err << "error: receiver material cannot be loaded\n";return 1;}
         material=*original.Shared();
-        if(material.materialType!="builtin.pbr"||!material.graph.nodes.empty()||material.desc.metallicFactor!=0||
-            material.desc.alphaMode!=kb::render::RenderMaterialAlphaMode::Opaque||material.desc.transmissionFactor!=0||
-            material.desc.emissiveTextureAssetId!=0||!material.emissiveTexturePath.empty()||material.desc.normalTextureAssetId!=0||
-            !material.normalTexturePath.empty()||material.desc.occlusionTextureAssetId!=0||!material.occlusionTexturePath.empty()||
-            material.desc.clearcoatFactor!=0||material.desc.anisotropyStrength!=0||material.desc.sheenColor[0]!=0||
-            material.desc.sheenColor[1]!=0||material.desc.sheenColor[2]!=0||
-            (material.desc.emissiveStrength>0&&(material.desc.emissiveColor[0]!=0||material.desc.emissiveColor[1]!=0||material.desc.emissiveColor[2]!=0))) {io.err << "error: bake receiver must use opaque matte builtin PBR without emission or normal maps\n";return 1;}
+        if(!kb::render::IsBakeReceiverMaterial(material)) {io.err << "error: bake receiver must use opaque matte builtin PBR without emission or normal maps\n";return 1;}
     }
     scene.Runtime().SynchronizeTransforms();
     std::vector<kb::render::LightmapTriangle> triangles,occluders;

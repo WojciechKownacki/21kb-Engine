@@ -1,7 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <application android:allowBackup="false" android:label="Controller Tests"
         android:theme="@style/ControllerTestTheme">
         <receiver android:name=".AudioFocusReceiver" android:exported="true" />
+        <service android:name=".AudioFocusService" android:exported="true"
+            android:foregroundServiceType="mediaPlayback" />
         <activity android:name=".ControllerActivity" android:exported="false"
             android:configChanges="orientation|keyboardHidden|screenSize">
             <meta-data android:name="android.app.lib_name" android:value="kb_controller_tests" />
