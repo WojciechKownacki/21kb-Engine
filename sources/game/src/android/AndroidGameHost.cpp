@@ -42,8 +42,11 @@
 #include <android/keycodes.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
+#include <dlfcn.h>
 #include <sys/mman.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
+#include <vulkan/vulkan.h>
 
 #include <algorithm>
 #include <array>
@@ -52,6 +55,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -344,6 +348,54 @@ private:
     }
 }
 
+// Asks the Vulkan loader which device the renderer would start on, without starting the renderer: an instance
+// with no extensions, the first physical device's properties, then the instance is released again.
+[[nodiscard]] kb::game::AndroidVulkanDevice ProbeAndroidVulkanDevice() noexcept {
+    kb::game::AndroidVulkanDevice device;
+    char release[PROP_VALUE_MAX] = {};
+    if (__system_property_get("ro.build.version.sdk", release) > 0) {
+        device.androidApiLevel = static_cast<std::uint32_t>(std::strtoul(release, nullptr, 10));
+    }
+    void* const library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+    if (library == nullptr) {
+        return device;
+    }
+    const auto getInstanceProc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(library, "vkGetInstanceProcAddr"));
+    const auto createInstance = getInstanceProc == nullptr ? nullptr
+        : reinterpret_cast<PFN_vkCreateInstance>(getInstanceProc(VK_NULL_HANDLE, "vkCreateInstance"));
+    if (createInstance == nullptr) {
+        return device;
+    }
+    VkApplicationInfo application{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
+    application.apiVersion = VK_API_VERSION_1_0;
+    VkInstanceCreateInfo instanceInfo{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+    instanceInfo.pApplicationInfo = &application;
+    VkInstance instance = VK_NULL_HANDLE;
+    if (createInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS || instance == VK_NULL_HANDLE) {
+        return device;
+    }
+    const auto destroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(getInstanceProc(instance, "vkDestroyInstance"));
+    const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(getInstanceProc(instance, "vkEnumeratePhysicalDevices"));
+    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(getInstanceProc(instance, "vkGetPhysicalDeviceProperties"));
+    if (enumerate != nullptr && properties != nullptr) {
+        std::uint32_t count = 1U;
+        VkPhysicalDevice physical = VK_NULL_HANDLE;
+        const VkResult result = enumerate(instance, &count, &physical);
+        if ((result == VK_SUCCESS || result == VK_INCOMPLETE) && count > 0U && physical != VK_NULL_HANDLE) {
+            VkPhysicalDeviceProperties found{};
+            properties(physical, &found);
+            device.known = true;
+            device.vendorId = found.vendorID;
+            device.deviceId = found.deviceID;
+            device.driverVersion = found.driverVersion;
+        }
+    }
+    if (destroyInstance != nullptr) {
+        destroyInstance(instance, nullptr);
+    }
+    return device;
+}
+
 class AndroidGameHost {
 public:
     explicit AndroidGameHost(android_app& app) noexcept
@@ -594,8 +646,20 @@ private:
         std::array<bgfx::RendererType::Enum, bgfx::RendererType::Count> supported{};
         const std::uint8_t supportedCount = bgfx::getSupportedRenderers(
             static_cast<std::uint8_t>(supported.size()), supported.data());
+        const bool vulkanOffered = std::find(supported.data(), supported.data() + supportedCount, bgfx::RendererType::Vulkan)
+            != supported.data() + supportedCount;
+        const kb::game::AndroidVulkanDevice vulkanDevice = api == Api::Auto && vulkanOffered
+            ? ProbeAndroidVulkanDevice() : kb::game::AndroidVulkanDevice{};
         const kb::game::AndroidRendererCandidates candidates =
-            kb::game::ResolveAndroidRenderers(api, supported.data(), supportedCount);
+            kb::game::ResolveAndroidRenderers(api, supported.data(), supportedCount, vulkanDevice);
+        if (candidates.unreliableRule >= 0) {
+            std::ostringstream reason;
+            reason << "graphics api auto chose OpenGL ES: the Vulkan device is on the unreliable list (rule "
+                   << candidates.unreliableRule << ") vendor=0x" << std::hex << vulkanDevice.vendorId
+                   << " device=0x" << vulkanDevice.deviceId << " driver=0x" << vulkanDevice.driverVersion << std::dec
+                   << " android=" << vulkanDevice.androidApiLevel;
+            LogInfo(reason.str());
+        }
         for (std::uint8_t index = 0U; index < candidates.count; ++index) {
             config.preferredBgfxRendererType = candidates.types[index];
             if (!renderer_.Initialize(surface_, &config)) {

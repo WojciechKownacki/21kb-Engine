@@ -182,6 +182,55 @@ void RunAndroidGraphicsApiTests() {
     // A build that offers neither leaves the choice to the renderer, which then reports why it cannot start.
     const kb::game::AndroidRendererCandidates neither = resolve(Api::Vulkan, neitherOffered);
     Require(neither.count == 1U && neither.types[0] == -1, "A build with neither API must leave the choice to the renderer");
+
+    // The list of unreliable Vulkan devices: a device built from the values of a rule matches that rule, moves an
+    // Auto project to OpenGL ES and changes nothing else.
+    for (std::size_t index = 0U; index < kb::game::kAndroidVulkanUnreliableDevices.size(); ++index) {
+        const kb::game::AndroidVulkanUnreliableRule& rule = kb::game::kAndroidVulkanUnreliableDevices[index];
+        const kb::game::AndroidVulkanDevice device{ true, rule.vendorId, rule.deviceIdValue, rule.maxDriverVersion,
+            rule.maxAndroidApiLevel == 0U ? 33U : rule.maxAndroidApiLevel };
+        const auto resolveFor = [&](Api api, const auto& supported) {
+            return kb::game::ResolveAndroidRenderers(api, supported.data(), static_cast<std::uint8_t>(supported.size()), device);
+        };
+        Require(kb::game::FindAndroidVulkanUnreliableRule(device) == static_cast<int>(index),
+            "A device with the values of a rule must match that rule");
+        const kb::game::AndroidRendererCandidates listed = resolveFor(Api::Auto, both);
+        Require(listed.count == 1U && listed.types[0] == gles && listed.unreliableRule == static_cast<int>(index),
+            "Auto must start OpenGL ES on a listed Vulkan device");
+        const kb::game::AndroidRendererCandidates keptVulkan = resolveFor(Api::Vulkan, both);
+        Require(keptVulkan.count == 2U && keptVulkan.types[0] == vulkan && keptVulkan.unreliableRule == -1,
+            "A project that names Vulkan must keep Vulkan on a listed device");
+        const kb::game::AndroidRendererCandidates noGles = resolveFor(Api::Auto, vulkanOnly);
+        Require(noGles.count == 1U && noGles.types[0] == -1 && noGles.unreliableRule == -1,
+            "A build without OpenGL ES must leave Auto to the renderer on a listed device");
+        const kb::game::AndroidRendererCandidates noVulkan = resolveFor(Api::Auto, glesOnly);
+        Require(noVulkan.count == 1U && noVulkan.types[0] == -1 && noVulkan.unreliableRule == -1,
+            "A build without Vulkan must leave Auto to the renderer on a listed device");
+
+        kb::game::AndroidVulkanDevice newerDriver = device;
+        newerDriver.driverVersion = rule.maxDriverVersion + 1U;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(newerDriver) == -1, "A driver newer than the ceiling must not match");
+        kb::game::AndroidVulkanDevice olderDriver = device;
+        olderDriver.driverVersion = 0U;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(olderDriver) == static_cast<int>(index),
+            "A driver older than the ceiling must match");
+        if (rule.maxAndroidApiLevel != 0U) {
+            kb::game::AndroidVulkanDevice newerRelease = device;
+            newerRelease.androidApiLevel = rule.maxAndroidApiLevel + 1U;
+            Require(kb::game::FindAndroidVulkanUnreliableRule(newerRelease) == -1,
+                "An Android release newer than the ceiling must not match");
+        }
+        kb::game::AndroidVulkanDevice otherVendor = device;
+        otherVendor.vendorId = rule.vendorId ^ 1U;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(otherVendor) == -1, "Another vendor must not match");
+        kb::game::AndroidVulkanDevice otherDevice = device;
+        otherDevice.deviceId = rule.deviceIdValue ^ (rule.deviceIdMask & ~(rule.deviceIdMask - 1U));
+        Require(kb::game::FindAndroidVulkanUnreliableRule(otherDevice) == -1, "Another device id must not match");
+        kb::game::AndroidVulkanDevice unknown = device;
+        unknown.known = false;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(unknown) == -1, "A device the loader did not report must not match");
+    }
+    Require(resolve(Api::Auto, both).unreliableRule == -1, "Without a probed device Auto must not consult the list");
 }
 
 void RunRuntimeDeltaTests() {
