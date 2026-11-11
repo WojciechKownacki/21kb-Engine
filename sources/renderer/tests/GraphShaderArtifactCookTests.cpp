@@ -117,11 +117,11 @@ void RunGraphShaderWrapperSourceTest() {
         "KBMAT-MAT46: Forward wrapper must expose a real front/back-face sign to graph nodes");
     // The scene colour alpha is the share of the opaque surface still visible (the TAA reactive mask): an opaque
     // surface covers what is behind it, only a translucent one writes its opacity.
-    Require(opaque.find("gl_FragColor = vec4(lighting + surface.emissive, terrainLayerOpacity);") != std::string::npos,
+    Require(opaque.find("gl_FragColor = vec4(KbApplyHeightFog(lighting + surface.emissive, u_cameraPosition.xyz, v_worldPos), terrainLayerOpacity);") != std::string::npos,
         "KBMAT-MAT08: Forward wrapper must combine lit color and emissive, covering what is behind an opaque surface");
     const std::string translucent = BuildGraphFragmentWrapperSource(
         CompileConstantColorGraph("0.25 0.5 0.75 0.5", "defaultLit", "translucent"), "BaseTransparent");
-    Require(translucent.find("gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);") != std::string::npos,
+    Require(translucent.find("gl_FragColor = vec4(KbApplyHeightFog(lighting + surface.emissive, u_cameraPosition.xyz, v_worldPos), surface.alpha);") != std::string::npos,
         "KBMAT-MAT08: A translucent forward wrapper must write its surface opacity");
     Require(opaque.find("basisTangent = vertexTangent;") != std::string::npos &&
             opaque.find("basisBitangent = vertexBitangent;") != std::string::npos &&

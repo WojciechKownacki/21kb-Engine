@@ -464,22 +464,6 @@ if(BUILD_TESTING)
             set(_kb_particle_test_shaderc "$<TARGET_FILE:bgfx::shaderc>")
             add_dependencies(kb_game_tests bgfx::shaderc)
         endif()
-        add_test(NAME kb_game_particle_gpu_package COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticlePackagedGpuTests.py"
-            "--cli" "$<TARGET_FILE:kb_cli>"
-            "--cooker" "$<TARGET_FILE:kb_cooker>"
-            "--player" "$<TARGET_FILE:kb_game>"
-            "--engine-root" "${CMAKE_SOURCE_DIR}"
-            "--test-root" "${CMAKE_BINARY_DIR}/particle_package_tests"
-            "--shaderc" "${_kb_particle_test_shaderc}"
-            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
-        set_tests_properties(kb_game_particle_gpu_package PROPERTIES
-            LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
         set(_kb_touch_test_runtime_args)
         if(TARGET kb_steam_audio)
             list(APPEND _kb_touch_test_runtime_args "--runtime-dll" "$<TARGET_FILE:kb_steam_audio>")
@@ -488,6 +472,23 @@ if(BUILD_TESTING)
             list(APPEND _kb_touch_test_runtime_args
                 "--runtime-dll" "${KB_MSVC_ASAN_DYNAMIC_RUNTIME}")
         endif()
+        add_test(NAME kb_game_particle_gpu_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticlePackagedGpuTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/particle_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_particle_gpu_package PROPERTIES
+            LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
         add_test(NAME kb_game_touch_script_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ScriptTouchPackagedTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"

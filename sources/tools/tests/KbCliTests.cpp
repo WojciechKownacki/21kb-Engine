@@ -5293,10 +5293,15 @@ void RunBatchSceneSessionTests() {
     }
     const std::filesystem::path cheap = parent / "cheap.txt";
     WriteTextFile(cheap, "entity show --name Obj1\n");
-    const auto bigStarted = std::chrono::steady_clock::now();
-    const CliRun cheapRun = RunCliProgram({ "batch", "--project", project, "--file", cheap.string() });
-    const auto bigElapsed = std::chrono::steady_clock::now() - bigStarted;
-    Require(cheapRun.exitCode == 0 && Contains(cheapRun.out, "0 file(s) changed"), "a batch that changes nothing must apply: " + cheapRun.out + cheapRun.err);
+    // The copy of 120 MB is disk bound, and a stall of a busy disk lasts one run while a byte by byte read costs every
+    // run: the fastest of three runs is what is held to the limit.
+    auto bigElapsed = std::chrono::steady_clock::duration::max();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto bigStarted = std::chrono::steady_clock::now();
+        const CliRun cheapRun = RunCliProgram({ "batch", "--project", project, "--file", cheap.string() });
+        bigElapsed = std::min(bigElapsed, std::chrono::steady_clock::now() - bigStarted);
+        Require(cheapRun.exitCode == 0 && Contains(cheapRun.out, "0 file(s) changed"), "a batch that changes nothing must apply: " + cheapRun.out + cheapRun.err);
+    }
     Require(bigElapsed < std::chrono::seconds{ 1 }, "a batch must not read 120 MB of unchanged files byte by byte");
     std::filesystem::remove_all(projectPath / "Assets" / "Data", error);
 

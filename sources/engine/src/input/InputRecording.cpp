@@ -203,6 +203,7 @@ InputFrameSnapshot CaptureInputFrame(const InputDeviceState& device, float delta
     InputFrameSnapshot frame;
     frame.deltaSeconds = deltaSeconds;
     frame.sensors = device.Sensors();
+    frame.sensors.replayed = false; // The marker belongs to playback; a recording keeps what its source supplied.
 
     for (std::uint32_t raw = 0U; raw < static_cast<std::uint32_t>(InputKey::Count); ++raw) {
         const auto key = static_cast<InputKey>(raw);

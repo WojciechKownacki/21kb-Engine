@@ -23,6 +23,7 @@ def main():
     for option in ["cli", "cooker", "player", "engine-root", "test-root", "shaderc"]:
         parser.add_argument("--" + option, type=Path, required=True)
     parser.add_argument("--plugin", type=Path, action="append", required=True)
+    parser.add_argument("--runtime-dll", type=Path, action="append", default=[])
     args = parser.parse_args()
     require(os.name == "nt", "The packaged GPU test requires the native Windows host")
     require(args.shaderc.is_file(), "Packaged GPU testing requires shaderc: enable KB_BUILD_GRAPH_SHADERC or set KB_COOKER_SHADERC")
@@ -109,7 +110,7 @@ def main():
             "--engine-root", args.engine_root, "--shaderc", args.shaderc, "--cache", root / "CookCache")
         player = package / "Sample.exe"
         shutil.copy2(args.player, player)
-        for plugin in args.plugin:
+        for plugin in [*args.plugin, *args.runtime_dll]:
             shutil.copy2(plugin, package / plugin.name)
         require(not (package / "Assets").exists() and not (package / "shaders").exists(), "Package fixture includes loose content")
         return player
