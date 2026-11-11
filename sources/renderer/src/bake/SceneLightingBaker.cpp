@@ -287,7 +287,7 @@ SceneLightingBakeResult BakeSceneLighting(kb::scene::Scene& scene, std::string_v
         high = { high.x + margin, high.y + margin, high.z + margin };
         LightProbeSettings probeSettings;
         probeSettings.spacing = settings.probeSpacing; probeSettings.maxProbes = settings.maxProbes;
-        probes = BakeLightProbes(surfaces, lights, low, high, probeSettings);
+        probes = BakeLightProbes(surfaces, low, high, probeSettings);
         if (!probes.Succeeded()) return fail("light probes: " + probes.error);
     }
     if (progress && !progress(1.0F, "write")) { result.cancelled = true; return result; }

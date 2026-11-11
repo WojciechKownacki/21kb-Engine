@@ -15,6 +15,13 @@ namespace kb::render {
         config.globalIllumination == SceneRenderGlobalIlluminationMode::VoxelGrid;
 }
 
+// Whether the baked light probes light the frame. Gathered GI owns the bounce light, and the deferred lighting
+// shader reads the probe texture through the stage of the reflections' lit colour (light_probes.sh), so screen-space
+// reflections keep that stage for themselves.
+[[nodiscard]] inline bool UsesBakedLightProbes(const SceneRenderLightingConfig& config) noexcept {
+    return bgfx::isValid(config.lightProbes) && !UsesGatheredGi(config) && !config.screenSpaceReflectionsEnabled;
+}
+
 // Whether the frame needs the screen-space resolve (GI, ambient occlusion) or the previous frame's lit
 // colour (reflections). All of them read the G-buffer, so they imply the deferred path.
 [[nodiscard]] constexpr bool UsesScreenSpaceEffects(const SceneRenderLightingConfig& config) noexcept {

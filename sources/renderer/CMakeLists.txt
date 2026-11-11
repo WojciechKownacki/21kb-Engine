@@ -734,12 +734,12 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh"
-                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/local_reflection.sh")
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/local_reflection.sh"
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/light_probes.sh")
         endif()
         if(_fog_shader_output MATCHES "/fs_mesh_instanced\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
-                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_advanced.sh"
-                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/light_probes.sh")
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_advanced.sh")
         endif()
         if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND DEPENDS

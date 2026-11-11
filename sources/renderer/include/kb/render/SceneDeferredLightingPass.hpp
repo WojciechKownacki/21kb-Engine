@@ -11,6 +11,7 @@
 #include "kb/render/scene/SceneLightGridResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 #include "kb/render/scene/LocalReflectionUniforms.hpp"
+#include "kb/render/scene/SceneLightProbeTexture.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -84,6 +85,7 @@ private:
     ShadowCascadeUniforms shadowCascades_{};
     PointShadowUniforms pointShadows_{};
     SceneGiUniforms giUniforms_{};
+    LightProbeUniforms lightProbes_{};
     bgfx::UniformHandle fogParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fogColorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fogVolumetricUniform_ = BGFX_INVALID_HANDLE;

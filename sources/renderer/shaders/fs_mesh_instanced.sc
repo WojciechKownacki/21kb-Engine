@@ -183,8 +183,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
     // A baked probe grid gives the surroundings' diffuse light where the scene has one.
-    vec3 diffuseLight = u_lightProbeSize.w > 0.5 ? KbLightProbeIrradiance(worldPos, normal) : EnvironmentColor(normal);
-    vec3 diffuseEnv = diffuseLight * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
+    vec3 diffuseEnv = KbDiffuseAmbient(worldPos, normal, EnvironmentColor(normal)) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     diffuseEnv *= 1.0 - u_materialOptics.x;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);

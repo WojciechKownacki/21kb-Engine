@@ -10377,16 +10377,17 @@ void RunRendererLightProbeTests() {
     const std::array<BakedLightmapSurface, 2> surfaces{ BakedLightmapSurface{ wall, lit, 4 }, BakedLightmapSurface{ floor, lit, 4 } };
     LightProbeSettings settings;
     settings.spacing = 1.0F;
-    const LightProbeGrid grid = BakeLightProbes(surfaces, {}, { -1.5F, 0.5F, -2.5F }, { 2.5F, 3.5F, 2.5F }, settings);
+    const LightProbeGrid grid = BakeLightProbes(surfaces, { -1.5F, 0.5F, -2.5F }, { 2.5F, 3.5F, 2.5F }, settings);
     Require(grid.Succeeded(), "Light probe test grid could not be baked");
     const LightProbeGrid parsed = ParseLightProbeGrid(SerializeLightProbeGrid(grid));
     Require(parsed.Succeeded() && parsed.probes.size() == grid.probes.size(), "Light probe test grid did not survive its file form");
 
-    const auto render = [&](bool withGrid, SceneRenderGlobalIlluminationMode gi) {
+    const auto render = [&](bool withGrid, SceneRenderLightingPath path, bool reflections = false, SceneRenderSubmitStats* statsOut = nullptr) {
         SsMaterialOptions options;
         options.sphere = true;
         SceneRenderLightingConfig lighting{};
-        lighting.globalIllumination = gi;
+        lighting.lightingPath = path;
+        lighting.screenSpaceReflectionsEnabled = reflections;
         const auto assign = [&](kb::scene::Scene& scene, int frame) {
             if (frame != 0 || !withGrid) return;
             const kb::assets::AssetId id = kb::assets::MakeAssetId("ProbeTestGrid");
@@ -10402,7 +10403,7 @@ void RunRendererLightProbeTests() {
         };
         return RenderScreenSpaceScene({ { { 0.0F, 1.2F, 0.0F }, { 1.0F, 1.0F, 1.0F } } }, {}, { 0.0F, 1.2F, -6.0F }, { 0.0F, 1.2F, 0.0F },
             30.0F, lighting, 4, 64U, SceneRenderMeshPassMode::OpaqueOnly, assign, false, 1.27F, 40.0F, nullptr, {}, 0.05F,
-            bgfx::RendererType::Direct3D11, nullptr, &options);
+            bgfx::RendererType::Direct3D11, statsOut, &options);
     };
     // Red minus blue over the sphere's wall-facing half (the wall is at -x, on the left of the image).
     const auto redShift = [](const std::vector<std::uint8_t>& pixels) {
@@ -10413,12 +10414,23 @@ void RunRendererLightProbeTests() {
         }
         return sum / 120.0;
     };
-    const auto without = render(false, SceneRenderGlobalIlluminationMode::Disabled);
-    const auto withProbes = render(true, SceneRenderGlobalIlluminationMode::Disabled);
-    const auto again = render(false, SceneRenderGlobalIlluminationMode::Disabled);
-    std::fprintf(stderr, "light_probe_pixels without=%.3f with=%.3f\n", redShift(without), redShift(withProbes));
-    Require(redShift(withProbes) > redShift(without) + 10.0, "A baked probe grid next to a red wall did not red-shift the dynamic sphere");
-    Require(without == again, "A scene without a probe grid must render the same image every time");
+    // The forward path, and the deferred lighting pass that the project default and every sky backdrop select.
+    std::array<std::uint32_t, 2> drawCalls{};
+    for (const SceneRenderLightingPath path : { SceneRenderLightingPath::Forward, SceneRenderLightingPath::Deferred }) {
+        SceneRenderSubmitStats stats{};
+        const auto without = render(false, path);
+        const auto withProbes = render(true, path, false, &stats);
+        const auto again = render(false, path);
+        drawCalls[path == SceneRenderLightingPath::Deferred ? 1U : 0U] = stats.submittedDrawCallCount;
+        std::fprintf(stderr, "light_probe_pixels path=%u without=%.3f with=%.3f\n", static_cast<unsigned>(path), redShift(without), redShift(withProbes));
+        Require(redShift(withProbes) > redShift(without) + 10.0, "A baked probe grid next to a red wall did not red-shift the dynamic sphere");
+        Require(without == again, "A scene without a probe grid must render the same image every time");
+    }
+    Require(drawCalls[1] > drawCalls[0], "The deferred case did not run the G-buffer and lighting passes");
+    // Screen-space reflections keep the stage the deferred pass would give the grid: the grid stands aside.
+    const auto reflectionsWithout = render(false, SceneRenderLightingPath::Deferred, true);
+    Require(reflectionsWithout == render(true, SceneRenderLightingPath::Deferred, true),
+        "A deferred frame with screen-space reflections must not use the probe grid");
 #else
     throw std::runtime_error("Light probe readback requires a supported native GPU test surface");
 #endif

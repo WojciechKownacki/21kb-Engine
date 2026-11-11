@@ -410,13 +410,13 @@ V EvaluateShL2Irradiance(const ShL2& sh,V normal) {
     return sum;
 }
 
-LightProbeGrid BakeLightProbes(std::span<const BakedLightmapSurface> surfaces,std::span<const LightmapLight> lights,
+LightProbeGrid BakeLightProbes(std::span<const BakedLightmapSurface> surfaces,
     V boundsMin,V boundsMax,const LightProbeSettings& settings) {
     LightProbeGrid grid;
     const auto fail=[&](const char* error) { grid.error=error; grid.probes.clear(); return grid; };
     if(surfaces.empty()||!Finite(boundsMin)||!Finite(boundsMax)||boundsMax.x<boundsMin.x||boundsMax.y<boundsMin.y||boundsMax.z<boundsMin.z||
         !std::isfinite(settings.spacing)||settings.spacing<0.05F||settings.maxProbes==0||settings.maxProbes>65536||
-        !std::isfinite(settings.ambient)||settings.ambient<0||!std::isfinite(settings.rayBias)||settings.rayBias<=0||lights.size()>256)
+        !std::isfinite(settings.ambient)||settings.ambient<0)
         return fail("invalid light probe settings or bounds");
     std::vector<LightmapTriangle> geometry; std::vector<std::uint32_t> owner;
     for(std::size_t s=0;s<surfaces.size();++s) {
@@ -426,7 +426,6 @@ LightProbeGrid BakeLightProbes(std::span<const BakedLightmapSurface> surfaces,st
         geometry.insert(geometry.end(),surface.triangles.begin(),surface.triangles.end());
         owner.insert(owner.end(),surface.triangles.size(),static_cast<std::uint32_t>(s));
     }
-    for(const auto& light:lights) if(!ValidLight(light)) return fail("invalid lightmap light");
     // Coarsen the spacing until the grid fits the probe budget.
     float spacing=settings.spacing; std::array<std::uint32_t,3> dims{};
     for(;;) {
@@ -464,16 +463,7 @@ LightProbeGrid BakeLightProbes(std::span<const BakedLightmapSurface> surfaces,st
             }
             AddShL2Direction(sh,direction,Mul(radiance,4*kPi/static_cast<float>(kProbeRays)));
         }
-        if(backHits*4>kProbeRays) { valid[index]=0; ++remaining; continue; }
-        for(const auto& light:lights) {
-            // Light that reaches the probe unobstructed arrives from one direction: the cosine is left to the lookup.
-            const V toward=light.directional?Mul(Unit(light.direction),-1):Unit(Sub(light.position,p));
-            V direction; float distance=0; const float strength=DirectStrength(light,p,toward,direction,distance);
-            if(strength<=0) continue;
-            float blockerDistance=0,u=0,v=0; int blocker=-1;
-            if(light.castsShadow&&bvh.Nearest(p,direction,light.directional?1.0e20F:distance-settings.rayBias,blockerDistance,blocker,u,v)) continue;
-            AddShL2Direction(sh,direction,Mul(light.color,kPi*strength));
-        }
+        if(backHits*4>kProbeRays) { valid[index]=0; ++remaining; }
     }
     grid.invalidProbes=static_cast<std::uint32_t>(remaining);
     if(remaining==total) return fail("every light probe lies inside geometry");

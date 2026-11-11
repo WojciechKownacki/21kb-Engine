@@ -132,6 +132,8 @@ bool SceneDeferredLightingPass::Initialize() {
     shadowCascades_.Create();
     pointShadows_.Create();
     giUniforms_.Create();
+    // All 16 sampler stages are taken: the probe texture is read through the sampler of the reflections' lit colour.
+    lightProbes_.Create("s_ssrLit");
     fogParamsUniform_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     fogColorUniform_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
     fogVolumetricUniform_ = bgfx::createUniform("u_fogVolumetric", bgfx::UniformType::Vec4);
@@ -227,6 +229,7 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     shadowCascades_.Destroy();
     pointShadows_.Destroy();
     giUniforms_.Destroy();
+    lightProbes_.Destroy();
     for (bgfx::UniformHandle* handle : { &fogParamsUniform_, &fogColorUniform_, &fogVolumetricUniform_, &fogSkyUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
@@ -511,6 +514,9 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     // Adds the bounce light the resolve pass accumulated up to the previous frame; without one
     // (first frame, resize) the shader skips it rather than reading an undefined texture.
     giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
+    // A frame with the baked grid has no screen-space reflections (UsesBakedLightProbes), so the grid takes their stage.
+    lightProbes_.Set(lighting.lightProbes, lighting.lightProbeGrid, lighting.lightProbeSize, SceneGiUniforms::kLitStage,
+        BGFX_INVALID_HANDLE);
     {
         const SceneRenderLightingConfig& config = desc.lightingConfig;
         // Volumetric fog is marched over the first 100 m.
@@ -556,7 +562,7 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_) &&
         bgfx::isValid(backdropSunUniform_) && bgfx::isValid(backdropSunColorUniform_) &&
         bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
-        giUniforms_.IsValid() &&
+        giUniforms_.IsValid() && lightProbes_.IsValid() &&
         bgfx::isValid(backdropHorizonUniform_) && bgfx::isValid(backdropZenithUniform_) && bgfx::isValid(backdropParamsUniform_) &&
         bgfx::isValid(backdropEnvironmentSampler_) && bgfx::isValid(fallbackShadowTexture_) &&
         bgfx::isValid(fallbackBackdropEnvironmentTexture_) && bgfx::isValid(skyReflectionSampler_) &&

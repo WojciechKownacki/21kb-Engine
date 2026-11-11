@@ -175,8 +175,7 @@ PackedSceneLighting SceneLightingPacker::Build(
     lighting.fogColor = {config.fogColor[0], config.fogColor[1], config.fogColor[2], std::clamp(config.fogAnisotropy, -0.9F, 0.9F)};
     lighting.skyReflection = config.skyReflection;
     lighting.skyReflectionParams = { bgfx::isValid(config.skyReflection) ? 1.0F : 0.0F, config.skyReflectionMaxMip, 0.0F, 0.0F };
-    // Gathered real-time GI owns the bounce light, so the baked probes stand aside.
-    if (bgfx::isValid(config.lightProbes) && !UsesGatheredGi(config)) {
+    if (UsesBakedLightProbes(config)) {
         lighting.lightProbes = config.lightProbes;
         lighting.lightProbeGrid = config.lightProbeGrid;
         lighting.lightProbeSize = config.lightProbeSize;

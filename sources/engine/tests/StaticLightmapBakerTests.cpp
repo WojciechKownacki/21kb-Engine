@@ -159,10 +159,10 @@ void RunLightProbeTests() {
         surfaces[i] = { *parts[i], maps[i].rgba, settings.resolution };
     }
     kb::tests::Require(maps[0].Succeeded() && maps[1].Succeeded() && maps[2].Succeeded(), "probe test room bakes");
-    const auto grid = kb::render::BakeLightProbes(surfaces, lights, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 3 });
+    const auto grid = kb::render::BakeLightProbes(surfaces, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 3 });
     kb::tests::Require(grid.Succeeded() && grid.dimensions[0] == 3 && grid.dimensions[1] == 1 && grid.dimensions[2] == 3 && grid.probes.size() == 9U,
         "a probe grid covers the bounds at the requested spacing");
-    const auto again = kb::render::BakeLightProbes(surfaces, lights, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 3 });
+    const auto again = kb::render::BakeLightProbes(surfaces, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 3 });
     kb::tests::Require(kb::render::SerializeLightProbeGrid(grid) == kb::render::SerializeLightProbeGrid(again), "probe baking is deterministic");
     const auto parsed = kb::render::ParseLightProbeGrid(kb::render::SerializeLightProbeGrid(grid));
     kb::tests::Require(parsed.Succeeded() && kb::render::SerializeLightProbeGrid(parsed) == kb::render::SerializeLightProbeGrid(grid), "a probe grid survives its binary form");
@@ -174,7 +174,7 @@ void RunLightProbeTests() {
     const auto leftProbe = kb::render::SampleLightProbeGrid(grid, { 0, 0.5F, 0 }), rightProbe = kb::render::SampleLightProbeGrid(grid, { 3, 0.5F, 0 });
     const auto middle = kb::render::SampleLightProbeGrid(grid, { 1.5F, 0.5F, 0 });
     kb::tests::Require(std::abs(middle.c[0].x - 0.5F * (leftProbe.c[0].x + rightProbe.c[0].x)) < 1.0e-4F, "sampling between probes blends them linearly");
-    const auto coarse = kb::render::BakeLightProbes(surfaces, lights, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 0.2F, .maxProbes = 20 });
+    const auto coarse = kb::render::BakeLightProbes(surfaces, { -3, 0.5F, -3 }, { 3, 2.5F, 3 }, { .spacing = 0.2F, .maxProbes = 20 });
     kb::tests::Require(coarse.Succeeded() && coarse.probes.size() <= 20U, "the probe count is capped by coarsening the spacing");
 }
 } // namespace

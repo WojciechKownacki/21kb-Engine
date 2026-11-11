@@ -41,6 +41,9 @@ uniform vec4 u_deferredShadowParams;
 
 #include "ssgi.sh"
 #include "ssr.sh"
+// No sampler stage is left: the baked light probes use the stage of the reflections' lit colour (s_ssrLit).
+#define KB_LIGHT_PROBES_DEFERRED 1
+#include "light_probes.sh"
 
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
@@ -99,7 +102,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     float nDotV = max(dot(normal, viewDir), 0.0);
     vec3 f0 = mix(vec3_splat(0.08 * specular), albedo, metallic);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
-    vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_deferredEnvironmentParams.y;
+    vec3 diffuseEnv = KbDiffuseAmbient(worldPos, normal, EnvironmentColor(normal)) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_deferredEnvironmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
     vec3 specularEnv = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir))) * fresnel * specularEnergy * u_deferredEnvironmentParams.z;

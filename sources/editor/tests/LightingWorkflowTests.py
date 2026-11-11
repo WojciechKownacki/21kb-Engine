@@ -295,16 +295,16 @@ end
     cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
     assert wide_texture.read_bytes() == first_wide
     cli('scene-bake-lighting', '--project', project, '--bounces', '5', expected=1)
-    # Probes light the forward path; the same bake without its grid leaves the movable wall on the flat ambient.
-    def forward_frame(target, name):
+    # Probes light the default path; the same bake without its grid leaves the movable wall on the flat ambient.
+    def probe_frame(target, name):
         run(args.player, '--project=' + str(target), '--headless', '--frames=120', '--uncapped', '--width=640', '--height=360',
-            '--profile-lighting=Forward', '--profile-fixed-step', '--profile-file=' + str(root / f'{name}.csv'),
+            '--profile-fixed-step', '--profile-file=' + str(root / f'{name}.csv'),
             '--screenshot-frame=120', '--screenshot-file=' + str(root / f'{name}.png'))
     cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1', '--probe-spacing', '0')
-    forward_frame(next(project.glob('*.21kbproject')), 'unprobed')
+    probe_frame(next(project.glob('*.21kbproject')), 'unprobed')
     cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
     assert wide_texture.read_bytes() == first_wide and probe_file.read_bytes() == first_probes
-    forward_frame(next(project.glob('*.21kbproject')), 'probedSource')
+    probe_frame(next(project.glob('*.21kbproject')), 'probedSource')
     run(args.player, '--project=' + str(next(project.glob('*.21kbproject'))), '--headless', '--frames=120', '--uncapped',
         '--width=640', '--height=360', '--profile-fixed-step', '--profile-file=' + str(root / 'source.csv'), '--screenshot-frame=120', '--screenshot-file=' + str(root / 'source.png'))
     package = root / 'Package'
@@ -333,17 +333,21 @@ end
     lit, dark = brightness(cooked, 420, 313), brightness(cooked, 110, 330)
     assert lit > dark + 40 and abs(lit - brightness(source, 420, 313)) < 12, (lit, dark)
 
-    # The packaged frame keeps the probe grid's light on the movable wall: it differs from the frame without
-    # the grid far more than from its own source, which only texture compression changes.
-    forward_frame(package / 'Game.kbpack', 'probedPackage')
-    probed = read_png(root / 'probedPackage.png')
+    # The packaged frame keeps the probe grid's light on the movable wall: where the grid changes the source
+    # frame, the packaged frame differs from the frame without the grid far more than from its own source,
+    # which only texture compression and shader cooking change.
+    probe_frame(package / 'Game.kbpack', 'probedPackage')
+    probed, unprobed, probed_source = read_png(root / 'probedPackage.png'), read_png(root / 'unprobed.png'), read_png(root / 'probedSource.png')
+    lit_by_probes = [(y, x) for y, (row1, row2) in enumerate(zip(unprobed, probed_source)) for x, (p, q) in enumerate(zip(row1, row2))
+        if sum(abs(a - b) for a, b in zip(p[:3], q[:3])) > 12]
+    assert len(lit_by_probes) > 1500, len(lit_by_probes)
     def difference_sum(a, b):
-        return sum(abs(x - y) for row1, row2 in zip(a, b) for p, q in zip(row1, row2) for x, y in zip(p[:3], q[:3]))
-    probe_difference, cook_difference = difference_sum(read_png(root / 'unprobed.png'), probed), difference_sum(read_png(root / 'probedSource.png'), probed)
+        return sum(abs(c - d) for y, x in lit_by_probes for c, d in zip(a[y][x][:3], b[y][x][:3]))
+    probe_difference, cook_difference = difference_sum(unprobed, probed), difference_sum(probed_source, probed)
     assert probe_difference > 2 * cook_difference, (probe_difference, cook_difference)
     (root / 'result.json').write_text(json.dumps(dict(result='PASS', probes=observations, focus=focus,
         bakedTexels=int(match[1]), occludedSamples=int(match[2]), sourceUnavailable=True, cookedMeanError=average,
-        probeDifference=probe_difference, cookDifference=cook_difference), indent=2), encoding='utf-8')
+        probeDifference=probe_difference, cookDifference=cook_difference, probePixels=len(lit_by_probes)), indent=2), encoding='utf-8')
     print(root)
 
 

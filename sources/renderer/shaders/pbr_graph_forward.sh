@@ -11,6 +11,9 @@
 // The prefiltered sky takes a free builtin stage of graph shaders (they own the stages from 6 up).
 SAMPLERCUBE(s_skyReflection, 3);
 #include "sky_reflection.sh"
+// The baked light probe grid takes the free graph stage 2 (the builtin material textures are not bound).
+#define KB_LIGHT_PROBES_GRAPH 1
+#include "light_probes.sh"
 #include "height_fog.sh"
 
 uniform vec4 u_cameraPosition;
@@ -139,7 +142,7 @@ vec3 KbEnvironmentColor(vec3 direction)
     return u_environmentParams.x < 1.5 ? constantColor : hemisphereColor;
 }
 
-vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
+vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion, vec3 worldPos)
 {
     if (u_environmentParams.x < 0.5) {
         return vec3(0.0, 0.0, 0.0);
@@ -148,7 +151,7 @@ vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metalli
     float nDotV = max(dot(normal, viewDir), 0.0);
     vec3 f0 = mix(vec3_splat(0.08 * specular), albedo, metallic);
     vec3 fresnel = KbFresnelSchlickRoughness(nDotV, f0, roughness);
-    vec3 diffuseEnv = KbEnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
+    vec3 diffuseEnv = KbDiffuseAmbient(worldPos, normal, KbEnvironmentColor(normal)) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
     vec3 specularEnv = KbSkyReflection(reflectionDir, roughness, KbEnvironmentColor(reflectionDir)) * fresnel * specularEnergy * u_environmentParams.z;
@@ -161,7 +164,7 @@ vec3 KbEvaluateForwardLightingFull(vec3 worldNormal, vec3 worldPos, vec3 albedo,
     float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris)
 {
     vec3 viewDir = normalize(u_cameraPosition.xyz - worldPos);
-    vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, specular, occlusion);
+    vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, specular, occlusion, worldPos);
     if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) && u_environmentParams.x > 0.5) {
         vec3 coatDirection = reflect(-viewDir, worldNormal);
         vec3 coatReflection = KbSkyReflection(coatDirection, customData1, KbEnvironmentColor(coatDirection)) * u_environmentParams.z;

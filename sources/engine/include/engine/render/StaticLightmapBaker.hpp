@@ -73,7 +73,7 @@ struct BakedLightmapSurface {
 struct LightProbeSettings {
     float spacing = 2.0F;
     std::uint32_t maxProbes = 4096;
-    float ambient = 0.03F, rayBias = 0.001F;
+    float ambient = 0.03F;
 };
 // A regular grid of probes over [origin, origin + (dimensions - 1) * spacing]; x is the fastest index.
 struct LightProbeGrid {
@@ -85,11 +85,12 @@ struct LightProbeGrid {
     std::uint32_t invalidProbes = 0;
     [[nodiscard]] bool Succeeded() const noexcept { return error.empty() && !probes.empty(); }
 };
-// Traces the static geometry with the lightmap tracer: each probe gathers the lights it sees plus the
-// outgoing light (albedo * baked irradiance, so every bounce the lightmaps hold) of what its rays hit.
+// Traces the static geometry with the lightmap tracer: each probe gathers the outgoing light (albedo * baked
+// irradiance, so every bounce the lightmaps hold) of what its rays hit. Light that arrives straight from a light
+// is not stored: those lights still shine on moving objects in real time, so a probe holds indirect light only.
 // Probes inside geometry are refilled from valid neighbours. Deterministic; never publishes partial data.
 [[nodiscard]] LightProbeGrid BakeLightProbes(std::span<const BakedLightmapSurface> surfaces,
-    std::span<const LightmapLight> lights, kb::math::Vec3 boundsMin, kb::math::Vec3 boundsMax, const LightProbeSettings& settings = {});
+    kb::math::Vec3 boundsMin, kb::math::Vec3 boundsMax, const LightProbeSettings& settings = {});
 // Trilinear SH at a world position (clamped to the grid).
 [[nodiscard]] ShL2 SampleLightProbeGrid(const LightProbeGrid& grid, kb::math::Vec3 position);
 // Small little-endian binary form: "KBLP", version, origin, spacing, dimensions, 27 floats per probe.

@@ -391,9 +391,7 @@ bool SceneMeshPassResources::Initialize() {
     environmentParamsUniform_ = bgfx::createUniform("u_environmentParams", bgfx::UniformType::Vec4);
     skyReflectionSampler_ = bgfx::createUniform("s_skyReflection", bgfx::UniformType::Sampler);
     skyReflectionParamsUniform_ = bgfx::createUniform("u_skyReflectionParams", bgfx::UniformType::Vec4);
-    lightProbeSampler_ = bgfx::createUniform("s_lightProbes", bgfx::UniformType::Sampler);
-    lightProbeGridUniform_ = bgfx::createUniform("u_lightProbeGrid", bgfx::UniformType::Vec4);
-    lightProbeSizeUniform_ = bgfx::createUniform("u_lightProbeSize", bgfx::UniformType::Vec4);
+    lightProbes_.Create("s_lightProbes");
     shadowViewProjUniform_ =bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
     shadowCascades_.Create();
@@ -519,12 +517,7 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(skyReflectionParamsUniform_);
         skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
     }
-    for (bgfx::UniformHandle* uniform : { &lightProbeSampler_, &lightProbeGridUniform_, &lightProbeSizeUniform_ }) {
-        if (bgfx::isValid(*uniform)) {
-            bgfx::destroy(*uniform);
-            *uniform = BGFX_INVALID_HANDLE;
-        }
-    }
+    lightProbes_.Destroy();
     if (bgfx::isValid(environmentGroundUniform_)) {
         bgfx::destroy(environmentGroundUniform_);
         environmentGroundUniform_ = BGFX_INVALID_HANDLE;
@@ -742,7 +735,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) &&
         bgfx::isValid(skyReflectionSampler_) && bgfx::isValid(skyReflectionParamsUniform_) &&
-        bgfx::isValid(lightProbeSampler_) && bgfx::isValid(lightProbeGridUniform_) && bgfx::isValid(lightProbeSizeUniform_) &&
+        lightProbes_.IsValid() &&
         bgfx::isValid(shadowViewProjUniform_) &&
         bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
         bgfx::isValid(fallbackWhiteTexture_) &&
@@ -1386,6 +1379,9 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent) {
             // The sky reflection (pbr_graph_forward.sh) takes graph stage 3, free of the builtin textures.
             BindSkyReflection(desc.lighting, 3U);
+            // The probe grid (light_probes.sh) takes graph stage 2, free like 3: the builtin material textures are not bound.
+            lightProbes_.Set(desc.lighting.lightProbes, desc.lighting.lightProbeGrid, desc.lighting.lightProbeSize, 2U,
+                fallbackWhiteTexture_);
         }
         pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, desc.lighting.pointShadowSlot,
             fallbackWhiteTexture_, PointShadowUniforms::kGraphSamplerStage);
@@ -1474,10 +1470,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
     if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent) {
         BindSkyReflection(desc.lighting, 12U);
-        bgfx::setTexture(14U, lightProbeSampler_,
-            bgfx::isValid(desc.lighting.lightProbes) ? desc.lighting.lightProbes : fallbackWhite3DTexture_);
-        bgfx::setUniform(lightProbeGridUniform_, desc.lighting.lightProbeGrid.data());
-        bgfx::setUniform(lightProbeSizeUniform_, desc.lighting.lightProbeSize.data());
+        lightProbes_.Set(desc.lighting.lightProbes, desc.lighting.lightProbeGrid, desc.lighting.lightProbeSize, 14U,
+            fallbackWhiteTexture_);
     }
     bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());

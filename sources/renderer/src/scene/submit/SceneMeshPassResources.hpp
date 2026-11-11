@@ -8,6 +8,7 @@
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/LocalReflectionUniforms.hpp"
+#include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 
 #include <bgfx/bgfx.h>
@@ -233,9 +234,7 @@ private:
     bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
     // The baked light probe grid (light_probes.sh) of the forward lighting.
-    bgfx::UniformHandle lightProbeSampler_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle lightProbeGridUniform_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle lightProbeSizeUniform_ = BGFX_INVALID_HANDLE;
+    LightProbeUniforms lightProbes_{};
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};
