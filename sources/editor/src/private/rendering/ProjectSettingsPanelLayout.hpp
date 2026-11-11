@@ -58,9 +58,11 @@ struct ProjectSettingsPanelLayoutRects {
     // with one button per level (Auto, Low, Medium, High, Ultra).
     RECT qualityLabel[4]{};
     RECT qualityButton[4][5]{};
-    // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit, render scale.
-    RECT displayLabel[6]{};
+    // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit, render scale,
+    // Android graphics API.
+    RECT displayLabel[7]{};
     RECT windowModeButton[2]{};
+    RECT androidGraphicsApiButton[3]{};
     RECT windowSizeButton[4]{};
     RECT resizableCheckbox{};
     RECT vsyncCheckbox{};

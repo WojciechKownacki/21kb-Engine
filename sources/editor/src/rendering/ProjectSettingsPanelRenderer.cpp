@@ -244,6 +244,8 @@ struct TooltipContent {
         return EditorText("projectSettings.frameRateLimit", "Frame Rate Limit");
     case ProjectSettingsTooltipKind::RenderScale:
         return EditorText("projectSettings.renderScale", "Render Scale");
+    case ProjectSettingsTooltipKind::AndroidGraphicsApi:
+        return EditorText("projectSettings.androidGraphicsApi", "Android Graphics API");
     case ProjectSettingsTooltipKind::FixedStep:
         return EditorText("projectSettings.fixedStep", "Fixed Step (Hz)");
     case ProjectSettingsTooltipKind::Gravity:
@@ -371,6 +373,7 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::VSync:
     case ProjectSettingsTooltipKind::FrameRateLimit:
     case ProjectSettingsTooltipKind::RenderScale:
+    case ProjectSettingsTooltipKind::AndroidGraphicsApi:
     case ProjectSettingsTooltipKind::FixedStep:
     case ProjectSettingsTooltipKind::Gravity:
     case ProjectSettingsTooltipKind::GravityPreset:
@@ -433,6 +436,8 @@ struct TooltipContent {
         return EditorText("projectSettings.frameRateLimitDescription", "Most frames per second the game draws; Off leaves it to VSync.");
     case ProjectSettingsTooltipKind::RenderScale:
         return EditorText("projectSettings.renderScaleDescription", "Share of the screen resolution the 3D scene renders at (0.5 to 1); the interface stays sharp.");
+    case ProjectSettingsTooltipKind::AndroidGraphicsApi:
+        return EditorText("projectSettings.androidGraphicsApiDescription", "Graphics API of the Android package. Auto uses Vulkan where available; if the device cannot start the chosen API, the other one runs.");
     case ProjectSettingsTooltipKind::FixedStep:
         return EditorText("projectSettings.fixedStepDescription", "Physics steps per second.");
     case ProjectSettingsTooltipKind::Gravity:
@@ -487,7 +492,7 @@ struct SearchableSetting {
     case ProjectSettingsCategory::Lighting:
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
     case ProjectSettingsCategory::Display:
-        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale });
+        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale, Kind::AndroidGraphicsApi });
     case ProjectSettingsCategory::Audio:
         return fromKinds({ Kind::MasterVolume, Kind::Microphone });
     case ProjectSettingsCategory::Tags:
@@ -714,6 +719,11 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
 
     DrawSetting(dc, rects, rects.displayLabel[5], SettingLabel(Kind::RenderScale), Kind::RenderScale, theme, query);
     DrawNumberCell(dc, rects.renderScaleValue, theme, sceneContext, ProjectSettingsNumber::RenderScale);
+
+    DrawSetting(dc, rects, rects.displayLabel[6], SettingLabel(Kind::AndroidGraphicsApi), Kind::AndroidGraphicsApi, theme, query);
+    DrawOptionButton(dc, rects.androidGraphicsApiButton[0], theme, EditorText("projectSettings.backendAuto", "Auto"), display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Auto);
+    DrawOptionButton(dc, rects.androidGraphicsApiButton[1], theme, "Vulkan", display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Vulkan);
+    DrawOptionButton(dc, rects.androidGraphicsApiButton[2], theme, "OpenGL ES", display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::OpenGLES);
 }
 
 void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -985,6 +995,11 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         for (int index = 0; index < 4; ++index) {
             if (PointInRect(rects.windowSizeButton[index], x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::WindowSizeOption, .index = index, .rect = rects.windowSizeButton[index] };
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            if (PointInRect(rects.androidGraphicsApiButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::AndroidGraphicsApiOption, .index = index, .rect = rects.androidGraphicsApiButton[index] };
             }
         }
         for (int index = 0; index < 5; ++index) {
@@ -1317,6 +1332,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
             ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::FrameRateOption };
         if (PointInRect(rects.displayLabel[5], x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(ProjectSettingsNumber::RenderScale), .rect = rects.renderScaleValue };
+        }
+        if (PointInRect(rects.displayLabel[6], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::AndroidGraphicsApiOption, .index = -1, .rect = rects.displayLabel[6] };
         }
         for (int row = 0; row < 5; ++row) {
             if (PointInRect(rects.displayLabel[row], x, y)) {

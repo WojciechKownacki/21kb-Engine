@@ -826,6 +826,31 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     Require(bake::DecodeRuntimeAssetManifest(firstBytes, silentDecoded) == bake::RuntimeAssetManifestStatus::Success &&
             !silentDecoded.settings.microphone,
         "A runtime manifest without the microphone flag must read as not recording");
+    // The Android graphics API travels on its own flag as one byte, only while it is not Auto.
+    bake::RuntimeAssetManifest gles = first;
+    gles.settings.display.androidGraphicsApi = kb::project::ProjectAndroidGraphicsApi::OpenGLES;
+    std::vector<std::uint8_t> glesBytes;
+    bake::RuntimeAssetManifest glesDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(gles, glesBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            glesBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(glesBytes, glesDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            glesDecoded.settings == gles.settings &&
+            glesDecoded.settings.display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::OpenGLES,
+        "A runtime manifest lost the Android graphics API during the round trip");
+    bake::RuntimeAssetManifest glesEverything = everything;
+    glesEverything.settings.display.androidGraphicsApi = kb::project::ProjectAndroidGraphicsApi::Vulkan;
+    glesEverything.settings.microphone = true;
+    std::vector<std::uint8_t> glesEverythingBytes;
+    bake::RuntimeAssetManifest glesEverythingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(glesEverything, glesEverythingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            bake::DecodeRuntimeAssetManifest(glesEverythingBytes, glesEverythingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            glesEverythingDecoded.settings == glesEverything.settings,
+        "A runtime manifest lost a setting when the Android graphics API was written with the others");
+    bake::RuntimeAssetManifest unknownApi = first;
+    unknownApi.settings.display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(kb::project::kProjectAndroidGraphicsApiCount);
+    std::vector<std::uint8_t> unknownApiBytes;
+    Require(bake::EncodeRuntimeAssetManifest(unknownApi, unknownApiBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted an Android graphics API it does not know");
     bake::RuntimeAssetManifest tooLoud = first;
     tooLoud.settings.masterVolume = 1.5F;
     std::vector<std::uint8_t> tooLoudBytes;

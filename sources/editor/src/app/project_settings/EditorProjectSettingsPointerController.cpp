@@ -194,6 +194,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         return hit.index == 0 ? ProjectSettingsTooltipKind::Resizable : ProjectSettingsTooltipKind::VSync;
     case ProjectSettingsHitKind::FrameRateOption:
         return ProjectSettingsTooltipKind::FrameRateLimit;
+    case ProjectSettingsHitKind::AndroidGraphicsApiOption:
+        return ProjectSettingsTooltipKind::AndroidGraphicsApi;
     case ProjectSettingsHitKind::SimulationStepper: {
         const int stepper = hit.index / 2;
         return stepper == 0 ? ProjectSettingsTooltipKind::FixedStep
@@ -436,7 +438,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::WindowModeOption:
     case ProjectSettingsHitKind::WindowSizeOption:
     case ProjectSettingsHitKind::DisplayToggle:
-    case ProjectSettingsHitKind::FrameRateOption: {
+    case ProjectSettingsHitKind::FrameRateOption:
+    case ProjectSettingsHitKind::AndroidGraphicsApiOption: {
         // A click on a label cell only answers the tooltip.
         kb::project::ProjectDisplaySettings display = sceneContext.ProjectConfiguration().display;
         if (hit.index >= 0) {
@@ -454,6 +457,9 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
                 flag = !flag;
                 break;
             }
+            case ProjectSettingsHitKind::AndroidGraphicsApiOption:
+                display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(hit.index);
+                break;
             default:
                 display.frameRateCap = kProjectSettingsFrameRates[static_cast<std::size_t>(hit.index)];
                 break;

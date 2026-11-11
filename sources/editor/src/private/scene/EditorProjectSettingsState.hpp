@@ -32,6 +32,7 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     VSync,
     FrameRateLimit,
     RenderScale,
+    AndroidGraphicsApi,
     FixedStep,
     Gravity,
     GravityPreset,

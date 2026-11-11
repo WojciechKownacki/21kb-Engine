@@ -51,6 +51,16 @@ inline constexpr std::size_t kProjectAdditionalScenesMax = 256U;
 // Most tags a project defines of its own: the scene's tag catalogue holds 256 names, six of them built in.
 inline constexpr std::size_t kProjectTagsMax = 250U;
 
+// The graphics API an Android package renders with. Auto leaves the choice to the renderer: Vulkan where
+// the build offers it, otherwise OpenGL ES. A named API that the device cannot start falls back to the other.
+enum class ProjectAndroidGraphicsApi : std::uint8_t {
+    Auto = 0,
+    Vulkan,
+    OpenGLES,
+};
+
+inline constexpr std::uint8_t kProjectAndroidGraphicsApiCount = 3U;
+
 // How the shipped game opens its window and paces its frames. The defaults are what the game did
 // before these were settings.
 struct ProjectDisplaySettings {
@@ -64,6 +74,8 @@ struct ProjectDisplaySettings {
     // Fraction of the output resolution the 3D scene renders at before it is upscaled; the UI stays at
     // full resolution. 1 renders at the output resolution with no upscale pass.
     float renderScale = 1.0F;
+    // The graphics API of the Android package; the other platforms ignore it.
+    ProjectAndroidGraphicsApi androidGraphicsApi = ProjectAndroidGraphicsApi::Auto;
 
     [[nodiscard]] bool operator==(const ProjectDisplaySettings&) const noexcept = default;
 };

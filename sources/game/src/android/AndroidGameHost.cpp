@@ -1,5 +1,6 @@
 #include "GameProjectRuntime.hpp"
 #include "GameProjectLighting.hpp"
+#include "AndroidGraphicsApi.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
 #include "RuntimeSceneFrameSync.hpp"
@@ -585,6 +586,38 @@ private:
         }
     }
 
+    // Starts the renderer with the graphics API the project names. An API this build does not offer or this device
+    // cannot start gives way to the other one, and the log says so.
+    [[nodiscard]] bool InitializeRenderer(kb::render::DisplayConfig& config) {
+        using Api = kb::project::ProjectAndroidGraphicsApi;
+        const Api api = projectRuntime_.display.androidGraphicsApi;
+        std::array<bgfx::RendererType::Enum, bgfx::RendererType::Count> supported{};
+        const std::uint8_t supportedCount = bgfx::getSupportedRenderers(
+            static_cast<std::uint8_t>(supported.size()), supported.data());
+        const kb::game::AndroidRendererCandidates candidates =
+            kb::game::ResolveAndroidRenderers(api, supported.data(), supportedCount);
+        for (std::uint8_t index = 0U; index < candidates.count; ++index) {
+            config.preferredBgfxRendererType = candidates.types[index];
+            if (!renderer_.Initialize(surface_, &config)) {
+                if (index + 1U < candidates.count) {
+                    LogInfo(std::string{"graphics api "} +
+                        bgfx::getRendererName(static_cast<bgfx::RendererType::Enum>(candidates.types[index])) +
+                        " could not start on this device, trying the other one");
+                }
+                continue;
+            }
+            if (api != Api::Auto) {
+                const char* const requested = bgfx::getRendererName(
+                    api == Api::Vulkan ? bgfx::RendererType::Vulkan : bgfx::RendererType::OpenGLES);
+                const char* const started = renderer_.CapabilityReport().selectedBackendName;
+                LogInfo(std::string{"graphics api requested="} + requested + " backend=" + started +
+                    (std::string_view{requested} == started ? "" : " substituted=1"));
+            }
+            return true;
+        }
+        return false;
+    }
+
     void ApplyWindowState() {
         if (memoryPressure_) {
             DrainStorageWrites();
@@ -606,7 +639,7 @@ private:
             kb::render::DisplayConfig config{};
             config.writableStorageRoot = storageRoot_;
             config.enableEditorRendering = false;
-            if (!renderer_.Initialize(surface_, &config)) {
+            if (!InitializeRenderer(config)) {
                 LogError("renderer initialization failed");
                 failed_ = true;
                 return;

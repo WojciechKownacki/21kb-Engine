@@ -501,6 +501,7 @@ void RunProjectDisplayAndSimulationSettingsTest() {
     Require(defaults.display.windowWidth == 1280U && defaults.display.windowHeight == 720U &&
             defaults.display.windowMode == kb::project::ProjectWindowMode::Windowed && defaults.display.resizable &&
             defaults.display.vsync && defaults.display.frameRateCap == 0U && defaults.display.renderScale == 1.0F &&
+            defaults.display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Auto &&
             defaults.simulation.fixedStepHz == 60U && defaults.simulation.gravity[0] == 0.0F &&
             defaults.simulation.gravity[1] == -9.81F && defaults.simulation.gravity[2] == 0.0F &&
             defaults.simulation.timeScale == 1.0F,
@@ -516,17 +517,25 @@ void RunProjectDisplayAndSimulationSettingsTest() {
 
     kb::project::ProjectSettings chosen = older.settings;
     chosen.display = { .windowWidth = 1920U, .windowHeight = 1080U, .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen,
-        .resizable = false, .vsync = false, .frameRateCap = 144U, .renderScale = 0.75F };
+        .resizable = false, .vsync = false, .frameRateCap = 144U, .renderScale = 0.75F,
+        .androidGraphicsApi = kb::project::ProjectAndroidGraphicsApi::OpenGLES };
     chosen.simulation = { .fixedStepHz = 120U, .gravity = { 0.5F, -1.62F, 3.0F }, .timeScale = 0.25F };
     std::string error;
     Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the display and simulation settings could not be saved");
     const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
     Require(reloaded.Succeeded() && reloaded.settings == chosen,
         "the settings file did not keep the display and simulation settings");
+    for (const kb::project::ProjectAndroidGraphicsApi api :
+            { kb::project::ProjectAndroidGraphicsApi::Vulkan, kb::project::ProjectAndroidGraphicsApi::Auto }) {
+        chosen.display.androidGraphicsApi = api;
+        Require(kb::project::ProjectSettingsStore::Save(file, chosen, error) &&
+                kb::project::ProjectSettingsStore::Load(file).settings.display.androidGraphicsApi == api,
+            "the settings file did not keep the Android graphics API");
+    }
 
     {
         std::ofstream output{ file, std::ios::binary | std::ios::trunc };
-        output << "[Project.Display]\nWindowWidth=10\nWindowHeight=99999\nWindowMode=Sideways\nFrameRateCap=5000\nRenderScale=0.1\n"
+        output << "[Project.Display]\nAndroidGraphicsApi=Metal\nWindowWidth=10\nWindowHeight=99999\nWindowMode=Sideways\nFrameRateCap=5000\nRenderScale=0.1\n"
                   "[Project.Physics]\nFixedStepHz=1\nGravityX=oops\nGravityY=-2000\n[Project.Time]\nTimeScale=-3\n";
     }
     const kb::project::ProjectSettings clamped = kb::project::ProjectSettingsStore::Load(file).settings;
@@ -535,6 +544,7 @@ void RunProjectDisplayAndSimulationSettingsTest() {
             clamped.display.windowMode == kb::project::ProjectWindowMode::Windowed &&
             clamped.display.frameRateCap == kb::project::kProjectFrameRateCapMax &&
             clamped.display.renderScale == kb::project::kProjectRenderScaleMin &&
+            clamped.display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Auto &&
             clamped.simulation.fixedStepHz == kb::project::kProjectFixedStepHzMin &&
             clamped.simulation.gravity[0] == 0.0F && clamped.simulation.gravity[1] == -kb::project::kProjectGravityLimit &&
             clamped.simulation.timeScale == 0.0F,

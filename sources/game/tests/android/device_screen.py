@@ -20,19 +20,28 @@ def default_display(adb):
     return found[1]
 
 
+def system_bar_height(adb):
+    """The pixel thickness of the thickest system bar: 48 dp, the navigation bar (at the bottom, or at a side in landscape);
+    the status bar and the gesture handle are thinner."""
+    densities = re.findall(r"density: (\d+)", adb("shell", "wm", "density"))
+    if not densities:
+        raise RuntimeError("Cannot read the display density")
+    return 48 * int(densities[-1]) // 160
+
+
 def capture(adb, path, display, timeout=15):
-    """Writes the first screen capture whose central area is not black to `path` and returns its pixels.
+    """Writes the first screen capture with content other than black, apart from the system bars, to `path` and returns its pixels.
 
     A frame the app has just logged may not be composited yet, so the capture is repeated until it is.
     """
     deadline = time.monotonic() + timeout
+    bars = system_bar_height(adb)
     while True:
         path.write_bytes(adb("exec-out", "screencap", *(["-d", display] if display else []), "-p", binary=True))
         pixels = read_png(path)
-        # System bars at the edges are drawn before the app's surface is.
+        # The system bars at the edges are drawn before the app's surface is; everything between them counts.
         height, width = len(pixels), len(pixels[0])
-        if any(max(pixels[y][x][:3]) > 16 for y in range(height // 10, height * 9 // 10, 8)
-                for x in range(width // 10, width * 9 // 10, 8)):
+        if any(max(pixels[y][x][:3]) > 16 for y in range(bars, height - bars, 8) for x in range(bars, width - bars, 8)):
             return pixels
         if time.monotonic() > deadline:
             raise RuntimeError("The screen stayed black in " + path.name)

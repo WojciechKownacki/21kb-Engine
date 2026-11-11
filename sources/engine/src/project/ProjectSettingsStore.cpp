@@ -53,6 +53,22 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     return fallback;
 }
 
+[[nodiscard]] std::string_view AndroidGraphicsApiName(ProjectAndroidGraphicsApi api) noexcept {
+    switch (api) {
+    case ProjectAndroidGraphicsApi::Vulkan: return "Vulkan";
+    case ProjectAndroidGraphicsApi::OpenGLES: return "OpenGLES";
+    case ProjectAndroidGraphicsApi::Auto:
+    default: return "Auto";
+    }
+}
+
+[[nodiscard]] ProjectAndroidGraphicsApi ParseAndroidGraphicsApi(std::string_view name, ProjectAndroidGraphicsApi fallback) noexcept {
+    if (name == "Auto") return ProjectAndroidGraphicsApi::Auto;
+    if (name == "Vulkan") return ProjectAndroidGraphicsApi::Vulkan;
+    if (name == "OpenGLES") return ProjectAndroidGraphicsApi::OpenGLES;
+    return fallback;
+}
+
 // An integer setting kept inside its bounds; a missing or unreadable key keeps the default.
 [[nodiscard]] std::uint32_t ReadBounded(
     const config::IniDocument& document, std::string_view section, std::string_view key,
@@ -247,6 +263,9 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
         0U, kProjectFrameRateCapMax);
     display.renderScale = ReadBoundedFloat(document, kDisplay, "RenderScale", defaults.display.renderScale,
         kProjectRenderScaleMin, kProjectRenderScaleMax);
+    display.androidGraphicsApi = ParseAndroidGraphicsApi(
+        ReadString(document, kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(defaults.display.androidGraphicsApi)}),
+        defaults.display.androidGraphicsApi);
     result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
     result.settings.microphone = document.GetBool(kAudio, "Microphone").value_or(defaults.microphone);
     const std::int64_t tagCount = std::clamp<std::int64_t>(
@@ -328,6 +347,7 @@ bool ProjectSettingsStore::Save(
     document.SetBool(kDisplay, "VSync", settings.display.vsync);
     document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
     document.SetFloat(kDisplay, "RenderScale", settings.display.renderScale);
+    document.SetString(kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(settings.display.androidGraphicsApi)});
     document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
     document.SetBool(kAudio, "Microphone", settings.microphone);
     // The tags as a count and one key each; keys a shorter list leaves behind are removed.

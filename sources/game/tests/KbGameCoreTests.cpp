@@ -6,6 +6,7 @@
 // input activation and the mapping context left every test in the repository
 // green. These run the bootstrap directly, on projects that have those things.
 
+#include "AndroidGraphicsApi.hpp"
 #include "GameProjectRuntime.hpp"
 #include "PackagedRuntimeModuleContract.hpp"
 #include "ProjectCooker.hpp"
@@ -143,6 +144,45 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& text) {
 // -------------------------------------------------------------------------
 // The time step the loop hands the scene runtime.
 // -------------------------------------------------------------------------
+
+// -------------------------------------------------------------------------
+// The renderer an Android package starts with.
+// -------------------------------------------------------------------------
+
+void RunAndroidGraphicsApiTests() {
+    using Api = kb::project::ProjectAndroidGraphicsApi;
+    constexpr std::int32_t vulkan = static_cast<std::int32_t>(bgfx::RendererType::Vulkan);
+    constexpr std::int32_t gles = static_cast<std::int32_t>(bgfx::RendererType::OpenGLES);
+    const std::array<bgfx::RendererType::Enum, 2U> both{ bgfx::RendererType::Vulkan, bgfx::RendererType::OpenGLES };
+    const std::array<bgfx::RendererType::Enum, 1U> glesOnly{ bgfx::RendererType::OpenGLES };
+    const std::array<bgfx::RendererType::Enum, 1U> vulkanOnly{ bgfx::RendererType::Vulkan };
+    const std::array<bgfx::RendererType::Enum, 1U> neitherOffered{ bgfx::RendererType::Noop };
+    const auto resolve = [](Api api, const auto& supported) {
+        return kb::game::ResolveAndroidRenderers(api, supported.data(), static_cast<std::uint8_t>(supported.size()));
+    };
+
+    // Auto leaves the choice to the renderer, whatever the build offers.
+    for (const auto& candidates : { resolve(Api::Auto, both), resolve(Api::Auto, glesOnly), resolve(Api::Auto, vulkanOnly) }) {
+        Require(candidates.count == 1U && candidates.types[0] == -1, "Auto must leave the choice of the renderer to the renderer");
+    }
+    // A named API comes first and the other one is the way out when the device cannot start it.
+    const kb::game::AndroidRendererCandidates forcedGles = resolve(Api::OpenGLES, both);
+    Require(forcedGles.count == 2U && forcedGles.types[0] == gles && forcedGles.types[1] == vulkan,
+        "OpenGL ES must be tried first and Vulkan after it");
+    const kb::game::AndroidRendererCandidates forcedVulkan = resolve(Api::Vulkan, both);
+    Require(forcedVulkan.count == 2U && forcedVulkan.types[0] == vulkan && forcedVulkan.types[1] == gles,
+        "Vulkan must be tried first and OpenGL ES after it");
+    // An API the build does not offer is left out, so the other one starts.
+    const kb::game::AndroidRendererCandidates missingVulkan = resolve(Api::Vulkan, glesOnly);
+    Require(missingVulkan.count == 1U && missingVulkan.types[0] == gles,
+        "A build without Vulkan must start OpenGL ES for a Vulkan project");
+    const kb::game::AndroidRendererCandidates missingGles = resolve(Api::OpenGLES, vulkanOnly);
+    Require(missingGles.count == 1U && missingGles.types[0] == vulkan,
+        "A build without OpenGL ES must start Vulkan for an OpenGL ES project");
+    // A build that offers neither leaves the choice to the renderer, which then reports why it cannot start.
+    const kb::game::AndroidRendererCandidates neither = resolve(Api::Vulkan, neitherOffered);
+    Require(neither.count == 1U && neither.types[0] == -1, "A build with neither API must leave the choice to the renderer");
+}
 
 void RunRuntimeDeltaTests() {
     const Clock::time_point base = Clock::now();
@@ -3020,6 +3060,7 @@ int main(int argc, char** argv) {
     Require(argc == 1, "kb_game_core tests received an unsupported argument");
 
     RunRuntimeDeltaTests();
+    RunAndroidGraphicsApiTests();
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
     RunTextureReuseCookTests();

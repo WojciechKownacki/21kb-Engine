@@ -27,7 +27,8 @@ constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R
 // settings follow the physics layers asset (settings that are all defaults leave them out); bit 3 says the
 // master volume follows them and bit 4 that the project's tag list does (each left out while it is the default);
 // bit 5 says the display render scale follows the tags (left out at 1); bit 6 says the project records from the
-// microphone and carries no data (left out while it is off).
+// microphone and carries no data (left out while it is off); bit 7 says the Android graphics API follows the
+// render scale as one byte (left out while it is Auto).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
 constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
@@ -35,8 +36,9 @@ constexpr std::uint32_t kMasterVolumeManifestFlag = 8U;
 constexpr std::uint32_t kTagsManifestFlag = 16U;
 constexpr std::uint32_t kRenderScaleManifestFlag = 32U;
 constexpr std::uint32_t kMicrophoneManifestFlag = 64U;
+constexpr std::uint32_t kAndroidGraphicsApiManifestFlag = 128U;
 constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag |
-    kRenderScaleManifestFlag | kMicrophoneManifestFlag;
+    kRenderScaleManifestFlag | kMicrophoneManifestFlag | kAndroidGraphicsApiManifestFlag;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -255,6 +257,7 @@ private:
         display.windowMode <= kb::project::ProjectWindowMode::BorderlessFullscreen &&
         display.frameRateCap <= kb::project::kProjectFrameRateCapMax &&
         within(display.renderScale, kb::project::kProjectRenderScaleMin, kb::project::kProjectRenderScaleMax) &&
+        static_cast<std::uint8_t>(display.androidGraphicsApi) < kb::project::kProjectAndroidGraphicsApiCount &&
         within(simulation.fixedStepHz, kb::project::kProjectFixedStepHzMin, kb::project::kProjectFixedStepHzMax) &&
         within(simulation.gravity[0], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
         within(simulation.gravity[1], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
@@ -273,7 +276,8 @@ private:
         (settings.masterVolume != defaults.masterVolume ? kMasterVolumeManifestFlag : 0U) |
         (!settings.tags.empty() ? kTagsManifestFlag : 0U) |
         (settings.display.renderScale != defaults.display.renderScale ? kRenderScaleManifestFlag : 0U) |
-        (settings.microphone != defaults.microphone ? kMicrophoneManifestFlag : 0U);
+        (settings.microphone != defaults.microphone ? kMicrophoneManifestFlag : 0U) |
+        (settings.display.androidGraphicsApi != defaults.display.androidGraphicsApi ? kAndroidGraphicsApiManifestFlag : 0U);
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -517,6 +521,9 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     if ((flags & kRenderScaleManifestFlag) != 0U) {
         PutFloat(bytes, settings.display.renderScale);
     }
+    if ((flags & kAndroidGraphicsApiManifestFlag) != 0U) {
+        PutUInt8(bytes, static_cast<std::uint8_t>(settings.display.androidGraphicsApi));
+    }
 }
 
 [[nodiscard]] bool DecodeRuntimeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
@@ -537,6 +544,15 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     display.windowMode = static_cast<kb::project::ProjectWindowMode>(windowMode);
     display.resizable = resizable != 0U;
     display.vsync = vsync != 0U;
+    return true;
+}
+
+[[nodiscard]] bool DecodeAndroidGraphicsApi(Reader& reader, kb::project::ProjectDisplaySettings& display) {
+    std::uint8_t api = 0U;
+    if (!reader.ReadUInt8(api) || api >= kb::project::kProjectAndroidGraphicsApiCount) {
+        return false;
+    }
+    display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(api);
     return true;
 }
 
@@ -577,7 +593,8 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         ((flags & kMasterVolumeManifestFlag) == 0U || reader.ReadFloat(settings.masterVolume)) &&
         ((flags & kTagsManifestFlag) == 0U || DecodeTags(reader, settings.tags)) &&
         ((flags & kRenderScaleManifestFlag) == 0U || reader.ReadFloat(settings.display.renderScale)) &&
-        ((flags & kMicrophoneManifestFlag) == 0U || (settings.microphone = true));
+        ((flags & kMicrophoneManifestFlag) == 0U || (settings.microphone = true)) &&
+        ((flags & kAndroidGraphicsApiManifestFlag) == 0U || DecodeAndroidGraphicsApi(reader, settings.display));
 }
 
 } // namespace

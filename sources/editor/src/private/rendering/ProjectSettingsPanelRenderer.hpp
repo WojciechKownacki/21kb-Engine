@@ -41,6 +41,7 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     WindowSizeOption,     // Display: one of the size presets; -1 over the label.
     DisplayToggle,        // Display: Resizable (0) or VSync (1).
     FrameRateOption,      // Display: one of the frame rate limits; -1 over the label.
+    AndroidGraphicsApiOption, // Display: Auto (0), Vulkan (1) or OpenGL ES (2); -1 over the label.
     SimulationStepper,    // Physics: index = stepper * 2 + (0 minus, 1 plus); stepper 0 fixed step, 1..3 gravity, 4 time scale. -1 over a label.
     GravityPresetOption,  // Physics: one of the gravity presets; -1 over the label.
     NumberField,          // A value cell that takes a typed number (index = ProjectSettingsNumber); -1 over its label.
